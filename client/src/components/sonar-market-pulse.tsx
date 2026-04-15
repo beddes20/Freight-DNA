@@ -364,10 +364,14 @@ export function SonarMarketPulsePortlet({ role }: SonarMarketPulsePortletProps =
         </p>
       </CardHeader>
       <CardContent className="pt-0">
-        {pulse.marketDataLimited && (
+        {(pulse.marketDataLimited || pulse.isStale) && (
           <div className="flex items-center gap-1.5 rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 px-2.5 py-1.5 mb-2" data-testid="banner-market-data-limited">
             <AlertCircle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-            <span className="text-[11px] text-amber-700 dark:text-amber-300">Market data temporarily limited — showing cached values</span>
+            <span className="text-[11px] text-amber-700 dark:text-amber-300">
+              {pulse.marketDataLimited
+                ? "Using cached data — live market feed limited"
+                : "Market data may be slightly delayed — showing last known values"}
+            </span>
           </div>
         )}
         {/* National metrics bar */}
@@ -459,7 +463,7 @@ export function SonarMarketPulseStrip() {
       <span className="text-white/70">
         NTI {pulse.ntiPerMove > 100 ? `$${Math.round(pulse.ntiPerMove).toLocaleString()}/move` : `$${pulse.ntiPerMove.toFixed(2)}/mi`}
       </span>
-      {pulse.isStale && <span className="text-amber-400 text-[10px]" title="Market data is temporarily cached">⚠ Cached</span>}
+      {(pulse.isStale || pulse.marketDataLimited) && <span className="text-amber-400 text-[10px]" title="Market data is temporarily cached — live feed limited">⚠ Cached</span>}
     </div>
   );
 }

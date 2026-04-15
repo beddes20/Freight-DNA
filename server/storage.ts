@@ -976,6 +976,7 @@ export interface IStorage {
   getCachedApiResponse(key: string): Promise<ApiResponseCache | undefined>;
   setCachedApiResponse(key: string, response: unknown, ttlSeconds: number, source: string): Promise<void>;
   getValidCachedApiResponses(source: string): Promise<ApiResponseCache[]>;
+  getAllCachedApiResponses(source: string): Promise<ApiResponseCache[]>;
   cleanExpiredApiCache(): Promise<number>;
 }
 
@@ -6729,6 +6730,12 @@ export class DatabaseStorage implements IStorage {
       const ageSeconds = (now - new Date(r.fetchedAt).getTime()) / 1000;
       return ageSeconds <= r.ttlSeconds;
     });
+  }
+
+  async getAllCachedApiResponses(source: string): Promise<ApiResponseCache[]> {
+    return db.select().from(apiResponseCache)
+      .where(eq(apiResponseCache.source, source))
+      .orderBy(desc(apiResponseCache.fetchedAt));
   }
 
   async cleanExpiredApiCache(): Promise<number> {

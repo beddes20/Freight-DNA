@@ -63,5 +63,6 @@ Key database tables support core functionalities, including pre-computed lane da
 - **Resend / GoDaddy SMTP**: For sending transactional and report emails.
 - **OpenAI (GPT-4o / GPT-4o-mini)**: For AI-assisted features (RFP column mapping, lane gap insights, email drafting, lane coaching cards, and all AI Intelligence Hub features).
 - **Microsoft Graph API (Outlook)**: Two-way carrier email via webhook subscription and auto-sync of customer emails.
-- **FreightWaves SONAR**: For market rate benchmarking and lane rate intelligence.
+- **FreightWaves SONAR**: For market rate benchmarking and lane VOTRI capacity signals. Uses 12-second rate limiter, circuit breaker (30-min cooldown on HTTP 451), DB-backed cache with 2-6 hour TTLs, and stale-fallback warm-up on cold start. National summary uses 3 API calls (OTRI, NTI, VCRPM1), market OTRI uses 1 call/market, lane VOTRI uses 1 call/lane.
 - **Webex Calling API**: Click-to-call deep links, CDR history sync, presence lookup, and recording download. Auth via OAuth client-credentials flow (`server/webexService.ts`).
+- **TRAC API**: Primary source for lane-level spot rates and 3-week forecasts. Used by getLaneSpotRate() and getLaneMarketRate() with Sonar/national fallback.

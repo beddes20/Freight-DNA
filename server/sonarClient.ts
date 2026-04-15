@@ -117,11 +117,15 @@ export interface LaneMarketRate {
 
 const SONAR_BASE = "https://api.freightwaves.com";
 const TOKEN_BUFFER_MS = 5 * 60 * 1000;
-const VOTRI_TTL   = 4 * 60 * 60 * 1000;
-const OTRI_TTL    = 4 * 60 * 60 * 1000;
-const NTI_TTL     = 1 * 60 * 60 * 1000;
-const EIA_TTL     = 24 * 60 * 60 * 1000;  // EIA diesel — 24-hour TTL
-const TRAC_MARKET_RATE_TTL = 4 * 60 * 60 * 1000; // 4-hour TTL for lane market rates
+const VOTRI_TTL   = 6 * 60 * 60 * 1000;
+const OTRI_TTL    = 6 * 60 * 60 * 1000;
+const NTI_TTL     = 2 * 60 * 60 * 1000;
+const EIA_TTL     = 24 * 60 * 60 * 1000;
+const TRAC_MARKET_RATE_TTL = 6 * 60 * 60 * 1000;
+
+const SONAR_RATE_LIMIT_INTERVAL_MS = 12_000;
+let lastSonarCallAt = 0;
+let _sonarQueueTail: Promise<void> = Promise.resolve();
 
 // ── Circuit Breaker (451 rate-limit protection) ───────────────────────────────
 
@@ -200,9 +204,9 @@ async function warmMemoryCacheFromDb(): Promise<void> {
 
 async function doWarmMemoryCacheFromDb(): Promise<void> {
   try {
-    const sonarRows = await storage.getValidCachedApiResponses("sonar");
+    const validRows = await storage.getValidCachedApiResponses("sonar");
     let loaded = 0;
-    for (const row of sonarRows) {
+    for (const row of validRows) {
       const key = row.cacheKey;
       const ttlMs = row.ttlSeconds * 1000;
       const fetchedAt = new Date(row.fetchedAt).getTime();
@@ -221,8 +225,25 @@ async function doWarmMemoryCacheFromDb(): Promise<void> {
         loaded++;
       }
     }
+
+    if (!lastKnownNational) {
+      try {
+        const allSonarRows = await storage.getAllCachedApiResponses("sonar");
+        for (const row of allSonarRows) {
+          if (row.cacheKey === "national_summary" && row.response) {
+            lastKnownNational = row.response as unknown as NationalMarketSummary;
+            if (!nationalCache) {
+              const fetchedAt = new Date(row.fetchedAt).getTime();
+              nationalCache = { value: { ...lastKnownNational, isStale: true }, fetchedAt, ttlMs: NTI_TTL };
+            }
+            break;
+          }
+        }
+      } catch {}
+    }
+
     if (loaded > 0) {
-      log(`DB cache warm-up: loaded ${loaded} entries into memory (no cold-start API stampede)`);
+      log(`DB cache warm-up: loaded ${loaded} fresh entries into memory (no cold-start API stampede)`);
     }
   } catch (err: any) {
     log(`DB cache warm-up failed (non-fatal): ${err.message}`);
@@ -328,9 +349,22 @@ async function sonarGet(path: string): Promise<any | null> {
   return coalescedSonarGet(path);
 }
 
+function rateLimitedWait(): Promise<void> {
+  const ticket = _sonarQueueTail.then(async () => {
+    const elapsed = Date.now() - lastSonarCallAt;
+    if (elapsed < SONAR_RATE_LIMIT_INTERVAL_MS) {
+      await new Promise(r => setTimeout(r, SONAR_RATE_LIMIT_INTERVAL_MS - elapsed));
+    }
+    lastSonarCallAt = Date.now();
+  });
+  _sonarQueueTail = ticket.catch(() => {});
+  return ticket;
+}
+
 async function rawSonarGet(path: string): Promise<any | null> {
   const token = await getSonarToken();
   if (!token) return null;
+  await rateLimitedWait();
   try {
     const resp = await fetch(`${SONAR_BASE}${path}`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -595,25 +629,19 @@ export async function getNationalMarketSummary(): Promise<NationalMarketSummary>
   const fallback = buildFallbackNational();
 
   const today = new Date().toISOString().slice(0, 10);
-  const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
 
-  const [ntiData, otriData, vcrpmData, otriWData, ntiWData, ratesData] = await Promise.all([
-    sonarGet(`/data/NTI/USA/${yesterday}/${today}`),
-    sonarGet(`/data/OTRI/USA/${yesterday}/${today}`),
-    sonarGet(`/data/VCRPM1/USA/${yesterday}/${today}`),
-    sonarGet(`/data/OTRIW/USA/${yesterday}/${today}`),
-    sonarGet(`/data/NTIW/USA/${yesterday}/${today}`),
-    sonarGet(`/data/RATES/USA/${yesterday}/${today}`),
+  const [otriData, ntiData, vcrpmData] = await Promise.all([
+    sonarGet(`/data/OTRI/USA/${weekAgo}/${today}`),
+    sonarGet(`/data/NTI/USA/${weekAgo}/${today}`),
+    sonarGet(`/data/VCRPM1/USA/${weekAgo}/${today}`),
   ]);
 
-  const nti   = extractValue(ntiData);
-  const ntiP  = extractPriorValue(ntiData);
   const otri  = extractValue(otriData);
   const otriP = extractPriorValue(otriData);
+  const nti   = extractValue(ntiData);
+  const ntiP  = extractPriorValue(ntiData);
   const vcrpm = extractValue(vcrpmData);
-  const otriW = extractValue(otriWData);
-  const ntiW  = extractValue(ntiWData);
-  const rates = extractValue(ratesData);
 
   if (nti === null && otri === null) {
     log("National market data unavailable — using fallback");
@@ -622,18 +650,18 @@ export async function getNationalMarketSummary(): Promise<NationalMarketSummary>
 
   const resolvedNti  = nti   ?? fallback.ntiPerMove;
   const resolvedVcrp = vcrpm ?? fallback.ntiPerMile;
-  const ratesSpread  = rates !== null ? Math.round(rates * 100) / 100 : null;
+  const ratesSpread  = (nti !== null && vcrpm !== null && vcrpm > 0)
+    ? Math.round(((nti > 100 ? nti / 500 : nti) - vcrpm) * 100) / 100
+    : null;
 
   const eiaDiesel = await fetchEiaDieselPrice();
 
   const summary: NationalMarketSummary = {
     otri:          otri  ?? fallback.otri,
-    otriWoWDelta:  otriW !== null ? Math.round(otriW * 100) / 100
-                 : otri !== null && otriP !== null ? Math.round((otri - otriP) * 100) / 100
+    otriWoWDelta:  otri !== null && otriP !== null ? Math.round((otri - otriP) * 100) / 100
                  : fallback.otriWoWDelta,
     ntiPerMove:    resolvedNti,
-    ntiWoWDelta:   ntiW !== null ? Math.round(ntiW * 100) / 100
-                 : nti !== null && ntiP !== null ? Math.round((nti - ntiP) * 100) / 100
+    ntiWoWDelta:   nti !== null && ntiP !== null ? Math.round((nti - ntiP) * 100) / 100
                  : fallback.ntiWoWDelta,
     ntiPerMile:    resolvedVcrp,
     ratesSpread,
@@ -676,64 +704,66 @@ function buildFallbackNational(): NationalMarketSummary {
 export async function getMarketOtris(markets: string[]): Promise<MarketOtri[]> {
   if (markets.length === 0) return [];
   await warmMemoryCacheFromDb();
-  const results: MarketOtri[] = [];
 
-  await Promise.all(markets.map(async (market) => {
+  const cached: MarketOtri[] = [];
+  const uncached: string[] = [];
+
+  for (const market of markets) {
     const key = market.toLowerCase();
-    const cached = otriCache.get(key);
-    if (cached && isFresh(cached)) {
-      results.push(cached.value);
-      return;
+    const entry = otriCache.get(key);
+    if (entry && isFresh(entry)) {
+      cached.push(entry.value);
+    } else {
+      uncached.push(market);
     }
+  }
 
-    const code = cityToMarketCode(market);
-    const todayM = new Date().toISOString().slice(0, 10);
-    const ydayM  = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+  const fetched: MarketOtri[] = [];
+  const BATCH_SIZE = 3;
+  for (let i = 0; i < uncached.length; i += BATCH_SIZE) {
+    const batch = uncached.slice(i, i + BATCH_SIZE);
+    const batchResults = await Promise.all(batch.map(async (market) => {
+      const code = cityToMarketCode(market);
+      const todayM = new Date().toISOString().slice(0, 10);
+      const weekAgoM = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
 
-    const [otriData, otriWData] = await Promise.all([
-      sonarGet(`/data/OTRI/${code}/${ydayM}/${todayM}`),
-      sonarGet(`/data/OTRIW/${code}/${ydayM}/${todayM}`),
-    ]);
-    const otri = extractValue(otriData) ?? 15;
-    const otriWoW = extractValue(otriWData) ?? 0;
+      const otriData = await sonarGet(`/data/OTRI/${code}/${weekAgoM}/${todayM}`);
+      const otri = extractValue(otriData) ?? 15;
+      const otriPrior = extractPriorValue(otriData);
+      const otriWoW = otriPrior !== null ? Math.round((otri - otriPrior) * 100) / 100 : 0;
 
-    const entry: MarketOtri = {
-      market,
-      otri,
-      otriWoW:  Math.round(otriWoW * 100) / 100,
-      votri:    null,
-      votriWoW: null,
-      signal: otriSignal(otri),
-    };
-    otriCache.set(key, { value: entry, fetchedAt: Date.now(), ttlMs: OTRI_TTL });
-    persistToDbCache(`otri:${key}`, entry, OTRI_TTL);
-    results.push(entry);
-  }));
+      const entry: MarketOtri = {
+        market,
+        otri,
+        otriWoW,
+        votri:    null,
+        votriWoW: null,
+        signal: otriSignal(otri),
+      };
+      const key = market.toLowerCase();
+      otriCache.set(key, { value: entry, fetchedAt: Date.now(), ttlMs: OTRI_TTL });
+      persistToDbCache(`otri:${key}`, entry, OTRI_TTL);
+      return entry;
+    }));
+    fetched.push(...batchResults);
+  }
 
-  return results;
+  return [...cached, ...fetched];
 }
 
 export async function getMarketOtrisExtended(markets: string[]): Promise<MarketExtended[]> {
   if (markets.length === 0) return [];
   const baseResults = await getMarketOtris(markets);
-  const extended: MarketExtended[] = [];
-
-  await Promise.all(baseResults.map(async (base) => {
-    const code = cityToMarketCode(base.market);
-    const { otvi, hai } = await fetchOtviHai(code);
-    extended.push({
-      market: base.market,
-      otri: base.otri,
-      otriWoW: base.otriWoW,
-      votri: base.votri,
-      votriWoW: base.votriWoW,
-      otvi,
-      hai,
-      signal: base.signal,
-    });
+  return baseResults.map((base) => ({
+    market: base.market,
+    otri: base.otri,
+    otriWoW: base.otriWoW,
+    votri: base.votri,
+    votriWoW: base.votriWoW,
+    otvi: null,
+    hai: null,
+    signal: base.signal,
   }));
-
-  return extended;
 }
 
 export async function getMarketOtri(market: string): Promise<MarketOtri> {
@@ -791,21 +821,16 @@ export async function getLaneVotri(origin: string, destination: string): Promise
   if (cached && isFresh(cached)) return cached.value;
 
   const todayL = new Date().toISOString().slice(0, 10);
-  const ydayL  = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-  const [data, votriWData] = await Promise.all([
-    sonarGet(`/data/VOTRI/${qualifier}/${ydayL}/${todayL}`),
-    sonarGet(`/data/VOTRIW/${qualifier}/${ydayL}/${todayL}`),
-  ]);
+  const weekAgoL = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
+  const data = await sonarGet(`/data/VOTRI/${qualifier}/${weekAgoL}/${todayL}`);
   const rawVotri = extractValue(data);
-  const rawVotriW = extractValue(votriWData);
+  const priorVotri = extractPriorValue(data);
 
   const isStale = rawVotri === null;
   const votri    = rawVotri ?? 0;
-  const votriWoW = rawVotriW !== null
-    ? Math.round(rawVotriW * 100) / 100
-    : rawVotri !== null
-      ? Math.round((rawVotri - (extractPriorValue(data) ?? rawVotri)) * 100) / 100
-      : 0;
+  const votriWoW = rawVotri !== null && priorVotri !== null
+    ? Math.round((rawVotri - priorVotri) * 100) / 100
+    : 0;
 
   const entry: LaneVotri = {
     origin,
@@ -861,11 +886,36 @@ export async function getLaneVotrisBatchFresh(
 }
 
 export async function getLaneSpotRate(origin: string, destination: string): Promise<LaneSpotRate | null> {
-  const [votri, national] = await Promise.all([
-    getLaneVotri(origin, destination),
-    getNationalMarketSummary(),
-  ]);
+  const origCode = cityToMarketCode(origin);
+  const destCode = cityToMarketCode(destination);
 
+  try {
+    const { fetchTracSpotRates } = await import("./tracService");
+    const laneId = `${origCode}-${destCode}-VAN`;
+    const lane = {
+      lane_id: laneId,
+      origin: origCode,
+      origin_country_code: "USA",
+      destination: destCode,
+      destination_country_code: "USA",
+      equipment_type: "VAN" as const,
+    };
+
+    const spots = await fetchTracSpotRates([lane]);
+    const spot = spots[0];
+    if (spot?.rpm !== null && spot?.rpm !== undefined && spot.rpm > 0) {
+      return {
+        origin,
+        destination,
+        ratePerMile: Math.round(spot.rpm * 100) / 100,
+        confidence: spot.confidenceScore !== null && spot.confidenceScore >= 70 ? "high" : "medium",
+        timestamp: new Date().toISOString(),
+      };
+    }
+  } catch {}
+
+  const national = await getNationalMarketSummary();
+  const votri = await getLaneVotri(origin, destination);
   const baseRate = national.ntiPerMile > 0 ? national.ntiPerMile : 2.28;
   const premium = votri.signal === "hot" ? 0.08 : votri.signal === "warm" ? 0.03 : 0;
   const ratePerMile = Math.round(baseRate * (1 + premium) * 100) / 100;
@@ -874,7 +924,7 @@ export async function getLaneSpotRate(origin: string, destination: string): Prom
     origin,
     destination,
     ratePerMile,
-    confidence: votri.isStale ? "low" : "medium",
+    confidence: "low",
     timestamp: new Date().toISOString(),
   };
 }
@@ -899,59 +949,69 @@ export async function getLaneMarketRate(origin: string, destination: string): Pr
   const cached = laneMarketRateCache.get(cacheKey);
   if (cached && isFresh(cached)) return cached.value;
 
-  const today = new Date().toISOString().slice(0, 10);
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const origCode = cityToMarketCode(origin);
+  const destCode = cityToMarketCode(destination);
 
-  const [national, laneVotri, laneTRAC] = await Promise.all([
+  const [national, laneVotri] = await Promise.all([
     getNationalMarketSummary(),
     getLaneVotri(origin, destination),
-    sonarGet(`/data/VCRPM1/${qualifier}/${yesterday}/${today}`).catch(() => null),
   ]);
 
   const nationalRate = national.ntiPerMile > 0 ? national.ntiPerMile : 2.28;
 
   let marketRatePerMile: number;
   let source: "lane" | "national_fallback";
+  let forecastDirection: "TIGHTENING" | "EASING" | "STABLE" = "STABLE";
+  let weeklyRateChange = 0;
 
-  const laneTRACRate = laneTRAC !== null ? extractValue(laneTRAC) : null;
+  try {
+    const { fetchTracSpotRates, fetchTracForecast } = await import("./tracService");
+    const laneId = `${origCode}-${destCode}-VAN`;
+    const lane = {
+      lane_id: laneId,
+      origin: origCode,
+      origin_country_code: "USA",
+      destination: destCode,
+      destination_country_code: "USA",
+      equipment_type: "VAN" as const,
+    };
 
-  if (laneTRACRate !== null && laneTRACRate > 0) {
-    marketRatePerMile = Math.round(laneTRACRate * 100) / 100;
-    source = "lane";
-    log(`Lane TRAC benchmark found for ${qualifier}: $${marketRatePerMile.toFixed(2)}/mi`);
-  } else {
+    const [spots, forecasts] = await Promise.all([
+      fetchTracSpotRates([lane]).catch(() => []),
+      fetchTracForecast([lane]).catch(() => []),
+    ]);
+
+    const spot = spots[0];
+    if (spot?.rpm !== null && spot?.rpm !== undefined && spot.rpm > 0) {
+      marketRatePerMile = Math.round(spot.rpm * 100) / 100;
+      source = "lane";
+
+      const days = forecasts[0]?.days ?? [];
+      const next7 = days.slice(0, 7).map(d => d.forecastRpm).filter((v): v is number => v !== null);
+      if (next7.length > 0) {
+        const avgForecast = next7.reduce((a, b) => a + b, 0) / next7.length;
+        const delta = (avgForecast - spot.rpm) / spot.rpm;
+        if (delta > 0.02) {
+          forecastDirection = "TIGHTENING";
+          weeklyRateChange = Math.min(delta / 2, 0.03);
+        } else if (delta < -0.02) {
+          forecastDirection = "EASING";
+          weeklyRateChange = Math.max(delta / 2, -0.025);
+        }
+      }
+
+      log(`Lane TRAC spot for ${qualifier}: $${marketRatePerMile.toFixed(2)}/mi [${forecastDirection}]`);
+    } else {
+      throw new Error("No TRAC spot data");
+    }
+  } catch {
     source = "national_fallback";
     marketRatePerMile = nationalRate;
     if (!laneVotri.isStale) {
       const votriPremium = laneVotri.signal === "hot" ? 0.05 : laneVotri.signal === "warm" ? 0.02 : 0;
       marketRatePerMile = Math.round(nationalRate * (1 + votriPremium) * 100) / 100;
     }
-  }
 
-  const twoWeeksAgo = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
-
-  const [priorVCRPM1Data] = await Promise.all([
-    sonarGet(`/data/VCRPM1/USA/${twoWeeksAgo}/${yesterday}`).catch(() => null),
-  ]);
-
-  const priorNationalRate = priorVCRPM1Data !== null ? extractValue(priorVCRPM1Data) : null;
-
-  let weeklyRateChange = 0;
-  let forecastDirection: "TIGHTENING" | "EASING" | "STABLE";
-
-  if (priorNationalRate && priorNationalRate > 0 && nationalRate > 0) {
-    const rateWoW = (nationalRate - priorNationalRate) / priorNationalRate;
-    if (rateWoW > 0.005) {
-      forecastDirection = "TIGHTENING";
-      weeklyRateChange = Math.min(rateWoW, 0.03);
-    } else if (rateWoW < -0.005) {
-      forecastDirection = "EASING";
-      weeklyRateChange = Math.max(rateWoW, -0.025);
-    } else {
-      forecastDirection = "STABLE";
-      weeklyRateChange = 0;
-    }
-  } else {
     const votriWoW = laneVotri.votriWoW;
     if (votriWoW > 1.5) {
       forecastDirection = "TIGHTENING";
@@ -959,9 +1019,6 @@ export async function getLaneMarketRate(origin: string, destination: string): Pr
     } else if (votriWoW < -1.5) {
       forecastDirection = "EASING";
       weeklyRateChange = -0.015;
-    } else {
-      forecastDirection = "STABLE";
-      weeklyRateChange = 0;
     }
   }
 
