@@ -68,6 +68,7 @@ import {
   MailOpen,
   PenLine,
   Check,
+  AlertTriangle,
 } from "lucide-react";
 import {
   Dialog,
@@ -504,12 +505,27 @@ export function CarrierOutreachPanel({
     ...(overrideRecentlyContacted ? { overrideRecentlyContacted: "true" } : {}),
   }).toString();
 
-  const { data: suggestionsData, isLoading: suggestionsLoading } = useQuery<SuggestionsResponse>({
+  const { data: suggestionsData, isLoading: suggestionsLoading, isError: suggestionsError, error: suggestionsErrorObj, refetch: refetchSuggestions } = useQuery<SuggestionsResponse>({
     queryKey: ["/api/lanes", laneId, "carrier-suggestions", suggestionsQueryParams],
-    queryFn: () => fetch(`/api/lanes/${laneId}/carrier-suggestions?${suggestionsQueryParams}`).then(r => r.json()),
+    queryFn: async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30_000);
+      try {
+        const r = await fetch(`/api/lanes/${laneId}/carrier-suggestions?${suggestionsQueryParams}`, { signal: controller.signal });
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.error || `Server error (${r.status})`);
+        }
+        return r.json();
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
     enabled: !!laneId && open,
-    staleTime: 2 * 60 * 1000,   // cache for 2 min — TMS ranking is expensive, avoid re-running on every panel open
+    staleTime: 2 * 60 * 1000,
     gcTime: 5 * 60 * 1000,
+    retry: 1,
+    retryDelay: 2000,
   });
 
   // Pre-populate capturedEmails from carrier primaryEmail so the email input
@@ -1735,8 +1751,27 @@ export function CarrierOutreachPanel({
                     </div>
                   )}
 
+                  {/* Error state */}
+                  {suggestionsError && !suggestionsLoading && (
+                    <div className="text-center py-8">
+                      <div className="w-10 h-10 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center mx-auto mb-3">
+                        <AlertTriangle className="w-5 h-5 text-red-400" />
+                      </div>
+                      <p className="text-xs text-muted-foreground mb-1">
+                        {(suggestionsErrorObj as Error)?.message || "Failed to load carrier suggestions"}
+                      </p>
+                      <button
+                        onClick={() => refetchSuggestions()}
+                        className="text-xs text-amber-400 hover:text-amber-300 underline mt-2"
+                        data-testid="btn-retry-suggestions"
+                      >
+                        Try again
+                      </button>
+                    </div>
+                  )}
+
                   {/* Empty state */}
-                  {!suggestionsLoading && filteredCarriers.length === 0 && (
+                  {!suggestionsLoading && !suggestionsError && filteredCarriers.length === 0 && (
                     <div className="text-center py-8">
                       <div className="w-10 h-10 rounded-full bg-muted/20 border border-border flex items-center justify-center mx-auto mb-3">
                         <Truck className="w-5 h-5 text-muted-foreground" />

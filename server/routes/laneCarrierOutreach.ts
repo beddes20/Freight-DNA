@@ -1368,6 +1368,10 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
   // ── Carrier Suggestions (AI-ranked) ───────────────────────────────────────
 
+  const _rankingCache = new Map<string, { ranked: Awaited<ReturnType<typeof rankCarriersForLane>>; isHfLane: boolean; expiresAt: number }>();
+  const RANKING_CACHE_TTL = 3 * 60 * 1000;
+  const RANKING_TIMEOUT_MS = 25_000;
+
   app.get("/api/lanes/:laneId/carrier-suggestions", async (req, res) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
@@ -1377,26 +1381,6 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     if (!lane) return;
 
     try {
-      // Pass existing bench data so ranking can boost carriers with positive prior outcomes
-      const bench = await storage.getLaneCarrierBench(req.params.laneId);
-
-      // Fetch coverage profile for incumbent boost (if broaden search is NOT active)
-      let coverageProfile = null;
-      let coverageCarriers: import("@shared/schema").LaneCoverageProfileCarrier[] = [];
-      try {
-        const profileResult = await getLaneCoverageProfile(lane, storage);
-        coverageProfile = profileResult.profile;
-        if (!coverageProfile.broadenSearchActive) {
-          coverageCarriers = profileResult.carriers;
-        }
-      } catch {
-        // Non-fatal: coverage profile is optional
-      }
-
-      // Load org uploads here — passed to isHighFrequencyLane for accurate HF detection
-      // (same uploads are used internally by rankCarriersForLane for history extraction)
-      const suggUploads = await storage.getFinancialUploadsForOrg(user.organizationId);
-
       // ── Query parameter parsing ──────────────────────────────────────────
       const pageSize = parseInt(String(req.query.pageSize ?? "20"), 10);
       const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10));
@@ -1405,12 +1389,54 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       const hasEmail = req.query.hasEmail === "true";
       const notRecentlyContacted = req.query.notRecentlyContacted === "true";
       const activeOnly = req.query.activeOnly === "true";
-      const includeNewProspects = req.query.includeNewProspects !== "false"; // default true
+      const includeNewProspects = req.query.includeNewProspects !== "false";
       const overrideRecentlyContacted = req.query.overrideRecentlyContacted === "true";
-      // debug=true is auth-gated (requireAuth already applied via getLaneWithAccessCheck path)
       const debugMode = req.query.debug === "true";
+      const forceRefresh = req.query.refresh === "true";
 
-      let ranked = await rankCarriersForLane(lane, storage, bench, coverageProfile, coverageCarriers, debugMode);
+      const cacheKey = `${req.params.laneId}::${user.organizationId}`;
+      const cached = _rankingCache.get(cacheKey);
+      let ranked: Awaited<ReturnType<typeof rankCarriersForLane>>;
+      let isHfLane: boolean;
+
+      if (cached && cached.expiresAt > Date.now() && !debugMode && !forceRefresh) {
+        ranked = cached.ranked;
+        isHfLane = cached.isHfLane;
+      } else {
+        const rankingStart = Date.now();
+        const rankingPromise = (async () => {
+          const [bench, suggUploads] = await Promise.all([
+            storage.getLaneCarrierBench(req.params.laneId),
+            storage.getFinancialUploadsForOrg(user.organizationId),
+          ]);
+
+          let coverageProfile = null;
+          let coverageCarriers: import("@shared/schema").LaneCoverageProfileCarrier[] = [];
+          try {
+            const profileResult = await getLaneCoverageProfile(lane, storage);
+            coverageProfile = profileResult.profile;
+            if (!coverageProfile.broadenSearchActive) {
+              coverageCarriers = profileResult.carriers;
+            }
+          } catch {
+          }
+
+          const r = await rankCarriersForLane(lane, storage, bench, coverageProfile, coverageCarriers, debugMode);
+          const hf = isHighFrequencyLane(lane, suggUploads);
+          return { ranked: r, isHfLane: hf };
+        })();
+
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Carrier ranking timed out")), RANKING_TIMEOUT_MS)
+        );
+
+        const result = await Promise.race([rankingPromise, timeoutPromise]);
+        ranked = result.ranked;
+        isHfLane = result.isHfLane;
+        console.log(`[carrier-suggestions] ranked ${ranked.length} carriers for lane ${req.params.laneId} in ${Date.now() - rankingStart}ms`);
+
+        _rankingCache.set(cacheKey, { ranked, isHfLane, expiresAt: Date.now() + RANKING_CACHE_TTL });
+      }
 
       // ── Hard-filter Do Not Use carriers (unconditional) ─────────────────
       ranked = ranked.filter(c => !c.isDoNotUse);
@@ -1594,9 +1620,6 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         };
       });
 
-      // Use canonical HF detection with uploads for accuracy (consistent with ranking path)
-      const isHfLane = isHighFrequencyLane(lane, suggUploads);
-
       res.json({
         carriers: carriersWithWhy,
         totalCount,
@@ -1607,7 +1630,14 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         highFrequencyConfig: isHfLane ? HIGH_FREQUENCY_CONFIG : undefined,
       });
     } catch (err) {
-      res.status(500).json({ error: (err as Error)?.message ?? "Failed to rank carriers" });
+      const msg = (err as Error)?.message ?? "Failed to rank carriers";
+      const isTimeout = msg.includes("timed out");
+      console.error(`[carrier-suggestions] error for lane ${req.params.laneId}: ${msg}`);
+      res.status(isTimeout ? 504 : 500).json({
+        error: isTimeout
+          ? "Carrier ranking took too long — please try again in a moment"
+          : msg,
+      });
     }
   });
 
