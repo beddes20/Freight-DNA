@@ -60,6 +60,7 @@ export default function AIIntelligencePage() {
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
+    enabled: !!selectedCompany,
   });
 
   const { data: winLossData } = useQuery<any>({
@@ -74,6 +75,7 @@ export default function AIIntelligencePage() {
       if (!res.ok) throw new Error("Failed to fetch");
       return res.json();
     },
+    enabled: !!selectedCompany,
   });
 
   const { data: walletShareData } = useQuery<any>({
@@ -457,7 +459,7 @@ export default function AIIntelligencePage() {
                         <Card key={s.id} data-testid={`sentiment-card-${s.id}`}>
                           <CardContent className="pt-4">
                             <div className="flex items-center justify-between mb-2">
-                              <span className="font-medium text-sm">Contact {s.contactId?.substring(0, 8)}...</span>
+                              <span className="font-medium text-sm" data-testid={`text-contact-name-${s.id}`}>{s.contactName || `Contact ${s.contactId?.substring(0, 8)}...`}</span>
                               <Badge variant={s.sentimentTrend === "cooling" ? "destructive" : s.sentimentTrend === "warming" ? "default" : "secondary"}>
                                 {s.sentimentTrend === "warming" && <TrendingUp className="h-3 w-3 mr-1" />}
                                 {s.sentimentTrend === "cooling" && <TrendingDown className="h-3 w-3 mr-1" />}
@@ -507,7 +509,7 @@ export default function AIIntelligencePage() {
                     <Card key={rec.id} data-testid={`followup-card-${rec.id}`}>
                       <CardContent className="pt-4 space-y-2">
                         <div className="flex items-center justify-between">
-                          <span className="text-sm font-medium">Contact {rec.contactId?.substring(0, 8)}...</span>
+                          <span className="text-sm font-medium" data-testid={`text-contact-name-${rec.id}`}>{rec.contactName || `Contact ${rec.contactId?.substring(0, 8)}...`}</span>
                           {rec.confidenceScore && <Badge variant="outline">{rec.confidenceScore}% conf</Badge>}
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-sm">

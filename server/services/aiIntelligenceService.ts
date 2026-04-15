@@ -10,6 +10,26 @@ import {
 import { eq, and, desc, sql, inArray, gte, lte, count } from "drizzle-orm";
 import OpenAI from "openai";
 
+function safeParseJSON(raw: string | null | undefined, fallback: any = {}): any {
+  try {
+    return JSON.parse(raw || JSON.stringify(fallback));
+  } catch (err) {
+    console.warn("[ai-intelligence] Failed to parse AI response JSON, using fallback:", err instanceof Error ? err.message : err);
+    return fallback;
+  }
+}
+
+function clampInt(val: any, min: number, max: number, fallback: number): number {
+  const n = parseInt(String(val), 10);
+  if (isNaN(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function toInt(val: any, fallback: number): number {
+  const n = parseInt(String(val), 10);
+  return isNaN(n) ? fallback : n;
+}
+
 function getOpenAI() {
   return new OpenAI({
     apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -47,7 +67,7 @@ export async function generateMeetingPrepBrief(orgId: string, companyId: string,
 
   const recentEmails = await db.select()
     .from(emailMessages)
-    .where(and(eq(emailMessages.accountId, companyId)))
+    .where(and(eq(emailMessages.linkedAccountId, companyId)))
     .orderBy(desc(sql`${emailMessages.createdAt}::timestamptz`))
     .limit(10);
 
@@ -105,7 +125,7 @@ Respond in JSON format:
     temperature: 0.3,
   });
 
-  const briefContent = JSON.parse(response.choices[0].message.content || "{}");
+  const briefContent = safeParseJSON(response.choices[0].message.content, {});
 
   const [brief] = await db.insert(meetingPrepBriefs).values({
     orgId,
@@ -148,8 +168,8 @@ export async function analyzeContactSentiment(orgId: string, companyId: string, 
     emailActivity = await db.select()
       .from(emailMessages)
       .where(and(
-        eq(emailMessages.accountId, companyId),
-        sql`(${emailMessages.fromAddress} ILIKE ${'%' + contactEmail + '%'} OR ${emailMessages.toAddresses}::text ILIKE ${'%' + contactEmail + '%'})`
+        eq(emailMessages.linkedAccountId, companyId),
+        sql`(${emailMessages.fromEmail} ILIKE ${'%' + contactEmail + '%'} OR ${emailMessages.toEmail}::text ILIKE ${'%' + contactEmail + '%'})`
       ))
       .orderBy(desc(sql`${emailMessages.createdAt}::timestamptz`))
       .limit(20);
@@ -182,13 +202,13 @@ Respond in JSON:
     temperature: 0.2,
   });
 
-  const analysis = JSON.parse(response.choices[0].message.content || "{}");
+  const analysis = safeParseJSON(response.choices[0].message.content, {});
 
   const [record] = await db.insert(contactSentimentTracking).values({
     orgId,
     contactId,
     companyId,
-    sentimentScore: analysis.sentimentScore || 50,
+    sentimentScore: clampInt(analysis.sentimentScore, 1, 100, 50),
     sentimentTrend: analysis.trend || "stable",
     avgResponseTimeHours: analysis.avgResponseTimeTrend === "faster" ? "12" : analysis.avgResponseTimeTrend === "slower" ? "48" : "24",
     signals: analysis.signals || [],
@@ -222,8 +242,8 @@ export async function analyzeFollowUpTiming(orgId: string, companyId: string, co
     emails = await db.select()
       .from(emailMessages)
       .where(and(
-        eq(emailMessages.accountId, companyId),
-        sql`${emailMessages.fromAddress} ILIKE ${'%' + contactEmail + '%'}`
+        eq(emailMessages.linkedAccountId, companyId),
+        sql`${emailMessages.fromEmail} ILIKE ${'%' + contactEmail + '%'}`
       ))
       .orderBy(desc(sql`${emailMessages.createdAt}::timestamptz`))
       .limit(30);
@@ -257,7 +277,7 @@ Based on the patterns, determine optimal follow-up timing. Respond in JSON:
     temperature: 0.2,
   });
 
-  const timing = JSON.parse(response.choices[0].message.content || "{}");
+  const timing = safeParseJSON(response.choices[0].message.content, {});
 
   const existing = await db.select()
     .from(followUpRecommendations)
@@ -269,11 +289,11 @@ Based on the patterns, determine optimal follow-up timing. Respond in JSON:
       .set({
         recommendedDay: timing.recommendedDay,
         recommendedTimeOfDay: timing.recommendedTimeOfDay,
-        optimalCadenceDays: timing.optimalCadenceDays,
-        maxSilenceDays: timing.maxSilenceDays,
+        optimalCadenceDays: toInt(timing.optimalCadenceDays, 7),
+        maxSilenceDays: toInt(timing.maxSilenceDays, 14),
         nextFollowUpDate: timing.nextFollowUpDate,
         reasoning: timing.reasoning,
-        confidenceScore: timing.confidenceScore,
+        confidenceScore: clampInt(timing.confidenceScore, 1, 100, 50),
         dataPoints: allTouches.length + emails.length,
         updatedAt: new Date(),
       })
@@ -288,11 +308,11 @@ Based on the patterns, determine optimal follow-up timing. Respond in JSON:
     companyId,
     recommendedDay: timing.recommendedDay,
     recommendedTimeOfDay: timing.recommendedTimeOfDay,
-    optimalCadenceDays: timing.optimalCadenceDays,
-    maxSilenceDays: timing.maxSilenceDays,
+    optimalCadenceDays: toInt(timing.optimalCadenceDays, 7),
+    maxSilenceDays: toInt(timing.maxSilenceDays, 14),
     nextFollowUpDate: timing.nextFollowUpDate,
     reasoning: timing.reasoning,
-    confidenceScore: timing.confidenceScore,
+    confidenceScore: clampInt(timing.confidenceScore, 1, 100, 50),
     dataPoints: allTouches.length + emails.length,
   }).returning();
   return rec;
@@ -355,7 +375,7 @@ Generate 3-5 coaching insights. Respond in JSON:
     temperature: 0.3,
   });
 
-  const result = JSON.parse(response.choices[0].message.content || '{"insights":[]}');
+  const result = safeParseJSON(response.choices[0].message.content, { insights: [] });
 
   await db.delete(relationshipCoachingInsights)
     .where(and(eq(relationshipCoachingInsights.orgId, orgId), eq(relationshipCoachingInsights.companyId, companyId)));
@@ -403,13 +423,13 @@ export async function analyzeOrgChartGaps(orgId: string, companyId: string) {
 
   const emails = await db.select()
     .from(emailMessages)
-    .where(eq(emailMessages.accountId, companyId))
+    .where(eq(emailMessages.linkedAccountId, companyId))
     .orderBy(desc(sql`${emailMessages.createdAt}::timestamptz`))
     .limit(30);
 
   const ccPatterns = emails
-    .filter(e => e.ccAddresses)
-    .map(e => e.ccAddresses)
+    .filter(e => e.ccEmail)
+    .map(e => e.ccEmail)
     .flat();
 
   const prompt = `Analyze the org chart coverage for this freight customer and identify gaps.
@@ -454,7 +474,7 @@ Identify gaps. Respond in JSON:
     temperature: 0.3,
   });
 
-  const result = JSON.parse(response.choices[0].message.content || '{"gaps":[]}');
+  const result = safeParseJSON(response.choices[0].message.content, { gaps: [] });
 
   await db.delete(orgChartGaps)
     .where(and(eq(orgChartGaps.orgId, orgId), eq(orgChartGaps.companyId, companyId)));
@@ -497,7 +517,7 @@ export async function findWarmIntroPaths(orgId: string, companyId: string) {
 
   const emails = await db.select()
     .from(emailMessages)
-    .where(eq(emailMessages.accountId, companyId))
+    .where(eq(emailMessages.linkedAccountId, companyId))
     .orderBy(desc(sql`${emailMessages.createdAt}::timestamptz`))
     .limit(50);
 
@@ -510,7 +530,7 @@ IDENTIFIED GAPS/TARGETS:
 ${gaps.map(g => `- ${g.title}: ${g.suggestedContactName || "Unknown"} (${g.suggestedContactTitle || "?"}) - Email: ${g.suggestedContactEmail || "?"}`).join("\n") || "No specific gaps identified"}
 
 EMAIL CC PATTERNS (who appears together):
-${emails.slice(0, 20).map(e => `From: ${e.fromAddress} CC: ${e.ccAddresses || "none"}`).join("\n") || "No CC data"}
+${emails.slice(0, 20).map(e => `From: ${e.fromEmail} CC: ${e.ccEmail || "none"}`).join("\n") || "No CC data"}
 
 TOUCHPOINT ACTIVITY:
 ${(() => {
@@ -540,7 +560,7 @@ Suggest warm intro paths. Respond in JSON:
     temperature: 0.3,
   });
 
-  const result = JSON.parse(response.choices[0].message.content || '{"suggestions":[]}');
+  const result = safeParseJSON(response.choices[0].message.content, { suggestions: [] });
 
   await db.delete(warmIntroSuggestions)
     .where(and(eq(warmIntroSuggestions.orgId, orgId), eq(warmIntroSuggestions.companyId, companyId)));
@@ -613,7 +633,7 @@ Find the top 5 most similar accounts and score them. Respond in JSON:
     temperature: 0.3,
   });
 
-  const result = JSON.parse(response.choices[0].message.content || '{"lookAlikes":[]}');
+  const result = safeParseJSON(response.choices[0].message.content, { lookAlikes: [] });
 
   await db.delete(accountLookAlikes)
     .where(and(eq(accountLookAlikes.orgId, orgId), eq(accountLookAlikes.sourceCompanyId, sourceCompanyId)));
@@ -626,7 +646,7 @@ Find the top 5 most similar accounts and score them. Respond in JSON:
       sourceCompanyId,
       targetCompanyId: validTarget?.id || null,
       targetCompanyName: la.companyName,
-      similarityScore: la.similarityScore || 50,
+      similarityScore: clampInt(la.similarityScore, 1, 100, 50),
       matchFactors: la.matchFactors || [],
       expansionOpportunity: la.expansionOpportunity,
     }).returning();
@@ -684,7 +704,7 @@ Identify lanes or services this customer SHOULD be shipping but ISN'T, based on 
     temperature: 0.3,
   });
 
-  const result = JSON.parse(response.choices[0].message.content || '{"opportunities":[]}');
+  const result = safeParseJSON(response.choices[0].message.content, { opportunities: [] });
 
   await db.delete(crossSellOpportunities)
     .where(and(eq(crossSellOpportunities.orgId, orgId), eq(crossSellOpportunities.companyId, companyId)));
@@ -699,7 +719,7 @@ Identify lanes or services this customer SHOULD be shipping but ISN'T, based on 
       description: opp.description,
       lane: opp.lane,
       estimatedValue: opp.estimatedValue?.toString(),
-      confidenceScore: opp.confidenceScore,
+      confidenceScore: clampInt(opp.confidenceScore, 1, 100, 50),
       peerEvidence: opp.peerEvidence || [],
       suggestedApproach: opp.suggestedApproach,
     }).returning();
@@ -755,7 +775,7 @@ Create a step-by-step growth playbook. Respond in JSON:
     temperature: 0.3,
   });
 
-  const play = JSON.parse(response.choices[0].message.content || "{}");
+  const play = safeParseJSON(response.choices[0].message.content, {});
 
   const [record] = await db.insert(walletSharePlays).values({
     orgId,
@@ -766,7 +786,7 @@ Create a step-by-step growth playbook. Respond in JSON:
     targetContacts: play.targetContacts || [],
     pricingStrategy: play.pricingStrategy,
     estimatedRevenue: play.estimatedRevenue?.toString(),
-    timelineWeeks: play.timelineWeeks,
+    timelineWeeks: toInt(play.timelineWeeks, 4),
     steps: play.steps || [],
   }).returning();
 
@@ -829,7 +849,7 @@ Find patterns. Respond in JSON:
     temperature: 0.3,
   });
 
-  const result = JSON.parse(response.choices[0].message.content || '{"patterns":[]}');
+  const result = safeParseJSON(response.choices[0].message.content, { patterns: [] });
 
   await db.delete(winLossPatterns).where(eq(winLossPatterns.orgId, orgId));
 
@@ -841,10 +861,10 @@ Find patterns. Respond in JSON:
       title: p.title,
       description: p.description,
       outcome: p.outcome || "mixed",
-      frequency: p.frequency || 1,
+      frequency: toInt(p.frequency, 1),
       factors: p.factors || [],
       recommendations: p.recommendations || [],
-      confidenceScore: p.confidenceScore,
+      confidenceScore: clampInt(p.confidenceScore, 1, 100, 50),
     }).returning();
     patterns.push(record);
   }
@@ -864,7 +884,7 @@ export async function detectCompetitiveSignals(orgId: string, companyId: string)
 
   const recentEmails = await db.select()
     .from(emailMessages)
-    .where(and(eq(emailMessages.accountId, companyId)))
+    .where(and(eq(emailMessages.linkedAccountId, companyId)))
     .orderBy(desc(sql`${emailMessages.createdAt}::timestamptz`))
     .limit(30);
 
@@ -879,7 +899,7 @@ export async function detectCompetitiveSignals(orgId: string, companyId: string)
 COMPANY: ${company.name}
 
 RECENT EMAILS:
-${recentEmails.map(e => `- ${e.direction} | ${e.subject || "no subject"} | From: ${e.fromAddress} | Snippet: ${e.bodyPreview?.substring(0, 150) || ""}`).join("\n") || "No emails"}
+${recentEmails.map(e => `- ${e.direction} | ${e.subject || "no subject"} | From: ${e.fromEmail} | Snippet: ${e.body?.substring(0, 150) || ""}`).join("\n") || "No emails"}
 
 DETECTED SIGNALS:
 ${recentSignals.map(s => `- ${s.intentType}/${s.intentSubtype || ""} from ${s.actorType} (confidence: ${s.confidence})`).join("\n") || "No signals"}
@@ -904,7 +924,7 @@ Look for competitive threats. Respond in JSON:
     temperature: 0.2,
   });
 
-  const result = JSON.parse(response.choices[0].message.content || '{"signals":[]}');
+  const result = safeParseJSON(response.choices[0].message.content, { signals: [] });
 
   const detected = [];
   for (const sig of result.signals || []) {
