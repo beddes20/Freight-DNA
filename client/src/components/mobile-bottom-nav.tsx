@@ -1,6 +1,5 @@
 import { useLocation } from "wouter";
-import { useState } from "react";
-import { LayoutDashboard, Building2, ListTodo, TrendingUp, Menu, X } from "lucide-react";
+import { LayoutDashboard, Building2, ListTodo, TrendingUp, Menu } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useSidebar } from "@/components/ui/sidebar";
 

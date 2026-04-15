@@ -634,8 +634,8 @@ export default function AdminCarriers() {
           {search || sourceFilter !== "__all__" ? "No carriers match your filters" : "No carriers yet — import your freight file or add one manually"}
         </div>
       ) : (
-        <div className="rounded-xl border border-border overflow-hidden bg-card">
-          <table className="w-full text-sm">
+        <div className="rounded-xl border border-border overflow-hidden bg-card overflow-x-auto">
+          <table className="w-full text-sm min-w-[640px]">
             <thead className="bg-muted border-b border-border">
               <tr>
                 <th className="px-4 py-2.5 w-8">

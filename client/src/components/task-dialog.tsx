@@ -364,7 +364,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
+      <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto w-[calc(100%-2rem)] rounded-lg">
         <DialogHeader>
           <DialogTitle data-testid="text-task-dialog-title">
             {prefillData ? "Force Task from Lane" : forwardingTask ? "Forward Task" : editingTask ? "Edit Task" : "New Task"}

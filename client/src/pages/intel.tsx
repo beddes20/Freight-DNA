@@ -1106,8 +1106,8 @@ function MyLanesPanel({ lanes, isLoading, lastUpdated }: {
         )}
       </div>
 
-      <div className="border rounded-xl overflow-hidden">
-        <table className="w-full text-sm" data-testid="table-my-lanes">
+      <div className="border rounded-xl overflow-hidden overflow-x-auto">
+        <table className="w-full text-sm min-w-[600px]" data-testid="table-my-lanes">
           <thead>
             <tr className="border-b bg-muted/50">
               <th className="text-left px-4 py-2 text-xs font-semibold text-muted-foreground">Lane</th>
@@ -1816,8 +1816,8 @@ export default function IntelPage() {
             <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
               <Radio className="h-4 w-4 text-blue-500" /> Market Trends — Your Top Corridors
             </h3>
-            <div className="border rounded-xl overflow-hidden">
-              <table className="w-full text-sm" data-testid="table-market-trends">
+            <div className="border rounded-xl overflow-hidden overflow-x-auto">
+              <table className="w-full text-sm min-w-[500px]" data-testid="table-market-trends">
                 <thead>
                   <tr className="border-b bg-muted/50">
                     <th className="text-left px-4 py-2 text-xs font-semibold text-muted-foreground">Market</th>
@@ -1918,8 +1918,8 @@ export default function IntelPage() {
             <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
               <DollarSign className="h-4 w-4 text-blue-500" /> Today's Buy Rate Quick-Look
             </h3>
-            <div className="border rounded-xl overflow-hidden">
-              <table className="w-full text-sm" data-testid="table-buy-rate">
+            <div className="border rounded-xl overflow-hidden overflow-x-auto">
+              <table className="w-full text-sm min-w-[500px]" data-testid="table-buy-rate">
                 <thead>
                   <tr className="border-b bg-muted/50">
                     <th className="text-left px-4 py-2 text-xs font-semibold text-muted-foreground">Lane</th>

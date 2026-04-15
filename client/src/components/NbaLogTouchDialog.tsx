@@ -141,7 +141,7 @@ export function NbaLogTouchDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
-      <DialogContent className="sm:max-w-sm" data-testid="dialog-nba-log-touch">
+      <DialogContent className="w-[calc(100%-2rem)] sm:max-w-sm rounded-lg" data-testid="dialog-nba-log-touch">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <PhoneCall className="h-4 w-4 text-cyan-500" />

@@ -127,7 +127,7 @@ export function GlobalLogTouchDialog() {
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
-      <DialogContent className="sm:max-w-md" data-testid="dialog-global-log-touch">
+      <DialogContent className="w-[calc(100%-2rem)] sm:max-w-md rounded-lg" data-testid="dialog-global-log-touch">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <PhoneCall className="h-4 w-4 text-cyan-500" />
