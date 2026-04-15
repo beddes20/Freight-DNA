@@ -31,10 +31,22 @@
 23. [AI Features (DNA Guru & More)](#23-ai-features-dna-guru--more)
 24. [Next Best Action (NBA) Cards](#24-next-best-action-nba-cards)
 25. [Market Pulse (SONAR)](#25-market-pulse-sonar)
-26. [Additional Tools](#26-additional-tools)
-27. [Keyboard Shortcuts & Power User Tools](#27-keyboard-shortcuts--power-user-tools)
-28. [Roles & Permissions](#28-roles--permissions)
-29. [Key Terminology](#29-key-terminology)
+26. [Coordinators Corner](#26-coordinators-corner)
+27. [PTO Passoff](#27-pto-passoff)
+28. [Proven Tactics](#28-proven-tactics)
+29. [Contact Suggestions](#29-contact-suggestions)
+30. [Quote Request SLA](#30-quote-request-sla)
+31. [Career Progression System](#31-career-progression-system)
+32. [Notifications / Inbox](#32-notifications--inbox)
+33. [Callouts / Trends Feed](#33-callouts--trends-feed)
+34. [Report Cards](#34-report-cards)
+35. [Shared Account Ownership](#35-shared-account-ownership)
+36. [Landing Page & Onboarding](#36-landing-page--onboarding)
+37. [Privacy & Terms](#37-privacy--terms)
+38. [Additional Tools](#38-additional-tools)
+39. [Keyboard Shortcuts & Power User Tools](#39-keyboard-shortcuts--power-user-tools)
+40. [Roles & Permissions](#40-roles--permissions)
+41. [Key Terminology](#41-key-terminology)
 
 ---
 
@@ -50,20 +62,20 @@ FreightDNA is a sales intelligence and CRM platform purpose-built for transporta
 | **National Account Manager (NAM)** | Team oversight, coaching AMs, strategic account growth |
 | **Director** | Portfolio-level visibility, rate exposure, team performance |
 | **Sales / Sales Director** | Prospecting, pipeline management, new business development |
-| **Logistics Manager (LM)** | Carrier outreach, lane capacity, procurement execution |
-| **Logistics Coordinator (LC)** | Operational support, coordinator workflows |
+| **Logistics Manager (LM)** | Carrier outreach, lane capacity, procurement execution, career progression tracking |
+| **Logistics Coordinator (LC)** | Operational support, coordinator workflows, portal credential management |
 | **Admin** | Full system access, user management, data uploads, configuration |
 
 ### Navigation
 
 The left sidebar organizes features into four sections:
 
-- **Navigation** - Core daily tools (Dashboard, Customers, Tasks, Goals, 1:1s)
-- **Pipeline** - Sales pipeline and RFP tracking
-- **Lane Tools** - Lane intelligence, carrier outreach, and procurement
-- **Admin / Team** - User management, financials, and analytics
+- **Navigation** - Core daily tools (Dashboard, Customers, Tasks, Goals, 1:1s, My Scorecard)
+- **Pipeline** - Sales pipeline, RFP tracking, Rep Scorecard, and LM Check-In Log
+- **Lane Tools** - Lane intelligence, carrier outreach, procurement, conversations, email intelligence, proven tactics, AI intelligence, and contact suggestions
+- **Admin / Team** - User management, financials, lane analytics, coordinators corner, PTO passoff, touchpoint history, and feedback inbox
 
-The sidebar can be collapsed to icon-only mode using the toggle button at the top. Hover over icons for tooltips when collapsed.
+The sidebar can be collapsed to icon-only mode using the toggle button at the top. Hover over icons for tooltips when collapsed. Sidebar groups (Pipeline, Lane Tools, Admin/Team) are collapsible via chevron toggles.
 
 ---
 
@@ -79,9 +91,10 @@ Your command center. The dashboard adapts to your role and shows the most releva
 - **Pinned Accounts** - Your personal watchlist of up to 10 starred accounts
 - **Goal Progress** - Current progress against your active goals with pace indicators
 - **NBA Cards** - AI-generated recommended next actions (top 5 for reps, up to 200 for directors)
+- **Outbound Touchpoints Today** - Live count of touchpoints logged today across the team
 
 **Account Managers additionally see:**
-- **My Trending Accounts** - Accounts with significant margin shifts vs. their 3-month average
+- **My Trending Accounts** - All accounts with significant margin shifts vs. their 3-month average
 - **My Activity Cards** - KPI tiles for Relationships Moved, Meaningful Conversations, New Contacts, and Touches Today
 - **Market Pulse** - Top 3 markets affecting your specific accounts
 
@@ -95,6 +108,9 @@ Your command center. The dashboard adapts to your role and shows the most releva
 - **Portfolio Rate Exposure** - Book-of-business rates vs. market (Above/At/Below) with estimated over-market spend
 - **Rep Rate Positioning** - Leaderboard ranking reps by pricing relative to market
 - **Director Heat Summary** - Hot/Warm/Cool lane counts across the organization
+
+**Logistics Managers additionally see:**
+- **LM Career Panel** - Operational KPIs, path-to-AM tracking, and development milestones (see Section 31)
 
 ### Common Use Cases
 
@@ -165,7 +181,7 @@ Clicking any account opens a multi-tab detail view:
 
 **Touchpoints Tab:**
 - Full history of all logged interactions
-- Callouts/Trends feed for team collaboration
+- Callouts/Trends feed for team collaboration (see Section 33)
 - Unified activity timeline
 
 **RFPs Tab:**
@@ -233,7 +249,7 @@ Use the org chart to identify:
 
 ### Contact Suggestions
 
-The system automatically detects new people mentioned in email threads linked to an account. These appear as suggestions on the People tab with a count badge visible in the Customers list. You can accept (creates the contact) or ignore each suggestion.
+The system automatically detects new people mentioned in email threads linked to an account. These appear as suggestions on the People tab with a count badge visible in the Customers list. You can accept (creates the contact) or ignore each suggestion. See Section 29 for the org-wide batch review interface.
 
 ### Copy to Clipboard
 
@@ -911,11 +927,60 @@ A dedicated panel for long-term career growth items that persist across every se
 
 ### What It Does
 
-**Rep Scorecard** - Admin/Director-only page that ranks reps across key metrics for performance comparison.
+A leadership-facing performance dashboard that ranks reps across key activity metrics for performance comparison. Accessible to Admins, Directors, NAMs, and Sales Directors.
 
-**My Scorecard** - Individual view for AMs, Sales, LMs, and LCs to see their own performance metrics.
+### Time Range Selection
 
-**LM Check-In Log** - Historical record of logistics manager daily check-ins.
+View data across four ranges using the pill toggle at the top:
+- **Last Week** - Previous 7-day period
+- **MTD** - Month to Date
+- **Last Month** - Previous calendar month
+- **YTD** - Year to Date
+
+### Summary Statistics
+
+Four aggregate cards at the top showing:
+- Total Touchpoints for the selected period
+- Meaningful Conversations across all reps
+- Contacts Added in the period
+- Active Reps (those with at least one touch logged)
+
+### Leaderboard Tables
+
+Separate sortable tables for **National Account Managers** and **Account Managers**, each showing:
+- Rank with medal icons (gold/silver/bronze for top 3)
+- Rep name and role
+- Total Touches with goal progress bar
+- Calls, Emails, Texts, and Site Visits breakdown
+- Meaningful Conversations with pace badge (On pace / Near / Behind)
+- New Contacts with pace badge
+- Relationships Moved Up count
+- "You" badge highlighting the current user
+
+### Pace Badges
+
+Visual indicators comparing actual progress against set goals:
+- **On pace** (green) - At or above 100% of target
+- **Near** (amber) - Between 70-99% of target
+- **Behind** (red) - Below 70% of target
+
+### Plays Activity Tracking
+
+A dedicated section tracks which outreach "Plays" are being executed by the team:
+- Play-by-play usage counts showing which tactics are most popular
+- Top reps per play
+- Rep-level plays-executed table showing total plays and most-used approaches
+
+### Individual Rep Breakdown Cards
+
+Grid of cards showing each rep's activity breakdown:
+- Calls, Emails, Meaningful Conversations, New Contacts, Site Visits, and Relationships Moved Up
+- Goal completion percentage with color-coded indicator
+
+### Related Views
+
+- **My Scorecard** - Individual view for AMs, Sales, LMs, and LCs to see their own performance metrics via the rep report page
+- **LM Check-In Log** - Historical record of logistics manager daily check-ins
 
 ---
 
@@ -959,6 +1024,14 @@ After logging a touchpoint, AI scans your notes for:
 ### Health Score Narratives
 
 AI-generated two-sentence explanations of why an account's health score is what it is, highlighting the key drivers and recommending specific actions.
+
+### AI Sales Intel Briefs
+
+One-click AI-generated prospect intelligence available from the Launchpad, providing:
+- Network overlap analysis
+- Conversation starters
+- Industry pain points
+- Competitive tips
 
 ---
 
@@ -1030,41 +1103,529 @@ Live freight market data from FreightWaves SONAR, integrated directly into your 
 
 ---
 
-## 26. Additional Tools
+## 26. Coordinators Corner
 
-### Coordinators Corner
-Operational workspace for logistics coordinators and managers. Track daily workflows and team coordination.
+### What It Does
 
-### PTO Passoff
-When you're going on PTO:
-1. Open PTO Passoff from Admin/Team
-2. Select your accounts
-3. Assign a covering team member
-4. Add handoff notes
-5. Your cover receives access and context for your accounts
+A centralized operational hub for logistics coordinators and managers to quickly access scheduling contacts, portal credentials, dispatch contacts, and account-specific operational details — all in one searchable page.
 
-### Feedback Inbox (Admin/Director only)
-Review and respond to team feedback and suggestions. Responses trigger email notifications to the submitter.
+### Who Uses It
 
-### Carrier Catalog (Admin/Director only)
-Master list of all carriers in the system with bulk management capabilities.
+Admins, Directors, NAMs, Logistics Managers, and Logistics Coordinators.
 
-### User Management
-- **Admins** see "User Management" — create users, assign roles, manage the team hierarchy
-- **Others** see "My Team" — view their direct reports and team structure
+### What's Displayed Per Account
 
-### Contact Suggestions
-Review AI-detected contact suggestions from email threads. Accept to create contacts or ignore to dismiss.
+Each account card shows badges for available data and expands to reveal full details:
+
+**Scheduling Info:**
+- D/L Email address with one-click copy
+- Tendering Process / Style (e.g., "Email tender with 2-hour window")
+- Operating Hours / Scheduling Windows
+
+**Dispatch Contacts:**
+- Contact name, title, phone, and email
+- One-click copy buttons for every phone number and email
+- Click-to-call and click-to-email links
+
+**Portal Credentials:**
+- Portal URL (clickable, opens in new tab)
+- Username with copy button
+- Password with reveal/hide toggle and copy button
+
+**Account Quirks:**
+- Special handling instructions or warnings highlighted in amber
+- Free-text notes about how the customer operates differently
+
+### Search and Filtering
+
+- Full-text search across customer names, contact names, phone numbers, emails, portal URLs, and tendering styles
+- Only accounts with at least one coordinator-relevant field are shown
+- Account count badge in the header
+
+### One-Click Copy
+
+Every phone number, email address, username, and password has a dedicated copy button that copies to clipboard with a toast confirmation.
 
 ---
 
-## 27. Keyboard Shortcuts & Power User Tools
+## 27. PTO Passoff
+
+### What It Does
+
+A structured workflow for managing account coverage when a team member is out on PTO. Ensures no account goes unattended and provides the covering rep with full context.
+
+### Who Uses It
+
+All roles. Available in the Admin/Team section of the sidebar.
+
+### Step-by-Step: Planning a PTO Passoff
+
+**1. Create the Passoff**
+1. Open **PTO Passoff** from the sidebar
+2. Click **New Passoff**
+3. Set your start date (out) and end date (return)
+4. Assign a covering team member
+5. Enter emergency contact info
+6. Add general notes
+7. Select which accounts to include (search and multi-select, with select-all option)
+8. Save as Draft or set to Active
+
+**2. Per-Account Checklist**
+
+For each included account, the owner fills out:
+- **Priority Level** - High (can't miss), Medium (keep an eye on), or Low (minimal touch)
+- **Account-Specific Cover** - Override the default covering person for specific accounts
+- **Spot Freight Handler** - Who handles spot requests
+- **Key Customer Contact** - Primary person to reach
+- **Open Items / Follow-Ups** - Pending callbacks and commitments
+- **Process Notes / Account Quirks** - How the customer likes to operate
+- **Active RFPs / Bids / Hot Deals** - Anything in play
+- **Average Weekly Loads** - Spot and total load volume
+- **Email Forwarding** - Checkbox to confirm autoforwarding is set up
+- **Spot Board Updated** - Checkbox to confirm spot board is current
+
+**3. Covering Rep Dashboard**
+
+The covering person sees:
+- All accounts they're covering with priority color coding
+- "I've reviewed" checkbox for each account to acknowledge receipt
+- Editable **Coverage Notes** field to document what happened during coverage
+- Read-only view of the owner's checklist and instructions
+
+**4. Notifications**
+
+- The covering person receives a notification when assigned
+- PTO acknowledgment notifications confirm the covering person has reviewed accounts
+- Return notification sent the day before the owner comes back
+
+**5. Automated Return**
+
+A scheduled job runs daily at 8:00 AM CT to:
+- Check for reps returning from PTO the following day
+- Send the covering person a reminder to finalize open items
+- Automatically transition passoff status when the return date is reached
+
+### Passoff Statuses
+
+| Status | Meaning |
+|--------|---------|
+| **Draft** | Still preparing — not yet visible to covering person |
+| **Active** | Owner is out — covering person has access |
+| **Completed** | Owner has returned from PTO |
+
+### Tabs
+
+- **My Passoffs** - Passoffs you've created (your upcoming/active PTO)
+- **Covering For** - Passoffs where you're the covering person
+- **Open Tasks** - All open tasks associated with passoff accounts, with due dates and status indicators
+
+---
+
+## 28. Proven Tactics
+
+### What It Does
+
+Surfaces AI-learned response patterns from your team's email conversations that correlate with winning outcomes. Helps reps understand which approaches work best for different customer signals.
+
+### Who Uses It
+
+Admins, Directors, NAMs, Logistics Managers, and Account Managers.
+
+### How Tactics Are Captured
+
+The system automatically analyzes outbound email responses to customer signals (objections, pricing requests, urgency, etc.) and tracks whether those responses led to won or lost outcomes. Over time, patterns emerge showing which approaches have the highest success rates.
+
+### Signal Types
+
+| Signal Type | What It Detects |
+|-------------|----------------|
+| **Objection Handling** | Responses to customer pushback or hesitation |
+| **Pricing Response** | How pricing inquiries were addressed |
+| **Service Recovery** | Responses to service complaints |
+| **Urgency Response** | How time-sensitive requests were handled |
+| **Opportunity Capture** | Responses to new business signals |
+| **Re-engagement** | Approaches to revive stalled email threads |
+| **Relationship Deepening** | Responses to positive feedback |
+| **Closing Move** | Responses that led to closing a deal |
+| **Loss Recovery** | Responses after losing a deal |
+| **Geography Expansion** | Responses exploring new lanes/regions |
+| **New Stakeholder** | Engagement with newly identified contacts |
+
+### What Each Tactic Shows
+
+- **Tactic Label** - A short descriptive name for the approach
+- **Tactic Summary** - What the rep did and why it worked
+- **Example Response** - An actual email excerpt demonstrating the approach
+- **Success Rate** - Percentage of times this approach led to a won outcome
+- **Times Used** - How many times this tactic has been applied
+- **Outcome** - Won, Lost, or Pending
+- **Account & Rep** - Who used it and on which account
+
+### Outcome Recording
+
+For tactics with pending outcomes, users can record whether the approach ultimately resulted in a Win or Loss, improving the accuracy of success rates over time.
+
+### How Tactics Surface During Email Drafting
+
+When composing a response to a detected signal, the system may suggest relevant proven tactics based on the signal type, helping reps apply approaches that have historically worked.
+
+### Dashboard Statistics
+
+- Total Tactics captured
+- Won Tactics count
+- Pending Outcome count
+- Top Signal Type (most frequent)
+
+---
+
+## 29. Contact Suggestions
+
+### What It Does
+
+An org-wide batch review interface for AI-detected contacts found in email threads who are not yet in the CRM. Surfaces new people across all accounts so reps and managers can quickly review and add them.
+
+### Who Uses It
+
+Admins, Directors, NAMs, and Account Managers.
+
+### How Suggestions Are Generated
+
+The system scans email threads linked to accounts and identifies email addresses that don't match any existing contact in the CRM. Sources include:
+- **Email Thread** - New participants in ongoing conversations
+- **Domain Match** - Email addresses matching the customer's domain
+- **Email Message** - Individual messages with unknown senders
+
+### What's Shown Per Suggestion
+
+- Email address
+- Suggested name and title (if detected)
+- Confidence score badge: **High** (65+), **Medium** (40-64), or **Low** (below 40)
+- Source type badge (Thread, Domain, Message)
+- Number of email threads the person appeared in
+- Account association
+
+### Batch Review Interface
+
+Suggestions are grouped by account, with each account showing its pending count. The interface supports:
+
+**One-Click Add:**
+- Click **Add** to immediately create a contact with the detected information
+
+**Add with Role:**
+- Click **+ Role** to open a dialog where you assign a role before adding:
+  - Decision Maker, Influencer, Champion, End User, Finance/Procurement, Operations, IT/Technical, Executive, or Other
+
+**Ignore:**
+- Click **Ignore** to dismiss a suggestion you don't want to add
+
+### Account-Level View
+
+The page also shows a total pending count badge and supports search filtering across account names. Each account group is collapsible.
+
+### Integration with Customers Page
+
+Contact suggestion counts also appear as badges on individual customer cards in the Customers list, alerting reps that new contacts have been detected.
+
+---
+
+## 30. Quote Request SLA
+
+### What It Does
+
+Enforces a 7-minute response SLA when a quote request is detected from an inbound customer email. Ensures pricing requests are handled with urgency.
+
+### How It Works
+
+1. **Detection** - The Email Intelligence system identifies a "pricing_request" or "quote_request" signal from an inbound email
+2. **Alert** - A high-priority notification is immediately sent to the rep assigned to that account
+3. **Countdown** - A 7-minute timer begins from the moment the signal is detected
+4. **Escalation** - If the rep has not responded within 5 minutes, the system automatically escalates to the rep's manager with a `quote_request_escalation` notification
+5. **Resolution** - Logging a touchpoint or responding to the email resolves the SLA
+
+### Escalation Check
+
+A background job runs every minute to check for breached Quote Request SLAs and trigger manager escalations automatically.
+
+---
+
+## 31. Career Progression System
+
+### What It Does
+
+Provides Logistics Managers with a dedicated career development panel showing their operational KPIs, progress toward promotion to Account Manager, and development milestones set by leadership.
+
+### Who Sees It
+
+The LM Career Panel appears on the Dashboard for Logistics Manager users.
+
+### Operational KPI Cards
+
+Four real-time statistics cards:
+- **Loads This Month** - Total loads handled in the current month
+- **Margin This Month** - Total margin dollars generated
+- **Margin %** - Current margin percentage
+- **Repeat Carrier Rate** - Percentage of loads hauled by repeat carriers, with preferred carrier sub-count
+
+### Path to Account Manager
+
+A promotion criteria tracker showing progress toward specific thresholds:
+- **Loads/Month Target** - Minimum monthly load count required
+- **Margin % Target** - Minimum margin percentage required
+- Visual progress bars with color coding (green when met, amber when close, red when behind)
+
+### Top Carriers
+
+A leaderboard of the top 5 repeat carriers for the current month, showing load counts per carrier.
+
+### Development Milestones
+
+An interactive checklist of career development goals managed by leadership:
+- Each milestone can be toggled as complete/incomplete
+- Progress bar shows overall completion percentage
+- Examples: "Complete carrier negotiation training," "Shadow AM for one week," "Lead a customer call independently"
+
+---
+
+## 32. Notifications / Inbox
+
+### What It Does
+
+A centralized notification feed that aggregates all system-generated alerts, assignments, and updates into a single inbox. Accessible via the notification bell icon in the header or the dedicated Notifications page.
+
+### Notification Types
+
+| Type | Description |
+|------|-------------|
+| **Task Reminder** | Tasks approaching or past their due date |
+| **Task Assigned** | A new task has been assigned to you |
+| **Task Comment** | Someone commented on a task you're involved in |
+| **Task Completed** | A task you created or are watching has been completed |
+| **Goal Set** | A new goal has been set for you |
+| **Goal Updated** | Progress on one of your goals was updated |
+| **Goal Comment** | Someone commented on a goal thread |
+| **1:1 Topic Added** | A new topic was added to an upcoming 1:1 session |
+| **1:1 Reply** | A reply was posted on a 1:1 topic thread |
+| **Session Closed** | A 1:1 session was closed and summarized |
+| **Post Reply** | Someone replied to a post in the Callouts feed |
+| **New Post** | A new post was shared in the Callouts feed |
+| **Account Assigned** | An account was assigned or reassigned to you |
+| **PTO Coverage** | You've been assigned to cover someone's accounts during PTO |
+| **PTO Acknowledged** | The covering person has reviewed your PTO passoff |
+| **App Suggestion** | A platform feature suggestion or tip |
+| **Promotion Nomination** | You've been nominated for a career progression milestone |
+
+### Features
+
+- **Category Filtering** - Filter by All, Unread, or specific notification types
+- **Mark All as Read** - One-click button to clear all unread indicators
+- **Quick Actions** - Clicking a notification navigates directly to the relevant context (task, goal, account, etc.)
+- **Unread Indicator** - Blue dot on unread notifications with bold text
+- **Time Stamps** - Relative time display (e.g., "2h ago," "Yesterday")
+
+### Notification Bell
+
+The header notification bell shows a count of unread notifications and provides a dropdown preview. Click "See all" to open the full Inbox page.
+
+### Integration with Today's Briefing
+
+Unread notification counts feed into the Dashboard's Today's Briefing portlet, ensuring critical items are visible at the start of each day.
+
+---
+
+## 33. Callouts / Trends Feed
+
+### What It Does
+
+A team collaboration feed embedded in company detail pages and available as a standalone portlet. Enables Win/Risk/Intel posts that keep the team informed about account developments.
+
+### Post Categories
+
+| Category | Purpose |
+|----------|---------|
+| **Win** | Celebrate a deal closed, new lane won, or positive outcome |
+| **Risk** | Flag a concern — declining volumes, competitor threat, service issue |
+| **Intel** | Share intelligence — market insight, contact change, competitor activity |
+| **Idea** | Suggest an approach or strategy for the account |
+| **Trend** | Highlight a pattern or emerging trend |
+
+### Features
+
+- **@Mentions** - Tag specific team members to draw their attention to a post
+- **Threaded Replies** - Respond to posts with comments that nest under the original
+- **File Attachments** - Attach screenshots or documents (supports clipboard paste)
+- **Pinned Posts** - Leadership can pin important posts to the top of the feed
+- **Emoji Reactions** - React to posts with emoji
+- **Linked Accounts** - Posts can be linked to specific customer accounts
+
+### Who Can Post
+
+- Leadership Callouts (admin/director-created posts) can target specific groups: "All NAMs," individual reps, or custom groups
+- All users can post on account-specific feeds via the Touchpoints tab on Company Detail pages
+
+### Notifications
+
+When you're @mentioned in a post or someone replies to your post, you receive a notification in your Inbox.
+
+---
+
+## 34. Report Cards
+
+### What It Does
+
+Captures point-in-time snapshots of individual rep performance, creating a historical log that leadership can review over time.
+
+### What's Tracked
+
+- **Financial Metrics** - Load count, margin dollars, margin percentage
+- **Activity Metrics** - Touchpoints, meaningful conversations, new contacts
+- **Goal Attainment** - Progress against set targets
+
+### Snapshot Periods
+
+Report cards are generated on both weekly and monthly cadences, stored as JSONB metric data.
+
+### Team Section
+
+Leadership views include a team-level report card showing aggregated performance across all direct reports, enabling period-over-period comparison and trend analysis.
+
+### Individual View
+
+Each rep can view their own report card via the **My Scorecard** link in the Navigation section, showing their current performance metrics and historical trends.
+
+---
+
+## 35. Shared Account Ownership
+
+### What It Does
+
+Allows multiple reps to be associated with a single customer account, each with specific territory notes describing their role or geographic responsibility.
+
+### How It Works
+
+On the Company Detail Intel tab, shared reps are listed with:
+- **User** - The additional rep assigned to the account
+- **Territory Note** - A text description of what the shared rep covers (e.g., "Southeast region," "Reefer lanes only," "Backup for spot freight")
+
+### Visibility Rules
+
+Shared reps gain visibility into the account's data, touchpoints, and contacts. The account appears in their customer list alongside their primary assignments.
+
+---
+
+## 36. Landing Page & Onboarding
+
+### What It Does
+
+The public-facing marketing site that introduces FreightDNA to prospective customers, showcases features, and enables self-service onboarding through Stripe checkout.
+
+### Key Sections
+
+**Hero & Stats:**
+- Platform headline with key statistics: 25+ modules, 360° account visibility, AI-powered intelligence, ~1 week onboarding
+
+**Feature Highlights:**
+- Eight core feature cards covering Org Charts, Sales Pipeline, Carrier Lane Intelligence, Touchpoint Tracking, RFP Intelligence, Goals, Market Intelligence/SONAR, and AI Intelligence Hub
+
+**Module Directory:**
+- Complete list of 19+ platform modules with descriptions
+
+**Persona-Based Value Props:**
+- NAMs & Account Executives, Directors & Managers, Ops & Logistics Managers, Admins & Platform Owners — each with role-specific bullet points
+
+### Pricing Tiers
+
+| Plan | Monthly Price | Annual Price | Details |
+|------|---------------|--------------|---------|
+| **Trial** | $1,000 first month | — | Full platform access, complete setup and data import, hands-on onboarding. If you continue, $1,000 applies toward first year. |
+| **Standard** | $1,500/mo | $1,200/mo (save 20%) | Up to 50 team members, all 25+ modules, AI features, goals, 1:1s, performance dashboards, unlimited accounts/contacts |
+| **Enterprise** | $2,000/mo | $1,600/mo (save 20%) | 50+ team members, multi-org support, dedicated account manager, priority feature development |
+| **Custom Buildout** | Quoted per project | — | Bespoke features scoped to your requirements, starting around $500 for simple additions |
+
+### Dana (AI Chatbot)
+
+A floating marketing chat widget on the landing page powered by AI. Dana introduces herself as "your Freight DNA guide" and handles:
+- Feature questions
+- Pricing inquiries
+- CRM comparisons
+- Fit assessment conversations
+
+### Onboarding Flow
+
+1. Prospect schedules a demo via the landing page
+2. After demo, prospect selects a plan
+3. Stripe checkout processes payment
+4. Checkout Success page confirms subscription with plan name
+5. User is directed to the login page to begin using the platform
+
+### Schedule Demo
+
+All pricing cards include a "Schedule Demo" CTA that opens a demo scheduling modal. The platform prioritizes a demo-first approach to ensure fit.
+
+---
+
+## 37. Privacy & Terms
+
+### Privacy Policy
+
+Accessible at `/privacy`. Covers:
+- **Data Collection** - Account info, billing details, business data (shipments, contacts), and AI processing logs
+- **AI Feature Disclosure** - Relevant customer data (account names, freight lanes) is sent to OpenAI for processing but is not used to train models
+- **Data Ownership** - Customers retain 100% ownership of submitted data
+- **Effective Date** - March 29, 2026
+
+### Terms of Service
+
+Accessible at `/terms`. Key provisions:
+- **Refund Policy** - Monthly subscriptions are non-refundable; annual plans have a 30-day pro-rated refund window
+- **AI Output Disclaimer** - AI-generated content (DNA Guru responses, health narratives, email drafts) is for sales assistance only and not guaranteed for accuracy
+- **Customer Data Ownership** - Customers retain full ownership of all data they submit to the platform
+
+### Navigation
+
+Both pages are accessible from the landing page footer and are available to unauthenticated users.
+
+---
+
+## 38. Additional Tools
+
+### AI Intelligence Hub
+
+A centralized AI-powered intelligence page combining sentiment analysis on customer interactions, AI-driven coaching recommendations, and competitive intelligence. Available to Admins, Directors, NAMs, AMs, Sales, and Sales Directors.
+
+### Feedback Inbox (Admin/Director only)
+
+Review and respond to team feedback and suggestions. Responses trigger email notifications to the submitter.
+
+### Carrier Catalog (Admin/Director only)
+
+Master list of all carriers in the system with bulk management capabilities.
+
+### User Management
+
+- **Admins** see "User Management" — create users, assign roles, manage the team hierarchy
+- **Others** see "My Team" — view their direct reports and team structure
+
+### Monitored Mailboxes (Admin/Director/Sales Director)
+
+Configure which email mailboxes are monitored for email intelligence, conversation tracking, and contact suggestion detection.
+
+### Training
+
+Platform training resources and onboarding materials.
+
+### Tools
+
+Utility tools and administrative functions.
+
+---
+
+## 39. Keyboard Shortcuts & Power User Tools
 
 ### Global Shortcuts
 
 | Shortcut | Action |
 |----------|--------|
-| **/** or **Cmd+K** | Open global search |
+| **/** or **Cmd+K** / **Ctrl+K** | Open global search |
 | **Shift+T** | Open touchpoint logging dialog |
 | **Shift+D** | Navigate to Dashboard |
 | **Shift+A** | Navigate to Customers |
@@ -1078,9 +1639,13 @@ On the Customers page, save up to 10 custom filter combinations for instant reca
 
 Click the collapse button at the top of the sidebar to switch to icon-only mode. Your preference persists across sessions.
 
+### Inactivity Timeout
+
+For security, the platform warns you after a period of inactivity and automatically signs you out if you don't respond. A countdown dialog lets you choose to stay signed in or sign out immediately.
+
 ---
 
-## 28. Roles & Permissions
+## 40. Roles & Permissions
 
 ### Role Access Matrix
 
@@ -1090,18 +1655,33 @@ Click the collapse button at the top of the sidebar to switch to icon-only mode.
 | Customers | All | Team | Team | Own | Own | Team | Inherited | Own |
 | Launchpad | Yes | - | - | - | Yes | Yes | - | - |
 | RFP & Awards | Yes | Yes | Yes | Yes | Yes | Yes | - | - |
+| Rep Scorecard | Yes | Yes | Yes | - | - | Yes | - | - |
+| LM Check-In Log | Yes | Yes | Yes | Yes | - | Yes | - | - |
 | Lane Work Queue | Yes | Yes | Yes | Yes | - | - | Yes | Yes |
 | My Procurement | Yes | Yes | Yes | Yes | - | - | Yes | Yes |
 | Carrier Hub | Yes | Yes | Yes | - | - | - | Yes | - |
 | Intel | Yes | - | - | - | - | - | - | - |
-| Conversations | Yes | Yes | Yes | Yes | - | - | Yes | Yes |
+| Conversations | Yes | Yes | Yes | Yes | - | - | Yes | - |
+| Contact Suggestions | Yes | Yes | Yes | Yes | - | - | - | - |
 | Email Intelligence | Yes | Yes | Yes | - | - | Yes | - | - |
+| Proven Tactics | Yes | Yes | Yes | Yes | - | - | Yes | - |
+| AI Intelligence | Yes | Yes | Yes | Yes | Yes | Yes | - | - |
+| Coordinators Corner | Yes | Yes | Yes | - | - | - | Yes | Yes |
+| PTO Passoff | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Financials | Yes | Yes | Yes | - | Yes | Yes | - | - |
 | Financial Upload | Yes | - | - | - | - | - | - | - |
-| User Management | Yes | - | - | - | - | - | - | - |
-| Feedback Inbox | Yes | Yes | - | - | - | - | - | - |
-| Rep Scorecard | Yes | Yes | Yes | - | - | Yes | - | - |
+| Lane Analytics | Yes | Yes | Yes | - | Yes | Yes | - | - |
 | Team Performance | Yes | Yes | Yes | - | Yes | Yes | - | - |
+| User Management | Yes | - | - | - | - | - | - | - |
+| Carrier Catalog | Yes | Yes | - | - | - | - | - | - |
+| Monitored Mailboxes | Yes | Yes | - | - | - | Yes | - | - |
+| Feedback Inbox | Yes | Yes | - | - | - | - | - | - |
+| Career Panel (LM) | - | - | - | - | - | - | Yes | - |
+| My Scorecard | - | - | - | Yes | Yes | - | Yes | Yes |
+
+### Sidebar Visibility vs. Route Access
+
+Some features are accessible by direct URL even if they don't appear in a user's sidebar navigation. For example, Coordinators Corner is accessible to LMs and LCs via route permissions, but the sidebar group it belongs to (Admin/Team) may not be visible to all roles. The matrix above reflects route-level access permissions, not sidebar placement.
 
 ### Data Visibility Rules
 
@@ -1113,16 +1693,20 @@ Click the collapse button at the top of the sidebar to switch to icon-only mode.
 
 ---
 
-## 29. Key Terminology
+## 41. Key Terminology
 
 | Term | Definition |
 |------|-----------|
 | **Account** | A customer company in the CRM |
 | **Award** | Lanes won from an RFP — freight you've been awarded to haul |
 | **Bench** | The list of carriers contacted for a specific lane |
-| **Callout** | A team-shared post on an account (Win, Risk, or Intel) |
+| **Callout** | A team-shared post on an account (Win, Risk, Intel, Idea, or Trend) |
+| **Career Panel** | The LM Career Progression dashboard showing operational KPIs and path to Account Manager |
+| **Confidence Score** | A 0-100 rating indicating the system's certainty that a contact suggestion is valid |
 | **Corridor** | A geographic freight pattern (e.g., Upper Midwest, Texas to Southeast) |
 | **Coverage Profile** | Assessment of carrier coverage on a lane (Stable, Watch, No History) |
+| **Dana** | The AI marketing chatbot on the public landing page that answers questions about FreightDNA |
+| **Development Milestone** | A career growth objective set by leadership for an LM, tracked in the Career Panel |
 | **DNA** | "Down Not Across" — the company tagline and operating philosophy |
 | **Fit Score** | 0-100% measure of how well a carrier matches a specific lane |
 | **Greenfield** | An unworked account — no touchpoints, no assigned rep |
@@ -1134,7 +1718,11 @@ Click the collapse button at the top of the sidebar to switch to icon-only mode.
 | **Momentum Score** | 0-100 account health score based on activity, relationships, and financials |
 | **NBA** | Next Best Action — AI-recommended action for an account |
 | **OTRI** | Outbound Tender Rejection Index — freight market tightness indicator |
+| **Passoff** | The PTO handoff process where a rep transfers account coverage to a teammate |
+| **Plays** | Structured outreach tactics tracked in the Rep Scorecard for team activity measurement |
 | **Procurement** | The process of finding and securing carrier capacity for awarded lanes |
+| **Proven Tactic** | An AI-learned email response pattern that correlates with winning outcomes |
+| **Quote SLA** | The 7-minute response window enforced when a quote request is detected from email |
 | **Recurring Lane** | A freight route that moves consistently (identified from TMS data) |
 | **Relationship Base** | Your depth of relationship with a contact (1st, 2nd, 3rd, Home Run) |
 | **RFP** | Request for Proposal — a customer's formal request for carrier pricing |
