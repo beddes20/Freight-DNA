@@ -24,6 +24,7 @@ import { startEmailIntelligenceScheduler } from "./emailIntelligenceScheduler";
 import { startQuoteRequestSlaScheduler } from "./quoteRequestSlaService";
 import { initGraphSubscriptionService } from "./graphSubscriptionService";
 import { initDeltaSyncScheduler } from "./services/mailboxDeltaSyncService";
+import { initWebexSyncScheduler } from "./routes/webex";
 import { runMigrations } from "./runMigrations";
 import { storage } from "./storage";
 import { WebhookHandlers } from "./webhookHandlers";
@@ -287,6 +288,7 @@ async function initStripe() {
           console.error("[graph-sub] Startup error:", err instanceof Error ? err.message : String(err));
         });
         initDeltaSyncScheduler();
+        initWebexSyncScheduler();
       }, 4000);
       // Pre-warm the financial uploads cache so the first carrier-suggestions
       // request doesn't trigger a cold full-table JSONB scan in production.

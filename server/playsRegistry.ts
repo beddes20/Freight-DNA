@@ -100,6 +100,13 @@ export const PLAYS_REGISTRY: PlayDefinition[] = [
     outcomeType: "execute",
     ruleTypes: ["market_surge_customer_outreach"],
   },
+  {
+    id: "webex_missed_call_follow_up",
+    name: "Return Missed Call",
+    description: "Follow up on a missed inbound call or voicemail from a known contact — inbound interest should never fall through the cracks.",
+    outcomeType: "protect",
+    ruleTypes: ["webex_missed_call"],
+  },
 ];
 
 const ruleToPlayMap = new Map<string, PlayDefinition>();

@@ -74,6 +74,7 @@ const RULE_LABELS: Record<string, string> = {
   rfp_coverage_gap:       "RFP Coverage Gap",
   stalled_award_lanes:    "Stalled Award",
   recurring_lane_capacity:"Lane Capacity",
+  webex_missed_call:      "Missed Call",
 };
 
 const OUTCOME_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {

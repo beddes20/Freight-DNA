@@ -28,6 +28,7 @@ import { registerAIIntelligenceRoutes } from "./routes/aiIntelligence";
 import { getPlayForRuleType } from "./playsRegistry";
 import { registerEmailDraftingRoutes } from "./routes/emailDrafting";
 import { registerMonitoredMailboxRoutes } from "./routes/monitoredMailboxes";
+import { registerWebexRoutes } from "./routes/webex";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
@@ -3160,6 +3161,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerProspectRoutes(app);
   registerEmailDraftingRoutes(app);
   registerMonitoredMailboxRoutes(app);
+  registerWebexRoutes(app);
 
   registerFinancialRoutes(app);
   // ── Company Historical Trends ─────────────────────────────────────────────

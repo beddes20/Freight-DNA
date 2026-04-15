@@ -28,6 +28,8 @@ import type { Contact, Touchpoint } from "@shared/schema";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 import { ContactLaneManager } from "@/components/relationship-freight-portlet";
 import { OutlookComposeDialog } from "@/components/outlook-compose-dialog";
+import { useWebexStatus, useWebexPresenceBatch, getPresenceStyle } from "@/hooks/use-webex";
+import { Video } from "lucide-react";
 
 function stripHtml(html: string): string {
   return html
@@ -108,6 +110,9 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit, onDeleted }
   const [tpPendingFiles, setTpPendingFiles] = useState<PendingFile[]>([]);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
+  const webexConfigured = useWebexStatus();
+  const contactPhones = contact?.phone ? [contact.phone] : [];
+  const presenceMap = useWebexPresenceBatch(contactPhones, webexConfigured && !!contact?.phone);
 
   function copyToClipboard(value: string, field: string) {
     navigator.clipboard.writeText(value).then(() => {
@@ -302,19 +307,43 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit, onDeleted }
                   </div>
                 )}
                 {contact.phone && (
-                  <div className="flex items-center gap-2 group">
-                    <a href={`tel:${contact.phone}`} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground flex-1 min-w-0">
-                      <Phone className="h-4 w-4 shrink-0" />
-                      <span>{contact.phone}</span>
-                    </a>
-                    <button
-                      onClick={() => copyToClipboard(contact.phone!, "phone")}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground shrink-0"
-                      title="Copy phone"
-                      data-testid="button-copy-phone"
-                    >
-                      {copiedField === "phone" ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
-                    </button>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-2 group">
+                      <a href={`tel:${contact.phone}`} className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground flex-1 min-w-0">
+                        <Phone className="h-4 w-4 shrink-0" />
+                        <span>{contact.phone}</span>
+                      </a>
+                      {webexConfigured && (() => {
+                        const ps = getPresenceStyle(presenceMap[contact.phone!] ?? "unknown");
+                        return (
+                          <span
+                            className={`inline-block h-2.5 w-2.5 rounded-full ${ps.dot}`}
+                            title={`Webex: ${ps.label}`}
+                            data-testid="presence-dot-detail"
+                          />
+                        );
+                      })()}
+                      <button
+                        onClick={() => copyToClipboard(contact.phone!, "phone")}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground shrink-0"
+                        title="Copy phone"
+                        data-testid="button-copy-phone"
+                      >
+                        {copiedField === "phone" ? <Check className="h-3.5 w-3.5 text-green-500" /> : <Copy className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                    {webexConfigured && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full gap-2 text-green-600 border-green-200 hover:bg-green-50 hover:border-green-400 dark:text-green-400 dark:border-green-800 dark:hover:bg-green-950/40"
+                        onClick={() => window.open(`webextel://${contact.phone!.replace(/[^0-9+]/g, "")}`, "_self")}
+                        data-testid="button-webex-call-detail"
+                      >
+                        <Video className="h-3.5 w-3.5" />
+                        Call via Webex
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>

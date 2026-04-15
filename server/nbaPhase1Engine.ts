@@ -38,7 +38,8 @@ export type Phase1RuleType =
   | "market_tightening"
   | "market_loosening"
   | "R_MARKET_TIGHT"
-  | "R_MARKET_LOOSE";
+  | "R_MARKET_LOOSE"
+  | "webex_missed_call";
 
 export type Phase1OutcomeType = "protect" | "execute" | "grow" | "deepen";
 

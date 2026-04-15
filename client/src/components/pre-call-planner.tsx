@@ -48,6 +48,8 @@ import { GrowthScoreBadge } from "@/components/account-growth-portlet";
 import { invalidateAfterTouchpoint } from "@/lib/invalidations";
 import { buildAiToasts } from "@/lib/aiTouchUtils";
 import { useToast } from "@/hooks/use-toast";
+import { useWebexStatus, useWebexPresenceBatch, getPresenceStyle } from "@/hooks/use-webex";
+import { Video } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -225,6 +227,10 @@ export function PreCallPlanner({
   const [selectedContactForIntel, setSelectedContactForIntel] = useState<Contact | null>(null);
   const [composeTarget, setComposeTarget] = useState<Contact | null>(null);
   const [narrativeEnabled, setNarrativeEnabled] = useState(false);
+
+  const webexConfigured = useWebexStatus();
+  const contactPhones = useMemo(() => contacts.filter(c => c.phone).map(c => c.phone!), [contacts]);
+  const presenceMap = useWebexPresenceBatch(contactPhones, webexConfigured && open);
 
   // Footer — log touch
   const [logOpen, setLogOpen] = useState(false);
@@ -659,13 +665,34 @@ export function PreCallPlanner({
                         {(c.phone || c.email) && (
                           <div className="flex items-center gap-2 flex-wrap" onClick={e => e.stopPropagation()}>
                             {c.phone && (
-                              <a
-                                href={`tel:${c.phone}`}
-                                className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-md bg-green-50 dark:bg-green-950/30 text-green-700 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-950/50 transition-colors border border-green-200 dark:border-green-800/50"
-                                data-testid={`precall-phone-${c.id}`}
-                              >
-                                <Phone className="h-3 w-3" /> {c.phone}
-                              </a>
+                              <span className="flex items-center gap-1.5">
+                                <a
+                                  href={`tel:${c.phone}`}
+                                  className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-md bg-green-50 dark:bg-green-950/30 text-green-700 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-950/50 transition-colors border border-green-200 dark:border-green-800/50"
+                                  data-testid={`precall-phone-${c.id}`}
+                                >
+                                  <Phone className="h-3 w-3" /> {c.phone}
+                                </a>
+                                {webexConfigured && (() => {
+                                  const ps = getPresenceStyle(presenceMap[c.phone!] ?? "unknown");
+                                  return (
+                                    <span
+                                      className={`inline-block h-2 w-2 rounded-full shrink-0 ${ps.dot}`}
+                                      title={`Webex: ${ps.label}`}
+                                      data-testid={`precall-presence-${c.id}`}
+                                    />
+                                  );
+                                })()}
+                                {webexConfigured && (
+                                  <button
+                                    onClick={() => window.open(`webextel://${c.phone!.replace(/[^0-9+]/g, "")}`, "_self")}
+                                    className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-md bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-950/50 transition-colors border border-emerald-200 dark:border-emerald-800/50"
+                                    data-testid={`precall-webex-call-${c.id}`}
+                                  >
+                                    <Video className="h-3 w-3" /> Webex
+                                  </button>
+                                )}
+                              </span>
                             )}
                             {c.email && (
                               <button
@@ -943,6 +970,20 @@ export function PreCallPlanner({
 
           {/* ── STICKY FOOTER ──────────────────────────────────────────────── */}
           <div className="shrink-0 border-t bg-background/95 backdrop-blur-sm px-5 py-3 flex items-center gap-2">
+            {webexConfigured && sortedContacts.some(c => c.phone) && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const best = sortedContacts.find(c => c.phone);
+                  if (best?.phone) window.open(`webextel://${best.phone.replace(/[^0-9+]/g, "")}`, "_self");
+                }}
+                data-testid="button-footer-webex-call"
+                className="flex items-center gap-1.5 text-green-600 border-green-200 hover:bg-green-50 hover:border-green-400 dark:text-green-400 dark:border-green-800 dark:hover:bg-green-950/40"
+              >
+                <Video className="h-3.5 w-3.5" /> Call via Webex
+              </Button>
+            )}
             <Button
               variant="default"
               size="sm"
