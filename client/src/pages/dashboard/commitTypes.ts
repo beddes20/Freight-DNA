@@ -1,14 +1,14 @@
 /** Shared types and constants for the weekly freight commitment system. */
 
 export const LEVERS = [
-  "Recovery",
   "Contact Mapping",
   "Lane ID",
-  "Spot-to-Contract",
-  "Referral",
   "Pipeline",
   "QBR",
+  "Recovery",
+  "Referral",
   "Relationship Advance",
+  "Spot-to-Contract",
 ] as const;
 
 export type Lever = typeof LEVERS[number];

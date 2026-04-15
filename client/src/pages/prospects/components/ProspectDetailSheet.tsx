@@ -362,9 +362,9 @@ export function ProspectDetailSheet({
                     <SelectContent>
                       <SelectItem value="call">Call</SelectItem>
                       <SelectItem value="email">Email</SelectItem>
-                      <SelectItem value="text">Text</SelectItem>
                       <SelectItem value="meeting">Meeting</SelectItem>
                       <SelectItem value="note">Note</SelectItem>
+                      <SelectItem value="text">Text</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

@@ -13,10 +13,10 @@ import { useToast } from "@/hooks/use-toast";
 
 export const OPPORTUNITY_CATEGORIES = [
   { value: "spot_batch", label: "Batch of Spot Loads" },
-  { value: "dedicated_contracted", label: "Spot to Contracted Conversion" },
   { value: "mini_bid", label: "Mini-Bid" },
-  { value: "project", label: "Project" },
   { value: "other", label: "New Site, First Opp" },
+  { value: "project", label: "Project" },
+  { value: "dedicated_contracted", label: "Spot to Contracted Conversion" },
 ];
 
 interface OpportunityLogDialogProps {

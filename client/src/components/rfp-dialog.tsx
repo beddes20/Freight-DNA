@@ -79,15 +79,15 @@ interface PdfPreviewResponse {
 const CLOSED_STATUSES = ["lost", "awarded", "partially_awarded", "declined"];
 
 const CLOSE_REASONS = [
-  { value: "price", label: "Price / Rate too high" },
-  { value: "incumbent", label: "Incumbent advantage" },
-  { value: "no_response", label: "No response from customer" },
+  { value: "awarded_us", label: "Awarded to us" },
   { value: "capacity", label: "Capacity constraints" },
+  { value: "incumbent", label: "Incumbent advantage" },
   { value: "lane_coverage", label: "Lane coverage gap" },
+  { value: "no_response", label: "No response from customer" },
+  { value: "other", label: "Other" },
+  { value: "price", label: "Price / Rate too high" },
   { value: "relationship", label: "Relationship / trust" },
   { value: "service", label: "Service concerns" },
-  { value: "awarded_us", label: "Awarded to us" },
-  { value: "other", label: "Other" },
 ];
 
 interface RfpDialogProps {

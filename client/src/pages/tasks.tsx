@@ -380,7 +380,7 @@ function AlertDialog({ open, onOpenChange, companies }: { open: boolean; onOpenC
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">No account linked</SelectItem>
-                {companies.map(c => (
+                {[...companies].sort((a, b) => a.name.localeCompare(b.name)).map(c => (
                   <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                 ))}
               </SelectContent>
@@ -1122,7 +1122,7 @@ export default function TasksPage() {
                 <SelectValue placeholder="Choose a team member…" />
               </SelectTrigger>
               <SelectContent>
-                {teamMembers.map(u => (
+                {[...teamMembers].sort((a, b) => a.name.localeCompare(b.name)).map(u => (
                   <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
                 ))}
               </SelectContent>

@@ -589,9 +589,9 @@ export default function AdminCarriers() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__all__">All Sources</SelectItem>
-              <SelectItem value="lwq">Lane Work Queue Upload</SelectItem>
               <SelectItem value="catalog">Catalog Import</SelectItem>
               <SelectItem value="engine">Engine Discovery</SelectItem>
+              <SelectItem value="lwq">Lane Work Queue Upload</SelectItem>
               <SelectItem value="no_source">Manual Add</SelectItem>
             </SelectContent>
           </Select>

@@ -65,16 +65,16 @@ function ConfidenceBadge({ score }: { score: number }) {
 }
 
 const ROLE_OPTIONS = [
-  "Decision Maker",
-  "Influencer",
   "Champion",
+  "Decision Maker",
   "End User",
-  "Finance/Procurement",
-  "Operations",
-  "IT/Technical",
   "Executive",
+  "Finance/Procurement",
+  "Influencer",
+  "IT/Technical",
+  "Operations",
   "Other",
-];
+].sort((a, b) => a.localeCompare(b));
 
 export function SuggestedContactsPanel({ companyId }: SuggestedContactsPanelProps) {
   const { toast } = useToast();

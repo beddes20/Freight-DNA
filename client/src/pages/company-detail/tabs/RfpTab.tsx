@@ -1155,6 +1155,7 @@ export function RfpTab({
                 <SelectContent>
                   {(contacts || [])
                     .filter((c) => !findPlannerFacility?.coveredBy?.some((cb) => cb.id === c.id))
+                    .sort((a, b) => a.name.localeCompare(b.name))
                     .map(c => (
                       <SelectItem key={c.id} value={c.id}>
                         {c.name}{c.title ? ` — ${c.title}` : ""}

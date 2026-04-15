@@ -64,15 +64,15 @@ const US_STATES = [
 ];
 
 const EQUIPMENT_OPTIONS = [
-  "Dry Van","Reefer","Flatbed","Step Deck","Power Only","Box Truck","Tanker","Lowboy","Other",
+  "Box Truck","Dry Van","Flatbed","Lowboy","Other","Power Only","Reefer","Step Deck","Tanker",
 ];
 
 const CONTACT_ROLES = [
-  { value: "dispatcher", label: "Dispatcher" },
   { value: "after_hours", label: "After Hours / Night Dispatch" },
-  { value: "sales", label: "Sales Rep" },
   { value: "billing", label: "Billing / AP" },
+  { value: "dispatcher", label: "Dispatcher" },
   { value: "general", label: "General Contact" },
+  { value: "sales", label: "Sales Rep" },
 ];
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.FC<{ className?: string }> }> = {

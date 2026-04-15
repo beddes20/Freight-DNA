@@ -214,10 +214,10 @@ export default function ProvenTacticsPage() {
   const stats = statsData;
 
   const signalTypes = [
-    "objection", "pricing_request", "service_complaint", "urgency_signal",
-    "new_opportunity", "stalled_thread", "positive_feedback",
-    "closed_won_indicator", "closed_lost_indicator",
-  ];
+    "closed_won_indicator", "closed_lost_indicator", "objection",
+    "new_opportunity", "pricing_request", "stalled_thread",
+    "positive_feedback", "service_complaint", "urgency_signal",
+  ].sort((a, b) => signalLabel(a).localeCompare(signalLabel(b)));
 
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4 md:space-y-6">

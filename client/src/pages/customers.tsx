@@ -904,7 +904,7 @@ export default function Customers() {
                   <SelectValue placeholder="Select contact..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {quickTouch?.contacts.map(c => (
+                  {[...(quickTouch?.contacts ?? [])].sort((a, b) => a.name.localeCompare(b.name)).map(c => (
                     <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                   ))}
                 </SelectContent>
@@ -919,8 +919,8 @@ export default function Customers() {
                 <SelectContent>
                   <SelectItem value="call">Call</SelectItem>
                   <SelectItem value="email">Email</SelectItem>
-                  <SelectItem value="text">Text</SelectItem>
                   <SelectItem value="site_visit">Site Visit</SelectItem>
+                  <SelectItem value="text">Text</SelectItem>
                 </SelectContent>
               </Select>
             </div>

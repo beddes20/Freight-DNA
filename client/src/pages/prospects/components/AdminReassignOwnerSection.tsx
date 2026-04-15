@@ -36,7 +36,7 @@ export function AdminReassignOwnerSection({ prospect, users, currentUser }: { pr
             <SelectValue placeholder="Select new owner…" />
           </SelectTrigger>
           <SelectContent>
-            {salesUsers.filter(u => u.id !== prospect.ownerId).map(u => (
+            {salesUsers.filter(u => u.id !== prospect.ownerId).sort((a, b) => (a.name ?? a.username).localeCompare(b.name ?? b.username)).map(u => (
               <SelectItem key={u.id} value={u.id} className="text-xs">{u.name ?? u.username} ({(u.role ?? "").replace(/_/g, " ")})</SelectItem>
             ))}
           </SelectContent>

@@ -1723,7 +1723,7 @@ export default function IntelPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Reps (Org-Wide)</SelectItem>
-                {availableReps.map(rep => (
+                {[...availableReps].sort((a, b) => a.name.localeCompare(b.name)).map(rep => (
                   <SelectItem key={rep.id} value={rep.id} data-testid={`option-rep-${rep.id}`}>
                     {rep.name}
                   </SelectItem>

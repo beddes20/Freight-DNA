@@ -505,7 +505,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">No account linked</SelectItem>
-                  {companies.map(c => (
+                  {[...companies].sort((a, b) => a.name.localeCompare(b.name)).map(c => (
                     <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                   ))}
                 </SelectContent>

@@ -24,14 +24,14 @@ import { useConfetti } from "@/components/confetti";
 import type { Goal, GoalComment } from "@shared/schema";
 
 const METRICS = [
-  { value: "contacts_added",        label: "New Contacts",                        icon: Users,       color: "bg-blue-500",    unit: "contacts" },
-  { value: "touchpoints",           label: "Touchpoints",                         icon: TrendingUp,  color: "bg-cyan-500",    unit: "touches" },
-  { value: "meaningful_touchpoints",label: "Meaningful Conversations (auto-tracked)", icon: Heart, color: "bg-rose-500",    unit: "convos" },
+  { value: "custom",                label: "Custom",                              icon: Sliders,     color: "bg-orange-500",  unit: "units" },
   { value: "load_count",            label: "Load Count",                          icon: Truck,       color: "bg-green-500",   unit: "loads" },
   { value: "loads_booked",          label: "Loads Booked (auto-tracked)",         icon: Truck,       color: "bg-teal-500",    unit: "loads" },
   { value: "margin",                label: "Margin ($)",                          icon: DollarSign,  color: "bg-violet-500",  unit: "$" },
   { value: "margin_pct",            label: "Margin %",                            icon: Percent,     color: "bg-emerald-500", unit: "%" },
-  { value: "custom",                label: "Custom",                              icon: Sliders,     color: "bg-orange-500",  unit: "units" },
+  { value: "meaningful_touchpoints",label: "Meaningful Conversations (auto-tracked)", icon: Heart, color: "bg-rose-500",    unit: "convos" },
+  { value: "contacts_added",        label: "New Contacts",                        icon: Users,       color: "bg-blue-500",    unit: "contacts" },
+  { value: "touchpoints",           label: "Touchpoints",                         icon: TrendingUp,  color: "bg-cyan-500",    unit: "touches" },
 ];
 
 const PERIODS = [

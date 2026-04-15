@@ -344,7 +344,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
                     </FormControl>
                     <SelectContent>
                       <SelectItem value="none">No manager</SelectItem>
-                      {availableManagers.map((manager) => (
+                      {[...availableManagers].sort((a, b) => a.name.localeCompare(b.name)).map((manager) => (
                         <SelectItem key={manager.id} value={manager.id}>
                           {manager.name} {manager.title ? `- ${manager.title}` : ""}
                         </SelectItem>

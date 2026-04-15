@@ -43,9 +43,9 @@ interface SuggestionCountRow {
 }
 
 const ROLE_OPTIONS = [
-  "Decision Maker", "Influencer", "Champion", "End User",
-  "Finance/Procurement", "Operations", "IT/Technical", "Executive", "Other",
-];
+  "Champion", "Decision Maker", "End User", "Executive",
+  "Finance/Procurement", "Influencer", "IT/Technical", "Operations", "Other",
+].sort((a, b) => a.localeCompare(b));
 
 function ConfidenceBadge({ score }: { score: number }) {
   if (score >= 65) {

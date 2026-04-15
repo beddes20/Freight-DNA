@@ -122,11 +122,12 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
   const isLaneCapacityCard = card.ruleType === "recurring_lane_capacity";
   const isPortfolioRole = ["admin", "director"].includes(currentUser?.role ?? "");
 
-  const { data: teamMembers = [] } = useQuery<TeamMember[]>({
+  const { data: teamMembersRaw = [] } = useQuery<TeamMember[]>({
     queryKey: ["/api/team-members"],
     queryFn: () => fetch("/api/team-members").then(r => r.json()),
     enabled: isLaneCapacityCard && isPortfolioRole,
   });
+  const teamMembers = [...teamMembersRaw].sort((a, b) => a.name.localeCompare(b.name));
 
   const reassignMutation = useMutation({
     mutationFn: (body: { ownerUserId?: string; overseerUserId?: string }) =>

@@ -78,7 +78,7 @@ export function ForcedFocusDialog({ open, onClose, editId, prefill }: ForcedFocu
     u.role === "logistics_coordinator" ||
     u.role === "national_account_manager" ||
     u.role === "sales"
-  );
+  ).sort((a, b) => a.name.localeCompare(b.name));
 
   const invalidateForcedFocusQueries = () => {
     queryClient.invalidateQueries({ queryKey: ["/api/forced-focus"] });

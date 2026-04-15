@@ -199,8 +199,8 @@ export default function TouchpointHistoryPage() {
             <SelectItem value="all">All types ({counts.all})</SelectItem>
             <SelectItem value="call">Calls ({counts.call})</SelectItem>
             <SelectItem value="email">Emails ({counts.email})</SelectItem>
-            <SelectItem value="text">Texts ({counts.text})</SelectItem>
             <SelectItem value="site_visit">Site Visits ({counts.site_visit})</SelectItem>
+            <SelectItem value="text">Texts ({counts.text})</SelectItem>
           </SelectContent>
         </Select>
 

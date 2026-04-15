@@ -450,7 +450,7 @@ function AssignToDropdown({
   // Assignable roles: people who actually do outreach
   const assignable = teamMembers.filter(m =>
     ["account_manager", "logistics_manager", "logistics_coordinator", "sales"].includes(m.role)
-  );
+  ).sort((a, b) => a.name.localeCompare(b.name));
 
   if (assignable.length === 0) return null;
 
@@ -1278,7 +1278,7 @@ interface BuildLaneForm {
   ownerUserId: string;
 }
 
-const EQUIPMENT_TYPES = ["Dry Van", "Reefer", "Flatbed", "Step Deck", "RGN", "Tanker", "Box Truck", "Conestoga", "Other"];
+const EQUIPMENT_TYPES = ["Box Truck", "Conestoga", "Dry Van", "Flatbed", "Other", "Reefer", "RGN", "Step Deck", "Tanker"];
 
 interface FieldNormState {
   result: NormalizationResult | null;
@@ -2077,7 +2077,7 @@ export default function LaneWorkQueuePage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__all__">All customers</SelectItem>
-                {(queue?.customers ?? []).map(name => (
+                {[...(queue?.customers ?? [])].sort((a, b) => a.localeCompare(b)).map(name => (
                   <SelectItem key={name} value={name}>{name}</SelectItem>
                 ))}
               </SelectContent>

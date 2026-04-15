@@ -104,7 +104,7 @@ export function QuickTouchDialog({
                 <SelectValue placeholder="Pick a contact" />
               </SelectTrigger>
               <SelectContent>
-                {(contacts ?? []).map((c: Contact) => (
+                {[...(contacts ?? [])].sort((a: Contact, b: Contact) => a.name.localeCompare(b.name)).map((c: Contact) => (
                   <SelectItem key={c.id} value={c.id}>{c.name}{c.title ? ` · ${c.title}` : ""}</SelectItem>
                 ))}
               </SelectContent>
@@ -113,7 +113,7 @@ export function QuickTouchDialog({
           <div>
             <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Touch Type</label>
             <div className="flex gap-2">
-              {[{ value: "call", label: "Call" }, { value: "email", label: "Email" }, { value: "text", label: "Text" }, { value: "site_visit", label: "Site Visit" }].map(opt => (
+              {[{ value: "call", label: "Call" }, { value: "email", label: "Email" }, { value: "site_visit", label: "Site Visit" }, { value: "text", label: "Text" }].map(opt => (
                 <button
                   key={opt.value}
                   onClick={() => setTouchType(opt.value)}
