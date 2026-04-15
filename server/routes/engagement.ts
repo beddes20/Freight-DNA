@@ -262,6 +262,12 @@ export function registerEngagementRoutes(app: Express) {
         });
       }
 
+      try {
+        await notifyLeadershipOfOpportunity(user, type, title, category, estimatedValue, authorizedCompanyId);
+      } catch (notifErr) {
+        console.error("[opportunity-log] notification error:", notifErr);
+      }
+
       res.status(201).json({ ...log });
     } catch (error) {
       res.status(500).json({ error: "Failed to create opportunity log" });
