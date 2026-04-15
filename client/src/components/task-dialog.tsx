@@ -742,7 +742,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-task-cancel">Cancel</Button>
             <Button type="submit" disabled={isPending || (forwardingTask ? !assignedTo : (!title.trim() || (!editingTask && !assignedTo)))} data-testid="button-task-save">
               {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              {dialogTitle === "Edit Task" ? "Save Changes" : dialogTitle}
+              {prefillData ? "Create Task" : forwardingTask ? "Forward Task" : editingTask ? "Save Changes" : "Create Task"}
             </Button>
           </div>
         </form>
