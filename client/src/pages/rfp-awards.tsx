@@ -891,7 +891,37 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                     </span>
                   )}
                 </div>
-                <div className="overflow-x-auto rounded-md border">
+                {/* Mobile card view */}
+                <div className="md:hidden space-y-2" data-testid="cards-high-volume-lanes">
+                  {displayedLanes.map(({ lane, origIdx }) => (
+                    <div key={origIdx} className={`rounded-lg border p-3 space-y-2 ${lane.status && lane.status !== "open" ? "bg-green-50/50 dark:bg-green-950/10" : ""}`} data-testid={`card-high-volume-lane-${origIdx}`}>
+                      <div className="flex items-center justify-between">
+                        <div className="font-medium text-sm">{fmtLoc(lane.origin, lane.originState)} → {fmtLoc(lane.destination, lane.destinationState)}</div>
+                        {getLaneStatusBadge(lane)}
+                      </div>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                        <span>{Math.round(lane.volume).toLocaleString()} / yr</span>
+                        {hasMiles && lane.miles != null && <span>{Math.round(lane.miles).toLocaleString()} mi</span>}
+                        {lane.equipment && <span>{lane.equipment}</span>}
+                      </div>
+                      <div>
+                        {(!lane.status || lane.status === "open") ? (
+                          <Button size="sm" variant="outline" className="w-full border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400" onClick={() => handleAssign(lane, origIdx)} data-testid={`button-assign-lane-m-${origIdx}`}>
+                            <UserPlus className="h-4 w-4 mr-1" /> Assign Lane
+                          </Button>
+                        ) : lane.status === "contact_added" ? (
+                          <Button size="sm" variant="outline" className="w-full border-green-300 text-green-700 dark:border-green-700 dark:text-green-400" onClick={() => markResearchedMutation.mutate({ laneIdx: origIdx })} disabled={markResearchedMutation.isPending} data-testid={`button-mark-researched-m-${origIdx}`}>
+                            Mark Complete
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-green-600 dark:text-green-400">Done</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {/* Desktop table view */}
+                <div className="hidden md:block overflow-x-auto rounded-md border">
                   <table className="w-full text-sm" data-testid="table-high-volume-lanes">
                     <thead>
                       <tr className="border-b bg-muted/50">
@@ -1058,7 +1088,29 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
         </CardHeader>
         {!dataViewerCollapsed && rows.length > 0 && (
           <CardContent className="pt-0">
-            <div className="overflow-x-auto rounded-md border">
+            {/* Mobile card view */}
+            <div className="md:hidden space-y-2" data-testid="cards-rfp-data">
+              {rows.slice(0, 50).map((row, i) => (
+                <div key={i} className="rounded-lg border p-3 space-y-1">
+                  {headers.slice(0, 4).map(h => (
+                    <div key={h} className="flex justify-between text-sm">
+                      <span className="text-muted-foreground text-xs">{h}</span>
+                      <span className="font-medium text-xs truncate max-w-[60%] text-right">{String(row[h] ?? "—")}</span>
+                    </div>
+                  ))}
+                  {headers.length > 4 && (
+                    <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground pt-1 border-t">
+                      {headers.slice(4).map(h => (
+                        <span key={h}>{h}: {String(row[h] ?? "—")}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+              {rows.length > 50 && <p className="text-sm text-muted-foreground text-center py-2">Showing 50 of {rows.length} rows</p>}
+            </div>
+            {/* Desktop table view */}
+            <div className="hidden md:block overflow-x-auto rounded-md border">
               <table className="w-full text-sm" data-testid="table-rfp-data">
                 <thead>
                   <tr className="border-b bg-muted/50">
@@ -1342,7 +1394,29 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
 
               <TabsContent value="states" className="mt-3">
                 {lanePatterns.stateCorridors.length > 0 ? (
-                  <div className="overflow-x-auto rounded-md border">
+                  <>
+                  {/* Mobile card view */}
+                  <div className="md:hidden space-y-2">
+                    {(() => {
+                      const maxVol = Math.max(...lanePatterns.stateCorridors.map(s => s.totalVolume));
+                      return lanePatterns.stateCorridors.map((s, i) => (
+                        <div key={i} className="rounded-lg border p-3 space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium text-sm">{s.corridor}</span>
+                            <span className="text-xs text-muted-foreground">{s.laneCount} lanes</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                              <div className="h-full bg-gradient-to-r from-blue-500 to-green-500 rounded-full transition-all" style={{ width: `${(s.totalVolume / maxVol) * 100}%` }} />
+                            </div>
+                            <span className="text-xs font-medium shrink-0">{s.totalVolume.toLocaleString()}</span>
+                          </div>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                  {/* Desktop table view */}
+                  <div className="hidden md:block overflow-x-auto rounded-md border">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="bg-muted/50 border-b">
@@ -1378,6 +1452,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                       </tbody>
                     </table>
                   </div>
+                  </>
                 ) : (
                   <p className="text-sm text-muted-foreground text-center py-6">No state corridor data available</p>
                 )}

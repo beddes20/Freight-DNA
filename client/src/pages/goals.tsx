@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { ResponsiveDialog } from "@/components/responsive-dialog";
 import { Progress } from "@/components/ui/progress";
 import {
   BarChart, Bar, ResponsiveContainer, Cell, Tooltip, XAxis,
@@ -1152,12 +1152,21 @@ export default function GoalsPage() {
         </Card>
       )}
 
-      <Dialog open={dialogOpen} onOpenChange={v => { if (!v) { setDialogOpen(false); setEditingGoal(null); } }}>
-        <DialogContent className="max-w-md" data-testid="dialog-goal-form">
-          <DialogHeader>
-            <DialogTitle>{editingGoal ? "Edit Goal" : "Create Goal"}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
+      <ResponsiveDialog
+        open={dialogOpen}
+        onOpenChange={v => { if (!v) { setDialogOpen(false); setEditingGoal(null); } }}
+        title={editingGoal ? "Edit Goal" : "Create Goal"}
+        className="max-w-md"
+        footer={
+          <div className="flex justify-end gap-2 w-full">
+            <Button variant="outline" onClick={() => { setDialogOpen(false); setEditingGoal(null); }}>Cancel</Button>
+            <Button onClick={handleSubmit} disabled={createGoal.isPending || updateGoalMutation.isPending} data-testid="button-save-goal">
+              {editingGoal ? "Save Changes" : "Create Goal"}
+            </Button>
+          </div>
+        }
+      >
+          <div className="space-y-4 py-2" data-testid="dialog-goal-form">
             {((isNam && !isAm) || amCanSetGoals) && (
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Team Member</label>
@@ -1353,25 +1362,40 @@ export default function GoalsPage() {
               </div>
             )}
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setDialogOpen(false); setEditingGoal(null); }}>Cancel</Button>
-            <Button onClick={handleSubmit} disabled={createGoal.isPending || updateGoalMutation.isPending} data-testid="button-save-goal">
-              {editingGoal ? "Save Changes" : "Create Goal"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      </ResponsiveDialog>
 
       {/* Bulk Goal Dialog */}
-      <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
-        <DialogContent className="max-w-md" data-testid="dialog-bulk-goals">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Users className="h-5 w-5 text-primary" />
-              Set Goal for All {teamLabel}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
+      <ResponsiveDialog
+        open={bulkOpen}
+        onOpenChange={setBulkOpen}
+        title={`Set Goal for All ${teamLabel}`}
+        className="max-w-md"
+        footer={
+          <div className="flex justify-end gap-2 w-full">
+            <Button variant="outline" onClick={() => setBulkOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!bulkForm.target || bulkGoalMutation.isPending}
+              onClick={() => {
+                if (!bulkForm.target) { toast({ variant: "destructive", description: "Enter a target value." }); return; }
+                if (bulkForm.startDate && bulkForm.endDate && bulkForm.endDate < bulkForm.startDate) {
+                  toast({ variant: "destructive", description: "End date must be after start date." }); return;
+                }
+                if (bulkForm.metric === "custom" && !(bulkForm as any).customLabel?.trim()) {
+                  toast({ variant: "destructive", description: "Enter a name for your custom metric." }); return;
+                }
+                bulkGoalMutation.mutate({
+                  ...bulkForm,
+                  amIds: uniqueAms.map(a => a.amId),
+                });
+              }}
+              data-testid="button-confirm-bulk-goals"
+            >
+              {bulkGoalMutation.isPending ? "Creating..." : `Create for ${uniqueAms.length} people`}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-4 py-2" data-testid="dialog-bulk-goals">
             <p className="text-sm text-muted-foreground">
               This will create the same goal for all {uniqueAms.length} members on your team. Existing goals are not overwritten.
             </p>
@@ -1422,30 +1446,8 @@ export default function GoalsPage() {
               <Input placeholder="Context or instructions..." value={bulkForm.notes} onChange={(e) => setBulkForm(f => ({ ...f, notes: e.target.value }))} data-testid="input-bulk-notes" />
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setBulkOpen(false)}>Cancel</Button>
-            <Button
-              disabled={!bulkForm.target || bulkGoalMutation.isPending}
-              onClick={() => {
-                if (!bulkForm.target) { toast({ variant: "destructive", description: "Enter a target value." }); return; }
-                if (bulkForm.startDate && bulkForm.endDate && bulkForm.endDate < bulkForm.startDate) {
-                  toast({ variant: "destructive", description: "End date must be after start date." }); return;
-                }
-                if (bulkForm.metric === "custom" && !(bulkForm as any).customLabel?.trim()) {
-                  toast({ variant: "destructive", description: "Enter a name for your custom metric." }); return;
-                }
-                bulkGoalMutation.mutate({
-                  ...bulkForm,
-                  amIds: uniqueAms.map(a => a.amId),
-                });
-              }}
-              data-testid="button-confirm-bulk-goals"
-            >
-              {bulkGoalMutation.isPending ? "Creating..." : `Create for ${uniqueAms.length} people`}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      </ResponsiveDialog>
     </div>
   );
 }
+

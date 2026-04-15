@@ -1,11 +1,6 @@
 import { useState, useEffect } from "react";
 import { useMutation } from "@tanstack/react-query";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ResponsiveDialog } from "@/components/responsive-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -82,15 +77,26 @@ export function QuickTouchDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={open => { if (!open) reset(); }}>
-      <DialogContent className="sm:max-w-sm" data-testid="dialog-quick-touch-detail">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <PhoneCall className="h-4 w-4 text-primary" />
-            Log Touch — {companyName}
-          </DialogTitle>
-        </DialogHeader>
-        <div className="space-y-3 pt-2">
+    <ResponsiveDialog
+      open={open}
+      onOpenChange={open => { if (!open) reset(); }}
+      title={`Log Touch — ${companyName}`}
+      className="sm:max-w-sm"
+      footer={
+        <div className="flex gap-2 w-full">
+          <Button variant="outline" className="flex-1" onClick={reset} data-testid="button-cancel-quick-touch-detail">Cancel</Button>
+          <Button
+            className="flex-1"
+            disabled={!contactId || logTouchMutation.isPending || (meaningful && !note.trim())}
+            onClick={() => logTouchMutation.mutate({ cId: contactId, type: touchType, notes: note, sent: sentiment || undefined, isMeaningful: meaningful })}
+            data-testid="button-submit-quick-touch-detail"
+          >
+            Log Touch
+          </Button>
+        </div>
+      }
+    >
+        <div className="space-y-3 pt-2" data-testid="dialog-quick-touch-detail">
           <div>
             <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Contact</label>
             <Select value={contactId} onValueChange={setContactId}>
@@ -175,19 +181,7 @@ export function QuickTouchDialog({
               ))}
             </div>
           </div>
-          <div className="flex gap-2 pt-1">
-            <Button variant="outline" className="flex-1" onClick={reset} data-testid="button-cancel-quick-touch-detail">Cancel</Button>
-            <Button
-              className="flex-1"
-              disabled={!contactId || logTouchMutation.isPending || (meaningful && !note.trim())}
-              onClick={() => logTouchMutation.mutate({ cId: contactId, type: touchType, notes: note, sent: sentiment || undefined, isMeaningful: meaningful })}
-              data-testid="button-submit-quick-touch-detail"
-            >
-              Log Touch
-            </Button>
-          </div>
         </div>
-      </DialogContent>
-    </Dialog>
+    </ResponsiveDialog>
   );
 }

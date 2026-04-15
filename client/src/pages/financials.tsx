@@ -1104,7 +1104,29 @@ export default function Financials() {
             </CardHeader>
             {!tableCollapsed && (
               <CardContent className="p-0">
-                <div className="overflow-x-auto">
+                {/* Mobile card view */}
+                <div className="md:hidden space-y-2 px-3 py-2">
+                  {paginated.length === 0 ? (
+                    <p className="py-12 text-center text-muted-foreground text-sm">No records match your filters</p>
+                  ) : paginated.map((r, i) => (
+                    <div key={i} className="rounded-lg border p-3 space-y-1.5" data-testid={`card-financial-${i}`}>
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-sm truncate max-w-[60%]">{r[colMap.customer] as string || "—"}</span>
+                        {r[colMap.status] ? <Badge variant="outline" className="text-xs capitalize">{r[colMap.status] as string}</Badge> : null}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {r[colMap.shipperCity] ? `${r[colMap.shipperCity]}, ${r[colMap.shipperState]}` : "—"} → {r[colMap.consigneeCity] ? `${r[colMap.consigneeCity]}, ${r[colMap.consigneeState]}` : "—"}
+                      </div>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                        <span className="text-muted-foreground">#{r[colMap.orderNumber] as string || "—"}</span>
+                        <span className="text-muted-foreground">{formatDate(r[colMap.dateOrdered])}</span>
+                        <span className="font-semibold text-green-600 dark:text-green-400">{formatCurrency(r[colMap.totalCharges])}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {/* Desktop table view */}
+                <div className="hidden md:block overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b bg-muted/40">
