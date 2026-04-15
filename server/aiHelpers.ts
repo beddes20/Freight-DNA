@@ -459,7 +459,7 @@ export async function getLaneNarrativesBatch(
 export async function generateLaneCoachingCard(
   lane: string,
   paidRatePerMile: number,
-  marketRatePerMile: number,
+  marketRatePerMile: number | null,
   deltaPerMile: number,
   deltaPct: number,
   classification: "ABOVE_MARKET" | "AT_MARKET" | "BELOW_MARKET",
@@ -467,7 +467,7 @@ export async function generateLaneCoachingCard(
   votri: number | null,
   marginTrend: "tightening" | "easing" | "stable",
 ): Promise<string | null> {
-  if (!process.env.OPENAI_API_KEY) return null;
+  if (!process.env.OPENAI_API_KEY || marketRatePerMile === null) return null;
 
   const key = `coaching:${lane}:${Math.round(paidRatePerMile * 100)}:${Math.round(marketRatePerMile * 100)}:${forecastDirection}:${classification}`;
   const cached = getCached(key);
@@ -519,7 +519,7 @@ export async function generateLaneCoachingCardsBatch(
   lanes: Array<{
     lane: string;
     paidRatePerMile: number;
-    marketRatePerMile: number;
+    marketRatePerMile: number | null;
     deltaPerMile: number;
     deltaPct: number;
     classification: "ABOVE_MARKET" | "AT_MARKET" | "BELOW_MARKET";

@@ -495,7 +495,7 @@ function AssignToDropdown({
 
 const MANAGER_ROLES = ["admin", "director", "national_account_manager", "logistics_manager"];
 
-type LaneVotriData = { votri: number; votriWoW: number; signal: "hot" | "warm" | "cool"; isStale: boolean };
+type LaneVotriData = { votri: number | null; votriWoW: number | null; signal: "hot" | "warm" | "stable" | "cool" | null; isStale: boolean };
 
 function LaneRow({
   item,
@@ -731,25 +731,32 @@ function LaneRow({
                 <TooltipTrigger asChild>
                   <span
                     className={`inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0 rounded-full border cursor-help ${
-                      votriData.isStale
+                      votriData.isStale && votriData.signal === null
                         ? "border-gray-400/50 text-gray-400 bg-gray-500/10"
                         : votriData.signal === "hot" ? "border-red-500/60 text-red-400 bg-red-500/10"
                         : votriData.signal === "warm" ? "border-amber-500/50 text-amber-400 bg-amber-500/10"
-                        : "border-green-500/50 text-green-400 bg-green-500/10"
+                        : votriData.signal === "stable" ? "border-blue-500/50 text-blue-400 bg-blue-500/10"
+                        : votriData.signal === "cool" ? "border-green-500/50 text-green-400 bg-green-500/10"
+                        : "border-gray-400/50 text-gray-400 bg-gray-500/10"
                     }`}
-                    data-testid={`badge-votri-${item.laneId}`}
+                    data-testid={`badge-signal-${item.laneId}`}
                   >
-                    {votriData.isStale ? "VOTRI —" : `VOTRI ${votriData.votri.toFixed(0)}% ${votriData.votriWoW > 0.5 ? "↑" : votriData.votriWoW < -0.5 ? "↓" : "→"}`}
+                    {votriData.signal === "hot" ? "Tightening"
+                      : votriData.signal === "warm" ? "Mild tightening"
+                      : votriData.signal === "stable" ? "Stable"
+                      : votriData.signal === "cool" ? "Softening"
+                      : "No signal"}
                   </span>
                 </TooltipTrigger>
                 <TooltipContent className="text-xs p-2 max-w-[240px]">
                   <p className="font-semibold">{item.origin} → {item.destination}</p>
-                  {votriData.isStale
-                    ? <p className="text-gray-400">Sonar signal unavailable for this lane</p>
-                    : <>
-                        <p>Van Tender Rejection: {votriData.votri.toFixed(1)}% {votriData.signal === "hot" ? "🔴 Hot" : votriData.signal === "warm" ? "🟡 Warm" : "🟢 Cool"}</p>
-                        <p>WoW: {votriData.votriWoW > 0 ? "+" : ""}{votriData.votriWoW.toFixed(1)} pp</p>
+                  {votriData.signal !== null
+                    ? <>
+                        <p>TRAC Direction: {votriData.signal === "hot" ? "Tightening" : votriData.signal === "warm" ? "Mild tightening" : votriData.signal === "stable" ? "Stable" : "Softening"}</p>
+                        {votriData.votri !== null && <p>VOTRI: {votriData.votri.toFixed(1)}%</p>}
+                        {votriData.votriWoW !== null && <p>WoW: {votriData.votriWoW > 0 ? "+" : ""}{votriData.votriWoW.toFixed(1)} pp</p>}
                       </>
+                    : <p className="text-gray-400">Market signal unavailable for this lane</p>
                   }
                 </TooltipContent>
               </Tooltip>
@@ -1913,7 +1920,7 @@ export default function LaneWorkQueuePage() {
     return pairs;
   }, [queue]);
 
-  type LaneVotriResult = { origin: string; destination: string; qualifier: string; votri: number; votriWoW: number; signal: "hot" | "warm" | "cool"; timestamp: string; isStale: boolean };
+  type LaneVotriResult = { origin: string; destination: string; qualifier: string; votri: number | null; votriWoW: number | null; signal: "hot" | "warm" | "stable" | "cool" | null; timestamp: string; isStale: boolean };
 
   // Pairs are semicolon-separated (not comma) so city names containing commas (e.g. "Los Angeles, CA") parse correctly.
   const lanesParam = allLanePairs.map(p => `${p.origin}|${p.destination}`).join(";");

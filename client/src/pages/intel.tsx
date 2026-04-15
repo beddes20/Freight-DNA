@@ -136,7 +136,7 @@ interface SonarMarketTrend {
   votriWoW: number | null;
   otvi: number | null;
   hai: number | null;
-  signal: "hot" | "warm" | "cool";
+  signal: "hot" | "warm" | "stable" | "cool";
   trendDir: "↑" | "↓" | "→";
   ibOtri: number | null;
 }
@@ -162,9 +162,9 @@ interface MyLanesRow {
   origin: string;
   destination: string;
   qualifier: string;
-  votri: number;
-  votriWoW: number;
-  signal: "hot" | "warm" | "cool";
+  votri: number | null;
+  votriWoW: number | null;
+  signal: "hot" | "warm" | "stable" | "cool" | null;
   avgCustomerRate: number | null;
   tracSpotRpm: number | null;
   rateDelta: "above" | "below" | "unknown";
@@ -742,7 +742,7 @@ function LaneScorecardCard({ lane, idx }: { lane: ScorecardLane; idx: number }) 
             <span className="text-xs font-normal text-white/50 ml-1">/mile</span>
           </div>
           <div className="text-[10px] text-white/50 mt-1">
-            Based on your last 3 weeks · adjusted for {lane.votri !== null && lane.votri !== undefined ? `VOTRI ${lane.votri.toFixed(1)}%` : `origin OTRI ${lane.originOtri.toFixed(1)}%`}
+            Based on your last 3 weeks · adjusted for {lane.votri !== null && lane.votri !== undefined ? `VOTRI ${lane.votri.toFixed(1)}%` : lane.originOtri !== null && lane.originOtri !== undefined ? `origin OTRI ${lane.originOtri.toFixed(1)}%` : "available market data"}
           </div>
         </div>
       )}
@@ -1049,9 +1049,9 @@ function MyLanesPanel({ lanes, isLoading, lastUpdated }: {
   const warmLanes = lanes.filter(l => l.signal === "warm");
   const coolLanes = lanes.filter(l => l.signal === "cool");
 
-  const SignalDot = ({ signal }: { signal: "hot" | "warm" | "cool" }) => {
-    const colors = { hot: "#ef4444", warm: "#f59e0b", cool: "#22c55e" };
-    return <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: colors[signal] }} />;
+  const SignalDot = ({ signal }: { signal: "hot" | "warm" | "stable" | "cool" | null }) => {
+    const colors: Record<string, string> = { hot: "#ef4444", warm: "#f59e0b", stable: "#3b82f6", cool: "#22c55e" };
+    return <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: signal ? colors[signal] ?? "#9ca3af" : "#9ca3af" }} />;
   };
 
   const WeatherBadge = ({ flag, label }: { flag: WeatherFlag | null; label: string }) => {
@@ -1128,8 +1128,10 @@ function MyLanesPanel({ lanes, isLoading, lastUpdated }: {
                 ? "text-red-600 dark:text-red-400"
                 : lane.signal === "warm"
                 ? "text-amber-600 dark:text-amber-400"
+                : lane.signal === null
+                ? "text-gray-400"
                 : "text-green-600 dark:text-green-400";
-              const wowColor = lane.votriWoW > 0 ? "text-red-500" : lane.votriWoW < 0 ? "text-green-500" : "text-muted-foreground";
+              const wowColor = (lane.votriWoW ?? 0) > 0 ? "text-red-500" : (lane.votriWoW ?? 0) < 0 ? "text-green-500" : "text-muted-foreground";
               const rateColor = lane.rateDelta === "above" ? "text-green-600 dark:text-green-400" : lane.rateDelta === "below" ? "text-red-600 dark:text-red-400" : "text-muted-foreground";
 
               return (
@@ -1146,10 +1148,10 @@ function MyLanesPanel({ lanes, isLoading, lastUpdated }: {
                     <div className="text-[10px] text-muted-foreground mt-0.5 pl-3.5">{lane.companyName} · {lane.totalLoads} loads</div>
                   </td>
                   <td className={`px-4 py-2.5 text-right font-mono font-bold ${votriColor}`}>
-                    {lane.votri.toFixed(1)}%
+                    {lane.votri !== null ? `${lane.votri.toFixed(1)}%` : "—"}
                   </td>
                   <td className={`px-4 py-2.5 text-right font-mono text-xs hidden sm:table-cell ${wowColor}`}>
-                    {lane.votriWoW > 0 ? "+" : ""}{lane.votriWoW.toFixed(1)}pp
+                    {lane.votriWoW !== null ? `${lane.votriWoW > 0 ? "+" : ""}${lane.votriWoW.toFixed(1)}pp` : "—"}
                   </td>
                   <td className={`px-4 py-2.5 text-right text-xs hidden md:table-cell ${rateColor}`}>
                     {lane.rateDeltaPct !== null
@@ -1162,9 +1164,13 @@ function MyLanesPanel({ lanes, isLoading, lastUpdated }: {
                         ? "text-red-600 bg-red-100 border-red-300 dark:bg-red-900/30 dark:text-red-300"
                         : lane.signal === "warm"
                         ? "text-amber-600 bg-amber-100 border-amber-300 dark:bg-amber-900/30 dark:text-amber-300"
-                        : "text-green-600 bg-green-100 border-green-300 dark:bg-green-900/30 dark:text-green-300"
+                        : lane.signal === "stable"
+                        ? "text-blue-600 bg-blue-100 border-blue-300 dark:bg-blue-900/30 dark:text-blue-300"
+                        : lane.signal === "cool"
+                        ? "text-green-600 bg-green-100 border-green-300 dark:bg-green-900/30 dark:text-green-300"
+                        : "text-gray-400 bg-gray-100 border-gray-300 dark:bg-gray-900/30 dark:text-gray-400"
                     }`}>
-                      {lane.signal === "hot" ? "🔴 Hot" : lane.signal === "warm" ? "🟡 Warm" : "🟢 Cool"}
+                      {lane.signal === "hot" ? "Tightening" : lane.signal === "warm" ? "Mild tightening" : lane.signal === "stable" ? "Stable" : lane.signal === "cool" ? "Softening" : "No signal"}
                     </span>
                   </td>
                 </tr>
@@ -1855,12 +1861,14 @@ export default function IntelPage() {
                       ? "text-red-600 bg-red-100 dark:bg-red-900/30 border-red-300"
                       : m.signal === "warm"
                       ? "text-amber-600 bg-amber-100 dark:bg-amber-900/30 border-amber-300"
+                      : m.signal === "stable"
+                      ? "text-blue-600 bg-blue-100 dark:bg-blue-900/30 border-blue-300"
                       : "text-green-600 bg-green-100 dark:bg-green-900/30 border-green-300";
-                    const wowVal = m.votriWoW ?? m.otriWoW;
+                    const wowVal = m.votriWoW ?? m.otriWoW ?? 0;
                     return (
                       <tr key={m.market} className={`border-b last:border-0 ${i % 2 === 0 ? "" : "bg-muted/20"}`} data-testid={`row-market-trend-${m.market}`}>
                         <td className="px-4 py-2.5 font-medium capitalize">{m.market}</td>
-                        <td className="px-4 py-2.5 text-right font-mono">{m.otri.toFixed(1)}%</td>
+                        <td className="px-4 py-2.5 text-right font-mono">{m.otri !== null ? `${m.otri.toFixed(1)}%` : "—"}</td>
                         <td className="px-4 py-2.5 text-right font-mono text-muted-foreground hidden sm:table-cell" data-testid={`cell-ibotri-${m.market}`}>
                           {m.ibOtri !== null ? `${m.ibOtri.toFixed(1)}%` : "—"}
                         </td>
@@ -1879,7 +1887,7 @@ export default function IntelPage() {
                         <td className="px-4 py-2.5 text-right text-base hidden sm:table-cell">{m.trendDir}</td>
                         <td className="px-4 py-2.5 text-right">
                           <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full border ${sigCls}`}>
-                            {m.signal === "hot" ? "🔴 Hot" : m.signal === "warm" ? "🟡 Warm" : "🟢 Cool"}
+                            {m.signal === "hot" ? "Tightening" : m.signal === "warm" ? "Mild tightening" : m.signal === "stable" ? "Stable" : m.signal === "cool" ? "Softening" : "No signal"}
                           </span>
                         </td>
                       </tr>
@@ -1952,7 +1960,9 @@ export default function IntelPage() {
                       <td className="px-4 py-2.5 text-right text-muted-foreground hidden md:table-cell">
                         {lane.votri !== null && lane.votri !== undefined
                           ? <span className="text-blue-600 dark:text-blue-400 font-medium">{lane.votri.toFixed(1)}% VOTRI</span>
-                          : `${lane.originOtri.toFixed(1)}% OB`
+                          : lane.originOtri !== null && lane.originOtri !== undefined
+                          ? `${lane.originOtri.toFixed(1)}% OB`
+                          : <span className="text-muted-foreground">—</span>
                         }
                       </td>
                     </tr>

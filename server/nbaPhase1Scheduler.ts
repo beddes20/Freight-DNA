@@ -20,6 +20,7 @@ import { scoreAllEligibleLanes } from "./laneScoringService";
 import { syncMarketSignalNbas } from "./marketNbaService";
 import { generateConversationOwnershipNbas } from "./nextBestActionEngine";
 import { getAvgVotriWoW, getLaneVotrisBatch, getLaneVotrisBatchFresh, buildVotriQualifier } from "./sonarClient";
+import { tracLaneDirectionSignal } from "./tracAlertEngine";
 import { resolveColumns, getRepFromRow } from "./colResolver";
 import { isExcludedRow } from "./financialHelpers";
 import { getPlayForRuleType } from "./playsRegistry";
@@ -242,7 +243,21 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
               const tier = (Number(company.estimatedFreightSpend ?? 0) >= 100_000 ? "A"
                 : Number(company.estimatedFreightSpend ?? 0) >= 25_000 ? "B" : null) as "A" | "B" | null;
 
-              const votriWoWAvg = await getAvgVotriWoW(validLanes).catch(() => null);
+              let tracSignalScore: number | null = null;
+              const tracDirs = await Promise.all(
+                validLanes.slice(0, 3).map(l =>
+                  tracLaneDirectionSignal(l.origin, l.destination).catch(() => null)
+                )
+              );
+              const tracValid = tracDirs.filter(Boolean) as Array<"hot" | "warm" | "stable" | "cool">;
+              if (tracValid.length > 0) {
+                const scoreMap: Record<string, number> = { hot: 5, warm: 2, stable: 0, cool: -3 };
+                tracSignalScore = tracValid.reduce((sum, d) => sum + (scoreMap[d] ?? 0), 0) / tracValid.length;
+              }
+
+              const votriWoWAvg = tracSignalScore === null
+                ? await getAvgVotriWoW(validLanes).catch(() => null)
+                : tracSignalScore;
               if (votriWoWAvg === null) continue;
 
               const laneSummary = validLanes.slice(0, 3).map(l => `${l.origin}→${l.destination}`).join(", ");
@@ -365,37 +380,52 @@ async function runIntradayVotriAlerts(): Promise<void> {
           userLaneMap.set(userId, sorted);
         }
 
-        // Check each user's top 10 lanes using VOTRIW (week-over-week movement)
         const VOTRIW_THRESHOLD = 3; // percentage points
         for (const [userId, lanes] of userLaneMap) {
           if (lanes.length === 0) continue;
-          // Use fresh fetch (bypass 4-hour cache) to meet the 2-hour alert SLA
           const votriMap = await getLaneVotrisBatchFresh(lanes);
 
           for (const lane of lanes) {
             const qualifier = buildVotriQualifier(lane.origin, lane.destination);
             const votriData = votriMap.get(qualifier);
-            if (!votriData || votriData.isStale) continue;
 
-            // Use VOTRIW — the week-over-week change in van outbound tender rejection rate
-            const votriWoW = votriData.votriWoW ?? 0;
-            if (Math.abs(votriWoW) < VOTRIW_THRESHOLD) continue;
+            const tracDir = await tracLaneDirectionSignal(lane.origin, lane.destination).catch(() => null);
 
-            const direction = votriWoW > 0 ? "tightened" : "loosened";
-            const action = votriWoW > 0
-              ? "Capacity getting tight — reach out to your carriers now to lock in coverage."
-              : "Market loosening — good time to negotiate rates with customers.";
+            let direction: "tightened" | "loosened" | null = null;
+            let action = "";
+            let alertLabel = "";
 
-            // Dedup: include direction + magnitude bucket (5pp bands) + 6-hour time bucket
-            // This allows re-firing if the move grows significantly or reverses direction,
-            // but suppresses duplicate alerts within the same 6-hour window for the same move.
-            const magnitudeBucket = Math.floor(Math.abs(votriWoW) / 5); // 0=3-4pp, 1=5-9pp, 2=10-14pp …
-            const hourBucket = Math.floor(Date.now() / (6 * 60 * 60 * 1000)); // changes every 6 hours
-            const dedupeKey = `${qualifier}:${votriWoW > 0 ? "up" : "dn"}:${magnitudeBucket}:${hourBucket}`;
+            if (tracDir === "hot" || tracDir === "warm") {
+              direction = "tightened";
+              action = "TRAC forecasts capacity tightening — reach out to your carriers now to lock in coverage.";
+              alertLabel = `TRAC ${tracDir}`;
+            } else if (tracDir === "cool") {
+              direction = "loosened";
+              action = "TRAC forecasts softening — good time to negotiate rates with customers.";
+              alertLabel = "TRAC cool";
+            } else if (tracDir === "stable") {
+              // stable = no alert needed from TRAC, fall through to check VOTRI WoW
+            }
+            
+            if (!direction && votriData && !votriData.isStale && votriData.votriWoW !== null) {
+              const votriWoW = votriData.votriWoW;
+              if (Math.abs(votriWoW) >= VOTRIW_THRESHOLD) {
+                direction = votriWoW > 0 ? "tightened" : "loosened";
+                action = votriWoW > 0
+                  ? "Capacity getting tight — reach out to your carriers now to lock in coverage."
+                  : "Market loosening — good time to negotiate rates with customers.";
+                alertLabel = `VOTRIW ${votriWoW > 0 ? "+" : ""}${votriWoW.toFixed(1)}pp`;
+              }
+            }
+
+            if (!direction) continue;
+
+            const hourBucket = Math.floor(Date.now() / (6 * 60 * 60 * 1000));
+            const dedupeKey = `${qualifier}:${direction === "tightened" ? "up" : "dn"}:${alertLabel}:${hourBucket}`;
 
             const alreadyNotified = await storage.hasUnreadNotification(
               userId,
-              "votri_alert",
+              "market_alert",
               dedupeKey,
             ).catch(() => false);
 
@@ -404,14 +434,14 @@ async function runIntradayVotriAlerts(): Promise<void> {
               const destTitle = lane.destination.charAt(0).toUpperCase() + lane.destination.slice(1);
               await storage.createNotification({
                 userId,
-                type: "votri_alert",
-                title: `${originTitle} → ${destTitle} VOTRIW ${direction} ${Math.abs(votriWoW).toFixed(1)}pts`,
-                body: `VOTRIW is ${votriWoW > 0 ? "+" : ""}${votriWoW.toFixed(1)}pp this week on this lane. ${action}`,
+                type: "market_alert",
+                title: `${originTitle} → ${destTitle} market ${direction} (${alertLabel})`,
+                body: action,
                 link: "/intel",
                 relatedId: dedupeKey,
                 read: false,
-              }).catch(err => log(`VOTRIW alert notification error: ${err.message}`));
-              log(`VOTRIW alert fired: ${qualifier} for user ${userId} (${direction} ${Math.abs(votriWoW).toFixed(1)}pp)`);
+              }).catch(err => log(`Market alert notification error: ${err.message}`));
+              log(`Market alert fired: ${qualifier} for user ${userId} (${direction}, ${alertLabel})`);
             }
           }
         }

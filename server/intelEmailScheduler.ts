@@ -64,7 +64,7 @@ function getScorecardStatus(marginPct: number): { status: string; color: string 
 
 function computeBuyRateRange(
   carrierPays: number[],
-  originOtri: number,
+  originOtri: number | null,
 ): { low: number; high: number } {
   if (carrierPays.length === 0) return { low: 0, high: 0 };
   const sorted = [...carrierPays].sort((a, b) => a - b);
@@ -74,8 +74,8 @@ function computeBuyRateRange(
   const p75 = sorted[p75Idx] ?? sorted[sorted.length - 1];
   const avgMiles = 500;
   let adjustment = 0;
-  if (originOtri > 25) adjustment = 0.1;
-  else if (originOtri > 10) adjustment = 0.05;
+  if (originOtri !== null && originOtri > 25) adjustment = 0.1;
+  else if (originOtri !== null && originOtri > 10) adjustment = 0.05;
   return {
     low: Math.round((p25 / avgMiles) * (1 + adjustment) * 100) / 100,
     high: Math.round((p75 / avgMiles) * (1 + adjustment) * 100) / 100,
@@ -157,17 +157,19 @@ function aggregateLanes(rows: any[], cols: ReturnType<typeof resolveColumns>, si
 function buildDailyInsightsEmail(opts: {
   recipientName: string;
   dateStr: string;
-  otri: number;
-  otriDelta: number;
-  ntiPerMile: number;
-  diesel: number;
+  otri: number | null;
+  otriDelta: number | null;
+  ntiPerMile: number | null;
+  diesel: number | null;
   alertHtml: string;
   buyRateHtml: string;
   ratePositioningHtml?: string;
   coachingActionsHtml?: string;
+  lastSuccessfulPull?: string | null;
 }): string {
-  const otriDir = opts.otriDelta >= 0 ? "▲" : "▼";
-  const otriColor = opts.otriDelta > 0 ? "#dc2626" : "#16a34a";
+  const otriDir = (opts.otriDelta ?? 0) >= 0 ? "▲" : "▼";
+  const otriColor = (opts.otriDelta ?? 0) > 0 ? "#dc2626" : "#16a34a";
+  const unavailableNote = opts.otri === null ? `<div style="padding:12px 24px;background:#fef3c7;color:#92400e;font-size:12px;">Market data unavailable${opts.lastSuccessfulPull ? ` — last updated ${opts.lastSuccessfulPull}` : ""}. Metrics below may be incomplete.</div>` : "";
 
   const body = `
     <div style="background:linear-gradient(135deg,#0d5c34 0%,#0a7a5c 100%);padding:32px 40px;border-radius:8px 8px 0 0;">
@@ -178,20 +180,21 @@ function buildDailyInsightsEmail(opts: {
       <p style="color:rgba(255,255,255,0.6);font-size:13px;margin:6px 0 0;">${opts.dateStr}</p>
     </div>
 
+    ${unavailableNote}
     <div style="background:#0a1628;padding:0;">
       <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
         <tr>
           <td style="padding:16px 20px;border-right:1px solid rgba(255,255,255,0.08);text-align:center;width:25%;">
-            <div style="color:#fff;font-size:20px;font-weight:900;">${opts.otri.toFixed(1)}%</div>
+            <div style="color:#fff;font-size:20px;font-weight:900;">${opts.otri !== null ? opts.otri.toFixed(1) + "%" : "—"}</div>
             <div style="color:rgba(255,255,255,0.4);font-size:9px;text-transform:uppercase;letter-spacing:1px;margin-top:4px;">Nat'l OTRI</div>
-            <div style="color:${otriColor};font-size:10px;margin-top:4px;">${otriDir} ${Math.abs(opts.otriDelta).toFixed(1)}% WoW</div>
+            ${opts.otriDelta !== null ? `<div style="color:${otriColor};font-size:10px;margin-top:4px;">${otriDir} ${Math.abs(opts.otriDelta).toFixed(1)}% WoW</div>` : ""}
           </td>
           <td style="padding:16px 20px;border-right:1px solid rgba(255,255,255,0.08);text-align:center;width:25%;">
-            <div style="color:#fff;font-size:20px;font-weight:900;">$${opts.ntiPerMile.toFixed(2)}</div>
+            <div style="color:#fff;font-size:20px;font-weight:900;">${opts.ntiPerMile !== null ? "$" + opts.ntiPerMile.toFixed(2) : "—"}</div>
             <div style="color:rgba(255,255,255,0.4);font-size:9px;text-transform:uppercase;letter-spacing:1px;margin-top:4px;">NTI $/mi</div>
           </td>
           <td style="padding:16px 20px;border-right:1px solid rgba(255,255,255,0.08);text-align:center;width:25%;">
-            <div style="color:#fff;font-size:20px;font-weight:900;">$${opts.diesel.toFixed(2)}</div>
+            <div style="color:#fff;font-size:20px;font-weight:900;">${opts.diesel !== null ? "$" + opts.diesel.toFixed(2) : "—"}</div>
             <div style="color:rgba(255,255,255,0.4);font-size:9px;text-transform:uppercase;letter-spacing:1px;margin-top:4px;">Diesel/gal</div>
           </td>
           <td style="padding:16px 20px;text-align:center;width:25%;">
@@ -315,8 +318,8 @@ async function sendDailyIntelEmails(): Promise<void> {
       // Build alert HTML
       const alerts: Array<{ lane: string; signal: string; severity: string }> = [];
       for (const lane of lanes.slice(0, 10)) {
-        const originOtri = otriByMarket.get(lane.origin.toLowerCase()) ?? 15;
-        if (originOtri > 25) {
+        const originOtri = otriByMarket.get(lane.origin.toLowerCase()) ?? null;
+        if (originOtri !== null && originOtri > 25) {
           alerts.push({
             lane: `${lane.origin} → ${lane.destination}`,
             signal: `Origin tight (OTRI ${originOtri.toFixed(1)}%)`,
@@ -359,7 +362,7 @@ async function sendDailyIntelEmails(): Promise<void> {
             </thead>
             <tbody>
               ${lanes.slice(0, 5).map((lane, i) => {
-                const originOtri = otriByMarket.get(lane.origin.toLowerCase()) ?? 15;
+                const originOtri = otriByMarket.get(lane.origin.toLowerCase()) ?? null;
                 const buyRate = computeBuyRateRange(lane.carrierPays, originOtri);
                 return `
                   <tr style="border-top:1px solid #e5e7eb;background:${i % 2 === 0 ? "#fff" : "#f9fafb"};">
@@ -398,6 +401,7 @@ async function sendDailyIntelEmails(): Promise<void> {
             if (!mr) continue;
             if (mr.forecastDirection === "TIGHTENING") tighteningLanes.push(`${lane.origin} → ${lane.destination}`);
             const paidPerMile = lane.totalCarrierPay / lane.totalLoads / AVG_MILES_C;
+            if (mr.marketRatePerMile === null) continue;
             const deltaPerMile = paidPerMile - mr.marketRatePerMile;
             const deltaPct = mr.marketRatePerMile > 0 ? (deltaPerMile / mr.marketRatePerMile) * 100 : 0;
             if (deltaPct > 10) aboveMarketItems.push({
@@ -502,6 +506,7 @@ async function sendDailyIntelEmails(): Promise<void> {
               const mr = marketRates.get(qualifier);
               if (!mr) return null;
               const paidPerMile = lane.totalCarrierPay / lane.totalLoads / AVG_MILES;
+              if (mr.marketRatePerMile === null) return null;
               const deltaPerMile = paidPerMile - mr.marketRatePerMile;
               const deltaPct = mr.marketRatePerMile > 0 ? (deltaPerMile / mr.marketRatePerMile) * 100 : 0;
               const cls = deltaPct > 10 ? "ABOVE_MARKET" : deltaPct < -10 ? "BELOW_MARKET" : "AT_MARKET";
@@ -585,6 +590,7 @@ async function sendDailyIntelEmails(): Promise<void> {
           buyRateHtml,
           coachingActionsHtml,
           ratePositioningHtml,
+          lastSuccessfulPull: national.lastSuccessfulPull ?? null,
         });
 
         const sent = await sendEmail({
@@ -656,7 +662,7 @@ async function sendBiweeklyScorecardEmails(): Promise<void> {
       // Build lanes HTML for scorecard
       const lanesHtml = lanes.slice(0, 10).map((lane, i) => {
         const { status, color } = getScorecardStatus(lane.marginPct);
-        const originOtri = otriByMarket.get(lane.origin.toLowerCase()) ?? 15;
+        const originOtri = otriByMarket.get(lane.origin.toLowerCase()) ?? null;
         const buyRate = computeBuyRateRange(lane.carrierPays, originOtri);
 
         return `
@@ -707,6 +713,7 @@ async function sendBiweeklyScorecardEmails(): Promise<void> {
             const mr = sRateMap.get(q);
             if (!mr) return null;
             const paidPerMile = lane.totalCarrierPay / lane.totalLoads / AVG_MI;
+            if (mr.marketRatePerMile === null) return null;
             const deltaPct = mr.marketRatePerMile > 0 ? ((paidPerMile - mr.marketRatePerMile) / mr.marketRatePerMile) * 100 : 0;
             const cls = deltaPct > 10 ? "ABOVE_MARKET" : deltaPct < -10 ? "BELOW_MARKET" : "AT_MARKET";
             return { lane: `${lane.origin} → ${lane.destination}`, paidPerMile, marketRate: mr.marketRatePerMile, deltaPct, cls, forecast: mr.forecastDirection };
@@ -822,8 +829,8 @@ export async function sendIntelNowForOrg(orgId: string): Promise<void> {
   // Build alerts
   const alerts: Array<{ lane: string; signal: string; severity: string }> = [];
   for (const lane of lanes.slice(0, 10)) {
-    const originOtri = otriByMarket.get(lane.origin.toLowerCase()) ?? 15;
-    if (originOtri > 25) {
+    const originOtri = otriByMarket.get(lane.origin.toLowerCase()) ?? null;
+    if (originOtri !== null && originOtri > 25) {
       alerts.push({ lane: `${lane.origin} → ${lane.destination}`, signal: `Origin tight (OTRI ${originOtri.toFixed(1)}%)`, severity: "high" });
     }
   }
@@ -850,7 +857,7 @@ export async function sendIntelNowForOrg(orgId: string): Promise<void> {
           <th style="text-align:right;padding:8px 12px;font-size:11px;color:#6b7280;font-weight:600;">Buy Rate $/mi</th>
         </tr></thead>
         <tbody>${lanes.slice(0, 5).map((lane, i) => {
-          const originOtri = otriByMarket.get(lane.origin.toLowerCase()) ?? 15;
+          const originOtri = otriByMarket.get(lane.origin.toLowerCase()) ?? null;
           const buyRate = computeBuyRateRange(lane.carrierPays, originOtri);
           return `<tr style="border-top:1px solid #e5e7eb;background:${i % 2 === 0 ? "#fff" : "#f9fafb"};">
             <td style="padding:8px 12px;font-size:12px;color:#111;text-transform:capitalize;">${lane.origin} → ${lane.destination}</td>
@@ -865,7 +872,7 @@ export async function sendIntelNowForOrg(orgId: string): Promise<void> {
   // Build lane scorecard HTML
   const lanesHtml = lanes.slice(0, 10).map((lane, i) => {
     const { status, color } = getScorecardStatus(lane.marginPct);
-    const originOtri = otriByMarket.get(lane.origin.toLowerCase()) ?? 15;
+    const originOtri = otriByMarket.get(lane.origin.toLowerCase()) ?? null;
     const buyRate = computeBuyRateRange(lane.carrierPays, originOtri);
     return `
       <div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;margin-bottom:10px;background:#fff;">
@@ -904,6 +911,7 @@ export async function sendIntelNowForOrg(orgId: string): Promise<void> {
       diesel: national.dieselPerGal,
       alertHtml,
       buyRateHtml,
+      lastSuccessfulPull: national.lastSuccessfulPull ?? null,
     });
 
     const sent = await sendEmail({

@@ -15,7 +15,7 @@ import { intelTrackedLanes, intelLaneRates, recurringLanes } from "../../shared/
 import { requireAuth, getCurrentUser } from "../auth";
 import { cityToKma, toTracEquipment } from "../kmaMapping";
 import { fetchFullLaneBatch } from "../tracService";
-import { generateAlert, generateDriverText } from "../tracAlertEngine";
+import { generateAlert, generateDriverText, tracLaneDirectionSignal } from "../tracAlertEngine";
 import { resolveColumns, getRepFromRow, getCustomerFromRow, getStatusFromRow } from "../colResolver";
 import { isExcludedRow } from "../financialHelpers";
 import {
@@ -279,7 +279,7 @@ function buildLanesFromRows(
 function computeBuyRateRange(
   carrierPays: number[],
   loadCount: number,
-  votriOrOtri: number,  // prefer lane VOTRI, fall back to origin OTRI
+  votriOrOtri: number | null,
 ): { low: number; high: number } {
   if (carrierPays.length === 0) return { low: 0, high: 0 };
 
@@ -293,10 +293,9 @@ function computeBuyRateRange(
   const lowPerMile = p25 / avgMiles;
   const highPerMile = p75 / avgMiles;
 
-  // Use VOTRI (or OTRI fallback) for adjustment — hot market = higher buy rate
   let adjustment = 0;
-  if (votriOrOtri > 25) adjustment = 0.1;
-  else if (votriOrOtri > 10) adjustment = 0.05;
+  if (votriOrOtri !== null && votriOrOtri > 25) adjustment = 0.1;
+  else if (votriOrOtri !== null && votriOrOtri > 10) adjustment = 0.05;
 
   return {
     low: Math.round((lowPerMile * (1 + adjustment)) * 100) / 100,
@@ -333,12 +332,12 @@ function computeLaneAlerts(
     const laneVotri = votriByQualifier.get(qualifier);
 
     // Prefer lane-level VOTRI for alert severity; fall back to origin market OTRI
-    const effectiveRejectionRate = (laneVotri && !laneVotri.isStale)
+    const effectiveRejectionRate = (laneVotri && !laneVotri.isStale && laneVotri.votri !== null)
       ? laneVotri.votri
-      : (otriByMarket.get(lane.origin.toLowerCase()) ?? 15);
+      : (otriByMarket.get(lane.origin.toLowerCase()) ?? null);
     const votriValue = (laneVotri && !laneVotri.isStale) ? laneVotri.votri : null;
 
-    if (effectiveRejectionRate > 25) {
+    if (effectiveRejectionRate !== null && effectiveRejectionRate > 25) {
       const signalLabel = laneVotri && !laneVotri.isStale
         ? `Lane VOTRI tight (${effectiveRejectionRate.toFixed(1)}%)`
         : `Origin market tight (OTRI ${effectiveRejectionRate.toFixed(1)}%)`;
@@ -568,13 +567,18 @@ ${tighteningLanes.length > 0 ? `- TIGHTENING forecast lanes (act this week): ${t
 ${exp.monthlyOverMarketDollars > 0 ? `- Estimated monthly over-market exposure: $${Math.round(exp.monthlyOverMarketDollars / 1000)}K` : ""}`;
   }
 
+  const otriStr = national.otri !== null ? `${national.otri.toFixed(2)}% (WoW: ${(national.otriWoWDelta ?? 0) >= 0 ? "+" : ""}${(national.otriWoWDelta ?? 0).toFixed(1)}pp)` : "unavailable";
+  const ntiStr = national.ntiPerMove !== null ? `$${Math.round(national.ntiPerMove).toLocaleString()}/move (WoW: ${(national.ntiWoWDelta ?? 0) >= 0 ? "+" : ""}$${Math.abs(national.ntiWoWDelta ?? 0).toFixed(0)})` : "unavailable";
+  const contractStr = national.ntiPerMile !== null ? `$${national.ntiPerMile.toFixed(2)}/mi` : "unavailable";
+  const dieselStr = national.dieselPerGal !== null ? `$${national.dieselPerGal.toFixed(2)}/gal (WoW: ${(national.dieselMoMDelta ?? 0) >= 0 ? "+" : ""}$${Math.abs(national.dieselMoMDelta ?? 0).toFixed(3)})` : "unavailable";
+
   const prompt = `You are a freight intelligence analyst briefing ${userName}, a freight sales rep.
 
 Today's national market conditions:
-- National OTRI: ${national.otri.toFixed(2)}% (WoW: ${national.otriWoWDelta >= 0 ? "+" : ""}${national.otriWoWDelta.toFixed(1)}pp)
-- NTI Spot Rate: $${Math.round(national.ntiPerMove).toLocaleString()}/move (WoW: ${national.ntiWoWDelta >= 0 ? "+" : ""}$${Math.abs(national.ntiWoWDelta).toFixed(0)})
-- Contract Rate: $${national.ntiPerMile.toFixed(2)}/mi
-- Diesel: $${national.dieselPerGal.toFixed(2)}/gal (WoW: ${national.dieselMoMDelta >= 0 ? "+" : ""}$${Math.abs(national.dieselMoMDelta).toFixed(3)})
+- National OTRI: ${otriStr}
+- NTI Spot Rate: ${ntiStr}
+- Contract Rate: ${contractStr}
+- Diesel: ${dieselStr}
 
 ${userName}'s top accounts (by revenue): ${accountNames || "No account data available"}
 
@@ -697,9 +701,9 @@ export interface MyLanesRow {
   origin: string;
   destination: string;
   qualifier: string;
-  votri: number;
-  votriWoW: number;
-  signal: "hot" | "warm" | "cool";
+  votri: number | null;
+  votriWoW: number | null;
+  signal: "hot" | "warm" | "stable" | "cool" | null;
   avgCustomerRate: number | null;
   tracSpotRpm: number | null;
   rateDelta: "above" | "below" | "unknown";
@@ -765,19 +769,21 @@ async function computeMyLanes(
     console.log("[intel] TRAC rate lookup for My Lanes failed (non-blocking):", err);
   }
 
-  const rows: MyLanesRow[] = dedupedLanes.map(lane => {
+  const rows: MyLanesRow[] = await Promise.all(dedupedLanes.map(async (lane) => {
     const qualifier = buildVotriQualifier(lane.origin, lane.destination);
     const votriData = votriMap.get(qualifier);
-    const votri = votriData?.votri ?? 0;
-    const votriWoW = votriData?.votriWoW ?? 0;
-    const signal = votriData?.signal ?? "cool";
+    const votri = votriData?.votri ?? null;
+    const votriWoW = votriData?.votriWoW ?? null;
+    let signal = votriData?.signal ?? null;
+
+    const tracDir = await tracLaneDirectionSignal(lane.origin, lane.destination).catch(() => null);
+    if (tracDir) signal = tracDir;
 
     const avgMiles = 500;
     const avgCustomerRatePerMile = lane.avgPayPerLoad > 0 ? lane.avgPayPerLoad / avgMiles : null;
     let rateDelta: "above" | "below" | "unknown" = "unknown";
     let rateDeltaPct: number | null = null;
 
-    // Look up TRAC lane-specific spot rate by mapping city to KMA
     const origKma = cityToKma(lane.origin);
     const destKma = cityToKma(lane.destination);
     const tracKey = origKma && destKma ? `${origKma.kma}|${destKma.kma}` : null;
@@ -808,9 +814,9 @@ async function computeMyLanes(
       totalLoads: lane.totalLoads,
       companyName: lane.companyName,
     };
-  });
+  }));
 
-  rows.sort((a, b) => b.votri !== a.votri ? b.votri - a.votri : b.totalLoads - a.totalLoads);
+  rows.sort((a, b) => (b.votri ?? -1) !== (a.votri ?? -1) ? (b.votri ?? -1) - (a.votri ?? -1) : b.totalLoads - a.totalLoads);
   return rows;
 }
 
@@ -947,6 +953,7 @@ async function computeRatePositioning(
     const avgCarrierPayPerMile = avgCarrierPayPerLoad / AVG_MILES_PER_LOAD;
 
     const marketRatePerMile = marketRate.marketRatePerMile;
+    if (marketRatePerMile === null) continue;
     const deltaPerMile = Math.round((avgCarrierPayPerMile - marketRatePerMile) * 100) / 100;
     const deltaPct = marketRatePerMile > 0
       ? Math.round((deltaPerMile / marketRatePerMile) * 1000) / 10
@@ -1048,7 +1055,7 @@ async function computeRatePositioning(
 
   // Tightening lanes that need immediate action (TIGHTENING + ABOVE_MARKET, or just TIGHTENING with significant VOTRI)
   const tighteningActionLanes = entries
-    .filter(e => e.forecastDirection === "TIGHTENING" && (e.classification === "ABOVE_MARKET" || (e.votri ?? 0) > 20))
+    .filter(e => e.forecastDirection === "TIGHTENING" && (e.classification === "ABOVE_MARKET" || (e.votri !== null && e.votri > 20)))
     .slice(0, 5)
     .map(e => e.lane);
 
@@ -1162,10 +1169,10 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
   // Sorted by OTRI descending. ibOtri populated for any market used as a destination.
   const destinationSet = new Set(uniqueDestinations);
   const sonarMarketTrends = extendedMarkets
-    .sort((a, b) => b.otri - a.otri)
+    .sort((a, b) => (b.otri ?? -1) - (a.otri ?? -1))
     .slice(0, 20)
     .map(m => {
-      const trendSource = m.votriWoW ?? m.otriWoW;
+      const trendSource = m.votriWoW ?? m.otriWoW ?? 0;
       return {
         market:   m.market,
         otri:     m.otri,
@@ -1175,8 +1182,7 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
         otvi:     m.otvi,
         hai:      m.hai,
         signal:   m.signal,
-        trendDir: trendSource > 0.5 ? "↑" : trendSource < -0.5 ? "↓" : "→",
-        // ibOtri: always set for any market that is used as a destination (IB = inbound)
+        trendDir: trendSource > 0.5 ? "↑" as const : trendSource < -0.5 ? "↓" as const : "→" as const,
         ibOtri: destinationSet.has(m.market) ? m.otri : null,
       };
     });
@@ -1194,7 +1200,7 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
         alert.lane.split(" → ")[1]?.trim() ?? "",
       );
       const laneVotri = votriByQualifier.get(qualifier);
-      const originOtri = otriByMarket.get((alert.lane.split(" → ")[0]?.trim() ?? "").toLowerCase())?.otri ?? 15;
+      const originOtri = otriByMarket.get((alert.lane.split(" → ")[0]?.trim() ?? "").toLowerCase())?.otri ?? null;
       const narrative = await getAlertNarrative(
         alert.lane,
         alert.signal,
@@ -1230,9 +1236,8 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
       const qualifier = buildVotriQualifier(lane.origin, lane.destination);
       const laneVotri = votriByQualifier.get(qualifier);
       const votriVal = (laneVotri && !laneVotri.isStale) ? laneVotri.votri : null;
-      const originMarketOtri = otriByMarket.get(lane.origin.toLowerCase())?.otri ?? 15;
-      // Use lane VOTRI for buy rate adjustment if available; otherwise use origin market OTRI
-      const effectiveRate = votriVal !== null ? votriVal : originMarketOtri;
+      const originMarketOtri = otriByMarket.get(lane.origin.toLowerCase())?.otri ?? null;
+      const effectiveRate = votriVal ?? originMarketOtri;
       const buyRate = computeBuyRateRange(lane.carrierPays, lane.totalLoads, effectiveRate);
 
       const rationale = await getBuyRateRationale(
@@ -1291,14 +1296,14 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
     const laneVotri = votriByQualifier.get(qualifier);
     const votriVal = (laneVotri && !laneVotri.isStale) ? laneVotri.votri : null;
 
-    const originMarketOtri = otriByMarket.get(lane.origin.toLowerCase())?.otri ?? 15;
-    const destMarketOtri = otriByMarket.get(lane.destination.toLowerCase())?.otri ?? 15;
+    const originMarketOtri = otriByMarket.get(lane.origin.toLowerCase())?.otri ?? null;
+    const destMarketOtri = otriByMarket.get(lane.destination.toLowerCase())?.otri ?? null;
 
-    const effectiveRate = votriVal !== null ? votriVal : originMarketOtri;
+    const effectiveRate = votriVal ?? originMarketOtri;
     const buyRate = computeBuyRateRange(lane.carrierPays, lane.totalLoads, effectiveRate);
 
-    const originSignal = originMarketOtri > 25 ? "red" : originMarketOtri > 10 ? "yellow" : "green";
-    const destSignal = destMarketOtri > 25 ? "red" : destMarketOtri > 10 ? "yellow" : "green";
+    const originSignal = originMarketOtri !== null ? (originMarketOtri > 25 ? "red" : originMarketOtri > 10 ? "yellow" : "green") : "gray";
+    const destSignal = destMarketOtri !== null ? (destMarketOtri > 25 ? "red" : destMarketOtri > 10 ? "yellow" : "green") : "gray";
 
     return {
       lane: `${lane.origin} → ${lane.destination}`,
@@ -1678,9 +1683,9 @@ export function registerIntelRoutes(app: Express): void {
             origin: lane.origin,
             destination: lane.destination,
             qualifier,
-            votri: votriData?.votri ?? 0,
-            votriWoW: votriData?.votriWoW ?? 0,
-            signal: votriData?.signal ?? "cool",
+            votri: votriData?.votri ?? null,
+            votriWoW: votriData?.votriWoW ?? null,
+            signal: votriData?.signal ?? null,
             avgCustomerRate: null,
             tracSpotRpm: tracSpot !== null ? Math.round(tracSpot * 100) / 100 : null,
             rateDelta: "unknown" as const,

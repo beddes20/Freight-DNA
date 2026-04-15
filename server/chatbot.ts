@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { sendEmail, buildFeedbackEmail } from "./emailService";
 import { getNationalMarketSummary, getMarketOtris, getLaneVotrisBatch, getLaneMarketRate, buildVotriQualifier } from "./sonarClient";
+import { tracLaneDirectionSignal } from "./tracAlertEngine";
 import { computeIntelPayload } from "./routes/intel";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
@@ -39,8 +40,8 @@ async function getCachedRatePositioningContext(orgId: string, filterUserId?: str
     const context = `\n\n=== RATE POSITIONING SUMMARY (SONAR TRAC-adjusted, 4-week avg vs national VCRPM1 benchmark) ===
 Portfolio: ${pe.aboveMarketCount} lanes above market (${pe.aboveMarketPct}%), ${pe.atMarketCount} at market (${pe.atMarketPct}%), ${pe.belowMarketCount} below market (${pe.belowMarketPct}%).
 Avg delta: ${pe.avgDeltaPct > 0 ? "+" : ""}${pe.avgDeltaPct}% vs benchmark. Est. monthly over-market spend: $${pe.monthlyOverMarketDollars?.toLocaleString() ?? 0}.
-${topAbove.length > 0 ? `TOP ABOVE-MARKET LANES (paying too much): ${topAbove.map(l => `${l.lane} (+${l.deltaPct.toFixed(1)}%, $${l.avgCarrierPayPerMile.toFixed(2)}/mi vs $${l.marketRatePerMile.toFixed(2)} benchmark)`).join("; ")}.` : ""}
-${topBelow.length > 0 ? `TOP BELOW-MARKET LANES (favorable rate): ${topBelow.map(l => `${l.lane} (${l.deltaPct.toFixed(1)}%, $${l.avgCarrierPayPerMile.toFixed(2)}/mi vs $${l.marketRatePerMile.toFixed(2)} benchmark)`).join("; ")}.` : ""}
+${topAbove.length > 0 ? `TOP ABOVE-MARKET LANES (paying too much): ${topAbove.map(l => `${l.lane} (+${l.deltaPct.toFixed(1)}%, $${l.avgCarrierPayPerMile.toFixed(2)}/mi vs ${l.marketRatePerMile != null ? `$${l.marketRatePerMile.toFixed(2)}` : "unavailable"} benchmark)`).join("; ")}.` : ""}
+${topBelow.length > 0 ? `TOP BELOW-MARKET LANES (favorable rate): ${topBelow.map(l => `${l.lane} (${l.deltaPct.toFixed(1)}%, $${l.avgCarrierPayPerMile.toFixed(2)}/mi vs ${l.marketRatePerMile != null ? `$${l.marketRatePerMile.toFixed(2)}` : "unavailable"} benchmark)`).join("; ")}.` : ""}
 ${pe.tighteningActionLanes?.length ? `TIGHTENING LANES (act fast): ${pe.tighteningActionLanes.join(", ")}.` : ""}
 Use the get_lane_rate_positioning tool for full coaching detail on any specific lane or when the user asks about rate competitiveness.`;
     ratePositioningCache.set(cacheKey, { context, fetchedAt: Date.now() });
@@ -628,7 +629,7 @@ Keep it short and casual — reps are busy. No fluff, no filler.
 - When the user says a conversation WAS MEANINGFUL, or wants to MARK A TOUCHPOINT MEANINGFUL — use the mark_meaningful tool
 - When the user asks about CARRIERS on a lane, who runs a corridor, carrier pay rates, what we're paying for a mode on a lane (e.g. "what carriers run TX-CA?", "how much are we paying for dry vans CA-TX?") — use the carrier_lane_search tool
 - When the user asks about MARKET CONDITIONS, current spot rates, OTRI, tender rejections, market tightness, how hot/cool a lane is, or Sonar data — use the query_market_otri or query_national_rates tools
-- When the user asks about a SPECIFIC LANE's market signal, rejection index, or how tight that corridor is — use the query_lane_votri tool with origin and destination
+- When the user asks about a SPECIFIC LANE's market signal, direction, how tight that corridor is, or spot rates — use the query_lane_votri tool with origin and destination (returns TRAC direction + spot rate as primary, VOTRI as supplementary)
 - When the user asks about NATIONAL rates, NTI spot $/move, contract $/mile, or the spread between spot and contract — use the query_national_rates tool
 - When the user asks about RATE COMPETITIVENESS, whether we're paying too much/little on a lane, or wants coaching on a specific lane's rate positioning — use the get_lane_rate_positioning tool
 - PROACTIVELY use Sonar market tools when the user asks about specific accounts' lanes, procurement strategy, buy rates on a corridor, or what action to take on a lane — don't wait for them to explicitly ask about "the market"
@@ -777,7 +778,7 @@ When drafting emails or call prep, note the play at the top so the rep knows whi
           type: "function",
           function: {
             name: "query_lane_votri",
-            description: "Fetch live Sonar VOTRI (Van Outbound Tender Rejection Index) for a specific lane/corridor. Returns the rejection rate (%) and week-over-week delta. Use when the user asks how tight a specific lane is, the market signal for a corridor, VOTRI for a specific origin-destination pair, or what to target buying on a lane.",
+            description: "Fetch lane market intelligence (TRAC direction + spot rate as primary, VOTRI as supplementary). Returns TRAC forecast direction (Tightening/Stable/Softening), TRAC spot rate per mile, and VOTRI rejection rate when available. Use when the user asks how tight a specific lane is, the market signal for a corridor, or what to target buying on a lane.",
             parameters: {
               type: "object",
               properties: {
@@ -893,14 +894,22 @@ When drafting emails or call prep, note the play at the top so the rep knows whi
                 callLabel = "call_sonar_pulse";
                 try {
                   const pulse = await getNationalMarketSummary();
-                  const signalLabel = pulse.otri > 20 ? "🔴 Hot" : pulse.otri > 8 ? "🟡 Warm" : "🟢 Cool";
-                  searchResult = [
+                  const hasData = pulse.otri !== null;
+                  const signalLabel = !hasData ? "⚪ No Data" : pulse.otri! > 20 ? "🔴 Hot" : pulse.otri! > 8 ? "🟡 Warm" : "🟢 Cool";
+                  const lines: string[] = [
                     `FreightWaves Sonar — National Market Pulse (as of ${new Date(pulse.timestamp).toLocaleString()})${pulse.isStale ? " ⚠ Stale" : ""}`,
-                    `National OTRI: ${pulse.otri.toFixed(2)}% (${pulse.otriWoWDelta > 0 ? "+" : ""}${pulse.otriWoWDelta.toFixed(1)} pp WoW) — ${signalLabel}`,
-                    `NTI National Spot: $${pulse.ntiPerMove > 100 ? pulse.ntiPerMove.toLocaleString() : pulse.ntiPerMove.toFixed(2)}/move`,
-                    `Contract Rate (VCRPM1): $${pulse.ntiPerMile.toFixed(2)}/mile`,
-                    `Market Signal: ${pulse.otri > 20 ? "Tight — capacity scarce, rejection rates elevated. Good time to lock in contracts and position as reliable capacity source." : pulse.otri > 8 ? "Moderate — balanced market conditions." : "Loose — capacity abundant, good negotiating leverage on buy rates."}`,
-                  ].join("\n");
+                  ];
+                  if (hasData) {
+                    lines.push(`National OTRI: ${pulse.otri!.toFixed(2)}% (${(pulse.otriWoWDelta ?? 0) > 0 ? "+" : ""}${(pulse.otriWoWDelta ?? 0).toFixed(1)} pp WoW) — ${signalLabel}`);
+                  } else {
+                    lines.push(`National OTRI: unavailable${pulse.lastSuccessfulPull ? ` — last updated ${pulse.lastSuccessfulPull}` : ""}`);
+                  }
+                  lines.push(pulse.ntiPerMove !== null ? `NTI National Spot: $${pulse.ntiPerMove > 100 ? pulse.ntiPerMove.toLocaleString() : pulse.ntiPerMove.toFixed(2)}/move` : `NTI National Spot: unavailable`);
+                  lines.push(pulse.ntiPerMile !== null ? `Contract Rate (VCRPM1): $${pulse.ntiPerMile.toFixed(2)}/mile` : `Contract Rate (VCRPM1): unavailable`);
+                  if (hasData) {
+                    lines.push(`Market Signal: ${pulse.otri! > 20 ? "Tight — capacity scarce, rejection rates elevated. Good time to lock in contracts and position as reliable capacity source." : pulse.otri! > 8 ? "Moderate — balanced market conditions." : "Loose — capacity abundant, good negotiating leverage on buy rates."}`);
+                  }
+                  searchResult = lines.join("\n");
                 } catch {
                   searchResult = "Sonar market data temporarily unavailable.";
                 }
@@ -912,23 +921,48 @@ When drafting emails or call prep, note the play at the top so the rep knows whi
                   const votriMap = await getLaneVotrisBatch([{ origin, destination }]);
                   const qualifier = buildVotriQualifier(origin, destination);
                   const votri = votriMap.get(qualifier);
-                  if (votri) {
-                    const sig = votri.signal === "hot" ? "🔴 Hot" : votri.signal === "warm" ? "🟡 Warm" : "🟢 Cool";
-                    searchResult = [
-                      `Sonar VOTRI for ${origin} → ${destination} (qualifier: ${qualifier})${votri.isStale ? " ⚠ Stale" : ""}`,
-                      `Van Tender Rejection Rate: ${votri.votri.toFixed(1)}% — ${sig}`,
-                      `Week-over-Week: ${votri.votriWoW > 0 ? "+" : ""}${votri.votriWoW.toFixed(1)} pp`,
-                      votri.signal === "hot"
-                        ? "Market is tight on this lane — carriers rejecting frequently. Capacity is scarce, rates under upward pressure."
-                        : votri.signal === "warm"
-                        ? "Market is moderately active — some capacity pressure, normal booking lead times."
-                        : "Market is loose — plenty of capacity available, good leverage for negotiating buy rates.",
-                    ].join("\n");
-                  } else {
-                    searchResult = `No VOTRI data found for ${origin} → ${destination}. This qualifier (${qualifier}) may not have enough volume in Sonar.`;
+
+                  const tracDir = await tracLaneDirectionSignal(origin, destination).catch(() => null);
+                  let tracSpotRpm: number | null = null;
+                  try {
+                    const lmr = await getLaneMarketRate(origin, destination);
+                    tracSpotRpm = lmr.marketRatePerMile;
+                  } catch {}
+
+                  const directionLabel = tracDir === "hot" ? "Tightening" : tracDir === "warm" ? "Mild tightening" : tracDir === "stable" ? "Stable" : tracDir === "cool" ? "Softening" : null;
+                  const hasVotriData = votri?.votri !== null && votri?.votri !== undefined;
+
+                  const lines: string[] = [
+                    `Lane market intelligence for ${origin} → ${destination}${votri?.isStale ? " ⚠ Stale" : ""}`,
+                  ];
+                  if (directionLabel) {
+                    lines.push(`TRAC Direction: ${directionLabel} (primary signal)`);
                   }
+                  if (tracSpotRpm !== null) {
+                    lines.push(`TRAC Spot Rate: $${tracSpotRpm.toFixed(2)}/mile`);
+                  }
+                  if (hasVotriData) {
+                    lines.push(`VOTRI: ${votri!.votri!.toFixed(1)}%${votri!.votriWoW !== null ? ` (WoW: ${votri!.votriWoW > 0 ? "+" : ""}${votri!.votriWoW.toFixed(1)} pp)` : ""}`);
+                  }
+                  if (!directionLabel && !hasVotriData && tracSpotRpm === null) {
+                    lines.push(`Market data unavailable for this lane${votri?.lastSuccessfulPull ? ` — last updated ${votri.lastSuccessfulPull}` : ""}`);
+                  }
+                  lines.push(
+                    tracDir === "hot"
+                      ? "Market is tight on this lane — TRAC forecasts capacity tightening. Rates under upward pressure."
+                      : tracDir === "warm"
+                      ? "Market shows mild tightening — monitor for further escalation."
+                      : tracDir === "stable"
+                      ? "Market is stable — no significant directional movement expected."
+                      : tracDir === "cool"
+                      ? "Market is softening — good conditions for rate negotiation."
+                      : hasVotriData
+                      ? (votri!.signal === "hot" ? "VOTRI indicates tight capacity on this corridor." : votri!.signal === "cool" ? "VOTRI indicates loose capacity — good for negotiation." : "")
+                      : ""
+                  );
+                  searchResult = lines.filter(Boolean).join("\n");
                 } catch {
-                  searchResult = "Sonar lane signal data temporarily unavailable.";
+                  searchResult = "Lane market signal data temporarily unavailable.";
                 }
               } else if (toolCallName === "query_market_otri") {
                 callLabel = "call_sonar_otris";
@@ -942,12 +976,14 @@ When drafting emails or call prep, note the play at the top so the rep knows whi
                     if (!m) {
                       searchResult = `No Sonar data found for "${market}".`;
                     } else {
-                      const sig = m.signal === "hot" ? "🔴 Hot" : m.signal === "warm" ? "🟡 Warm" : "🟢 Cool";
-                      const wowArrow = m.otriWoW > 0 ? "↑" : m.otriWoW < 0 ? "↓" : "→";
-                      const lines = [
-                        `Sonar market data for ${m.market}:`,
-                        `  OTRI: ${m.otri.toFixed(1)}% — ${sig} (WoW: ${wowArrow}${Math.abs(m.otriWoW).toFixed(1)} pp)`,
-                      ];
+                      const sig = m.signal === "hot" ? "🔴 Hot" : m.signal === "warm" ? "🟡 Warm" : m.signal === "cool" ? "🟢 Cool" : "⚪ No signal";
+                      const lines = [`Sonar market data for ${m.market}:`];
+                      if (m.otri !== null) {
+                        const wowArrow = (m.otriWoW ?? 0) > 0 ? "↑" : (m.otriWoW ?? 0) < 0 ? "↓" : "→";
+                        lines.push(`  OTRI: ${m.otri.toFixed(1)}% — ${sig}${m.otriWoW !== null ? ` (WoW: ${wowArrow}${Math.abs(m.otriWoW).toFixed(1)} pp)` : ""}`);
+                      } else {
+                        lines.push(`  OTRI: unavailable${m.lastSuccessfulPull ? ` — last updated ${m.lastSuccessfulPull}` : ""}`);
+                      }
                       if (m.votri !== null) {
                         lines.push(`  VOTRI (Van Outbound Rejection): ${m.votri.toFixed(1)}%`);
                       }
@@ -996,7 +1032,7 @@ When drafting emails or call prep, note the play at the top so the rep knows whi
                           ``,
                           `Your Org's Rate vs Market (${origin} → ${destination}):`,
                           `  Your avg carrier pay: $${laneEntry.avgCarrierPayPerMile.toFixed(2)}/mi`,
-                          `  Market benchmark:     $${laneEntry.marketRatePerMile.toFixed(2)}/mi`,
+                          `  Market benchmark:     ${laneEntry.marketRatePerMile != null ? `$${laneEntry.marketRatePerMile.toFixed(2)}/mi` : "unavailable"}`,
                           `  Delta: ${laneEntry.deltaPerMile >= 0 ? "+" : ""}$${laneEntry.deltaPerMile.toFixed(2)}/mi (${laneEntry.deltaPct >= 0 ? "+" : ""}${laneEntry.deltaPct.toFixed(1)}%)`,
                           `  Classification: ${classificationLabel}`,
                           laneEntry.coachingCard ? `  Coaching: ${laneEntry.coachingCard}` : "",
@@ -1008,7 +1044,7 @@ When drafting emails or call prep, note the play at the top so the rep knows whi
 
                     searchResult = [
                       `Rate Positioning Intelligence: ${origin} → ${destination}${rate.isStale ? " ⚠ Stale" : ""}`,
-                      `TRAC Market Benchmark: $${rate.marketRatePerMile.toFixed(2)}/mile (source: ${rate.source === "lane" ? "lane-level VCRPM1 TRAC benchmark" : "national VCRPM1 + VOTRI-adjusted fallback"})`,
+                      `TRAC Market Benchmark: ${rate.marketRatePerMile != null ? `$${rate.marketRatePerMile.toFixed(2)}/mile` : "unavailable"} (source: ${rate.source === "lane" ? "lane-level VCRPM1 TRAC benchmark" : "national VCRPM1 + VOTRI-adjusted fallback"})`,
                       `3-Week Market Forecast: ${classLabel}`,
                       forecastLines,
                       `Confidence: ${rate.confidence}`,
@@ -1474,14 +1510,23 @@ ${ANALYST_RULES}`,
             ? getLaneVotrisBatch(resolvedLanePairs)
             : Promise.resolve(new Map()),
         ]);
-        const marketSignal = pulse.otri > 20 ? "tight (carriers rejecting frequently)"
-          : pulse.otri > 8 ? "moderate"
-          : "loose (capacity abundant)";
-        marketContext = `\nCurrent market: National OTRI ${pulse.otri.toFixed(1)}% — market is ${marketSignal}.${pulse.isStale ? " (data may be slightly delayed)" : ""}`;
+        if (pulse.otri !== null) {
+          const marketSignal = pulse.otri > 20 ? "tight (carriers rejecting frequently)"
+            : pulse.otri > 8 ? "moderate"
+            : "loose (capacity abundant)";
+          marketContext = `\nCurrent market: National OTRI ${pulse.otri.toFixed(1)}% — market is ${marketSignal}.${pulse.isStale ? " (data may be slightly delayed)" : ""}`;
+        } else {
+          marketContext = `\nCurrent market: National OTRI data unavailable${pulse.lastSuccessfulPull ? ` — last updated ${pulse.lastSuccessfulPull}` : ""}.`;
+        }
         if (laneVotris.size > 0) {
-          const laneSignals = Array.from(laneVotris.values()).slice(0, 3).map(v =>
-            `${v.origin}→${v.destination}: VOTRI ${v.votri.toFixed(1)}% ${v.signal === "hot" ? "🔴 Hot" : v.signal === "warm" ? "🟡 Warm" : "🟢 Cool"} (${v.votriWoW > 0 ? "+" : ""}${v.votriWoW.toFixed(1)} pp WoW)`
-          ).join("; ");
+          const laneSignals = Array.from(laneVotris.values()).slice(0, 3).map(v => {
+            const sigLabel = v.signal === "hot" ? "🔴 Hot" : v.signal === "warm" ? "🟡 Warm" : v.signal === "cool" ? "🟢 Cool" : "⚪ No signal";
+            if (v.votri !== null) {
+              const wowStr = v.votriWoW !== null ? ` (${v.votriWoW > 0 ? "+" : ""}${v.votriWoW.toFixed(1)} pp WoW)` : "";
+              return `${v.origin}→${v.destination}: VOTRI ${v.votri.toFixed(1)}% ${sigLabel}${wowStr}`;
+            }
+            return `${v.origin}→${v.destination}: VOTRI unavailable`;
+          }).join("; ");
           marketContext += `\nLane signals: ${laneSignals}`;
         }
       } catch { /* non-fatal */ }

@@ -47,50 +47,53 @@ function isFresh<T>(entry: CacheEntry<T>): boolean {
 }
 
 export interface NationalMarketSummary {
-  otri: number;
-  otriWoWDelta: number;
-  ntiPerMove: number;
-  ntiWoWDelta: number;
-  ntiPerMile: number;
+  otri: number | null;
+  otriWoWDelta: number | null;
+  ntiPerMove: number | null;
+  ntiWoWDelta: number | null;
+  ntiPerMile: number | null;
   ratesSpread: number | null;
-  flatbedOtri: number;
-  flatbedSignal: "hot" | "cool" | "neutral";
-  dieselPerGal: number;
-  dieselMoMDelta: number;
-  dieselSource: "eia" | "estimated";
+  flatbedOtri: number | null;
+  flatbedSignal: "hot" | "cool" | "neutral" | null;
+  dieselPerGal: number | null;
+  dieselMoMDelta: number | null;
+  dieselSource: "eia" | "estimated" | null;
   timestamp: string;
   isStale: boolean;
+  lastSuccessfulPull: string | null;
 }
 
 export interface MarketExtended {
   market: string;
-  otri: number;
-  otriWoW: number;
+  otri: number | null;
+  otriWoW: number | null;
   votri: number | null;
   votriWoW: number | null;
   otvi: number | null;   // Outbound Tender Volume Index
   hai: number | null;    // Headhaul/Backhaul Imbalance Index
-  signal: "hot" | "warm" | "cool";
+  signal: "hot" | "warm" | "stable" | "cool" | null;
 }
 
 export interface MarketOtri {
   market: string;
-  otri: number;
-  otriWoW: number;     // OTRIW — market-level outbound tender rejection WoW delta
+  otri: number | null;
+  otriWoW: number | null;
   votri: number | null;
-  votriWoW: number | null; // VOTRIW — van outbound tender rejection WoW delta (used for Intel trend direction)
-  signal: "hot" | "warm" | "cool";
+  votriWoW: number | null;
+  signal: "hot" | "warm" | "stable" | "cool" | null;
+  lastSuccessfulPull: string | null;
 }
 
 export interface LaneVotri {
   origin: string;
   destination: string;
   qualifier: string;     // e.g. "ATLDAL"
-  votri: number;         // current week %
-  votriWoW: number;      // WoW delta pp
-  signal: "hot" | "warm" | "cool";
+  votri: number | null;
+  votriWoW: number | null;
+  signal: "hot" | "warm" | "stable" | "cool" | null;
   timestamp: string;
   isStale: boolean;
+  lastSuccessfulPull: string | null;
 }
 
 export interface LaneSpotRate {
@@ -104,13 +107,14 @@ export interface LaneSpotRate {
 export interface LaneMarketRate {
   origin: string;
   destination: string;
-  marketRatePerMile: number;
+  marketRatePerMile: number | null;
   forecastDirection: "TIGHTENING" | "EASING" | "STABLE";
   forecastWeeklyRates: Array<{ week: number; ratePerMile: number }>;
   confidence: "high" | "medium" | "low";
   source: "lane" | "national_fallback";
   timestamp: string;
   isStale: boolean;
+  lastSuccessfulPull: string | null;
 }
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -273,8 +277,8 @@ function logFirstLiveLane(entry: LaneVotri) {
   _lanePricingVerified = true;
   log(
     `Lane pricing verified (first live result): ${entry.qualifier} — ` +
-    `VOTRI=${entry.votri.toFixed(2)}% WoW=${entry.votriWoW >= 0 ? "+" : ""}${entry.votriWoW.toFixed(2)}pp ` +
-    `signal=${entry.signal} isStale=false`
+    `VOTRI=${entry.votri?.toFixed(2) ?? "n/a"}% WoW=${entry.votriWoW !== null ? ((entry.votriWoW >= 0 ? "+" : "") + entry.votriWoW.toFixed(2)) : "n/a"}pp ` +
+    `signal=${entry.signal ?? "none"} isStale=false`
   );
 }
 
@@ -644,12 +648,10 @@ export async function getNationalMarketSummary(): Promise<NationalMarketSummary>
   const vcrpm = extractValue(vcrpmData);
 
   if (nti === null && otri === null) {
-    log("National market data unavailable — using fallback");
+    log("National market data unavailable — returning null fields (no fake data)");
     return fallback;
   }
 
-  const resolvedNti  = nti   ?? fallback.ntiPerMove;
-  const resolvedVcrp = vcrpm ?? fallback.ntiPerMile;
   const ratesSpread  = (nti !== null && vcrpm !== null && vcrpm > 0)
     ? Math.round(((nti > 100 ? nti / 500 : nti) - vcrpm) * 100) / 100
     : null;
@@ -657,21 +659,20 @@ export async function getNationalMarketSummary(): Promise<NationalMarketSummary>
   const eiaDiesel = await fetchEiaDieselPrice();
 
   const summary: NationalMarketSummary = {
-    otri:          otri  ?? fallback.otri,
-    otriWoWDelta:  otri !== null && otriP !== null ? Math.round((otri - otriP) * 100) / 100
-                 : fallback.otriWoWDelta,
-    ntiPerMove:    resolvedNti,
-    ntiWoWDelta:   nti !== null && ntiP !== null ? Math.round((nti - ntiP) * 100) / 100
-                 : fallback.ntiWoWDelta,
-    ntiPerMile:    resolvedVcrp,
+    otri:          otri,
+    otriWoWDelta:  otri !== null && otriP !== null ? Math.round((otri - otriP) * 100) / 100 : null,
+    ntiPerMove:    nti,
+    ntiWoWDelta:   nti !== null && ntiP !== null ? Math.round((nti - ntiP) * 100) / 100 : null,
+    ntiPerMile:    vcrpm,
     ratesSpread,
-    flatbedOtri:   otri  ?? fallback.flatbedOtri,
-    flatbedSignal: otri !== null ? (otri > 25 ? "hot" : otri > 12 ? "neutral" : "cool") : fallback.flatbedSignal,
-    dieselPerGal:  eiaDiesel?.pricePerGal ?? fallback.dieselPerGal,
-    dieselMoMDelta: eiaDiesel?.weekOverWeekDelta ?? fallback.dieselMoMDelta,
-    dieselSource:  eiaDiesel ? "eia" : "estimated",
+    flatbedOtri:   otri,
+    flatbedSignal: otri !== null ? (otri > 25 ? "hot" : otri > 12 ? "neutral" : "cool") : null,
+    dieselPerGal:  eiaDiesel?.pricePerGal ?? null,
+    dieselMoMDelta: eiaDiesel?.weekOverWeekDelta ?? null,
+    dieselSource:  eiaDiesel ? "eia" : null,
     timestamp:     new Date().toISOString(),
     isStale:       false,
+    lastSuccessfulPull: new Date().toISOString(),
   };
 
   nationalCache = { value: summary, fetchedAt: Date.now(), ttlMs: NTI_TTL };
@@ -683,21 +684,37 @@ export async function getNationalMarketSummary(): Promise<NationalMarketSummary>
 
 let lastKnownNational: NationalMarketSummary | null = null;
 function buildFallbackNational(): NationalMarketSummary {
-  if (lastKnownNational) return { ...lastKnownNational, isStale: true };
-  return {
-    otri: 13.74,
-    otriWoWDelta: -0.7,
-    ntiPerMove: 3090,
-    ntiWoWDelta: 15,
-    ntiPerMile: 2.28,
+  if (lastKnownNational) return {
+    otri: null,
+    otriWoWDelta: null,
+    ntiPerMove: null,
+    ntiWoWDelta: null,
+    ntiPerMile: null,
     ratesSpread: null,
-    flatbedOtri: 18.5,
-    flatbedSignal: "neutral",
-    dieselPerGal: 3.72,
-    dieselMoMDelta: -0.04,
-    dieselSource: "estimated",
+    flatbedOtri: null,
+    flatbedSignal: null,
+    dieselPerGal: null,
+    dieselMoMDelta: null,
+    dieselSource: null,
     timestamp: new Date().toISOString(),
     isStale: true,
+    lastSuccessfulPull: lastKnownNational.timestamp,
+  };
+  return {
+    otri: null,
+    otriWoWDelta: null,
+    ntiPerMove: null,
+    ntiWoWDelta: null,
+    ntiPerMile: null,
+    ratesSpread: null,
+    flatbedOtri: null,
+    flatbedSignal: null,
+    dieselPerGal: null,
+    dieselMoMDelta: null,
+    dieselSource: null,
+    timestamp: new Date().toISOString(),
+    isStale: true,
+    lastSuccessfulPull: null,
   };
 }
 
@@ -728,9 +745,9 @@ export async function getMarketOtris(markets: string[]): Promise<MarketOtri[]> {
       const weekAgoM = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
 
       const otriData = await sonarGet(`/data/OTRI/${code}/${weekAgoM}/${todayM}`);
-      const otri = extractValue(otriData) ?? 15;
+      const otri = extractValue(otriData);
       const otriPrior = extractPriorValue(otriData);
-      const otriWoW = otriPrior !== null ? Math.round((otri - otriPrior) * 100) / 100 : 0;
+      const otriWoW = otri !== null && otriPrior !== null ? Math.round((otri - otriPrior) * 100) / 100 : null;
 
       const entry: MarketOtri = {
         market,
@@ -738,7 +755,8 @@ export async function getMarketOtris(markets: string[]): Promise<MarketOtri[]> {
         otriWoW,
         votri:    null,
         votriWoW: null,
-        signal: otriSignal(otri),
+        signal: otri !== null ? otriSignal(otri) : null,
+        lastSuccessfulPull: otri !== null ? new Date().toISOString() : (otriCache.get(market.toLowerCase())?.value.lastSuccessfulPull ?? null),
       };
       const key = market.toLowerCase();
       otriCache.set(key, { value: entry, fetchedAt: Date.now(), ttlMs: OTRI_TTL });
@@ -768,10 +786,10 @@ export async function getMarketOtrisExtended(markets: string[]): Promise<MarketE
 
 export async function getMarketOtri(market: string): Promise<MarketOtri> {
   const results = await getMarketOtris([market]);
-  return results[0] ?? { market, otri: 15, otriWoW: 0, votri: null, votriWoW: null, signal: "warm" };
+  return results[0] ?? { market, otri: null, otriWoW: null, votri: null, votriWoW: null, signal: null, lastSuccessfulPull: null };
 }
 
-export async function getNationalRates(): Promise<{ ntiPerMove: number; ntiPerMile: number; isStale: boolean }> {
+export async function getNationalRates(): Promise<{ ntiPerMove: number | null; ntiPerMile: number | null; isStale: boolean }> {
   const summary = await getNationalMarketSummary();
   return {
     ntiPerMove: summary.ntiPerMove,
@@ -827,10 +845,10 @@ export async function getLaneVotri(origin: string, destination: string): Promise
   const priorVotri = extractPriorValue(data);
 
   const isStale = rawVotri === null;
-  const votri    = rawVotri ?? 0;
+  const votri    = rawVotri;
   const votriWoW = rawVotri !== null && priorVotri !== null
     ? Math.round((rawVotri - priorVotri) * 100) / 100
-    : 0;
+    : null;
 
   const entry: LaneVotri = {
     origin,
@@ -838,9 +856,10 @@ export async function getLaneVotri(origin: string, destination: string): Promise
     qualifier,
     votri,
     votriWoW,
-    signal: isStale ? "cool" : votriSignal(votri),
+    signal: rawVotri !== null ? votriSignal(rawVotri) : null,
     timestamp: new Date().toISOString(),
     isStale,
+    lastSuccessfulPull: rawVotri !== null ? new Date().toISOString() : (cached?.value.lastSuccessfulPull ?? null),
   };
 
   votriCache.set(qualifier, { value: entry, fetchedAt: Date.now(), ttlMs: VOTRI_TTL });
@@ -916,7 +935,9 @@ export async function getLaneSpotRate(origin: string, destination: string): Prom
 
   const national = await getNationalMarketSummary();
   const votri = await getLaneVotri(origin, destination);
-  const baseRate = national.ntiPerMile > 0 ? national.ntiPerMile : 2.28;
+  if (national.ntiPerMile === null) return null;
+  const baseRate = national.ntiPerMile > 0 ? national.ntiPerMile : 0;
+  if (baseRate <= 0) return null;
   const premium = votri.signal === "hot" ? 0.08 : votri.signal === "warm" ? 0.03 : 0;
   const ratePerMile = Math.round(baseRate * (1 + premium) * 100) / 100;
 
@@ -934,7 +955,7 @@ export async function getAvgVotriWoW(
 ): Promise<number | null> {
   if (lanes.length === 0) return null;
   const votris = await getLaneVotrisBatch(lanes);
-  const deltas = Array.from(votris.values()).map(v => v.votriWoW);
+  const deltas = Array.from(votris.values()).map(v => v.votriWoW).filter((d): d is number => d !== null);
   if (deltas.length === 0) return null;
   return Math.round((deltas.reduce((s, d) => s + d, 0) / deltas.length) * 100) / 100;
 }
@@ -957,7 +978,7 @@ export async function getLaneMarketRate(origin: string, destination: string): Pr
     getLaneVotri(origin, destination),
   ]);
 
-  const nationalRate = national.ntiPerMile > 0 ? national.ntiPerMile : 2.28;
+  const nationalRate = (national.ntiPerMile !== null && national.ntiPerMile > 0) ? national.ntiPerMile : null;
 
   let marketRatePerMile: number;
   let source: "lane" | "national_fallback";
@@ -1006,19 +1027,39 @@ export async function getLaneMarketRate(origin: string, destination: string): Pr
     }
   } catch {
     source = "national_fallback";
+    if (nationalRate === null) {
+      const emptyResult: LaneMarketRate = {
+        origin, destination,
+        marketRatePerMile: null,
+        forecastDirection: "STABLE",
+        forecastWeeklyRates: [],
+        confidence: "low",
+        source: "national_fallback",
+        timestamp: new Date().toISOString(),
+        isStale: true,
+        lastSuccessfulPull: null,
+      };
+      laneMarketRateCache.set(cacheKey, { value: emptyResult, fetchedAt: Date.now(), ttlMs: TRAC_MARKET_RATE_TTL });
+      return emptyResult;
+    }
     marketRatePerMile = nationalRate;
-    if (!laneVotri.isStale) {
+    if (!laneVotri.isStale && laneVotri.votri !== null) {
       const votriPremium = laneVotri.signal === "hot" ? 0.05 : laneVotri.signal === "warm" ? 0.02 : 0;
       marketRatePerMile = Math.round(nationalRate * (1 + votriPremium) * 100) / 100;
     }
 
-    const votriWoW = laneVotri.votriWoW;
-    if (votriWoW > 1.5) {
-      forecastDirection = "TIGHTENING";
-      weeklyRateChange = 0.02;
-    } else if (votriWoW < -1.5) {
-      forecastDirection = "EASING";
-      weeklyRateChange = -0.015;
+    try {
+      const { tracLaneDirectionSignal } = await import("./tracAlertEngine");
+      const tracSignal = await tracLaneDirectionSignal(origin, destination);
+      if (tracSignal === "hot" || tracSignal === "warm") {
+        forecastDirection = "TIGHTENING";
+        weeklyRateChange = tracSignal === "hot" ? 0.02 : 0.01;
+      } else if (tracSignal === "cool") {
+        forecastDirection = "EASING";
+        weeklyRateChange = -0.015;
+      }
+    } catch {
+      // TRAC direction unavailable — keep STABLE default
     }
   }
 
@@ -1027,6 +1068,7 @@ export async function getLaneMarketRate(origin: string, destination: string): Pr
     ratePerMile: Math.round(marketRatePerMile * Math.pow(1 + weeklyRateChange, week) * 100) / 100,
   }));
 
+  const nowIso = new Date().toISOString();
   const result: LaneMarketRate = {
     origin,
     destination,
@@ -1035,8 +1077,9 @@ export async function getLaneMarketRate(origin: string, destination: string): Pr
     forecastWeeklyRates,
     confidence: source === "lane" ? "high" : laneVotri.isStale ? "low" : "medium",
     source,
-    timestamp: new Date().toISOString(),
+    timestamp: nowIso,
     isStale: laneVotri.isStale && source === "national_fallback",
+    lastSuccessfulPull: marketRatePerMile !== null ? nowIso : (laneVotri.lastSuccessfulPull ?? null),
   };
 
   laneMarketRateCache.set(cacheKey, { value: result, fetchedAt: Date.now(), ttlMs: TRAC_MARKET_RATE_TTL });

@@ -21,15 +21,15 @@ interface MarketEntry {
   companyCount: number;
   otri: number | null;
   otriWoW: number | null;
-  signal: "hot" | "warm" | "cool" | null;
+  signal: "hot" | "warm" | "stable" | "cool" | null;
 }
 
 interface UrgencyLane {
   origin: string;
   destination: string;
-  votri: number;
-  votriWoW: number;
-  signal: "hot" | "warm" | "cool";
+  votri: number | null;
+  votriWoW: number | null;
+  signal: "hot" | "warm" | "stable" | "cool" | null;
   companyName: string;
 }
 
@@ -47,10 +47,10 @@ interface NamRolePayload {
 interface DirectorRolePayload {
   role: "director";
   heatSummary: { hot: number; warm: number; cool: number; total: number };
-  ntiPerMove: number;
-  ntiPerMile: number;
+  ntiPerMove: number | null;
+  ntiPerMile: number | null;
   spread: number | null;
-  topMovingMarkets: Array<{ city: string; otri: number; otriWoW: number; signal: "hot" | "warm" | "cool" }>;
+  topMovingMarkets: Array<{ city: string; otri: number | null; otriWoW: number | null; signal: "hot" | "warm" | "stable" | "cool" | null }>;
 }
 
 interface LmRolePayload {
@@ -59,17 +59,18 @@ interface LmRolePayload {
 }
 
 interface MarketPulse {
-  otri: number;
-  otriWoWDelta: number;
-  ntiPerMove: number;
-  ntiWoWDelta: number;
-  ntiPerMile: number;
-  flatbedOtri: number;
-  flatbedSignal: "hot" | "cool" | "neutral";
-  dieselPerGal: number;
-  dieselMoMDelta: number;
+  otri: number | null;
+  otriWoWDelta: number | null;
+  ntiPerMove: number | null;
+  ntiWoWDelta: number | null;
+  ntiPerMile: number | null;
+  flatbedOtri: number | null;
+  flatbedSignal: "hot" | "cool" | "neutral" | null;
+  dieselPerGal: number | null;
+  dieselMoMDelta: number | null;
   timestamp: string;
   isStale: boolean;
+  lastSuccessfulPull: string | null;
   marketDataLimited?: boolean;
   marketDataResumesAt?: string;
   rolePayload?: AmRolePayload | NamRolePayload | DirectorRolePayload | LmRolePayload;
@@ -77,20 +78,27 @@ interface MarketPulse {
 
 type DashboardRole = "am" | "nam" | "director" | "logistics_manager";
 
-function signalColor(otri: number) {
+function signalColor(otri: number | null) {
+  if (otri === null) return { label: "No Data", cls: "text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800/30 border-gray-300 dark:border-gray-600" };
   if (otri >= 20) return { label: "Hot", cls: "text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/30 border-red-300 dark:border-red-700" };
   if (otri >= 8)  return { label: "Warm", cls: "text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-900/30 border-amber-300 dark:border-amber-700" };
   return { label: "Cool", cls: "text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-900/30 border-green-300 dark:border-green-700" };
 }
 
-function signalBadge(signal: "hot" | "warm" | "cool" | null, otri?: number | null) {
+function signalBadge(signal: "hot" | "warm" | "stable" | "cool" | null, otri?: number | null) {
+  if (signal === null && (otri === undefined || otri === null)) {
+    return <Badge variant="outline" className="text-[10px] py-0 px-1.5 text-gray-500 bg-gray-100 border-gray-300">— No Data</Badge>;
+  }
   if (signal === "hot" || (otri !== undefined && otri !== null && otri >= 20)) {
-    return <Badge variant="outline" className="text-[10px] py-0 px-1.5 text-red-600 bg-red-100 border-red-300">🔴 Hot</Badge>;
+    return <Badge variant="outline" className="text-[10px] py-0 px-1.5 text-red-600 bg-red-100 border-red-300">Tightening</Badge>;
   }
   if (signal === "warm" || (otri !== undefined && otri !== null && otri >= 8)) {
-    return <Badge variant="outline" className="text-[10px] py-0 px-1.5 text-amber-600 bg-amber-100 border-amber-300">🟡 Warm</Badge>;
+    return <Badge variant="outline" className="text-[10px] py-0 px-1.5 text-amber-600 bg-amber-100 border-amber-300">Mild tightening</Badge>;
   }
-  return <Badge variant="outline" className="text-[10px] py-0 px-1.5 text-green-600 bg-green-100 border-green-300">🟢 Cool</Badge>;
+  if (signal === "stable") {
+    return <Badge variant="outline" className="text-[10px] py-0 px-1.5 text-blue-600 bg-blue-100 border-blue-300">Stable</Badge>;
+  }
+  return <Badge variant="outline" className="text-[10px] py-0 px-1.5 text-green-600 bg-green-100 border-green-300">Softening</Badge>;
 }
 
 function DeltaIcon({ delta }: { delta: number }) {
@@ -125,8 +133,14 @@ function PulseMetric({ label, value, delta, deltaPositiveBad, deltaValue, testId
   );
 }
 
-/** Role-specific coaching insight beneath the metrics panel */
-function roleInsight(role: DashboardRole | undefined, otri: number): string {
+function formatTimestamp(ts: string | null): string {
+  if (!ts) return "never";
+  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function roleInsight(role: DashboardRole | undefined, otri: number | null): string {
+  if (otri === null) return "Market data currently unavailable. Check back shortly for updated signals.";
+
   const isHot  = otri >= 20;
   const isWarm = otri >= 8 && otri < 20;
 
@@ -164,7 +178,7 @@ function AmMarketBlock({ payload }: { payload: AmRolePayload }) {
   if (!payload.markets.length) {
     return (
       <p className="text-xs text-muted-foreground mt-2" data-testid="text-am-no-markets">
-        No financial corridor data found for your accounts. Upload financial data to see market signals.
+        No live market data available for your corridors. Data will appear when market signals are received.
       </p>
     );
   }
@@ -193,7 +207,7 @@ function NamMarketBlock({ payload }: { payload: NamRolePayload }) {
   if (!payload.markets.length) {
     return (
       <p className="text-xs text-muted-foreground mt-2">
-        No corridor data. Upload financial data to see org-wide market exposure.
+        No live market data available. Data will appear when market signals are received.
       </p>
     );
   }
@@ -253,9 +267,13 @@ function DirectorHeatBlock({ payload }: { payload: DirectorRolePayload }) {
             <div key={m.city} className="flex items-center justify-between text-xs mb-0.5" data-testid={`row-moving-${m.city}`}>
               <span>{m.city}</span>
               <div className="flex items-center gap-1.5">
-                <span className={`text-[10px] ${m.otriWoW > 0 ? "text-red-500" : "text-green-500"}`}>
-                  {m.otriWoW > 0 ? "+" : ""}{m.otriWoW.toFixed(1)}pp
-                </span>
+                {m.otriWoW !== null ? (
+                  <span className={`text-[10px] ${m.otriWoW > 0 ? "text-red-500" : "text-green-500"}`}>
+                    {m.otriWoW > 0 ? "+" : ""}{m.otriWoW.toFixed(1)}pp
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-gray-400">—</span>
+                )}
                 {signalBadge(m.signal)}
               </div>
             </div>
@@ -285,10 +303,18 @@ function LmUrgencyBlock({ payload }: { payload: LmRolePayload }) {
         >
           <span className="font-medium truncate max-w-[120px]">{lane.origin} → {lane.destination}</span>
           <div className="flex items-center gap-1.5">
-            <span className="text-[10px] text-muted-foreground">{lane.votri.toFixed(1)}%</span>
-            <span className={`text-[10px] ${lane.votriWoW > 0 ? "text-red-500" : "text-green-500"}`}>
-              {lane.votriWoW > 0 ? "+" : ""}{lane.votriWoW.toFixed(1)}pp
-            </span>
+            {lane.votri !== null ? (
+              <>
+                <span className="text-[10px] text-muted-foreground">{lane.votri.toFixed(1)}%</span>
+                {lane.votriWoW !== null && (
+                  <span className={`text-[10px] ${lane.votriWoW > 0 ? "text-red-500" : "text-green-500"}`}>
+                    {lane.votriWoW > 0 ? "+" : ""}{lane.votriWoW.toFixed(1)}pp
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className="text-[10px] text-gray-400">—</span>
+            )}
             {signalBadge(lane.signal)}
           </div>
         </div>
@@ -330,6 +356,7 @@ export function SonarMarketPulsePortlet({ role }: SonarMarketPulsePortletProps =
 
   if (!pulse) return null;
 
+  const allNull = pulse.otri === null && pulse.ntiPerMove === null && pulse.ntiPerMile === null;
   const signal = signalColor(pulse.otri);
 
   return (
@@ -364,7 +391,15 @@ export function SonarMarketPulsePortlet({ role }: SonarMarketPulsePortletProps =
         </p>
       </CardHeader>
       <CardContent className="pt-0">
-        {(pulse.marketDataLimited || pulse.isStale) && (
+        {allNull && (
+          <div className="flex items-center gap-1.5 rounded-md bg-gray-50 dark:bg-gray-900/20 border border-gray-200 dark:border-gray-700 px-2.5 py-2.5 mb-2" data-testid="banner-data-unavailable">
+            <AlertCircle className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+            <span className="text-[11px] text-gray-600 dark:text-gray-300">
+              Market data unavailable{pulse.lastSuccessfulPull ? ` — last updated ${formatTimestamp(pulse.lastSuccessfulPull)}` : ""}
+            </span>
+          </div>
+        )}
+        {!allNull && (pulse.marketDataLimited || pulse.isStale) && (
           <div className="flex items-center gap-1.5 rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 px-2.5 py-1.5 mb-2" data-testid="banner-market-data-limited">
             <AlertCircle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
             <span className="text-[11px] text-amber-700 dark:text-amber-300">
@@ -374,50 +409,48 @@ export function SonarMarketPulsePortlet({ role }: SonarMarketPulsePortletProps =
             </span>
           </div>
         )}
-        {/* National metrics bar */}
         <div className="rounded-lg overflow-hidden" style={{ background: "#0a1628" }}>
           <div className="grid grid-cols-3 divide-x divide-white/10 py-3 px-1">
             <PulseMetric
               label="OTRI"
-              value={`${pulse.otri.toFixed(1)}%`}
-              delta={`${pulse.otriWoWDelta > 0 ? "+" : ""}${pulse.otriWoWDelta.toFixed(1)} pp WoW`}
-              deltaValue={pulse.otriWoWDelta}
+              value={pulse.otri !== null ? `${pulse.otri.toFixed(1)}%` : "—"}
+              delta={pulse.otriWoWDelta !== null ? `${pulse.otriWoWDelta > 0 ? "+" : ""}${pulse.otriWoWDelta.toFixed(1)} pp WoW` : undefined}
+              deltaValue={pulse.otriWoWDelta ?? undefined}
               deltaPositiveBad={true}
               testId="metric-otri"
             />
             <PulseMetric
               label="NTI Spot"
-              value={pulse.ntiPerMove > 100
-                ? `$${Math.round(pulse.ntiPerMove).toLocaleString()}`
-                : `$${pulse.ntiPerMove.toFixed(2)}/mi`}
-              delta={pulse.ntiWoWDelta !== 0
+              value={pulse.ntiPerMove !== null
+                ? (pulse.ntiPerMove > 100
+                  ? `$${Math.round(pulse.ntiPerMove).toLocaleString()}`
+                  : `$${pulse.ntiPerMove.toFixed(2)}/mi`)
+                : "—"}
+              delta={pulse.ntiWoWDelta !== null && pulse.ntiWoWDelta !== 0
                 ? `${pulse.ntiWoWDelta > 0 ? "+" : ""}${Math.round(pulse.ntiWoWDelta)} WoW`
                 : undefined}
-              deltaValue={pulse.ntiWoWDelta}
+              deltaValue={pulse.ntiWoWDelta ?? undefined}
               testId="metric-nti"
             />
             <PulseMetric
               label="Contract $/mi"
-              value={`$${pulse.ntiPerMile.toFixed(2)}`}
+              value={pulse.ntiPerMile !== null ? `$${pulse.ntiPerMile.toFixed(2)}` : "—"}
               testId="metric-contract"
             />
           </div>
         </div>
 
-        {/* Role-specific block */}
         {pulse.rolePayload?.role === "am" && <AmMarketBlock payload={pulse.rolePayload as AmRolePayload} />}
         {pulse.rolePayload?.role === "nam" && <NamMarketBlock payload={pulse.rolePayload as NamRolePayload} />}
         {pulse.rolePayload?.role === "director" && <DirectorHeatBlock payload={pulse.rolePayload as DirectorRolePayload} />}
         {pulse.rolePayload?.role === "logistics_manager" && <LmUrgencyBlock payload={pulse.rolePayload as LmRolePayload} />}
 
-        {/* Fallback coaching text when no role-specific block rendered */}
         {!pulse.rolePayload && (
           <p className="text-[10px] text-muted-foreground mt-2 leading-relaxed" data-testid="text-market-insight">
             {roleInsight(role, pulse.otri)}
           </p>
         )}
 
-        {/* Role coaching text below role-specific block */}
         {pulse.rolePayload && (
           <p className="text-[10px] text-muted-foreground mt-2 leading-relaxed" data-testid="text-market-insight">
             {roleInsight(role, pulse.otri)}
@@ -452,7 +485,7 @@ export function SonarMarketPulseStrip() {
         <Radio className="h-3 w-3 text-blue-400" />
         <span className="text-[10px] uppercase tracking-wider">Sonar</span>
       </span>
-      <span className="text-white font-semibold">OTRI {pulse.otri.toFixed(1)}%</span>
+      <span className="text-white font-semibold">OTRI {pulse.otri !== null ? `${pulse.otri.toFixed(1)}%` : "—"}</span>
       <Badge
         variant="outline"
         className={`text-[10px] py-0 px-1.5 border ${signal.cls}`}
@@ -461,7 +494,7 @@ export function SonarMarketPulseStrip() {
         {signal.label}
       </Badge>
       <span className="text-white/70">
-        NTI {pulse.ntiPerMove > 100 ? `$${Math.round(pulse.ntiPerMove).toLocaleString()}/move` : `$${pulse.ntiPerMove.toFixed(2)}/mi`}
+        NTI {pulse.ntiPerMove !== null ? (pulse.ntiPerMove > 100 ? `$${Math.round(pulse.ntiPerMove).toLocaleString()}/move` : `$${pulse.ntiPerMove.toFixed(2)}/mi`) : "—"}
       </span>
       {(pulse.isStale || pulse.marketDataLimited) && <span className="text-amber-400 text-[10px]" title="Market data is temporarily cached — live feed limited">⚠ Cached</span>}
     </div>

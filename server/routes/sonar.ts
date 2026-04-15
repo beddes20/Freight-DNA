@@ -18,8 +18,10 @@ import {
   getLaneVotrisBatch,
   buildVotriQualifier,
   getSonarCircuitBreakerStatus,
+  getLaneMarketRate,
   type LaneVotri,
 } from "../sonarClient";
+import { tracLaneDirectionSignal } from "../tracAlertEngine";
 
 /** Normalize string for name-matching (same logic as NBA engine) */
 function norm(s: string) {
@@ -141,8 +143,11 @@ export function registerSonarRoutes(app: Express): void {
             otriWoW: otri?.otriWoW ?? null,
             signal: otri?.signal ?? null,
           };
-        }).filter(m => m.otri !== null)
-          .sort((a, b) => Math.abs(b.otriWoW ?? 0) - Math.abs(a.otriWoW ?? 0))
+        }).sort((a, b) => {
+            if (a.otri === null && b.otri !== null) return 1;
+            if (a.otri !== null && b.otri === null) return -1;
+            return Math.abs(b.otriWoW ?? 0) - Math.abs(a.otriWoW ?? 0);
+          })
           .slice(0, 3);
 
         return res.json({ ...nationalWithStatus, rolePayload: { role: "am", markets, myAccountCount: myCompanies.length } });
@@ -165,15 +170,17 @@ export function registerSonarRoutes(app: Express): void {
             otriWoW: otri?.otriWoW ?? null,
             signal: otri?.signal ?? null,
           };
-        }).filter(m => m.otri !== null)
-          .sort((a, b) => Math.abs(b.otriWoW ?? 0) - Math.abs(a.otriWoW ?? 0));
+        }).sort((a, b) => {
+            if (a.otri === null && b.otri !== null) return 1;
+            if (a.otri !== null && b.otri === null) return -1;
+            return Math.abs(b.otriWoW ?? 0) - Math.abs(a.otriWoW ?? 0);
+          });
 
         return res.json({ ...nationalWithStatus, rolePayload: { role: "nam", markets } });
       }
 
       // ── Director: portfolio heat summary ────────────────────────────────────
       if (resolvedRole === "director") {
-        // Fetch all org lanes to count lane-level hot/warm/cool signals
         const allLanes = await storage.getRecurringLanes(orgId).catch(() => []);
         const validLanes = allLanes.filter(l => l.origin && l.destination);
 
@@ -182,15 +189,11 @@ export function registerSonarRoutes(app: Express): void {
         const otris = marketNames.length > 0 ? await getMarketOtris(marketNames) : [];
         const otriByMarket = new Map(otris.map(o => [o.market.toLowerCase(), o]));
 
-        // Count org lanes by their origin market's OTRI signal.
-        // Note: this is an OTRI-origin proxy (market-level outbound tender rejection),
-        // not per-lane VOTRI. Portfolio heat at this level is an approximation suitable
-        // for Director-level trend awareness, not lane-by-lane precision.
-        let hot = 0, warm = 0, cool = 0;
+        let hot = 0, warm = 0, cool = 0, unknown = 0;
         for (const lane of validLanes) {
           const originKey = (lane.origin ?? "").split(",")[0].trim().toLowerCase();
           const mOtri = otriByMarket.get(originKey);
-          if (!mOtri) { cool++; continue; }
+          if (!mOtri || mOtri.signal === null) { unknown++; continue; }
           if (mOtri.signal === "hot") hot++;
           else if (mOtri.signal === "warm") warm++;
           else cool++;
@@ -202,13 +205,13 @@ export function registerSonarRoutes(app: Express): void {
           ...nationalWithStatus,
           rolePayload: {
             role: "director",
-            heatSummary: { hot, warm, cool, total: validLanes.length },
+            heatSummary: { hot, warm, cool, unknown, total: validLanes.length },
             ntiPerMove: national.ntiPerMove,
             ntiPerMile: national.ntiPerMile,
             spread,
             topMovingMarkets: otris
-              .filter(o => Math.abs(o.otriWoW) >= 2)
-              .sort((a, b) => Math.abs(b.otriWoW) - Math.abs(a.otriWoW))
+              .filter(o => o.otriWoW !== null && Math.abs(o.otriWoW) >= 2)
+              .sort((a, b) => Math.abs(b.otriWoW ?? 0) - Math.abs(a.otriWoW ?? 0))
               .slice(0, 5)
               .map(o => ({ city: o.market, otri: o.otri, otriWoW: o.otriWoW, signal: o.signal })),
           },
@@ -225,9 +228,9 @@ export function registerSonarRoutes(app: Express): void {
         let urgencyLanes: Array<{
           origin: string;
           destination: string;
-          votri: number;
-          votriWoW: number;
-          signal: "hot" | "warm" | "cool";
+          votri: number | null;
+          votriWoW: number | null;
+          signal: "hot" | "warm" | "stable" | "cool" | null;
           companyName: string;
         }> = [];
 
@@ -239,18 +242,22 @@ export function registerSonarRoutes(app: Express): void {
             const qualifier = buildVotriQualifier(lane.origin!, lane.destination!);
             const v = votriMap.get(qualifier);
             if (v) {
+              const tracDir = await tracLaneDirectionSignal(lane.origin!, lane.destination!).catch(() => null);
               urgencyLanes.push({
                 origin: lane.origin!,
                 destination: lane.destination!,
                 votri: v.votri,
                 votriWoW: v.votriWoW,
-                signal: v.signal,
+                signal: tracDir ?? v.signal,
                 companyName: lane.companyName ?? "",
               });
             }
           }
 
-          urgencyLanes.sort((a, b) => b.votri - a.votri);
+          const signalPriority: Record<string, number> = { hot: 4, warm: 3, stable: 1, cool: 0 };
+          urgencyLanes.sort((a, b) => (signalPriority[a.signal ?? ""] ?? 2) === (signalPriority[b.signal ?? ""] ?? 2)
+            ? (b.votri ?? 0) - (a.votri ?? 0)
+            : (signalPriority[b.signal ?? ""] ?? 2) - (signalPriority[a.signal ?? ""] ?? 2));
         }
 
         return res.json({
@@ -300,6 +307,10 @@ export function registerSonarRoutes(app: Express): void {
         const votriMap = await getLaneVotrisBatch(chunk);
         allSignals.push(...Array.from(votriMap.values()));
       }
+      for (const sig of allSignals) {
+        const tracDir = await tracLaneDirectionSignal(sig.origin, sig.destination).catch(() => null);
+        if (tracDir) sig.signal = tracDir;
+      }
       res.json({ signals: allSignals });
     } catch (err: any) {
       console.error("[sonar] lane-signals/batch error:", err?.message ?? err);
@@ -332,6 +343,10 @@ export function registerSonarRoutes(app: Express): void {
           const votriMap = await getLaneVotrisBatch(chunk);
           allSignals.push(...Array.from(votriMap.values()));
         }
+        for (const sig of allSignals) {
+          const tracDir = await tracLaneDirectionSignal(sig.origin, sig.destination).catch(() => null);
+          if (tracDir) sig.signal = tracDir;
+        }
         return res.json({ signals: allSignals });
       }
 
@@ -344,7 +359,18 @@ export function registerSonarRoutes(app: Express): void {
       const votriMap = await getLaneVotrisBatch([{ origin, destination }]);
       const qualifier = buildVotriQualifier(origin, destination);
       const signal = votriMap.get(qualifier) ?? null;
-      res.json({ signal });
+      let tracSpotRpm: number | null = null;
+      if (signal) {
+        const tracDir = await tracLaneDirectionSignal(origin, destination).catch(() => null);
+        if (tracDir) {
+          signal.signal = tracDir;
+        }
+        try {
+          const lmr = await getLaneMarketRate(origin, destination);
+          tracSpotRpm = lmr.marketRatePerMile;
+        } catch {}
+      }
+      res.json({ signal, tracSpotRpm });
     } catch (err: any) {
       console.error("[sonar] lane-signals error:", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch lane signal" });

@@ -70,6 +70,57 @@ export function generateAlert(
  *
  * Uses the forecast_index_value array (positive = tightening, negative = loosening).
  */
+/**
+ * Derive a directional signal from TRAC forecast_index_value.
+ * positive avg = tightening, negative = softening, near zero = stable
+ */
+export type TracDirection = "hot" | "warm" | "stable" | "cool";
+
+export function tracDirectionSignal(
+  forecastDays: TracForecastDay[],
+): { direction: TracDirection | null; label: string; avgIndex: number | null } {
+  const indexVals = forecastDays.slice(0, 7).map((d) => d.forecastIndexValue).filter((v): v is number => v !== null);
+  const avgIndex = indexVals.length ? indexVals.reduce((a, b) => a + b, 0) / indexVals.length : null;
+
+  if (avgIndex === null) return { direction: null, label: "No signal", avgIndex: null };
+  if (avgIndex > 0.05) return { direction: "hot", label: "Tightening", avgIndex };
+  if (avgIndex > 0.02) return { direction: "warm", label: "Mild tightening", avgIndex };
+  if (avgIndex < -0.03) return { direction: "cool", label: "Softening", avgIndex };
+  return { direction: "stable", label: "Stable", avgIndex };
+}
+
+/**
+ * Fetch TRAC forecast for a lane pair and derive directional signal.
+ * Returns "hot"/"warm"/"cool"/null based on forecast_index_value trend.
+ */
+export async function tracLaneDirectionSignal(
+  origin: string,
+  destination: string,
+): Promise<TracDirection | null> {
+  try {
+    const { cityToKma } = await import("./kmaMapping");
+    const { fetchTracForecast } = await import("./tracService");
+    const origKma = cityToKma(origin);
+    const destKma = cityToKma(destination);
+    if (!origKma || !destKma) return null;
+    const laneId = `${origKma.kma}-${destKma.kma}-VAN`;
+    const results = await fetchTracForecast([{
+      lane_id: laneId,
+      origin: origKma.kma,
+      origin_country_code: "USA",
+      destination: destKma.kma,
+      destination_country_code: "USA",
+      equipment_type: "VAN",
+    }]);
+    const forecast = results[0]?.days ?? [];
+    if (forecast.length === 0) return null;
+    const { direction } = tracDirectionSignal(forecast);
+    return direction;
+  } catch {
+    return null;
+  }
+}
+
 export function generateDriverText(
   forecastDays: TracForecastDay[],
   spotRpm: number | null,
