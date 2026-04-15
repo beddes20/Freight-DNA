@@ -73,7 +73,7 @@ export function SignatureEditor({ value, onChange }: SignatureEditorProps) {
       setSourceHtml(editor.getHTML());
     } else {
       // leaving source mode — push raw HTML back into editor
-      editor.commands.setContent(sourceHtml, false);
+      editor.commands.setContent(sourceHtml, { emitUpdate: false });
       onChange(sourceHtml);
     }
     setSourceMode(s => !s);

@@ -248,6 +248,7 @@ export function PreCallPlanner({
   const lastTouchByContactId = useMemo<Map<string, Touchpoint>>(() => {
     const map = new Map<string, Touchpoint>();
     for (const tp of touchpoints) {
+      if (!tp.contactId) continue;
       const existing = map.get(tp.contactId);
       if (!existing || tp.date > existing.date) map.set(tp.contactId, tp);
     }

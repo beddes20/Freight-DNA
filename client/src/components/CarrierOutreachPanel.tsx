@@ -2711,7 +2711,8 @@ export function CarrierOutreachPanel({
               ) : (
                 <div className="flex flex-col gap-3">
                   {outreachHistory.map(log => {
-                    const isInbound = (log as Record<string, unknown>).direction === "inbound";
+                    const logAny = log as unknown as Record<string, unknown>;
+                    const isInbound = logAny.direction === "inbound";
                     const status = log.deliveryStatus ?? "draft";
                     const statusConfig = isInbound
                       ? { label: "Reply", color: "text-blue-400", icon: <Mail className="w-3 h-3" /> }
@@ -2723,9 +2724,9 @@ export function CarrierOutreachPanel({
                           draft:    { label: "Logged",   color: "text-muted-foreground", icon: <ClipboardCheck className="w-3 h-3" /> },
                         }[status] ?? { label: status, color: "text-muted-foreground", icon: <Clock className="w-3 h-3" /> });
 
-                    const matchConfidence = (log as Record<string, unknown>).matchConfidence as string | null | undefined;
-                    const bodyPreview = (log as Record<string, unknown>).bodyPreview as string | null | undefined;
-                    const receivedAt = (log as Record<string, unknown>).receivedAt as string | null | undefined;
+                    const matchConfidence = logAny.matchConfidence as string | null | undefined;
+                    const bodyPreview = logAny.bodyPreview as string | null | undefined;
+                    const receivedAt = logAny.receivedAt as string | null | undefined;
                     const matchConfidenceConfig: Record<string, { label: string; color: string }> = {
                       exact:             { label: "Exact match",     color: "text-emerald-400" },
                       alternate_contact: { label: "Alt contact",     color: "text-blue-400" },
@@ -2770,9 +2771,9 @@ export function CarrierOutreachPanel({
                             </div>
                             {isInbound ? (
                               <>
-                                {(log as Record<string, unknown>).fromEmail && (
+                                {logAny.fromEmail && (
                                   <p className="text-[10px] text-foreground/70 mt-1 font-medium" data-testid={`log-from-email-${log.id}`}>
-                                    From: {(log as Record<string, unknown>).fromEmail as string}
+                                    From: {logAny.fromEmail as string}
                                   </p>
                                 )}
                                 {bodyPreview && (

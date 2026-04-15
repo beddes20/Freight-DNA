@@ -589,14 +589,14 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
           )}
 
           {editingTask && Array.isArray(editingTask.attachedLaneData) && (() => {
-            const procLanes = (editingTask.attachedLaneData as Array<Record<string, unknown>>).filter(
-              (l): l is ProcurementLaneInfo =>
+            const procLanes = (editingTask.attachedLaneData as unknown as ProcurementLaneInfo[]).filter(
+              (l) =>
                 l != null &&
                 typeof l === "object" &&
                 l.type === "carrier_procurement" &&
                 typeof l.lane === "string" &&
                 typeof l.awardId === "string"
-            ) as ProcurementLaneInfo[];
+            );
             if (procLanes.length === 0) return null;
             return (
               <div className="border rounded-lg p-3" data-testid="section-procurement-workspace">

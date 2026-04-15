@@ -233,9 +233,9 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function ContactReadinessIcon({ email, phone }: { email: string | null; phone: string | null }) {
-  if (email && phone) return <CheckCircle2 className="w-3.5 h-3.5 text-green-400" title="Has email + phone" />;
-  if (email || phone) return <CheckCircle2 className="w-3.5 h-3.5 text-amber-400" title="Partial contact info" />;
-  return <AlertTriangle className="w-3.5 h-3.5 text-red-400" title="No contact info" />;
+  if (email && phone) return <span title="Has email + phone"><CheckCircle2 className="w-3.5 h-3.5 text-green-400" /></span>;
+  if (email || phone) return <span title="Partial contact info"><CheckCircle2 className="w-3.5 h-3.5 text-amber-400" /></span>;
+  return <span title="No contact info"><AlertTriangle className="w-3.5 h-3.5 text-red-400" /></span>;
 }
 
 function formatDate(dt: string | null | undefined) {
