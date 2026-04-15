@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Bell, CheckCheck, ListTodo, MessageSquare, Loader2, Target, CheckCircle2, Users, BellRing, Building2, CalendarOff, SquareCheck, Lightbulb, Star, Truck, TrendingDown, BarChart2, Zap, AlertTriangle } from "lucide-react";
+import { Bell, CheckCheck, ListTodo, MessageSquare, Loader2, Target, CheckCircle2, Users, BellRing, Building2, CalendarOff, SquareCheck, Lightbulb, Star, Truck, TrendingDown, BarChart2, Zap, AlertTriangle, Trophy, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -36,6 +36,8 @@ const typeIcon: Record<string, React.ReactNode> = {
   votri_alert:            <TrendingDown className="h-3.5 w-3.5 text-orange-500" />,
   quote_request_alert:    <Zap className="h-3.5 w-3.5 text-amber-500" />,
   quote_request_escalation: <AlertTriangle className="h-3.5 w-3.5 text-red-500" />,
+  new_win:                  <Trophy className="h-3.5 w-3.5 text-amber-400" />,
+  new_opportunity:          <FileText className="h-3.5 w-3.5 text-green-500" />,
 };
 
 

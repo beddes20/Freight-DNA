@@ -28,6 +28,62 @@ async function getVisibleFeedAuthorIds(user: UserSlim): Promise<string[]> {
   return Array.from(ids);
 }
 
+const LEADERSHIP_ROLES = new Set(["admin", "director", "sales_director", "national_account_manager"]);
+
+export async function notifyLeadershipOfOpportunity(
+  author: { id: string; name: string; organizationId: string },
+  type: string,
+  title: string,
+  category?: string,
+  estimatedValue?: string | number | null,
+  companyId?: string | null,
+) {
+  const orgUsers = await storage.getUsers(author.organizationId);
+  const recipients = orgUsers.filter(u => LEADERSHIP_ROLES.has(u.role) && u.id !== author.id);
+  if (recipients.length === 0) return;
+
+  let companyName: string | null = null;
+  if (companyId) {
+    const company = await storage.getCompany(companyId);
+    companyName = company?.name ?? null;
+  }
+
+  const isWin = type === "win";
+  const emoji = isWin ? "🏆" : "📋";
+  const label = isWin ? "Win" : "Opportunity";
+  const notifType = isWin ? "new_win" : "new_opportunity";
+
+  const bodyParts: string[] = [];
+  if (companyName) bodyParts.push(`Account: ${companyName}`);
+  if (category) {
+    const categoryLabels: Record<string, string> = {
+      spot_batch: "Batch of Spot Loads",
+      dedicated_contracted: "Spot to Contracted Conversion",
+      mini_bid: "Mini-Bid",
+      project: "Project",
+      other: "New Site, First Opp",
+    };
+    bodyParts.push(`Category: ${categoryLabels[category] || category}`);
+  }
+  if (estimatedValue) bodyParts.push(`Est. value: $${Number(estimatedValue).toLocaleString()}`);
+
+  const link = companyId ? `/companies/${companyId}` : "/dashboard";
+
+  await Promise.all(
+    recipients.map(u =>
+      storage.createNotification({
+        userId: u.id,
+        type: notifType,
+        title: `${emoji} ${author.name} logged a new ${label}: ${title}`,
+        body: bodyParts.length > 0 ? bodyParts.join("\n") : null,
+        link,
+        read: false,
+        relatedId: companyId ?? null,
+      })
+    ),
+  );
+}
+
 export function registerEngagementRoutes(app: Express) {
   // ── Callouts ─────────────────────────────────────────────────────────────
 

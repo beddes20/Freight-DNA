@@ -4,6 +4,7 @@ import { getCurrentUser, requireAuth } from "../auth";
 import { db } from "../storage";
 import { sql } from "drizzle-orm";
 import type { InsertCrmOpportunity } from "../../shared/schema";
+import { notifyLeadershipOfOpportunity } from "./engagement";
 
 const PROSPECT_ROLES = ["admin", "sales", "sales_director"];
 
@@ -1208,6 +1209,14 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
         organizationId: user.organizationId,
         createdById: user.id,
       });
+
+      try {
+        const oppType = (stage === "closed_won") ? "win" : "opportunity";
+        await notifyLeadershipOfOpportunity(user, oppType, name, recordType, amount);
+      } catch (notifErr) {
+        console.error("[prospect-opportunity] notification error:", notifErr);
+      }
+
       res.json(row);
     } catch (err) {
       console.error("POST /api/prospects/:id/opportunities error:", err);
