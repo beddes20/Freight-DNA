@@ -47,6 +47,11 @@ Core features include:
 ### System Design Choices
 Key database tables support core functionalities, including pre-computed lane data (`lane_summary_cache`), email-derived contact suggestions (`account_contact_suggestions`), defined corridor patterns (`geographic_lane_patterns`), contact-to-corridor mapping (`account_contact_lane_pattern_responsibilities`), email conversation management (`email_conversation_threads`), AI-inferred geography ownership (`contact_geography_suggestions`), proven tactical responses (`proven_tactics`), AI draft feedback (`draft_feedback`), email correction records (`sent_email_corrections`), and numerous tables for the AI Intelligence Hub features (e.g., `meeting_prep_briefs`, `contact_sentiment_tracking`, `monitored_mailboxes`).
 
+### Performance Optimizations
+- **Dashboard query optimization**: `getColdContacts` and `getMeaningfulOverdueContacts` use SQL LATERAL joins with LIMIT 20 instead of loading all contacts/touchpoints into memory. Reduced response time from 28-34s to <500ms.
+- **Dashboard caching**: All four slow dashboard endpoints (`cold-contacts`, `meaningful-overdue`, `margin-metrics`, `relationship-summary`) use 10-15 minute server-side cache (via `server/cache.ts`).
+- **Carrier ranking cache**: Per-lane in-memory cache with 3-min TTL in `laneCarrierOutreach.ts`.
+
 ## External Dependencies
 - **PostgreSQL**: Primary database.
 - **xlsx (SheetJS)**: For Excel and CSV parsing.

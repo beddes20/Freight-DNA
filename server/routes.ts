@@ -8059,6 +8059,10 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
+      const relSumCacheKey = `rel-summary:${user.id}`;
+      const relSumCached = cacheGet(relSumCacheKey);
+      if (relSumCached) return res.json(relSumCached);
+
       const isAdmin = user.role === "admin";
       const isDirector = ["director", "national_account_manager"].includes(user.role ?? "");
 
@@ -8246,7 +8250,7 @@ Respond with valid JSON only:
         }
       }
 
-      res.json({
+      const relSumResult = {
         distribution: {
           levels: distLevels,
           recentAdvances: recentAdvances2,
@@ -8265,7 +8269,9 @@ Respond with valid JSON only:
           unworkedLoads: unworkedLoadsDS,
           unworkedMargin: unworkedMarginDS,
         },
-      });
+      };
+      cacheSet(relSumCacheKey, relSumResult, 10 * 60 * 1000);
+      res.json(relSumResult);
     } catch (e: any) {
       console.error("[dashboard-relationship-summary]", e);
       res.status(500).json({ error: e.message });

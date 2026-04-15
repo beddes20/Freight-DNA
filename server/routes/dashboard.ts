@@ -774,7 +774,7 @@ export function registerDashboardRoutes(app: Express): void {
       const amMetrics = buildMetrics(amRoles);
       console.log(`[margin-metrics] role=${user.role} nams=${namMetrics.length} ams=${amMetrics.length} scopedUserIds=${scopedUserIds ? scopedUserIds.size : 'null'} byRepIdKeys=${Object.keys(byRepId).length} curMonthKey=${curMonthKey}`);
       const mmResult = { nams: namMetrics, ams: amMetrics };
-      cacheSet(`margin-metrics:${req.session.organizationId}:${user.id}`, mmResult, 15 * 60 * 1000);
+      cacheSet(mmCacheKey, mmResult, 15 * 60 * 1000);
       res.json(mmResult);
     } catch (err) {
       console.error("Error loading margin metrics:", err);
@@ -1013,7 +1013,7 @@ export function registerDashboardRoutes(app: Express): void {
       } else {
         results = await storage.getColdContacts(user.id, days);
       }
-      cacheSet(cacheKey, results);
+      cacheSet(cacheKey, results, 10 * 60 * 1000);
       res.json(results);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch cold contacts" });
@@ -1037,7 +1037,7 @@ export function registerDashboardRoutes(app: Express): void {
       } else {
         results = await storage.getMeaningfulOverdueContacts(user.id, days);
       }
-      cacheSet(cacheKey, results);
+      cacheSet(cacheKey, results, 10 * 60 * 1000);
       res.json(results);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch meaningful overdue contacts" });

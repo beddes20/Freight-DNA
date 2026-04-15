@@ -2284,96 +2284,124 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getColdContacts(assignedToUserId: string | null, daysSince: number, teamUserIds?: string[]): Promise<Array<{ contact: Contact; company: Company; daysSince: number; lastType: string | null }>> {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - daysSince);
-    const cutoffStr = cutoff.toISOString().split("T")[0];
+    const cutoffStr = new Date(Date.now() - daysSince * 86400000).toISOString().split("T")[0];
 
-    let companiesResult: Company[];
+    let companyFilter: string;
+    const params: any[] = [cutoffStr];
     if (teamUserIds && teamUserIds.length > 0) {
-      companiesResult = await db.select().from(companies).where(inArray(companies.assignedTo, teamUserIds));
+      companyFilter = `co.assigned_to = ANY($2)`;
+      params.push(teamUserIds);
     } else if (assignedToUserId) {
-      companiesResult = await db.select().from(companies).where(eq(companies.assignedTo, assignedToUserId!));
+      companyFilter = `co.assigned_to = $2`;
+      params.push(assignedToUserId);
     } else {
-      companiesResult = await db.select().from(companies);
-    }
-    if (companiesResult.length === 0) return [];
-    const companyIds = companiesResult.map(c => c.id);
-    const companyMap = new Map(companiesResult.map(c => [c.id, c]));
-
-    const allContacts = await db.select().from(contacts).where(inArray(contacts.companyId, companyIds));
-    const allTouchpoints = await db.select().from(touchpoints).where(inArray(touchpoints.companyId, companyIds));
-
-    const tpByContact = new Map<string, Touchpoint[]>();
-    for (const tp of allTouchpoints) {
-      if (!tp.contactId) continue;
-      const arr = tpByContact.get(tp.contactId) ?? [];
-      arr.push(tp);
-      tpByContact.set(tp.contactId, arr);
+      companyFilter = `TRUE`;
     }
 
-    const results: Array<{ contact: Contact; company: Company; daysSince: number; lastType: string | null }> = [];
-    const today = new Date();
+    const rankingSql = `
+      SELECT
+        c.id AS contact_id,
+        c.company_id,
+        lt.last_type,
+        CASE WHEN lt.last_date IS NULL THEN 999
+             ELSE GREATEST(0, (CURRENT_DATE - lt.last_date::date))
+        END AS days_since
+      FROM contacts c
+      JOIN companies co ON co.id = c.company_id
+      LEFT JOIN LATERAL (
+        SELECT t.date AS last_date, t.type AS last_type
+        FROM touchpoints t
+        WHERE t.contact_id = c.id
+        ORDER BY t.date DESC
+        LIMIT 1
+      ) lt ON TRUE
+      WHERE ${companyFilter}
+        AND (lt.last_date IS NULL OR lt.last_date < $1)
+      ORDER BY days_since DESC
+      LIMIT 20
+    `;
 
-    for (const contact of allContacts) {
-      const tps = tpByContact.get(contact.id) ?? [];
-      if (tps.length === 0) {
-        const comp = companyMap.get(contact.companyId);
-        if (comp) results.push({ contact, company: comp, daysSince: 999, lastType: null });
-      } else {
-        const latest = tps.sort((a, b) => b.date.localeCompare(a.date))[0];
-        if (latest.date < cutoffStr) {
-          const diff = Math.floor((today.getTime() - new Date(latest.date).getTime()) / 86400000);
-          const comp = companyMap.get(contact.companyId);
-          if (comp) results.push({ contact, company: comp, daysSince: diff, lastType: latest.type });
-        }
-      }
-    }
+    const { rows: ranked } = await pool.query(rankingSql, params);
+    if (ranked.length === 0) return [];
 
-    return results.sort((a, b) => b.daysSince - a.daysSince).slice(0, 20);
+    const contactIds = ranked.map((r: any) => r.contact_id);
+    const companyIds = [...new Set(ranked.map((r: any) => r.company_id))];
+
+    const [contactRows, companyRows] = await Promise.all([
+      db.select().from(contacts).where(inArray(contacts.id, contactIds)),
+      db.select().from(companies).where(inArray(companies.id, companyIds)),
+    ]);
+
+    const contactMap = new Map(contactRows.map(c => [c.id, c]));
+    const companyMap = new Map(companyRows.map(c => [c.id, c]));
+
+    return ranked
+      .map((r: any) => {
+        const contact = contactMap.get(r.contact_id);
+        const company = companyMap.get(r.company_id);
+        if (!contact || !company) return null;
+        return { contact, company, daysSince: parseInt(r.days_since, 10), lastType: r.last_type || null };
+      })
+      .filter(Boolean) as Array<{ contact: Contact; company: Company; daysSince: number; lastType: string | null }>;
   }
 
   async getMeaningfulOverdueContacts(assignedToUserId: string | null, daysSince: number, teamUserIds?: string[]): Promise<Array<{ contact: Contact; company: Company; daysSinceLastMeaningful: number }>> {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - daysSince);
-    const cutoffStr = cutoff.toISOString().split("T")[0];
+    const cutoffStr = new Date(Date.now() - daysSince * 86400000).toISOString().split("T")[0];
 
-    let companiesResult: Company[];
+    let companyFilter: string;
+    const params: any[] = [cutoffStr];
     if (teamUserIds && teamUserIds.length > 0) {
-      companiesResult = await db.select().from(companies).where(inArray(companies.assignedTo, teamUserIds));
+      companyFilter = `co.assigned_to = ANY($2)`;
+      params.push(teamUserIds);
     } else if (assignedToUserId) {
-      companiesResult = await db.select().from(companies).where(eq(companies.assignedTo, assignedToUserId!));
+      companyFilter = `co.assigned_to = $2`;
+      params.push(assignedToUserId);
     } else {
-      companiesResult = await db.select().from(companies);
-    }
-    if (companiesResult.length === 0) return [];
-    const companyIds = companiesResult.map(c => c.id);
-    const companyMap = new Map(companiesResult.map(c => [c.id, c]));
-
-    const allContacts = await db.select().from(contacts).where(inArray(contacts.companyId, companyIds));
-    const meaningfulTps = await db.select().from(touchpoints).where(
-      and(inArray(touchpoints.companyId, companyIds), eq(touchpoints.isMeaningful, true))
-    );
-
-    const lastMeaningfulByContact = new Map<string, string>();
-    for (const tp of meaningfulTps) {
-      if (!tp.contactId || !tp.date) continue;
-      const existing = lastMeaningfulByContact.get(tp.contactId);
-      if (!existing || tp.date > existing) lastMeaningfulByContact.set(tp.contactId, tp.date);
+      companyFilter = `TRUE`;
     }
 
-    const results: Array<{ contact: Contact; company: Company; daysSinceLastMeaningful: number }> = [];
-    const today = new Date();
-    for (const contact of allContacts) {
-      const lastMeaningful = lastMeaningfulByContact.get(contact.id);
-      if (!lastMeaningful || lastMeaningful < cutoffStr) {
-        const days = lastMeaningful
-          ? Math.floor((today.getTime() - new Date(lastMeaningful).getTime()) / 86400000)
-          : 999;
-        const comp = companyMap.get(contact.companyId);
-        if (comp) results.push({ contact, company: comp, daysSinceLastMeaningful: days });
-      }
-    }
-    return results.sort((a, b) => b.daysSinceLastMeaningful - a.daysSinceLastMeaningful).slice(0, 20);
+    const rankingSql = `
+      SELECT
+        c.id AS contact_id,
+        c.company_id,
+        CASE WHEN lm.last_date IS NULL THEN 999
+             ELSE GREATEST(0, (CURRENT_DATE - lm.last_date::date))
+        END AS days_since
+      FROM contacts c
+      JOIN companies co ON co.id = c.company_id
+      LEFT JOIN LATERAL (
+        SELECT MAX(t.date) AS last_date
+        FROM touchpoints t
+        WHERE t.contact_id = c.id AND t.is_meaningful = TRUE
+      ) lm ON TRUE
+      WHERE ${companyFilter}
+        AND (lm.last_date IS NULL OR lm.last_date < $1)
+      ORDER BY days_since DESC
+      LIMIT 20
+    `;
+
+    const { rows: ranked } = await pool.query(rankingSql, params);
+    if (ranked.length === 0) return [];
+
+    const contactIds = ranked.map((r: any) => r.contact_id);
+    const companyIds = [...new Set(ranked.map((r: any) => r.company_id))];
+
+    const [contactRows, companyRows] = await Promise.all([
+      db.select().from(contacts).where(inArray(contacts.id, contactIds)),
+      db.select().from(companies).where(inArray(companies.id, companyIds)),
+    ]);
+
+    const contactMap = new Map(contactRows.map(c => [c.id, c]));
+    const companyMap = new Map(companyRows.map(c => [c.id, c]));
+
+    return ranked
+      .map((r: any) => {
+        const contact = contactMap.get(r.contact_id);
+        const company = companyMap.get(r.company_id);
+        if (!contact || !company) return null;
+        return { contact, company, daysSinceLastMeaningful: parseInt(r.days_since, 10) };
+      })
+      .filter(Boolean) as Array<{ contact: Contact; company: Company; daysSinceLastMeaningful: number }>;
   }
 
   async getContactsAddedByAm(amId: string, startDate: string, endDate: string): Promise<number> {
