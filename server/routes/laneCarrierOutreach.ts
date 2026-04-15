@@ -931,12 +931,28 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       notes: z.string().optional().or(z.literal("")),
       dropTrailerShipper: z.boolean().optional().default(false),
       dropTrailerReceiver: z.boolean().optional().default(false),
+      ownerUserId: z.string().optional(),
     });
 
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
     const { origin, originState, destination, destinationState, equipmentType, avgLoadsPerWeek, companyName, dropTrailerShipper, dropTrailerReceiver } = parsed.data;
+
+    let assigneeUserId = user.id;
+    let ownerName = user.name;
+    if (parsed.data.ownerUserId && parsed.data.ownerUserId !== user.id) {
+      const isPrivileged = ["admin", "director"].includes(user.role);
+      if (!isPrivileged) {
+        return res.status(403).json({ error: "Only admins and directors can assign lanes to other users" });
+      }
+      const assignee = await storage.getUser(parsed.data.ownerUserId);
+      if (!assignee || assignee.organizationId !== user.organizationId) {
+        return res.status(400).json({ error: "Invalid assignee: user not found in your organization" });
+      }
+      assigneeUserId = parsed.data.ownerUserId;
+      ownerName = assignee.name;
+    }
 
     try {
       const lane = await storage.createRecurringLane({
@@ -957,9 +973,12 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         carriersContactedCount: 0,
         dropTrailerShipper: dropTrailerShipper ?? false,
         dropTrailerReceiver: dropTrailerReceiver ?? false,
+        ownerUserId: assigneeUserId,
+        assignedAt: new Date().toISOString(),
+        assignedByUserId: user.id,
       });
 
-      storage.upsertLaneSummaryCache({
+      await storage.upsertLaneSummaryCache({
         laneId: lane.id,
         laneScore: 0,
         priority: 0,
@@ -971,7 +990,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         avgLoadsPerWeek: lane.avgLoadsPerWeek ?? null,
         companyId: lane.companyId ?? null,
         companyName: lane.companyName ?? null,
-        ownerUserId: lane.ownerUserId ?? null,
+        ownerUserId: lane.ownerUserId ?? assigneeUserId,
+        ownerName,
         carriersContactedCount: 0,
         contactableCount: 0,
         totalBenchCount: 0,
@@ -985,9 +1005,9 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         dropTrailerShipper: dropTrailerShipper ?? false,
         dropTrailerReceiver: dropTrailerReceiver ?? false,
         isManual: true,
-      }).catch(err => console.error("[lanes/manual] cache upsert error:", err));
+      });
 
-      res.status(201).json(lane);
+      res.status(201).json({ ...lane, ownerName });
     } catch (err) {
       console.error("[lanes/manual] error:", err);
       res.status(500).json({ error: "Failed to create manual lane" });
@@ -1316,9 +1336,11 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       }
 
       // Patch lane_summary_cache so list queries reflect new owner immediately
+      const newOwnerForCache = ownerUserId ? await storage.getUser(ownerUserId) : null;
       await storage.patchLaneSummaryCache(req.params.laneId, {
         ownerUserId: ownerUserId ?? undefined,
-      }).catch(() => {}); // non-blocking — cache is refreshed by scoring job regardless
+        ownerName: newOwnerForCache?.name ?? null,
+      }).catch(() => {});
 
       res.json(updated);
     } catch (err) {

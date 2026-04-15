@@ -1275,6 +1275,7 @@ interface BuildLaneForm {
   notes: string;
   dropTrailerShipper: boolean;
   dropTrailerReceiver: boolean;
+  ownerUserId: string;
 }
 
 const EQUIPMENT_TYPES = ["Dry Van", "Reefer", "Flatbed", "Step Deck", "RGN", "Tanker", "Box Truck", "Conestoga", "Other"];
@@ -1392,7 +1393,7 @@ function LocationFeedback({
   return null;
 }
 
-function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: () => void }) {
+function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, isAdminOrDirector }: { open: boolean; onClose: () => void; onCreated: () => void; currentUser: { id: string; name: string } | null; teamMembers: TeamMember[]; isAdminOrDirector: boolean }) {
   const { toast } = useToast();
   const [form, setForm] = useState<BuildLaneForm>({
     origin: "",
@@ -1405,7 +1406,14 @@ function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose:
     notes: "",
     dropTrailerShipper: false,
     dropTrailerReceiver: false,
+    ownerUserId: currentUser?.id ?? "",
   });
+
+  useEffect(() => {
+    if (open && currentUser?.id) {
+      setForm(f => ({ ...f, ownerUserId: currentUser.id }));
+    }
+  }, [open, currentUser?.id]);
 
   const [originNorm, setOriginNorm] = useState<FieldNormState>(EMPTY_NORM_STATE);
   const [destNorm, setDestNorm] = useState<FieldNormState>(EMPTY_NORM_STATE);
@@ -1538,6 +1546,7 @@ function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose:
         notes: form.notes.trim() || undefined,
         dropTrailerShipper: form.dropTrailerShipper,
         dropTrailerReceiver: form.dropTrailerReceiver,
+        ownerUserId: form.ownerUserId || undefined,
       }).then(r => r.json());
     },
     onSuccess: () => {
@@ -1545,7 +1554,7 @@ function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose:
       toast({ title: "Lane created", description: "Manual lane added to the work queue." });
       onCreated();
       onClose();
-      setForm({ origin: "", originState: "", destination: "", destinationState: "", equipmentType: "", avgLoadsPerWeek: "", companyName: "", notes: "", dropTrailerShipper: false, dropTrailerReceiver: false });
+      setForm({ origin: "", originState: "", destination: "", destinationState: "", equipmentType: "", avgLoadsPerWeek: "", companyName: "", notes: "", dropTrailerShipper: false, dropTrailerReceiver: false, ownerUserId: currentUser?.id ?? "" });
       setOriginNorm(EMPTY_NORM_STATE);
       setDestNorm(EMPTY_NORM_STATE);
     },
@@ -1713,6 +1722,24 @@ function BuildLaneDialog({ open, onClose, onCreated }: { open: boolean; onClose:
               data-testid="input-build-customer"
             />
           </div>
+
+          {isAdminOrDirector && teamMembers.length > 0 && (
+            <div className="space-y-1.5">
+              <Label className="text-xs">Assign to</Label>
+              <Select value={form.ownerUserId} onValueChange={v => setForm(f => ({ ...f, ownerUserId: v }))}>
+                <SelectTrigger className="h-9 text-sm" data-testid="select-build-assign-to">
+                  <SelectValue placeholder="Select team member" />
+                </SelectTrigger>
+                <SelectContent>
+                  {teamMembers.map(m => (
+                    <SelectItem key={m.id} value={m.id} data-testid={`option-assign-to-${m.id}`}>
+                      {m.name}{m.id === currentUser?.id ? " (me)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           {/* Notes */}
           <div className="space-y-1.5">
@@ -2443,6 +2470,9 @@ export default function LaneWorkQueuePage() {
         open={buildLaneOpen}
         onClose={() => setBuildLaneOpen(false)}
         onCreated={() => {}}
+        currentUser={user ? { id: user.id, name: user.name } : null}
+        teamMembers={teamMembers}
+        isAdminOrDirector={isAdminOrDirector}
       />
 
       {/* Outreach panel */}

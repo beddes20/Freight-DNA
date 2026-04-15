@@ -2650,4 +2650,20 @@ export async function runMigrations() {
   } finally {
     clientManualCache.release();
   }
+
+  const clientOwnerName = await pool.connect();
+  try {
+    await clientOwnerName.query(`ALTER TABLE lane_summary_cache ADD COLUMN IF NOT EXISTS owner_name TEXT`);
+    await clientOwnerName.query(`
+      UPDATE lane_summary_cache c
+      SET owner_name = u.name
+      FROM users u
+      WHERE c.owner_user_id = u.id AND c.owner_name IS NULL
+    `);
+    console.log("[migrations] owner_name column added to lane_summary_cache and back-filled (Task #239)");
+  } catch (err) {
+    console.error("[migrations] lane_summary_cache owner_name migration error:", err);
+  } finally {
+    clientOwnerName.release();
+  }
 }

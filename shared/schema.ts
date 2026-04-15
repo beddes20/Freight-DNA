@@ -1921,6 +1921,7 @@ export const laneSummaryCache = pgTable("lane_summary_cache", {
   companyId: varchar("company_id"),
   companyName: text("company_name"),
   ownerUserId: varchar("owner_user_id"),
+  ownerName: text("owner_name"),
   carriersContactedCount: integer("carriers_contacted_count").default(0),
   contactableCount: integer("contactable_count").default(0),
   totalBenchCount: integer("total_bench_count").default(0),
