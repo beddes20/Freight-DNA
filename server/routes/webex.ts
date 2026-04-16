@@ -8,6 +8,10 @@ import {
   getWebexRedirectUriInfo,
   exchangeWebexCode,
   setWebexRefreshToken,
+  setWebexRefreshTokenRotatedHandler,
+  setWebexNeedsReauthHandler,
+  refreshWebexAccessToken,
+  getWebexAuthState,
   hasWebexTokens,
   fetchCallHistory,
   fetchWebexPeople,
@@ -361,6 +365,13 @@ export function registerWebexRoutes(app: Express) {
       if (row?.response_data?.token) {
         setWebexRefreshToken(row.response_data.token);
         log("Loaded stored refresh token from DB");
+        // Eagerly mint an access token at boot so the first request is fast
+        // and so we surface a needs_reauth state immediately if revoked.
+        try {
+          await refreshWebexAccessToken();
+        } catch (e) {
+          log(`Initial token refresh failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
       }
     } catch (e) {
       log(`No stored refresh token found`);
@@ -375,6 +386,30 @@ export function registerWebexRoutes(app: Express) {
       [JSON.stringify({ token })]
     );
   }
+
+  async function deleteStoredRefreshToken() {
+    try {
+      await storage.pool.query(
+        `DELETE FROM api_response_cache WHERE cache_key = 'webex_refresh_token'`
+      );
+      log("Deleted stored refresh token (re-authorization required)");
+    } catch (e) {
+      log(`Failed to delete stored refresh token: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  setWebexRefreshTokenRotatedHandler(async (token) => {
+    try {
+      await saveRefreshToken(token);
+      log("Persisted rotated refresh token");
+    } catch (e) {
+      log(`Failed to persist rotated refresh token: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  });
+
+  setWebexNeedsReauthHandler(async () => {
+    await deleteStoredRefreshToken();
+  });
 
   loadStoredRefreshToken();
 
@@ -480,9 +515,14 @@ export function registerWebexRoutes(app: Express) {
 
   app.get("/api/webex/status", requireAuth, async (req: Request, res: Response) => {
     const info = getWebexRedirectUriInfo(req);
+    const authState = getWebexAuthState();
     res.json({
-      configured: webexCredentialsConfigured(),
+      configured: authState.configured,
       authorized: hasWebexTokens(),
+      needsReauth: authState.needsReauth,
+      accessTokenExpiresAt: authState.accessTokenExpiresAt,
+      lastRefreshAt: authState.lastRefreshAt,
+      lastRefreshError: authState.lastRefreshError,
       redirectUri: info.redirectUri,
       redirectUriSource: info.source,
       portalUrl: "https://developer.webex.com/my-apps",
@@ -626,6 +666,30 @@ export function initWebexSyncScheduler(): void {
     log("Webex credentials not configured — sync scheduler not started");
     return;
   }
+
+  // Proactive token refresh — runs every 5 minutes, refreshes if the access
+  // token expires within the next 10 minutes (or has no cached token yet).
+  cron.schedule("*/5 * * * *", async () => {
+    if (!hasWebexTokens()) return;
+    try {
+      const state = getWebexAuthState();
+      const now = Date.now();
+      const REFRESH_LEAD_MS = 10 * 60 * 1000;
+      if (
+        state.accessTokenExpiresAt == null ||
+        state.accessTokenExpiresAt - now < REFRESH_LEAD_MS
+      ) {
+        log("Proactive token refresh triggered");
+        await refreshWebexAccessToken();
+      }
+    } catch (err) {
+      // refreshWebexAccessToken already handles invalid_grant -> needs_reauth.
+      // Transient failures are logged inside the helper; nothing more to do here.
+      log(`Proactive refresh error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+
+  log("Webex token auto-refresh scheduler started (every 5 minutes)");
 
   cron.schedule("*/30 * * * *", async () => {
     if (!hasWebexTokens()) return;

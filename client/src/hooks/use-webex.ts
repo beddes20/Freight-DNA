@@ -4,6 +4,10 @@ import { useMemo } from "react";
 export interface WebexStatusResponse {
   configured: boolean;
   authorized: boolean;
+  needsReauth?: boolean;
+  accessTokenExpiresAt?: number | null;
+  lastRefreshAt?: number | null;
+  lastRefreshError?: string | null;
   redirectUri: string;
   redirectUriSource: "WEBEX_REDIRECT_URI" | "APP_URL" | "request";
   portalUrl: string;
@@ -12,7 +16,8 @@ export interface WebexStatusResponse {
 export function useWebexConnectionStatus() {
   return useQuery<WebexStatusResponse>({
     queryKey: ["/api/webex/status"],
-    staleTime: 5 * 60 * 1000,
+    staleTime: 60 * 1000,
+    refetchInterval: 2 * 60 * 1000,
   });
 }
 

@@ -22,7 +22,20 @@ export function WebexConnectionStatus() {
     );
   }
 
-  const { configured, authorized, redirectUri, redirectUriSource, portalUrl } = data;
+  const {
+    configured,
+    authorized,
+    needsReauth,
+    accessTokenExpiresAt,
+    lastRefreshError,
+    redirectUri,
+    redirectUriSource,
+    portalUrl,
+  } = data;
+  const expiresInMin =
+    accessTokenExpiresAt != null
+      ? Math.max(0, Math.round((accessTokenExpiresAt - Date.now()) / 60000))
+      : null;
   const sourceLabel =
     redirectUriSource === "WEBEX_REDIRECT_URI"
       ? "from WEBEX_REDIRECT_URI"
@@ -52,6 +65,10 @@ export function WebexConnectionStatus() {
               <Badge variant="outline" className="text-xs bg-muted text-muted-foreground" data-testid="badge-webex-not-configured">
                 Not configured
               </Badge>
+            ) : needsReauth ? (
+              <Badge className="text-xs bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300" data-testid="badge-webex-needs-reauth">
+                <AlertTriangle className="h-3 w-3 mr-1" /> Re-authorization required
+              </Badge>
             ) : authorized ? (
               <Badge className="text-xs bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300" data-testid="badge-webex-authorized">
                 <CheckCircle2 className="h-3 w-3 mr-1" /> Connected
@@ -64,12 +81,45 @@ export function WebexConnectionStatus() {
           </div>
           {configured && (
             <a href="/api/webex/authorize">
-              <Button size="sm" variant={authorized ? "outline" : "default"} data-testid="button-webex-authorize">
-                {authorized ? "Re-authorize" : "Authorize Webex"}
+              <Button
+                size="sm"
+                variant={needsReauth ? "default" : authorized ? "outline" : "default"}
+                data-testid="button-webex-authorize"
+              >
+                {needsReauth
+                  ? "Re-authorize Webex"
+                  : authorized
+                  ? "Re-authorize"
+                  : "Authorize Webex"}
               </Button>
             </a>
           )}
         </div>
+
+        {configured && needsReauth && (
+          <div
+            className="rounded-md border border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 p-2.5 text-xs text-red-800 dark:text-red-200"
+            data-testid="banner-webex-needs-reauth"
+          >
+            <p className="font-medium mb-1">Webex re-authorization required</p>
+            <p>
+              The stored Webex refresh token was rejected (it may have been revoked
+              or expired). Call sync and presence are paused until an admin
+              re-authorizes.
+            </p>
+            {lastRefreshError && (
+              <p className="mt-1 opacity-80 break-all" data-testid="text-webex-refresh-error">
+                Last error: <code className="font-mono">{lastRefreshError}</code>
+              </p>
+            )}
+          </div>
+        )}
+
+        {configured && authorized && !needsReauth && expiresInMin != null && (
+          <p className="text-[11px] text-muted-foreground" data-testid="text-webex-token-expiry">
+            Access token refreshes automatically — current token valid for ~{expiresInMin} min.
+          </p>
+        )}
 
         {!configured && (
           <p className="text-xs text-muted-foreground">
@@ -103,7 +153,7 @@ export function WebexConnectionStatus() {
               <p className="text-[11px] text-muted-foreground mt-1">{sourceLabel}</p>
             </div>
 
-            {!authorized && (
+            {!authorized && !needsReauth && (
               <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 p-2.5 text-xs text-amber-800 dark:text-amber-200">
                 <p className="font-medium mb-1">Webex is configured but not yet authorized.</p>
                 <ol className="list-decimal pl-4 space-y-0.5">

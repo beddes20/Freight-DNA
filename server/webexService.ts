@@ -70,6 +70,59 @@ export function getWebexRedirectUri(req?: MinimalReq): string {
 
 let _cachedToken: { token: string; expiresAt: number } | null = null;
 let _refreshToken: string | null = null;
+let _needsReauth: boolean = false;
+let _lastRefreshError: string | null = null;
+let _lastRefreshAt: number | null = null;
+let _onRefreshTokenRotated: ((token: string) => Promise<void> | void) | null = null;
+let _onNeedsReauth: (() => Promise<void> | void) | null = null;
+
+export function setWebexRefreshTokenRotatedHandler(
+  fn: ((token: string) => Promise<void> | void) | null,
+) {
+  _onRefreshTokenRotated = fn;
+}
+
+export function setWebexNeedsReauthHandler(
+  fn: (() => Promise<void> | void) | null,
+) {
+  _onNeedsReauth = fn;
+}
+
+export interface WebexAuthState {
+  configured: boolean;
+  hasRefreshToken: boolean;
+  needsReauth: boolean;
+  accessTokenExpiresAt: number | null;
+  lastRefreshAt: number | null;
+  lastRefreshError: string | null;
+}
+
+export function getWebexAuthState(): WebexAuthState {
+  return {
+    configured: webexCredentialsConfigured(),
+    hasRefreshToken: !!_refreshToken,
+    needsReauth: _needsReauth,
+    accessTokenExpiresAt: _cachedToken?.expiresAt ?? null,
+    lastRefreshAt: _lastRefreshAt,
+    lastRefreshError: _lastRefreshError,
+  };
+}
+
+function isInvalidGrantError(status: number, body: string): boolean {
+  if (status === 400 || status === 401) {
+    const lower = body.toLowerCase();
+    if (
+      lower.includes("invalid_grant") ||
+      lower.includes("invalid refresh") ||
+      lower.includes("token has been revoked") ||
+      lower.includes("revoked") ||
+      lower.includes("expired")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export function getWebexOAuthUrl(redirectUri: string): string {
   const clientId = process.env.WEBEX_CLIENT_ID!.trim();
@@ -112,6 +165,9 @@ export async function exchangeWebexCode(code: string, redirectUri: string): Prom
     expiresAt: Date.now() + (data.expires_in ?? 43200) * 1000,
   };
   _refreshToken = data.refresh_token;
+  _needsReauth = false;
+  _lastRefreshError = null;
+  _lastRefreshAt = Date.now();
   log("OAuth tokens obtained via authorization code");
   return data;
 }
@@ -119,17 +175,26 @@ export async function exchangeWebexCode(code: string, redirectUri: string): Prom
 export function setWebexRefreshToken(token: string) {
   _refreshToken = token;
   _cachedToken = null;
+  _needsReauth = false;
+  _lastRefreshError = null;
 }
 
 export function hasWebexTokens(): boolean {
-  return !!_refreshToken;
+  return !!_refreshToken && !_needsReauth;
+}
+
+export function webexNeedsReauth(): boolean {
+  return _needsReauth;
 }
 
 export async function getWebexAccessToken(): Promise<string> {
   if (_cachedToken && Date.now() < _cachedToken.expiresAt - 30_000) {
     return _cachedToken.token;
   }
+  return refreshWebexAccessToken();
+}
 
+export async function refreshWebexAccessToken(): Promise<string> {
   if (!webexCredentialsConfigured()) {
     throw new Error(
       "Webex credentials are not configured. Set WEBEX_CLIENT_ID, WEBEX_CLIENT_SECRET, and WEBEX_ORG_ID."
@@ -139,6 +204,12 @@ export async function getWebexAccessToken(): Promise<string> {
   if (!_refreshToken) {
     throw new Error(
       "Webex not authorized. An admin must complete the OAuth flow at /api/webex/authorize first."
+    );
+  }
+
+  if (_needsReauth) {
+    throw new Error(
+      "Webex re-authorization required. The stored refresh token was rejected by Webex."
     );
   }
 
@@ -158,8 +229,24 @@ export async function getWebexAccessToken(): Promise<string> {
 
   if (!res.ok) {
     const text = await res.text();
-    _refreshToken = null;
-    _cachedToken = null;
+    _lastRefreshError = `${res.status} ${text}`.slice(0, 500);
+    if (isInvalidGrantError(res.status, text)) {
+      _needsReauth = true;
+      _refreshToken = null;
+      _cachedToken = null;
+      log(`Refresh token rejected (${res.status}) — re-authorization required`);
+      if (_onNeedsReauth) {
+        try {
+          await _onNeedsReauth();
+        } catch (e) {
+          log(`onNeedsReauth handler error: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      throw new Error(
+        `Webex re-authorization required: ${res.status} ${text}`
+      );
+    }
+    log(`Refresh failed (transient): ${res.status} ${text}`);
     throw new Error(`Failed to refresh Webex access token: ${res.status} ${text}`);
   }
 
@@ -168,12 +255,25 @@ export async function getWebexAccessToken(): Promise<string> {
     token: data.access_token,
     expiresAt: Date.now() + (data.expires_in ?? 43200) * 1000,
   };
-  if (data.refresh_token) {
+  _lastRefreshError = null;
+  _lastRefreshAt = Date.now();
+  if (data.refresh_token && data.refresh_token !== _refreshToken) {
     _refreshToken = data.refresh_token;
+    if (_onRefreshTokenRotated) {
+      try {
+        await _onRefreshTokenRotated(data.refresh_token);
+      } catch (e) {
+        log(`onRefreshTokenRotated handler error: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
   }
 
-  log("Access token refreshed");
+  log(`Access token refreshed (expires in ${Math.round(((_cachedToken.expiresAt - Date.now()) / 1000) / 60)} min)`);
   return _cachedToken.token;
+}
+
+export function getWebexAccessTokenExpiresAt(): number | null {
+  return _cachedToken?.expiresAt ?? null;
 }
 
 export interface WebexCallRecord {
