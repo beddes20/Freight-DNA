@@ -361,9 +361,9 @@ function ThreadDetailPanel({
                       {isOutbound && canCorrect && !correctedMessageIds.has(msg.id) && (
                         <Button
                           size="sm"
-                          variant="ghost"
-                          className="h-6 w-6 p-0 text-muted-foreground hover:text-amber-600"
-                          title="Correct this email — teach AI what should have been said"
+                          variant="outline"
+                          className="h-7 px-2 gap-1 text-xs border-amber-400 bg-amber-50 text-amber-700 hover:bg-amber-100 hover:text-amber-800 dark:bg-amber-950/30 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-950/60"
+                          title="Teach the AI — rewrite what this email should have said"
                           onClick={() => {
                             const prevInbound = [...messages.slice(0, idx)].reverse().find(m => m.direction !== "outbound");
                             setCorrectionMsg(msg);
@@ -374,6 +374,7 @@ function ThreadDetailPanel({
                           data-testid={`button-correct-${msg.id}`}
                         >
                           <PenLine className="w-3.5 h-3.5" />
+                          Teach AI
                         </Button>
                       )}
                       <span className="text-xs text-muted-foreground" data-testid={`text-date-${msg.id}`}>
