@@ -2603,6 +2603,10 @@ export async function runMigrations() {
     `);
     await clientApiCache.query(`CREATE INDEX IF NOT EXISTS arc_source_idx ON api_response_cache (source)`);
     await clientApiCache.query(`CREATE INDEX IF NOT EXISTS arc_fetched_idx ON api_response_cache (fetched_at)`);
+    // Webex routes (refresh-token storage and reauth state) reuse this table
+    // with separate column names. Add them if missing so both code paths work.
+    await clientApiCache.query(`ALTER TABLE api_response_cache ADD COLUMN IF NOT EXISTS response_data jsonb`);
+    await clientApiCache.query(`ALTER TABLE api_response_cache ADD COLUMN IF NOT EXISTS cached_at timestamp DEFAULT now()`);
     console.log("[migrations] api_response_cache table ensured (Task #231)");
   } catch (err) {
     console.error("[migrations] api_response_cache migration error:", err);
