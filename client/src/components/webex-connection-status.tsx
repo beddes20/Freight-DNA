@@ -112,6 +112,10 @@ export function WebexConnectionStatus() {
                 Last error: <code className="font-mono">{lastRefreshError}</code>
               </p>
             )}
+            <p className="mt-1 text-[11px] opacity-80">
+              All admins are emailed (and notified in-app) automatically the moment this happens, so you
+              don't have to keep checking this page.
+            </p>
           </div>
         )}
 

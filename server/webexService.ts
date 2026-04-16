@@ -74,7 +74,7 @@ let _needsReauth: boolean = false;
 let _lastRefreshError: string | null = null;
 let _lastRefreshAt: number | null = null;
 let _onRefreshTokenRotated: ((token: string) => Promise<void> | void) | null = null;
-let _onNeedsReauth: (() => Promise<void> | void) | null = null;
+let _onNeedsReauth: ((reason: string) => Promise<void> | void) | null = null;
 
 export function setWebexRefreshTokenRotatedHandler(
   fn: ((token: string) => Promise<void> | void) | null,
@@ -83,9 +83,13 @@ export function setWebexRefreshTokenRotatedHandler(
 }
 
 export function setWebexNeedsReauthHandler(
-  fn: (() => Promise<void> | void) | null,
+  fn: ((reason: string) => Promise<void> | void) | null,
 ) {
   _onNeedsReauth = fn;
+}
+
+export function webexNeedsReauth(): boolean {
+  return _needsReauth;
 }
 
 export interface WebexAuthState {
@@ -183,10 +187,6 @@ export function hasWebexTokens(): boolean {
   return !!_refreshToken && !_needsReauth;
 }
 
-export function webexNeedsReauth(): boolean {
-  return _needsReauth;
-}
-
 export async function getWebexAccessToken(): Promise<string> {
   if (_cachedToken && Date.now() < _cachedToken.expiresAt - 30_000) {
     return _cachedToken.token;
@@ -231,13 +231,15 @@ export async function refreshWebexAccessToken(): Promise<string> {
     const text = await res.text();
     _lastRefreshError = `${res.status} ${text}`.slice(0, 500);
     if (isInvalidGrantError(res.status, text)) {
-      _needsReauth = true;
+      const reason = `refresh_token rejected (${res.status}): ${text.slice(0, 200)}`;
       _refreshToken = null;
       _cachedToken = null;
+      const wasAlreadyNeedingReauth = _needsReauth;
+      _needsReauth = true;
       log(`Refresh token rejected (${res.status}) — re-authorization required`);
-      if (_onNeedsReauth) {
+      if (!wasAlreadyNeedingReauth && _onNeedsReauth) {
         try {
-          await _onNeedsReauth();
+          await _onNeedsReauth(reason);
         } catch (e) {
           log(`onNeedsReauth handler error: ${e instanceof Error ? e.message : String(e)}`);
         }

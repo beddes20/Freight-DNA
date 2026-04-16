@@ -21,7 +21,8 @@ import {
   buildWebexCallDeepLink,
   type WebexCallRecord,
 } from "../webexService";
-import { db, storage } from "../storage";
+import { db } from "../storage";
+import { notifyAdminsOfWebexReauthNeeded } from "../webexReauthNotifications";
 import { analyzeTouchpointNote } from "../aiTouchpoint";
 import { computeGrowthScore } from "../growthScoreCalculator";
 import { checkAndFireMomentumDropNotification } from "../momentumNotifications";
@@ -407,8 +408,10 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
-  setWebexNeedsReauthHandler(async () => {
+  setWebexNeedsReauthHandler(async (reason) => {
+    log(`Webex needs re-authorization — clearing stored token and notifying admins. Reason: ${reason}`);
     await deleteStoredRefreshToken();
+    await notifyAdminsOfWebexReauthNeeded(reason);
   });
 
   loadStoredRefreshToken();
