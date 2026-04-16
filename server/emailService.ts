@@ -44,19 +44,8 @@ export async function sendEmail(opts: EmailOptions): Promise<boolean> {
     return false;
   }
 
-  // ── Test-mode redirect ──────────────────────────────────────────────────────
-  // When EMAIL_OVERRIDE_TO is set, all emails go to that address instead of the
-  // real recipient. The original recipient is prepended to the subject line so
-  // you can see exactly who would have gotten it.
-  const overrideTo = process.env.EMAIL_OVERRIDE_TO?.trim();
-  const deliverTo = overrideTo || opts.to;
-  const subject = overrideTo
-    ? `[TEST → ${opts.to}] ${opts.subject}`
-    : opts.subject;
-  if (overrideTo) {
-    logMessage(`[REDIRECT] Sending to override address ${overrideTo} (original recipient: ${opts.to})`);
-  }
-  // ───────────────────────────────────────────────────────────────────────────
+  const deliverTo = opts.to;
+  const subject = opts.subject;
 
   const fromAddr = process.env.SMTP_FROM || "noreply@freight-dna.com";
   const fromName = process.env.SMTP_FROM_NAME || "Value Truck · Freight DNA";
