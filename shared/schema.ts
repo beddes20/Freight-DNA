@@ -2600,10 +2600,13 @@ export const webexUserTokens = pgTable(
     refreshToken: text("refresh_token").notNull(),
     accessTokenExpiresAt: timestamp("access_token_expires_at"),
     needsReauth: boolean("needs_reauth").notNull().default(false),
+    reauthReason: text("reauth_reason"),
+    lastReauthEmailAt: timestamp("last_reauth_email_at"),
     lastRefreshAt: timestamp("last_refresh_at"),
     lastRefreshError: text("last_refresh_error"),
     scopes: text("scopes"),
     connectedAt: timestamp("connected_at").defaultNow().notNull(),
+    disconnectedAt: timestamp("disconnected_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -2611,6 +2614,7 @@ export const webexUserTokens = pgTable(
     uniqueIndex("webex_user_tokens_user_idx").on(table.userId),
     index("webex_user_tokens_org_idx").on(table.orgId),
     index("webex_user_tokens_person_idx").on(table.webexPersonId),
+    index("webex_user_tokens_needs_reauth_idx").on(table.needsReauth),
   ],
 );
 

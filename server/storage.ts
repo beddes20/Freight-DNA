@@ -1,4 +1,4 @@
-import { eq, inArray, ilike, or, and, asc, desc, isNull, isNotNull, gte, lte, sql, SQL } from "drizzle-orm";
+import { eq, inArray, ilike, or, and, asc, desc, isNull, isNotNull, gte, lte, lt, sql, SQL } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { cacheGet, cacheSet, cacheInvalidatePrefix } from "./cache";
@@ -992,6 +992,7 @@ export interface IStorage {
   upsertWebexUserToken(data: InsertWebexUserToken): Promise<WebexUserToken>;
   updateWebexUserToken(userId: string, updates: Partial<InsertWebexUserToken>): Promise<WebexUserToken | undefined>;
   deleteWebexUserToken(userId: string): Promise<boolean>;
+  getWebexUserTokensNeedingReauthEmail(emailedBefore: Date): Promise<WebexUserToken[]>;
 
   // API cache methods (Task #231)
   getCachedApiResponse(key: string): Promise<ApiResponseCache | undefined>;
@@ -6855,6 +6856,19 @@ export class DatabaseStorage implements IStorage {
     const result = await db.delete(webexUserTokens)
       .where(eq(webexUserTokens.userId, userId));
     return (result.rowCount ?? 0) > 0;
+  }
+
+  async getWebexUserTokensNeedingReauthEmail(emailedBefore: Date): Promise<WebexUserToken[]> {
+    return db.select().from(webexUserTokens)
+      .where(
+        and(
+          eq(webexUserTokens.needsReauth, true),
+          or(
+            isNull(webexUserTokens.lastReauthEmailAt),
+            lt(webexUserTokens.lastReauthEmailAt, emailedBefore),
+          ),
+        ),
+      );
   }
 
   // ── API Response Cache (Task #231) ──────────────────────────────────────────

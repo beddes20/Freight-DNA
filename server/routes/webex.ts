@@ -30,6 +30,7 @@ import {
   resetWebexReauthReminderState,
   initWebexReauthState,
 } from "../webexReauthNotifications";
+import { sendPendingWebexUserReauthEmails } from "../webexUserTokenService";
 import { analyzeTouchpointNote } from "../aiTouchpoint";
 import { computeGrowthScore } from "../growthScoreCalculator";
 import { checkAndFireMomentumDropNotification } from "../momentumNotifications";
@@ -1181,6 +1182,7 @@ export function initWebexSyncScheduler(): void {
   // re-notifies admins at most once every 24 hours while disconnected.
   cron.schedule("17 * * * *", async () => {
     await maybeSendWebexReauthReminder();
+    await sendPendingWebexUserReauthEmails();
   });
 
   log("Webex re-auth reminder scheduler started (hourly check, ~24h cadence)");

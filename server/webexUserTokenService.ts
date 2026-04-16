@@ -4,6 +4,11 @@
  * Each rep can connect their own Webex account. We persist their refresh
  * token in `webex_user_tokens` and cache the minted access token in memory
  * for the duration of its lifetime.
+ *
+ * Task #265 extends this with a scheduled reminder: reps whose token was
+ * revoked/expired (`needsReauth = true`) receive an email nudging them to
+ * reconnect from /profile, throttled to at most once every 24h via the
+ * `lastReauthEmailAt` column.
  */
 import { storage } from "./storage";
 import {
@@ -14,7 +19,12 @@ import {
   WEBEX_OAUTH_SCOPES,
   type WebexTokenResponse,
 } from "./webexService";
-import type { WebexUserToken, InsertWebexUserToken, InsertWebexUserMapping } from "@shared/schema";
+import { sendEmail, emailEnabled, baseEmailTemplate } from "./emailService";
+import type {
+  WebexUserToken,
+  InsertWebexUserToken,
+  InsertWebexUserMapping,
+} from "@shared/schema";
 
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -64,11 +74,7 @@ export async function getUserWebexAccessToken(userId: string): Promise<{ token: 
     if (err instanceof WebexRefreshRevokedError) {
       log(`User ${userId} refresh token rejected — flagging needs_reauth`);
       _accessCache.delete(userId);
-      const reauthUpdates: Partial<InsertWebexUserToken> = {
-        needsReauth: true,
-        lastRefreshError: err.message.slice(0, 500),
-      };
-      await storage.updateWebexUserToken(userId, reauthUpdates);
+      await markWebexUserNeedsReauth(userId, err.message);
       return null;
     }
     const msg = err instanceof Error ? err.message : String(err);
@@ -78,6 +84,30 @@ export async function getUserWebexAccessToken(userId: string): Promise<{ token: 
     };
     await storage.updateWebexUserToken(userId, errUpdates);
     throw err;
+  }
+}
+
+/**
+ * Flag a user's Webex connection as needing re-authorization. Clears the
+ * email-reminder cooldown so the next scheduler tick emails the rep.
+ */
+export async function markWebexUserNeedsReauth(
+  userId: string,
+  reason: string,
+): Promise<void> {
+  const existing = await storage.getWebexUserToken(userId);
+  if (!existing) return;
+  _accessCache.delete(userId);
+  const updates: Partial<InsertWebexUserToken> = {
+    needsReauth: true,
+    reauthReason: reason.slice(0, 500),
+    lastRefreshError: reason.slice(0, 500),
+    lastReauthEmailAt: null,
+    disconnectedAt: new Date(),
+  };
+  await storage.updateWebexUserToken(userId, updates);
+  if (!existing.needsReauth) {
+    log(`Marked user ${userId} as needs-reauth: ${reason}`);
   }
 }
 
@@ -118,9 +148,12 @@ export async function connectUserWebex(
     refreshToken: tokens.refresh_token,
     accessTokenExpiresAt: new Date(expiresAt),
     needsReauth: false,
+    reauthReason: null,
+    lastReauthEmailAt: null,
     lastRefreshAt: new Date(),
     lastRefreshError: null,
     scopes: tokens.scope ?? WEBEX_OAUTH_SCOPES,
+    disconnectedAt: null,
   };
   const record = await storage.upsertWebexUserToken(insert);
 
@@ -150,4 +183,90 @@ export async function connectUserWebex(
 export async function disconnectUserWebex(userId: string): Promise<boolean> {
   _accessCache.delete(userId);
   return storage.deleteWebexUserToken(userId);
+}
+
+// ---------------------------------------------------------------------------
+// Needs-reauth email reminder (Task #265)
+// ---------------------------------------------------------------------------
+
+const REAUTH_EMAIL_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+function buildReauthEmailHtml(
+  userName: string,
+  appUrl: string,
+  reason: string | null,
+): string {
+  const link = `${appUrl.replace(/\/$/, "")}/profile`;
+  const safeReason = (reason ?? "authorization expired or was revoked")
+    .replace(/[<>]/g, c => (c === "<" ? "&lt;" : "&gt;"))
+    .slice(0, 300);
+  const body = `
+    <p>Hi ${userName || "there"},</p>
+    <p>Your personal <strong>Webex Calling</strong> connection to Freight DNA has
+    stopped working, so your calls aren't syncing to the CRM right now. Until you
+    reconnect, inbound/outbound calls won't appear in your activity feed, and
+    missed-call follow-ups won't be generated for you.</p>
+    <div class="item">
+      <div class="item-title">What to do</div>
+      <div class="item-meta">Open your profile and click
+      <strong>Reconnect Webex</strong>. It takes about 30 seconds.</div>
+    </div>
+    <p><a class="cta" href="${link}">Reconnect Webex</a></p>
+    <p style="font-size:12px;color:#6b7280;margin-top:24px">Reason reported by Webex: <code>${safeReason}</code></p>
+    <p style="font-size:12px;color:#6b7280">We'll send one reminder per day until your connection is restored.</p>
+  `;
+  return baseEmailTemplate("Reconnect your Webex to keep calls syncing", body);
+}
+
+/**
+ * Scheduled job: emails each rep whose Webex connection needs re-authorization,
+ * at most once every 24 hours per user. Safe to invoke hourly — it self-throttles
+ * via the `lastReauthEmailAt` column.
+ */
+export async function sendPendingWebexUserReauthEmails(): Promise<void> {
+  if (!emailEnabled()) return;
+
+  let tokens: WebexUserToken[];
+  try {
+    tokens = await storage.getWebexUserTokensNeedingReauthEmail(
+      new Date(Date.now() - REAUTH_EMAIL_INTERVAL_MS),
+    );
+  } catch (err) {
+    log(`Failed to load reauth email candidates: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+
+  if (tokens.length === 0) return;
+
+  const appUrl = process.env.APP_URL?.trim() || "";
+  let sent = 0;
+
+  for (const token of tokens) {
+    try {
+      const user = await storage.getUser(token.userId);
+      if (!user || !user.username || !user.username.includes("@")) continue;
+
+      const ok = await sendEmail({
+        to: user.username,
+        subject: "[Freight DNA] Reconnect your Webex to keep calls syncing",
+        html: buildReauthEmailHtml(
+          user.name || user.username,
+          appUrl,
+          token.reauthReason ?? token.lastRefreshError ?? null,
+        ),
+      });
+      if (!ok) continue;
+
+      await storage.updateWebexUserToken(token.userId, {
+        lastReauthEmailAt: new Date(),
+      });
+      sent++;
+    } catch (err) {
+      log(`Failed reauth email for user ${token.userId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (sent > 0) {
+    log(`Sent ${sent} per-user Webex re-auth reminder email(s)`);
+  }
 }
