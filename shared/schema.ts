@@ -68,6 +68,7 @@ export const contacts = pgTable("contacts", {
   relationshipBase: text("relationship_base"),
   email: text("email"),
   phone: text("phone"),
+  mobile: text("mobile"),
   reportsToId: varchar("reports_to_id"),
   lanes: text("lanes").array(),
   regions: text("regions").array(),

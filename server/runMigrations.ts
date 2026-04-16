@@ -2731,4 +2731,17 @@ export async function runMigrations() {
   } finally {
     clientWut.release();
   }
+
+  // ── contacts.mobile (Task #263) ──
+  // Secondary phone number so Webex call sync can auto-attach calls placed to
+  // either a contact's direct line or their cell.
+  const clientContactMobile = await pool.connect();
+  try {
+    await clientContactMobile.query(`ALTER TABLE contacts ADD COLUMN IF NOT EXISTS mobile text`);
+    console.log("[migrations] contacts.mobile column ensured (Task #263)");
+  } catch (err) {
+    console.error("[migrations] contacts.mobile migration error:", err);
+  } finally {
+    clientContactMobile.release();
+  }
 }

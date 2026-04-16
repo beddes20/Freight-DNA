@@ -55,6 +55,7 @@ const contactSchema = z.object({
   relationshipBase: z.string().optional(),
   email: z.string().email("Invalid email").optional().or(z.literal("")),
   phone: z.string().optional(),
+  mobile: z.string().optional(),
   reportsToId: z.string().optional(),
   lanes: z.string().optional(),
   regions: z.string().optional(),
@@ -93,6 +94,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
       relationshipBase: "",
       email: "",
       phone: "",
+      mobile: "",
       reportsToId: "",
       lanes: "",
       regions: "",
@@ -112,6 +114,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
         relationshipBase: contact.relationshipBase || "",
         email: contact.email || "",
         phone: contact.phone || "",
+        mobile: contact.mobile || "",
         reportsToId: contact.reportsToId || "",
         lanes: contact.lanes?.join(", ") || "",
         regions: contact.regions?.join(", ") || "",
@@ -128,6 +131,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
         relationshipBase: "",
         email: "",
         phone: "",
+        mobile: "",
         reportsToId: "",
         lanes: defaults?.lane || "",
         regions: defaults?.region || "",
@@ -223,6 +227,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
       relationshipBase: data.relationshipBase || null,
       email: data.email || null,
       phone: data.phone || null,
+      mobile: data.mobile || null,
       reportsToId: data.reportsToId || null,
       lanes: data.lanes ? data.lanes.split(",").map((s) => s.trim()).filter(Boolean) : null,
       regions: data.regions ? data.regions.split(",").map((s) => s.trim()).filter(Boolean) : null,
@@ -368,6 +373,21 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
                     <FormControl>
                       <Input placeholder="(555) 123-4567" {...field} data-testid="input-contact-phone" />
                     </FormControl>
+                    <FormDescription>Direct line / office</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="mobile"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Mobile</FormLabel>
+                    <FormControl>
+                      <Input placeholder="(555) 987-6543" {...field} data-testid="input-contact-mobile" />
+                    </FormControl>
+                    <FormDescription>Cell phone for call matching</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}

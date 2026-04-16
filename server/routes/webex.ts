@@ -146,10 +146,15 @@ async function syncCallsForOrg(
   type OrgContact = typeof allContacts[0];
   const contactsByPhoneKey = new Map<string, OrgContact>();
   for (const contact of allContacts) {
-    if (!contact.phone) continue;
-    const key = phoneMatchKey(contact.phone);
-    if (key.length >= 7 && !contactsByPhoneKey.has(key)) {
-      contactsByPhoneKey.set(key, contact);
+    // Index every known phone number for this contact so that calls placed
+    // to/from either a direct line or mobile will resolve to the same CRM
+    // record. First-write-wins on key collisions keeps behavior deterministic.
+    const numbers = [contact.phone, contact.mobile].filter((n): n is string => !!n);
+    for (const number of numbers) {
+      const key = phoneMatchKey(number);
+      if (key.length >= 7 && !contactsByPhoneKey.has(key)) {
+        contactsByPhoneKey.set(key, contact);
+      }
     }
   }
 
@@ -205,9 +210,11 @@ async function syncCallsForOrg(
       }
       if (!matchedContact) {
         // Fallback: tolerant suffix match for international/short numbers that
-        // the primary 10-digit key may miss.
+        // the primary 10-digit key may miss. Checks every number on the
+        // contact (direct + mobile) so secondary lines still auto-attach.
         for (const contact of allContacts) {
-          if (contact.phone && phonesMatch(contact.phone, otherNumber)) {
+          const numbers = [contact.phone, contact.mobile].filter((n): n is string => !!n);
+          if (numbers.some(n => phonesMatch(n, otherNumber))) {
             matchedContact = contact;
             break;
           }
