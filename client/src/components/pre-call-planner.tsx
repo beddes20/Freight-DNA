@@ -49,6 +49,7 @@ import { invalidateAfterTouchpoint } from "@/lib/invalidations";
 import { buildAiToasts } from "@/lib/aiTouchUtils";
 import { useToast } from "@/hooks/use-toast";
 import { useWebexStatus, useWebexPresenceBatch, getPresenceStyle } from "@/hooks/use-webex";
+import { WebexDisabledHint } from "@/components/webex-disabled-hint";
 import { Video } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -692,6 +693,12 @@ export function PreCallPlanner({
                                     <Video className="h-3 w-3" /> Webex
                                   </button>
                                 )}
+                                {!webexConfigured && (
+                                  <WebexDisabledHint
+                                    compact
+                                    testId={`precall-hint-webex-disabled-${c.id}`}
+                                  />
+                                )}
                               </span>
                             )}
                             {c.email && (
@@ -983,6 +990,9 @@ export function PreCallPlanner({
               >
                 <Video className="h-3.5 w-3.5" /> Call via Webex
               </Button>
+            )}
+            {!webexConfigured && sortedContacts.some(c => c.phone) && (
+              <WebexDisabledHint testId="precall-footer-hint-webex-disabled" />
             )}
             <Button
               variant="default"

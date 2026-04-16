@@ -29,6 +29,7 @@ import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type Pend
 import { ContactLaneManager } from "@/components/relationship-freight-portlet";
 import { OutlookComposeDialog } from "@/components/outlook-compose-dialog";
 import { useWebexStatus, useWebexPresenceBatch, getPresenceStyle } from "@/hooks/use-webex";
+import { WebexDisabledHint } from "@/components/webex-disabled-hint";
 import { Video } from "lucide-react";
 
 function stripHtml(html: string): string {
@@ -343,6 +344,9 @@ export function ContactDetailSheet({ contact, open, onClose, onEdit, onDeleted }
                         <Video className="h-3.5 w-3.5" />
                         Call via Webex
                       </Button>
+                    )}
+                    {!webexConfigured && (
+                      <WebexDisabledHint className="px-1" testId="hint-webex-disabled-detail" />
                     )}
                   </div>
                 )}

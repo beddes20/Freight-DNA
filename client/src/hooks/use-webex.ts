@@ -21,9 +21,15 @@ export function useWebexConnectionStatus() {
   });
 }
 
+/**
+ * Returns true only when Webex is BOTH configured and authorized — i.e. when
+ * Webex-dependent UI (call buttons, presence dots, call sync) can actually
+ * function. Use this to gate Webex features. Use `useWebexConnectionStatus`
+ * directly when you need the granular `configured` / `authorized` flags.
+ */
 export function useWebexStatus() {
   const { data } = useWebexConnectionStatus();
-  return data?.configured ?? false;
+  return !!(data?.configured && data?.authorized);
 }
 
 export function useWebexPresenceBatch(phones: string[], enabled = true) {

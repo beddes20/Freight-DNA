@@ -38,6 +38,7 @@ import { OutlookComposeDialog } from "@/components/outlook-compose-dialog";
 import { DraftEmailModal } from "@/components/DraftEmailModal";
 import { Sparkles, Video } from "lucide-react";
 import { useWebexStatus, useWebexPresenceBatch, getPresenceStyle } from "@/hooks/use-webex";
+import { WebexDisabledHint } from "@/components/webex-disabled-hint";
 
 function countThisWeek(tps: Touchpoint[]) {
   const start = new Date();
@@ -303,6 +304,13 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
                                 <Video className="h-3 w-3" />
                                 Webex Call
                               </Button>
+                            )}
+                            {!webexConfigured && contact.phone && (
+                              <WebexDisabledHint
+                                compact
+                                className="self-center px-1"
+                                testId={`hint-webex-disabled-${contact.id}`}
+                              />
                             )}
                           </div>
                         </div>
