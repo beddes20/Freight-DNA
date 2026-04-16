@@ -183,6 +183,21 @@ export function setWebexRefreshToken(token: string) {
   _lastRefreshError = null;
 }
 
+/**
+ * Force the in-memory needs-reauth flag on without firing the
+ * `onNeedsReauth` handler. Used at boot to restore the disconnected state
+ * from persistent storage so follow-up reminders keep firing across
+ * process restarts.
+ */
+export function markWebexNeedsReauth(reason: string): void {
+  _needsReauth = true;
+  _refreshToken = null;
+  _cachedToken = null;
+  if (reason) {
+    _lastRefreshError = reason.slice(0, 500);
+  }
+}
+
 export function hasWebexTokens(): boolean {
   return !!_refreshToken && !_needsReauth;
 }

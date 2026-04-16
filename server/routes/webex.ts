@@ -23,7 +23,12 @@ import {
   type WebexCallRecord,
 } from "../webexService";
 import { db } from "../storage";
-import { notifyAdminsOfWebexReauthNeeded } from "../webexReauthNotifications";
+import {
+  notifyAdminsOfWebexReauthNeeded,
+  maybeSendWebexReauthReminder,
+  resetWebexReauthReminderState,
+  initWebexReauthState,
+} from "../webexReauthNotifications";
 import { analyzeTouchpointNote } from "../aiTouchpoint";
 import { computeGrowthScore } from "../growthScoreCalculator";
 import { checkAndFireMomentumDropNotification } from "../momentumNotifications";
@@ -378,6 +383,15 @@ export function registerWebexRoutes(app: Express) {
     } catch (e) {
       log(`No stored refresh token found`);
     }
+
+    // Always restore the persisted needs-reauth flag (if any). Must run
+    // AFTER the refresh-token load attempt so that a successful boot-time
+    // refresh wins over a stale persisted disconnect flag.
+    try {
+      await initWebexReauthState();
+    } catch (e) {
+      log(`Reauth state init failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   async function saveRefreshToken(token: string) {
@@ -499,6 +513,7 @@ export function registerWebexRoutes(app: Express) {
 
       const tokens = await exchangeWebexCode(code, info.redirectUri);
       await saveRefreshToken(tokens.refresh_token);
+      await resetWebexReauthReminderState();
 
       log(`OAuth complete — tokens stored (redirect_uri=${info.redirectUri})`);
       res.send(`
@@ -732,4 +747,12 @@ export function initWebexSyncScheduler(): void {
   });
 
   log("Webex call sync scheduler started (every 30 minutes)");
+
+  // Follow-up reminder for the needs-reauth state. Runs hourly but only
+  // re-notifies admins at most once every 24 hours while disconnected.
+  cron.schedule("17 * * * *", async () => {
+    await maybeSendWebexReauthReminder();
+  });
+
+  log("Webex re-auth reminder scheduler started (hourly check, ~24h cadence)");
 }
