@@ -90,6 +90,15 @@ app.post(
   '/api/webhooks/graph/email',
   express.raw({ type: '*/*' }),
   async (req, res) => {
+    // Subscription validation handshake — Graph POSTs with ?validationToken=xxx
+    // and expects a 200 response with Content-Type: text/plain and the raw
+    // token as the body. Must respond within 10 seconds.
+    const validationToken = req.query.validationToken as string | undefined;
+    if (validationToken) {
+      res.set('Content-Type', 'text/plain');
+      return res.status(200).send(validationToken);
+    }
+
     // Immediately acknowledge — Graph times out if response is slow
     res.status(200).json({ received: true });
 
