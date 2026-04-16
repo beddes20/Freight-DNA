@@ -48,7 +48,7 @@ async function fetchDeltaMessages(
     url = deltaToken;
   } else {
     const lookback = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailboxEmail)}/messages/delta?$select=id,conversationId,from,toRecipients,subject,bodyPreview,body,receivedDateTime,internetMessageId&$filter=receivedDateTime ge ${lookback}`;
+    url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailboxEmail)}/mailFolders/inbox/messages/delta?$select=id,conversationId,from,toRecipients,subject,bodyPreview,body,receivedDateTime,internetMessageId&$filter=receivedDateTime ge ${lookback}`;
   }
 
   let pageCount = 0;

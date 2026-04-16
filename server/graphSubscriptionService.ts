@@ -293,6 +293,7 @@ export async function registerMailboxSubscription(mailboxEmail: string, mailboxI
 
     let inboxSubId: string | null = null;
     let sentSubId: string | null = null;
+    const failures: string[] = [];
 
     for (const [resource, label] of [[inboxResource, "inbox"], [sentResource, "sentitems"]] as const) {
       const body = {
@@ -320,6 +321,24 @@ export async function registerMailboxSubscription(mailboxEmail: string, mailboxI
       } else {
         const errorText = await res.text();
         log(`[user-mailbox] Failed to register ${label} subscription for ${mailboxEmail} (${res.status}): ${errorText.slice(0, 400)}`);
+
+        let friendly = `${label}: HTTP ${res.status}`;
+        if (res.status === 404) {
+          friendly = `Mailbox "${mailboxEmail}" was not found in your Microsoft 365 tenant. Verify the email address is exact and the user has an Outlook mailbox.`;
+        } else if (res.status === 403) {
+          friendly = `Permission denied. The "Mail.Read" application permission has not been granted in Azure AD for this tenant. Contact IT to grant admin consent.`;
+        } else if (res.status === 400 && errorText.includes("notificationUrl")) {
+          friendly = `Microsoft rejected the webhook URL. Make sure APP_BASE_URL is a public HTTPS URL reachable from the internet.`;
+        } else {
+          try {
+            const parsed = JSON.parse(errorText);
+            const apiMsg = parsed?.error?.message ?? errorText.slice(0, 200);
+            friendly = `${label}: ${apiMsg}`;
+          } catch {
+            friendly = `${label}: ${errorText.slice(0, 200)}`;
+          }
+        }
+        failures.push(friendly);
       }
     }
 
@@ -334,9 +353,13 @@ export async function registerMailboxSubscription(mailboxEmail: string, mailboxI
       return inboxSubId ?? sentSubId;
     }
 
+    const errorMsg = failures.length > 0
+      ? failures.join(" | ").slice(0, 500)
+      : "Failed to register Graph subscriptions";
+
     await storage.updateMonitoredMailbox(mailboxId, {
       syncStatus: "error",
-      syncError: "Failed to register Graph subscriptions",
+      syncError: errorMsg,
     });
     return null;
   } catch (err) {
