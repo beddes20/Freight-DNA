@@ -178,7 +178,14 @@ export default function AdminMonitoredMailboxesPage() {
             <div className="space-y-4 py-4">
               <div className="space-y-2">
                 <Label htmlFor="user-select">Team Member</Label>
-                <Select value={newUserId} onValueChange={setNewUserId}>
+                <Select
+                  value={newUserId}
+                  onValueChange={(id) => {
+                    setNewUserId(id);
+                    const picked = orgUsers.find(u => u.id === id);
+                    if (picked?.username) setNewEmail(picked.username);
+                  }}
+                >
                   <SelectTrigger id="user-select" data-testid="select-user">
                     <SelectValue placeholder="Select a user..." />
                   </SelectTrigger>
@@ -201,6 +208,9 @@ export default function AdminMonitoredMailboxesPage() {
                   onChange={e => setNewEmail(e.target.value)}
                   data-testid="input-mailbox-email"
                 />
+                <p className="text-xs text-muted-foreground">
+                  Auto-filled from the team member's login email. Edit only if their Outlook address is different.
+                </p>
               </div>
             </div>
             <DialogFooter>
