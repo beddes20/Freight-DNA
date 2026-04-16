@@ -193,7 +193,9 @@ function ThreadDetailPanel({
   onClose: () => void;
 }) {
   const [showDraftEmail, setShowDraftEmail] = useState(false);
+  const [draftTargetMessageId, setDraftTargetMessageId] = useState<string | null>(null);
   const [correctionMsg, setCorrectionMsg] = useState<EmailMessage | null>(null);
+  const [correctionRepliedToId, setCorrectionRepliedToId] = useState<string | null>(null);
   const [correctedText, setCorrectedText] = useState("");
   const [correctionNotes, setCorrectionNotes] = useState("");
   const { toast } = useToast();
@@ -212,7 +214,7 @@ function ThreadDetailPanel({
   const correctedMessageIds = new Set((correctionsData?.corrections ?? []).map(c => c.emailMessageId));
 
   const correctionMutation = useMutation({
-    mutationFn: async (params: { emailMessageId: string; originalText: string; correctedText: string; correctionNotes?: string; subject?: string }) => {
+    mutationFn: async (params: { emailMessageId: string; originalText: string; correctedText: string; correctionNotes?: string; subject?: string; repliedToMessageId?: string | null }) => {
       const res = await apiRequest("POST", "/api/email-corrections", {
         emailMessageId: params.emailMessageId,
         originalText: params.originalText,
@@ -222,12 +224,14 @@ function ThreadDetailPanel({
         accountId: thread.linkedAccountId || undefined,
         carrierId: thread.linkedCarrierId || undefined,
         subject: params.subject || undefined,
+        repliedToMessageId: params.repliedToMessageId || undefined,
       });
       return res.json();
     },
     onSuccess: () => {
       toast({ title: "Correction saved", description: "AI will learn from this in future drafts." });
       setCorrectionMsg(null);
+      setCorrectionRepliedToId(null);
       setCorrectedText("");
       setCorrectionNotes("");
       queryClient.invalidateQueries({ queryKey: ["/api/email-corrections"] });
@@ -336,6 +340,22 @@ function ThreadDetailPanel({
                       )}
                     </div>
                     <div className="flex items-center gap-1.5">
+                      {!isOutbound && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 px-2 gap-1 text-xs text-muted-foreground hover:text-indigo-600"
+                          title="Draft an AI reply specifically to this message"
+                          onClick={() => {
+                            setDraftTargetMessageId(msg.id);
+                            setShowDraftEmail(true);
+                          }}
+                          data-testid={`button-draft-reply-${msg.id}`}
+                        >
+                          <Sparkles className="w-3 h-3" />
+                          Draft Reply
+                        </Button>
+                      )}
                       {isOutbound && canCorrect && !correctedMessageIds.has(msg.id) && (
                         <Button
                           size="sm"
@@ -343,7 +363,9 @@ function ThreadDetailPanel({
                           className="h-6 w-6 p-0 text-muted-foreground hover:text-amber-600"
                           title="Correct this email — teach AI what should have been said"
                           onClick={() => {
+                            const prevInbound = [...messages.slice(0, idx)].reverse().find(m => m.direction !== "outbound");
                             setCorrectionMsg(msg);
+                            setCorrectionRepliedToId(prevInbound?.id ?? null);
                             setCorrectedText(msg.body || "");
                             setCorrectionNotes("");
                           }}
@@ -372,14 +394,15 @@ function ThreadDetailPanel({
         {showDraftEmail && (
           <DraftEmailModal
             open={showDraftEmail}
-            onClose={() => setShowDraftEmail(false)}
+            onClose={() => { setShowDraftEmail(false); setDraftTargetMessageId(null); }}
             accountId={thread.linkedAccountId}
             threadId={thread.threadId}
+            targetMessageId={draftTargetMessageId}
             defaultPlayType={thread.linkedCarrierId ? "carrier_capacity" : "check_in"}
           />
         )}
 
-        <Dialog open={!!correctionMsg} onOpenChange={(open) => { if (!open) setCorrectionMsg(null); }}>
+        <Dialog open={!!correctionMsg} onOpenChange={(open) => { if (!open) { setCorrectionMsg(null); setCorrectionRepliedToId(null); } }}>
           <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" data-testid="correction-modal">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2">
@@ -448,6 +471,7 @@ function ThreadDetailPanel({
                         correctedText: correctedText.trim(),
                         correctionNotes: correctionNotes.trim() || undefined,
                         subject: correctionMsg.subject || undefined,
+                        repliedToMessageId: correctionRepliedToId,
                       });
                     }}
                     data-testid="button-submit-correction"

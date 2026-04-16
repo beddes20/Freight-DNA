@@ -28,6 +28,7 @@ const draftRequestSchema = z.object({
   contactId: z.string().optional(),
   playType: z.string().default("general"),
   threadId: z.string().optional(),
+  targetMessageId: z.string().optional(),
   additionalContext: z.string().max(500).optional(),
 });
 
@@ -349,7 +350,7 @@ export function registerEmailDraftingRoutes(app: Express): void {
       const parsed = draftRequestSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-      const { accountId, contactId, playType, threadId, additionalContext } = parsed.data;
+      const { accountId, contactId, playType, threadId, targetMessageId, additionalContext } = parsed.data;
       const orgId = user.organizationId;
 
       if (accountId) {
@@ -379,6 +380,28 @@ export function registerEmailDraftingRoutes(app: Express): void {
       }
 
       let threadContext = "";
+      let targetContext = "";
+
+      if (targetMessageId) {
+        const [targetMsg] = await db.select({
+          body: emailMessages.body,
+          subject: emailMessages.subject,
+          direction: emailMessages.direction,
+          fromEmail: emailMessages.fromEmail,
+        })
+          .from(emailMessages)
+          .where(and(
+            eq(emailMessages.orgId, orgId),
+            eq(emailMessages.id, targetMessageId),
+          ))
+          .limit(1);
+
+        if (targetMsg) {
+          const cleanBody = (targetMsg.body || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 1500);
+          targetContext = `\n\n*** REPLY TO THIS SPECIFIC MESSAGE ***\nFrom: ${targetMsg.fromEmail ?? "(unknown)"}\nSubject: ${targetMsg.subject ?? "(no subject)"}\nMessage:\n"${cleanBody}"\n\nYour reply must directly address the questions, requests, or points in THIS message above. Use the rest of the thread only as background context.\n*** END TARGET MESSAGE ***\n`;
+        }
+      }
+
       if (threadId) {
         const threadEmails = await db.select({
           body: emailMessages.body,
@@ -402,6 +425,8 @@ export function registerEmailDraftingRoutes(app: Express): void {
           }).join("\n---\n");
         }
       }
+
+      threadContext = targetContext + threadContext;
 
       let tacticsContext = "";
       let suggestedTactics: { label: string; summary: string; successRate: number; outcome: string }[] = [];
@@ -592,9 +617,37 @@ export function registerEmailDraftingRoutes(app: Express): void {
         accountId: z.string().optional(),
         carrierId: z.string().optional(),
         subject: z.string().optional(),
+        repliedToMessageId: z.string().optional(),
       });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+
+      let combinedNotes = parsed.data.correctionNotes ?? "";
+      if (parsed.data.repliedToMessageId) {
+        try {
+          const [repliedTo] = await db.select({
+            body: emailMessages.body,
+            subject: emailMessages.subject,
+            fromEmail: emailMessages.fromEmail,
+          })
+            .from(emailMessages)
+            .where(and(
+              eq(emailMessages.orgId, user.organizationId),
+              eq(emailMessages.id, parsed.data.repliedToMessageId),
+            ))
+            .limit(1);
+
+          if (repliedTo) {
+            const cleanBody = (repliedTo.body || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 600);
+            const replyContext = `[CONTEXT — what we were replying to]\nFrom: ${repliedTo.fromEmail ?? "(unknown)"}\nSubject: ${repliedTo.subject ?? "(no subject)"}\nMessage: "${cleanBody}"`;
+            combinedNotes = combinedNotes
+              ? `${replyContext}\n\n[NOTES] ${combinedNotes}`
+              : replyContext;
+          }
+        } catch (ctxErr) {
+          console.error("[email-corrections] failed to load reply context:", ctxErr);
+        }
+      }
 
       const [inserted] = await db.insert(sentEmailCorrections)
         .values({
@@ -605,7 +658,7 @@ export function registerEmailDraftingRoutes(app: Express): void {
           outreachLogId: parsed.data.outreachLogId ?? null,
           originalText: parsed.data.originalText,
           correctedText: parsed.data.correctedText,
-          correctionNotes: parsed.data.correctionNotes ?? null,
+          correctionNotes: combinedNotes || null,
           threadId: parsed.data.threadId ?? null,
           accountId: parsed.data.accountId ?? null,
           carrierId: parsed.data.carrierId ?? null,

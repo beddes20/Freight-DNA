@@ -43,6 +43,7 @@ interface DraftEmailModalProps {
   accountId?: string | null;
   contactId?: string | null;
   threadId?: string | null;
+  targetMessageId?: string | null;
   defaultPlayType?: string;
   companyName?: string;
   contactName?: string;
@@ -75,6 +76,7 @@ export function DraftEmailModal({
   accountId,
   contactId,
   threadId,
+  targetMessageId,
   defaultPlayType = "general",
   companyName,
   contactName,
@@ -105,6 +107,7 @@ export function DraftEmailModal({
         contactId: contactId || undefined,
         playType: isThreadReply ? "thread_reply" : playType,
         threadId: threadId || undefined,
+        targetMessageId: targetMessageId || undefined,
         additionalContext: additionalContext || undefined,
       });
       return res.json() as Promise<DraftResponse>;
