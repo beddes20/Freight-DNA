@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network, Mail, XCircle, AlertTriangle, Wifi, TrendingUp, Save, CreditCard, CalendarDays, Download, FileText, ExternalLink, Building2, Contact, RefreshCw, Database } from "lucide-react";
 import type { User } from "@shared/schema";
+import { WebexConnectionStatus } from "@/components/webex-connection-status";
 
 interface PromotionCriteria {
   id: string;
@@ -1306,6 +1307,7 @@ export default function AdminUsers() {
 
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
+      {currentUser?.role === "admin" && <WebexConnectionStatus />}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-admin-title">

@@ -4,6 +4,8 @@ import { storage } from "../storage";
 import {
   webexCredentialsConfigured,
   getWebexOAuthUrl,
+  getWebexRedirectUri,
+  getWebexRedirectUriInfo,
   exchangeWebexCode,
   setWebexRefreshToken,
   hasWebexTokens,
@@ -385,10 +387,10 @@ export function registerWebexRoutes(app: Express) {
       if (!webexCredentialsConfigured()) {
         return res.status(400).json({ error: "Webex credentials not configured" });
       }
-      const host = req.get("host") || "localhost:5000";
-      const protocol = req.get("x-forwarded-proto") || req.protocol || "https";
-      const redirectUri = `${protocol}://${host}/api/webex/callback`;
-      const authUrl = getWebexOAuthUrl(redirectUri);
+      const info = getWebexRedirectUriInfo(req);
+      const authUrl = getWebexOAuthUrl(info.redirectUri);
+      log(`Authorize → redirect_uri=${info.redirectUri} (source=${info.source})`);
+      log(`Authorize → full URL: ${authUrl}`);
       res.redirect(authUrl);
     } catch (err) {
       log(`Authorize error: ${err instanceof Error ? err.message : String(err)}`);
@@ -396,20 +398,70 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
+  app.get("/api/webex/debug-config", requireAuth, async (req: Request, res: Response) => {
+    const user = await getCurrentUser(req);
+    if (!user || user.role !== "admin") {
+      return res.status(403).json({ error: "Admin only" });
+    }
+    const info = getWebexRedirectUriInfo(req);
+    res.json({
+      configured: webexCredentialsConfigured(),
+      authorized: hasWebexTokens(),
+      redirectUri: info.redirectUri,
+      redirectUriSource: info.source,
+      fallbackRedirectUri: info.fallbackRedirectUri,
+      envOverrides: {
+        WEBEX_REDIRECT_URI: !!process.env.WEBEX_REDIRECT_URI?.trim(),
+        APP_URL: !!process.env.APP_URL?.trim(),
+      },
+      clientIdSet: !!process.env.WEBEX_CLIENT_ID?.trim(),
+      clientSecretSet: !!process.env.WEBEX_CLIENT_SECRET?.trim(),
+      orgIdSet: !!process.env.WEBEX_ORG_ID?.trim(),
+      portalUrl: "https://developer.webex.com/my-apps",
+      hint: "Register the redirectUri above EXACTLY in your Webex Service App's Redirect URIs.",
+    });
+  });
+
   app.get("/api/webex/callback", async (req: Request, res: Response) => {
+    const info = getWebexRedirectUriInfo(req);
+    const renderError = (status: number, detail: string) => {
+      const safeDetail = detail.replace(/[<>]/g, c => (c === "<" ? "&lt;" : "&gt;"));
+      const safeUri = info.redirectUri.replace(/[<>"]/g, "");
+      res.status(status).send(`
+        <html><head><title>Webex Authorization Failed</title></head>
+        <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:640px;margin:60px auto;padding:24px;color:#111">
+          <h2 style="color:#b91c1c;margin-bottom:8px">Webex Authorization Failed</h2>
+          <p style="color:#374151">${safeDetail}</p>
+          <p style="margin-top:16px"><strong>Redirect URI used by this app:</strong><br/><code style="background:#f3f4f6;padding:4px 8px;border-radius:4px;display:inline-block;margin-top:4px">${safeUri}</code></p>
+          <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:12px 16px;margin-top:20px">
+            <p style="margin:0;font-weight:600;color:#92400e">Common cause: redirect URI mismatch</p>
+            <p style="margin:6px 0 0 0;color:#78350f;font-size:14px">The redirect URI shown above must EXACTLY match one of the Redirect URIs registered for your Webex Service App at
+              <a href="https://developer.webex.com/my-apps" target="_blank" rel="noopener" style="color:#b45309">developer.webex.com/my-apps</a>.
+              Set the <code>WEBEX_REDIRECT_URI</code> or <code>APP_URL</code> env var to lock the value across environments.
+            </p>
+          </div>
+          <p style="margin-top:20px;color:#6b7280;font-size:13px">You can close this window and try again from the admin settings.</p>
+        </body></html>
+      `);
+    };
+
     try {
+      const errParam = req.query.error as string | undefined;
+      const errDesc = req.query.error_description as string | undefined;
+      if (errParam) {
+        log(`Callback error from Webex: ${errParam} — ${errDesc ?? ""}`);
+        return renderError(400, `Webex returned an error: ${errParam}${errDesc ? ` — ${errDesc}` : ""}`);
+      }
+
       const code = req.query.code as string;
       if (!code) {
-        return res.status(400).send("Missing authorization code from Webex");
+        return renderError(400, "No authorization code was returned by Webex.");
       }
-      const host = req.get("host") || "localhost:5000";
-      const protocol = req.get("x-forwarded-proto") || req.protocol || "https";
-      const redirectUri = `${protocol}://${host}/api/webex/callback`;
 
-      const tokens = await exchangeWebexCode(code, redirectUri);
+      const tokens = await exchangeWebexCode(code, info.redirectUri);
       await saveRefreshToken(tokens.refresh_token);
 
-      log("OAuth complete — tokens stored");
+      log(`OAuth complete — tokens stored (redirect_uri=${info.redirectUri})`);
       res.send(`
         <html><body style="font-family:sans-serif;text-align:center;padding:60px">
           <h2>Webex Connected Successfully!</h2>
@@ -419,21 +471,21 @@ export function registerWebexRoutes(app: Express) {
         </body></html>
       `);
     } catch (err) {
-      log(`Callback error: ${err instanceof Error ? err.message : String(err)}`);
-      res.status(500).send(`
-        <html><body style="font-family:sans-serif;text-align:center;padding:60px">
-          <h2>Webex Authorization Failed</h2>
-          <p>${err instanceof Error ? err.message : "Unknown error"}</p>
-          <p>Please try again from the Settings page.</p>
-        </body></html>
-      `);
+      const msg = err instanceof Error ? err.message : String(err);
+      log(`Callback error: ${msg}`);
+      log(`Callback error context — redirect_uri=${info.redirectUri} (source=${info.source})`);
+      renderError(500, msg);
     }
   });
 
-  app.get("/api/webex/status", requireAuth, async (_req: Request, res: Response) => {
+  app.get("/api/webex/status", requireAuth, async (req: Request, res: Response) => {
+    const info = getWebexRedirectUriInfo(req);
     res.json({
       configured: webexCredentialsConfigured(),
       authorized: hasWebexTokens(),
+      redirectUri: info.redirectUri,
+      redirectUriSource: info.source,
+      portalUrl: "https://developer.webex.com/my-apps",
     });
   });
 

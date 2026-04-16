@@ -23,6 +23,51 @@ export function webexCredentialsConfigured(): boolean {
   );
 }
 
+export interface WebexRedirectUriInfo {
+  redirectUri: string;
+  source: "WEBEX_REDIRECT_URI" | "APP_URL" | "request";
+  fallbackRedirectUri: string | null;
+}
+
+interface MinimalReq {
+  get(name: string): string | undefined;
+  protocol?: string;
+}
+
+function buildFallbackFromRequest(req?: MinimalReq): string | null {
+  if (!req) return null;
+  const host = req.get("host") || "localhost:5000";
+  const xfProto = req.get("x-forwarded-proto");
+  const protocol = (xfProto && xfProto.split(",")[0].trim()) || req.protocol || "https";
+  return `${protocol}://${host}/api/webex/callback`;
+}
+
+export function getWebexRedirectUriInfo(req?: MinimalReq): WebexRedirectUriInfo {
+  const explicit = process.env.WEBEX_REDIRECT_URI?.trim();
+  const appUrl = process.env.APP_URL?.trim();
+  const fallback = buildFallbackFromRequest(req);
+
+  if (explicit) {
+    return { redirectUri: explicit, source: "WEBEX_REDIRECT_URI", fallbackRedirectUri: fallback };
+  }
+  if (appUrl) {
+    return {
+      redirectUri: `${appUrl.replace(/\/$/, "")}/api/webex/callback`,
+      source: "APP_URL",
+      fallbackRedirectUri: fallback,
+    };
+  }
+  return {
+    redirectUri: fallback ?? "http://localhost:5000/api/webex/callback",
+    source: "request",
+    fallbackRedirectUri: null,
+  };
+}
+
+export function getWebexRedirectUri(req?: MinimalReq): string {
+  return getWebexRedirectUriInfo(req).redirectUri;
+}
+
 let _cachedToken: { token: string; expiresAt: number } | null = null;
 let _refreshToken: string | null = null;
 

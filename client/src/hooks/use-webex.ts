@@ -1,11 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
-export function useWebexStatus() {
-  const { data } = useQuery<{ configured: boolean }>({
+export interface WebexStatusResponse {
+  configured: boolean;
+  authorized: boolean;
+  redirectUri: string;
+  redirectUriSource: "WEBEX_REDIRECT_URI" | "APP_URL" | "request";
+  portalUrl: string;
+}
+
+export function useWebexConnectionStatus() {
+  return useQuery<WebexStatusResponse>({
     queryKey: ["/api/webex/status"],
     staleTime: 5 * 60 * 1000,
   });
+}
+
+export function useWebexStatus() {
+  const { data } = useWebexConnectionStatus();
   return data?.configured ?? false;
 }
 
