@@ -54,6 +54,53 @@ interface EmailMessage {
   createdAt: string;
 }
 
+function stripHtmlToText(input: string | null): string {
+  if (!input) return "";
+  const noStyle = input
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<head[\s\S]*?<\/head>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ");
+  const noTags = noStyle.replace(/<[^>]+>/g, " ");
+  const decoded = noTags
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&[a-z0-9#]+;/gi, " ");
+  return decoded.replace(/\s+/g, " ").trim();
+}
+
+function looksLikeHtml(input: string | null): boolean {
+  if (!input) return false;
+  return /<\/?(html|body|head|div|span|table|p|br|a|img|style|meta)\b/i.test(input);
+}
+
+function EmailBody({ body, testId }: { body: string | null; testId: string }) {
+  if (!body) return null;
+  if (!looksLikeHtml(body)) {
+    return (
+      <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed" data-testid={testId}>
+        {body}
+      </div>
+    );
+  }
+  const srcdoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><base target="_blank"><style>html,body{margin:0;padding:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;font-size:14px;color:inherit;line-height:1.5;word-wrap:break-word;overflow-wrap:break-word;}img{max-width:100%;height:auto;}table{max-width:100%;}a{color:#2563eb;}</style></head><body>${body}</body></html>`;
+  return (
+    <iframe
+      title="email-body"
+      srcDoc={srcdoc}
+      sandbox="allow-popups allow-popups-to-escape-sandbox"
+      referrerPolicy="no-referrer"
+      className="w-full border-0 bg-white dark:bg-zinc-50 rounded"
+      style={{ minHeight: "300px", height: "60vh" }}
+      data-testid={testId}
+    />
+  );
+}
+
 function formatAgo(iso: string | null): string {
   if (!iso) return "—";
   const diffMs = Date.now() - new Date(iso).getTime();
@@ -302,9 +349,7 @@ function ThreadDetailPanel({
                       To: {msg.toEmail}
                     </div>
                   )}
-                  <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed" data-testid={`text-body-${msg.id}`}>
-                    {msg.body}
-                  </div>
+                  <EmailBody body={msg.body} testId={`text-body-${msg.id}`} />
                 </div>
               );
             })
@@ -340,7 +385,7 @@ function ThreadDetailPanel({
                     Original (what was sent)
                   </label>
                   <div className="rounded-lg border bg-muted/40 p-3 text-sm whitespace-pre-wrap max-h-40 overflow-y-auto" data-testid="text-original-email">
-                    {correctionMsg.body}
+                    {stripHtmlToText(correctionMsg.body) || correctionMsg.body}
                   </div>
                 </div>
 
@@ -443,7 +488,7 @@ function ThreadRow({
   const msgCount = msgData?.messages?.length ?? 0;
   const displaySubject = firstMsg?.subject ?? thread.threadId.slice(0, 24) + "…";
   const lastMsg = msgData?.messages?.[msgData.messages.length - 1];
-  const previewBody = lastMsg?.body?.slice(0, 120) ?? "";
+  const previewBody = stripHtmlToText(lastMsg?.body ?? "").slice(0, 120);
 
   return (
     <>
