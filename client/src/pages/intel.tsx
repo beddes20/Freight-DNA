@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   LineChart, Line, ResponsiveContainer, ReferenceLine,
@@ -1537,20 +1537,94 @@ export default function IntelPage() {
 
   const queryUserId = (isAdmin || isDirector) && selectedUserId !== "all" ? selectedUserId : undefined;
 
-  const { data, isLoading, error, isFetching, dataUpdatedAt } = useQuery<IntelPayload>({
-    queryKey: ["/api/intel", queryUserId ?? "all"],
-    queryFn: async () => {
-      const url = queryUserId ? `/api/intel?userId=${encodeURIComponent(queryUserId)}` : "/api/intel";
-      const res = await fetch(url, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to load intel");
-      const result = await res.json();
-      setLastRefreshedAt(new Date());
-      return result;
+  // ── Per-section progressive loading ─────────────────────────────────────────
+  // Each section endpoint is fetched in parallel and rendered independently
+  // as soon as its slice arrives. Shared lanes/SONAR caches on the server
+  // make subsequent section requests cheap.
+  const userParam = queryUserId ? `?userId=${encodeURIComponent(queryUserId)}` : "";
+  const sectionQuery = <T,>(path: string, opts?: { staleTime?: number }) =>
+    useQuery<T>({
+      queryKey: [path, queryUserId ?? "all"],
+      queryFn: async () => {
+        const res = await fetch(`${path}${userParam}`, { credentials: "include" });
+        if (!res.ok) throw new Error(`Failed to load ${path}`);
+        return res.json();
+      },
+      staleTime: opts?.staleTime ?? 5 * 60 * 1000,
+      refetchInterval: 15 * 60 * 1000,
+      refetchOnWindowFocus: false,
+    });
+
+  const shellQ      = sectionQuery<{ viewUserId: string|null; viewUserName: string|null; availableReps: RepEntry[]; dailyInsights: { greeting: string; date: string }; biweeklyScorecard: { lastRefreshDate: string; nextUpdateDays: number; overallStats: IntelPayload["biweeklyScorecard"]["overallStats"] } }>("/api/intel/shell");
+  const marketQ     = sectionQuery<{ sonarMarketTrends: SonarMarketTrend[]; dailyInsights: { marketPulse: MarketPulse; sonarTimestamp: string; sonarIsStale: boolean; marketContext?: MarketContextItem[] } }>("/api/intel/market");
+  const alertsQ     = sectionQuery<{ dailyInsights: { laneAlerts: LaneAlert[]; spotOpportunities: SpotOpportunity[]; buyRateQuickLook: BuyRateLane[] } }>("/api/intel/alerts", { staleTime: 10 * 60 * 1000 });
+  const scorecardQ  = sectionQuery<{ biweeklyScorecard: { lanes: ScorecardLane[] } }>("/api/intel/scorecard-lanes", { staleTime: 10 * 60 * 1000 });
+  const executiveQ  = sectionQuery<{ executiveReport: ExecutiveReportWithBrief }>("/api/intel/executive-report", { staleTime: 10 * 60 * 1000 });
+  const ratePosQ    = sectionQuery<{ ratePositioning?: RatePositioningSummary }>("/api/intel/rate-positioning", { staleTime: 30 * 60 * 1000 });
+
+  // Compose a unified `data` object so existing render code stays unchanged.
+  // Sections still loading get safe empty defaults; per-section skeletons
+  // are gated separately via the *Loading flags below.
+  const isLoading = shellQ.isLoading;
+  const isFetching = shellQ.isFetching || marketQ.isFetching || alertsQ.isFetching || scorecardQ.isFetching || executiveQ.isFetching || ratePosQ.isFetching;
+  const error = shellQ.error;
+  const dataUpdatedAt = Math.max(
+    shellQ.dataUpdatedAt ?? 0, marketQ.dataUpdatedAt ?? 0, alertsQ.dataUpdatedAt ?? 0,
+    scorecardQ.dataUpdatedAt ?? 0, executiveQ.dataUpdatedAt ?? 0, ratePosQ.dataUpdatedAt ?? 0,
+  );
+  useEffect(() => {
+    if (dataUpdatedAt) setLastRefreshedAt(new Date(dataUpdatedAt));
+  }, [dataUpdatedAt]);
+
+  const marketLoading    = marketQ.isLoading;
+  const alertsLoading    = alertsQ.isLoading;
+  const scorecardLoading = scorecardQ.isLoading;
+  const executiveLoading = executiveQ.isLoading;
+  const ratePosLoading   = ratePosQ.isLoading;
+
+  const data: (IntelPayload & { ratePositioning?: RatePositioningSummary }) | undefined = shellQ.data && {
+    viewUserId: shellQ.data.viewUserId,
+    viewUserName: shellQ.data.viewUserName,
+    availableReps: shellQ.data.availableReps,
+    sonarMarketTrends: marketQ.data?.sonarMarketTrends ?? [],
+    dailyInsights: {
+      greeting: shellQ.data.dailyInsights.greeting,
+      date: shellQ.data.dailyInsights.date,
+      marketPulse: marketQ.data?.dailyInsights.marketPulse ?? {
+        otri: 0, otriWoWDelta: 0,
+        ntiPerMove: 0, ntiPerMile: 0, ntiWoWDelta: 0,
+        flatbedOtri: 0, flatbedSignal: "neutral",
+        dieselPerGal: 0, dieselMoMDelta: 0,
+        timestamp: "", isStale: false,
+      },
+      laneAlerts: alertsQ.data?.dailyInsights.laneAlerts ?? [],
+      spotOpportunities: alertsQ.data?.dailyInsights.spotOpportunities ?? [],
+      buyRateQuickLook: alertsQ.data?.dailyInsights.buyRateQuickLook ?? [],
+      sonarTimestamp: marketQ.data?.dailyInsights.sonarTimestamp ?? "",
+      sonarIsStale: marketQ.data?.dailyInsights.sonarIsStale ?? false,
+      marketContext: marketQ.data?.dailyInsights.marketContext,
     },
-    staleTime: 5 * 60 * 1000,
-    refetchInterval: 15 * 60 * 1000, // 15-minute auto-refresh
-    refetchOnWindowFocus: false,
-  });
+    biweeklyScorecard: {
+      lastRefreshDate: shellQ.data.biweeklyScorecard.lastRefreshDate,
+      nextUpdateDays: shellQ.data.biweeklyScorecard.nextUpdateDays,
+      overallStats: shellQ.data.biweeklyScorecard.overallStats,
+      lanes: scorecardQ.data?.biweeklyScorecard.lanes ?? [],
+    },
+    executiveReport: executiveQ.data?.executiveReport ?? {
+      topCompanies: [],
+      repLeaderboard: [],
+      healthDistribution: {
+        SCALE: { count: 0, pct: 0 },
+        GROW:  { count: 0, pct: 0 },
+        WATCH: { count: 0, pct: 0 },
+        HOLD:  { count: 0, pct: 0 },
+      },
+      equipmentBreakdown: [],
+      weeklyTrend: [],
+      executiveBrief: "",
+    },
+    ratePositioning: ratePosQ.data?.ratePositioning,
+  };
 
   // AI Daily Brief query — per current user (not filtered by selectedUserId for main intel)
   const {
@@ -1634,7 +1708,12 @@ export default function IntelPage() {
   });
 
   const handleManualRefresh = () => {
-    queryClient.invalidateQueries({ queryKey: ["/api/intel"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/intel/shell"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/intel/market"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/intel/alerts"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/intel/scorecard-lanes"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/intel/executive-report"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/intel/rate-positioning"] });
     queryClient.invalidateQueries({ queryKey: ["/api/intel/my-lanes"] });
     setLastRefreshedAt(new Date());
   };
@@ -1795,11 +1874,20 @@ export default function IntelPage() {
           <Radio className="h-5 w-5 text-blue-500" /> Daily Insights
         </h2>
 
-        <MarketPulseStrip
-          pulse={dailyInsights.marketPulse}
-          isStale={dailyInsights.sonarIsStale}
-          timestamp={dailyInsights.sonarTimestamp}
-        />
+        {marketLoading || !marketQ.data ? (
+          <div className="border rounded-xl p-4 mb-4 space-y-2 animate-pulse" data-testid="skeleton-market-pulse">
+            <div className="h-4 w-40 bg-muted rounded" />
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
+              {[0,1,2,3].map(i => <div key={i} className="h-14 bg-muted/40 rounded" />)}
+            </div>
+          </div>
+        ) : (
+          <MarketPulseStrip
+            pulse={dailyInsights.marketPulse}
+            isStale={dailyInsights.sonarIsStale}
+            timestamp={dailyInsights.sonarTimestamp}
+          />
+        )}
 
         {/* ── My Lanes Heat Panel ─────────────────────────────── */}
         <MyLanesPanel
@@ -1817,7 +1905,15 @@ export default function IntelPage() {
         />
 
         {/* ── Sonar Market Trend Table (top-20 org markets) ───── */}
-        {data.sonarMarketTrends && data.sonarMarketTrends.length > 0 && (
+        {marketLoading && (
+          <div className="mb-6 border rounded-xl p-4 space-y-2 animate-pulse" data-testid="skeleton-market-trends">
+            <div className="h-4 w-56 bg-muted rounded" />
+            <div className="h-3 w-full bg-muted/60 rounded" />
+            <div className="h-3 w-11/12 bg-muted/60 rounded" />
+            <div className="h-3 w-10/12 bg-muted/60 rounded" />
+          </div>
+        )}
+        {!marketLoading && data.sonarMarketTrends && data.sonarMarketTrends.length > 0 && (
           <div className="mb-6">
             <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
               <Radio className="h-4 w-4 text-blue-500" /> Market Trends — Your Top Corridors
@@ -1899,7 +1995,15 @@ export default function IntelPage() {
           </div>
         )}
 
-        {dailyInsights.laneAlerts.length > 0 && (
+        {alertsLoading && (
+          <div className="mb-6 space-y-3" data-testid="skeleton-alerts">
+            <div className="h-4 w-40 bg-muted rounded animate-pulse" />
+            <div className="h-16 border rounded-xl bg-muted/40 animate-pulse" />
+            <div className="h-16 border rounded-xl bg-muted/40 animate-pulse" />
+            <div className="h-16 border rounded-xl bg-muted/40 animate-pulse" />
+          </div>
+        )}
+        {!alertsLoading && dailyInsights.laneAlerts.length > 0 && (
           <div className="mb-6">
             <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
               <AlertTriangle className="h-4 w-4 text-amber-500" /> Lane Alerts
@@ -1910,7 +2014,7 @@ export default function IntelPage() {
           </div>
         )}
 
-        {dailyInsights.spotOpportunities.length > 0 && (
+        {!alertsLoading && dailyInsights.spotOpportunities.length > 0 && (
           <div className="mb-6">
             <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
               <Zap className="h-4 w-4 text-green-500" /> Spot Rate Opportunities
@@ -1921,7 +2025,7 @@ export default function IntelPage() {
           </div>
         )}
 
-        {dailyInsights.buyRateQuickLook.length > 0 && (
+        {!alertsLoading && dailyInsights.buyRateQuickLook.length > 0 && (
           <div className="mb-6">
             <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
               <DollarSign className="h-4 w-4 text-blue-500" /> Today's Buy Rate Quick-Look
@@ -1974,7 +2078,7 @@ export default function IntelPage() {
         )}
 
         {/* ── Perplexity Market Context ──────────────────────────────── */}
-        {dailyInsights.marketContext && dailyInsights.marketContext.length > 0 && (
+        {!marketLoading && dailyInsights.marketContext && dailyInsights.marketContext.length > 0 && (
           <div className="mb-6">
             <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-1.5">
               <Radio className="h-4 w-4 text-purple-500" /> Market Context — Real-World Freight News
@@ -1996,7 +2100,7 @@ export default function IntelPage() {
           </div>
         )}
 
-        {dailyInsights.laneAlerts.length === 0 && dailyInsights.spotOpportunities.length === 0 && dailyInsights.buyRateQuickLook.length === 0 && (
+        {!alertsLoading && !marketLoading && dailyInsights.laneAlerts.length === 0 && dailyInsights.spotOpportunities.length === 0 && dailyInsights.buyRateQuickLook.length === 0 && (
           <div className="rounded-xl border bg-muted/30 p-8 text-center text-muted-foreground text-sm">
             <Truck className="h-8 w-8 mx-auto mb-3 opacity-30" />
             {isFiltered ? `No lane data for ${viewLabel} in the last 6 weeks.` : "No financial data loaded yet. Upload financial data to see lane insights."}
@@ -2028,7 +2132,18 @@ export default function IntelPage() {
           </div>
         </div>
 
-        {biweeklyScorecard.lanes.length > 0 ? (
+        {scorecardLoading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4" data-testid="skeleton-scorecard">
+            {[0,1,2,3].map(i => (
+              <div key={i} className="border rounded-xl p-4 space-y-2 animate-pulse">
+                <div className="h-4 w-2/3 bg-muted rounded" />
+                <div className="h-3 w-full bg-muted/60 rounded" />
+                <div className="h-3 w-5/6 bg-muted/60 rounded" />
+                <div className="h-12 w-full bg-muted/40 rounded mt-2" />
+              </div>
+            ))}
+          </div>
+        ) : biweeklyScorecard.lanes.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {biweeklyScorecard.lanes.map((lane, i) => (
               <LaneScorecardCard key={i} lane={lane} idx={i} />
@@ -2048,14 +2163,30 @@ export default function IntelPage() {
       {/* ══════════════════════════════════════════════════════
           SECTION: RATE INTELLIGENCE & POSITIONING
       ══════════════════════════════════════════════════════ */}
-      {ratePositioning && (
+      {ratePosLoading ? (
+        <div className="border rounded-xl p-4 mb-10 space-y-3 animate-pulse" data-testid="skeleton-rate-positioning">
+          <div className="h-4 w-64 bg-muted rounded" />
+          <div className="h-3 w-full bg-muted/60 rounded" />
+          <div className="h-3 w-11/12 bg-muted/60 rounded" />
+          <div className="h-20 w-full bg-muted/40 rounded mt-2" />
+        </div>
+      ) : ratePositioning ? (
         <RatePositioningPanel rp={ratePositioning} />
-      )}
+      ) : null}
 
       {/* ══════════════════════════════════════════════════════
           SECTION: EXECUTIVE REPORT (admin only, always org-wide)
       ══════════════════════════════════════════════════════ */}
-      {isAdmin && <ExecutiveReportSection report={executiveReport} />}
+      {isAdmin && (executiveLoading ? (
+        <div className="border rounded-xl p-4 space-y-3 animate-pulse" data-testid="skeleton-executive">
+          <div className="h-4 w-56 bg-muted rounded" />
+          <div className="h-24 w-full bg-muted/40 rounded" />
+          <div className="h-3 w-11/12 bg-muted/60 rounded" />
+          <div className="h-3 w-10/12 bg-muted/60 rounded" />
+        </div>
+      ) : (
+        <ExecutiveReportSection report={executiveReport} />
+      ))}
     </div>
   );
 }

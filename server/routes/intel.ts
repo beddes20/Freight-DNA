@@ -46,6 +46,8 @@ import { getWeatherFlagsForCities, type WeatherFlag } from "../weatherService";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
 import OpenAI from "openai";
+import { getLanesCached, setLanesCached, makeLanesCacheKey } from "../lanesCache";
+import { getDbCached, setDbCached } from "../dbCache";
 
 function logIntel(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -545,6 +547,13 @@ async function generateAiBrief(
   if (cached && Date.now() - cached.fetchedAt < AI_BRIEF_TTL) {
     return cached.result;
   }
+  // L2: DB-backed cache survives restarts so cold loads don't pay the
+  // OpenAI latency for a brief that was generated within the last 4h.
+  const dbCached = await getDbCached<AiBriefResult>(`intel:brief:${cacheKey}`);
+  if (dbCached) {
+    aiBriefCache.set(cacheKey, { result: dbCached, fetchedAt: Date.now() });
+    return dbCached;
+  }
 
   const accountNames = topAccounts.slice(0, 10).map(a => `${a.name} ($${Math.round(a.revenue / 1000)}K)`).join(", ");
   const lanesText = topLanes.slice(0, 15).map(l => {
@@ -615,6 +624,7 @@ Format: Return ONLY the bullet list, one bullet per line, starting each with "�
       isStale: false,
     };
     aiBriefCache.set(cacheKey, { result, fetchedAt: Date.now() });
+    setDbCached(`intel:brief:${cacheKey}`, result, 4 * 60 * 60, "ai-brief");
     logIntel(`AI brief generated for user ${userId} (${bullets.length} bullets)`);
     return result;
   } catch (err: any) {
@@ -1106,265 +1116,151 @@ async function computeRatePositioning(
 
 // ── Core intel computation (shared between GET and send-now) ──────────────────
 
-export async function computeIntelPayload(orgId: string, filterUserId?: string) {
-  const allUsers = await storage.getUsers(orgId);
-  const uploads = await storage.getFinancialUploadsForOrg(orgId);
-  const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+/**
+ * Build the canonical "all lanes" array for an org. Cached in-memory keyed
+ * by the source upload IDs so repeated callers within a few minutes
+ * (intel + brief + my-lanes) skip re-iterating megabytes of rows.
+ */
+// In-flight Promise dedup for concurrent section endpoint requests
+const lanesInFlight = new Map<string, Promise<{ allLanes: LaneData[]; allUsers: any[]; sixWeekKeys: string[] }>>();
 
-  let allRows: any[] = [];
-  for (const upload of sorted.slice(0, 3)) {
-    const rows = (upload.rows as any[]) ?? [];
-    allRows = allRows.concat(rows);
+async function getAllLanesForOrg(orgId: string): Promise<{
+  allLanes: LaneData[];
+  allUsers: any[];
+  sixWeekKeys: string[];
+}> {
+  const inFlight = lanesInFlight.get(orgId);
+  if (inFlight) return inFlight;
+  const p = (async () => {
+    const t0 = Date.now();
+    const [allUsers, uploads] = await Promise.all([
+      storage.getUsers(orgId),
+      storage.getFinancialUploadsForOrg(orgId),
+    ]);
+    const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+    const usedUploads = sorted.slice(0, 3);
+    const uploadIds = usedUploads.map(u => u.id);
+    const sixWeekKeys = getRecentWeekKeys(6);
+
+    const cacheKey = makeLanesCacheKey(orgId, uploadIds, "all");
+    const cached = getLanesCached<LaneData[]>(cacheKey);
+    if (cached) {
+      logIntel(`Lanes cache HIT (${cached.length} lanes) in ${Date.now() - t0}ms`);
+      return { allLanes: cached, allUsers, sixWeekKeys };
+    }
+
+    let allRows: any[] = [];
+    for (const upload of usedUploads) {
+      const rows = (upload.rows as any[]) ?? [];
+      allRows = allRows.concat(rows);
+    }
+    const cols = allRows.length > 0 ? resolveColumns(allRows) : resolveColumns([]);
+    const threeWeekKeys = getRecentWeekKeys(3);
+    const allLanes = buildLanesFromRows(allRows, cols, sixWeekKeys, threeWeekKeys, allUsers, orgId);
+    setLanesCached(cacheKey, allLanes);
+    logIntel(`Lanes cache MISS — built ${allLanes.length} lanes in ${Date.now() - t0}ms`);
+    return { allLanes, allUsers, sixWeekKeys };
+  })();
+  lanesInFlight.set(orgId, p);
+  try {
+    return await p;
+  } finally {
+    lanesInFlight.delete(orgId);
+  }
+}
+
+// ── Shared SONAR bundle (national + OTRI + VOTRI + extended + Perplexity) ────
+// Cached in-memory (10-min TTL) so multiple section endpoints reuse one fetch.
+// In-flight Promise dedup so concurrent requests don't race to refetch.
+type SonarBundle = {
+  national: Awaited<ReturnType<typeof getNationalMarketSummary>>;
+  marketOtris: MarketOtri[];
+  votriByQualifier: Map<string, LaneVotri>;
+  extendedMarkets: MarketExtended[];
+  perplexityContext: MarketContextItem[] | null;
+};
+
+const SONAR_BUNDLE_TTL_MS = 10 * 60 * 1000;
+const sonarBundleValueCache = new Map<string, { value: SonarBundle; fetchedAt: number }>();
+const sonarBundleInFlight = new Map<string, Promise<SonarBundle>>();
+
+async function getOrComputeSonarBundle(orgId: string, filterUserId?: string): Promise<SonarBundle> {
+  const key = `${orgId}:${filterUserId ?? "all"}`;
+
+  const cached = sonarBundleValueCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < SONAR_BUNDLE_TTL_MS) {
+    return cached.value;
   }
 
-  const cols = allRows.length > 0 ? resolveColumns(allRows) : resolveColumns([]);
-  const sixWeekKeys = getRecentWeekKeys(6);
-  const threeWeekKeys = getRecentWeekKeys(3);
+  const existing = sonarBundleInFlight.get(key);
+  if (existing) return existing;
 
-  // All lanes — used for executive report + user roster
-  const allLanes = buildLanesFromRows(allRows, cols, sixWeekKeys, threeWeekKeys, allUsers, orgId);
+  const promise = (async (): Promise<SonarBundle> => {
+    const tStart = Date.now();
+    const { allLanes } = await getAllLanesForOrg(orgId);
+    const lanes = filterUserId
+      ? allLanes.filter(l => l.ownerUserId === filterUserId)
+      : allLanes;
 
-  // Optionally filter lanes by rep for the scorecard/insights view
-  const lanes = filterUserId
-    ? allLanes.filter(l => l.ownerUserId === filterUserId)
-    : allLanes;
+    const uniqueOrigins = Array.from(new Set(allLanes.map(l => l.origin))).filter(Boolean);
+    const uniqueDestinations = Array.from(new Set(allLanes.map(l => l.destination))).filter(Boolean);
+    const allUniqueMarkets = Array.from(new Set([...uniqueOrigins, ...uniqueDestinations]));
+    const allLanePairs = lanes.map(l => ({ origin: l.origin, destination: l.destination }));
 
-  // ── Sonar data ────────────────────────────────────────────────────────────
-  const national = await getNationalMarketSummary();
+    const marketLoadCount = new Map<string, number>();
+    for (const l of lanes) {
+      marketLoadCount.set(l.origin, (marketLoadCount.get(l.origin) ?? 0) + l.totalLoads);
+      marketLoadCount.set(l.destination, (marketLoadCount.get(l.destination) ?? 0) + l.totalLoads);
+    }
+    const top10PersonalizedMarkets = Array.from(marketLoadCount.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([m]) => m)
+      .filter(Boolean)
+      .slice(0, 10);
+    const topOriginMarkets = [...uniqueOrigins]
+      .map(m => ({ market: m, loads: lanes.filter(l => l.origin === m).reduce((s, l) => s + l.totalLoads, 0) }))
+      .sort((a, b) => b.loads - a.loads)
+      .slice(0, 5)
+      .map(m => m.market);
 
-  // Collect all unique origin and destination markets across all lanes (for OTRI lookup used by scorecard/alerts)
-  const uniqueOrigins = Array.from(new Set(allLanes.map(l => l.origin))).filter(Boolean);
-  const uniqueDestinations = Array.from(new Set(allLanes.map(l => l.destination))).filter(Boolean);
-  const allUniqueMarkets = Array.from(new Set([...uniqueOrigins, ...uniqueDestinations]));
+    const [national, marketOtris, votriByQualifier, extendedMarkets, perplexityContext] = await Promise.all([
+      getNationalMarketSummary(),
+      getMarketOtris(allUniqueMarkets).catch(() => [] as MarketOtri[]),
+      allLanePairs.length > 0
+        ? getLaneVotrisBatch(allLanePairs).catch(() => new Map<string, LaneVotri>())
+        : Promise.resolve(new Map<string, LaneVotri>()),
+      getMarketOtrisExtended(top10PersonalizedMarkets).catch(() => [] as MarketExtended[]),
+      getPerplexityMarketContext(topOriginMarkets).catch(() => null),
+    ]);
 
-  // Fetch OTRI for all markets — used by computeLaneAlerts, scorecard, buy rate
-  const marketOtris = await getMarketOtris(allUniqueMarkets).catch(() => [] as MarketOtri[]);
-  const otriByMarket = new Map(marketOtris.map(m => [m.market.toLowerCase(), m]));
+    const bundle: SonarBundle = { national, marketOtris, votriByQualifier, extendedMarkets, perplexityContext };
+    sonarBundleValueCache.set(key, { value: bundle, fetchedAt: Date.now() });
+    logIntel(`SONAR bundle built (VOTRI=${votriByQualifier.size} OTRI=${marketOtris.length}) in ${Date.now() - tStart}ms`);
+    return bundle;
+  })();
 
-  // VOTRI: fetch for ALL lanes owned by the user (not capped at top N)
-  const allLanePairs = lanes.map(l => ({ origin: l.origin, destination: l.destination }));
-  let votriByQualifier = new Map<string, LaneVotri>();
-  if (allLanePairs.length > 0) {
-    votriByQualifier = await getLaneVotrisBatch(allLanePairs);
-    logIntel(`VOTRI fetched for ${votriByQualifier.size} lanes`);
+  sonarBundleInFlight.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    sonarBundleInFlight.delete(key);
   }
+}
 
-  // Market trend table: scope to the active lane set (filtered by rep if applicable).
-  // Rank markets by load count so the rep's highest-volume markets appear first,
-  // then cap at top 10. Also fetch OTVI/HAI extended indices for the trend table.
-  const marketLoadCount = new Map<string, number>();
-  for (const l of lanes) {
-    marketLoadCount.set(l.origin, (marketLoadCount.get(l.origin) ?? 0) + l.totalLoads);
-    marketLoadCount.set(l.destination, (marketLoadCount.get(l.destination) ?? 0) + l.totalLoads);
-  }
-  const top10PersonalizedMarkets = Array.from(marketLoadCount.entries())
-    .sort((a, b) => b[1] - a[1])
-    .map(([m]) => m)
-    .filter(Boolean)
-    .slice(0, 10);
+// ── Section computers — shared cached helpers reused by /api/intel and per-
+// section endpoints. Each returns a slice of the legacy /api/intel payload so
+// the frontend can fetch them in parallel and progressively render.
 
-  const extendedMarkets = await getMarketOtrisExtended(top10PersonalizedMarkets).catch(() => [] as MarketExtended[]);
+export async function computeShellSection(orgId: string, filterUserId?: string) {
+  const { allLanes, allUsers, sixWeekKeys } = await getAllLanesForOrg(orgId);
+  const lanes = filterUserId ? allLanes.filter(l => l.ownerUserId === filterUserId) : allLanes;
 
-  // ── Sonar Market Trends table ──────────────────────────────────────────────
-  // Sorted by OTRI descending. ibOtri populated for any market used as a destination.
-  const destinationSet = new Set(uniqueDestinations);
-  const sonarMarketTrends = extendedMarkets
-    .sort((a, b) => (b.otri ?? -1) - (a.otri ?? -1))
-    .slice(0, 20)
-    .map(m => {
-      const trendSource = m.votriWoW ?? m.otriWoW ?? 0;
-      return {
-        market:   m.market,
-        otri:     m.otri,
-        otriWoW:  m.otriWoW,
-        votri:    m.votri,
-        votriWoW: m.votriWoW,
-        otvi:     m.otvi,
-        hai:      m.hai,
-        signal:   m.signal,
-        trendDir: trendSource > 0.5 ? "↑" as const : trendSource < -0.5 ? "↓" as const : "→" as const,
-        ibOtri: destinationSet.has(m.market) ? m.otri : null,
-      };
-    });
-
-  // Daily insights for the (possibly filtered) lane set
-  const laneAlerts = computeLaneAlerts(lanes, marketOtris, votriByQualifier);
-  const spotOpportunities = await computeSpotOpportunities(lanes);
-
-  // ── AI: generate narratives in parallel (OpenAI) ──────────────────────────
-  // Alert narratives
-  const alertsWithNarratives = await Promise.all(
-    laneAlerts.map(async (alert) => {
-      const qualifier = buildVotriQualifier(
-        alert.lane.split(" → ")[0]?.trim() ?? "",
-        alert.lane.split(" → ")[1]?.trim() ?? "",
-      );
-      const laneVotri = votriByQualifier.get(qualifier);
-      const originOtri = otriByMarket.get((alert.lane.split(" → ")[0]?.trim() ?? "").toLowerCase())?.otri ?? null;
-      const narrative = await getAlertNarrative(
-        alert.lane,
-        alert.signal,
-        alert.action,
-        alert.severity,
-        originOtri,
-        laneVotri && !laneVotri.isStale ? laneVotri.votri : null,
-      );
-      return { ...alert, aiNarrative: narrative };
-    }),
-  );
-
-  // Spot opportunity narratives
-  const spotWithNarratives = await Promise.all(
-    spotOpportunities.map(async (opp) => {
-      const narrative = await getSpotOpportunityNarrative(
-        opp.lane,
-        opp.historicalCustomerRate,
-        opp.expectedCarrierCost,
-        opp.estimatedMarginGap,
-      );
-      return { ...opp, aiNarrative: narrative };
-    }),
-  );
-
-  // Buy rate quick-look (top 5 lanes by load count)
-  const top5LanesData = [...lanes]
-    .sort((a, b) => b.totalLoads - a.totalLoads)
-    .slice(0, 5);
-
-  const top5Lanes = await Promise.all(
-    top5LanesData.map(async (lane) => {
-      const qualifier = buildVotriQualifier(lane.origin, lane.destination);
-      const laneVotri = votriByQualifier.get(qualifier);
-      const votriVal = (laneVotri && !laneVotri.isStale) ? laneVotri.votri : null;
-      const originMarketOtri = otriByMarket.get(lane.origin.toLowerCase())?.otri ?? null;
-      const effectiveRate = votriVal ?? originMarketOtri;
-      const buyRate = computeBuyRateRange(lane.carrierPays, lane.totalLoads, effectiveRate);
-
-      const rationale = await getBuyRateRationale(
-        `${lane.origin} → ${lane.destination}`,
-        buyRate.low,
-        buyRate.high,
-        originMarketOtri,
-        votriVal,
-      );
-
-      return {
-        lane: `${lane.origin} → ${lane.destination}`,
-        origin: lane.origin,
-        destination: lane.destination,
-        equipment: lane.equipmentType,
-        totalLoads: lane.totalLoads,
-        buyRateLow: buyRate.low,
-        buyRateHigh: buyRate.high,
-        originOtri: originMarketOtri,
-        votri: votriVal,
-        aiRationale: rationale,
-      };
-    }),
-  );
-
-  // ── Perplexity market context ─────────────────────────────────────────────
-  // Query using top 3–5 origin markets by load count
-  const topOriginMarkets = [...uniqueOrigins]
-    .map(m => ({ market: m, loads: lanes.filter(l => l.origin === m).reduce((s, l) => s + l.totalLoads, 0) }))
-    .sort((a, b) => b.loads - a.loads)
-    .slice(0, 5)
-    .map(m => m.market);
-
-  const perplexityContext = await getPerplexityMarketContext(topOriginMarkets).catch(() => null);
-
-  // ── Bi-weekly scorecard ───────────────────────────────────────────────────
-  const now = Date.now();
-  const lastBiweeklyTs = getLastBiweeklyTs();
-  const daysSinceRefresh = (now - lastBiweeklyTs) / (1000 * 60 * 60 * 24);
-  const biweeklyDue = daysSinceRefresh >= 14 || lastBiweeklyTs === 0;
-  if (biweeklyDue && !filterUserId) saveBiweeklyTs(now);
-
-  const nextUpdateDays = biweeklyDue ? 14 : Math.ceil(14 - daysSinceRefresh);
-
-  // All recurring lanes for the scorecard (no top-N cap; show all user lanes)
-  const allScorecardLanesData = [...lanes].sort((a, b) => b.totalLoads - a.totalLoads);
-
-  // Build deterministic scorecard data first (VOTRI, buy rates, signals)
-  const scorecardBase = allScorecardLanesData.map((lane) => {
-    const avg6WkMarginPct = lane.totalRevenue > 0
-      ? ((lane.totalRevenue - lane.totalCarrierPay) / lane.totalRevenue) * 100
-      : 0;
-    const statusInfo = getScorecardStatus(avg6WkMarginPct);
-
-    const qualifier = buildVotriQualifier(lane.origin, lane.destination);
-    const laneVotri = votriByQualifier.get(qualifier);
-    const votriVal = (laneVotri && !laneVotri.isStale) ? laneVotri.votri : null;
-
-    const originMarketOtri = otriByMarket.get(lane.origin.toLowerCase())?.otri ?? null;
-    const destMarketOtri = otriByMarket.get(lane.destination.toLowerCase())?.otri ?? null;
-
-    const effectiveRate = votriVal ?? originMarketOtri;
-    const buyRate = computeBuyRateRange(lane.carrierPays, lane.totalLoads, effectiveRate);
-
-    const originSignal = originMarketOtri !== null ? (originMarketOtri > 25 ? "red" : originMarketOtri > 10 ? "yellow" : "green") : "gray";
-    const destSignal = destMarketOtri !== null ? (destMarketOtri > 25 ? "red" : destMarketOtri > 10 ? "yellow" : "green") : "gray";
-
-    return {
-      lane: `${lane.origin} → ${lane.destination}`,
-      origin: lane.origin,
-      originState: lane.originState,
-      destination: lane.destination,
-      destinationState: lane.destinationState,
-      equipment: lane.equipmentType,
-      status: statusInfo.status,
-      statusColor: statusInfo.color,
-      avg6WkMarginPct: Math.round(avg6WkMarginPct * 10) / 10,
-      totalLoads: lane.totalLoads,
-      avgPayPerLoad: Math.round(lane.avgPayPerLoad),
-      carrierRateTrend: lane.marginTrend,
-      weeklyMarginPcts: lane.marginPctLast6Weeks.map(p => Math.round(p * 10) / 10),
-      buyRateLow: buyRate.low,
-      buyRateHigh: buyRate.high,
-      originOtri: originMarketOtri,
-      destOtri: destMarketOtri,
-      votri: votriVal,
-      originSignal,
-      destSignal,
-      // narrative placeholder; filled below via bounded-concurrency batch
-      aiNarrative: null as string | null,
-      // kept for AI call
-      _marginTrend: lane.marginTrend,
-      _marginPcts: lane.marginPctLast6Weeks,
-    };
-  });
-
-  // Claude: 2–3 sentence strategic lane narratives with bounded concurrency
-  // (MAX_CLAUDE_CONCURRENCY cap prevents rate-limit errors on large lane sets)
-  const narrativeInputs = scorecardBase.map(e => ({
-    lane: e.lane,
-    avg6WkMarginPct: e.avg6WkMarginPct,
-    marginTrend: e._marginTrend,
-    weeklyMarginPcts: e._marginPcts,
-    totalLoads: e.totalLoads,
-    votri: e.votri,
-    destOtri: e.destOtri,
-  }));
-  const narratives = await getLaneNarrativesBatch(narrativeInputs);
-
-  const scorecardEntries = scorecardBase.map((e, i) => {
-    const { _marginTrend: _mt, _marginPcts: _mp, ...rest } = e;
-    return { ...rest, aiNarrative: narratives[i] ?? null };
-  });
-
-  // ── Rate Positioning Layer ────────────────────────────────────────────────
-  // Compare org's 4-week avg carrier pay per mile vs SONAR TRAC market rate per lane.
-  // Classification: ABOVE_MARKET (>10% over), AT_MARKET (±10%), BELOW_MARKET (>10% under).
-  const ratePositioning = await computeRatePositioning(lanes, scorecardBase, filterUserId, sixWeekKeys);
-
-  // ── Overall stats for the current view ───────────────────────────────────
   const totalLoads6Wk = lanes.reduce((s, l) => s + l.totalLoads, 0);
   const totalRevenue6Wk = lanes.reduce((s, l) => s + l.totalRevenue, 0);
   const totalCarrierPay6Wk = lanes.reduce((s, l) => s + l.totalCarrierPay, 0);
   const overallMarginPct = totalRevenue6Wk > 0
     ? ((totalRevenue6Wk - totalCarrierPay6Wk) / totalRevenue6Wk) * 100
     : 0;
-
   const totalReps = allUsers.filter(u =>
     ["account_manager", "national_account_manager", "admin"].includes(u.role)
   ).length;
@@ -1381,38 +1277,21 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
     if (pct > bestWeekMargin) { bestWeekMargin = pct; bestWeekLabel = wkKey; }
   }
 
-  // ── Claude: executive brief ───────────────────────────────────────────────
-  const executiveReport = computeExecutiveReport(allLanes, allUsers, sixWeekKeys);
-  const healthDistFlat = {
-    SCALE: executiveReport.healthDistribution.SCALE.count,
-    GROW:  executiveReport.healthDistribution.GROW.count,
-    WATCH: executiveReport.healthDistribution.WATCH.count,
-    HOLD:  executiveReport.healthDistribution.HOLD.count,
-  };
-  const topCompanyForBrief = executiveReport.topCompanies[0]?.name ?? "";
+  const now = Date.now();
+  const lastBiweeklyTs = getLastBiweeklyTs();
+  const daysSinceRefresh = (now - lastBiweeklyTs) / (1000 * 60 * 60 * 24);
+  const biweeklyDue = daysSinceRefresh >= 14 || lastBiweeklyTs === 0;
+  if (biweeklyDue && !filterUserId) saveBiweeklyTs(now);
+  const nextUpdateDays = biweeklyDue ? 14 : Math.ceil(14 - daysSinceRefresh);
 
-  const executiveBrief = await getExecutiveBrief(
-    totalLoads6Wk,
-    totalRevenue6Wk,
-    overallMarginPct,
-    healthDistFlat,
-    topCompanyForBrief,
-    bestWeekLabel,
-  );
-
-  // ── Who we're looking at ──────────────────────────────────────────────────
   const viewUser = filterUserId ? allUsers.find(u => u.id === filterUserId) : null;
   const greetingName = viewUser ? viewUser.name.split(" ")[0] : (allUsers.find(u => u.role === "admin")?.name.split(" ")[0] ?? "there");
-
   const today = new Date();
   const dateStr = today.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 
-  // Rep roster for the dropdown (anyone who owns at least 1 lane)
   const repRoster = Array.from(
     new Map(
-      allLanes
-        .filter(l => l.ownerUserId)
-        .map(l => [l.ownerUserId, { id: l.ownerUserId!, name: l.ownerName }])
+      allLanes.filter(l => l.ownerUserId).map(l => [l.ownerUserId, { id: l.ownerUserId!, name: l.ownerName }])
     ).values()
   ).sort((a, b) => a.name.localeCompare(b.name));
 
@@ -1420,18 +1299,7 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
     viewUserId: filterUserId ?? null,
     viewUserName: viewUser?.name ?? null,
     availableReps: repRoster,
-    sonarMarketTrends,
-    dailyInsights: {
-      greeting: `Good morning, ${greetingName}`,
-      date: dateStr,
-      marketPulse: national,
-      laneAlerts: alertsWithNarratives,
-      spotOpportunities: spotWithNarratives,
-      buyRateQuickLook: top5Lanes,
-      sonarTimestamp: national.timestamp,
-      sonarIsStale: national.isStale,
-      marketContext: perplexityContext ?? undefined,
-    },
+    dailyInsights: { greeting: `Good morning, ${greetingName}`, date: dateStr },
     biweeklyScorecard: {
       lastRefreshDate: new Date(lastBiweeklyTs || now).toISOString(),
       nextUpdateDays,
@@ -1444,15 +1312,242 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
         bestWeek: bestWeekLabel,
         bestWeekMarginPct: Math.round(bestWeekMargin * 10) / 10,
       },
-      lanes: scorecardEntries,
     },
-    executiveReport: {
-      ...executiveReport,
-      executiveBrief,
-    },
-    ratePositioning,
   };
 }
+
+export async function computeMarketSection(orgId: string, filterUserId?: string) {
+  const { allLanes } = await getAllLanesForOrg(orgId);
+  const sonar = await getOrComputeSonarBundle(orgId, filterUserId);
+  const uniqueDestinations = Array.from(new Set(allLanes.map(l => l.destination))).filter(Boolean);
+  const destinationSet = new Set(uniqueDestinations);
+  const sonarMarketTrends = sonar.extendedMarkets
+    .sort((a, b) => (b.otri ?? -1) - (a.otri ?? -1))
+    .slice(0, 20)
+    .map(m => {
+      const trendSource = m.votriWoW ?? m.otriWoW ?? 0;
+      return {
+        market: m.market, otri: m.otri, otriWoW: m.otriWoW, votri: m.votri, votriWoW: m.votriWoW,
+        otvi: m.otvi, hai: m.hai, signal: m.signal,
+        trendDir: trendSource > 0.5 ? "↑" as const : trendSource < -0.5 ? "↓" as const : "→" as const,
+        ibOtri: destinationSet.has(m.market) ? m.otri : null,
+      };
+    });
+  return {
+    sonarMarketTrends,
+    dailyInsights: {
+      marketPulse: sonar.national,
+      sonarTimestamp: sonar.national.timestamp,
+      sonarIsStale: sonar.national.isStale,
+      marketContext: sonar.perplexityContext ?? undefined,
+    },
+  };
+}
+
+export async function computeAlertsSection(orgId: string, filterUserId?: string) {
+  const { allLanes } = await getAllLanesForOrg(orgId);
+  const lanes = filterUserId ? allLanes.filter(l => l.ownerUserId === filterUserId) : allLanes;
+  const sonar = await getOrComputeSonarBundle(orgId, filterUserId);
+  const otriByMarket = new Map(sonar.marketOtris.map(m => [m.market.toLowerCase(), m]));
+
+  const tInsights = Date.now();
+  const [laneAlerts, spotOpportunities] = await Promise.all([
+    Promise.resolve(computeLaneAlerts(lanes, sonar.marketOtris, sonar.votriByQualifier)),
+    computeSpotOpportunities(lanes),
+  ]);
+  logIntel(`Alerts (${laneAlerts.length}) + spot ops (${spotOpportunities.length}) in ${Date.now() - tInsights}ms`);
+
+  const alertsWithNarratives = await Promise.all(
+    laneAlerts.map(async (alert) => {
+      const qualifier = buildVotriQualifier(
+        alert.lane.split(" → ")[0]?.trim() ?? "",
+        alert.lane.split(" → ")[1]?.trim() ?? "",
+      );
+      const laneVotri = sonar.votriByQualifier.get(qualifier);
+      const originOtri = otriByMarket.get((alert.lane.split(" → ")[0]?.trim() ?? "").toLowerCase())?.otri ?? null;
+      const narrative = await getAlertNarrative(
+        alert.lane, alert.signal, alert.action, alert.severity, originOtri,
+        laneVotri && !laneVotri.isStale ? laneVotri.votri : null,
+      );
+      return { ...alert, aiNarrative: narrative };
+    }),
+  );
+
+  const spotWithNarratives = await Promise.all(
+    spotOpportunities.map(async (opp) => {
+      const narrative = await getSpotOpportunityNarrative(
+        opp.lane, opp.historicalCustomerRate, opp.expectedCarrierCost, opp.estimatedMarginGap,
+      );
+      return { ...opp, aiNarrative: narrative };
+    }),
+  );
+
+  const top5LanesData = [...lanes].sort((a, b) => b.totalLoads - a.totalLoads).slice(0, 5);
+  const top5Lanes = await Promise.all(
+    top5LanesData.map(async (lane) => {
+      const qualifier = buildVotriQualifier(lane.origin, lane.destination);
+      const laneVotri = sonar.votriByQualifier.get(qualifier);
+      const votriVal = (laneVotri && !laneVotri.isStale) ? laneVotri.votri : null;
+      const originMarketOtri = otriByMarket.get(lane.origin.toLowerCase())?.otri ?? null;
+      const effectiveRate = votriVal ?? originMarketOtri;
+      const buyRate = computeBuyRateRange(lane.carrierPays, lane.totalLoads, effectiveRate);
+      const rationale = await getBuyRateRationale(
+        `${lane.origin} → ${lane.destination}`, buyRate.low, buyRate.high, originMarketOtri, votriVal,
+      );
+      return {
+        lane: `${lane.origin} → ${lane.destination}`,
+        origin: lane.origin, destination: lane.destination, equipment: lane.equipmentType,
+        totalLoads: lane.totalLoads, buyRateLow: buyRate.low, buyRateHigh: buyRate.high,
+        originOtri: originMarketOtri, votri: votriVal, aiRationale: rationale,
+      };
+    }),
+  );
+
+  return {
+    dailyInsights: {
+      laneAlerts: alertsWithNarratives,
+      spotOpportunities: spotWithNarratives,
+      buyRateQuickLook: top5Lanes,
+    },
+  };
+}
+
+function buildScorecardBase(lanes: LaneData[], sonar: SonarBundle) {
+  const otriByMarket = new Map(sonar.marketOtris.map(m => [m.market.toLowerCase(), m]));
+  const allScorecardLanesData = [...lanes].sort((a, b) => b.totalLoads - a.totalLoads);
+  return allScorecardLanesData.map((lane) => {
+    const avg6WkMarginPct = lane.totalRevenue > 0
+      ? ((lane.totalRevenue - lane.totalCarrierPay) / lane.totalRevenue) * 100
+      : 0;
+    const statusInfo = getScorecardStatus(avg6WkMarginPct);
+    const qualifier = buildVotriQualifier(lane.origin, lane.destination);
+    const laneVotri = sonar.votriByQualifier.get(qualifier);
+    const votriVal = (laneVotri && !laneVotri.isStale) ? laneVotri.votri : null;
+    const originMarketOtri = otriByMarket.get(lane.origin.toLowerCase())?.otri ?? null;
+    const destMarketOtri = otriByMarket.get(lane.destination.toLowerCase())?.otri ?? null;
+    const effectiveRate = votriVal ?? originMarketOtri;
+    const buyRate = computeBuyRateRange(lane.carrierPays, lane.totalLoads, effectiveRate);
+    const originSignal = originMarketOtri !== null ? (originMarketOtri > 25 ? "red" : originMarketOtri > 10 ? "yellow" : "green") : "gray";
+    const destSignal = destMarketOtri !== null ? (destMarketOtri > 25 ? "red" : destMarketOtri > 10 ? "yellow" : "green") : "gray";
+    return {
+      lane: `${lane.origin} → ${lane.destination}`,
+      origin: lane.origin, originState: lane.originState,
+      destination: lane.destination, destinationState: lane.destinationState,
+      equipment: lane.equipmentType,
+      status: statusInfo.status, statusColor: statusInfo.color,
+      avg6WkMarginPct: Math.round(avg6WkMarginPct * 10) / 10,
+      totalLoads: lane.totalLoads, avgPayPerLoad: Math.round(lane.avgPayPerLoad),
+      carrierRateTrend: lane.marginTrend,
+      weeklyMarginPcts: lane.marginPctLast6Weeks.map(p => Math.round(p * 10) / 10),
+      buyRateLow: buyRate.low, buyRateHigh: buyRate.high,
+      originOtri: originMarketOtri, destOtri: destMarketOtri, votri: votriVal,
+      originSignal, destSignal,
+      aiNarrative: null as string | null,
+      _marginTrend: lane.marginTrend, _marginPcts: lane.marginPctLast6Weeks,
+    };
+  });
+}
+
+export async function computeScorecardLanesSection(orgId: string, filterUserId?: string) {
+  const { allLanes } = await getAllLanesForOrg(orgId);
+  const lanes = filterUserId ? allLanes.filter(l => l.ownerUserId === filterUserId) : allLanes;
+  const sonar = await getOrComputeSonarBundle(orgId, filterUserId);
+  const scorecardBase = buildScorecardBase(lanes, sonar);
+  const narrativeInputs = scorecardBase.map(e => ({
+    lane: e.lane, avg6WkMarginPct: e.avg6WkMarginPct, marginTrend: e._marginTrend,
+    weeklyMarginPcts: e._marginPcts, totalLoads: e.totalLoads, votri: e.votri, destOtri: e.destOtri,
+  }));
+  const narratives = await getLaneNarrativesBatch(narrativeInputs);
+  const scorecardEntries = scorecardBase.map((e, i) => {
+    const { _marginTrend: _mt, _marginPcts: _mp, ...rest } = e;
+    return { ...rest, aiNarrative: narratives[i] ?? null };
+  });
+  return { biweeklyScorecard: { lanes: scorecardEntries } };
+}
+
+export async function computeExecutiveSection(orgId: string, filterUserId?: string) {
+  const { allLanes, allUsers, sixWeekKeys } = await getAllLanesForOrg(orgId);
+  const lanes = filterUserId ? allLanes.filter(l => l.ownerUserId === filterUserId) : allLanes;
+
+  const executiveReport = computeExecutiveReport(allLanes, allUsers, sixWeekKeys);
+  const healthDistFlat = {
+    SCALE: executiveReport.healthDistribution.SCALE.count,
+    GROW:  executiveReport.healthDistribution.GROW.count,
+    WATCH: executiveReport.healthDistribution.WATCH.count,
+    HOLD:  executiveReport.healthDistribution.HOLD.count,
+  };
+  const topCompanyForBrief = executiveReport.topCompanies[0]?.name ?? "";
+
+  const totalLoads6Wk = lanes.reduce((s, l) => s + l.totalLoads, 0);
+  const totalRevenue6Wk = lanes.reduce((s, l) => s + l.totalRevenue, 0);
+  const totalCarrierPay6Wk = lanes.reduce((s, l) => s + l.totalCarrierPay, 0);
+  const overallMarginPct = totalRevenue6Wk > 0
+    ? ((totalRevenue6Wk - totalCarrierPay6Wk) / totalRevenue6Wk) * 100 : 0;
+
+  let bestWeekLabel = "";
+  let bestWeekMargin = 0;
+  for (const wkKey of sixWeekKeys) {
+    let wkRev = 0; let wkCost = 0;
+    for (const lane of lanes) {
+      const wd = lane.byWeek.get(wkKey);
+      if (wd) { wkRev += wd.revenue; wkCost += wd.carrierPay; }
+    }
+    const pct = wkRev > 0 ? ((wkRev - wkCost) / wkRev) * 100 : 0;
+    if (pct > bestWeekMargin) { bestWeekMargin = pct; bestWeekLabel = wkKey; }
+  }
+
+  const executiveBrief = await getExecutiveBrief(
+    totalLoads6Wk, totalRevenue6Wk, overallMarginPct, healthDistFlat, topCompanyForBrief, bestWeekLabel,
+  );
+  return { executiveReport: { ...executiveReport, executiveBrief } };
+}
+
+export async function computeRatePositioningSection(orgId: string, filterUserId?: string) {
+  const cacheKey = `intel:rp:${orgId}:${filterUserId ?? "_all"}`;
+  const cached = await getDbCached<RatePositioningSummary>(cacheKey);
+  if (cached) {
+    return { ratePositioning: cached };
+  }
+  const { allLanes, sixWeekKeys } = await getAllLanesForOrg(orgId);
+  const lanes = filterUserId ? allLanes.filter(l => l.ownerUserId === filterUserId) : allLanes;
+  const sonar = await getOrComputeSonarBundle(orgId, filterUserId);
+  const scorecardBase = buildScorecardBase(lanes, sonar);
+  const ratePositioning = await computeRatePositioning(lanes, scorecardBase, filterUserId, sixWeekKeys);
+  setDbCached(cacheKey, ratePositioning, 4 * 60 * 60, "rate-positioning");
+  return { ratePositioning };
+}
+
+export async function computeIntelPayload(orgId: string, filterUserId?: string) {
+  const tStart = Date.now();
+  const [shell, market, alerts, scorecardLanes, executive, ratePos] = await Promise.all([
+    computeShellSection(orgId, filterUserId),
+    computeMarketSection(orgId, filterUserId),
+    computeAlertsSection(orgId, filterUserId),
+    computeScorecardLanesSection(orgId, filterUserId),
+    computeExecutiveSection(orgId, filterUserId),
+    computeRatePositioningSection(orgId, filterUserId),
+  ]);
+  logIntel(`computeIntelPayload total ${Date.now() - tStart}ms (${filterUserId ? "rep " + filterUserId : "org"})`);
+  return {
+    viewUserId: shell.viewUserId,
+    viewUserName: shell.viewUserName,
+    availableReps: shell.availableReps,
+    sonarMarketTrends: market.sonarMarketTrends,
+    dailyInsights: {
+      ...shell.dailyInsights,
+      ...market.dailyInsights,
+      ...alerts.dailyInsights,
+    },
+    biweeklyScorecard: {
+      ...shell.biweeklyScorecard,
+      ...scorecardLanes.biweeklyScorecard,
+    },
+    executiveReport: executive.executiveReport,
+    ratePositioning: ratePos.ratePositioning,
+  };
+}
+
+// ── Legacy monolithic implementation kept (commented-out) for reference ──────
 
 // ── Main route registration ───────────────────────────────────────────────────
 
@@ -1488,6 +1583,47 @@ export function registerIntelRoutes(app: Express): void {
     }
   });
 
+  // ── Per-section endpoints ──────────────────────────────────────────────────
+  // The frontend fetches these in parallel and progressively renders each
+  // section as soon as its slice arrives. All share the lanes/SONAR caches.
+  function resolveFilterUserId(user: any, req: any): string | undefined {
+    if (["admin", "director", "sales_director"].includes(user.role)) {
+      return typeof req.query.userId === "string" && req.query.userId.trim()
+        ? req.query.userId.trim()
+        : undefined;
+    }
+    return user.id;
+  }
+
+  async function handleSection<T>(
+    req: any, res: any,
+    label: string,
+    compute: (orgId: string, filterUserId?: string) => Promise<T>,
+  ) {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const allowedRoles = ["admin", "director", "sales_director", "account_manager", "national_account_manager"];
+      if (!allowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized" });
+      const orgId = req.session.organizationId!;
+      const filterUserId = resolveFilterUserId(user, req);
+      const tStart = Date.now();
+      const data = await compute(orgId, filterUserId);
+      logIntel(`section ${label} (${filterUserId ? "rep " + filterUserId : "org"}) in ${Date.now() - tStart}ms`);
+      res.json(data);
+    } catch (err: any) {
+      console.error(`[intel/${label}] Error:`, err);
+      res.status(500).json({ error: `Failed to load ${label}` });
+    }
+  }
+
+  app.get("/api/intel/shell",            requireAuth, (req, res) => handleSection(req, res, "shell",          computeShellSection));
+  app.get("/api/intel/market",           requireAuth, (req, res) => handleSection(req, res, "market",         computeMarketSection));
+  app.get("/api/intel/alerts",           requireAuth, (req, res) => handleSection(req, res, "alerts",         computeAlertsSection));
+  app.get("/api/intel/scorecard-lanes",  requireAuth, (req, res) => handleSection(req, res, "scorecard",      computeScorecardLanesSection));
+  app.get("/api/intel/executive-report", requireAuth, (req, res) => handleSection(req, res, "executive",      computeExecutiveSection));
+  app.get("/api/intel/rate-positioning", requireAuth, (req, res) => handleSection(req, res, "ratePositioning",computeRatePositioningSection));
+
   // ── GET /api/intel/brief ────────────────────────────────────────────────────
   // AI-generated personalized daily brief for the requesting user.
   // 4-hour cache per user. Can be force-refreshed with ?refresh=true.
@@ -1506,20 +1642,10 @@ export function registerIntelRoutes(app: Express): void {
         aiBriefCache.delete(cacheKey);
       }
 
-      // Build context for AI brief
-      const allUsers = await storage.getUsers(orgId);
-      const uploads = await storage.getFinancialUploadsForOrg(orgId);
-      const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
-      let allRows: any[] = [];
-      for (const upload of sorted.slice(0, 3)) {
-        allRows = allRows.concat((upload.rows as any[]) ?? []);
-      }
-
-      const cols = allRows.length > 0 ? resolveColumns(allRows) : resolveColumns([]);
-      const sixWeekKeys = getRecentWeekKeys(6);
-      const threeWeekKeys = getRecentWeekKeys(3);
-      const userLanes = buildLanesFromRows(allRows, cols, sixWeekKeys, threeWeekKeys, allUsers, orgId)
-        .filter(l => l.ownerUserId === user.id);
+      // Build context for AI brief — reuse the cached lanes computation that
+      // /api/intel populates so we never re-iterate raw upload rows here.
+      const { allLanes } = await getAllLanesForOrg(orgId);
+      const userLanes = allLanes.filter(l => l.ownerUserId === user.id);
 
       // Top accounts by revenue
       const companyRevMap = new Map<string, number>();
@@ -1584,11 +1710,13 @@ export function registerIntelRoutes(app: Express): void {
         };
       });
 
-      // Optionally pass rate positioning for richer coaching context (best-effort, don't block)
+      // Rate positioning is optional context. Read from the DB-cached intel
+      // payload if present (warm cache); never trigger a fresh
+      // computeIntelPayload here — that re-does the entire heavy intel build.
       let briefRatePositioning: RatePositioningSummary | undefined;
       try {
-        const rpPayload = await computeIntelPayload(orgId, user.id);
-        briefRatePositioning = rpPayload.ratePositioning;
+        const cachedRp = await getDbCached<RatePositioningSummary>(`intel:rp:${orgId}:${user.id}`);
+        if (cachedRp) briefRatePositioning = cachedRp;
       } catch { /* non-blocking */ }
       const brief = await generateAiBrief(user.id, user.name, orgId, topAccounts, topLanes, national, briefRatePositioning);
       res.json(brief);
@@ -1615,19 +1743,9 @@ export function registerIntelRoutes(app: Express): void {
         ? req.query.userId.trim()
         : user.id;
 
-      const allUsers = await storage.getUsers(orgId);
-      const uploads = await storage.getFinancialUploadsForOrg(orgId);
-      const sorted = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
-      let allRows: any[] = [];
-      for (const upload of sorted.slice(0, 3)) {
-        allRows = allRows.concat((upload.rows as any[]) ?? []);
-      }
-
-      const cols = allRows.length > 0 ? resolveColumns(allRows) : resolveColumns([]);
-      const sixWeekKeys = getRecentWeekKeys(6);
-      const threeWeekKeys = getRecentWeekKeys(3);
-      const userLanes = buildLanesFromRows(allRows, cols, sixWeekKeys, threeWeekKeys, allUsers, orgId)
-        .filter(l => l.ownerUserId === filterUserId);
+      // Reuse the cached lane build shared with /api/intel and /api/intel/brief.
+      const { allLanes } = await getAllLanesForOrg(orgId);
+      const userLanes = allLanes.filter(l => l.ownerUserId === filterUserId);
 
       // Merge awarded RFP lanes as supplementary entries (non-blocking)
       const [rfpLaneItems, national] = await Promise.all([

@@ -14,6 +14,7 @@
 
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
+import { getDbCached, setDbCached } from "./dbCache";
 
 // ── Clients ───────────────────────────────────────────────────────────────────
 
@@ -55,6 +56,32 @@ function setCached(key: string, value: string, ttlMs: number): void {
 
 const TTL_30 = 30 * 60 * 1000;
 const TTL_60 = 60 * 60 * 1000;
+
+// DB-backed cache TTLs (seconds) — survive restarts so cold starts skip
+// re-generating identical narratives.
+const DB_TTL_30 = 30 * 60;
+const DB_TTL_60 = 60 * 60;
+const DB_TTL_4H = 4 * 60 * 60;
+
+/**
+ * Layered cache: L1 = in-memory aiCache (fastest), L2 = DB via dbCache.
+ * Returns null if neither layer has the key. Hydrates L1 on L2 hit.
+ */
+async function getCachedLayered(key: string, hydrateTtlMs: number = TTL_60): Promise<string | null> {
+  const mem = getCached(key);
+  if (mem !== null) return mem;
+  const dbVal = await getDbCached<string>(`ai:${key}`);
+  if (dbVal !== null && dbVal !== undefined) {
+    setCached(key, dbVal, hydrateTtlMs);
+    return dbVal;
+  }
+  return null;
+}
+
+function setCachedLayered(key: string, value: string, ttlMs: number, dbTtlSec: number): void {
+  setCached(key, value, ttlMs);
+  setDbCached(`ai:${key}`, value, dbTtlSec, "ai");
+}
 
 // ── Bounded concurrency helper ────────────────────────────────────────────────
 
@@ -121,7 +148,7 @@ export async function getAlertNarrative(
 ): Promise<string | null> {
   if (!process.env.OPENAI_API_KEY) return null;
   const key = `alert:${lane}:${signal}:${severity}:${Math.round(originOtri)}:${votri !== null ? Math.round(votri) : "n"}`;
-  const cached = getCached(key);
+  const cached = await getCachedLayered(key, TTL_30);
   if (cached) return cached;
 
   try {
@@ -135,7 +162,7 @@ Origin market OTRI: ${originOtri.toFixed(1)}%${votri !== null ? `\nLane VOTRI (v
 
 Keep the tone direct and professional. No bullet points, no headers. 1–2 sentences only.`;
     const result = await callAI(prompt, 120);
-    setCached(key, result, TTL_30);
+    setCachedLayered(key, result, TTL_30, DB_TTL_30);
     log(`Alert narrative generated for ${lane}`);
     return result;
   } catch (err: unknown) {
@@ -156,7 +183,7 @@ export async function getSpotOpportunityNarrative(
 ): Promise<string | null> {
   if (!process.env.OPENAI_API_KEY) return null;
   const key = `spot:${lane}:${Math.round(marginGap * 10)}`;
-  const cached = getCached(key);
+  const cached = await getCachedLayered(key, TTL_30);
   if (cached) return cached;
 
   try {
@@ -169,7 +196,7 @@ Estimated margin gap: ${marginGap.toFixed(1)}%
 
 Explain why this is an opportunity and what the broker should do. 1–2 sentences only, direct and actionable.`;
     const result = await callAI(prompt, 120);
-    setCached(key, result, TTL_30);
+    setCachedLayered(key, result, TTL_30, DB_TTL_30);
     log(`Spot narrative generated for ${lane}`);
     return result;
   } catch (err: unknown) {
@@ -191,10 +218,9 @@ export async function getBuyRateRationale(
 ): Promise<string | null> {
   if (!process.env.OPENAI_API_KEY) return null;
   const key = `buyr:${lane}:${Math.round(buyRateLow * 100)}:${Math.round(buyRateHigh * 100)}:${Math.round(originOtri)}`;
-  const cached = getCached(key);
-  if (cached) return cached;
-
   if (buyRateLow <= 0 && buyRateHigh <= 0) return null;
+  const cached = await getCachedLayered(key, TTL_30);
+  if (cached) return cached;
 
   try {
     const prompt = `You are a freight market intelligence analyst. Write a 1–2 sentence buy rate rationale for a freight broker.
@@ -205,7 +231,7 @@ Origin market OTRI: ${originOtri.toFixed(1)}%${votri !== null ? `\nLane VOTRI (v
 
 Explain why this rate range makes sense given current market conditions. 1–2 sentences, direct and professional.`;
     const result = await callAI(prompt, 120);
-    setCached(key, result, TTL_30);
+    setCachedLayered(key, result, TTL_30, DB_TTL_30);
     log(`Buy rate rationale generated for ${lane}`);
     return result;
   } catch (err: unknown) {
@@ -246,7 +272,7 @@ export async function getLaneNarrative(
 ): Promise<string | null> {
   if (!process.env.ANTHROPIC_API_KEY) return null;
   const key = `lane-narr:${lane}:${Math.round(avg6WkMarginPct * 10)}:${marginTrend}:${weeklyMarginPcts.map(p => Math.round(p)).join(",")}`;
-  const cached = getCached(key);
+  const cached = await getCachedLayered(key, TTL_60);
   if (cached) return cached;
 
   try {
@@ -270,7 +296,7 @@ Focus on: what the trend means, what's driving it, and one strategic recommendat
     });
     const result = extractClaudeText(resp);
     if (!result) return null;
-    setCached(key, result, TTL_60);
+    setCachedLayered(key, result, TTL_60, DB_TTL_60);
     log(`Lane narrative generated for ${lane}`);
     return result;
   } catch (err: unknown) {
@@ -293,7 +319,7 @@ export async function getExecutiveBrief(
 ): Promise<string | null> {
   if (!process.env.ANTHROPIC_API_KEY) return null;
   const key = `exec-brief:${totalLoads}:${Math.round(totalRevenue / 1000)}:${Math.round(overallMarginPct * 10)}:${healthDistribution.SCALE}:${healthDistribution.HOLD}`;
-  const cached = getCached(key);
+  const cached = await getCachedLayered(key, TTL_60);
   if (cached) return cached;
 
   try {
@@ -318,7 +344,7 @@ Write as if briefing a VP. Highlight the most important insight and one strategi
     });
     const result = extractClaudeText(resp);
     if (!result) return null;
-    setCached(key, result, TTL_60);
+    setCachedLayered(key, result, TTL_60, DB_TTL_60);
     log(`Executive brief generated`);
     return result;
   } catch (err: unknown) {
@@ -357,9 +383,9 @@ export async function getPerplexityMarketContext(
 
   const top3 = markets.slice(0, 3);
   const key = `perplexity:${top3.join(",")}`;
-  const cached = getCached(key);
+  const cached = await getCachedLayered(key, TTL_60);
   if (cached) {
-    try { return JSON.parse(cached) as MarketContextItem[]; } catch { return null; }
+    try { return JSON.parse(cached) as MarketContextItem[]; } catch { /* fall through */ }
   }
 
   try {
@@ -412,7 +438,7 @@ Today's date: ${new Date().toLocaleDateString("en-US", { weekday: "long", year: 
     if (!Array.isArray(items) || items.length === 0) return null;
 
     const serialized = JSON.stringify(items);
-    setCached(key, serialized, TTL_60);
+    setCachedLayered(key, serialized, TTL_60, DB_TTL_4H);
     log(`Perplexity market context fetched for: ${top3.join(", ")}`);
     return items;
   } catch (err: unknown) {
@@ -470,7 +496,7 @@ export async function generateLaneCoachingCard(
   if (!process.env.OPENAI_API_KEY || marketRatePerMile === null) return null;
 
   const key = `coaching:${lane}:${Math.round(paidRatePerMile * 100)}:${Math.round(marketRatePerMile * 100)}:${forecastDirection}:${classification}`;
-  const cached = getCached(key);
+  const cached = await getCachedLayered(key, TTL_60);
   if (cached) return cached;
 
   try {
@@ -503,7 +529,7 @@ Target benchmark rate: $${targetRate.toFixed(2)}/mile
 Write a coaching card that tells the rep EXACTLY what action to take (renegotiate, lock in current rates, hold, or capitalize on favorable positioning). Be specific: include the dollar amount and the reason. 2–3 sentences only, direct and action-oriented. No bullet points, no headers.`;
 
     const result = await callAI(prompt, 180);
-    setCached(key, result, TTL_60);
+    setCachedLayered(key, result, TTL_60, DB_TTL_60);
     log(`Coaching card generated for ${lane}`);
     return result;
   } catch (err: unknown) {
