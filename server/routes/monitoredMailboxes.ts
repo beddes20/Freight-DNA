@@ -172,6 +172,18 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
         return res.status(400).json({ error: "Mailbox is disabled — enable it before syncing" });
       }
 
+      const needsSubscription =
+        existing.syncStatus === "error" ||
+        (!existing.subscriptionId && !existing.sentItemsSubscriptionId);
+
+      if (needsSubscription) {
+        await registerMailboxSubscription(existing.email, existing.id);
+        const refreshed = await storage.getMonitoredMailbox(existing.id);
+        if (refreshed?.syncStatus === "error") {
+          return res.json({ ok: false, processed: 0, errors: 1, error: refreshed.syncError });
+        }
+      }
+
       const result = await syncMailboxDelta(existing.id);
       res.json({ ok: true, ...result });
     } catch (err) {
