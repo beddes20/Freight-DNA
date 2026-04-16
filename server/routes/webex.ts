@@ -33,6 +33,11 @@ import { analyzeTouchpointNote } from "../aiTouchpoint";
 import { computeGrowthScore } from "../growthScoreCalculator";
 import { checkAndFireMomentumDropNotification } from "../momentumNotifications";
 import { getPlayForRuleType, getPlayByLabel, getAllPlayLabels } from "../playsRegistry";
+import {
+  seedWebexUserMappings,
+  resolveInternalUserIdForCall,
+} from "../webexUserMappingService";
+import { insertWebexUserMappingSchema } from "@shared/schema";
 import OpenAI from "openai";
 import cron from "node-cron";
 
@@ -124,6 +129,27 @@ async function syncCallsForOrg(orgId: string, hoursBack: number, customEndMs?: n
 
     if (!matchedContact) continue;
 
+    // Resolve which internal user this Webex call should be attributed to.
+    // Falls back to defaultUserId (orgUsers[0]) if no mapping exists,
+    // matching the previous behavior so we never crash or silently lose calls.
+    let attributedUserId = defaultUserId;
+    try {
+      const resolved = await resolveInternalUserIdForCall(
+        orgId,
+        record.webexPersonId,
+        record.webexUserEmail,
+      );
+      if (resolved.userId) {
+        attributedUserId = resolved.userId;
+      } else if (resolved.mapping?.status === "ignored") {
+        log(`Skipping attribution for CDR ${record.id} — Webex person ${resolved.mapping.webexDisplayName ?? resolved.mapping.webexPersonId} is marked ignored; using default user`);
+      } else {
+        log(`No Webex user mapping for personId=${record.webexPersonId ?? "?"} email=${record.webexUserEmail ?? "?"} (CDR ${record.id}); falling back to default user`);
+      }
+    } catch (mapErr) {
+      log(`Mapping lookup failed for CDR ${record.id}: ${mapErr instanceof Error ? mapErr.message : String(mapErr)}`);
+    }
+
     if (!record.answered && record.direction === "TERMINATING") {
       if (existingMissedCallCdrIds.has(record.id)) continue;
 
@@ -141,7 +167,7 @@ async function syncCallsForOrg(orgId: string, hoursBack: number, customEndMs?: n
 
         const nbaCard = await storage.createNbaCard({
           orgId,
-          userId: defaultUserId,
+          userId: attributedUserId,
           companyId: matchedContact.companyId || null,
           contactId: matchedContact.id,
           companyName: company?.name || null,
@@ -273,8 +299,8 @@ Respond with valid JSON only (no markdown):
                     notes: `Auto-created from Webex call with ${matchedContact.name}`,
                     status: "open",
                     dueDate: due.toISOString().split("T")[0],
-                    assignedTo: defaultUserId,
-                    assignedBy: defaultUserId,
+                    assignedTo: attributedUserId,
+                    assignedBy: attributedUserId,
                     companyId: matchedContact.companyId || "",
                     contactId: matchedContact.id,
                     createdAt: new Date().toISOString(),
@@ -304,8 +330,8 @@ Respond with valid JSON only (no markdown):
               notes: `Auto-created from Webex call with ${matchedContact.name}`,
               status: "open",
               dueDate: due.toISOString().split("T")[0],
-              assignedTo: defaultUserId,
-              assignedBy: defaultUserId,
+              assignedTo: attributedUserId,
+              assignedBy: attributedUserId,
               companyId: matchedContact.companyId || "",
               contactId: matchedContact.id,
               createdAt: new Date().toISOString(),
@@ -328,7 +354,7 @@ Respond with valid JSON only (no markdown):
         notes: notes.slice(0, 4000),
         sentiment: aiSentiment,
         isMeaningful: hasTranscript || record.duration >= 120,
-        loggedById: defaultUserId,
+        loggedById: attributedUserId,
         playLabel: aiPlayLabel,
         createdAt: callDate.toISOString(),
       });
@@ -633,6 +659,87 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
+  // ── Webex user mappings (Task #258) ───────────────────────────────────────
+
+  app.get("/api/webex/user-mappings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const mappings = await storage.getWebexUserMappings(user.organizationId);
+      const orgUsers = await storage.getUsers(user.organizationId);
+      res.json({
+        mappings,
+        users: orgUsers.map(u => ({ id: u.id, name: u.name, username: u.username, role: u.role })),
+      });
+    } catch (err) {
+      log(`List mappings error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: "Failed to load Webex user mappings" });
+    }
+  });
+
+  app.post("/api/webex/user-mappings/seed", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const result = await seedWebexUserMappings(user.organizationId);
+      res.json(result);
+    } catch (err) {
+      log(`Seed mappings error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: "Failed to seed Webex user mappings" });
+    }
+  });
+
+  app.post("/api/webex/user-mappings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const parsed = insertWebexUserMappingSchema.parse({
+        ...req.body,
+        orgId: user.organizationId,
+      });
+      const row = await storage.upsertWebexUserMapping(parsed);
+      res.json(row);
+    } catch (err) {
+      log(`Upsert mapping error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(400).json({ error: err instanceof Error ? err.message : "Invalid mapping data" });
+    }
+  });
+
+  app.patch("/api/webex/user-mappings/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const ALLOWED_STATUS = new Set(["needs_review", "auto_matched", "confirmed", "ignored"]);
+      const updates: any = {};
+      if ("userId" in req.body) updates.userId = req.body.userId || null;
+      if ("status" in req.body) {
+        if (!ALLOWED_STATUS.has(req.body.status)) {
+          return res.status(400).json({ error: `Invalid status. Allowed: ${Array.from(ALLOWED_STATUS).join(", ")}` });
+        }
+        updates.status = req.body.status;
+      }
+      if ("notes" in req.body) updates.notes = req.body.notes;
+      const row = await storage.updateWebexUserMapping(req.params.id, user.organizationId, updates);
+      if (!row) return res.status(404).json({ error: "Mapping not found" });
+      res.json(row);
+    } catch (err) {
+      log(`Update mapping error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: "Failed to update mapping" });
+    }
+  });
+
+  app.delete("/api/webex/user-mappings/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const ok = await storage.deleteWebexUserMapping(req.params.id, user.organizationId);
+      res.json({ deleted: ok });
+    } catch (err) {
+      log(`Delete mapping error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: "Failed to delete mapping" });
+    }
+  });
+
   app.post("/api/webex/presence-batch", requireAuth, async (req: Request, res: Response) => {
     try {
       if (!webexCredentialsConfigured()) {
@@ -747,6 +854,40 @@ export function initWebexSyncScheduler(): void {
   });
 
   log("Webex call sync scheduler started (every 30 minutes)");
+
+  // Bootstrap auto-seed of Webex user mappings on startup for any org that
+  // has zero mappings yet. Runs once, in the background, so it doesn't block
+  // server boot. Uses Webex People API when authorized, CSV fallback otherwise.
+  setTimeout(async () => {
+    try {
+      const { db } = await import("../storage");
+      const { organizations, webexUserMappings } = await import("../../shared/schema");
+      const { seedWebexUserMappings } = await import("../webexUserMappingService");
+      const { sql } = await import("drizzle-orm");
+      const orgs = await db.select().from(organizations);
+      for (const org of orgs) {
+        try {
+          const existing = await db
+            .select({ c: sql<number>`count(*)::int` })
+            .from(webexUserMappings)
+            .where(sql`${webexUserMappings.orgId} = ${org.id}`);
+          const count = existing[0]?.c ?? 0;
+          if (count > 0) continue;
+          const result = await seedWebexUserMappings(org.id);
+          log(
+            `Org ${org.id}: bootstrap-seeded ${result.candidatesProcessed} Webex mappings ` +
+              `(matched=${result.matched}, needs_review=${result.needsReview}, source=${result.source})`,
+          );
+        } catch (orgErr) {
+          log(
+            `Org ${org.id}: bootstrap seed error: ${orgErr instanceof Error ? orgErr.message : String(orgErr)}`,
+          );
+        }
+      }
+    } catch (err) {
+      log(`Bootstrap seed scheduling error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, 15_000);
 
   // Follow-up reminder for the needs-reauth state. Runs hourly but only
   // re-notifies admins at most once every 24 hours while disconnected.

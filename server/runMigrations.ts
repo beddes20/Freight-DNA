@@ -2670,4 +2670,33 @@ export async function runMigrations() {
   } finally {
     clientOwnerName.release();
   }
+
+  // ── webex_user_mappings (Task #258) ──
+  const clientWum = await pool.connect();
+  try {
+    await clientWum.query(`
+      CREATE TABLE IF NOT EXISTS webex_user_mappings (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        webex_person_id TEXT,
+        webex_email TEXT,
+        webex_display_name TEXT,
+        user_id VARCHAR REFERENCES users(id) ON DELETE SET NULL,
+        status TEXT NOT NULL DEFAULT 'needs_review',
+        match_source TEXT,
+        notes TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientWum.query(`CREATE UNIQUE INDEX IF NOT EXISTS webex_user_mappings_org_person_idx ON webex_user_mappings(org_id, webex_person_id) WHERE webex_person_id IS NOT NULL`);
+    await clientWum.query(`CREATE UNIQUE INDEX IF NOT EXISTS webex_user_mappings_org_email_idx ON webex_user_mappings(org_id, webex_email) WHERE webex_email IS NOT NULL`);
+    await clientWum.query(`CREATE INDEX IF NOT EXISTS webex_user_mappings_org_user_idx ON webex_user_mappings(org_id, user_id)`);
+    await clientWum.query(`CREATE INDEX IF NOT EXISTS webex_user_mappings_status_idx ON webex_user_mappings(org_id, status)`);
+    console.log("[migrations] webex_user_mappings table ensured (Task #258)");
+  } catch (err) {
+    console.error("[migrations] webex_user_mappings migration error:", err);
+  } finally {
+    clientWum.release();
+  }
 }

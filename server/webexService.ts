@@ -309,6 +309,10 @@ export interface WebexCallRecord {
   location?: string;
   recordingId?: string;
   voicemailLeft?: boolean;
+  /** Webex internal person id of the user that placed/received this call. */
+  webexPersonId?: string;
+  /** Webex email of the user that placed/received this call (when available). */
+  webexUserEmail?: string;
 }
 
 export interface WebexPerson {
@@ -391,6 +395,8 @@ export async function fetchCallHistory(
         location: item.location ?? item.siteName,
         recordingId: item.recordingId,
         voicemailLeft: item.voicemailLeft === true,
+        webexPersonId: item.userId ?? item.personId ?? item.user?.id ?? undefined,
+        webexUserEmail: item.userEmail ?? item.user?.email ?? undefined,
       });
     }
 
@@ -436,6 +442,48 @@ export async function fetchWebexPeople(
     status: p.status ?? "unknown",
     lastActivity: p.lastActivity,
   }));
+}
+
+/**
+ * Fetch all Webex people in the configured org. Paginates through the
+ * `link: rel="next"` header. Returns id, emails, and displayName for each.
+ */
+export async function listWebexPeople(maxResults = 1000): Promise<WebexPerson[]> {
+  const token = await getWebexAccessToken();
+  const orgId = process.env.WEBEX_ORG_ID!;
+
+  const all: WebexPerson[] = [];
+  const params = new URLSearchParams({ orgId, max: "100" });
+  let url: string = `https://webexapis.com/v1/people?${params.toString()}`;
+
+  while (url && all.length < maxResults) {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      const text = await res.text();
+      log(`listWebexPeople error ${res.status}: ${text}`);
+      break;
+    }
+    const data = await res.json();
+    for (const p of data.items ?? []) {
+      all.push({
+        id: p.id,
+        emails: p.emails ?? [],
+        phoneNumbers: p.phoneNumbers ?? [],
+        displayName: p.displayName ?? "",
+        status: p.status ?? "unknown",
+        lastActivity: p.lastActivity,
+      });
+    }
+    const linkHeader = res.headers.get("link");
+    if (linkHeader) {
+      const m = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+      url = m ? m[1] : "";
+    } else {
+      url = "";
+    }
+  }
+  log(`listWebexPeople fetched ${all.length} people`);
+  return all;
 }
 
 export async function fetchPersonStatus(personId: string): Promise<string> {

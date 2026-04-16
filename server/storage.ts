@@ -184,6 +184,9 @@ import {
   monitoredMailboxes,
   type MonitoredMailbox,
   type InsertMonitoredMailbox,
+  webexUserMappings,
+  type WebexUserMapping,
+  type InsertWebexUserMapping,
   apiResponseCache,
   type ApiResponseCache,
 } from "@shared/schema";
@@ -970,6 +973,14 @@ export interface IStorage {
   deleteMonitoredMailbox(id: string): Promise<boolean>;
   getUserByEmailAddress(email: string, orgId: string): Promise<User | undefined>;
   getMonitoredMailboxBySubscriptionId(subscriptionId: string): Promise<MonitoredMailbox | undefined>;
+
+  // Webex user mappings (Task #258)
+  getWebexUserMappings(orgId: string): Promise<WebexUserMapping[]>;
+  getWebexUserMappingByPersonId(orgId: string, webexPersonId: string): Promise<WebexUserMapping | undefined>;
+  getWebexUserMappingByEmail(orgId: string, webexEmail: string): Promise<WebexUserMapping | undefined>;
+  upsertWebexUserMapping(data: InsertWebexUserMapping): Promise<WebexUserMapping>;
+  updateWebexUserMapping(id: string, orgId: string, data: Partial<InsertWebexUserMapping>): Promise<WebexUserMapping | undefined>;
+  deleteWebexUserMapping(id: string, orgId: string): Promise<boolean>;
   getMonitoredMailboxByAnySubscriptionId(subscriptionId: string): Promise<MonitoredMailbox | undefined>;
 
   // API cache methods (Task #231)
@@ -6700,6 +6711,88 @@ export class DatabaseStorage implements IStorage {
       ))
       .limit(1);
     return row;
+  }
+
+  // ── Webex user mappings (Task #258) ─────────────────────────────────────────
+
+  async getWebexUserMappings(orgId: string): Promise<WebexUserMapping[]> {
+    return db.select().from(webexUserMappings)
+      .where(eq(webexUserMappings.orgId, orgId))
+      .orderBy(asc(webexUserMappings.webexDisplayName));
+  }
+
+  async getWebexUserMappingByPersonId(orgId: string, webexPersonId: string): Promise<WebexUserMapping | undefined> {
+    const [row] = await db.select().from(webexUserMappings)
+      .where(and(
+        eq(webexUserMappings.orgId, orgId),
+        eq(webexUserMappings.webexPersonId, webexPersonId),
+      ))
+      .limit(1);
+    return row;
+  }
+
+  async getWebexUserMappingByEmail(orgId: string, webexEmail: string): Promise<WebexUserMapping | undefined> {
+    const [row] = await db.select().from(webexUserMappings)
+      .where(and(
+        eq(webexUserMappings.orgId, orgId),
+        eq(webexUserMappings.webexEmail, webexEmail.toLowerCase()),
+      ))
+      .limit(1);
+    return row;
+  }
+
+  async upsertWebexUserMapping(data: InsertWebexUserMapping): Promise<WebexUserMapping> {
+    const normalizedEmail = data.webexEmail ? data.webexEmail.toLowerCase() : null;
+
+    // Try existing match by personId first; fall back to email when personId is null.
+    let existing: WebexUserMapping | undefined;
+    if (data.webexPersonId) {
+      existing = await this.getWebexUserMappingByPersonId(data.orgId, data.webexPersonId);
+    }
+    if (!existing && normalizedEmail) {
+      existing = await this.getWebexUserMappingByEmail(data.orgId, normalizedEmail);
+    }
+
+    if (existing) {
+      const [row] = await db.update(webexUserMappings)
+        .set({
+          webexPersonId: data.webexPersonId ?? existing.webexPersonId,
+          webexEmail: normalizedEmail ?? existing.webexEmail,
+          webexDisplayName: data.webexDisplayName ?? existing.webexDisplayName,
+          userId: data.userId !== undefined ? data.userId : existing.userId,
+          status: data.status ?? existing.status,
+          matchSource: data.matchSource ?? existing.matchSource,
+          notes: data.notes ?? existing.notes,
+          updatedAt: new Date(),
+        })
+        .where(eq(webexUserMappings.id, existing.id))
+        .returning();
+      return row;
+    }
+
+    const [row] = await db.insert(webexUserMappings).values({
+      ...data,
+      webexEmail: normalizedEmail,
+    }).returning();
+    return row;
+  }
+
+  async updateWebexUserMapping(id: string, orgId: string, data: Partial<InsertWebexUserMapping>): Promise<WebexUserMapping | undefined> {
+    const [row] = await db.update(webexUserMappings)
+      .set({
+        ...data,
+        webexEmail: data.webexEmail ? data.webexEmail.toLowerCase() : data.webexEmail,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(webexUserMappings.id, id), eq(webexUserMappings.orgId, orgId)))
+      .returning();
+    return row;
+  }
+
+  async deleteWebexUserMapping(id: string, orgId: string): Promise<boolean> {
+    const result = await db.delete(webexUserMappings)
+      .where(and(eq(webexUserMappings.id, id), eq(webexUserMappings.orgId, orgId)));
+    return (result.rowCount ?? 0) > 0;
   }
 
   // ── API Response Cache (Task #231) ──────────────────────────────────────────

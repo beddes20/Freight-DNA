@@ -2553,6 +2553,36 @@ export const insertMonitoredMailboxSchema = createInsertSchema(monitoredMailboxe
 export type InsertMonitoredMailbox = z.infer<typeof insertMonitoredMailboxSchema>;
 export type MonitoredMailbox = typeof monitoredMailboxes.$inferSelect;
 
+export const webexUserMappings = pgTable(
+  "webex_user_mappings",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    webexPersonId: text("webex_person_id"),
+    webexEmail: text("webex_email"),
+    webexDisplayName: text("webex_display_name"),
+    userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
+    status: text("status").notNull().default("needs_review"),
+    matchSource: text("match_source"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("webex_mappings_org_person_idx").on(table.orgId, table.webexPersonId),
+    index("webex_mappings_org_email_idx").on(table.orgId, table.webexEmail),
+    index("webex_mappings_user_idx").on(table.userId),
+  ],
+);
+
+export const insertWebexUserMappingSchema = createInsertSchema(webexUserMappings).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertWebexUserMapping = z.infer<typeof insertWebexUserMappingSchema>;
+export type WebexUserMapping = typeof webexUserMappings.$inferSelect;
+
 export const apiResponseCache = pgTable(
   "api_response_cache",
   {
