@@ -677,7 +677,10 @@ export async function getNationalMarketSummary(): Promise<NationalMarketSummary>
 
   nationalCache = { value: summary, fetchedAt: Date.now(), ttlMs: NTI_TTL };
   lastKnownNational = summary;
-  persistToDbCache("national_summary", summary, NTI_TTL);
+  const hasLiveNationalData = summary.otri !== null || summary.ntiPerMove !== null || summary.ntiPerMile !== null;
+  if (hasLiveNationalData) {
+    persistToDbCache("national_summary", summary, NTI_TTL);
+  }
   log(`National: OTRI=${summary.otri}% NTI=$${summary.ntiPerMove}`);
   return summary;
 }
@@ -760,7 +763,9 @@ export async function getMarketOtris(markets: string[]): Promise<MarketOtri[]> {
       };
       const key = market.toLowerCase();
       otriCache.set(key, { value: entry, fetchedAt: Date.now(), ttlMs: OTRI_TTL });
-      persistToDbCache(`otri:${key}`, entry, OTRI_TTL);
+      if (otri !== null) {
+        persistToDbCache(`otri:${key}`, entry, OTRI_TTL);
+      }
       return entry;
     }));
     fetched.push(...batchResults);
