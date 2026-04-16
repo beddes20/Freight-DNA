@@ -324,8 +324,18 @@ export interface WebexPerson {
   lastActivity?: string;
 }
 
-function normalizePhone(phone: string): string {
+export function normalizePhone(phone: string): string {
   return phone.replace(/[^0-9+]/g, "").replace(/^(\+?1)/, "+1");
+}
+
+/**
+ * Returns the last 10 digits of a phone number, used as a loose E.164-insensitive
+ * match key for North American numbers. Falls back to the full digit string
+ * (without country code prefix) if the number is shorter than 10 digits.
+ */
+export function phoneMatchKey(phone: string): string {
+  const digits = phone.replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+  return digits.slice(-10);
 }
 
 export function phonesMatch(a: string, b: string): boolean {

@@ -19,6 +19,7 @@ import {
   fetchPersonStatus,
   fetchCallRecording,
   phonesMatch,
+  phoneMatchKey,
   buildWebexCallDeepLink,
   type WebexCallRecord,
 } from "../webexService";
@@ -70,13 +71,21 @@ async function syncCallsForOrg(orgId: string, hoursBack: number, customEndMs?: n
 
   const orgCompanies = await storage.getCompanies(orgId);
   const orgCompanyIds = orgCompanies.map(c => c.id);
+  // Load all org contacts once for this sync so we can match inbound/outbound
+  // call phone numbers against every known CRM contact without issuing one
+  // query per record. We build an in-memory index keyed by the normalized
+  // last-10-digit phone key that `storage.getContactByPhone` also uses, so
+  // both paths share identical normalization rules.
   const allContacts = orgCompanyIds.length > 0
     ? await storage.getContactsByCompanyIds(orgCompanyIds)
     : [];
-  const contactsByPhone = new Map<string, typeof allContacts[0]>();
+  type OrgContact = typeof allContacts[0];
+  const contactsByPhoneKey = new Map<string, OrgContact>();
   for (const contact of allContacts) {
-    if (contact.phone) {
-      contactsByPhone.set(contact.phone, contact);
+    if (!contact.phone) continue;
+    const key = phoneMatchKey(contact.phone);
+    if (key.length >= 7 && !contactsByPhoneKey.has(key)) {
+      contactsByPhoneKey.set(key, contact);
     }
   }
 
@@ -120,11 +129,25 @@ async function syncCallsForOrg(orgId: string, hoursBack: number, customEndMs?: n
       ? record.calledNumber
       : record.callingNumber;
 
-    let matchedContact = null;
-    for (const [phone, contact] of contactsByPhone) {
-      if (phonesMatch(phone, otherNumber)) {
-        matchedContact = contact;
-        break;
+    // Resolve the remote party (customer/prospect) to a known CRM contact by
+    // normalized phone number. This auto-attaches the synced call to the right
+    // contact + account instead of letting it become an orphaned activity.
+    // Falls back to skipping the record when no contact matches.
+    let matchedContact: (typeof allContacts[0]) | null = null;
+    if (otherNumber) {
+      const key = phoneMatchKey(otherNumber);
+      if (key.length >= 7) {
+        matchedContact = contactsByPhoneKey.get(key) ?? null;
+      }
+      if (!matchedContact) {
+        // Fallback: tolerant suffix match for international/short numbers that
+        // the primary 10-digit key may miss.
+        for (const contact of allContacts) {
+          if (contact.phone && phonesMatch(contact.phone, otherNumber)) {
+            matchedContact = contact;
+            break;
+          }
+        }
       }
     }
 
