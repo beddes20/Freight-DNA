@@ -1,9 +1,19 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { z } from "zod";
-import { Loader2, HelpCircle } from "lucide-react";
+import { Loader2, HelpCircle, Trash2 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useConfetti } from "@/components/confetti";
 import {
   Dialog,
@@ -149,10 +159,8 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
         className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
       });
       fireConfetti();
-      setTimeout(() => {
-        onOpenChange(false);
-        form.reset();
-      }, 800);
+      onOpenChange(false);
+      form.reset();
     },
     onError: (error: Error) => {
       toast({ title: "Error creating contact", description: error.message, variant: "destructive" });
@@ -176,10 +184,31 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
         className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
       });
       fireConfetti();
-      setTimeout(() => onOpenChange(false), 800);
+      onOpenChange(false);
     },
     onError: (error: Error) => {
       toast({ title: "Error updating contact", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("DELETE", `/api/contacts/${contact?.id}`);
+      return response;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "facility-coverage"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "relationship-freight-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/relationship-freight-summary"] });
+      toast({ title: "Contact deleted", description: "The contact was removed." });
+      setConfirmDeleteOpen(false);
+      onOpenChange(false);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error deleting contact", description: error.message, variant: "destructive" });
     },
   });
 
@@ -475,19 +504,57 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
               )}
             />
 
-            <div className="flex justify-end gap-2 pt-4">
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-contact">
-                Cancel
-              </Button>
-              <Button type="submit" disabled={isPending} data-testid="button-save-contact">
-                {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-                {isPending ? "Saving..." : isEditing ? "Save Changes" : "Add Contact"}
-              </Button>
+            <div className="flex justify-between items-center gap-2 pt-4">
+              <div>
+                {isEditing && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 dark:border-red-900/50 dark:hover:bg-red-950/40"
+                    onClick={() => setConfirmDeleteOpen(true)}
+                    disabled={deleteMutation.isPending}
+                    data-testid="button-delete-contact"
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete
+                  </Button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-contact">
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={isPending} data-testid="button-save-contact">
+                  {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                  {isPending ? "Saving..." : isEditing ? "Save Changes" : "Add Contact"}
+                </Button>
+              </div>
             </div>
           </form>
         </Form>
       </DialogContent>
     </Dialog>
+    <AlertDialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete this contact?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This will permanently remove {contact?.name ?? "this contact"} from the org chart. Touchpoints and past activity will be preserved but the contact record cannot be recovered.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel data-testid="button-cancel-delete-contact">Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(e) => { e.preventDefault(); deleteMutation.mutate(); }}
+            disabled={deleteMutation.isPending}
+            className="bg-red-600 hover:bg-red-700 text-white"
+            data-testid="button-confirm-delete-contact"
+          >
+            {deleteMutation.isPending ? "Deleting..." : "Delete Contact"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
     </>
   );
 }
