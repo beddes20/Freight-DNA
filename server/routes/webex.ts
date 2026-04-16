@@ -37,6 +37,7 @@ import {
   seedWebexUserMappings,
   resolveInternalUserIdForCall,
 } from "../webexUserMappingService";
+import { backfillWebexAttribution } from "../webexAttributionBackfill";
 import { insertWebexUserMappingSchema } from "@shared/schema";
 import OpenAI from "openai";
 import cron from "node-cron";
@@ -686,6 +687,37 @@ export function registerWebexRoutes(app: Express) {
     } catch (err) {
       log(`Seed mappings error: ${err instanceof Error ? err.message : String(err)}`);
       res.status(500).json({ error: "Failed to seed Webex user mappings" });
+    }
+  });
+
+  app.post("/api/webex/backfill-attribution", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      if (!webexCredentialsConfigured()) {
+        return res.status(400).json({ error: "Webex credentials not configured" });
+      }
+      if (!hasWebexTokens()) {
+        return res.status(400).json({ error: "Webex not authorized. Visit /api/webex/authorize to connect." });
+      }
+      if (webexNeedsReauth()) {
+        return res.status(400).json({ error: "Webex needs re-authorization before a backfill can run." });
+      }
+      const daysBack = Number(req.body?.daysBack);
+      const result = await backfillWebexAttribution(
+        user.organizationId,
+        Number.isFinite(daysBack) && daysBack > 0 ? daysBack : undefined,
+      );
+      if (result.chunkFetches.attempted > 0 && result.chunkFetches.succeeded === 0) {
+        return res.status(502).json({
+          error: "Unable to fetch any Webex call history — check Webex connectivity and try again.",
+          result,
+        });
+      }
+      res.json(result);
+    } catch (err) {
+      log(`Backfill attribution error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to backfill attribution" });
     }
   });
 

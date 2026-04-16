@@ -21,6 +21,7 @@ import {
   Ban,
   Video,
   Search,
+  History,
 } from "lucide-react";
 
 interface WebexMapping {
@@ -79,6 +80,31 @@ export function WebexUserMappingPanel() {
       toast({ title: "Auto-match failed", description: err.message, variant: "destructive" }),
   });
 
+  const backfillMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/webex/backfill-attribution", { daysBack: 90 });
+      return res.json();
+    },
+    onSuccess: (result: any) => {
+      const tp = result?.touchpoints ?? {};
+      const cards = result?.nbaCards ?? {};
+      const tasks = result?.tasks ?? {};
+      toast({
+        title: "Backfill complete",
+        description:
+          `Touchpoints: ${tp.reassigned ?? 0} reassigned / ${tp.scanned ?? 0} scanned. ` +
+          `Missed-call cards: ${cards.reassigned ?? 0}/${cards.scanned ?? 0}. ` +
+          `Follow-up tasks: ${tasks.reassigned ?? 0}/${tasks.scanned ?? 0}.`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/webex/user-mappings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/touchpoints"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/nba-cards"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+    },
+    onError: (err: any) =>
+      toast({ title: "Backfill failed", description: err.message, variant: "destructive" }),
+  });
+
   const updateMutation = useMutation({
     mutationFn: async ({ id, ...patch }: { id: string; userId?: string | null; status?: string }) => {
       const res = await apiRequest("PATCH", `/api/webex/user-mappings/${id}`, patch);
@@ -132,21 +158,39 @@ export function WebexUserMappingPanel() {
               Routes synced calls, follow-ups, and missed-call cards to the right rep.
             </span>
           </div>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => seedMutation.mutate()}
-            disabled={seedMutation.isPending}
-            data-testid="button-webex-mapping-seed"
-            className="gap-1.5"
-          >
-            {seedMutation.isPending ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="w-3.5 h-3.5" />
-            )}
-            Re-run auto-match
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => backfillMutation.mutate()}
+              disabled={backfillMutation.isPending}
+              data-testid="button-webex-backfill-attribution"
+              className="gap-1.5"
+              title="Re-attribute past Webex calls, missed-call cards, and follow-up tasks using the current mappings."
+            >
+              {backfillMutation.isPending ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <History className="w-3.5 h-3.5" />
+              )}
+              Re-attribute past calls
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => seedMutation.mutate()}
+              disabled={seedMutation.isPending}
+              data-testid="button-webex-mapping-seed"
+              className="gap-1.5"
+            >
+              {seedMutation.isPending ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5" />
+              )}
+              Re-run auto-match
+            </Button>
+          </div>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
@@ -298,8 +342,9 @@ export function WebexUserMappingPanel() {
         )}
 
         <p className="text-[11px] text-muted-foreground">
-          Note: only future calls/follow-ups/cards are routed by these mappings. Historical
-          touchpoints attributed to the default user are not retroactively re-assigned.
+          New calls, follow-ups, and missed-call cards route through these mappings automatically. Use
+          <strong> Re-attribute past calls</strong> to retro-credit previously synced Webex activity once
+          mappings are confirmed. Mappings in <em>Ignored</em> status are skipped.
         </p>
       </CardContent>
     </Card>
