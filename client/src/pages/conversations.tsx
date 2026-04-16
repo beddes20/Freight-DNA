@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
@@ -79,23 +79,36 @@ function looksLikeHtml(input: string | null): boolean {
 }
 
 function EmailBody({ body, testId }: { body: string | null; testId: string }) {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [height, setHeight] = useState(40);
+
   if (!body) return null;
   if (!looksLikeHtml(body)) {
     return (
-      <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed" data-testid={testId}>
-        {body}
+      <div className="text-sm text-foreground whitespace-pre-wrap leading-snug" data-testid={testId}>
+        {body.trim()}
       </div>
     );
   }
-  const srcdoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><base target="_blank"><style>html,body{margin:0;padding:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;font-size:14px;color:inherit;line-height:1.5;word-wrap:break-word;overflow-wrap:break-word;}img{max-width:100%;height:auto;}table{max-width:100%;}a{color:#2563eb;}</style></head><body>${body}</body></html>`;
+  const srcdoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><base target="_blank"><style>html,body{margin:0;padding:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;font-size:13px;color:#0f172a;line-height:1.4;word-wrap:break-word;overflow-wrap:break-word;}body>*:first-child{margin-top:0;}body>*:last-child{margin-bottom:0;}p{margin:0 0 6px;}img{max-width:100%;height:auto;}table{max-width:100%;}a{color:#2563eb;}div[style*="background-color:#FFD700"],div[style*="background-color: #FFD700"]{display:none;}</style></head><body>${body}</body></html>`;
+
+  const handleLoad = () => {
+    const doc = iframeRef.current?.contentDocument;
+    if (!doc) return;
+    const measured = Math.max(doc.documentElement.scrollHeight, doc.body.scrollHeight);
+    setHeight(measured + 4);
+  };
+
   return (
     <iframe
+      ref={iframeRef}
       title="email-body"
       srcDoc={srcdoc}
-      sandbox="allow-popups allow-popups-to-escape-sandbox"
+      sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin"
       referrerPolicy="no-referrer"
-      className="w-full border-0 bg-white dark:bg-zinc-50 rounded"
-      style={{ minHeight: "300px", height: "60vh" }}
+      onLoad={handleLoad}
+      className="w-full border-0 bg-transparent block"
+      style={{ height: `${height}px` }}
       data-testid={testId}
     />
   );
@@ -271,7 +284,7 @@ function ThreadDetailPanel({
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4" data-testid="messages-container">
+        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2" data-testid="messages-container">
           {isLoading ? (
             <div className="space-y-4">
               {[...Array(3)].map((_, i) => (
@@ -294,7 +307,7 @@ function ThreadDetailPanel({
                 <div
                   key={msg.id}
                   className={cn(
-                    "rounded-lg border p-4",
+                    "rounded-lg border px-3 py-2",
                     isOutbound
                       ? "bg-indigo-50/60 dark:bg-indigo-950/20 border-indigo-200 dark:border-indigo-900/50 ml-6"
                       : "bg-white dark:bg-muted/30 border-border mr-6"
