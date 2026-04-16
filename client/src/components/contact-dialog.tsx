@@ -245,7 +245,19 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
   return (
     <>
     {ConfettiOverlay && <ConfettiOverlay />}
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        onOpenChange(o);
+        if (!o) {
+          setTimeout(() => {
+            if (document.body.style.pointerEvents === "none") {
+              document.body.style.pointerEvents = "";
+            }
+          }, 300);
+        }
+      }}
+    >
       <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEditing ? "Edit Contact" : "Add Contact"}</DialogTitle>
