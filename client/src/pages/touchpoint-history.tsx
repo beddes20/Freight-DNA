@@ -18,6 +18,7 @@ import {
   Building2,
   Filter,
   Trash2,
+  Video,
 } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -86,6 +87,10 @@ function TypeIcon({ type }: { type: string }) {
   const cfg = TYPE_CONFIG[type] ?? { icon: History, color: "text-muted-foreground" };
   const Icon = cfg.icon;
   return <Icon className={`h-4 w-4 ${cfg.color} shrink-0`} />;
+}
+
+function isWebexSyncedCall(tp: { type: string; notes: string | null }): boolean {
+  return tp.type === "call" && !!tp.notes && /\[Webex CDR:\s*[^\]]+\]/.test(tp.notes);
 }
 
 const MANAGER_ROLES = ["admin", "director", "national_account_manager", "sales", "sales_director"];
@@ -313,7 +318,20 @@ export default function TouchpointHistoryPage() {
                         )}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-xs text-muted-foreground">
-                        {tp.loggedByName}
+                        <div className="flex items-center gap-1.5">
+                          <span data-testid={`text-touchpoint-rep-${tp.id}`}>{tp.loggedByName}</span>
+                          {isWebexSyncedCall(tp) && (
+                            <Badge
+                              variant="outline"
+                              className="h-4 px-1 text-[10px] font-medium bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-800 gap-0.5"
+                              title={`Synced from ${tp.loggedByName}'s Webex account`}
+                              data-testid={`badge-webex-synced-${tp.id}`}
+                            >
+                              <Video className="h-2.5 w-2.5" />
+                              Webex
+                            </Badge>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-center">
                         {tp.isMeaningful ? (

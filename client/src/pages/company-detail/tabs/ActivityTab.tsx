@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import {
   PhoneCall, Mail, MessageSquare, Building2, ClipboardList, Activity,
   Megaphone, ChevronDown, Trash2, Plus, Calendar, CheckCircle2,
-  PlayCircle, Circle,
+  PlayCircle, Circle, Video,
 } from "lucide-react";
 import type { Callout, CalloutReaction, Contact, Touchpoint, User } from "@shared/schema";
 import type { TouchLogEntry, TaskWithCount } from "../types";
@@ -114,7 +114,11 @@ export function ActivityTab({
     notes?: string;
     who?: string;
     status?: string;
+    webexSynced?: boolean;
   };
+
+  const isWebexSyncedNote = (notes: string | null | undefined): boolean =>
+    !!notes && /\[Webex CDR:\s*[^\]]+\]/.test(notes);
 
   const parseEmailNotes = (notes: string | null | undefined) => {
     if (!notes) return { subject: null, to: null, body: notes ?? undefined };
@@ -139,6 +143,7 @@ export function ActivityTab({
       subLabel: tp.isMeaningful ? "Meaningful" : (isEmail && parsed?.to ? `To: ${parsed.to}` : undefined),
       notes: isEmail ? (parsed?.body ?? undefined) : (tp.notes ?? undefined),
       who: tp.loggedByName,
+      webexSynced: tp.type === "call" && isWebexSyncedNote(tp.notes),
     };
   });
 
@@ -200,6 +205,16 @@ export function ActivityTab({
                           )}
                           {item.status === "completed" && (
                             <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300">Done</span>
+                          )}
+                          {item.webexSynced && (
+                            <span
+                              className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+                              title={item.who ? `Synced from ${item.who}'s Webex account` : "Synced from Webex"}
+                              data-testid={`badge-webex-synced-${item.id}`}
+                            >
+                              <Video className="h-2.5 w-2.5" />
+                              Webex
+                            </span>
                           )}
                         </div>
                         {item.notes && (
