@@ -2583,6 +2583,45 @@ export const insertWebexUserMappingSchema = createInsertSchema(webexUserMappings
 export type InsertWebexUserMapping = z.infer<typeof insertWebexUserMappingSchema>;
 export type WebexUserMapping = typeof webexUserMappings.$inferSelect;
 
+// Per-user Webex OAuth tokens (Task #261)
+// Stores a rep's own Webex OAuth refresh token so their personal call history,
+// presence, and dial actions run against their own Webex account rather than
+// the shared org-level token.
+export const webexUserTokens = pgTable(
+  "webex_user_tokens",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    webexPersonId: text("webex_person_id"),
+    webexEmail: text("webex_email"),
+    webexDisplayName: text("webex_display_name"),
+    refreshToken: text("refresh_token").notNull(),
+    accessTokenExpiresAt: timestamp("access_token_expires_at"),
+    needsReauth: boolean("needs_reauth").notNull().default(false),
+    lastRefreshAt: timestamp("last_refresh_at"),
+    lastRefreshError: text("last_refresh_error"),
+    scopes: text("scopes"),
+    connectedAt: timestamp("connected_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("webex_user_tokens_user_idx").on(table.userId),
+    index("webex_user_tokens_org_idx").on(table.orgId),
+    index("webex_user_tokens_person_idx").on(table.webexPersonId),
+  ],
+);
+
+export const insertWebexUserTokenSchema = createInsertSchema(webexUserTokens).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  connectedAt: true,
+});
+export type InsertWebexUserToken = z.infer<typeof insertWebexUserTokenSchema>;
+export type WebexUserToken = typeof webexUserTokens.$inferSelect;
+
 export const apiResponseCache = pgTable(
   "api_response_cache",
   {

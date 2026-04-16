@@ -187,6 +187,9 @@ import {
   webexUserMappings,
   type WebexUserMapping,
   type InsertWebexUserMapping,
+  webexUserTokens,
+  type WebexUserToken,
+  type InsertWebexUserToken,
   apiResponseCache,
   type ApiResponseCache,
 } from "@shared/schema";
@@ -982,6 +985,13 @@ export interface IStorage {
   updateWebexUserMapping(id: string, orgId: string, data: Partial<InsertWebexUserMapping>): Promise<WebexUserMapping | undefined>;
   deleteWebexUserMapping(id: string, orgId: string): Promise<boolean>;
   getMonitoredMailboxByAnySubscriptionId(subscriptionId: string): Promise<MonitoredMailbox | undefined>;
+
+  // Per-user Webex OAuth tokens (Task #261)
+  getWebexUserToken(userId: string): Promise<WebexUserToken | undefined>;
+  getWebexUserTokensForOrg(orgId: string): Promise<WebexUserToken[]>;
+  upsertWebexUserToken(data: InsertWebexUserToken): Promise<WebexUserToken>;
+  updateWebexUserToken(userId: string, updates: Partial<InsertWebexUserToken>): Promise<WebexUserToken | undefined>;
+  deleteWebexUserToken(userId: string): Promise<boolean>;
 
   // API cache methods (Task #231)
   getCachedApiResponse(key: string): Promise<ApiResponseCache | undefined>;
@@ -6792,6 +6802,58 @@ export class DatabaseStorage implements IStorage {
   async deleteWebexUserMapping(id: string, orgId: string): Promise<boolean> {
     const result = await db.delete(webexUserMappings)
       .where(and(eq(webexUserMappings.id, id), eq(webexUserMappings.orgId, orgId)));
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  // ── Per-user Webex OAuth tokens (Task #261) ────────────────────────────────
+
+  async getWebexUserToken(userId: string): Promise<WebexUserToken | undefined> {
+    const [row] = await db.select().from(webexUserTokens)
+      .where(eq(webexUserTokens.userId, userId))
+      .limit(1);
+    return row;
+  }
+
+  async getWebexUserTokensForOrg(orgId: string): Promise<WebexUserToken[]> {
+    return db.select().from(webexUserTokens)
+      .where(eq(webexUserTokens.orgId, orgId));
+  }
+
+  async upsertWebexUserToken(data: InsertWebexUserToken): Promise<WebexUserToken> {
+    const existing = await this.getWebexUserToken(data.userId);
+    if (existing) {
+      const [row] = await db.update(webexUserTokens)
+        .set({
+          ...data,
+          webexEmail: data.webexEmail ? data.webexEmail.toLowerCase() : data.webexEmail,
+          updatedAt: new Date(),
+        })
+        .where(eq(webexUserTokens.userId, data.userId))
+        .returning();
+      return row;
+    }
+    const [row] = await db.insert(webexUserTokens).values({
+      ...data,
+      webexEmail: data.webexEmail ? data.webexEmail.toLowerCase() : data.webexEmail,
+    }).returning();
+    return row;
+  }
+
+  async updateWebexUserToken(userId: string, updates: Partial<InsertWebexUserToken>): Promise<WebexUserToken | undefined> {
+    const [row] = await db.update(webexUserTokens)
+      .set({
+        ...updates,
+        webexEmail: updates.webexEmail ? updates.webexEmail.toLowerCase() : updates.webexEmail,
+        updatedAt: new Date(),
+      })
+      .where(eq(webexUserTokens.userId, userId))
+      .returning();
+    return row;
+  }
+
+  async deleteWebexUserToken(userId: string): Promise<boolean> {
+    const result = await db.delete(webexUserTokens)
+      .where(eq(webexUserTokens.userId, userId));
     return (result.rowCount ?? 0) > 0;
   }
 

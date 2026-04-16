@@ -39,9 +39,65 @@ import {
   resolveInternalUserIdForCall,
 } from "../webexUserMappingService";
 import { backfillWebexAttribution } from "../webexAttributionBackfill";
+import {
+  getUserWebexAccessToken,
+  connectUserWebex,
+  disconnectUserWebex,
+} from "../webexUserTokenService";
 import { insertWebexUserMappingSchema } from "@shared/schema";
 import OpenAI from "openai";
 import cron from "node-cron";
+import crypto from "crypto";
+
+const WEBEX_STATE_TTL_MS = 10 * 60 * 1000;
+const WEBEX_STATE_RUNTIME_SECRET = crypto.randomBytes(32).toString("hex");
+const _webexUsedNonces = new Map<string, number>();
+function rememberWebexNonce(nonce: string) {
+  _webexUsedNonces.set(nonce, Date.now());
+}
+function consumeWebexNonce(nonce: string): boolean {
+  const now = Date.now();
+  for (const [k, t] of _webexUsedNonces) {
+    if (now - t > WEBEX_STATE_TTL_MS) _webexUsedNonces.delete(k);
+  }
+  if (_webexUsedNonces.has(nonce)) return false;
+  _webexUsedNonces.set(nonce, now);
+  return true;
+}
+function webexStateSecret(): string {
+  const envSecret = process.env.SESSION_SECRET?.trim();
+  if (envSecret && envSecret.length >= 16) return envSecret;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "SESSION_SECRET (>=16 chars) is required in production to sign per-user Webex OAuth state",
+    );
+  }
+  // Non-production fallback: a per-process random secret. This keeps dev
+  // usable while still being unpredictable across restarts, and it will
+  // refuse to run entirely in production without a real secret.
+  return WEBEX_STATE_RUNTIME_SECRET;
+}
+function signWebexUserState(userId: string): string {
+  const ts = Date.now().toString();
+  const nonce = crypto.randomBytes(16).toString("hex");
+  const payload = `${userId}.${ts}.${nonce}`;
+  const sig = crypto.createHmac("sha256", webexStateSecret()).update(payload).digest("hex");
+  rememberWebexNonce(nonce);
+  return `webex_oauth_user.${userId}.${ts}.${nonce}.${sig}`;
+}
+function verifyWebexUserState(state: string): { userId: string; nonce: string } | null {
+  const parts = state.split(".");
+  if (parts.length !== 5 || parts[0] !== "webex_oauth_user") return null;
+  const [, userId, tsStr, nonce, sig] = parts;
+  if (!userId || !tsStr || !nonce || !sig) return null;
+  const ts = Number(tsStr);
+  if (!Number.isFinite(ts) || Date.now() - ts > WEBEX_STATE_TTL_MS) return null;
+  const expected = crypto.createHmac("sha256", webexStateSecret()).update(`${userId}.${tsStr}.${nonce}`).digest("hex");
+  const a = Buffer.from(sig, "hex");
+  const b = Buffer.from(expected, "hex");
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  return { userId, nonce };
+}
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -56,7 +112,12 @@ function log(msg: string) {
 const presenceCache = new Map<string, { status: string; fetchedAt: number }>();
 const PRESENCE_CACHE_TTL = 60_000;
 
-async function syncCallsForOrg(orgId: string, hoursBack: number, customEndMs?: number): Promise<{
+async function syncCallsForOrg(
+  orgId: string,
+  hoursBack: number,
+  customEndMs?: number,
+  opts?: { forUser?: { userId: string; accessToken: string } },
+): Promise<{
   touchpoints: any[];
   nbaCards: any[];
 }> {
@@ -64,9 +125,12 @@ async function syncCallsForOrg(orgId: string, hoursBack: number, customEndMs?: n
   const endTime = new Date(endMs).toISOString();
   const startTime = new Date(endMs - hoursBack * 3600 * 1000).toISOString();
 
-  log(`Syncing calls for org ${orgId}: ${startTime} → ${endTime}`);
+  const scope = opts?.forUser ? `user ${opts.forUser.userId}` : `org ${orgId}`;
+  log(`Syncing calls for ${scope}: ${startTime} → ${endTime}`);
 
-  const records = await fetchCallHistory(startTime, endTime);
+  const records = opts?.forUser
+    ? await fetchCallHistory(startTime, endTime, 200, { accessToken: opts.forUser.accessToken, scope: "user" })
+    : await fetchCallHistory(startTime, endTime);
   if (records.length === 0) return { touchpoints: [], nbaCards: [] };
 
   const orgCompanies = await storage.getCompanies(orgId);
@@ -113,7 +177,7 @@ async function syncCallsForOrg(orgId: string, hoursBack: number, customEndMs?: n
   }
 
   const orgUsers = await storage.getUsers(orgId);
-  const defaultUserId = orgUsers[0]?.id;
+  const defaultUserId = opts?.forUser?.userId ?? orgUsers[0]?.id;
   if (!defaultUserId) {
     log(`No users in org ${orgId}, skipping sync`);
     return { touchpoints: [], nbaCards: [] };
@@ -154,24 +218,28 @@ async function syncCallsForOrg(orgId: string, hoursBack: number, customEndMs?: n
     if (!matchedContact) continue;
 
     // Resolve which internal user this Webex call should be attributed to.
-    // Falls back to defaultUserId (orgUsers[0]) if no mapping exists,
-    // matching the previous behavior so we never crash or silently lose calls.
+    // In per-user (forUser) mode the token already belongs to a specific rep
+    // so attribute directly. Otherwise look up the webex_user_mappings row.
     let attributedUserId = defaultUserId;
-    try {
-      const resolved = await resolveInternalUserIdForCall(
-        orgId,
-        record.webexPersonId,
-        record.webexUserEmail,
-      );
-      if (resolved.userId) {
-        attributedUserId = resolved.userId;
-      } else if (resolved.mapping?.status === "ignored") {
-        log(`Skipping attribution for CDR ${record.id} — Webex person ${resolved.mapping.webexDisplayName ?? resolved.mapping.webexPersonId} is marked ignored; using default user`);
-      } else {
-        log(`No Webex user mapping for personId=${record.webexPersonId ?? "?"} email=${record.webexUserEmail ?? "?"} (CDR ${record.id}); falling back to default user`);
+    if (opts?.forUser) {
+      attributedUserId = opts.forUser.userId;
+    } else {
+      try {
+        const resolved = await resolveInternalUserIdForCall(
+          orgId,
+          record.webexPersonId,
+          record.webexUserEmail,
+        );
+        if (resolved.userId) {
+          attributedUserId = resolved.userId;
+        } else if (resolved.mapping?.status === "ignored") {
+          log(`Skipping attribution for CDR ${record.id} — Webex person ${resolved.mapping.webexDisplayName ?? resolved.mapping.webexPersonId} is marked ignored; using default user`);
+        } else {
+          log(`No Webex user mapping for personId=${record.webexPersonId ?? "?"} email=${record.webexUserEmail ?? "?"} (CDR ${record.id}); falling back to default user`);
+        }
+      } catch (mapErr) {
+        log(`Mapping lookup failed for CDR ${record.id}: ${mapErr instanceof Error ? mapErr.message : String(mapErr)}`);
       }
-    } catch (mapErr) {
-      log(`Mapping lookup failed for CDR ${record.id}: ${mapErr instanceof Error ? mapErr.message : String(mapErr)}`);
     }
 
     if (!record.answered && record.direction === "TERMINATING") {
@@ -484,16 +552,21 @@ export function registerWebexRoutes(app: Express) {
   app.get("/api/webex/authorize", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") {
-        return res.status(403).json({ error: "Only admins can authorize Webex" });
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const mode = (req.query.mode as string) === "personal" ? "personal" : "org";
+      if (mode === "org" && user.role !== "admin") {
+        return res.status(403).json({ error: "Only admins can authorize the org-level Webex connection" });
       }
       if (!webexCredentialsConfigured()) {
         return res.status(400).json({ error: "Webex credentials not configured" });
       }
       const info = getWebexRedirectUriInfo(req);
-      const authUrl = getWebexOAuthUrl(info.redirectUri);
-      log(`Authorize → redirect_uri=${info.redirectUri} (source=${info.source})`);
-      log(`Authorize → full URL: ${authUrl}`);
+      const state =
+        mode === "personal"
+          ? signWebexUserState(user.id)
+          : `webex_oauth_org_${Date.now()}`;
+      const authUrl = getWebexOAuthUrl(info.redirectUri, state);
+      log(`Authorize (${mode}) → redirect_uri=${info.redirectUri} (source=${info.source})`);
       res.redirect(authUrl);
     } catch (err) {
       log(`Authorize error: ${err instanceof Error ? err.message : String(err)}`);
@@ -561,11 +634,49 @@ export function registerWebexRoutes(app: Express) {
         return renderError(400, "No authorization code was returned by Webex.");
       }
 
+      const stateParam = (req.query.state as string) || "";
+      if (stateParam.startsWith("webex_oauth_user")) {
+        // Per-user (Task #261) flow — verify signed state, confirm the
+        // current browser session matches the initiating user, and consume
+        // the one-time nonce to block replay.
+        const verified = verifyWebexUserState(stateParam);
+        if (!verified) {
+          log(`Rejected per-user callback: state signature invalid or expired`);
+          return renderError(400, "This Webex authorization link has expired or is invalid. Please start the connection again from your profile.");
+        }
+        const sessionUser = await getCurrentUser(req);
+        if (!sessionUser) {
+          return renderError(401, "You must be signed in to FreightDNA in this browser to complete Webex authorization. Please sign in and try again from your profile.");
+        }
+        if (sessionUser.id !== verified.userId) {
+          log(`Rejected per-user callback: session user ${sessionUser.id} does not match state user ${verified.userId}`);
+          return renderError(403, "This Webex authorization link belongs to a different FreightDNA user. Please start the connection from your own profile.");
+        }
+        if (!consumeWebexNonce(verified.nonce)) {
+          log(`Rejected per-user callback: nonce already used or expired`);
+          return renderError(400, "This Webex authorization link has already been used. Please start the connection again from your profile.");
+        }
+        const u = await storage.getUser(verified.userId);
+        if (!u) {
+          return renderError(400, "The user who started this connection could not be found.");
+        }
+        await connectUserWebex(u.organizationId, u.id, code, info.redirectUri);
+        log(`Per-user OAuth complete for user ${u.id}`);
+        return res.send(`
+          <html><body style="font-family:sans-serif;text-align:center;padding:60px">
+            <h2>Your Webex account is connected!</h2>
+            <p>FreightDNA can now pull your personal call history and presence.</p>
+            <p>You can close this window and return to the app.</p>
+            <script>setTimeout(() => window.close(), 3000)</script>
+          </body></html>
+        `);
+      }
+
       const tokens = await exchangeWebexCode(code, info.redirectUri);
       await saveRefreshToken(tokens.refresh_token);
       await resetWebexReauthReminderState();
 
-      log(`OAuth complete — tokens stored (redirect_uri=${info.redirectUri})`);
+      log(`OAuth complete — org tokens stored (redirect_uri=${info.redirectUri})`);
       res.send(`
         <html><body style="font-family:sans-serif;text-align:center;padding:60px">
           <h2>Webex Connected Successfully!</h2>
@@ -634,6 +745,69 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
+  app.get("/api/webex/my-connection", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const record = await storage.getWebexUserToken(user.id);
+      res.json({
+        configured: webexCredentialsConfigured(),
+        connected: !!record && !record.needsReauth,
+        needsReauth: !!record?.needsReauth,
+        webexEmail: record?.webexEmail ?? null,
+        webexDisplayName: record?.webexDisplayName ?? null,
+        webexPersonId: record?.webexPersonId ?? null,
+        connectedAt: record?.connectedAt ?? null,
+        accessTokenExpiresAt: record?.accessTokenExpiresAt ?? null,
+        lastRefreshAt: record?.lastRefreshAt ?? null,
+        lastRefreshError: record?.lastRefreshError ?? null,
+      });
+    } catch (err) {
+      log(`my-connection error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: "Failed to load personal Webex connection" });
+    }
+  });
+
+  app.delete("/api/webex/my-connection", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const deleted = await disconnectUserWebex(user.id);
+      log(`User ${user.id} disconnected their personal Webex account (deleted=${deleted})`);
+      res.json({ deleted });
+    } catch (err) {
+      log(`my-connection delete error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: "Failed to disconnect Webex" });
+    }
+  });
+
+  app.post("/api/webex/sync-my-calls", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!webexCredentialsConfigured()) {
+        return res.status(400).json({ error: "Webex credentials not configured" });
+      }
+      const tokenResult = await getUserWebexAccessToken(user.id);
+      if (!tokenResult) {
+        return res.status(400).json({ error: "Your Webex account is not connected. Reconnect from your profile." });
+      }
+      const hoursBack = Math.min(Number(req.body?.hoursBack) || 24, 168);
+      const result = await syncCallsForOrg(user.organizationId, hoursBack, undefined, {
+        forUser: { userId: user.id, accessToken: tokenResult.token },
+      });
+      res.json({
+        synced: result.touchpoints.length,
+        missedCallCards: result.nbaCards.length,
+        touchpoints: result.touchpoints,
+        nbaCards: result.nbaCards,
+      });
+    } catch (err) {
+      log(`sync-my-calls error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to sync personal Webex calls" });
+    }
+  });
+
   app.post("/api/webex/sync-calls", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
@@ -642,6 +816,31 @@ export function registerWebexRoutes(app: Express) {
       if (!webexCredentialsConfigured()) {
         return res.status(400).json({ error: "Webex credentials not configured" });
       }
+
+      // Prefer the rep's own Webex token (Task #261) when available so calls
+      // are sourced from their personal history; otherwise fall back to the
+      // org-level token + user-mapping resolution. Transient refresh errors
+      // are logged but do not block org fallback.
+      let tokenResult: Awaited<ReturnType<typeof getUserWebexAccessToken>> = null;
+      try {
+        tokenResult = await getUserWebexAccessToken(user.id);
+      } catch (e) {
+        log(`Per-user token refresh failed, falling back to org token: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      if (tokenResult) {
+        const hoursBack = Math.min(Number(req.body?.hoursBack) || 24, 168);
+        const result = await syncCallsForOrg(user.organizationId, hoursBack, undefined, {
+          forUser: { userId: user.id, accessToken: tokenResult.token },
+        });
+        return res.json({
+          synced: result.touchpoints.length,
+          missedCallCards: result.nbaCards.length,
+          touchpoints: result.touchpoints,
+          nbaCards: result.nbaCards,
+          source: "user_token",
+        });
+      }
+
       if (!hasWebexTokens()) {
         return res.status(400).json({ error: "Webex not authorized. Visit /api/webex/authorize to connect." });
       }
@@ -873,16 +1072,43 @@ export function initWebexSyncScheduler(): void {
   log("Webex token auto-refresh scheduler started (every 5 minutes)");
 
   cron.schedule("*/30 * * * *", async () => {
-    if (webexNeedsReauth()) {
-      log("Background call sync skipped — Webex needs re-authorization");
-      return;
-    }
-    if (!hasWebexTokens()) return;
     log("Background call sync starting...");
     try {
       const { db } = await import("../storage");
       const { organizations } = await import("../../shared/schema");
       const orgs = await db.select().from(organizations);
+
+      // Per-user (Task #261) sync — iterate each rep with a connected
+      // Webex account and pull their personal call history. Runs regardless
+      // of org-level token state.
+      for (const org of orgs) {
+        try {
+          const tokens = await storage.getWebexUserTokensForOrg(org.id);
+          for (const t of tokens) {
+            if (t.needsReauth) continue;
+            try {
+              const res = await getUserWebexAccessToken(t.userId);
+              if (!res) continue;
+              const result = await syncCallsForOrg(org.id, 1, undefined, {
+                forUser: { userId: t.userId, accessToken: res.token },
+              });
+              if (result.touchpoints.length > 0 || result.nbaCards.length > 0) {
+                log(`User ${t.userId}: synced ${result.touchpoints.length} calls, ${result.nbaCards.length} missed-call cards (personal token)`);
+              }
+            } catch (userErr) {
+              log(`User ${t.userId} personal sync error: ${userErr instanceof Error ? userErr.message : String(userErr)}`);
+            }
+          }
+        } catch (e) {
+          log(`Org ${org.id} per-user sync listing failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+
+      if (webexNeedsReauth()) {
+        log("Background org call sync skipped — Webex org token needs re-authorization");
+        return;
+      }
+      if (!hasWebexTokens()) return;
 
       for (const org of orgs) {
         if (webexNeedsReauth()) {

@@ -2699,4 +2699,36 @@ export async function runMigrations() {
   } finally {
     clientWum.release();
   }
+
+  // ── webex_user_tokens (Task #261) ──
+  const clientWut = await pool.connect();
+  try {
+    await clientWut.query(`
+      CREATE TABLE IF NOT EXISTS webex_user_tokens (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id VARCHAR NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        webex_person_id TEXT,
+        webex_email TEXT,
+        webex_display_name TEXT,
+        refresh_token TEXT NOT NULL,
+        access_token_expires_at TIMESTAMP,
+        needs_reauth BOOLEAN NOT NULL DEFAULT FALSE,
+        last_refresh_at TIMESTAMP,
+        last_refresh_error TEXT,
+        scopes TEXT,
+        connected_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientWut.query(`CREATE UNIQUE INDEX IF NOT EXISTS webex_user_tokens_user_idx ON webex_user_tokens(user_id)`);
+    await clientWut.query(`CREATE INDEX IF NOT EXISTS webex_user_tokens_org_idx ON webex_user_tokens(org_id)`);
+    await clientWut.query(`CREATE INDEX IF NOT EXISTS webex_user_tokens_person_idx ON webex_user_tokens(webex_person_id)`);
+    console.log("[migrations] webex_user_tokens table ensured (Task #261)");
+  } catch (err) {
+    console.error("[migrations] webex_user_tokens migration error:", err);
+  } finally {
+    clientWut.release();
+  }
 }

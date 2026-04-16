@@ -128,18 +128,114 @@ function isInvalidGrantError(status: number, body: string): boolean {
   return false;
 }
 
-export function getWebexOAuthUrl(redirectUri: string): string {
+export const WEBEX_OAUTH_SCOPES = "spark:calls_read spark:people_read spark:calls_write";
+
+export function getWebexOAuthUrl(redirectUri: string, state?: string): string {
   const clientId = process.env.WEBEX_CLIENT_ID!.trim();
-  const scopes = "spark:calls_read spark:people_read spark:calls_write";
-  const state = "webex_oauth_" + Date.now();
+  const s = state ?? "webex_oauth_" + Date.now();
   return (
     `https://webexapis.com/v1/authorize?` +
     `client_id=${encodeURIComponent(clientId)}` +
     `&response_type=code` +
     `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-    `&scope=${encodeURIComponent(scopes)}` +
-    `&state=${state}`
+    `&scope=${encodeURIComponent(WEBEX_OAUTH_SCOPES)}` +
+    `&state=${encodeURIComponent(s)}`
   );
+}
+
+export interface WebexTokenResponse {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+  refresh_token_expires_in?: number;
+  scope?: string;
+}
+
+/**
+ * Stateless Webex auth-code exchange used for per-user OAuth connections
+ * (Task #261). Does NOT mutate the module-level org token cache.
+ */
+export async function exchangeWebexCodeStateless(code: string, redirectUri: string): Promise<WebexTokenResponse> {
+  const clientId = process.env.WEBEX_CLIENT_ID!.trim();
+  const clientSecret = process.env.WEBEX_CLIENT_SECRET!.trim();
+  const res = await fetch("https://webexapis.com/v1/access_token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: clientId,
+      client_secret: clientSecret,
+      code,
+      redirect_uri: redirectUri,
+    }).toString(),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to exchange Webex auth code: ${res.status} ${text}`);
+  }
+  return res.json() as Promise<WebexTokenResponse>;
+}
+
+export class WebexRefreshRevokedError extends Error {
+  constructor(public status: number, public body: string) {
+    super(`Webex refresh token rejected (${status}): ${body.slice(0, 200)}`);
+    this.name = "WebexRefreshRevokedError";
+  }
+}
+
+/**
+ * Stateless refresh for a per-user token (Task #261). Throws
+ * `WebexRefreshRevokedError` on invalid_grant so callers can flag the user's
+ * token as needing re-authorization.
+ */
+export async function refreshWebexAccessTokenWith(refreshToken: string): Promise<WebexTokenResponse> {
+  if (!webexCredentialsConfigured()) {
+    throw new Error("Webex credentials are not configured.");
+  }
+  const clientId = process.env.WEBEX_CLIENT_ID!.trim();
+  const clientSecret = process.env.WEBEX_CLIENT_SECRET!.trim();
+  const res = await fetch("https://webexapis.com/v1/access_token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+    }).toString(),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    if (isInvalidGrantError(res.status, text)) {
+      throw new WebexRefreshRevokedError(res.status, text);
+    }
+    throw new Error(`Failed to refresh Webex access token: ${res.status} ${text}`);
+  }
+  return res.json() as Promise<WebexTokenResponse>;
+}
+
+/**
+ * Fetch the authenticated Webex user's own profile (Task #261) using a
+ * per-user access token. Used to capture personId/email/displayName when a
+ * rep connects their account.
+ */
+export async function fetchWebexMe(accessToken: string): Promise<WebexPerson | null> {
+  const res = await fetch("https://webexapis.com/v1/people/me", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    log(`fetchWebexMe error ${res.status}`);
+    return null;
+  }
+  const p = await res.json();
+  return {
+    id: p.id,
+    emails: p.emails ?? [],
+    phoneNumbers: p.phoneNumbers ?? [],
+    displayName: p.displayName ?? (p.emails?.[0] ?? ""),
+    status: p.status ?? "unknown",
+    lastActivity: p.lastActivity,
+  };
 }
 
 export async function exchangeWebexCode(code: string, redirectUri: string): Promise<{ access_token: string; refresh_token: string; expires_in: number }> {
@@ -352,19 +448,22 @@ export async function fetchCallHistory(
   startTime: string,
   endTime: string,
   maxRecords = 200,
+  opts?: { accessToken?: string; scope?: "org" | "user" },
 ): Promise<WebexCallRecord[]> {
-  const token = await getWebexAccessToken();
-  const orgId = process.env.WEBEX_ORG_ID!;
+  const token = opts?.accessToken ?? (await getWebexAccessToken());
+  const scope = opts?.scope ?? (opts?.accessToken ? "user" : "org");
 
   const allRecords: WebexCallRecord[] = [];
   let nextUrl: string | null = null;
 
   const params = new URLSearchParams({
-    orgId,
     startTime,
     endTime,
     max: String(Math.min(maxRecords, 50)),
   });
+  if (scope === "org") {
+    params.set("orgId", process.env.WEBEX_ORG_ID!);
+  }
 
   let url: string = `https://webexapis.com/v1/telephony/calls/history?${params.toString()}`;
 

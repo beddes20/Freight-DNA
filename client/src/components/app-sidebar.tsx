@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { SignatureEditor } from "@/components/signature-editor";
+import { WebexMyConnection } from "@/components/webex-my-connection";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
@@ -618,6 +619,13 @@ export function AppSidebar() {
             <SignatureEditor value={signature} onChange={setSignature} />
             <p className="text-xs text-muted-foreground">
               Supports bold, italic, underline, color, alignment, links, and logos. Appended automatically to every email you compose.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label>Integrations</Label>
+            <WebexMyConnection />
+            <p className="text-xs text-muted-foreground">
+              Need more settings? <Link href="/profile" onClick={() => setProfileOpen(false)} className="underline" data-testid="link-full-profile">Open the full profile page →</Link>
             </p>
           </div>
         </div>

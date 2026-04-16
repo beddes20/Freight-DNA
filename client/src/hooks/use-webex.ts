@@ -21,6 +21,27 @@ export function useWebexConnectionStatus() {
   });
 }
 
+export interface WebexMyConnectionResponse {
+  configured: boolean;
+  connected: boolean;
+  needsReauth: boolean;
+  webexEmail: string | null;
+  webexDisplayName: string | null;
+  webexPersonId: string | null;
+  connectedAt: string | null;
+  accessTokenExpiresAt: string | null;
+  lastRefreshAt: string | null;
+  lastRefreshError: string | null;
+}
+
+export function useWebexMyConnection() {
+  return useQuery<WebexMyConnectionResponse>({
+    queryKey: ["/api/webex/my-connection"],
+    staleTime: 60 * 1000,
+    refetchInterval: 2 * 60 * 1000,
+  });
+}
+
 /**
  * Returns true only when Webex is BOTH configured and authorized — i.e. when
  * Webex-dependent UI (call buttons, presence dots, call sync) can actually
