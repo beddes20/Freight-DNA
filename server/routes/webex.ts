@@ -13,6 +13,7 @@ import {
   refreshWebexAccessToken,
   getWebexAuthState,
   hasWebexTokens,
+  webexNeedsReauth,
   fetchCallHistory,
   fetchWebexPeople,
   fetchPersonStatus,
@@ -695,6 +696,10 @@ export function initWebexSyncScheduler(): void {
   log("Webex token auto-refresh scheduler started (every 5 minutes)");
 
   cron.schedule("*/30 * * * *", async () => {
+    if (webexNeedsReauth()) {
+      log("Background call sync skipped — Webex needs re-authorization");
+      return;
+    }
     if (!hasWebexTokens()) return;
     log("Background call sync starting...");
     try {
@@ -703,6 +708,10 @@ export function initWebexSyncScheduler(): void {
       const orgs = await db.select().from(organizations);
 
       for (const org of orgs) {
+        if (webexNeedsReauth()) {
+          log("Aborting remaining org syncs — Webex flipped to needs-reauth mid-run");
+          break;
+        }
         try {
           const result = await syncCallsForOrg(org.id, 1);
           if (result.touchpoints.length > 0 || result.nbaCards.length > 0) {
@@ -710,6 +719,10 @@ export function initWebexSyncScheduler(): void {
           }
         } catch (orgErr) {
           log(`Org ${org.id} sync error: ${orgErr instanceof Error ? orgErr.message : String(orgErr)}`);
+          if (webexNeedsReauth()) {
+            log("Aborting remaining org syncs — Webex token rejected during sync");
+            break;
+          }
         }
       }
       log("Background call sync complete");

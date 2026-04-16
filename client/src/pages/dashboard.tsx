@@ -73,6 +73,8 @@ import { TodaysBriefingPortlet } from "@/components/todays-briefing-portlet";
 import { RecentlyVisitedPortlet } from "@/components/recently-visited-portlet";
 import { useRecentlyVisited } from "@/hooks/use-recently-visited";
 import { PinnedAccountsPortlet } from "@/components/pinned-accounts-portlet";
+import { useWebexConnectionStatus } from "@/hooks/use-webex";
+import { VideoOff } from "lucide-react";
 
 const METRIC_LABELS: Record<string, string> = {
   contacts_added: "New Contacts",
@@ -453,6 +455,9 @@ export default function Dashboard() {
   });
 
   const [todaysBriefingCollapsed, setTodaysBriefingCollapsed] = useState(() => localStorage.getItem("dash_todays_briefing_collapsed") === "true");
+
+  const { data: webexStatus } = useWebexConnectionStatus();
+  const webexSyncPaused = !!(webexStatus?.configured && webexStatus?.needsReauth);
 
   const { entries: recentlyVisited } = useRecentlyVisited(currentUser?.id);
 
@@ -888,6 +893,35 @@ export default function Dashboard() {
           <button onClick={dismissBriefing} className="shrink-0 text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300" data-testid="button-dismiss-briefing">
             <X className="h-4 w-4" />
           </button>
+        </div>
+      )}
+
+      {webexSyncPaused && (
+        <div
+          className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/40 p-3"
+          data-testid="banner-webex-sync-paused"
+        >
+          <VideoOff className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-sm text-amber-800 dark:text-amber-200">
+              Webex sync paused — disconnected
+            </p>
+            <p className="text-sm text-amber-700 dark:text-amber-300 mt-0.5">
+              Missed-call cards and call activity won't update until an admin re-authorizes Webex.
+            </p>
+          </div>
+          {currentUser?.role === "admin" && (
+            <a href="/api/webex/authorize" className="shrink-0">
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5 text-amber-700 border-amber-300 hover:bg-amber-100 dark:text-amber-300 dark:border-amber-700 dark:hover:bg-amber-900/50"
+                data-testid="button-webex-reconnect"
+              >
+                Reconnect
+              </Button>
+            </a>
+          )}
         </div>
       )}
 
