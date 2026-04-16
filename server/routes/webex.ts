@@ -366,11 +366,11 @@ export function registerWebexRoutes(app: Express) {
   async function loadStoredRefreshToken() {
     try {
       const result = await storage.pool.query(
-        `SELECT response_data FROM api_response_cache WHERE cache_key = 'webex_refresh_token' LIMIT 1`
+        `SELECT response FROM api_response_cache WHERE cache_key = 'webex_refresh_token' LIMIT 1`
       );
       const row = result.rows?.[0];
-      if (row?.response_data?.token) {
-        setWebexRefreshToken(row.response_data.token);
+      if (row?.response?.token) {
+        setWebexRefreshToken(row.response.token);
         log("Loaded stored refresh token from DB");
         // Eagerly mint an access token at boot so the first request is fast
         // and so we surface a needs_reauth state immediately if revoked.
@@ -396,9 +396,9 @@ export function registerWebexRoutes(app: Express) {
 
   async function saveRefreshToken(token: string) {
     await storage.pool.query(
-      `INSERT INTO api_response_cache (cache_key, response_data, cached_at, ttl_seconds)
-       VALUES ('webex_refresh_token', $1::jsonb, NOW(), 7776000)
-       ON CONFLICT (cache_key) DO UPDATE SET response_data = $1::jsonb, cached_at = NOW()`,
+      `INSERT INTO api_response_cache (cache_key, response, fetched_at, ttl_seconds, source)
+       VALUES ('webex_refresh_token', $1::jsonb, NOW(), 7776000, 'webex')
+       ON CONFLICT (cache_key) DO UPDATE SET response = $1::jsonb, fetched_at = NOW()`,
       [JSON.stringify({ token })]
     );
   }

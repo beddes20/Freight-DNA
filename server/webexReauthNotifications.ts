@@ -53,12 +53,12 @@ let stateLoaded = false;
 async function loadPersistedState(): Promise<PersistedState | null> {
   try {
     const result = await storage.pool.query(
-      `SELECT response_data FROM api_response_cache WHERE cache_key = $1 LIMIT 1`,
+      `SELECT response FROM api_response_cache WHERE cache_key = $1 LIMIT 1`,
       [STATE_CACHE_KEY],
     );
     const row = result.rows?.[0];
-    if (!row?.response_data) return null;
-    const data = row.response_data as Partial<PersistedState>;
+    if (!row?.response) return null;
+    const data = row.response as Partial<PersistedState>;
     return {
       needsReauth: !!data.needsReauth,
       alertAt: typeof data.alertAt === "number" ? data.alertAt : null,
@@ -80,9 +80,9 @@ async function savePersistedState(): Promise<void> {
   };
   try {
     await storage.pool.query(
-      `INSERT INTO api_response_cache (cache_key, response_data, cached_at, ttl_seconds)
-       VALUES ($1, $2::jsonb, NOW(), 31536000)
-       ON CONFLICT (cache_key) DO UPDATE SET response_data = $2::jsonb, cached_at = NOW()`,
+      `INSERT INTO api_response_cache (cache_key, response, fetched_at, ttl_seconds, source)
+       VALUES ($1, $2::jsonb, NOW(), 31536000, 'webex')
+       ON CONFLICT (cache_key) DO UPDATE SET response = $2::jsonb, fetched_at = NOW()`,
       [STATE_CACHE_KEY, JSON.stringify(payload)],
     );
   } catch (e) {
