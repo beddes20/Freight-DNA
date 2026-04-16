@@ -191,10 +191,13 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
     },
   });
 
-  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
   const deleteMutation = useMutation({
-    mutationFn: async () => {
-      const response = await apiRequest("DELETE", `/api/contacts/${contact?.id}`);
+    mutationFn: async (id: string) => {
+      if (!id) {
+        throw new Error("This contact has no saved record yet — close the dialog and refresh the page.");
+      }
+      const response = await apiRequest("DELETE", `/api/contacts/${id}`);
       return response;
     },
     onSuccess: () => {
@@ -204,7 +207,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "relationship-freight-summary"] });
       queryClient.invalidateQueries({ queryKey: ["/api/relationship-freight-summary"] });
       toast({ title: "Contact deleted", description: "The contact was removed." });
-      setConfirmDeleteOpen(false);
+      setPendingDelete(null);
       onOpenChange(false);
     },
     onError: (error: Error) => {
@@ -511,8 +514,12 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
                     type="button"
                     variant="outline"
                     className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 dark:border-red-900/50 dark:hover:bg-red-950/40"
-                    onClick={() => setConfirmDeleteOpen(true)}
-                    disabled={deleteMutation.isPending}
+                    onClick={() => {
+                      if (contact?.id) {
+                        setPendingDelete({ id: contact.id, name: contact.name ?? "this contact" });
+                      }
+                    }}
+                    disabled={deleteMutation.isPending || !contact?.id}
                     data-testid="button-delete-contact"
                   >
                     <Trash2 className="h-4 w-4 mr-2" />
@@ -534,19 +541,19 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
         </Form>
       </DialogContent>
     </Dialog>
-    <AlertDialog open={confirmDeleteOpen} onOpenChange={setConfirmDeleteOpen}>
+    <AlertDialog open={!!pendingDelete} onOpenChange={(o) => { if (!o) setPendingDelete(null); }}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this contact?</AlertDialogTitle>
           <AlertDialogDescription>
-            This will permanently remove {contact?.name ?? "this contact"} from the org chart. Touchpoints and past activity will be preserved but the contact record cannot be recovered.
+            This will permanently remove {pendingDelete?.name ?? "this contact"} from the org chart. Touchpoints and past activity will be preserved but the contact record cannot be recovered.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel data-testid="button-cancel-delete-contact">Cancel</AlertDialogCancel>
           <AlertDialogAction
-            onClick={(e) => { e.preventDefault(); deleteMutation.mutate(); }}
-            disabled={deleteMutation.isPending}
+            onClick={(e) => { e.preventDefault(); if (pendingDelete?.id) deleteMutation.mutate(pendingDelete.id); }}
+            disabled={deleteMutation.isPending || !pendingDelete?.id}
             className="bg-red-600 hover:bg-red-700 text-white"
             data-testid="button-confirm-delete-contact"
           >
