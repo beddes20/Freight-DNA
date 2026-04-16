@@ -7,12 +7,14 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Clock, AlertTriangle, User, Users, MessageSquare, CheckCircle2, Sparkles, X, Mail, ArrowUpRight, ArrowDownLeft, ChevronRight, PenLine, Check, Loader2, Archive, Search } from "lucide-react";
+import { Clock, AlertTriangle, User, Users, MessageSquare, CheckCircle2, Sparkles, X, Mail, ArrowUpRight, ArrowDownLeft, ChevronRight, PenLine, Check, Loader2, Archive, Search, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DraftEmailModal } from "@/components/DraftEmailModal";
 
@@ -662,6 +664,91 @@ function ThreadRow({
   );
 }
 
+function RepFilterCombobox({
+  value,
+  onChange,
+  reps,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  reps: Array<{ id: string; name: string; username: string }>;
+}) {
+  const [open, setOpen] = useState(false);
+
+  let label = "All reps";
+  if (value === "unassigned") label = "Unassigned";
+  else if (value !== "all") {
+    const found = reps.find((r) => r.id === value);
+    if (found) label = found.name || found.username;
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="w-full md:w-56 justify-between font-normal"
+          data-testid="select-filter-rep"
+        >
+          <span className="truncate">{label}</span>
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Search reps..." data-testid="input-rep-search" />
+          <CommandList>
+            <CommandEmpty>No reps found.</CommandEmpty>
+            <CommandGroup>
+              <CommandItem
+                value="all reps"
+                onSelect={() => {
+                  onChange("all");
+                  setOpen(false);
+                }}
+                data-testid="select-filter-rep-option-all"
+              >
+                <Check className={cn("mr-2 h-4 w-4", value === "all" ? "opacity-100" : "opacity-0")} />
+                All reps
+              </CommandItem>
+              <CommandItem
+                value="unassigned"
+                onSelect={() => {
+                  onChange("unassigned");
+                  setOpen(false);
+                }}
+                data-testid="select-filter-rep-option-unassigned"
+              >
+                <Check className={cn("mr-2 h-4 w-4", value === "unassigned" ? "opacity-100" : "opacity-0")} />
+                Unassigned
+              </CommandItem>
+              {reps.map((rep) => {
+                const display = rep.name || rep.username;
+                return (
+                  <CommandItem
+                    key={rep.id}
+                    value={`${display} ${rep.username ?? ""}`}
+                    onSelect={() => {
+                      onChange(rep.id);
+                      setOpen(false);
+                    }}
+                    data-testid={`select-filter-rep-option-${rep.id}`}
+                  >
+                    <Check className={cn("mr-2 h-4 w-4", value === rep.id ? "opacity-100" : "opacity-0")} />
+                    {display}
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export default function ConversationsPage() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -670,6 +757,7 @@ export default function ConversationsPage() {
   const [filterState, setFilterState] = useState<string>("all");
   const [filterPriority, setFilterPriority] = useState<string>("all");
   const [filterOverdue, setFilterOverdue] = useState(false);
+  const [filterRep, setFilterRep] = useState<string>("all");
   const [selectedThread, setSelectedThread] = useState<ConversationThread | null>(null);
   const [allThreads, setAllThreads] = useState<ConversationThread[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -706,12 +794,22 @@ export default function ConversationsPage() {
       if (filterPriority !== "all") p.set("responsePriority", filterPriority);
       if (filterOverdue) p.set("overdue", "true");
     }
+    if (
+      (activeTab === "all" || activeTab === "high_priority" || activeTab === "archived") &&
+      filterRep !== "all"
+    ) {
+      if (filterRep === "unassigned") {
+        p.set("unowned", "true");
+      } else {
+        p.set("ownerUserId", filterRep);
+      }
+    }
     if (cursorParam) p.set("cursor", cursorParam);
     return p.toString();
   }
 
   const { data, isLoading, isError, refetch } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", activeTab, filterState, filterPriority, filterOverdue, debouncedSearch, archiveDateFrom, archiveDateTo],
+    queryKey: ["/api/internal/conversations", activeTab, filterState, filterPriority, filterOverdue, filterRep, debouncedSearch, archiveDateFrom, archiveDateTo],
     queryFn: async () => {
       const res = await fetch(`/api/internal/conversations?${buildParams()}`);
       if (!res.ok) throw new Error("Failed to fetch conversations");
@@ -737,6 +835,14 @@ export default function ConversationsPage() {
     },
     onError: () => toast({ title: "Failed to load more conversations", variant: "destructive" }),
   });
+
+  const { data: repsData = [] } = useQuery<Array<{ id: string; name: string; username: string }>>({
+    queryKey: ["/api/users?includeManagers=true"],
+  });
+
+  const sortedReps = [...repsData].sort((a, b) =>
+    (a.name || a.username || "").localeCompare(b.name || b.username || "")
+  );
 
   const { data: mineData } = useQuery<ThreadsResponse>({
     queryKey: ["/api/internal/conversations", "mine-count", user?.id],
@@ -857,6 +963,16 @@ export default function ConversationsPage() {
             Archived
           </TabsTrigger>
         </TabsList>
+
+        {(activeTab === "all" || activeTab === "high_priority" || activeTab === "archived") && (
+          <div className="mb-4" data-testid="rep-filter-container">
+            <RepFilterCombobox
+              value={filterRep}
+              onChange={setFilterRep}
+              reps={sortedReps}
+            />
+          </div>
+        )}
 
         {activeTab === "all" && (
           <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 mb-4" data-testid="filters-container">
