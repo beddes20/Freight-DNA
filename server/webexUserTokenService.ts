@@ -42,6 +42,51 @@ export function invalidateUserAccessCache(userId: string) {
 }
 
 /**
+ * Flag a user's Webex connection as needing re-authorization. Clears the
+ * email-reminder cooldown (via `lastReauthEmailAt = null`) so the next
+ * scheduler tick emails the rep, and stamps `disconnectedAt`. Safe to call
+ * when no token row exists (no-op).
+ */
+export async function markWebexUserNeedsReauth(
+  userId: string,
+  reason: string,
+): Promise<void> {
+  const existing = await storage.getWebexUserToken(userId);
+  if (!existing) return;
+  _accessCache.delete(userId);
+  const updates: Partial<InsertWebexUserToken> = {
+    needsReauth: true,
+    reauthReason: reason.slice(0, 500),
+    lastRefreshError: reason.slice(0, 500),
+    lastReauthEmailAt: null,
+    disconnectedAt: new Date(),
+  };
+  await storage.updateWebexUserToken(userId, updates);
+  if (!existing.needsReauth) {
+    log(`Marked user ${userId} as needs-reauth: ${reason}`);
+  }
+}
+
+/**
+ * Clear the re-auth flag for this rep after a successful (re)connect and
+ * stamp `connectedAt` so the UI can show when they most recently linked.
+ * Also clears the reminder-email fields so the hourly emailer stops
+ * nudging this rep.
+ */
+export async function clearWebexUserNeedsReauth(userId: string): Promise<void> {
+  const existing = await storage.getWebexUserToken(userId);
+  if (!existing) return;
+  await storage.updateWebexUserToken(userId, {
+    needsReauth: false,
+    reauthReason: null,
+    lastRefreshError: null,
+    lastReauthEmailAt: null,
+    disconnectedAt: null,
+    connectedAt: new Date(),
+  } as any);
+}
+
+/**
  * Resolve a usable access token for the given user, refreshing if needed.
  * Returns null if the user has no stored token or is flagged for re-auth.
  */
@@ -72,9 +117,7 @@ export async function getUserWebexAccessToken(userId: string): Promise<{ token: 
     return { token: data.access_token, record: updated ?? { ...record, ...updates } as WebexUserToken };
   } catch (err) {
     if (err instanceof WebexRefreshRevokedError) {
-      log(`User ${userId} refresh token rejected — flagging needs_reauth`);
-      _accessCache.delete(userId);
-      await markWebexUserNeedsReauth(userId, err.message);
+      await markWebexUserNeedsReauth(userId, err.message || "refresh_token_revoked");
       return null;
     }
     const msg = err instanceof Error ? err.message : String(err);
@@ -84,30 +127,6 @@ export async function getUserWebexAccessToken(userId: string): Promise<{ token: 
     };
     await storage.updateWebexUserToken(userId, errUpdates);
     throw err;
-  }
-}
-
-/**
- * Flag a user's Webex connection as needing re-authorization. Clears the
- * email-reminder cooldown so the next scheduler tick emails the rep.
- */
-export async function markWebexUserNeedsReauth(
-  userId: string,
-  reason: string,
-): Promise<void> {
-  const existing = await storage.getWebexUserToken(userId);
-  if (!existing) return;
-  _accessCache.delete(userId);
-  const updates: Partial<InsertWebexUserToken> = {
-    needsReauth: true,
-    reauthReason: reason.slice(0, 500),
-    lastRefreshError: reason.slice(0, 500),
-    lastReauthEmailAt: null,
-    disconnectedAt: new Date(),
-  };
-  await storage.updateWebexUserToken(userId, updates);
-  if (!existing.needsReauth) {
-    log(`Marked user ${userId} as needs-reauth: ${reason}`);
   }
 }
 
@@ -155,7 +174,14 @@ export async function connectUserWebex(
     scopes: tokens.scope ?? WEBEX_OAUTH_SCOPES,
     disconnectedAt: null,
   };
-  const record = await storage.upsertWebexUserToken(insert);
+  let record = await storage.upsertWebexUserToken(insert);
+
+  // Stamp connectedAt + fully clear any stale needs-reauth state on every
+  // (re)connect so /profile shows the latest linkage time and the hourly
+  // reminder emailer stops nudging this rep.
+  await clearWebexUserNeedsReauth(userId);
+  const refreshed = await storage.getWebexUserToken(userId);
+  if (refreshed) record = refreshed;
 
   _accessCache.set(userId, { token: tokens.access_token, expiresAt });
 
