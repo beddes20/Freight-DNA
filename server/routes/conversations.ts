@@ -16,9 +16,15 @@
 
 import type { Express, Request, Response } from "express";
 import { z } from "zod";
-import { inArray, and, eq, asc } from "drizzle-orm";
+import { inArray, and, eq, asc, sql, gte, isNull, desc } from "drizzle-orm";
 import { storage, db } from "../storage";
-import { emailMessages, InsertEmailConversationThread } from "@shared/schema";
+import {
+  emailMessages,
+  emailConversationThreads,
+  monitoredMailboxes,
+  users,
+  InsertEmailConversationThread,
+} from "@shared/schema";
 import { requireAuth, getCurrentUser } from "../auth";
 import { setWaitingState, setPriority } from "../services/conversationWaitingStateService";
 import { assignOwner } from "../services/conversationOwnershipService";
@@ -392,6 +398,108 @@ export function registerConversationsRoutes(app: Express): void {
     } catch (err) {
       console.error("[conversations] POST /conversations/:id/priority error:", err);
       res.status(500).json({ error: "Failed to update priority" });
+    }
+  });
+
+  // ── GET /api/internal/admin/conversations/diagnostic ─────────────────────────
+  // Admin-only diagnostic that reports on conversation/email pipeline health.
+  // Helps debug "why is my badge empty?" in production.
+  app.get("/api/internal/admin/conversations/diagnostic", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!["admin", "director", "sales_director"].includes(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const orgId = user.organizationId;
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+      const mailboxes = await db
+        .select({
+          id: monitoredMailboxes.id,
+          email: monitoredMailboxes.email,
+          enabled: monitoredMailboxes.enabled,
+          syncStatus: monitoredMailboxes.syncStatus,
+          syncError: monitoredMailboxes.syncError,
+          lastSyncAt: monitoredMailboxes.lastSyncAt,
+          subscriptionExpiresAt: monitoredMailboxes.subscriptionExpiresAt,
+          userName: users.name,
+          userId: users.id,
+        })
+        .from(monitoredMailboxes)
+        .leftJoin(users, eq(users.id, monitoredMailboxes.userId))
+        .where(eq(monitoredMailboxes.orgId, orgId));
+
+      const [inboundCountRow] = await db
+        .select({ c: sql<number>`count(*)::int` })
+        .from(emailMessages)
+        .where(
+          and(
+            eq(emailMessages.orgId, orgId),
+            eq(emailMessages.direction, "inbound"),
+            gte(emailMessages.createdAt, sevenDaysAgo),
+          ),
+        );
+
+      const [threadsCreatedRow] = await db
+        .select({ c: sql<number>`count(*)::int` })
+        .from(emailConversationThreads)
+        .where(
+          and(
+            eq(emailConversationThreads.orgId, orgId),
+            gte(emailConversationThreads.createdAt, sevenDaysAgo),
+          ),
+        );
+
+      const ownerBreakdown = await db
+        .select({
+          ownerUserId: emailConversationThreads.ownerUserId,
+          ownerName: users.name,
+          waitingState: emailConversationThreads.waitingState,
+          c: sql<number>`count(*)::int`,
+        })
+        .from(emailConversationThreads)
+        .leftJoin(users, eq(users.id, emailConversationThreads.ownerUserId))
+        .where(
+          and(
+            eq(emailConversationThreads.orgId, orgId),
+            isNull(emailConversationThreads.archivedAt),
+          ),
+        )
+        .groupBy(emailConversationThreads.ownerUserId, users.name, emailConversationThreads.waitingState)
+        .orderBy(desc(sql`count(*)`));
+
+      const recentThreads = await db
+        .select({
+          id: emailConversationThreads.id,
+          threadId: emailConversationThreads.threadId,
+          ownerUserId: emailConversationThreads.ownerUserId,
+          ownerName: users.name,
+          waitingState: emailConversationThreads.waitingState,
+          createdAt: emailConversationThreads.createdAt,
+          lastIncomingAt: emailConversationThreads.lastIncomingAt,
+          archivedAt: emailConversationThreads.archivedAt,
+        })
+        .from(emailConversationThreads)
+        .leftJoin(users, eq(users.id, emailConversationThreads.ownerUserId))
+        .where(eq(emailConversationThreads.orgId, orgId))
+        .orderBy(desc(emailConversationThreads.createdAt))
+        .limit(10);
+
+      res.json({
+        currentUser: { id: user.id, name: user.name, organizationId: orgId },
+        monitoredMailboxes: mailboxes,
+        last7Days: {
+          inboundEmails: inboundCountRow?.c ?? 0,
+          threadsCreated: threadsCreatedRow?.c ?? 0,
+        },
+        activeThreadsByOwner: ownerBreakdown,
+        recentThreads,
+      });
+    } catch (err) {
+      console.error("[conversations] GET /admin/conversations/diagnostic error:", err);
+      res.status(500).json({ error: "Failed to fetch diagnostic" });
     }
   });
 }
