@@ -266,20 +266,57 @@ async function processUserMailboxEmail(params: {
     ? [...new Set([toEmail, ...(allToRecipients ?? [])].filter(Boolean))]
     : [fromEmail];
 
+  // First: if we already track a conversation thread for this Outlook
+  // conversationId, ALWAYS save the new message and use the thread's
+  // linkedAccountId as the source of truth. This preserves thread continuity
+  // even when the customer counterparty isn't a perfect CRM contact match,
+  // or when the linked account is assigned to a different rep.
+  let existingThreadExists = false;
+  let existingThreadAccountId: string | null = null;
+  if (conversationId) {
+    const existingThreadEarly = await storage.getEmailConversationThreadByThreadId(orgId, conversationId);
+    if (existingThreadEarly) {
+      existingThreadExists = true;
+      existingThreadAccountId = existingThreadEarly.linkedAccountId ?? null;
+    }
+  }
+
   let accountMatch: { companyId: string; contactId: string; contactName: string } | null = null;
   for (const email of counterpartyEmails) {
     accountMatch = await matchInboundSenderToAccount(email, orgId);
     if (accountMatch) break;
   }
 
-  if (!accountMatch) {
+  // If no contact match but we already have a thread with a linked account,
+  // synthesize an accountMatch from the thread's linkedAccountId so the
+  // message is saved with the correct account link.
+  if (!accountMatch && existingThreadAccountId) {
+    accountMatch = {
+      companyId: existingThreadAccountId,
+      contactId: "",
+      contactName: "",
+    };
+  }
+
+  // If we have neither a contact match nor an existing thread, drop the
+  // message — there's nothing to link it to. (If the thread exists but has
+  // no linkedAccountId, we still save the message below with linkedAccountId
+  // = null so the thread continuity is preserved.)
+  if (!accountMatch && !existingThreadExists) {
     return;
   }
 
-  const company = await storage.getCompany(accountMatch.companyId);
-  if (company && company.assignedTo && company.assignedTo !== monitoredMailbox.userId) {
-    log(`[user-mailbox] Skipping email — account ${accountMatch.companyId} is assigned to ${company.assignedTo}, not ${monitoredMailbox.userId}`);
-    return;
+  // Skip the "is this account assigned to this rep?" gate when:
+  //   (a) we already have an active thread for this conversation (continuity),
+  //   OR
+  //   (b) this is the rep's own outbound reply (they explicitly sent it from
+  //       their own monitored mailbox — always record it).
+  if (!existingThreadExists && direction !== "outbound" && accountMatch) {
+    const company = await storage.getCompany(accountMatch.companyId);
+    if (company && company.assignedTo && company.assignedTo !== monitoredMailbox.userId) {
+      log(`[user-mailbox] Skipping email — account ${accountMatch.companyId} is assigned to ${company.assignedTo}, not ${monitoredMailbox.userId}`);
+      return;
+    }
   }
 
   const { message, created } = await storage.upsertInboundEmailMessage({
@@ -291,7 +328,7 @@ async function processUserMailboxEmail(params: {
     toEmail,
     subject,
     body: bodyFull.slice(0, 5000),
-    linkedAccountId: accountMatch.companyId,
+    linkedAccountId: accountMatch?.companyId ?? null,
     linkedCarrierId: null,
     linkedLaneId: null,
     linkedLoadId: null,

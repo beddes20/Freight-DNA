@@ -498,6 +498,17 @@ export function registerConversationsRoutes(app: Express): void {
           ),
         );
 
+      const [outboundCountRow] = await db
+        .select({ c: sql<number>`count(*)::int` })
+        .from(emailMessages)
+        .where(
+          and(
+            eq(emailMessages.orgId, orgId),
+            eq(emailMessages.direction, "outbound"),
+            gte(emailMessages.createdAt, sevenDaysAgo),
+          ),
+        );
+
       const [threadsCreatedRow] = await db
         .select({ c: sql<number>`count(*)::int` })
         .from(emailConversationThreads)
@@ -548,6 +559,7 @@ export function registerConversationsRoutes(app: Express): void {
         monitoredMailboxes: mailboxes,
         last7Days: {
           inboundEmails: inboundCountRow?.c ?? 0,
+          outboundEmails: outboundCountRow?.c ?? 0,
           threadsCreated: threadsCreatedRow?.c ?? 0,
         },
         activeThreadsByOwner: ownerBreakdown,
