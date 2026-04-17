@@ -256,6 +256,23 @@ export function registerConversationsRoutes(app: Express): void {
       if (dateFrom) filters.dateFrom = dateFrom as string;
       if (dateTo) filters.dateTo = dateTo as string;
 
+      // Role-based scoping: directors only see their own team's conversations
+      // (themselves + every descendant in the managerId chain). Admins keep
+      // org-wide visibility. Other roles fall through unchanged so existing
+      // dashboards continue to work as before.
+      const directorRoles = new Set(["director", "sales_director"]);
+      if (directorRoles.has(user.role)) {
+        const teamMemberIds = await storage.getTeamMemberIds(user.id, orgId);
+        const allowedOwnerIds = Array.from(new Set([user.id, ...teamMemberIds]));
+
+        // If the caller is explicitly filtering by an owner outside their team,
+        // return an empty page rather than leaking other teams' threads.
+        if (filters.ownerUserId && !allowedOwnerIds.includes(filters.ownerUserId)) {
+          return res.json({ count: 0, threads: [], nextCursor: null });
+        }
+        filters.ownerUserIdIn = allowedOwnerIds;
+      }
+
       // Signal-based pre-filter: e.g. signal=quote_request narrows the thread set
       // to threads whose messages have a pricing_request OR quote_request signal.
       // Synonyms: "quote_request" and "pricing_request" both map to the

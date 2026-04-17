@@ -887,6 +887,7 @@ export interface IStorage {
   getEmailConversationThreadByThreadId(orgId: string, threadId: string): Promise<EmailConversationThread | undefined>;
   listEmailConversationThreads(orgId: string, filters: {
     ownerUserId?: string | null;
+    ownerUserIdIn?: string[];
     unowned?: boolean;
     waitingState?: string;
     responsePriority?: string;
@@ -6166,6 +6167,7 @@ export class DatabaseStorage implements IStorage {
 
   async listEmailConversationThreads(orgId: string, filters: {
     ownerUserId?: string | null;
+    ownerUserIdIn?: string[];
     unowned?: boolean;
     waitingState?: string;
     responsePriority?: string;
@@ -6194,6 +6196,21 @@ export class DatabaseStorage implements IStorage {
       conditions.push(isNull(emailConversationThreads.ownerUserId));
     } else if (filters.ownerUserId !== undefined && filters.ownerUserId !== null) {
       conditions.push(eq(emailConversationThreads.ownerUserId, filters.ownerUserId));
+    }
+
+    if (filters.ownerUserIdIn) {
+      if (filters.ownerUserIdIn.length === 0) {
+        conditions.push(sql`false`);
+      } else {
+        // Allow team-scoped views to include unowned threads alongside team-owned ones
+        // so directors can still see and claim unassigned conversations.
+        conditions.push(
+          or(
+            inArray(emailConversationThreads.ownerUserId, filters.ownerUserIdIn),
+            isNull(emailConversationThreads.ownerUserId),
+          )!,
+        );
+      }
     }
 
     if (filters.waitingState) {
