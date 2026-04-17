@@ -61,7 +61,6 @@ import {
   TrendingUp,
   Trash2,
   Pencil,
-  X,
   MessageCircle,
 } from "lucide-react";
 import {
@@ -83,8 +82,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import {
   resolveLaneLocationWithConfidence,
   normalizeStateAbbr,
-  type NormalizationResult,
 } from "@/lib/laneLocationNormalizer";
+import { LaneLocationFeedback as LocationFeedback, EMPTY_NORM_STATE, type FieldNormState } from "@/components/lane-location-feedback";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1287,119 +1286,6 @@ interface BuildLaneForm {
 
 const EQUIPMENT_TYPES = ["Box Truck", "Conestoga", "Dry Van", "Flatbed", "Other", "Reefer", "RGN", "Step Deck", "Tanker"];
 
-interface FieldNormState {
-  result: NormalizationResult | null;
-  dismissedSuggestion: boolean;
-  acceptedCandidate: string | null;
-}
-
-const EMPTY_NORM_STATE: FieldNormState = {
-  result: null,
-  dismissedSuggestion: false,
-  acceptedCandidate: null,
-};
-
-function LocationFeedback({
-  norm,
-  fieldId,
-  onAccept,
-  onDismiss,
-}: {
-  norm: FieldNormState;
-  fieldId: string;
-  onAccept: (canonical: string, city: string, state: string) => void;
-  onDismiss: () => void;
-}) {
-  const { result, dismissedSuggestion } = norm;
-  if (!result) return null;
-
-  if (result.status === "exact" && result.correctedFrom) {
-    return (
-      <p className="text-[11px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1 mt-1" data-testid={`hint-corrected-${fieldId}`}>
-        <CheckCircle2 className="w-3 h-3 shrink-0" />
-        Auto-formatted to <span className="font-medium">{result.canonical}</span>
-      </p>
-    );
-  }
-
-  if (result.status === "corrected" && !dismissedSuggestion) {
-    return (
-      <p className="text-[11px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1 mt-1" data-testid={`hint-corrected-${fieldId}`}>
-        <CheckCircle2 className="w-3 h-3 shrink-0" />
-        Corrected from <span className="italic">{result.correctedFrom}</span> → <span className="font-medium">{result.canonical}</span>
-      </p>
-    );
-  }
-
-  if ((result.status === "suggested") && !dismissedSuggestion) {
-    return (
-      <div className="flex items-center gap-1.5 mt-1 flex-wrap" data-testid={`hint-suggested-${fieldId}`}>
-        <span className="text-[11px] text-amber-600 dark:text-amber-400">Did you mean?</span>
-        <button
-          type="button"
-          className="inline-flex items-center gap-1 text-[11px] bg-amber-500/10 border border-amber-400/30 text-amber-600 dark:text-amber-400 rounded px-2 py-0.5 hover:bg-amber-500/20 transition-colors"
-          onClick={() => result.city && result.state && onAccept(result.canonical!, result.city, result.state)}
-          data-testid={`btn-accept-suggestion-${fieldId}`}
-        >
-          <CheckCircle2 className="w-3 h-3" />
-          {result.canonical}
-        </button>
-        <button
-          type="button"
-          className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-          onClick={onDismiss}
-          data-testid={`btn-dismiss-suggestion-${fieldId}`}
-        >
-          <X className="w-3 h-3" />
-        </button>
-      </div>
-    );
-  }
-
-  if (result.status === "ambiguous" && !dismissedSuggestion && result.candidates && result.candidates.length > 0) {
-    return (
-      <div className="mt-1" data-testid={`hint-ambiguous-${fieldId}`}>
-        <span className="text-[11px] text-amber-600 dark:text-amber-400 block mb-1">Did you mean?</span>
-        <div className="flex flex-wrap gap-1">
-          {result.candidates.slice(0, 4).map(c => (
-            <button
-              key={`${c.city}-${c.state}`}
-              type="button"
-              className="inline-flex items-center gap-1 text-[11px] bg-amber-500/10 border border-amber-400/30 text-amber-600 dark:text-amber-400 rounded px-2 py-0.5 hover:bg-amber-500/20 transition-colors"
-              onClick={() => onAccept(`${c.city}, ${c.state}`, c.city, c.state)}
-              data-testid={`btn-candidate-${fieldId}-${c.state}`}
-            >
-              {c.city}, {c.state}
-            </button>
-          ))}
-          <button
-            type="button"
-            className="text-[11px] text-muted-foreground hover:text-foreground transition-colors px-1"
-            onClick={onDismiss}
-            data-testid={`btn-dismiss-ambiguous-${fieldId}`}
-          >
-            <X className="w-3 h-3" />
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (result.status === "invalid") {
-    const stateInvalid = result.state && result.state.length > 2;
-    return (
-      <p className="text-[11px] text-destructive flex items-center gap-1 mt-1" data-testid={`hint-invalid-${fieldId}`}>
-        <AlertCircle className="w-3 h-3 shrink-0" />
-        {stateInvalid
-          ? `"${result.state}" is not a valid US state`
-          : "City not recognized — double-check the spelling"}
-      </p>
-    );
-  }
-
-  return null;
-}
-
 function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, isAdminOrDirector }: { open: boolean; onClose: () => void; onCreated: () => void; currentUser: { id: string; name: string } | null; teamMembers: TeamMember[]; isAdminOrDirector: boolean }) {
   const { toast } = useToast();
   const [form, setForm] = useState<BuildLaneForm>({
@@ -1432,12 +1318,6 @@ function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, i
     }
     const result = resolveLaneLocationWithConfidence(city, state || undefined);
     setter({ result, dismissedSuggestion: false, acceptedCandidate: null });
-
-    if (result.status === "exact" || result.status === "corrected") {
-      if (result.city && result.state) {
-        return result;
-      }
-    }
     return result;
   }
 
@@ -1445,16 +1325,12 @@ function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, i
     const result = runNormalization(form.origin, form.originState, setOriginNorm);
     if (result && (result.status === "exact" || result.status === "corrected") && result.city && result.state) {
       setForm(f => ({ ...f, origin: result.city!, originState: result.state! }));
-    } else if (result && result.status === "corrected" && result.city && result.state) {
-      setForm(f => ({ ...f, origin: result.city!, originState: result.state! }));
     }
   }
 
   function handleDestBlur() {
     const result = runNormalization(form.destination, form.destinationState, setDestNorm);
     if (result && (result.status === "exact" || result.status === "corrected") && result.city && result.state) {
-      setForm(f => ({ ...f, destination: result.city!, destinationState: result.state! }));
-    } else if (result && result.status === "corrected" && result.city && result.state) {
       setForm(f => ({ ...f, destination: result.city!, destinationState: result.state! }));
     }
   }
@@ -1521,8 +1397,10 @@ function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, i
     setDestNorm(EMPTY_NORM_STATE);
   }
 
-  const originHasBlockingError = originNorm.result?.status === "invalid";
-  const destHasBlockingError = destNorm.result?.status === "invalid";
+  const originHasBlockingError = false;
+  const destHasBlockingError = false;
+  const originHasWarning = originNorm.result?.status === "invalid";
+  const destHasWarning = destNorm.result?.status === "invalid";
 
   const buildMutation = useMutation({
     mutationFn: () => {
@@ -1598,7 +1476,7 @@ function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, i
                   setOriginNorm(EMPTY_NORM_STATE);
                 }}
                 onBlur={handleOriginBlur}
-                className={originHasBlockingError ? "border-destructive focus-visible:ring-destructive" : ""}
+                className={originHasWarning ? "border-amber-400 focus-visible:ring-amber-400" : ""}
                 data-testid="input-build-origin"
               />
               <LocationFeedback
@@ -1637,7 +1515,7 @@ function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, i
                   setDestNorm(EMPTY_NORM_STATE);
                 }}
                 onBlur={handleDestBlur}
-                className={destHasBlockingError ? "border-destructive focus-visible:ring-destructive" : ""}
+                className={destHasWarning ? "border-amber-400 focus-visible:ring-amber-400" : ""}
                 data-testid="input-build-dest"
               />
               <LocationFeedback

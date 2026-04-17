@@ -30,6 +30,8 @@ import {
 import { InfoTooltip } from "@/components/info-tooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConversationThreadBadges } from "@/components/conversation-thread-badges";
+import { resolveLaneLocationWithConfidence } from "@/lib/laneLocationNormalizer";
+import { LaneLocationFeedback, EMPTY_NORM_STATE, type FieldNormState } from "@/components/lane-location-feedback";
 
 // ── Source channel helpers ─────────────────────────────────────────────────────
 
@@ -445,6 +447,42 @@ function ClaimedLaneForm({ carrierId, onSave, onCancel }: { carrierId: string; o
   const { toast } = useToast();
   const qc = useQueryClient();
   const [form, setForm] = useState({ originState: "", originCity: "", destState: "", destCity: "", equipment: "__any__", laneType: "prefer", notes: "" });
+  const [originNorm, setOriginNorm] = useState<FieldNormState>(EMPTY_NORM_STATE);
+  const [destNorm, setDestNorm] = useState<FieldNormState>(EMPTY_NORM_STATE);
+
+  function runNormalization(city: string, state: string, setter: (s: FieldNormState) => void) {
+    if (!city.trim()) {
+      setter(EMPTY_NORM_STATE);
+      return;
+    }
+    const result = resolveLaneLocationWithConfidence(city, state || undefined);
+    setter({ result, dismissedSuggestion: false, acceptedCandidate: null });
+    return result;
+  }
+
+  function handleOriginBlur() {
+    const result = runNormalization(form.originCity, form.originState, setOriginNorm);
+    if (result && (result.status === "exact" || result.status === "corrected") && result.city && result.state) {
+      setForm(f => ({ ...f, originCity: result.city!, originState: result.state! }));
+    }
+  }
+
+  function handleDestBlur() {
+    const result = runNormalization(form.destCity, form.destState, setDestNorm);
+    if (result && (result.status === "exact" || result.status === "corrected") && result.city && result.state) {
+      setForm(f => ({ ...f, destCity: result.city!, destState: result.state! }));
+    }
+  }
+
+  function acceptOriginSuggestion(_canonical: string, city: string, state: string) {
+    setForm(f => ({ ...f, originCity: city, originState: state }));
+    setOriginNorm(EMPTY_NORM_STATE);
+  }
+
+  function acceptDestSuggestion(_canonical: string, city: string, state: string) {
+    setForm(f => ({ ...f, destCity: city, destState: state }));
+    setDestNorm(EMPTY_NORM_STATE);
+  }
 
   const save = useMutation({
     mutationFn: (data: typeof form) => apiRequest("POST", `/api/carrier-hub/${carrierId}/claimed-lanes`, { ...data, equipment: data.equipment === "__any__" ? "" : data.equipment }),
@@ -456,12 +494,28 @@ function ClaimedLaneForm({ carrierId, onSave, onCancel }: { carrierId: string; o
     onError: () => toast({ title: "Failed to add lane preference", variant: "destructive" }),
   });
 
+  const originHasWarning = originNorm.result?.status === "invalid";
+  const destHasWarning = destNorm.result?.status === "invalid";
+
   return (
     <div className="bg-muted/20 border border-border rounded-lg p-4 flex flex-col gap-3">
       <div className="grid grid-cols-2 gap-2">
         <div>
           <Label className="text-xs">Origin City</Label>
-          <Input data-testid="input-lane-origin-city" value={form.originCity} onChange={e => setForm(f => ({ ...f, originCity: e.target.value }))} placeholder="Chicago" className="mt-1 h-8 text-sm" />
+          <Input
+            data-testid="input-lane-origin-city"
+            value={form.originCity}
+            onChange={e => { setForm(f => ({ ...f, originCity: e.target.value })); setOriginNorm(EMPTY_NORM_STATE); }}
+            onBlur={handleOriginBlur}
+            placeholder="Chicago"
+            className={`mt-1 h-8 text-sm ${originHasWarning ? "border-amber-400 focus-visible:ring-amber-400" : ""}`}
+          />
+          <LaneLocationFeedback
+            norm={originNorm}
+            fieldId="lane-origin"
+            onAccept={acceptOriginSuggestion}
+            onDismiss={() => setOriginNorm(prev => ({ ...prev, dismissedSuggestion: true }))}
+          />
         </div>
         <div>
           <Label className="text-xs">Origin State</Label>
@@ -476,7 +530,20 @@ function ClaimedLaneForm({ carrierId, onSave, onCancel }: { carrierId: string; o
         </div>
         <div>
           <Label className="text-xs">Dest City</Label>
-          <Input data-testid="input-lane-dest-city" value={form.destCity} onChange={e => setForm(f => ({ ...f, destCity: e.target.value }))} placeholder="Dallas" className="mt-1 h-8 text-sm" />
+          <Input
+            data-testid="input-lane-dest-city"
+            value={form.destCity}
+            onChange={e => { setForm(f => ({ ...f, destCity: e.target.value })); setDestNorm(EMPTY_NORM_STATE); }}
+            onBlur={handleDestBlur}
+            placeholder="Dallas"
+            className={`mt-1 h-8 text-sm ${destHasWarning ? "border-amber-400 focus-visible:ring-amber-400" : ""}`}
+          />
+          <LaneLocationFeedback
+            norm={destNorm}
+            fieldId="lane-dest"
+            onAccept={acceptDestSuggestion}
+            onDismiss={() => setDestNorm(prev => ({ ...prev, dismissedSuggestion: true }))}
+          />
         </div>
         <div>
           <Label className="text-xs">Dest State</Label>

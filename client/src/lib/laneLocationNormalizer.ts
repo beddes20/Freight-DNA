@@ -285,7 +285,7 @@ export function resolveLaneLocationWithConfidence(
     const canonical = formatCanonicalCityState(best.city, best.state);
     const wasFormatting = canonical !== originalInput;
     return {
-      status: wasFormatting ? "exact" : "exact",
+      status: "exact",
       canonical,
       city: best.city,
       state: best.state,
@@ -297,7 +297,9 @@ export function resolveLaneLocationWithConfidence(
   const closeMatches = withState.filter(m => m.distance <= 2);
   const nearMatches = withState.filter(m => m.distance === bestDist);
 
-  if (bestDist <= 2 && closeMatches.length === 1) {
+  // If there's a single unique winner at the best distance and it's close (≤2),
+  // prefer auto-correction even if there are weaker also-rans within the close window.
+  if (bestDist <= 2 && nearMatches.length === 1) {
     const canonical = formatCanonicalCityState(best.city, best.state);
     return {
       status: "corrected",
