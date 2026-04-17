@@ -825,10 +825,10 @@ export default function ConversationsPage() {
         p.set("ownerUserId", filterRep);
       }
     }
-    if (
-      (activeTab === "all" || activeTab === "high_priority" || activeTab === "archived") &&
-      filterTeam !== "all"
-    ) {
+    // Team filter is available on every tab except "mine" (which is hard-pinned
+    // to the current user). It composes with whatever owner/state filters the
+    // tab already applied above.
+    if (activeTab !== "mine" && filterTeam !== "all") {
       p.set("team", filterTeam);
     }
     if (cursorParam) p.set("cursor", cursorParam);
@@ -1014,13 +1014,15 @@ export default function ConversationsPage() {
           </TabsTrigger>
         </TabsList>
 
-        {(activeTab === "all" || activeTab === "high_priority" || activeTab === "archived") && (
+        {activeTab !== "mine" && (
           <div className="mb-4 flex flex-col md:flex-row md:items-center gap-2 md:gap-3" data-testid="rep-filter-container">
-            <RepFilterCombobox
-              value={filterRep}
-              onChange={setFilterRep}
-              reps={sortedReps}
-            />
+            {(activeTab === "all" || activeTab === "high_priority" || activeTab === "archived") && (
+              <RepFilterCombobox
+                value={filterRep}
+                onChange={setFilterRep}
+                reps={sortedReps}
+              />
+            )}
             <Select value={filterTeam} onValueChange={setFilterTeam}>
               <SelectTrigger className="w-full md:w-56" data-testid="select-filter-team">
                 <SelectValue placeholder="Team" />
