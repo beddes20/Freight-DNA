@@ -20,6 +20,7 @@ import { inArray, and, eq, asc, sql, gte, isNull, desc } from "drizzle-orm";
 import { storage, db } from "../storage";
 import {
   emailMessages,
+  emailSignals,
   emailConversationThreads,
   monitoredMailboxes,
   users,
@@ -229,7 +230,7 @@ export function registerConversationsRoutes(app: Express): void {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
       const orgId = user.organizationId;
-      const { accountId, carrierId, ownerUserId, unowned, waitingState, responsePriority, overdue, threadId, archived, cursor, limit, search, dateFrom, dateTo } = req.query;
+      const { accountId, carrierId, ownerUserId, unowned, waitingState, responsePriority, overdue, threadId, archived, cursor, limit, search, dateFrom, dateTo, signal } = req.query;
 
       const filters: Parameters<typeof storage.listEmailConversationThreads>[1] = {};
 
@@ -255,6 +256,31 @@ export function registerConversationsRoutes(app: Express): void {
       if (dateFrom) filters.dateFrom = dateFrom as string;
       if (dateTo) filters.dateTo = dateTo as string;
 
+      // Signal-based pre-filter: e.g. signal=quote_request narrows the thread set
+      // to threads whose messages have a pricing_request OR quote_request signal.
+      // Synonyms: "quote_request" and "pricing_request" both map to the
+      // pricing/quote intent family.
+      const signalParam = typeof signal === "string" ? signal.trim() : "";
+      if (signalParam) {
+        const intentTypes =
+          signalParam === "quote_request" || signalParam === "pricing_request"
+            ? ["pricing_request", "quote_request"]
+            : [signalParam];
+        const matchingThreadRows = await db
+          .selectDistinct({ threadId: emailMessages.threadId })
+          .from(emailSignals)
+          .innerJoin(emailMessages, eq(emailMessages.id, emailSignals.messageId))
+          .where(
+            and(
+              eq(emailMessages.orgId, orgId),
+              inArray(emailSignals.intentType, intentTypes),
+            ),
+          );
+        filters.threadIdsIn = matchingThreadRows
+          .map(r => r.threadId)
+          .filter((id): id is string => !!id);
+      }
+
       const result = await storage.listEmailConversationThreads(orgId, filters);
       const threads = result.threads;
 
@@ -265,9 +291,39 @@ export function registerConversationsRoutes(app: Express): void {
         if (u) ownerMap.set(id, u.name);
       }));
 
+      // Enrich each thread with the unique set of intent_types found across its
+      // messages so the UI can render badges like "Quote", "Urgent", etc.
+      const threadKeys = threads.map(t => t.threadId).filter(Boolean) as string[];
+      const signalsByThread = new Map<string, Set<string>>();
+      if (threadKeys.length > 0) {
+        const sigRows = await db
+          .select({
+            threadId: emailMessages.threadId,
+            intentType: emailSignals.intentType,
+          })
+          .from(emailSignals)
+          .innerJoin(emailMessages, eq(emailMessages.id, emailSignals.messageId))
+          .where(
+            and(
+              eq(emailMessages.orgId, orgId),
+              inArray(emailMessages.threadId, threadKeys),
+            ),
+          );
+        for (const row of sigRows) {
+          if (!row.threadId || !row.intentType) continue;
+          if (!signalsByThread.has(row.threadId)) {
+            signalsByThread.set(row.threadId, new Set());
+          }
+          signalsByThread.get(row.threadId)!.add(row.intentType);
+        }
+      }
+
       const enriched = threads.map(t => ({
         ...t,
         ownerName: t.ownerUserId ? (ownerMap.get(t.ownerUserId) ?? null) : null,
+        signals: t.threadId && signalsByThread.has(t.threadId)
+          ? Array.from(signalsByThread.get(t.threadId)!)
+          : [],
       }));
 
       res.json({ count: result.totalCount, threads: enriched, nextCursor: result.nextCursor });

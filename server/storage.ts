@@ -6173,6 +6173,7 @@ export class DatabaseStorage implements IStorage {
     linkedAccountId?: string;
     linkedCarrierId?: string;
     threadId?: string;
+    threadIdsIn?: string[];
     limit?: number;
     cursor?: string;
     excludeArchived?: boolean;
@@ -6218,6 +6219,14 @@ export class DatabaseStorage implements IStorage {
 
     if (filters.threadId) {
       conditions.push(eq(emailConversationThreads.threadId, filters.threadId));
+    }
+
+    if (filters.threadIdsIn) {
+      if (filters.threadIdsIn.length === 0) {
+        conditions.push(sql`false`);
+      } else {
+        conditions.push(inArray(emailConversationThreads.threadId, filters.threadIdsIn));
+      }
     }
 
     if (filters.dateFrom) {

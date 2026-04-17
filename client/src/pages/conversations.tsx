@@ -14,7 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Clock, AlertTriangle, User, Users, MessageSquare, CheckCircle2, Sparkles, X, Mail, ArrowUpRight, ArrowDownLeft, ChevronRight, PenLine, Check, Loader2, Archive, Search, ChevronsUpDown } from "lucide-react";
+import { Clock, AlertTriangle, User, Users, MessageSquare, CheckCircle2, Sparkles, X, Mail, ArrowUpRight, ArrowDownLeft, ChevronRight, PenLine, Check, Loader2, Archive, Search, ChevronsUpDown, DollarSign } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DraftEmailModal } from "@/components/DraftEmailModal";
 
@@ -36,6 +36,13 @@ interface ConversationThread {
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  signals?: string[];
+}
+
+const QUOTE_SIGNAL_TYPES = new Set(["pricing_request", "quote_request"]);
+
+function hasQuoteSignal(thread: ConversationThread): boolean {
+  return (thread.signals ?? []).some(s => QUOTE_SIGNAL_TYPES.has(s));
 }
 
 interface ThreadsResponse {
@@ -557,6 +564,15 @@ function ThreadRow({
             {msgCount > 0 && (
               <Badge variant="outline" className="text-xs">{msgCount} msg{msgCount !== 1 ? "s" : ""}</Badge>
             )}
+            {hasQuoteSignal(thread) && (
+              <Badge
+                className="text-xs bg-emerald-600 text-white gap-1"
+                data-testid={`badge-quote-request-${thread.id}`}
+              >
+                <DollarSign className="w-3 h-3" />
+                Quote request
+              </Badge>
+            )}
           </div>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             {thread.linkedAccountId && (
@@ -754,7 +770,7 @@ export default function ConversationsPage() {
   const { user } = useAuth();
   const { toast } = useToast();
 
-  const [activeTab, setActiveTab] = useState<"mine" | "unowned" | "high_priority" | "all" | "archived">("mine");
+  const [activeTab, setActiveTab] = useState<"mine" | "unowned" | "quote_requests" | "high_priority" | "all" | "archived">("mine");
   const [filterState, setFilterState] = useState<string>("all");
   const [filterPriority, setFilterPriority] = useState<string>("all");
   const [filterOverdue, setFilterOverdue] = useState(false);
@@ -784,6 +800,9 @@ export default function ConversationsPage() {
       p.set("waitingState", "waiting_on_us");
     } else if (activeTab === "high_priority") {
       p.set("responsePriority", "high");
+      p.set("waitingState", "waiting_on_us");
+    } else if (activeTab === "quote_requests") {
+      p.set("signal", "quote_request");
       p.set("waitingState", "waiting_on_us");
     } else if (activeTab === "archived") {
       p.set("archived", "true");
@@ -875,6 +894,15 @@ export default function ConversationsPage() {
     },
   });
 
+  const { data: quoteData } = useQuery<ThreadsResponse>({
+    queryKey: ["/api/internal/conversations", "quote-request-count"],
+    queryFn: async () => {
+      const res = await fetch("/api/internal/conversations?signal=quote_request&waitingState=waiting_on_us&limit=1");
+      if (!res.ok) throw new Error("");
+      return res.json();
+    },
+  });
+
   const assignToMeMutation = useMutation({
     mutationFn: async (threadId: string) => {
       if (!user?.id) throw new Error("Not logged in");
@@ -950,6 +978,13 @@ export default function ConversationsPage() {
             Unowned
             {(unownedData?.count ?? 0) > 0 && (
               <Badge className="ml-2 text-xs">{unownedData?.count}</Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="quote_requests" data-testid="tab-quote-requests">
+            <DollarSign className="w-3.5 h-3.5 mr-1" />
+            Quote requests
+            {(quoteData?.count ?? 0) > 0 && (
+              <Badge className="ml-2 text-xs bg-emerald-600 text-white">{quoteData?.count}</Badge>
             )}
           </TabsTrigger>
           <TabsTrigger value="high_priority" data-testid="tab-high-priority">
