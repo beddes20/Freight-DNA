@@ -775,6 +775,7 @@ export default function ConversationsPage() {
   const [filterPriority, setFilterPriority] = useState<string>("all");
   const [filterOverdue, setFilterOverdue] = useState(false);
   const [filterRep, setFilterRep] = useState<string>("all");
+  const [filterTeam, setFilterTeam] = useState<string>("all");
   const [selectedThread, setSelectedThread] = useState<ConversationThread | null>(null);
   const [allThreads, setAllThreads] = useState<ConversationThread[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -824,6 +825,12 @@ export default function ConversationsPage() {
         p.set("ownerUserId", filterRep);
       }
     }
+    if (
+      (activeTab === "all" || activeTab === "high_priority" || activeTab === "archived") &&
+      filterTeam !== "all"
+    ) {
+      p.set("team", filterTeam);
+    }
     if (cursorParam) p.set("cursor", cursorParam);
     return p.toString();
   }
@@ -856,13 +863,20 @@ export default function ConversationsPage() {
     onError: () => toast({ title: "Failed to load more conversations", variant: "destructive" }),
   });
 
-  const { data: repsData = [] } = useQuery<Array<{ id: string; name: string; username: string }>>({
+  const { data: repsData = [] } = useQuery<Array<{ id: string; name: string; username: string; role: string }>>({
     queryKey: ["/api/users?includeManagers=true"],
   });
 
   const sortedReps = [...repsData].sort((a, b) =>
     (a.name || a.username || "").localeCompare(b.name || b.username || "")
   );
+
+  const teamLeads = sortedReps.filter(r =>
+    ["director", "sales_director", "national_account_manager", "sales"].includes(r.role)
+  );
+
+  const firstName = (full: string | undefined | null) =>
+    (full ?? "").trim().split(/\s+/)[0] || "Team";
 
   const { data: mineData } = useQuery<ThreadsResponse>({
     queryKey: ["/api/internal/conversations", "mine-count", user?.id],
@@ -1001,12 +1015,29 @@ export default function ConversationsPage() {
         </TabsList>
 
         {(activeTab === "all" || activeTab === "high_priority" || activeTab === "archived") && (
-          <div className="mb-4" data-testid="rep-filter-container">
+          <div className="mb-4 flex flex-col md:flex-row md:items-center gap-2 md:gap-3" data-testid="rep-filter-container">
             <RepFilterCombobox
               value={filterRep}
               onChange={setFilterRep}
               reps={sortedReps}
             />
+            <Select value={filterTeam} onValueChange={setFilterTeam}>
+              <SelectTrigger className="w-full md:w-56" data-testid="select-filter-team">
+                <SelectValue placeholder="Team" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All teams</SelectItem>
+                {teamLeads.map((lead) => (
+                  <SelectItem
+                    key={lead.id}
+                    value={lead.id}
+                    data-testid={`select-filter-team-option-${lead.id}`}
+                  >
+                    Team {firstName(lead.name || lead.username)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         )}
 

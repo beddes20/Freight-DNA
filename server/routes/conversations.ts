@@ -256,21 +256,22 @@ export function registerConversationsRoutes(app: Express): void {
       if (dateFrom) filters.dateFrom = dateFrom as string;
       if (dateTo) filters.dateTo = dateTo as string;
 
-      // Role-based scoping: directors only see their own team's conversations
-      // (themselves + every descendant in the managerId chain). Admins keep
-      // org-wide visibility. Other roles fall through unchanged so existing
-      // dashboards continue to work as before.
-      const directorRoles = new Set(["director", "sales_director"]);
-      if (directorRoles.has(user.role)) {
-        const teamMemberIds = await storage.getTeamMemberIds(user.id, orgId);
-        const allowedOwnerIds = Array.from(new Set([user.id, ...teamMemberIds]));
-
-        // If the caller is explicitly filtering by an owner outside their team,
-        // return an empty page rather than leaking other teams' threads.
-        if (filters.ownerUserId && !allowedOwnerIds.includes(filters.ownerUserId)) {
-          return res.json({ count: 0, threads: [], nextCursor: null });
+      // Optional `team=<userId>` filter: returns threads owned by the given
+      // manager + every descendant in their managerId chain. Lets the UI
+      // show e.g. "Team Danny" / "Team Sam" without enforcing permissions.
+      const team = typeof req.query.team === "string" ? req.query.team.trim() : "";
+      if (team) {
+        const teamMemberIds = await storage.getTeamMemberIds(team, orgId);
+        const allowedOwnerIds = Array.from(new Set([team, ...teamMemberIds]));
+        // If the caller is also filtering by ownerUserId, intersect with team
+        // (owner outside the team -> empty page, otherwise just that owner).
+        if (filters.ownerUserId) {
+          if (!allowedOwnerIds.includes(filters.ownerUserId)) {
+            return res.json({ count: 0, threads: [], nextCursor: null });
+          }
+        } else {
+          filters.ownerUserIdIn = allowedOwnerIds;
         }
-        filters.ownerUserIdIn = allowedOwnerIds;
       }
 
       // Signal-based pre-filter: e.g. signal=quote_request narrows the thread set
