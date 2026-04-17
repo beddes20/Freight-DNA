@@ -56,6 +56,72 @@ export async function matchInboundSenderToAccount(
   return storage.getContactByEmailInOrg(normalized, orgId);
 }
 
+// ── Free / personal email providers we never treat as account domains ────────
+const FREE_PROVIDERS_FOR_DOMAIN_MATCH = new Set([
+  "gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "icloud.com",
+  "aol.com", "live.com", "msn.com", "me.com", "ymail.com",
+  "protonmail.com", "proton.me",
+]);
+
+function normalizeDomainForMatch(raw: string): string {
+  return raw.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
+}
+
+/**
+ * Fallback: when an email's sender (or counterparty) isn't in our CRM
+ * contacts, try matching their email DOMAIN against a known company's
+ * website / name in the org. This lets unknown senders at known accounts
+ * get linked → which then triggers the contact-suggestion pipeline so
+ * the NAM/AM is prompted to add them as a real contact.
+ *
+ * Returns the best matching companyId or null.
+ */
+export async function matchAccountByEmailDomain(
+  emailAddress: string,
+  orgId: string,
+): Promise<string | null> {
+  const domain = emailAddress.split("@")[1]?.toLowerCase().trim();
+  if (!domain) return null;
+  if (FREE_PROVIDERS_FOR_DOMAIN_MATCH.has(domain)) return null;
+
+  const companies = await storage.getCompanies(orgId).catch(() => [] as Awaited<ReturnType<typeof storage.getCompanies>>);
+  let bestId: string | null = null;
+  let bestScore = 0;
+  let tied = false;
+
+  for (const c of companies) {
+    // Webhook-time linking only accepts strong WEBSITE/DOMAIN evidence
+    // (>=25). Name-only heuristic matches are intentionally excluded here
+    // because they're too weak to auto-link a conversation to an account
+    // — the contact-suggestion service still uses them for scoring once
+    // a message is linked some other way.
+    let score = 0;
+    if (c.website) {
+      const site = normalizeDomainForMatch(c.website);
+      if (site === domain) score = 30;
+      else if (site && (domain.endsWith("." + site) || site.endsWith("." + domain))) score = 25;
+    }
+    if (score === 0) continue;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = c.id;
+      tied = false;
+    } else if (score === bestScore && c.id !== bestId) {
+      tied = true;
+    }
+  }
+
+  // Ambiguity guard: if two or more companies tie at the top score,
+  // refuse to link rather than risk attaching to the wrong account.
+  if (tied) {
+    log(`[user-mailbox] Domain-match ambiguous for ${emailAddress} — multiple companies share domain, skipping fallback`);
+    return null;
+  }
+
+  return bestId;
+}
+
 interface GraphNotificationValue {
   clientState?: string;
   subscriptionId?: string;
@@ -298,6 +364,22 @@ async function processUserMailboxEmail(params: {
     };
   }
 
+  // Domain-match fallback: if still no match, try matching the counterparty's
+  // email domain against a known company in the org. This is the critical
+  // path for "unknown sender at known account" — the message gets linked to
+  // the account so the contact-suggestion pipeline can prompt the rep to
+  // add this person as a real contact.
+  if (!accountMatch) {
+    for (const email of counterpartyEmails) {
+      const matchedCompanyId = await matchAccountByEmailDomain(email, orgId);
+      if (matchedCompanyId) {
+        accountMatch = { companyId: matchedCompanyId, contactId: "", contactName: "" };
+        log(`[user-mailbox] Domain-match fallback linked email from ${email} → company ${matchedCompanyId}`);
+        break;
+      }
+    }
+  }
+
   // If we have neither a contact match nor an existing thread, drop the
   // message — there's nothing to link it to. (If the thread exists but has
   // no linkedAccountId, we still save the message below with linkedAccountId
@@ -343,7 +425,7 @@ async function processUserMailboxEmail(params: {
     return;
   }
 
-  log(`[user-mailbox] ${direction} email recorded: from=${fromEmail} to=${toEmail} account=${accountMatch.companyId} msgId=${providerMessageId}`);
+  log(`[user-mailbox] ${direction} email recorded: from=${fromEmail} to=${toEmail} account=${accountMatch?.companyId ?? "(none)"} msgId=${providerMessageId}`);
 
   if (conversationId) {
     try {
