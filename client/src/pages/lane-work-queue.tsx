@@ -993,13 +993,23 @@ function LaneRow({
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor={`edit-equipment-${item.laneId}`}>Equipment type</Label>
-                <Input
-                  id={`edit-equipment-${item.laneId}`}
-                  value={editForm.equipmentType}
-                  onChange={e => setEditForm(f => ({ ...f, equipmentType: e.target.value }))}
-                  placeholder="e.g. Dry Van"
-                  data-testid={`input-edit-equipment-${item.laneId}`}
-                />
+                <Select
+                  value={editForm.equipmentType === "" ? "__none__" : editForm.equipmentType}
+                  onValueChange={v => setEditForm(f => ({ ...f, equipmentType: v === "__none__" ? "" : v }))}
+                >
+                  <SelectTrigger
+                    id={`edit-equipment-${item.laneId}`}
+                    data-testid={`select-edit-equipment-${item.laneId}`}
+                  >
+                    <SelectValue placeholder="Any" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Any</SelectItem>
+                    {EQUIPMENT_TYPES.map(t => (
+                      <SelectItem key={t} value={t}>{t}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor={`edit-loads-${item.laneId}`}>Avg loads/week</Label>
@@ -1284,7 +1294,7 @@ interface BuildLaneForm {
   ownerUserId: string;
 }
 
-const EQUIPMENT_TYPES = ["Box Truck", "Conestoga", "Dry Van", "Flatbed", "Other", "Reefer", "RGN", "Step Deck", "Tanker"];
+const EQUIPMENT_TYPES = ["Box Truck", "Conestoga", "Dry Van", "Flatbed", "Other", "Power Only", "Reefer", "RGN", "Step Deck", "Tanker"];
 
 function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, isAdminOrDirector }: { open: boolean; onClose: () => void; onCreated: () => void; currentUser: { id: string; name: string } | null; teamMembers: TeamMember[]; isAdminOrDirector: boolean }) {
   const { toast } = useToast();
