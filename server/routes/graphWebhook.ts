@@ -201,12 +201,28 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
   const providerMessageId = messageDetails?.id ?? resourceDataId;
   const receivedAt = messageDetails?.receivedDateTime ? new Date(messageDetails.receivedDateTime) : new Date();
 
-  const resourceMailbox = resource.match(/users\/([^/]+)\//);
-  const mailboxEmail = resourceMailbox ? decodeURIComponent(resourceMailbox[1]).toLowerCase() : "";
+  // Microsoft Graph delivers SentItems notifications with inconsistent casing
+  // (`Users/...` vs `users/...`) and the path segment may be either the
+  // mailbox email OR the user's Azure AD object ID (UUID). Match
+  // case-insensitively, and when the path is a UUID, fall back to looking up
+  // the monitored mailbox by Azure user id instead of email.
+  const resourceMailbox = resource.match(/users\/([^/]+)\//i);
+  const rawMailboxSegment = resourceMailbox ? decodeURIComponent(resourceMailbox[1]) : "";
+  const isUuidSegment = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawMailboxSegment);
+  const mailboxEmail = !isUuidSegment ? rawMailboxSegment.toLowerCase() : "";
 
-  const monitoredMailbox = mailboxEmail
+  let monitoredMailbox = mailboxEmail
     ? await storage.getMonitoredMailboxByEmail(orgId, mailboxEmail).catch(() => null)
     : null;
+
+  // Subscription-id resolution path (already used by the outer caller) — when
+  // the resource segment is a UUID we cannot look up by email, but the
+  // notification's subscriptionId pins us to a specific monitored mailbox.
+  if (!monitoredMailbox && notification.subscriptionId) {
+    monitoredMailbox = await storage
+      .getMonitoredMailboxByAnySubscriptionId(notification.subscriptionId)
+      .catch(() => null) ?? null;
+  }
 
   if (monitoredMailbox) {
     const allToRecipients = (messageDetails?.toRecipients ?? [])

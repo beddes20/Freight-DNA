@@ -804,7 +804,9 @@ export default function ConversationsPage() {
       p.set("waitingState", "waiting_on_us");
     } else if (activeTab === "quote_requests") {
       p.set("signal", "quote_request");
-      p.set("waitingState", "waiting_on_us");
+      // Intentionally NOT scoping to waitingState=waiting_on_us — once a rep
+      // replies the thread flips to waiting_on_them, but we still want it
+      // visible on this tab so reps can track outcomes after responding.
     } else if (activeTab === "archived") {
       p.set("archived", "true");
       if (debouncedSearch) p.set("search", debouncedSearch);
