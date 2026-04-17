@@ -437,7 +437,7 @@ async function processUserMailboxEmail(params: {
 
       const threadBase: EmailConversationThread = existingThread ?? {
         id: "", orgId, threadId: conversationId,
-        linkedAccountId: accountMatch.companyId, linkedCarrierId: null,
+        linkedAccountId: accountMatch?.companyId ?? null, linkedCarrierId: null,
         ownerUserId: monitoredMailbox.userId,
         waitingState: "waiting_on_us",
         responsePriority: "normal", lastMessageId: null,
@@ -494,26 +494,39 @@ export async function processGraphNotifications(body: unknown): Promise<void> {
     }
 
     const resource = notification.resource ?? "";
-    const mailboxMatch = resource.match(/users\/([^/]+)\//);
+    // Microsoft Graph delivers notifications with inconsistent casing
+    // (sometimes `users/...`, sometimes `Users/...`) and may use either the
+    // mailbox email or the user's Azure AD object ID as the path segment.
+    // Match case-insensitively so SentItems notifications resolve correctly.
+    const mailboxMatch = resource.match(/users\/([^/]+)\//i);
     const mailbox = mailboxMatch ? decodeURIComponent(mailboxMatch[1]) : null;
 
     let orgId: string | null = null;
+    let resolvedVia: string | null = null;
 
     if (notification.subscriptionId) {
       const monitoredMb = await storage.getMonitoredMailboxByAnySubscriptionId(notification.subscriptionId).catch(() => null);
       if (monitoredMb) {
         orgId = monitoredMb.orgId;
+        resolvedVia = "subscriptionId";
       }
     }
 
-    if (!orgId && mailbox) {
+    if (!orgId && mailbox && mailbox.includes("@")) {
       const org = await storage.getOrgByOutlookMailbox(mailbox).catch(() => null);
-      if (org) orgId = org.id;
+      if (org) {
+        orgId = org.id;
+        resolvedVia = "mailboxEmail";
+      }
     }
 
     if (!orgId) {
-      log(`Could not resolve org for resource "${resource}" — skipping (no matching monitored mailbox or org)`);
+      log(`Could not resolve org for resource "${resource}" subId=${notification.subscriptionId ?? "(none)"} — skipping (no matching monitored mailbox or org)`);
       continue;
+    }
+    if (resolvedVia) {
+      // Lightweight breadcrumb so we can confirm SentItems subscriptions are firing.
+      log(`Notification accepted via ${resolvedVia} subId=${notification.subscriptionId ?? "(none)"} resource="${resource.slice(0, 80)}"`);
     }
 
     processNotification(notification, orgId).catch(err => {
