@@ -123,14 +123,14 @@ function log(msg: string) {
  * Send a prompt to GPT-4o-mini and return the text response.
  * Throws if the API call fails or no API key is configured.
  */
-export async function callAI(prompt: string, maxTokens = 400): Promise<string> {
+export async function callAI(prompt: string, maxTokens = 400, timeoutMs = 15_000): Promise<string> {
   const openai = getOpenAI();
   const resp = await openai.chat.completions.create({
     model: "gpt-4o",
     messages: [{ role: "user", content: prompt }],
     max_tokens: maxTokens,
     temperature: 0.5,
-  });
+  }, { signal: AbortSignal.timeout(timeoutMs) });
   return resp.choices[0]?.message?.content?.trim() ?? "";
 }
 

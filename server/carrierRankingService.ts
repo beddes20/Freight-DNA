@@ -931,6 +931,31 @@ export async function rankCarriersForLane(
   const laneDestState = normStr(lane.destinationState ?? "");
   const customerName = lane.companyName ?? "";
 
+  // ── Pre-compute customer-history loads per carrier (single O(rows) pass) ───
+  // Previous implementation called extractCustomerHistoryLoads inside the per-carrier
+  // scoring loop, making the cost O(catalog × uploadRows). For large orgs this could
+  // block the event loop for 100+ seconds. Now we scan uploads once.
+  const customerLoadsByCarrier = new Map<string, number>();
+  if (customerName) {
+    const customerNorm = normStr(customerName);
+    const customerNeedle = customerNorm.slice(0, 6);
+    const sortedUploads = [...uploads].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
+    for (const upload of sortedUploads.slice(0, 3)) {
+      const rows = (upload.rows as TmsRow[]) ?? [];
+      for (const row of rows) {
+        const rawCarrier = readTmsField(row, "carrier", "carrierName", "carrier_name", "Carrier", "Carrier name");
+        const rowCarrier = normStr(parseCarrierName(rawCarrier));
+        if (!rowCarrier) continue;
+        const rowCustomer = normStr(readTmsField(row, "customerName", "Customer", "customer", "customer_name"));
+        if (!rowCustomer) continue;
+        if (!rowCustomer.includes(customerNeedle)) continue;
+        customerLoadsByCarrier.set(rowCarrier, (customerLoadsByCarrier.get(rowCarrier) ?? 0) + 1);
+      }
+    }
+  }
+  const lookupCustomerLoads = (carrierName: string): number =>
+    customerLoadsByCarrier.get(normStr(carrierName)) ?? 0;
+
   // Build incumbent lookup for coverage boost
   const useIncumbentFlow = shouldUseIncumbentFirstFlow(coverageProfile);
   const ineligibleStatuses = new Set(["do_not_use", "inactive", "disqualified"]);
@@ -1133,7 +1158,7 @@ export async function rankCarriersForLane(
 
     // Customer history signal: carrier has run freight for this same customer before
     // Increased cap from +15 to +20; base from +8 to +12
-    const custLoads = extractCustomerHistoryLoads(uploads, carrier.name, customerName);
+    const custLoads = lookupCustomerLoads(carrier.name);
     let _dbgCustHistScore = 0;
     if (custLoads > 0) {
       _dbgCustHistScore = Math.min(20, 12 + custLoads * 2);
@@ -1352,7 +1377,7 @@ export async function rankCarriersForLane(
 
     // Customer history signal for TMS-only carriers
     // Increased cap from +15 to +20; base from +8 to +12
-    const custLoadsHist = extractCustomerHistoryLoads(uploads, carrierNorm, customerName);
+    const custLoadsHist = lookupCustomerLoads(carrierNorm);
     if (custLoadsHist > 0) {
       fitScore = Math.min(100, fitScore + Math.min(20, 12 + custLoadsHist * 2));
       reasons.push(`Hauled for ${customerName} (${custLoadsHist} loads)`);
