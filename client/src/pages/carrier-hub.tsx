@@ -32,6 +32,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ConversationThreadBadges } from "@/components/conversation-thread-badges";
 import { resolveLaneLocationWithConfidence } from "@/lib/laneLocationNormalizer";
 import { LaneLocationFeedback, EMPTY_NORM_STATE, type FieldNormState } from "@/components/lane-location-feedback";
+import { CityAutocompleteInput } from "@/components/city-autocomplete-input";
 
 // ── Source channel helpers ─────────────────────────────────────────────────────
 
@@ -502,13 +503,16 @@ function ClaimedLaneForm({ carrierId, onSave, onCancel }: { carrierId: string; o
       <div className="grid grid-cols-2 gap-2">
         <div>
           <Label className="text-xs">Origin City</Label>
-          <Input
-            data-testid="input-lane-origin-city"
+          <CityAutocompleteInput
+            testId="input-lane-origin-city"
             value={form.originCity}
-            onChange={e => { setForm(f => ({ ...f, originCity: e.target.value })); setOriginNorm(EMPTY_NORM_STATE); }}
+            stateFilter={form.originState}
+            onChange={v => { setForm(f => ({ ...f, originCity: v })); setOriginNorm(EMPTY_NORM_STATE); }}
+            onSelect={(city, state) => { setForm(f => ({ ...f, originCity: city, originState: state })); setOriginNorm(EMPTY_NORM_STATE); }}
             onBlur={handleOriginBlur}
             placeholder="Chicago"
-            className={`mt-1 h-8 text-sm ${originHasWarning ? "border-amber-400 focus-visible:ring-amber-400" : ""}`}
+            className="mt-1"
+            inputClassName={`h-8 text-sm ${originHasWarning ? "border-amber-400 focus-visible:ring-amber-400" : ""}`}
           />
           <LaneLocationFeedback
             norm={originNorm}
@@ -530,13 +534,16 @@ function ClaimedLaneForm({ carrierId, onSave, onCancel }: { carrierId: string; o
         </div>
         <div>
           <Label className="text-xs">Dest City</Label>
-          <Input
-            data-testid="input-lane-dest-city"
+          <CityAutocompleteInput
+            testId="input-lane-dest-city"
             value={form.destCity}
-            onChange={e => { setForm(f => ({ ...f, destCity: e.target.value })); setDestNorm(EMPTY_NORM_STATE); }}
+            stateFilter={form.destState}
+            onChange={v => { setForm(f => ({ ...f, destCity: v })); setDestNorm(EMPTY_NORM_STATE); }}
+            onSelect={(city, state) => { setForm(f => ({ ...f, destCity: city, destState: state })); setDestNorm(EMPTY_NORM_STATE); }}
             onBlur={handleDestBlur}
             placeholder="Dallas"
-            className={`mt-1 h-8 text-sm ${destHasWarning ? "border-amber-400 focus-visible:ring-amber-400" : ""}`}
+            className="mt-1"
+            inputClassName={`h-8 text-sm ${destHasWarning ? "border-amber-400 focus-visible:ring-amber-400" : ""}`}
           />
           <LaneLocationFeedback
             norm={destNorm}

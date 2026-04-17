@@ -393,6 +393,71 @@ export function normalizeLaneLocationInput(rawCity: string, rawState?: string): 
 }
 
 /**
+ * Prefix-based autocomplete for typing. Returns city/state matches whose
+ * (city or alias) name begins with the input. Optimized for as-you-type
+ * dropdowns rather than typo correction.
+ *
+ * @param rawCity     The (possibly partial) city the rep is typing.
+ * @param stateFilter Optional 2-letter state code to constrain results.
+ * @param maxResults  Max number of suggestions to return.
+ */
+export function getCityAutocompleteSuggestions(
+  rawCity: string,
+  stateFilter?: string,
+  maxResults = 8,
+): Array<{ city: string; state: string; canonical: string }> {
+  const trimmed = rawCity.trim();
+  if (trimmed.length < 2) return [];
+
+  let cityPart = trimmed;
+  let inlineStatePart = "";
+  const commaIdx = trimmed.lastIndexOf(",");
+  if (commaIdx !== -1) {
+    cityPart = trimmed.slice(0, commaIdx).trim();
+    inlineStatePart = trimmed.slice(commaIdx + 1).trim();
+  }
+
+  if (cityPart.length < 2) return [];
+
+  const cityPrefix = cityPart.toLowerCase();
+  const stateConstraint = (stateFilter?.trim() || inlineStatePart).toUpperCase();
+
+  const matches: Array<{ city: string; state: string; sortKey: string }> = [];
+  const seen = new Set<string>();
+
+  for (const entry of CITY_INDEX) {
+    if (stateConstraint) {
+      if (stateConstraint.length === 2) {
+        if (entry.state !== stateConstraint) continue;
+      } else if (stateConstraint.length === 1) {
+        if (!entry.state.startsWith(stateConstraint)) continue;
+      } else {
+        continue;
+      }
+    }
+    if (!entry.searchKey.startsWith(cityPrefix)) continue;
+
+    const dedupeKey = `${entry.city.toLowerCase()}|${entry.state}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    matches.push({
+      city: entry.city,
+      state: entry.state,
+      sortKey: `${entry.searchKey.length.toString().padStart(4, "0")}|${entry.city.toLowerCase()}|${entry.state}`,
+    });
+  }
+
+  matches.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+
+  return matches.slice(0, maxResults).map(m => ({
+    city: m.city,
+    state: m.state,
+    canonical: formatCanonicalCityState(m.city, m.state),
+  }));
+}
+
+/**
  * Returns a list of possible city/state suggestions for a given input.
  * Useful for building autocomplete or disambiguation UIs.
  */

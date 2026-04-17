@@ -84,6 +84,7 @@ import {
   normalizeStateAbbr,
 } from "@/lib/laneLocationNormalizer";
 import { LaneLocationFeedback as LocationFeedback, EMPTY_NORM_STATE, type FieldNormState } from "@/components/lane-location-feedback";
+import { CityAutocompleteInput } from "@/components/city-autocomplete-input";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1477,17 +1478,22 @@ function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, i
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="build-origin" className="text-xs">Origin City <span className="text-destructive">*</span></Label>
-              <Input
+              <CityAutocompleteInput
                 id="build-origin"
                 placeholder="e.g. Salt Lake City"
                 value={form.origin}
-                onChange={e => {
-                  setForm(f => ({ ...f, origin: e.target.value }));
+                stateFilter={form.originState}
+                onChange={v => {
+                  setForm(f => ({ ...f, origin: v }));
+                  setOriginNorm(EMPTY_NORM_STATE);
+                }}
+                onSelect={(city, state) => {
+                  setForm(f => ({ ...f, origin: city, originState: state }));
                   setOriginNorm(EMPTY_NORM_STATE);
                 }}
                 onBlur={handleOriginBlur}
-                className={originHasWarning ? "border-amber-400 focus-visible:ring-amber-400" : ""}
-                data-testid="input-build-origin"
+                inputClassName={originHasWarning ? "border-amber-400 focus-visible:ring-amber-400" : ""}
+                testId="input-build-origin"
               />
               <LocationFeedback
                 norm={originNorm}
@@ -1516,17 +1522,22 @@ function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, i
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="build-dest" className="text-xs">Destination City <span className="text-destructive">*</span></Label>
-              <Input
+              <CityAutocompleteInput
                 id="build-dest"
                 placeholder="e.g. Dallas"
                 value={form.destination}
-                onChange={e => {
-                  setForm(f => ({ ...f, destination: e.target.value }));
+                stateFilter={form.destinationState}
+                onChange={v => {
+                  setForm(f => ({ ...f, destination: v }));
+                  setDestNorm(EMPTY_NORM_STATE);
+                }}
+                onSelect={(city, state) => {
+                  setForm(f => ({ ...f, destination: city, destinationState: state }));
                   setDestNorm(EMPTY_NORM_STATE);
                 }}
                 onBlur={handleDestBlur}
-                className={destHasWarning ? "border-amber-400 focus-visible:ring-amber-400" : ""}
-                data-testid="input-build-dest"
+                inputClassName={destHasWarning ? "border-amber-400 focus-visible:ring-amber-400" : ""}
+                testId="input-build-dest"
               />
               <LocationFeedback
                 norm={destNorm}

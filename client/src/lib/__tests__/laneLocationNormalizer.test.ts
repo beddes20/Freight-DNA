@@ -3,6 +3,7 @@ import {
   resolveLaneLocationWithConfidence,
   normalizeLaneLocationInput,
   getLaneLocationSuggestions,
+  getCityAutocompleteSuggestions,
   formatCanonicalCityState,
   normalizeStateAbbr,
 } from "../laneLocationNormalizer";
@@ -234,5 +235,57 @@ describe("getLaneLocationSuggestions", () => {
       expect(s.state).toBeTruthy();
       expect(s.canonical).toBe(`${s.city}, ${s.state}`);
     }
+  });
+});
+
+// ── getCityAutocompleteSuggestions ────────────────────────────────────────────
+
+describe("getCityAutocompleteSuggestions", () => {
+  it("returns nothing for inputs shorter than 2 characters", () => {
+    expect(getCityAutocompleteSuggestions("")).toEqual([]);
+    expect(getCityAutocompleteSuggestions("p")).toEqual([]);
+  });
+
+  it("returns prefix matches for a partial city", () => {
+    const suggestions = getCityAutocompleteSuggestions("phoe");
+    expect(suggestions.length).toBeGreaterThan(0);
+    expect(suggestions.some(s => s.city === "Phoenix" && s.state === "AZ")).toBe(true);
+    for (const s of suggestions) {
+      expect(s.city.toLowerCase().startsWith("phoe")).toBe(true);
+    }
+  });
+
+  it("filters by an explicit state", () => {
+    const suggestions = getCityAutocompleteSuggestions("phoenix", "AZ");
+    expect(suggestions.some(s => s.city === "Phoenix" && s.state === "AZ")).toBe(true);
+    for (const s of suggestions) {
+      expect(s.state).toBe("AZ");
+    }
+  });
+
+  it("respects state typed inline after a comma", () => {
+    const suggestions = getCityAutocompleteSuggestions("dallas, t");
+    expect(suggestions.length).toBeGreaterThan(0);
+    for (const s of suggestions) {
+      expect(s.state.startsWith("T")).toBe(true);
+      expect(s.city.toLowerCase().startsWith("dallas")).toBe(true);
+    }
+  });
+
+  it("finds smaller cities by partial spelling (Millwood)", () => {
+    const suggestions = getCityAutocompleteSuggestions("millw");
+    expect(suggestions.some(s => s.city === "Millwood")).toBe(true);
+  });
+
+  it("returns canonical formatted as City, ST", () => {
+    const suggestions = getCityAutocompleteSuggestions("austi", "TX");
+    for (const s of suggestions) {
+      expect(s.canonical).toBe(`${s.city}, ${s.state}`);
+    }
+  });
+
+  it("respects maxResults", () => {
+    const suggestions = getCityAutocompleteSuggestions("spring", undefined, 3);
+    expect(suggestions.length).toBeLessThanOrEqual(3);
   });
 });
