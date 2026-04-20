@@ -114,8 +114,34 @@ CUSTOMER intent types (use when actorType is "customer"):
 - meaningful_touchpoint: genuine engagement without a specific request
 - new_opportunity: customer mentioning new lanes, volumes, or freight
 - positive_feedback: customer expressing satisfaction
-- closed_won_indicator: signals a deal has been won
-- closed_lost_indicator: signals a deal has been lost or customer churned
+- closed_won_indicator: ANY language indicating the customer is awarding, dispatching,
+  or moving forward with us on a load, lane, or bid. Be liberal here — operational
+  follow-through is a win signal, not just explicit "you won" language.
+  Examples that qualify (non-exhaustive):
+    * "sending over the load now" / "sending you the rate con" / "rate con attached"
+    * "tendering now" / "tender is on its way" / "I'll tender this to you"
+    * "dispatching this to you" / "go ahead and cover" / "you're covered on this one"
+    * "you got it" / "it's yours" / "consider this booked" / "booked with you"
+    * "awarded" / "we're awarding you the lane" / "you won the bid"
+    * "PO attached" / "load number is..." / "BOL attached" / "pickup is confirmed for..."
+    * "approved at $X" / "we'll go with your rate" / "let's run it"
+  Set extractedData.winLanguage to the exact phrase that triggered the signal.
+
+- closed_lost_indicator: ANY language indicating the customer chose another carrier,
+  no longer needs us on this load, or the opportunity is dead. Be liberal —
+  customers very rarely send "you lost" language; the most common loss signal
+  is "load is covered" type phrasing AFTER a quote was given.
+  Examples that qualify (non-exhaustive):
+    * "load is covered" / "we're covered" / "all set on this one" / "got it covered"
+    * "no longer needed" / "we don't need it anymore" / "load cancelled"
+    * "going in a different direction" / "we went with another carrier"
+    * "appreciate the quote but..." / "thanks but we'll pass" / "not this time"
+    * "rate is too high, going with someone else" / "we found cheaper coverage"
+    * "we already have a carrier" / "moved this with another provider"
+  IMPORTANT: a bare "covered" / "all set" reply on a thread that started with a
+  pricing_request from us is almost always a loss — flag it with confidence ≥ 60
+  even when the customer doesn't explicitly say they chose someone else.
+  Set extractedData.lossLanguage to the exact phrase that triggered the signal.
 
 CONVERSATION SPARK intent types (use when actorType is "customer"):
 These capture data-backed outreach opportunities observed across email threads:
