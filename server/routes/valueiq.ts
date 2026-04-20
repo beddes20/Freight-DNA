@@ -223,12 +223,30 @@ export function registerValueIQRoutes(app: Express) {
     defaultAgentId: z.string().nullable().optional(),
     surface: z.string().optional(),
   });
+  async function assertProjectOwnership(projectId: string | null | undefined, userId: string): Promise<{ ok: boolean; reason?: string }> {
+    if (!projectId) return { ok: true };
+    const [p] = await db.select({ id: threadProjects.id })
+      .from(threadProjects)
+      .where(and(eq(threadProjects.id, projectId), eq(threadProjects.userId, userId)))
+      .limit(1);
+    return p ? { ok: true } : { ok: false, reason: "Project not found" };
+  }
+
   app.post("/api/valueiq/threads", requireAuth, async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const body = createThreadSchema.parse(req.body ?? {});
-      const defaultAgentId = body.defaultAgentId ?? (await ensureDefaultAgent(user.organizationId));
+      const projOk = await assertProjectOwnership(body.projectId ?? null, user.id);
+      if (!projOk.ok) return res.status(400).json({ error: projOk.reason });
+      let defaultAgentId = body.defaultAgentId ?? null;
+      if (defaultAgentId) {
+        const eligible = await assertAgentEligible(defaultAgentId, user);
+        if (!eligible.ok) return res.status(403).json({ error: eligible.reason });
+        defaultAgentId = eligible.agentId;
+      } else {
+        defaultAgentId = await ensureDefaultAgent(user.organizationId);
+      }
       const [row] = await db.insert(threadsTable).values({
         organizationId: user.organizationId,
         userId: user.id,
@@ -254,7 +272,15 @@ export function registerValueIQRoutes(app: Express) {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     const body = patchThreadSchema.parse(req.body ?? {});
-    const patch: any = { updatedAt: new Date() };
+    if (body.projectId !== undefined && body.projectId !== null) {
+      const projOk = await assertProjectOwnership(body.projectId, user.id);
+      if (!projOk.ok) return res.status(400).json({ error: projOk.reason });
+    }
+    if (body.defaultAgentId !== undefined && body.defaultAgentId !== null) {
+      const eligible = await assertAgentEligible(body.defaultAgentId, user);
+      if (!eligible.ok) return res.status(403).json({ error: eligible.reason });
+    }
+    const patch: Partial<typeof threadsTable.$inferInsert> = { updatedAt: new Date() };
     if (body.title !== undefined) patch.title = body.title;
     if (body.pinned !== undefined) patch.pinned = body.pinned;
     if (body.projectId !== undefined) patch.projectId = body.projectId;
@@ -325,6 +351,16 @@ export function registerValueIQRoutes(app: Express) {
       threadId: thread.id, role: "user", content: body.content,
       attachments: body.attachmentIds?.length ? body.attachmentIds : null,
     }).returning();
+
+    // Backfill thread_attachments.message_id for traceability
+    if (body.attachmentIds?.length) {
+      await db.update(threadAttachments)
+        .set({ messageId: userMsg.id })
+        .where(and(
+          eq(threadAttachments.threadId, thread.id),
+          inArray(threadAttachments.id, body.attachmentIds),
+        ));
+    }
 
     // Stream agent reply via SSE
     res.setHeader("Content-Type", "text/event-stream");

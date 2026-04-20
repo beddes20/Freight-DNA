@@ -132,6 +132,13 @@ function ThreadsPane() {
   });
 
   useEffect(() => {
+    // Honor ?thread=<id> deep-link from the Insights handoff bar.
+    const sp = new URLSearchParams(window.location.search);
+    const requested = sp.get("thread");
+    if (requested && threadsQ.data?.some((t) => t.id === requested)) {
+      setActiveId(requested);
+      return;
+    }
     if (!activeId && threadsQ.data && threadsQ.data.length > 0) setActiveId(threadsQ.data[0].id);
   }, [threadsQ.data, activeId]);
 
