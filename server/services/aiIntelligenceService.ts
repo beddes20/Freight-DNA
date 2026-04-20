@@ -380,20 +380,39 @@ Generate 3-5 coaching insights. Respond in JSON:
   await db.delete(relationshipCoachingInsights)
     .where(and(eq(relationshipCoachingInsights.orgId, orgId), eq(relationshipCoachingInsights.companyId, companyId)));
 
+  const validContactIds = new Set(companyContacts.map(c => c.id));
+
   const insights = [];
   for (const insight of result.insights || []) {
-    const [record] = await db.insert(relationshipCoachingInsights).values({
-      orgId,
-      companyId,
-      contactId: insight.contactId || null,
-      insightType: insight.type || "opportunity",
-      title: insight.title,
-      description: insight.description,
-      priority: insight.priority || "moderate",
-      suggestedAction: insight.suggestedAction,
-      dataContext: { sentiment: sentiment.map(s => ({ contactId: s.contactId, score: s.sentimentScore, trend: s.sentimentTrend })) },
-    }).returning();
-    insights.push(record);
+    const rawContactId = typeof insight.contactId === "string" ? insight.contactId.trim() : null;
+    let contactId: string | null = null;
+    if (rawContactId && validContactIds.has(rawContactId)) {
+      contactId = rawContactId;
+    } else if (rawContactId) {
+      console.warn(`[ai-intelligence] Coaching insight referenced unknown contactId "${rawContactId}" for company ${companyId}; coercing to null`);
+    }
+
+    if (!insight.title || !insight.description) {
+      console.warn(`[ai-intelligence] Skipping coaching insight missing title/description for company ${companyId}`);
+      continue;
+    }
+
+    try {
+      const [record] = await db.insert(relationshipCoachingInsights).values({
+        orgId,
+        companyId,
+        contactId,
+        insightType: insight.type || "opportunity",
+        title: insight.title,
+        description: insight.description,
+        priority: insight.priority || "moderate",
+        suggestedAction: insight.suggestedAction,
+        dataContext: { sentiment: sentiment.map(s => ({ contactId: s.contactId, score: s.sentimentScore, trend: s.sentimentTrend })) },
+      }).returning();
+      insights.push(record);
+    } catch (err) {
+      console.warn(`[ai-intelligence] Skipping coaching insight insert for company ${companyId}:`, err instanceof Error ? err.message : err);
+    }
   }
 
   return insights;
