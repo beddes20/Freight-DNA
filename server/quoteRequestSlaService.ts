@@ -2,10 +2,43 @@ import cron from "node-cron";
 import { storage, db } from "./storage";
 import { notifications } from "@shared/schema";
 import { and, eq, lt } from "drizzle-orm";
-import type { InsertNotification } from "@shared/schema";
+import type { InsertNotification, UserRole } from "@shared/schema";
 
 const QUOTE_SLA_MINUTES = 7;
 const ESCALATION_MINUTES = 5;
+
+const AM_NAM_ROLES: ReadonlySet<UserRole> = new Set<UserRole>([
+  "account_manager",
+  "national_account_manager",
+]);
+
+/**
+ * Resolve the appropriate Quote SLA recipient for a company.
+ * Prefers the company's salesperson if their role is AM or NAM; otherwise
+ * walks up the manager chain and returns the first ancestor with an AM/NAM
+ * role. Returns null when no AM/NAM can be resolved. Uses a `seen` set to
+ * guard against manager-chain cycles.
+ */
+export async function resolveQuoteSlaRecipient(
+  salesPersonId: string | null | undefined,
+): Promise<string | null> {
+  if (!salesPersonId) return null;
+
+  const seen = new Set<string>();
+  let currentId: string | null = salesPersonId;
+
+  while (currentId && !seen.has(currentId)) {
+    seen.add(currentId);
+    const user = await storage.getUser(currentId);
+    if (!user) return null;
+    if (AM_NAM_ROLES.has(user.role as UserRole)) {
+      return user.id;
+    }
+    currentId = user.managerId ?? null;
+  }
+
+  return null;
+}
 
 export async function fireQuoteRequestAlert(
   orgId: string,
@@ -16,8 +49,14 @@ export async function fireQuoteRequestAlert(
   const company = await storage.getCompany(accountId);
   if (!company) return;
 
-  const repId = (company as any).salesPersonId as string | null;
-  if (!repId) return;
+  const salesPersonId = (company as any).salesPersonId as string | null;
+  const repId = await resolveQuoteSlaRecipient(salesPersonId);
+  if (!repId) {
+    console.warn(
+      `[quote-sla] ⚠️ Skipped alert for account ${company.name} (${accountId}) — no AM/NAM resolvable from salesPersonId=${salesPersonId ?? "null"} (signal ${signalId})`,
+    );
+    return;
+  }
 
   const alreadySent = await storage.hasUnreadNotification(repId, "quote_request_alert", signalId);
   if (alreadySent) return;
