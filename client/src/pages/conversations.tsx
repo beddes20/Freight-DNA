@@ -255,7 +255,7 @@ export function ThreadDetailPanel({
   const { data, isLoading } = useQuery<{ messages: EmailMessage[] }>({
     queryKey: ["/api/internal/conversations", thread.id, "messages"],
     queryFn: async () => {
-      const res = await fetch(`/api/internal/conversations/${thread.id}/messages`);
+      const res = await fetch(`/api/internal/conversations/${encodeURIComponent(thread.id)}/messages`);
       if (!res.ok) throw new Error("Failed to fetch messages");
       return res.json();
     },
@@ -528,7 +528,7 @@ function ThreadRow({
   const { data: msgData } = useQuery<{ messages: EmailMessage[] }>({
     queryKey: ["/api/internal/conversations", thread.id, "messages"],
     queryFn: async () => {
-      const res = await fetch(`/api/internal/conversations/${thread.id}/messages`);
+      const res = await fetch(`/api/internal/conversations/${encodeURIComponent(thread.id)}/messages`);
       if (!res.ok) throw new Error("");
       return res.json();
     },

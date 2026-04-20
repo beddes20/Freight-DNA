@@ -431,8 +431,22 @@ export function registerConversationsRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const thread = await storage.getEmailConversationThreadById(req.params.id);
-      if (!thread || thread.orgId !== user.organizationId) {
+      // Support an "orphan" lookup by raw thread_id when no conversation
+      // record has been materialized yet (drilldowns can surface threads with
+      // signals that never produced an email_conversation_threads row).
+      let threadIdForMessages: string | null = null;
+      const idParam = String(req.params.id);
+
+      if (idParam.startsWith("thread:")) {
+        threadIdForMessages = idParam.slice("thread:".length);
+      } else {
+        const thread = await storage.getEmailConversationThreadById(idParam);
+        if (thread && thread.orgId === user.organizationId) {
+          threadIdForMessages = thread.threadId;
+        }
+      }
+
+      if (!threadIdForMessages) {
         return res.status(404).json({ error: "Conversation not found" });
       }
 
@@ -440,7 +454,7 @@ export function registerConversationsRoutes(app: Express): void {
         .from(emailMessages)
         .where(
           and(
-            eq(emailMessages.threadId, thread.threadId),
+            eq(emailMessages.threadId, threadIdForMessages),
             eq(emailMessages.orgId, user.organizationId),
           )
         )

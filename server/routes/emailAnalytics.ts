@@ -178,29 +178,30 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
           mt.thread_id,
           mt.has_won, mt.has_lost, mt.has_outcome,
           mt.last_signal_at,
-          ect.id              AS conversation_id,
-          ect.org_id,
-          ect.linked_account_id,
-          ect.linked_carrier_id,
+          COALESCE(ect.id, 'thread:' || mt.thread_id) AS conversation_id,
+          ect.id              AS ect_id,
+          COALESCE(ect.org_id, $1) AS org_id,
+          COALESCE(ect.linked_account_id, fallback.linked_account_id) AS linked_account_id,
+          COALESCE(ect.linked_carrier_id, fallback.linked_carrier_id) AS linked_carrier_id,
           ect.owner_user_id,
           u.name              AS owner_name,
-          ect.waiting_state,
-          ect.response_priority,
+          COALESCE(ect.waiting_state, 'waiting_on_us') AS waiting_state,
+          COALESCE(ect.response_priority, 'normal') AS response_priority,
           ect.last_message_id,
           ect.last_incoming_at,
           ect.last_outgoing_at,
           ect.waiting_since_at,
           ect.overdue_at,
           ect.archived_at,
-          ect.created_at      AS thread_created_at,
-          ect.updated_at      AS thread_updated_at,
+          COALESCE(ect.created_at, latest.created_at) AS thread_created_at,
+          COALESCE(ect.updated_at, latest.created_at) AS thread_updated_at,
           latest.subject,
           latest.from_email,
           latest.to_email,
           latest.cc_email,
           latest.created_at   AS last_message_at,
-          c.name              AS company_name,
-          ca.name             AS carrier_name
+          COALESCE(c.name, c2.name)   AS company_name,
+          COALESCE(ca.name, ca2.name) AS carrier_name
         FROM matching_threads mt
         LEFT JOIN email_conversation_threads ect
           ON ect.thread_id = mt.thread_id AND ect.org_id = $1
@@ -214,7 +215,16 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
           ORDER BY created_at DESC
           LIMIT 1
         ) latest ON true
-        WHERE ect.id IS NOT NULL
+        LEFT JOIN LATERAL (
+          SELECT linked_account_id, linked_carrier_id
+          FROM email_messages em3
+          WHERE em3.thread_id = mt.thread_id AND em3.org_id = $1
+            AND (em3.linked_account_id IS NOT NULL OR em3.linked_carrier_id IS NOT NULL)
+          ORDER BY created_at DESC
+          LIMIT 1
+        ) fallback ON true
+        LEFT JOIN companies c2 ON c2.id = fallback.linked_account_id
+        LEFT JOIN carriers ca2 ON ca2.id = fallback.linked_carrier_id
         ORDER BY COALESCE(latest.created_at, mt.last_signal_at) DESC
         LIMIT 200
       `;
@@ -259,6 +269,7 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
           companyName: r.company_name ?? null,
           carrierName: r.carrier_name ?? null,
           outcome: outcomeLabel,
+          hasConversationRecord: r.ect_id != null,
         };
       });
 
