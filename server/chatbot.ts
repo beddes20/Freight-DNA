@@ -24,7 +24,7 @@ const db = drizzle(pool);
 const ratePositioningCache = new Map<string, { context: string; fetchedAt: number }>();
 const RATE_POSITIONING_CACHE_TTL_MS = 30 * 60 * 1000;
 
-async function getCachedRatePositioningContext(orgId: string, filterUserId?: string): Promise<string> {
+export async function getCachedRatePositioningContext(orgId: string, filterUserId?: string): Promise<string> {
   const cacheKey = `rpc:${orgId}:${filterUserId ?? "all"}`;
   const cached = ratePositioningCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < RATE_POSITIONING_CACHE_TTL_MS) {
@@ -74,7 +74,7 @@ function normalizeModeCS(raw: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-async function runCarrierLaneSearch(
+export async function runCarrierLaneSearch(
   orgId: string,
   originQuery: string,
   destQuery: string,
@@ -444,7 +444,7 @@ async function buildMyTeamContext(userId: string, userRole: string): Promise<str
   }
 }
 
-async function getCompanyDetails(orgId: string, companyName: string): Promise<string> {
+export async function getCompanyDetails(orgId: string, companyName: string): Promise<string> {
   try {
     const allCompanies = await db.select().from(companies).where(eq(companies.organizationId, orgId));
     const cn = companyName.toLowerCase();
@@ -563,8 +563,11 @@ export function registerChatbotRoutes(app: Express): void {
   app.get("/api/chatbot/conversations/:id/messages", async (req: Request, res: Response) => {
     if (!req.session?.userId) return res.status(401).json({ error: "Unauthorized" });
     try {
+      const conversationId = parseInt(req.params.id as string);
+      const [conv] = await db.select().from(chatConversations).where(eq(chatConversations.id, conversationId));
+      if (!conv || conv.userId !== req.session.userId) return res.status(404).json({ error: "Conversation not found" });
       const msgs = await db.select().from(chatMessages)
-        .where(eq(chatMessages.conversationId, parseInt(req.params.id as string)))
+        .where(eq(chatMessages.conversationId, conversationId))
         .orderBy(chatMessages.id);
       res.json(msgs);
     } catch (err) {
@@ -579,6 +582,9 @@ export function registerChatbotRoutes(app: Express): void {
 
     const conversationId = parseInt(req.params.id as string);
     try {
+      const [conv] = await db.select().from(chatConversations).where(eq(chatConversations.id, conversationId));
+      if (!conv || conv.userId !== req.session.userId) return res.status(404).json({ error: "Conversation not found" });
+
       await db.insert(chatMessages).values({
         conversationId,
         role: "user",
@@ -595,595 +601,44 @@ export function registerChatbotRoutes(app: Express): void {
         .limit(30);
 
       const effectiveScope = (user.role === "admin" || user.role === "director") ? "everyone" : scope;
-      const crmContext = await buildCrmContext(user.id, user.role, effectiveScope);
 
-      const scopeLabel = effectiveScope === "everyone" ? "the entire organization (all reps and teams)" : "the current user's team only";
-
-      // Build lightweight rate positioning summary for Guru default context (cached 30-min per org)
-      let ratePositioningContext = "";
-      const orgId = req.session?.organizationId;
-      if (orgId) {
-        const filterUserId = effectiveScope === "everyone" ? undefined : user.id;
-        ratePositioningContext = await getCachedRatePositioningContext(orgId, filterUserId);
-      }
-
-      const systemPrompt = `You are DNA Guru, an AI assistant built into the OrgChart CRM for Value Truck transportation brokerage. You have access to live CRM data.
-
-Current user: ${user.name} (${user.role.replace(/_/g, " ")})
-Data scope: ${scopeLabel}
-
-Here is the current CRM data:
-${crmContext}${ratePositioningContext}
-
-Keep it short and casual — reps are busy. No fluff, no filler.
-- Use the data above to answer questions about accounts, contacts, RFPs, touchpoints, tasks, and goals
-- For ranking questions use the TEAM MEMBERS section for per-rep stats
-- Bullet points for lists, plain sentences otherwise
-- If data isn't there, just say so
-- Talk like a sharp colleague, not a corporate assistant
-- When the user asks for details, full info, or wants to know everything about a SPECIFIC account — use the get_company_details tool
-- When the user says "open", "navigate to", "pull up", "go to", or "show me" a specific account page — use the navigate_to_company tool
-- When the user says they want to LOG A CALL, LOG AN EMAIL, LOG A TEXT, LOG A VISIT, or LOG A TOUCHPOINT — use the log_touchpoint tool
-- When the user says they want to CREATE A TASK, SET A REMINDER, or ADD A TO-DO — use the create_task tool
-- When the user says they want to MARK A TASK DONE, COMPLETE A TASK, or CHECK OFF a to-do — use the complete_task tool
-- When the user says a conversation WAS MEANINGFUL, or wants to MARK A TOUCHPOINT MEANINGFUL — use the mark_meaningful tool
-- When the user asks about CARRIERS on a lane, who runs a corridor, carrier pay rates, what we're paying for a mode on a lane (e.g. "what carriers run TX-CA?", "how much are we paying for dry vans CA-TX?") — use the carrier_lane_search tool
-- When the user asks about MARKET CONDITIONS, current spot rates, OTRI, tender rejections, market tightness, how hot/cool a lane is, or Sonar data — use the query_market_otri or query_national_rates tools
-- When the user asks about a SPECIFIC LANE's market signal, direction, how tight that corridor is, or spot rates — use the query_lane_votri tool with origin and destination (returns TRAC direction + spot rate as primary, VOTRI as supplementary)
-- When the user asks about NATIONAL rates, NTI spot $/move, contract $/mile, or the spread between spot and contract — use the query_national_rates tool
-- When the user asks about RATE COMPETITIVENESS, whether we're paying too much/little on a lane, or wants coaching on a specific lane's rate positioning — use the get_lane_rate_positioning tool
-- PROACTIVELY use Sonar market tools when the user asks about specific accounts' lanes, procurement strategy, buy rates on a corridor, or what action to take on a lane — don't wait for them to explicitly ask about "the market"
-- Example: if someone asks "what should I do for [Company] on the CHI-ATL lane?", query_lane_votri for Chicago→Atlanta and weave the signal into your advice
-
-=== PLAYBOOK PLAYS REGISTRY ===
-Every suggestion, call prep, and email draft should reference the play that applies. Use the play label and a one-line reason why it fits.
-Available plays:
-- "Stabilize At-Risk Account" — Intervene on accounts showing churn signals (load drops, score declines, service issues)
-- "Expand Contact Coverage" — Map additional stakeholders to reduce single-contact dependency
-- "Re-Engage Stale Account" — Restart communication on revenue-bearing accounts that have gone quiet
-- "Clear Overdue Commitment" — Complete or update overdue next steps to restore execution momentum
-- "Consolidate Spot → Mini-Bid" — Convert recurring spot volume into a contracted lane agreement
-- "RFP Defense / Expansion" — Cover uncovered high-volume RFP facilities and position for new freight
-- "Activate Stalled Awards" — Re-engage on awarded lanes not converting to loads
-- "Carrier Bench Strengthen" — Build carrier depth on recurring lanes for reliable coverage
-- "Market Tightening Outreach" — Proactively reach out ahead of a tightening market
-- "Market Loosening Opportunity" — Leverage a loosening market to negotiate rates and pitch new lanes
-- "Geography Expansion" — Identify freight at new customer facilities, sites, or regions
-- "Wallet Share Capture" — Increase share of customer's total freight spend
-- "Market Signal Outreach" — Act on a market signal creating an opportunity or risk for a specific account
-When generating a suggestion or coaching advice, include a line like: "Play: [Play Name] — [one-line reason why this play applies]"
-When drafting emails or call prep, note the play at the top so the rep knows which playbook move they're running.`;
-
-      const tools: any[] = [
-        {
-          type: "function",
-          function: {
-            name: "get_company_details",
-            description: "Pull the full account profile for a specific company: all contacts with relationship levels, recent touchpoints with notes, open RFPs, account summary, quirks, tendering style, and rep assignment. Use when the user asks for details or full info about a specific account.",
-            parameters: {
-              type: "object",
-              properties: {
-                company_name: { type: "string", description: "Name of the company to look up (partial match is fine)" },
-              },
-              required: ["company_name"],
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "navigate_to_company",
-            description: "Navigate the user directly to a company's account page in the CRM. Use when the user says 'open', 'go to', 'pull up', 'navigate to', or 'show me the account page for' a specific company.",
-            parameters: {
-              type: "object",
-              properties: {
-                company_name: { type: "string", description: "Name of the company to navigate to" },
-              },
-              required: ["company_name"],
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "complete_task",
-            description: "Mark an open task as complete/done. Use when the user says they want to mark a task done, complete a task, check off a to-do, or close out a task.",
-            parameters: {
-              type: "object",
-              properties: {
-                task_name: { type: "string", description: "Title or partial name of the task to mark complete" },
-              },
-              required: ["task_name"],
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "mark_meaningful",
-            description: "Mark the user's most recent touchpoint at a company as meaningful. Use when the user says a call/conversation was meaningful, productive, or they want to flag it as meaningful.",
-            parameters: {
-              type: "object",
-              properties: {
-                company_name: { type: "string", description: "Name of the company where the touchpoint occurred" },
-                contact_name: { type: "string", description: "Name of the contact involved (optional)" },
-              },
-              required: ["company_name"],
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "log_touchpoint",
-            description: "Log a touchpoint/interaction (call, email, text, or site visit) with a contact. Use this when the user wants to log or record a call, email, text, or meeting.",
-            parameters: {
-              type: "object",
-              properties: {
-                company_name: { type: "string", description: "Name of the company/account (as it appears in the CRM)" },
-                contact_name: { type: "string", description: "Name of the contact person (leave empty if not specified)" },
-                type: { type: "string", enum: ["call", "email", "text", "site_visit"], description: "Type of interaction" },
-                note: { type: "string", description: "Brief note about what was discussed or the outcome" },
-              },
-              required: ["type"],
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "create_task",
-            description: "Create a new task or reminder. Use this when the user wants to set a reminder, create a to-do, or follow up on something.",
-            parameters: {
-              type: "object",
-              properties: {
-                title: { type: "string", description: "Clear, actionable task title" },
-                due_date: { type: "string", description: "Due date in YYYY-MM-DD format (optional, omit if not mentioned)" },
-              },
-              required: ["title"],
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "carrier_lane_search",
-            description: "Search financial upload data to find which carriers run on a specific lane/corridor and what we're paying them. Use when the user asks about carriers on a lane, carrier pay rates, who runs TX-CA, what we're paying for dry vans on a corridor, etc.",
-            parameters: {
-              type: "object",
-              properties: {
-                origin: { type: "string", description: "Origin location: city+state ('Chicago, IL'), state abbreviation ('TX'), or city name. Leave empty to search any origin." },
-                destination: { type: "string", description: "Destination location: city+state, state abbreviation, or city name. Leave empty to search any destination." },
-                radius_miles: { type: "number", description: "Radius in miles around the origin/destination to include nearby lanes (default 75)." },
-                mode: { type: "string", description: "Equipment/mode filter: Van, Reefer, Flatbed, LTL, Drayage, or IMDL. Leave empty for all modes." },
-                min_loads_per_month: { type: "number", description: "Minimum average loads per month for a corridor to be included (default 3)." },
-              },
-              required: [],
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "query_national_rates",
-            description: "Fetch live national market data from FreightWaves Sonar: national OTRI (%), national spot $/move (NTI), contract $/mile (VCRPM1), and the RATES spread between spot and contract. Use when the user asks about overall market conditions, national OTRI, current spot rates, or the spread between spot and contract rates.",
-            parameters: {
-              type: "object",
-              properties: {},
-              required: [],
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "query_lane_votri",
-            description: "Fetch lane market intelligence (TRAC direction + spot rate as primary, VOTRI as supplementary). Returns TRAC forecast direction (Tightening/Stable/Softening), TRAC spot rate per mile, and VOTRI rejection rate when available. Use when the user asks how tight a specific lane is, the market signal for a corridor, or what to target buying on a lane.",
-            parameters: {
-              type: "object",
-              properties: {
-                origin: { type: "string", description: "Origin city or market (e.g. 'Atlanta', 'Chicago', 'Dallas')" },
-                destination: { type: "string", description: "Destination city or market (e.g. 'Dallas', 'Los Angeles', 'Memphis')" },
-              },
-              required: ["origin", "destination"],
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "query_market_otri",
-            description: "Fetch live OTRI (Outbound Tender Rejection Index), VOTRI (Van Tender Rejection Index), and week-over-week trend for a specific market/city from FreightWaves Sonar. Use when the user asks about a specific market's tightness, rejection rate, OTRI, VOTRI, or trend direction. Examples: 'Is Chicago tight?', 'What's the OTRI in Atlanta?', 'How is the Dallas market moving?'",
-            parameters: {
-              type: "object",
-              properties: {
-                market: {
-                  type: "string",
-                  description: "City/market name to fetch OTRI and VOTRI for (e.g. 'Atlanta', 'Dallas', 'Chicago')",
-                },
-              },
-              required: ["market"],
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "get_lane_rate_positioning",
-            description: "Get the rate positioning intelligence for a specific lane: TRAC contract rate benchmark, how the org's paid carrier rate compares to market (above/at/below market), the delta in $/mile and %, and a 3-week rate forecast direction. Use when the user asks about rate positioning, whether we're above or below market on a lane, TRAC benchmarks, carrier rate competitiveness, or market rate comparison for a specific origin-destination pair.",
-            parameters: {
-              type: "object",
-              properties: {
-                origin: { type: "string", description: "Origin city or market (e.g. 'Atlanta', 'Chicago', 'Dallas')" },
-                destination: { type: "string", description: "Destination city or market (e.g. 'Dallas', 'Los Angeles', 'Memphis')" },
-              },
-              required: ["origin", "destination"],
-            },
-          },
-        },
-      ];
-
+      // ─── DNA Logistics Bot agent core (Task #282 Phase 1) ──────────────
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
 
-      const chatHistory = history.map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-      }));
+      const { runAgentTurn } = await import("./agent/core");
+      const priorHistory = history
+        .slice(0, -1) // exclude the user message we just inserted; agent passes it as `userMessage`
+        .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
-      const stream = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [{ role: "system", content: systemPrompt }, ...chatHistory],
-        tools,
-        tool_choice: "auto",
-        stream: true,
-        max_tokens: 1200,
+      const { assistantText, hadError, surfacedAction } = await runAgentTurn({
+        ctx: {
+          rep: user,
+          organizationId: req.session.organizationId!,
+          channel: "in_app",
+          conversationRef: String(conversationId),
+          scope: effectiveScope as "my_team" | "everyone",
+        },
+        history: priorHistory,
+        userMessage: content.trim(),
+        emit: (event) => { res.write(`data: ${JSON.stringify(event)}\n\n`); },
       });
 
-      let fullResponse = "";
-      let toolCallId   = "";
-      let toolCallName = "";
-      let toolCallArgs = "";
-
-      for await (const chunk of stream) {
-        const choice = chunk.choices[0];
-        const delta = choice?.delta;
-
-        // Streaming text content
-        if (delta?.content) {
-          fullResponse += delta.content;
-          res.write(`data: ${JSON.stringify({ content: delta.content })}\n\n`);
-        }
-
-        // Accumulate tool call data
-        if (delta?.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            if (tc.id)              toolCallId   += tc.id;
-            if (tc.function?.name) toolCallName += tc.function.name;
-            if (tc.function?.arguments) toolCallArgs += tc.function.arguments;
-          }
-        }
-
-        // Tool call complete
-        if (choice?.finish_reason === "tool_calls" && toolCallName) {
-          try {
-            const args = JSON.parse(toolCallArgs);
-
-            // ── Data-retrieval tools execute server-side then feed result back to GPT ──
-            const dataRetrievalTools = ["carrier_lane_search", "get_company_details", "query_national_rates", "query_lane_votri", "query_market_otri", "get_lane_rate_positioning"];
-
-            if (dataRetrievalTools.includes(toolCallName)) {
-              let searchResult = "";
-              let callLabel = "";
-
-              if (toolCallName === "carrier_lane_search") {
-                callLabel = "call_carrier";
-                searchResult = await runCarrierLaneSearch(
-                  req.session.organizationId!,
-                  String(args.origin || ""),
-                  String(args.destination || ""),
-                  Number(args.radius_miles || 75),
-                  String(args.mode || ""),
-                  Number(args.min_loads_per_month || 3),
-                );
-              } else if (toolCallName === "get_company_details") {
-                callLabel = "call_company";
-                searchResult = await getCompanyDetails(req.session.organizationId!, String(args.company_name || ""));
-              } else if (toolCallName === "query_national_rates") {
-                callLabel = "call_sonar_pulse";
-                try {
-                  const pulse = await getNationalMarketSummary();
-                  const hasData = pulse.otri !== null;
-                  const signalLabel = !hasData ? "⚪ No Data" : pulse.otri! > 20 ? "🔴 Hot" : pulse.otri! > 8 ? "🟡 Warm" : "🟢 Cool";
-                  const lines: string[] = [
-                    `FreightWaves Sonar — National Market Pulse (as of ${new Date(pulse.timestamp).toLocaleString()})${pulse.isStale ? " ⚠ Stale" : ""}`,
-                  ];
-                  if (hasData) {
-                    lines.push(`National OTRI: ${pulse.otri!.toFixed(2)}% (${(pulse.otriWoWDelta ?? 0) > 0 ? "+" : ""}${(pulse.otriWoWDelta ?? 0).toFixed(1)} pp WoW) — ${signalLabel}`);
-                  } else {
-                    lines.push(`National OTRI: unavailable${pulse.lastSuccessfulPull ? ` — last updated ${pulse.lastSuccessfulPull}` : ""}`);
-                  }
-                  lines.push(pulse.ntiPerMove !== null ? `NTI National Spot: $${pulse.ntiPerMove > 100 ? pulse.ntiPerMove.toLocaleString() : pulse.ntiPerMove.toFixed(2)}/move` : `NTI National Spot: unavailable`);
-                  lines.push(pulse.ntiPerMile !== null ? `Contract Rate (VCRPM1): $${pulse.ntiPerMile.toFixed(2)}/mile` : `Contract Rate (VCRPM1): unavailable`);
-                  if (hasData) {
-                    lines.push(`Market Signal: ${pulse.otri! > 20 ? "Tight — capacity scarce, rejection rates elevated. Good time to lock in contracts and position as reliable capacity source." : pulse.otri! > 8 ? "Moderate — balanced market conditions." : "Loose — capacity abundant, good negotiating leverage on buy rates."}`);
-                  }
-                  searchResult = lines.join("\n");
-                } catch {
-                  searchResult = "Sonar market data temporarily unavailable.";
-                }
-              } else if (toolCallName === "query_lane_votri") {
-                callLabel = "call_sonar_lane";
-                try {
-                  const origin = String(args.origin || "");
-                  const destination = String(args.destination || "");
-                  const votriMap = await getLaneVotrisBatch([{ origin, destination }]);
-                  const qualifier = buildVotriQualifier(origin, destination);
-                  const votri = votriMap.get(qualifier);
-
-                  const tracDir = await tracLaneDirectionSignal(origin, destination).catch(() => null);
-                  let tracSpotRpm: number | null = null;
-                  try {
-                    const lmr = await getLaneMarketRate(origin, destination);
-                    tracSpotRpm = lmr.marketRatePerMile;
-                  } catch {}
-
-                  const directionLabel = tracDir === "hot" ? "Tightening" : tracDir === "warm" ? "Mild tightening" : tracDir === "stable" ? "Stable" : tracDir === "cool" ? "Softening" : null;
-                  const hasVotriData = votri?.votri !== null && votri?.votri !== undefined;
-
-                  const lines: string[] = [
-                    `Lane market intelligence for ${origin} → ${destination}${votri?.isStale ? " ⚠ Stale" : ""}`,
-                  ];
-                  if (directionLabel) {
-                    lines.push(`TRAC Direction: ${directionLabel} (primary signal)`);
-                  }
-                  if (tracSpotRpm !== null) {
-                    lines.push(`TRAC Spot Rate: $${tracSpotRpm.toFixed(2)}/mile`);
-                  }
-                  if (hasVotriData) {
-                    lines.push(`VOTRI: ${votri!.votri!.toFixed(1)}%${votri!.votriWoW !== null ? ` (WoW: ${votri!.votriWoW > 0 ? "+" : ""}${votri!.votriWoW.toFixed(1)} pp)` : ""}`);
-                  }
-                  if (!directionLabel && !hasVotriData && tracSpotRpm === null) {
-                    lines.push(`Market data unavailable for this lane${votri?.lastSuccessfulPull ? ` — last updated ${votri.lastSuccessfulPull}` : ""}`);
-                  }
-                  lines.push(
-                    tracDir === "hot"
-                      ? "Market is tight on this lane — TRAC forecasts capacity tightening. Rates under upward pressure."
-                      : tracDir === "warm"
-                      ? "Market shows mild tightening — monitor for further escalation."
-                      : tracDir === "stable"
-                      ? "Market is stable — no significant directional movement expected."
-                      : tracDir === "cool"
-                      ? "Market is softening — good conditions for rate negotiation."
-                      : hasVotriData
-                      ? (votri!.signal === "hot" ? "VOTRI indicates tight capacity on this corridor." : votri!.signal === "cool" ? "VOTRI indicates loose capacity — good for negotiation." : "")
-                      : ""
-                  );
-                  searchResult = lines.filter(Boolean).join("\n");
-                } catch {
-                  searchResult = "Lane market signal data temporarily unavailable.";
-                }
-              } else if (toolCallName === "query_market_otri") {
-                callLabel = "call_sonar_otris";
-                try {
-                  const market: string = typeof args.market === "string" ? args.market.trim() : "";
-                  if (!market) {
-                    searchResult = "No market specified.";
-                  } else {
-                    const otris = await getMarketOtris([market]);
-                    const m = otris[0];
-                    if (!m) {
-                      searchResult = `No Sonar data found for "${market}".`;
-                    } else {
-                      const sig = m.signal === "hot" ? "🔴 Hot" : m.signal === "warm" ? "🟡 Warm" : m.signal === "cool" ? "🟢 Cool" : "⚪ No signal";
-                      const lines = [`Sonar market data for ${m.market}:`];
-                      if (m.otri !== null) {
-                        const wowArrow = (m.otriWoW ?? 0) > 0 ? "↑" : (m.otriWoW ?? 0) < 0 ? "↓" : "→";
-                        lines.push(`  OTRI: ${m.otri.toFixed(1)}% — ${sig}${m.otriWoW !== null ? ` (WoW: ${wowArrow}${Math.abs(m.otriWoW).toFixed(1)} pp)` : ""}`);
-                      } else {
-                        lines.push(`  OTRI: unavailable${m.lastSuccessfulPull ? ` — last updated ${m.lastSuccessfulPull}` : ""}`);
-                      }
-                      if (m.votri !== null) {
-                        lines.push(`  VOTRI (Van Outbound Rejection): ${m.votri.toFixed(1)}%`);
-                      }
-                      searchResult = lines.join("\n");
-                    }
-                  }
-                } catch {
-                  searchResult = "Sonar market OTRI data temporarily unavailable.";
-                }
-              } else if (toolCallName === "get_lane_rate_positioning") {
-                callLabel = "call_rate_positioning";
-                try {
-                  const origin = String(args.origin || "").trim().toLowerCase();
-                  const destination = String(args.destination || "").trim().toLowerCase();
-                  if (!origin || !destination) {
-                    searchResult = "Both origin and destination are required for rate positioning.";
-                  } else {
-                    const orgId = req.session.organizationId!;
-                    // Fetch TRAC market benchmark
-                    const rate = await getLaneMarketRate(origin, destination);
-                    const classLabel = rate.forecastDirection === "TIGHTENING"
-                      ? "📈 Tightening (rates rising — act now to lock in capacity)"
-                      : rate.forecastDirection === "EASING"
-                      ? "📉 Easing (rates declining — leverage for negotiations)"
-                      : "📊 Stable";
-                    const forecastLines = rate.forecastWeeklyRates.map(
-                      w => `  Week +${w.week}: $${w.ratePerMile.toFixed(2)}/mi`
-                    ).join("\n");
-
-                    // Look up org's actual rate positioning for this lane from the intel payload
-                    // Respect effectiveScope: only expose org-wide data to admin/director users
-                    let orgRateContext = "";
-                    try {
-                      const toolFilterUserId = effectiveScope === "everyone" ? undefined : user.id;
-                      const intel = await computeIntelPayload(orgId, toolFilterUserId);
-                      const laneEntry = intel.ratePositioning?.lanes.find(
-                        e => e.origin.toLowerCase() === origin && e.destination.toLowerCase() === destination
-                      );
-                      if (laneEntry) {
-                        const classificationLabel = laneEntry.classification === "ABOVE_MARKET"
-                          ? "🔴 ABOVE MARKET (overpaying)"
-                          : laneEntry.classification === "BELOW_MARKET"
-                          ? "🟢 BELOW MARKET (favorable)"
-                          : "🟡 AT MARKET (competitive)";
-                        orgRateContext = [
-                          ``,
-                          `Your Org's Rate vs Market (${origin} → ${destination}):`,
-                          `  Your avg carrier pay: $${laneEntry.avgCarrierPayPerMile.toFixed(2)}/mi`,
-                          `  Market benchmark:     ${laneEntry.marketRatePerMile != null ? `$${laneEntry.marketRatePerMile.toFixed(2)}/mi` : "unavailable"}`,
-                          `  Delta: ${laneEntry.deltaPerMile >= 0 ? "+" : ""}$${laneEntry.deltaPerMile.toFixed(2)}/mi (${laneEntry.deltaPct >= 0 ? "+" : ""}${laneEntry.deltaPct.toFixed(1)}%)`,
-                          `  Classification: ${classificationLabel}`,
-                          laneEntry.coachingCard ? `  Coaching: ${laneEntry.coachingCard}` : "",
-                        ].filter(Boolean).join("\n");
-                      } else {
-                        orgRateContext = `\nNo org-specific carrier pay data found for ${origin} → ${destination}. Upload financial data for this lane to get org vs market comparison.`;
-                      }
-                    } catch { /* best-effort */ }
-
-                    searchResult = [
-                      `Rate Positioning Intelligence: ${origin} → ${destination}${rate.isStale ? " ⚠ Stale" : ""}`,
-                      `TRAC Market Benchmark: ${rate.marketRatePerMile != null ? `$${rate.marketRatePerMile.toFixed(2)}/mile` : "unavailable"} (source: ${rate.source === "lane" ? "lane-level VCRPM1 TRAC benchmark" : "national VCRPM1 + VOTRI-adjusted fallback"})`,
-                      `3-Week Market Forecast: ${classLabel}`,
-                      forecastLines,
-                      `Confidence: ${rate.confidence}`,
-                      orgRateContext,
-                    ].join("\n");
-                  }
-                } catch {
-                  searchResult = "Rate positioning data temporarily unavailable.";
-                }
-              }
-
-              const toolResultMessages: any[] = [
-                { role: "system", content: systemPrompt },
-                ...chatHistory,
-                {
-                  role: "assistant",
-                  content: null,
-                  tool_calls: [{
-                    id: toolCallId || callLabel,
-                    type: "function",
-                    function: { name: toolCallName, arguments: toolCallArgs },
-                  }],
-                },
-                {
-                  role: "tool",
-                  tool_call_id: toolCallId || callLabel,
-                  content: searchResult,
-                },
-              ];
-
-              const stream2 = await openai.chat.completions.create({
-                model: "gpt-4o",
-                messages: toolResultMessages,
-                stream: true,
-                max_tokens: 1500,
-              });
-
-              for await (const chunk2 of stream2) {
-                const c2 = chunk2.choices[0]?.delta?.content;
-                if (c2) {
-                  fullResponse += c2;
-                  res.write(`data: ${JSON.stringify({ content: c2 })}\n\n`);
-                }
-              }
-
-            } else if (toolCallName === "navigate_to_company") {
-              // ── Navigate: resolve company ID server-side, emit navigate event ──
-              const orgId = req.session.organizationId!;
-              const cn = (args.company_name || "").toLowerCase();
-              const allOrgCompanies = await db.select({ id: companies.id, name: companies.name })
-                .from(companies).where(eq(companies.organizationId, orgId));
-              const matched = allOrgCompanies.find(c => c.name.toLowerCase().includes(cn))
-                || allOrgCompanies.find(c => cn.includes(c.name.toLowerCase().slice(0, 5)));
-              if (matched) {
-                const msg = `Opening ${matched.name}...`;
-                fullResponse += msg;
-                res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-                res.write(`data: ${JSON.stringify({ navigate: `/companies/${matched.id}` })}\n\n`);
-              } else {
-                const msg = `I couldn't find "${args.company_name}" in your CRM.`;
-                fullResponse += msg;
-                res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-              }
-
-            } else if (toolCallName === "complete_task") {
-              // ── Complete task: resolve task by name, emit confirmation card ──
-              const userId = req.session.userId!;
-              const taskName = (args.task_name || "").toLowerCase();
-              const openTasks = await db.select().from(tasks)
-                .where(and(eq(tasks.assignedTo, userId), eq(tasks.status, "open")));
-              const matched = openTasks.find(t =>
-                t.title.toLowerCase().includes(taskName) || taskName.includes(t.title.toLowerCase())
-              );
-              if (matched) {
-                const actionResponse = `Got it — ready to mark this task complete:`;
-                fullResponse += actionResponse;
-                res.write(`data: ${JSON.stringify({ content: actionResponse })}\n\n`);
-                res.write(`data: ${JSON.stringify({ action: { tool: "complete_task", args: { task_id: matched.id, task_title: matched.title, due_date: matched.dueDate || "" } } })}\n\n`);
-              } else {
-                const msg = `I couldn't find an open task matching "${args.task_name}". Check your tasks page for the full list.`;
-                fullResponse += msg;
-                res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-              }
-
-            } else if (toolCallName === "mark_meaningful") {
-              // ── Mark meaningful: find most recent touchpoint by user at company ──
-              const orgId = req.session.organizationId!;
-              const userId = req.session.userId!;
-              const cn = (args.company_name || "").toLowerCase();
-              const allOrgCompanies = await db.select({ id: companies.id, name: companies.name })
-                .from(companies).where(eq(companies.organizationId, orgId));
-              const matchedCompany = allOrgCompanies.find(c => c.name.toLowerCase().includes(cn));
-              if (!matchedCompany) {
-                const msg = `I couldn't find "${args.company_name}" in your CRM.`;
-                fullResponse += msg;
-                res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-              } else {
-                const recentTps = await db.select().from(touchpoints)
-                  .where(and(eq(touchpoints.companyId, matchedCompany.id), eq(touchpoints.loggedById, userId)))
-                  .orderBy(desc(touchpoints.createdAt))
-                  .limit(5);
-                if (recentTps.length === 0) {
-                  const msg = `No touchpoints logged by you at ${matchedCompany.name} yet.`;
-                  fullResponse += msg;
-                  res.write(`data: ${JSON.stringify({ content: msg })}\n\n`);
-                } else {
-                  const tp = recentTps[0];
-                  const actionResponse = `Here's your most recent touchpoint at ${matchedCompany.name}:`;
-                  fullResponse += actionResponse;
-                  res.write(`data: ${JSON.stringify({ content: actionResponse })}\n\n`);
-                  res.write(`data: ${JSON.stringify({ action: { tool: "mark_meaningful", args: { touchpoint_id: tp.id, company_name: matchedCompany.name, type: tp.type, date: tp.date, note: tp.notes || "" } } })}\n\n`);
-                }
-              }
-
-            } else {
-              // ── Action tools (log_touchpoint, create_task): emit confirmation card ──
-              const actionResponse = `I can do that for you. Here's what I'll log:`;
-              fullResponse += actionResponse;
-              res.write(`data: ${JSON.stringify({ content: actionResponse })}\n\n`);
-              res.write(`data: ${JSON.stringify({ action: { tool: toolCallName, args } })}\n\n`);
-            }
-
-            toolCallId = "";
-            toolCallName = "";
-            toolCallArgs = "";
-          } catch (parseErr) {
-            console.error("Tool call parse error:", parseErr);
-          }
-        }
+      // Only persist an assistant message if the turn produced something
+      // meaningful. Skip on transport errors (no empty bubbles) but keep a
+      // placeholder when the agent surfaced an action card without prose.
+      const persisted = assistantText.trim() || (surfacedAction ? "(action proposed)" : "");
+      if (!hadError && persisted) {
+        await db.insert(chatMessages).values({
+          conversationId,
+          role: "assistant",
+          content: persisted,
+          createdAt: new Date().toISOString(),
+        });
       }
 
-      await db.insert(chatMessages).values({
-        conversationId,
-        role: "assistant",
-        content: fullResponse || "(action proposed)",
-        createdAt: new Date().toISOString(),
-      });
-
-      if (history.length <= 1) {
+      if (!hadError && history.length <= 1) {
         const shortTitle = content.trim().slice(0, 50);
         await db.update(chatConversations).set({ title: shortTitle }).where(eq(chatConversations.id, conversationId));
       }

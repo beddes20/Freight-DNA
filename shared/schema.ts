@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, serial, decimal, jsonb, boolean, timestamp, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, serial, decimal, jsonb, boolean, timestamp, uniqueIndex, index, customType } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -2643,3 +2643,159 @@ export const apiResponseCache = pgTable(
 );
 
 export type ApiResponseCache = typeof apiResponseCache.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DNA Logistics Bot — agent foundation (Task #282 Phase 1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// pgvector column type (1536 dims = text-embedding-3-small).
+// Stored/read as a JS number[]; serialized to pgvector literal on write.
+export const vector1536 = customType<{ data: number[]; driverData: string }>({
+  dataType() {
+    return "vector(1536)";
+  },
+  toDriver(value: number[]): string {
+    return `[${value.join(",")}]`;
+  },
+  fromDriver(value: unknown): number[] {
+    if (Array.isArray(value)) return value as number[];
+    if (typeof value === "string") {
+      const inner = value.replace(/^\[|\]$/g, "");
+      if (!inner) return [];
+      return inner.split(",").map(Number);
+    }
+    return [];
+  },
+});
+
+// Per-(rep, capability) permission overrides; absence = inherit role default.
+// `effect` = "allow" | "deny" | "auto". `auto` = standing-approval (skip HITL).
+export const agentCapabilities = pgTable(
+  "agent_capabilities",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    capability: text("capability").notNull(),
+    effect: text("effect").notNull(),
+    note: text("note"),
+    updatedBy: varchar("updated_by"),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("agent_capabilities_user_cap_idx").on(table.userId, table.capability),
+    index("agent_capabilities_org_idx").on(table.organizationId),
+  ],
+);
+export const insertAgentCapabilitySchema = createInsertSchema(agentCapabilities).omit({ id: true, updatedAt: true });
+export type InsertAgentCapability = z.infer<typeof insertAgentCapabilitySchema>;
+export type AgentCapability = typeof agentCapabilities.$inferSelect;
+
+// Standing facts about a rep (preferences, style, working hours, etc.).
+// Hand-curated or extracted by the agent. Always loaded into context envelope.
+export const agentFacts = pgTable(
+  "agent_facts",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    fact: text("fact").notNull(),
+    source: text("source").notNull().default("rep"),
+    pinned: boolean("pinned").notNull().default(false),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("agent_facts_user_idx").on(table.userId),
+    index("agent_facts_pinned_idx").on(table.userId, table.pinned),
+  ],
+);
+export const insertAgentFactSchema = createInsertSchema(agentFacts).omit({ id: true, createdAt: true });
+export type InsertAgentFact = z.infer<typeof insertAgentFactSchema>;
+export type AgentFact = typeof agentFacts.$inferSelect;
+
+// Long-tail memories — embedded conversational snippets, decisions, etc.
+// Retrieved top-k by cosine similarity per turn.
+export const agentMemories = pgTable(
+  "agent_memories",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull().default("episodic"),
+    content: text("content").notNull(),
+    embedding: vector1536("embedding"),
+    relatedCompanyId: varchar("related_company_id"),
+    relatedContactId: varchar("related_contact_id"),
+    importance: integer("importance").notNull().default(1),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    lastAccessedAt: timestamp("last_accessed_at"),
+  },
+  (table) => [
+    index("agent_memories_user_idx").on(table.userId),
+    index("agent_memories_user_company_idx").on(table.userId, table.relatedCompanyId),
+    index("agent_memories_created_idx").on(table.userId, table.createdAt),
+  ],
+);
+export const insertAgentMemorySchema = createInsertSchema(agentMemories).omit({ id: true, createdAt: true, embedding: true });
+export type InsertAgentMemory = z.infer<typeof insertAgentMemorySchema>;
+export type AgentMemory = typeof agentMemories.$inferSelect;
+
+// Append-only audit trail of every agent action (read or write, allowed or denied).
+export const agentActivity = pgTable(
+  "agent_activity",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    channel: text("channel").notNull().default("in_app"),
+    conversationRef: text("conversation_ref"),
+    direction: text("direction").notNull(),
+    tool: text("tool"),
+    capability: text("capability"),
+    summary: text("summary"),
+    inputJson: jsonb("input_json"),
+    outputJson: jsonb("output_json"),
+    relatedCompanyId: varchar("related_company_id"),
+    relatedContactId: varchar("related_contact_id"),
+    model: text("model"),
+    promptTokens: integer("prompt_tokens"),
+    completionTokens: integer("completion_tokens"),
+    latencyMs: integer("latency_ms"),
+    outcome: text("outcome").notNull().default("ok"),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("agent_activity_user_idx").on(table.userId, table.createdAt),
+    index("agent_activity_org_idx").on(table.organizationId, table.createdAt),
+    index("agent_activity_tool_idx").on(table.tool),
+    index("agent_activity_company_idx").on(table.relatedCompanyId),
+  ],
+);
+export const insertAgentActivitySchema = createInsertSchema(agentActivity).omit({ id: true, createdAt: true });
+export type InsertAgentActivity = z.infer<typeof insertAgentActivitySchema>;
+export type AgentActivity = typeof agentActivity.$inferSelect;
+
+// Consent tracking for first-contact gating with external parties (drivers, dispatchers).
+export const externalContactConsent = pgTable(
+  "external_contact_consent",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    contactKind: text("contact_kind").notNull(),
+    identifier: text("identifier").notNull(),
+    displayName: text("display_name"),
+    relatedCompanyId: varchar("related_company_id"),
+    consent: text("consent").notNull().default("unknown"),
+    firstContactBy: varchar("first_contact_by"),
+    firstContactAt: timestamp("first_contact_at"),
+    lastContactAt: timestamp("last_contact_at"),
+    notes: text("notes"),
+  },
+  (table) => [
+    uniqueIndex("ext_consent_identifier_idx").on(table.organizationId, table.contactKind, table.identifier),
+  ],
+);
+export const insertExternalContactConsentSchema = createInsertSchema(externalContactConsent).omit({ id: true });
+export type InsertExternalContactConsent = z.infer<typeof insertExternalContactConsentSchema>;
+export type ExternalContactConsent = typeof externalContactConsent.$inferSelect;

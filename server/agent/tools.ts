@@ -1,0 +1,408 @@
+/**
+ * Tool registry for DNA Logistics Bot.
+ *
+ * Each tool declares: name, capability key, OpenAI tool spec, and an `execute`
+ * handler. Handlers return a `ToolOutput` describing what to do with the result:
+ *   - "data"     → feed text back to the LLM as the tool result; loop continues
+ *   - "action"   → emit a HITL action card to the client; the loop ends
+ *   - "navigate" → emit a navigation event + optional message; loop ends
+ */
+import { z } from "zod";
+import { eq, and, desc, ilike } from "drizzle-orm";
+import { db } from "../storage";
+import { storage } from "../storage";
+import {
+  companies, contacts, tasks, touchpoints, type User,
+} from "@shared/schema";
+import {
+  getNationalMarketSummary, getMarketOtris, getLaneVotrisBatch,
+  getLaneMarketRate, buildVotriQualifier,
+} from "../sonarClient";
+import { tracLaneDirectionSignal } from "../tracAlertEngine";
+import {
+  runCarrierLaneSearch, getCompanyDetails, getCachedRatePositioningContext,
+} from "../chatbot";
+import { saveMemory, searchMemories, listFacts } from "./memory";
+import type { Capability } from "./permissions";
+
+export interface AgentContext {
+  rep: User;
+  organizationId: string;
+  channel: "in_app" | "email" | "teams" | "sms" | "voice";
+  conversationRef: string | null;
+  scope: "my_team" | "everyone";
+}
+
+export type ToolOutput =
+  | { kind: "data"; text: string; relatedCompanyId?: string | null }
+  | { kind: "action"; tool: string; args: Record<string, unknown>; preface?: string }
+  | { kind: "navigate"; path: string; preface?: string };
+
+export interface AgentTool {
+  name: string;
+  capability: Capability;
+  description: string;
+  parameters: Record<string, unknown>;
+  execute: (ctx: AgentContext, args: any) => Promise<ToolOutput>;
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+async function findCompanyByName(orgId: string, query: string) {
+  if (!query) return null;
+  const all = await db.select().from(companies).where(eq(companies.organizationId, orgId));
+  const q = query.toLowerCase().trim();
+  return (
+    all.find((c) => c.name.toLowerCase() === q) ||
+    all.find((c) => c.name.toLowerCase().includes(q)) ||
+    null
+  );
+}
+
+// ── registry ─────────────────────────────────────────────────────────────────
+
+export const TOOLS: AgentTool[] = [
+  // ─── READ TOOLS ──────────────────────────────────────────────────────────
+  {
+    name: "get_company_details",
+    capability: "read.account",
+    description: "Pull the full account profile for a specific company: contacts, recent touchpoints, open RFPs, account summary, quirks, tendering style, rep assignment.",
+    parameters: {
+      type: "object",
+      properties: { company_name: { type: "string", description: "Company name (partial match ok)" } },
+      required: ["company_name"],
+    },
+    async execute(ctx, args) {
+      const text = await getCompanyDetails(ctx.organizationId, String(args.company_name || ""));
+      const company = await findCompanyByName(ctx.organizationId, String(args.company_name || ""));
+      return { kind: "data", text, relatedCompanyId: company?.id ?? null };
+    },
+  },
+  {
+    name: "carrier_lane_search",
+    capability: "read.carrier",
+    description: "Find which carriers run a specific corridor and what we're paying. Use for questions about carriers on a lane, carrier pay rates, what we're paying for a mode on a lane.",
+    parameters: {
+      type: "object",
+      properties: {
+        origin: { type: "string" },
+        destination: { type: "string" },
+        radius_miles: { type: "number" },
+        mode: { type: "string" },
+        min_loads_per_month: { type: "number" },
+      },
+    },
+    async execute(ctx, args) {
+      const text = await runCarrierLaneSearch(
+        ctx.organizationId,
+        String(args.origin || ""), String(args.destination || ""),
+        Number(args.radius_miles || 75), String(args.mode || ""),
+        Number(args.min_loads_per_month || 3),
+      );
+      return { kind: "data", text };
+    },
+  },
+  {
+    name: "query_national_rates",
+    capability: "read.market",
+    description: "Live national market data from FreightWaves Sonar: national OTRI, NTI spot $/move, contract VCRPM1, spread.",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      try {
+        const pulse = await getNationalMarketSummary();
+        const has = pulse.otri !== null;
+        const sig = !has ? "⚪ No Data" : pulse.otri! > 20 ? "🔴 Hot" : pulse.otri! > 8 ? "🟡 Warm" : "🟢 Cool";
+        const lines = [`FreightWaves Sonar — National Pulse${pulse.isStale ? " ⚠ Stale" : ""}`];
+        if (has) lines.push(`National OTRI: ${pulse.otri!.toFixed(2)}% (${(pulse.otriWoWDelta ?? 0) >= 0 ? "+" : ""}${(pulse.otriWoWDelta ?? 0).toFixed(1)}pp WoW) — ${sig}`);
+        else lines.push(`National OTRI: unavailable`);
+        lines.push(pulse.ntiPerMove !== null ? `NTI Spot: $${pulse.ntiPerMove.toFixed(2)}/move` : "NTI Spot: unavailable");
+        lines.push(pulse.ntiPerMile !== null ? `Contract (VCRPM1): $${pulse.ntiPerMile.toFixed(2)}/mile` : "Contract: unavailable");
+        return { kind: "data", text: lines.join("\n") };
+      } catch {
+        return { kind: "data", text: "Sonar national data temporarily unavailable." };
+      }
+    },
+  },
+  {
+    name: "query_market_otri",
+    capability: "read.market",
+    description: "Live OTRI/VOTRI for a specific market/city. Use for 'is X tight?', 'what's OTRI in Y?'.",
+    parameters: {
+      type: "object",
+      properties: { market: { type: "string" } },
+      required: ["market"],
+    },
+    async execute(_ctx, args) {
+      const market = String(args.market || "").trim();
+      if (!market) return { kind: "data", text: "No market specified." };
+      try {
+        const otris = await getMarketOtris([market]);
+        const m = otris[0];
+        if (!m) return { kind: "data", text: `No Sonar data for "${market}".` };
+        const sig = m.signal === "hot" ? "🔴 Hot" : m.signal === "warm" ? "🟡 Warm" : m.signal === "cool" ? "🟢 Cool" : "⚪";
+        const lines = [`Sonar market — ${m.market}:`];
+        if (m.otri !== null) lines.push(`OTRI: ${m.otri.toFixed(1)}% ${sig}`);
+        if (m.votri !== null && m.votri !== undefined) lines.push(`VOTRI: ${m.votri.toFixed(1)}%`);
+        return { kind: "data", text: lines.join("\n") };
+      } catch {
+        return { kind: "data", text: "Sonar market data temporarily unavailable." };
+      }
+    },
+  },
+  {
+    name: "query_lane_signal",
+    capability: "read.lane",
+    description: "Lane intelligence: TRAC direction (Tightening/Stable/Softening), TRAC spot rate, VOTRI when available. Use for 'how tight is X→Y?'.",
+    parameters: {
+      type: "object",
+      properties: { origin: { type: "string" }, destination: { type: "string" } },
+      required: ["origin", "destination"],
+    },
+    async execute(_ctx, args) {
+      const origin = String(args.origin || "");
+      const destination = String(args.destination || "");
+      try {
+        const [votriMap, tracDir, lmr] = await Promise.all([
+          getLaneVotrisBatch([{ origin, destination }]),
+          tracLaneDirectionSignal(origin, destination).catch(() => null),
+          getLaneMarketRate(origin, destination).catch(() => ({ marketRatePerMile: null as number | null })),
+        ]);
+        const votri = votriMap.get(buildVotriQualifier(origin, destination));
+        const dirLabel = tracDir === "hot" ? "Tightening" : tracDir === "warm" ? "Mild tightening" : tracDir === "stable" ? "Stable" : tracDir === "cool" ? "Softening" : null;
+        const lines = [`${origin} → ${destination}`];
+        if (dirLabel) lines.push(`TRAC Direction: ${dirLabel}`);
+        if (lmr.marketRatePerMile !== null) lines.push(`TRAC Spot: $${lmr.marketRatePerMile.toFixed(2)}/mile`);
+        if (votri?.votri !== null && votri?.votri !== undefined) lines.push(`VOTRI: ${votri.votri.toFixed(1)}%`);
+        if (lines.length === 1) lines.push("Market data unavailable for this lane.");
+        return { kind: "data", text: lines.join("\n") };
+      } catch {
+        return { kind: "data", text: "Lane signal data temporarily unavailable." };
+      }
+    },
+  },
+  {
+    name: "get_rate_positioning_summary",
+    capability: "read.lane",
+    description: "Org-wide rate positioning rollup across the rep's recurring lanes (above/at/below TRAC contract benchmark). No arguments — always summarises the current scope.",
+    parameters: { type: "object", properties: {} },
+    async execute(ctx, _args) {
+      const text = await getCachedRatePositioningContext(ctx.organizationId, ctx.scope === "everyone" ? undefined : ctx.rep.id);
+      return { kind: "data", text: text || "No rate positioning data available." };
+    },
+  },
+  {
+    name: "list_open_tasks",
+    capability: "read.task",
+    description: "List the rep's currently open tasks (overdue first). Use when user asks 'what's on my plate', 'open to-dos', etc.",
+    parameters: { type: "object", properties: { limit: { type: "number" } } },
+    async execute(ctx, args) {
+      const limit = Math.min(20, Math.max(1, Number(args.limit || 10)));
+      const rows = await db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.assignedTo, ctx.rep.id), eq(tasks.status, "open")))
+        .orderBy(tasks.dueDate)
+        .limit(limit);
+      if (!rows.length) return { kind: "data", text: "No open tasks." };
+      const today = new Date().toISOString().slice(0, 10);
+      return {
+        kind: "data",
+        text: rows.map((t) => {
+          const overdue = t.dueDate && t.dueDate < today ? " ⚠ overdue" : "";
+          return `• ${t.title}${t.dueDate ? ` (due ${t.dueDate})` : ""}${overdue}`;
+        }).join("\n"),
+      };
+    },
+  },
+  {
+    name: "list_recent_touchpoints",
+    capability: "read.touchpoint",
+    description: "Most recent touchpoints (any company) the rep logged. Use for 'what did I do recently', 'last few calls'.",
+    parameters: { type: "object", properties: { limit: { type: "number" } } },
+    async execute(ctx, args) {
+      const limit = Math.min(20, Math.max(1, Number(args.limit || 10)));
+      const rows = await db
+        .select({ tp: touchpoints, c: companies })
+        .from(touchpoints)
+        .leftJoin(companies, eq(touchpoints.companyId, companies.id))
+        .where(eq(touchpoints.loggedById, ctx.rep.id))
+        .orderBy(desc(touchpoints.date))
+        .limit(limit);
+      if (!rows.length) return { kind: "data", text: "No recent touchpoints." };
+      return {
+        kind: "data",
+        text: rows.map((r) => `• ${r.tp.date} ${r.tp.type} @ ${r.c?.name ?? "?"}${r.tp.notes ? `: ${r.tp.notes.slice(0, 80)}` : ""}`).join("\n"),
+      };
+    },
+  },
+  {
+    name: "recall_memory",
+    capability: "read.memory",
+    description: "Search the rep's prior memories/decisions/preferences. Use proactively when the user references something they told you before.",
+    parameters: {
+      type: "object",
+      properties: { query: { type: "string" }, limit: { type: "number" } },
+      required: ["query"],
+    },
+    async execute(ctx, args) {
+      const hits = await searchMemories(ctx.rep.id, String(args.query || ""), Math.min(8, Math.max(1, Number(args.limit || 5))));
+      if (!hits.length) return { kind: "data", text: "No prior memories matched." };
+      return { kind: "data", text: hits.map((h, i) => `${i + 1}. ${h.content}${h.similarity != null ? ` (sim ${(h.similarity * 100).toFixed(0)}%)` : ""}`).join("\n") };
+    },
+  },
+  // ─── NAVIGATE ────────────────────────────────────────────────────────────
+  {
+    name: "navigate_to_company",
+    capability: "navigate.crm",
+    description: "Navigate the user to a company's account page. Use for 'open', 'go to', 'pull up', 'show me' a specific company.",
+    parameters: {
+      type: "object",
+      properties: { company_name: { type: "string" } },
+      required: ["company_name"],
+    },
+    async execute(ctx, args) {
+      const company = await findCompanyByName(ctx.organizationId, String(args.company_name || ""));
+      if (!company) return { kind: "data", text: `No company found matching "${args.company_name}".` };
+      return { kind: "navigate", path: `/companies/${company.id}`, preface: `Opening **${company.name}**…` };
+    },
+  },
+  // ─── HITL WRITES (action cards) ──────────────────────────────────────────
+  {
+    name: "log_touchpoint",
+    capability: "write.touchpoint",
+    description: "Log a touchpoint (call/email/text/site_visit) with a contact. Always renders an action card for the rep to confirm.",
+    parameters: {
+      type: "object",
+      properties: {
+        company_name: { type: "string" },
+        contact_name: { type: "string" },
+        type: { type: "string", enum: ["call", "email", "text", "site_visit"] },
+        note: { type: "string" },
+      },
+      required: ["type"],
+    },
+    async execute(_ctx, args) {
+      return {
+        kind: "action",
+        tool: "log_touchpoint",
+        args: {
+          company_name: String(args.company_name || ""),
+          contact_name: String(args.contact_name || ""),
+          type: String(args.type || "call"),
+          note: String(args.note || ""),
+        },
+        preface: "Here's the touchpoint to log — review and confirm:",
+      };
+    },
+  },
+  {
+    name: "create_task",
+    capability: "write.task",
+    description: "Create a new task/reminder. Renders an action card.",
+    parameters: {
+      type: "object",
+      properties: { title: { type: "string" }, due_date: { type: "string" } },
+      required: ["title"],
+    },
+    async execute(_ctx, args) {
+      return {
+        kind: "action",
+        tool: "create_task",
+        args: { title: String(args.title || ""), due_date: String(args.due_date || "") },
+        preface: "Task ready to create — confirm or edit:",
+      };
+    },
+  },
+  {
+    name: "complete_task",
+    capability: "write.task.complete",
+    description: "Mark an open task complete. Will look up the task by name and render a confirmation card.",
+    parameters: {
+      type: "object",
+      properties: { task_name: { type: "string" } },
+      required: ["task_name"],
+    },
+    async execute(ctx, args) {
+      const name = String(args.task_name || "").toLowerCase().trim();
+      if (!name) return { kind: "data", text: "Tell me which task to complete." };
+      const open = await db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.assignedTo, ctx.rep.id), eq(tasks.status, "open")));
+      const matched = open.find((t) => t.title.toLowerCase().includes(name)) ?? null;
+      if (!matched) return { kind: "data", text: `No open task matching "${args.task_name}".` };
+      return {
+        kind: "action",
+        tool: "complete_task",
+        args: { task_id: matched.id, task_title: matched.title, due_date: matched.dueDate || "" },
+        preface: "Task ready to mark complete:",
+      };
+    },
+  },
+  {
+    name: "mark_meaningful",
+    capability: "write.touchpoint.meaningful",
+    description: "Flag the rep's most recent touchpoint at a company as meaningful.",
+    parameters: {
+      type: "object",
+      properties: { company_name: { type: "string" }, contact_name: { type: "string" } },
+      required: ["company_name"],
+    },
+    async execute(ctx, args) {
+      const company = await findCompanyByName(ctx.organizationId, String(args.company_name || ""));
+      if (!company) return { kind: "data", text: `No company matching "${args.company_name}".` };
+      const recent = await db
+        .select()
+        .from(touchpoints)
+        .where(and(eq(touchpoints.companyId, company.id), eq(touchpoints.loggedById, ctx.rep.id)))
+        .orderBy(desc(touchpoints.date))
+        .limit(1);
+      const tp = recent[0];
+      if (!tp) return { kind: "data", text: `No touchpoints found at ${company.name}.` };
+      return {
+        kind: "action",
+        tool: "mark_meaningful",
+        args: { touchpoint_id: tp.id, company_name: company.name, type: tp.type, date: tp.date, note: tp.notes || "" },
+        preface: "Touchpoint ready to mark meaningful:",
+      };
+    },
+  },
+  {
+    name: "remember_this",
+    capability: "write.memory",
+    description: "Save a fact, preference, or decision the user wants you to remember across future conversations.",
+    parameters: {
+      type: "object",
+      properties: {
+        content: { type: "string", description: "The fact to remember (1–2 sentences, written in 3rd person about the user)." },
+        related_company_name: { type: "string", description: "Optional company this memory relates to." },
+      },
+      required: ["content"],
+    },
+    async execute(ctx, args) {
+      const content = String(args.content || "").trim();
+      if (!content) return { kind: "data", text: "Nothing to remember." };
+      const company = args.related_company_name
+        ? await findCompanyByName(ctx.organizationId, String(args.related_company_name))
+        : null;
+      await saveMemory({
+        organizationId: ctx.organizationId,
+        userId: ctx.rep.id,
+        content,
+        kind: "preference",
+        relatedCompanyId: company?.id ?? null,
+        importance: 2,
+      });
+      return { kind: "data", text: `Saved. I'll remember: "${content}"` };
+    },
+  },
+];
+
+export const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
+
+export function openAiToolSpecs() {
+  return TOOLS.map((t) => ({
+    type: "function" as const,
+    function: { name: t.name, description: t.description, parameters: t.parameters },
+  }));
+}
