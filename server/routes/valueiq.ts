@@ -38,6 +38,8 @@ import {
   threadAttachments,
   type Thread,
 } from "@shared/schema";
+import type { AgentContext } from "../agent/tools";
+import type { InsertTask, InsertTouchpoint, User } from "@shared/schema";
 import { runAgentTurn } from "../agent/core";
 import { ensureDefaultAgent } from "../agent/persona";
 import { addLibraryItem, listLibraryItems, deleteLibraryItem } from "../agent/libraryIndexer";
@@ -342,12 +344,12 @@ export function registerValueIQRoutes(app: Express) {
         content: m.content,
       }));
 
-    const ctx = {
-      rep: user as any,
+    const ctx: AgentContext = {
+      rep: user as User,
       organizationId: user.organizationId,
-      channel: "in_app" as const,
+      channel: "in_app",
       conversationRef: thread.id,
-      scope: "everyone" as const,
+      scope: "everyone",
     };
 
     let assembled = "";
@@ -428,25 +430,27 @@ export function registerValueIQRoutes(app: Express) {
       return res.json({ id });
     }
     if (body.target === "task") {
-      const t = await storage.createTask({
+      const taskInput: InsertTask = {
         organizationId: user.organizationId,
-        title: body.title ?? `From ValueIQ: ${thread.title}`.slice(0, 200),
+        title: (body.title ?? `From ValueIQ: ${thread.title}`).slice(0, 200),
         description: msg.content.slice(0, 2000),
         assignedTo: user.id,
         createdBy: user.id,
         companyId: body.companyId ?? null,
         status: "pending",
-      } as any);
+      };
+      const t = await storage.createTask(taskInput);
       return res.json({ id: t.id });
     }
     if (body.target === "touchpoint" && body.companyId) {
-      const t = await storage.createTouchpoint({
+      const tpInput: InsertTouchpoint = {
         organizationId: user.organizationId,
         companyId: body.companyId,
         userId: user.id,
         type: "note",
         notes: msg.content.slice(0, 4000),
-      } as any);
+      };
+      const t = await storage.createTouchpoint(tpInput);
       return res.json({ id: t.id });
     }
     res.status(400).json({ error: "Missing companyId for touchpoint" });

@@ -117,9 +117,19 @@ function InsightsHandoffBar({ onOpened }: { onOpened: () => void }) {
 function ThreadsPane() {
   const { toast } = useToast();
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
   const threadsQ = useQuery<ThreadRow[]>({ queryKey: ["/api/valueiq/threads"] });
   const projectsQ = useQuery<ProjectRow[]>({ queryKey: ["/api/valueiq/projects"] });
   const agentsQ = useQuery<AgentRow[]>({ queryKey: ["/api/valueiq/agents"] });
+  const renameThread = useMutation({
+    mutationFn: ({ id, title }: { id: string; title: string }) =>
+      apiRequest("PATCH", `/api/valueiq/threads/${id}`, { title }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/valueiq/threads"] }),
+  });
+  const createProject = useMutation({
+    mutationFn: (name: string) => apiRequest("POST", "/api/valueiq/projects", { name }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/valueiq/projects"] }),
+  });
 
   useEffect(() => {
     if (!activeId && threadsQ.data && threadsQ.data.length > 0) setActiveId(threadsQ.data[0].id);
@@ -147,21 +157,52 @@ function ThreadsPane() {
   return (
     <div className="grid grid-cols-12 gap-4 h-[calc(100vh-200px)] min-h-[600px]">
       <div className="col-span-3 border rounded-md flex flex-col min-h-0">
-        <div className="p-2 border-b">
+        <div className="p-2 border-b space-y-2">
           <Button size="sm" className="w-full" onClick={() => createThread.mutate()} disabled={createThread.isPending} data-testid="button-new-thread">
             <Plus className="h-4 w-4 mr-1" /> New thread
           </Button>
+          <Input
+            placeholder="Search threads…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-8 text-xs"
+            data-testid="input-thread-search"
+          />
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>Projects: {projectsQ.data?.length ?? 0}</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-xs"
+              data-testid="button-new-project"
+              onClick={() => {
+                const name = window.prompt("New project name");
+                if (name && name.trim()) createProject.mutate(name.trim());
+              }}
+            >
+              <Plus className="h-3 w-3 mr-1" /> Project
+            </Button>
+          </div>
         </div>
         <ScrollArea className="flex-1">
           <div className="p-2 space-y-1">
             {threadsQ.isLoading && <div className="text-xs text-muted-foreground p-2">Loading…</div>}
             {threadsQ.data?.length === 0 && <div className="text-xs text-muted-foreground p-2">No threads yet — start one to talk to DNA.</div>}
-            {threadsQ.data?.map(t => (
+            {threadsQ.data
+              ?.filter((t) => !search || t.title.toLowerCase().includes(search.toLowerCase()))
+              .map((t) => (
               <div
                 key={t.id}
                 onClick={() => setActiveId(t.id)}
+                onDoubleClick={() => {
+                  const next = window.prompt("Rename thread", t.title);
+                  if (next && next.trim() && next.trim() !== t.title) {
+                    renameThread.mutate({ id: t.id, title: next.trim() });
+                  }
+                }}
                 className={`p-2 rounded-md cursor-pointer text-sm ${activeId === t.id ? "bg-accent" : "hover:bg-muted"}`}
                 data-testid={`thread-item-${t.id}`}
+                title="Double-click to rename"
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="truncate font-medium">{t.title}</div>
@@ -342,7 +383,7 @@ function ThreadView({ thread, agents, onPin, onArchive }: { thread: ThreadRow; a
           </div>
         )}
         <div className="flex gap-2 items-end">
-          <input ref={fileInputRef} type="file" className="hidden" onChange={onFile} accept=".txt,.md,.csv,.json,.log,text/*" />
+          <input ref={fileInputRef} type="file" className="hidden" onChange={onFile} accept=".txt,.md,.csv,.json,.log,.pdf,.xlsx,.xls,text/*,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" />
           <Button size="icon" variant="ghost" onClick={() => fileInputRef.current?.click()} title="Attach file" data-testid="button-attach"><Paperclip className="h-4 w-4" /></Button>
           <Textarea
             value={draft} onChange={e => setDraft(e.target.value)} placeholder="Ask anything about your accounts, lanes, contacts…"
@@ -366,6 +407,8 @@ function LibraryPane() {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [search, setSearch] = useState("");
+  const uploadRef = useRef<HTMLInputElement>(null);
+  const [isUploading, setIsUploading] = useState(false);
   const add = useMutation({
     mutationFn: () => apiRequest("POST", "/api/valueiq/library", { kind: "memory", title, body }),
     onSuccess: () => {
@@ -374,6 +417,24 @@ function LibraryPane() {
       toast({ title: "Saved to Library" });
     },
   });
+  const onUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/valueiq/library/upload", { method: "POST", body: fd, credentials: "include" });
+      if (!res.ok) throw new Error(await res.text());
+      queryClient.invalidateQueries({ queryKey: ["/api/valueiq/library"] });
+      toast({ title: `Uploaded ${file.name} to Library` });
+    } catch (err) {
+      toast({ title: "Upload failed", description: String(err), variant: "destructive" });
+    } finally {
+      setIsUploading(false);
+      if (uploadRef.current) uploadRef.current.value = "";
+    }
+  };
   const del = useMutation({
     mutationFn: (id: string) => apiRequest("DELETE", `/api/valueiq/library/${id}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/valueiq/library"] }),
@@ -391,6 +452,24 @@ function LibraryPane() {
           <Input placeholder="Title" value={title} onChange={e => setTitle(e.target.value)} data-testid="input-lib-title" />
           <Textarea placeholder="Memory, fact, snippet…" value={body} onChange={e => setBody(e.target.value)} className="min-h-[120px]" data-testid="input-lib-body" />
           <Button className="w-full" onClick={() => add.mutate()} disabled={!title.trim() || add.isPending} data-testid="button-lib-save">Save</Button>
+          <div className="pt-2 border-t">
+            <input
+              ref={uploadRef}
+              type="file"
+              className="hidden"
+              onChange={onUpload}
+              accept=".txt,.md,.csv,.json,.log,.pdf,.xlsx,.xls,text/*,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+            />
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => uploadRef.current?.click()}
+              disabled={isUploading}
+              data-testid="button-lib-upload"
+            >
+              <Paperclip className="h-4 w-4 mr-2" />{isUploading ? "Uploading…" : "Upload file (PDF / Excel / text)"}
+            </Button>
+          </div>
           <p className="text-xs text-muted-foreground">Anything saved here becomes part of your personal context — DNA will recall it across threads.</p>
         </CardContent>
       </Card>
