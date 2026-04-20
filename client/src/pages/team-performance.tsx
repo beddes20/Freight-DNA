@@ -912,11 +912,11 @@ export default function TeamPerformancePage() {
           </div>
         <div className="flex flex-col items-start sm:items-end gap-2">
           <div className="flex items-center gap-2">
-            <div className="flex items-center rounded-lg border bg-muted/40 p-0.5 gap-0.5" data-testid="toggle-view-mode">
+            <div className="flex items-center rounded-lg border border-white/15 bg-white/5 p-0.5 gap-0.5" data-testid="toggle-view-mode">
               <button
                 onClick={() => setViewMode("grid")}
                 data-testid="button-view-grid"
-                className={`p-1.5 rounded-md transition-all ${viewMode === "grid" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                className={`p-1.5 rounded-md transition-all ${viewMode === "grid" ? "bg-white/15 text-white shadow-sm" : "text-white/60 hover:text-white hover:bg-white/10"}`}
                 title="Card grid view"
               >
                 <LayoutGrid className="h-3.5 w-3.5" />
@@ -924,7 +924,7 @@ export default function TeamPerformancePage() {
               <button
                 onClick={() => setViewMode("leaderboard")}
                 data-testid="button-view-leaderboard"
-                className={`p-1.5 rounded-md transition-all ${viewMode === "leaderboard" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                className={`p-1.5 rounded-md transition-all ${viewMode === "leaderboard" ? "bg-white/15 text-white shadow-sm" : "text-white/60 hover:text-white hover:bg-white/10"}`}
                 title="Leaderboard view"
               >
                 <List className="h-3.5 w-3.5" />
@@ -933,7 +933,7 @@ export default function TeamPerformancePage() {
             <Button
               size="sm"
               variant="outline"
-              className="h-8 text-xs gap-1.5"
+              className="h-8 text-xs gap-1.5 border-white/20 bg-white/5 text-white hover:bg-white/10 hover:text-white"
               onClick={handleExportCsv}
               data-testid="button-export-csv"
             >
@@ -943,7 +943,7 @@ export default function TeamPerformancePage() {
             <Button
               size="sm"
               variant="outline"
-              className="h-8 text-xs gap-1.5 border-blue-200 text-blue-700 hover:bg-blue-50 dark:border-blue-800 dark:text-blue-400 dark:hover:bg-blue-950/30"
+              className="h-8 text-xs gap-1.5 border-blue-400/40 bg-blue-500/10 text-blue-200 hover:bg-blue-500/20 hover:text-blue-100"
               onClick={() => { setBulkResult(null); setShowBulkSend(true); }}
               data-testid="button-send-all-reports"
             >
@@ -951,8 +951,8 @@ export default function TeamPerformancePage() {
               Email All Reports
             </Button>
             <Select value={sortBy} onValueChange={v => setSortBy(v as SortOption)}>
-              <SelectTrigger className="h-8 w-44 text-xs" data-testid="select-sort-by">
-                <ArrowUpDown className="h-3 w-3 mr-1 text-muted-foreground shrink-0" />
+              <SelectTrigger className="h-8 w-44 text-xs border-white/20 bg-white/5 text-white hover:bg-white/10 [&>svg]:text-white/70" data-testid="select-sort-by">
+                <ArrowUpDown className="h-3 w-3 mr-1 text-white/70 shrink-0" />
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -963,7 +963,7 @@ export default function TeamPerformancePage() {
                 <SelectItem value="accounts">Most Accounts</SelectItem>
               </SelectContent>
             </Select>
-            <div className="flex items-center rounded-lg border bg-muted/40 p-0.5 gap-0.5" data-testid="toggle-period">
+            <div className="flex items-center rounded-lg border border-white/15 bg-white/5 p-0.5 gap-0.5" data-testid="toggle-period">
               {(["current", "last", "ytd"] as PeriodOption[]).map((opt) => (
                 <button
                   key={opt}
@@ -971,8 +971,8 @@ export default function TeamPerformancePage() {
                   onClick={() => { setPeriod(opt); navigate(`/team-performance?period=${opt}`, { replace: true }); }}
                   className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                     period === opt
-                      ? "bg-background shadow-sm text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
+                      ? "bg-white/15 text-white shadow-sm"
+                      : "text-white/60 hover:text-white hover:bg-white/10"
                   }`}
                 >
                   {opt === "current" ? "This Month" : opt === "last" ? "Last Month" : "YTD"}
@@ -981,11 +981,11 @@ export default function TeamPerformancePage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <p className="text-xs text-muted-foreground" data-testid="text-period-label">
+            <p className="text-xs text-white/70" data-testid="text-period-label">
               {getPeriodLabel(period)}
             </p>
             {lastUploadInfo?.uploadedAt && (
-              <span className="flex items-center gap-1 text-[11px] text-muted-foreground/70 border border-dashed border-muted-foreground/30 rounded px-1.5 py-0.5" data-testid="text-data-as-of">
+              <span className="flex items-center gap-1 text-[11px] text-white/70 border border-dashed border-white/30 rounded px-1.5 py-0.5" data-testid="text-data-as-of">
                 <CalendarClock className="h-3 w-3" />
                 Data as of {new Date(lastUploadInfo.uploadedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
               </span>
