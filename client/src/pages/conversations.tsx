@@ -18,7 +18,7 @@ import { Clock, AlertTriangle, User, Users, MessageSquare, CheckCircle2, Sparkle
 import { cn } from "@/lib/utils";
 import { DraftEmailModal } from "@/components/DraftEmailModal";
 
-interface ConversationThread {
+export interface ConversationThread {
   id: string;
   orgId: string;
   threadId: string;
@@ -194,12 +194,14 @@ function PriorityDot({ priority }: { priority: ConversationThread["responsePrior
   );
 }
 
-function ThreadDetailPanel({
+export function ThreadDetailPanel({
   thread,
   onClose,
+  readOnly = false,
 }: {
   thread: ConversationThread;
   onClose: () => void;
+  readOnly?: boolean;
 }) {
   const [showDraftEmail, setShowDraftEmail] = useState(false);
   const [draftTargetMessageId, setDraftTargetMessageId] = useState<string | null>(null);
@@ -281,16 +283,18 @@ function ThreadDetailPanel({
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="default"
-              className="gap-1"
-              onClick={() => setShowDraftEmail(true)}
-              data-testid="button-draft-reply"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              Draft Reply
-            </Button>
+            {!readOnly && (
+              <Button
+                size="sm"
+                variant="default"
+                className="gap-1"
+                onClick={() => setShowDraftEmail(true)}
+                data-testid="button-draft-reply"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                Draft Reply
+              </Button>
+            )}
             <Button size="icon" variant="ghost" onClick={onClose} data-testid="button-close-detail">
               <X className="w-4 h-4" />
             </Button>
@@ -349,7 +353,7 @@ function ThreadDetailPanel({
                       )}
                     </div>
                     <div className="flex items-center gap-1.5">
-                      {!isOutbound && (
+                      {!isOutbound && !readOnly && (
                         <Button
                           size="sm"
                           variant="ghost"
@@ -365,7 +369,7 @@ function ThreadDetailPanel({
                           Draft Reply
                         </Button>
                       )}
-                      {isOutbound && canCorrect && !correctedMessageIds.has(msg.id) && (
+                      {isOutbound && canCorrect && !readOnly && !correctedMessageIds.has(msg.id) && (
                         <Button
                           size="sm"
                           variant="outline"

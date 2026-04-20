@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -5,15 +6,17 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell
 } from "recharts";
 import {
   BrainCircuit, AlertTriangle, CheckCircle2, XCircle, TrendingUp, Activity,
   Clock, Building2, Mail, Zap, RefreshCw, ChevronRight, ArrowUpRight, BarChart2,
-  Lightbulb, UserPlus, MapPin, Wrench, Sparkles
+  Lightbulb, UserPlus, MapPin, Wrench, Sparkles, Inbox
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { ThreadDetailPanel, type ConversationThread } from "@/pages/conversations";
 
 interface SignalSummaryRow {
   intent_type: string;
@@ -246,8 +249,148 @@ function UrgencyRow({ u, onClick }: { u: UrgencySignal; onClick: () => void }) {
   );
 }
 
+type DrilldownOutcome = "won" | "lost" | "neutral" | "all";
+
+interface DrilldownThread extends ConversationThread {
+  subject: string | null;
+  fromEmail: string | null;
+  toEmail: string | null;
+  ccEmail: string | null;
+  lastMessageAt: string | null;
+  companyName: string | null;
+  carrierName: string | null;
+  outcome: "won" | "lost" | "neutral";
+}
+
+function outcomeBadgeClass(outcome: "won" | "lost" | "neutral"): string {
+  if (outcome === "won") return "text-green-600 border-green-500/30 bg-green-500/10";
+  if (outcome === "lost") return "text-red-600 border-red-500/30 bg-red-500/10";
+  return "text-muted-foreground border-border bg-muted/30";
+}
+
+function WinLossDrilldownDialog({
+  intentType,
+  outcome,
+  onClose,
+}: {
+  intentType: string | null;
+  outcome: DrilldownOutcome;
+  onClose: () => void;
+}) {
+  const [selectedThread, setSelectedThread] = useState<DrilldownThread | null>(null);
+
+  const enabled = !!intentType;
+  const { data, isLoading, error } = useQuery<{ threads: DrilldownThread[]; count: number }>({
+    queryKey: ["/api/analytics/email-intelligence/drilldown", intentType, outcome],
+    enabled,
+    queryFn: async () => {
+      const params = new URLSearchParams({ intent_type: intentType!, outcome });
+      const r = await fetch(`/api/analytics/email-intelligence/drilldown?${params.toString()}`);
+      if (!r.ok) throw new Error("Failed to load drilldown");
+      return r.json();
+    },
+    staleTime: 60 * 1000,
+  });
+
+  const outcomeText = outcome === "all" ? "all outcomes" : outcome.charAt(0).toUpperCase() + outcome.slice(1);
+  const threads = data?.threads ?? [];
+
+  return (
+    <>
+      <Dialog open={!!intentType} onOpenChange={open => { if (!open) onClose(); }}>
+        <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col" data-testid="dialog-winloss-drilldown">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Inbox className="w-4 h-4 text-amber-500" />
+              {intentType ? label(intentType) : ""} <span className="text-muted-foreground font-normal text-sm">· {outcomeText}</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Email threads contributing to this signal type{outcome !== "all" ? ` and ${outcome} outcome` : ""}.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto -mx-6 px-6">
+            {isLoading ? (
+              <div className="space-y-2 py-2">
+                {[...Array(5)].map((_, i) => <Skeleton key={i} className="h-16 rounded-lg" />)}
+              </div>
+            ) : error ? (
+              <div className="py-12 text-center text-sm text-destructive" data-testid="drilldown-error">
+                Failed to load drilldown. Please try again.
+              </div>
+            ) : threads.length === 0 ? (
+              <div className="py-12 text-center" data-testid="drilldown-empty">
+                <Inbox className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+                <p className="text-sm font-medium text-foreground">No emails in this category yet</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Threads with this signal type and outcome will appear here.
+                </p>
+              </div>
+            ) : (
+              <div className="divide-y divide-border">
+                {threads.map(t => {
+                  const dateIso = t.lastMessageAt ?? t.updatedAt;
+                  const accountLabel = t.companyName ?? t.carrierName ?? t.fromEmail ?? "Unknown";
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setSelectedThread(t)}
+                      className="w-full text-left px-3 py-3 hover:bg-muted/40 transition-colors flex items-start gap-3 cursor-pointer"
+                      data-testid={`drilldown-thread-${t.id}`}
+                    >
+                      <Mail className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-medium text-foreground truncate" data-testid={`drilldown-subject-${t.id}`}>
+                            {t.subject ?? "(no subject)"}
+                          </span>
+                          <Badge variant="outline" className={`text-[10px] px-1.5 ${outcomeBadgeClass(t.outcome)}`}>
+                            {t.outcome === "won" ? "Won" : t.outcome === "lost" ? "Lost" : "Neutral"}
+                          </Badge>
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-0.5 truncate">
+                          {accountLabel}
+                          {t.fromEmail && t.fromEmail !== accountLabel && (
+                            <span className="ml-1">· {t.fromEmail}</span>
+                          )}
+                        </div>
+                        {dateIso && (
+                          <div className="text-[10px] text-muted-foreground mt-0.5">
+                            {formatDistanceToNow(new Date(dateIso), { addSuffix: true })}
+                          </div>
+                        )}
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 mt-1" />
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {!isLoading && threads.length > 0 && (
+            <div className="text-xs text-muted-foreground border-t pt-2">
+              {threads.length} thread{threads.length === 1 ? "" : "s"}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {selectedThread && (
+        <ThreadDetailPanel thread={selectedThread} onClose={() => setSelectedThread(null)} readOnly />
+      )}
+    </>
+  );
+}
+
 export default function EmailIntelligencePage() {
   const [, navigate] = useLocation();
+  const [drilldown, setDrilldown] = useState<{ intentType: string; outcome: DrilldownOutcome } | null>(null);
+
+  const openDrilldown = (intentType: string, outcome: DrilldownOutcome) => {
+    setDrilldown({ intentType, outcome });
+  };
 
   const { data, isLoading, error, refetch } = useQuery<EmailIntelligenceData>({
     queryKey: ["/api/analytics/email-intelligence"],
@@ -276,6 +419,7 @@ export default function EmailIntelligencePage() {
     .filter(r => r.won > 0 || r.lost > 0)
     .map(r => ({
       name: label(r.intent_type),
+      type: r.intent_type,
       Won: r.won,
       Lost: r.lost,
       Neutral: Math.max(0, r.total - r.won - r.lost),
@@ -498,11 +642,38 @@ export default function EmailIntelligencePage() {
                         <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="hsl(var(--border))" />
                         <XAxis type="number" tick={{ fontSize: 10 }} />
                         <YAxis type="category" dataKey="name" tick={{ fontSize: 10 }} width={110} />
-                        <Tooltip contentStyle={{ fontSize: 12 }} />
+                        <Tooltip contentStyle={{ fontSize: 12 }} cursor={{ fill: "hsl(var(--muted) / 0.3)" }} />
                         <Legend iconSize={10} wrapperStyle={{ fontSize: 11 }} />
-                        <Bar dataKey="Won" fill="#22c55e" radius={[0, 3, 3, 0]} />
-                        <Bar dataKey="Lost" fill="#ef4444" radius={[0, 3, 3, 0]} />
-                        <Bar dataKey="Neutral" fill="#6b7280" radius={[0, 3, 3, 0]} />
+                        <Bar
+                          dataKey="Won"
+                          fill="#22c55e"
+                          radius={[0, 3, 3, 0]}
+                          cursor="pointer"
+                          onClick={(d: { type?: string; payload?: { type?: string } }) => {
+                            const t = d?.payload?.type ?? d?.type;
+                            if (t) openDrilldown(t, "won");
+                          }}
+                        />
+                        <Bar
+                          dataKey="Lost"
+                          fill="#ef4444"
+                          radius={[0, 3, 3, 0]}
+                          cursor="pointer"
+                          onClick={(d: { type?: string; payload?: { type?: string } }) => {
+                            const t = d?.payload?.type ?? d?.type;
+                            if (t) openDrilldown(t, "lost");
+                          }}
+                        />
+                        <Bar
+                          dataKey="Neutral"
+                          fill="#6b7280"
+                          radius={[0, 3, 3, 0]}
+                          cursor="pointer"
+                          onClick={(d: { type?: string; payload?: { type?: string } }) => {
+                            const t = d?.payload?.type ?? d?.type;
+                            if (t) openDrilldown(t, "neutral");
+                          }}
+                        />
                       </BarChart>
                     </ResponsiveContainer>
                   )}
@@ -527,18 +698,48 @@ export default function EmailIntelligencePage() {
                     <div className="divide-y divide-border">
                       {(data?.win_loss_patterns ?? []).map(row => {
                         const winPct = row.total > 0 ? Math.round((row.won / row.total) * 100) : 0;
-                        const lossPct = row.total > 0 ? Math.round((row.lost / row.total) * 100) : 0;
                         return (
-                          <div key={row.intent_type} className="px-4 py-2.5 flex items-center gap-3" data-testid={`winloss-row-${row.intent_type}`}>
+                          <div
+                            key={row.intent_type}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => openDrilldown(row.intent_type, "all")}
+                            onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDrilldown(row.intent_type, "all"); } }}
+                            className="px-4 py-2.5 flex items-center gap-3 cursor-pointer hover:bg-muted/40 transition-colors"
+                            data-testid={`winloss-row-${row.intent_type}`}
+                          >
                             <div className="w-2 h-6 rounded-full shrink-0" style={{ backgroundColor: INTENT_COLORS[row.intent_type] ?? "#6b7280" }} />
                             <div className="flex-1 min-w-0">
                               <div className="text-xs font-medium text-foreground">{label(row.intent_type)}</div>
                               <div className="text-[10px] text-muted-foreground">{row.total} total signals</div>
                             </div>
                             <div className="flex items-center gap-2 shrink-0">
-                              {row.won > 0 && <Badge variant="outline" className="text-[10px] text-green-600 border-green-500/30 px-1.5">{row.won} won</Badge>}
-                              {row.lost > 0 && <Badge variant="outline" className="text-[10px] text-red-600 border-red-500/30 px-1.5">{row.lost} lost</Badge>}
+                              {row.won > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={e => { e.stopPropagation(); openDrilldown(row.intent_type, "won"); }}
+                                  className="rounded hover:opacity-80 transition-opacity"
+                                  data-testid={`winloss-won-${row.intent_type}`}
+                                >
+                                  <Badge variant="outline" className="text-[10px] text-green-600 border-green-500/30 px-1.5 cursor-pointer">
+                                    {row.won} won
+                                  </Badge>
+                                </button>
+                              )}
+                              {row.lost > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={e => { e.stopPropagation(); openDrilldown(row.intent_type, "lost"); }}
+                                  className="rounded hover:opacity-80 transition-opacity"
+                                  data-testid={`winloss-lost-${row.intent_type}`}
+                                >
+                                  <Badge variant="outline" className="text-[10px] text-red-600 border-red-500/30 px-1.5 cursor-pointer">
+                                    {row.lost} lost
+                                  </Badge>
+                                </button>
+                              )}
                               {winPct > 0 && <span className="text-[10px] text-green-500 font-medium">{winPct}% W</span>}
+                              <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
                             </div>
                           </div>
                         );
@@ -931,6 +1132,12 @@ export default function EmailIntelligencePage() {
           </TabsContent>
         </Tabs>
       </div>
+
+      <WinLossDrilldownDialog
+        intentType={drilldown?.intentType ?? null}
+        outcome={drilldown?.outcome ?? "all"}
+        onClose={() => setDrilldown(null)}
+      />
     </div>
   );
 }
