@@ -1,7 +1,13 @@
 #!/bin/bash
 set -e
 npm install
-printf 'no\nno\nno\nno\nno\nno\nno\nno\n' | npx drizzle-kit push --force
+# Drizzle-kit prompts come in two flavors: confirm prompts (typed y/n) and
+# select prompts (arrow-key list where Enter picks the highlighted default,
+# which is always the safe/non-destructive option). A bare newline handles
+# both — it accepts the safe default on selects, and answers "no" to confirms
+# (drizzle-kit treats empty input as the default-no for confirm prompts).
+# Provide plenty of newlines so we never run out across many prompts.
+printf '\n%.0s' {1..40} | npx drizzle-kit push --force
 # Ensure the session table used by connect-pg-simple is always present.
 # drizzle-kit push does not manage this table (excluded via tablesFilter),
 # but this guard recreates it if it was ever accidentally dropped.
