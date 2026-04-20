@@ -1072,11 +1072,12 @@ function PlaysCard() {
   );
 }
 
+interface PlayDraft { name: string; whenToUse: string; body: string; enabled: boolean; sortOrder: number }
 function PlayEditor({
   draft, setDraft, onSave, onCancel, saving, testIdSuffix,
 }: {
-  draft: { name: string; whenToUse: string; body: string; enabled: boolean; sortOrder: number };
-  setDraft: (d: any) => void;
+  draft: PlayDraft;
+  setDraft: (d: PlayDraft) => void;
   onSave: () => void;
   onCancel: () => void;
   saving: boolean;

@@ -2732,6 +2732,70 @@ export async function runMigrations() {
     clientWut.release();
   }
 
+  // ── agents / agent_personas / agent_plays (Task #290) ──
+  // Admin-managed persona & playbook backing the in-app DNA bot. Tables are
+  // keyed by agent_id from day one to support the upcoming multi-agent
+  // registry. The partial unique index on agent_personas guarantees at most
+  // one active row per (agent_id, channel) so the loader can't get confused.
+  const clientAgents = await pool.connect();
+  try {
+    await clientAgents.query(`
+      CREATE TABLE IF NOT EXISTS agents (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        slug text NOT NULL,
+        name text NOT NULL,
+        description text,
+        is_default boolean NOT NULL DEFAULT false,
+        status text NOT NULL DEFAULT 'published',
+        created_by varchar,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientAgents.query(`CREATE UNIQUE INDEX IF NOT EXISTS agents_org_slug_idx ON agents(organization_id, slug)`);
+    await clientAgents.query(`CREATE INDEX IF NOT EXISTS agents_org_default_idx ON agents(organization_id, is_default)`);
+
+    await clientAgents.query(`
+      CREATE TABLE IF NOT EXISTS agent_personas (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        agent_id varchar NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        channel text NOT NULL,
+        body text NOT NULL,
+        is_active boolean NOT NULL DEFAULT true,
+        version integer NOT NULL DEFAULT 1,
+        created_by varchar,
+        created_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientAgents.query(`CREATE INDEX IF NOT EXISTS agent_personas_active_idx ON agent_personas(agent_id, channel, is_active)`);
+    await clientAgents.query(`CREATE INDEX IF NOT EXISTS agent_personas_history_idx ON agent_personas(agent_id, channel, created_at)`);
+    // Enforce: at most one ACTIVE persona row per (agent_id, channel).
+    await clientAgents.query(`CREATE UNIQUE INDEX IF NOT EXISTS agent_personas_active_unique ON agent_personas(agent_id, channel) WHERE is_active = true`);
+
+    await clientAgents.query(`
+      CREATE TABLE IF NOT EXISTS agent_plays (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        agent_id varchar NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        name text NOT NULL,
+        when_to_use text NOT NULL,
+        body text NOT NULL,
+        enabled boolean NOT NULL DEFAULT true,
+        sort_order integer NOT NULL DEFAULT 0,
+        created_by varchar,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientAgents.query(`CREATE INDEX IF NOT EXISTS agent_plays_agent_idx ON agent_plays(agent_id, enabled)`);
+
+    console.log("[migrations] agents/agent_personas/agent_plays tables ensured (Task #290)");
+  } catch (err) {
+    console.error("[migrations] agents migration error:", err);
+  } finally {
+    clientAgents.release();
+  }
+
   // ── contacts.mobile (Task #263) ──
   // Secondary phone number so Webex call sync can auto-attach calls placed to
   // either a contact's direct line or their cell.

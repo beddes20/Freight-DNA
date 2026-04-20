@@ -77,6 +77,33 @@ export function invalidatePersonaCache(agentId?: string) {
   playsCache.delete(agentId);
 }
 
+/**
+ * Seed an active base persona row so the DB reflects what the bot is currently
+ * saying. Does nothing if a base persona already exists for this agent.
+ */
+async function seedBasePersonaIfMissing(agentId: string) {
+  const [existing] = await db.select({ id: agentPersonas.id }).from(agentPersonas)
+    .where(and(
+      eq(agentPersonas.agentId, agentId),
+      eq(agentPersonas.channel, "base"),
+      eq(agentPersonas.isActive, true),
+    ))
+    .limit(1);
+  if (existing) return;
+  try {
+    await db.insert(agentPersonas).values({
+      agentId,
+      channel: "base",
+      body: DEFAULT_BASE_PERSONA,
+      isActive: true,
+      version: 1,
+    });
+  } catch (err) {
+    // Partial unique index may race with a concurrent seed — that's fine.
+    console.warn("[agent.persona] base seed race (ignored):", (err as Error)?.message);
+  }
+}
+
 /** Get-or-create the org's default DNA agent, returning its id. */
 export async function ensureDefaultAgent(organizationId: string): Promise<string> {
   const cached = cacheGet(agentIdCache, organizationId);
@@ -87,6 +114,7 @@ export async function ensureDefaultAgent(organizationId: string): Promise<string
     .limit(1);
   if (existing) {
     agentIdCache.set(organizationId, { value: existing.id, ts: Date.now() });
+    await seedBasePersonaIfMissing(existing.id);
     return existing.id;
   }
 
@@ -99,6 +127,7 @@ export async function ensureDefaultAgent(organizationId: string): Promise<string
     status: "published",
   }).returning();
   agentIdCache.set(organizationId, { value: created.id, ts: Date.now() });
+  await seedBasePersonaIfMissing(created.id);
   return created.id;
 }
 
