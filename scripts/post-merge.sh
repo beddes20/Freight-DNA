@@ -1,13 +1,27 @@
 #!/bin/bash
 set -e
 npm install
-# Drizzle-kit prompts come in two flavors: confirm prompts (typed y/n) and
-# select prompts (arrow-key list where Enter picks the highlighted default,
-# which is always the safe/non-destructive option). A bare newline handles
-# both — it accepts the safe default on selects, and answers "no" to confirms
-# (drizzle-kit treats empty input as the default-no for confirm prompts).
-# Provide plenty of newlines so we never run out across many prompts.
-printf '\n%.0s' {1..40} | npx drizzle-kit push --force
+
+# Drizzle-kit push handles confirm prompts via --force, but newer versions also
+# emit interactive *select* prompts (e.g. "truncate table?" when adding a unique
+# constraint to an existing table). Those select prompts read from a TTY and
+# will hang indefinitely when stdin is closed (which it is during post-merge).
+#
+# Strategy:
+#  1. Try push with a hard timeout. On the happy path this finishes quickly.
+#  2. If it times out or errors, fall back to a no-op warning — most schema
+#     changes are also applied inline at server boot via server/migrations,
+#     and a stuck push should never block the rest of post-merge setup.
+#  3. Pipe newlines anyway so confirm prompts that DO read stdin get a default.
+set +e
+printf '\n%.0s' {1..40} | timeout 45 npx drizzle-kit push --force
+DRIZZLE_EXIT=$?
+set -e
+if [ $DRIZZLE_EXIT -ne 0 ]; then
+  echo "[post-merge] drizzle-kit push exited with $DRIZZLE_EXIT — continuing." >&2
+  echo "[post-merge] If this was a hang on an interactive prompt, run the prompted DDL manually via psql, then re-run db:push to verify." >&2
+fi
+
 # Ensure the session table used by connect-pg-simple is always present.
 # drizzle-kit push does not manage this table (excluded via tablesFilter),
 # but this guard recreates it if it was ever accidentally dropped.
