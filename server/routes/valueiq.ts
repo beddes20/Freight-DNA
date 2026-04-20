@@ -332,10 +332,12 @@ export function registerValueIQRoutes(app: Express) {
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders?.();
 
-    // Build short history (last 20)
-    const history = await db.select().from(threadMessages)
+    // Build short history: most-recent 50 in DB, drop the just-inserted user
+    // turn, then take the last 20 in chronological order for the LLM.
+    const recent = await db.select().from(threadMessages)
       .where(eq(threadMessages.threadId, thread.id))
-      .orderBy(threadMessages.createdAt).limit(50);
+      .orderBy(desc(threadMessages.createdAt)).limit(50);
+    const history = recent.slice().reverse();
     const historyForLLM = history
       .filter((m) => m.id !== userMsg.id)
       .slice(-20)

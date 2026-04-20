@@ -880,7 +880,16 @@ export function registerAgentAdminRoutes(app: Express) {
       if (!me) return res.status(401).json({ error: "Unauthorized" });
       if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
       const body = agentBodySchema.partial().parse(req.body);
-      const [row] = await db.update(agentsTable).set({ ...body, updatedAt: new Date() } as any)
+      const patch: Partial<typeof agentsTable.$inferInsert> = { updatedAt: new Date() };
+      if (body.slug !== undefined) patch.slug = body.slug;
+      if (body.name !== undefined) patch.name = body.name;
+      if (body.description !== undefined) patch.description = body.description ?? null;
+      if (body.avatarUrl !== undefined) patch.avatarUrl = body.avatarUrl ?? null;
+      if (body.model !== undefined) patch.model = body.model;
+      if (body.accessScope !== undefined) patch.accessScope = body.accessScope;
+      if (body.allowedRoles !== undefined) patch.allowedRoles = body.allowedRoles ?? null;
+      if (body.status !== undefined) patch.status = body.status;
+      const [row] = await db.update(agentsTable).set(patch)
         .where(and(eq(agentsTable.id, req.params.id), eq(agentsTable.organizationId, me.organizationId)))
         .returning();
       if (!row) return res.status(404).json({ error: "Not found" });
