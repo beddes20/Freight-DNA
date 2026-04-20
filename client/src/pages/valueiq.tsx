@@ -50,6 +50,7 @@ export default function ValueIQPage() {
           <TabsTrigger value="library" data-testid="tab-library"><BookMarked className="h-4 w-4 mr-2" />Library</TabsTrigger>
         </TabsList>
         <TabsContent value="insights" className="m-0">
+          <InsightsHandoffBar onOpened={() => setTab("threads")} />
           <AIIntelligencePage />
         </TabsContent>
         <TabsContent value="threads" className="m-0">
@@ -60,6 +61,55 @@ export default function ValueIQPage() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+// ─── Insights handoff bar ─────────────────────────────────────────────────
+function InsightsHandoffBar({ onOpened }: { onOpened: () => void }) {
+  const { toast } = useToast();
+  const [, setLocation] = useLocation();
+  const startThread = useMutation({
+    mutationFn: async (seedTopic: string) => {
+      const res = await apiRequest("POST", "/api/valueiq/threads", { title: seedTopic });
+      const thread = await res.json();
+      // Seed a user message that primes DNA with the dashboard context.
+      await apiRequest("POST", `/api/valueiq/threads/${thread.id}/messages`, {
+        content: `I just opened the AI Intelligence dashboard. ${seedTopic}. Use my CRM data to walk me through what to focus on first.`,
+      }).catch(() => {/* SSE — fire and forget */});
+      return thread.id as string;
+    },
+    onSuccess: (threadId) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/valueiq/threads"] });
+      setLocation(`/valueiq?tab=threads&thread=${threadId}`);
+      onOpened();
+      toast({ title: "Started a new ValueIQ thread" });
+    },
+    onError: () => toast({ title: "Couldn't start thread", variant: "destructive" }),
+  });
+  const quickPrompts = [
+    "Walk me through today's top insights",
+    "Which accounts need a touchpoint this week?",
+    "What's our biggest expansion opportunity right now?",
+  ];
+  return (
+    <Card className="mb-4 border-amber-500/40 bg-amber-50/40 dark:bg-amber-950/20">
+      <CardContent className="p-3 flex flex-col sm:flex-row gap-2 sm:items-center">
+        <div className="flex-1 text-sm">
+          <span className="font-medium">Discuss in ValueIQ:</span>{" "}
+          <span className="text-muted-foreground">turn any insight into a working thread with DNA.</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {quickPrompts.map((p) => (
+            <Button key={p} size="sm" variant="outline"
+              data-testid={`button-discuss-${p.slice(0, 12).replace(/\s+/g, "-").toLowerCase()}`}
+              disabled={startThread.isPending}
+              onClick={() => startThread.mutate(p)}>
+              <Sparkles className="h-3.5 w-3.5 mr-1.5" />{p}
+            </Button>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

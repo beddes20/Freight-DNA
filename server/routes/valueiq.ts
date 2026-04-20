@@ -44,6 +44,44 @@ import { addLibraryItem, listLibraryItems, deleteLibraryItem } from "../agent/li
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
+/**
+ * Extract plain text from an uploaded file. Supports text/json/csv/markdown
+ * (utf-8), Excel (.xlsx/.xls via SheetJS → CSV per sheet), and PDF (via
+ * pdf-parse). Unsupported types return null so the file is stored as binary.
+ * Output is capped at 100k characters to keep prompt size bounded.
+ */
+async function extractTextFromUpload(file: Express.Multer.File): Promise<string | null> {
+  const name = file.originalname || "";
+  const mime = file.mimetype || "";
+  const isTextLike = mime.startsWith("text/") || mime === "application/json"
+    || /\.(md|txt|csv|json|html?|log|tsv)$/i.test(name);
+  try {
+    if (isTextLike) return file.buffer.toString("utf-8").slice(0, 100_000);
+    if (mime === "application/pdf" || /\.pdf$/i.test(name)) {
+      const pdfParse = (await import("pdf-parse")).default;
+      const result = await pdfParse(file.buffer);
+      return (result.text ?? "").slice(0, 100_000);
+    }
+    if (
+      mime.includes("spreadsheetml") || mime.includes("ms-excel")
+      || /\.(xlsx?|xlsm)$/i.test(name)
+    ) {
+      const XLSX = await import("xlsx");
+      const wb = XLSX.read(file.buffer, { type: "buffer" });
+      const blocks: string[] = [];
+      for (const sheetName of wb.SheetNames.slice(0, 10)) {
+        const ws = wb.Sheets[sheetName];
+        const csv = XLSX.utils.sheet_to_csv(ws);
+        if (csv.trim()) blocks.push(`--- sheet: ${sheetName} ---\n${csv}`);
+      }
+      return blocks.join("\n\n").slice(0, 100_000) || null;
+    }
+  } catch (err) {
+    console.warn("[valueiq] file parse failed:", err);
+  }
+  return null;
+}
+
 async function loadThread(threadId: string, userId: string): Promise<Thread | null> {
   const [row] = await db.select().from(threadsTable)
     .where(and(eq(threadsTable.id, threadId), eq(threadsTable.userId, userId))).limit(1);
@@ -422,11 +460,9 @@ export function registerValueIQRoutes(app: Express) {
     if (!thread) return res.status(404).json({ error: "Not found" });
     const file = (req as any).file as Express.Multer.File | undefined;
     if (!file) return res.status(400).json({ error: "No file" });
-    const isText = file.mimetype.startsWith("text/") || file.mimetype === "application/json"
-      || /\.(md|txt|csv|json|html?|log)$/i.test(file.originalname);
-    const parsedText = isText ? file.buffer.toString("utf-8").slice(0, 100_000) : null;
+    const parsedText = await extractTextFromUpload(file);
     const [row] = await db.insert(threadAttachments).values({
-      threadId: thread.id, userId: user.id, kind: isText ? "text" : "binary",
+      threadId: thread.id, userId: user.id, kind: parsedText ? "text" : "binary",
       fileName: file.originalname, mimeType: file.mimetype, byteSize: file.size,
       parsedText,
     }).returning();
@@ -463,5 +499,28 @@ export function registerValueIQRoutes(app: Express) {
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     const ok = await deleteLibraryItem(user.id, req.params.id);
     res.json({ ok });
+  });
+
+  // Upload a file directly into the personal library (parsed text becomes
+  // the body so it is embedded + searchable like a note). Same parser as
+  // thread attachments — supports text/CSV/JSON/Markdown, PDF, Excel.
+  app.post("/api/valueiq/library/upload", requireAuth, upload.single("file"), async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const file = (req as any).file as Express.Multer.File | undefined;
+      if (!file) return res.status(400).json({ error: "No file" });
+      const parsedText = await extractTextFromUpload(file);
+      if (!parsedText) {
+        return res.status(415).json({ error: "Unsupported file type. Use PDF, CSV, Excel, or text." });
+      }
+      const id = await addLibraryItem({
+        organizationId: user.organizationId, userId: user.id,
+        kind: "file", title: file.originalname || "Uploaded file", body: parsedText,
+      });
+      res.json({ id, fileName: file.originalname, chars: parsedText.length });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message ?? "Upload failed" });
+    }
   });
 }

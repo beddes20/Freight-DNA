@@ -129,7 +129,23 @@ export async function retrieveContext(args: RetrievalArgs): Promise<RetrievalRes
     }
   }
 
-  return { hits, degraded };
+  // De-dup: collapse by (bucket, sourceKind, sourceId), keeping the
+  // highest-similarity hit. Then collapse near-identical text bodies across
+  // buckets by a stable signature (first 120 chars, lowercased, whitespace-normalized).
+  const byKey = new Map<string, RetrievalHit>();
+  for (const h of hits) {
+    const k = `${h.bucket}::${h.sourceKind}::${h.sourceId}`;
+    const prev = byKey.get(k);
+    if (!prev || (h.similarity ?? 0) > (prev.similarity ?? 0)) byKey.set(k, h);
+  }
+  const bySig = new Map<string, RetrievalHit>();
+  for (const h of byKey.values()) {
+    const sig = h.text.toLowerCase().replace(/\s+/g, " ").trim().slice(0, 120);
+    const prev = bySig.get(sig);
+    if (!prev || (h.similarity ?? 0) > (prev.similarity ?? 0)) bySig.set(sig, h);
+  }
+  const deduped = Array.from(bySig.values()).sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
+  return { hits: deduped, degraded };
 }
 
 export function formatHitsForPrompt(hits: RetrievalHit[], maxChars = 4000): string {

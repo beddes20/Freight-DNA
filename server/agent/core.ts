@@ -157,7 +157,7 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
       console.error("[agent.core] OpenAI call failed:", err);
       hadError = true;
       emit({ error: "AI service temporarily unavailable. Please try again." });
-      return { assistantText, hadError, surfacedAction };
+      return { assistantText, hadError, surfacedAction, agentId };
     }
 
     let textThisTurn = "";
