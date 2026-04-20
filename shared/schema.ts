@@ -2776,6 +2776,30 @@ export const insertAgentActivitySchema = createInsertSchema(agentActivity).omit(
 export type InsertAgentActivity = z.infer<typeof insertAgentActivitySchema>;
 export type AgentActivity = typeof agentActivity.$inferSelect;
 
+// Org-level AI Agent module settings. One row per organization.
+// Mass foundational toggles (kill switch, default access policy, default model).
+export const agentOrgSettings = pgTable(
+  "agent_org_settings",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    moduleEnabled: boolean("module_enabled").notNull().default(true),
+    defaultAccessForNewUsers: text("default_access_for_new_users").notNull().default("allow"),
+    defaultModel: text("default_model").notNull().default("gpt-4o-mini"),
+    autoApprovePersonalMemory: boolean("auto_approve_personal_memory").notNull().default(true),
+    allowExternalOutreach: boolean("allow_external_outreach").notNull().default(false),
+    notes: text("notes"),
+    updatedBy: varchar("updated_by"),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("agent_org_settings_org_idx").on(table.organizationId),
+  ],
+);
+export const insertAgentOrgSettingsSchema = createInsertSchema(agentOrgSettings).omit({ id: true, updatedAt: true });
+export type InsertAgentOrgSettings = z.infer<typeof insertAgentOrgSettingsSchema>;
+export type AgentOrgSettings = typeof agentOrgSettings.$inferSelect;
+
 // Consent tracking for first-contact gating with external parties (drivers, dispatchers).
 export const externalContactConsent = pgTable(
   "external_contact_consent",

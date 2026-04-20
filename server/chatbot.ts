@@ -608,6 +608,14 @@ export function registerChatbotRoutes(app: Express): void {
       res.setHeader("Connection", "keep-alive");
 
       const { runAgentTurn } = await import("./agent/core");
+      const { hasModuleAccess } = await import("./agent/permissions");
+      const access = await hasModuleAccess(user);
+      if (!access.allowed) {
+        res.write(`data: ${JSON.stringify({ content: access.reason || "AI Agent module is not available." })}\n\n`);
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+        res.end();
+        return;
+      }
       const priorHistory = history
         .slice(0, -1) // exclude the user message we just inserted; agent passes it as `userMessage`
         .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));

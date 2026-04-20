@@ -8,6 +8,7 @@ import {
   agentFacts,
   agentMemories,
   agentActivity,
+  agentOrgSettings,
   users,
   type UserRole,
 } from "@shared/schema";
@@ -15,6 +16,7 @@ import {
   ROLE_DEFAULTS,
   defaultEffectFor,
   canInvoke,
+  hasModuleAccess,
   type Capability,
   type Effect,
 } from "../agent/permissions";
@@ -32,6 +34,7 @@ const ALL_CAPABILITIES: Capability[] = [
   "write.touchpoint.meaningful", "write.account", "write.opportunity",
   "write.memory", "write.email.draft",
   "write.sms.driver", "write.voice.driver", "write.email.external",
+  "module.access",
 ];
 
 const ALL_ROLES: UserRole[] = [
@@ -47,7 +50,26 @@ function isManagerOrAbove(role: string | null | undefined) {
   return role === "admin" || role === "director" || role === "sales_director" || role === "national_account_manager";
 }
 
+async function getOrInitOrgSettings(orgId: string) {
+  const [existing] = await db.select().from(agentOrgSettings).where(eq(agentOrgSettings.organizationId, orgId)).limit(1);
+  if (existing) return existing;
+  const [created] = await db.insert(agentOrgSettings).values({ organizationId: orgId }).returning();
+  return created;
+}
+
 export function registerAgentAdminRoutes(app: Express) {
+  // ─── Module access (everyone can self-check) ──────────────────────────────
+  app.get("/api/agent/me/module-access", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const result = await hasModuleAccess(user);
+      res.json(result);
+    } catch {
+      res.status(500).json({ error: "Failed to check access" });
+    }
+  });
+
   // ─── Self-service: AI Assistant settings ──────────────────────────────────
 
   // List my effective capabilities (defaults + per-user overrides resolved).
@@ -341,6 +363,162 @@ export function registerAgentAdminRoutes(app: Express) {
       if (err?.issues) return res.status(400).json({ error: err.issues });
       console.error("[agent-admin] upsert capability:", err);
       res.status(500).json({ error: "Failed to update capability" });
+    }
+  });
+
+  // ─── Admin: Module Access roster ──────────────────────────────────────────
+  // List every user with their effective module.access state.
+  app.get("/api/agent/admin/module-access", requireAuth, async (req: Request, res: Response) => {
+    const me = await getCurrentUser(req);
+    if (!me) return res.status(401).json({ error: "Unauthorized" });
+    if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+
+    const orgUsers = await db.select({ id: users.id, name: users.name, username: users.username, role: users.role })
+      .from(users)
+      .where(eq(users.organizationId, me.organizationId));
+
+    const overrides = await db.select().from(agentCapabilities)
+      .where(and(eq(agentCapabilities.organizationId, me.organizationId), eq(agentCapabilities.capability, "module.access")));
+    const overrideMap = new Map(overrides.map((o) => [o.userId, o]));
+
+    const rows = orgUsers.map((u) => {
+      const def = defaultEffectFor(u.role as UserRole, "module.access");
+      const ov = overrideMap.get(u.id);
+      const effect = (ov?.effect ?? def) as Effect;
+      return {
+        id: u.id, name: u.name, email: u.username, role: u.role,
+        defaultEffect: def,
+        effect,
+        enabled: effect !== "deny",
+        hasOverride: !!ov,
+        updatedAt: ov?.updatedAt ?? null,
+      };
+    });
+    res.json(rows.sort((a, b) => a.name.localeCompare(b.name)));
+  });
+
+  const moduleToggleSchema = z.object({ enabled: z.boolean() });
+  app.put("/api/agent/admin/module-access/:userId", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+
+      const targetId = String(req.params.userId);
+      const [target] = await db.select().from(users).where(eq(users.id, targetId));
+      if (!target || target.organizationId !== me.organizationId) {
+        return res.status(404).json({ error: "User not found" });
+      }
+      const { enabled } = moduleToggleSchema.parse(req.body);
+      const targetEffect: Effect = enabled ? "allow" : "deny";
+      const def = defaultEffectFor(target.role as UserRole, "module.access");
+
+      // If the requested state matches the role default, clear the override.
+      if (targetEffect === def) {
+        await db.delete(agentCapabilities).where(and(
+          eq(agentCapabilities.userId, targetId),
+          eq(agentCapabilities.capability, "module.access"),
+        ));
+        return res.json({ ok: true, effect: def, source: "default" });
+      }
+      const [existing] = await db.select().from(agentCapabilities).where(and(
+        eq(agentCapabilities.userId, targetId),
+        eq(agentCapabilities.capability, "module.access"),
+      ));
+      if (existing) {
+        await db.update(agentCapabilities).set({ effect: targetEffect, updatedBy: me.id, updatedAt: new Date() })
+          .where(eq(agentCapabilities.id, existing.id));
+      } else {
+        await db.insert(agentCapabilities).values({
+          organizationId: target.organizationId, userId: targetId,
+          capability: "module.access", effect: targetEffect, updatedBy: me.id,
+        });
+      }
+      res.json({ ok: true, effect: targetEffect, source: "override" });
+    } catch (err: any) {
+      if (err?.issues) return res.status(400).json({ error: err.issues });
+      res.status(500).json({ error: "Failed to update access" });
+    }
+  });
+
+  // Bulk apply: enable/disable for everyone in a role at once.
+  const bulkSchema = z.object({ role: z.string().min(1), enabled: z.boolean() });
+  app.post("/api/agent/admin/module-access/bulk", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+
+      const { role, enabled } = bulkSchema.parse(req.body);
+      const targets = await db.select({ id: users.id, role: users.role })
+        .from(users)
+        .where(and(eq(users.organizationId, me.organizationId), eq(users.role, role as UserRole)));
+
+      let changed = 0;
+      for (const t of targets) {
+        const def = defaultEffectFor(t.role as UserRole, "module.access");
+        const desired: Effect = enabled ? "allow" : "deny";
+        if (desired === def) {
+          await db.delete(agentCapabilities).where(and(
+            eq(agentCapabilities.userId, t.id),
+            eq(agentCapabilities.capability, "module.access"),
+          ));
+        } else {
+          const [existing] = await db.select().from(agentCapabilities).where(and(
+            eq(agentCapabilities.userId, t.id),
+            eq(agentCapabilities.capability, "module.access"),
+          ));
+          if (existing) {
+            await db.update(agentCapabilities).set({ effect: desired, updatedBy: me.id, updatedAt: new Date() })
+              .where(eq(agentCapabilities.id, existing.id));
+          } else {
+            await db.insert(agentCapabilities).values({
+              organizationId: me.organizationId, userId: t.id,
+              capability: "module.access", effect: desired, updatedBy: me.id,
+            });
+          }
+        }
+        changed++;
+      }
+      res.json({ ok: true, changed });
+    } catch (err: any) {
+      if (err?.issues) return res.status(400).json({ error: err.issues });
+      res.status(500).json({ error: "Bulk update failed" });
+    }
+  });
+
+  // ─── Admin: Org-level settings (mass foundational) ────────────────────────
+  app.get("/api/agent/admin/org-settings", requireAuth, async (req: Request, res: Response) => {
+    const me = await getCurrentUser(req);
+    if (!me) return res.status(401).json({ error: "Unauthorized" });
+    if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+    const row = await getOrInitOrgSettings(me.organizationId);
+    res.json(row);
+  });
+
+  const orgSettingsSchema = z.object({
+    moduleEnabled: z.boolean().optional(),
+    defaultAccessForNewUsers: z.enum(["allow", "deny"]).optional(),
+    defaultModel: z.string().min(1).max(100).optional(),
+    autoApprovePersonalMemory: z.boolean().optional(),
+    allowExternalOutreach: z.boolean().optional(),
+    notes: z.string().max(2000).nullable().optional(),
+  });
+  app.put("/api/agent/admin/org-settings", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+      const patch = orgSettingsSchema.parse(req.body);
+      await getOrInitOrgSettings(me.organizationId); // ensure row
+      await db.update(agentOrgSettings)
+        .set({ ...patch, updatedBy: me.id, updatedAt: new Date() })
+        .where(eq(agentOrgSettings.organizationId, me.organizationId));
+      const row = await getOrInitOrgSettings(me.organizationId);
+      res.json(row);
+    } catch (err: any) {
+      if (err?.issues) return res.status(400).json({ error: err.issues });
+      res.status(500).json({ error: "Failed to save settings" });
     }
   });
 }

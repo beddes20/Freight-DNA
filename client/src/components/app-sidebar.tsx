@@ -426,21 +426,11 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
-                {user?.role === "admin" && (
-                  <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={location === "/admin/ai-permissions"}>
-                      <Link href="/admin/ai-permissions" data-testid="link-admin-ai-permissions">
-                        <Sparkles className="h-4 w-4" />
-                        <span>AI Permissions</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                )}
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location === "/agent-activity"}>
-                    <Link href="/agent-activity" data-testid="link-agent-activity">
-                      <Activity className="h-4 w-4" />
-                      <span>Agent Activity</span>
+                  <SidebarMenuButton asChild isActive={location.startsWith("/ai-agent")}>
+                    <Link href="/ai-agent" data-testid="link-ai-agent">
+                      <Sparkles className="h-4 w-4" />
+                      <span>AI Agent</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

@@ -36,7 +36,9 @@ export type Capability =
   // External outreach (drivers/dispatchers) — default deny except admin/director
   | "write.sms.driver"
   | "write.voice.driver"
-  | "write.email.external";
+  | "write.email.external"
+  // Module access — gates whether the user can use DNA at all
+  | "module.access";
 
 export type Effect = "allow" | "deny" | "auto";
 export type Decision =
@@ -70,6 +72,7 @@ function buildDefaults(): Record<Capability, Effect> {
   for (const c of ALL_HITL_WRITES) defaults[c] = "allow";
   for (const c of ALL_AUTO_WRITES) defaults[c] = "auto";
   for (const c of ALL_EXTERNAL) defaults[c] = "deny";
+  defaults["module.access"] = "allow";
   return defaults as Record<Capability, Effect>;
 }
 
@@ -78,6 +81,8 @@ const READ_ONLY_DEFAULTS = (() => {
   for (const c of ALL_HITL_WRITES) d[c] = "deny";
   // Personal memory is still allowed for read-only roles (no business impact).
   for (const c of ALL_AUTO_WRITES) d[c] = "auto";
+  // Read-only roles get module access by default, but admins can revoke.
+  d["module.access"] = "allow";
   return d;
 })();
 
@@ -133,6 +138,29 @@ export async function canInvoke(rep: User, capability: Capability): Promise<Deci
     return { allowed: false, reason: `Role ${rep.role} default: deny`, source: "default" };
   }
   return { allowed: true, auto: def === "auto", effect: def, source: "default" };
+}
+
+/**
+ * Module-level access check. Combines the org-wide kill switch with the
+ * per-user `module.access` capability. Use this BEFORE invoking the agent.
+ */
+export async function hasModuleAccess(rep: User): Promise<{ allowed: boolean; reason?: string }> {
+  // 1. Org kill switch
+  try {
+    const { agentOrgSettings } = await import("@shared/schema");
+    const [orgRow] = await db.select().from(agentOrgSettings).where(eq(agentOrgSettings.organizationId, rep.organizationId)).limit(1);
+    if (orgRow && !orgRow.moduleEnabled) {
+      return { allowed: false, reason: "AI Agent module is disabled for your organization." };
+    }
+  } catch {
+    // table may not exist yet — proceed
+  }
+  // 2. Per-user override
+  const decision = await canInvoke(rep, "module.access");
+  if (!decision.allowed) {
+    return { allowed: false, reason: "An admin has not granted you access to the AI Agent module." };
+  }
+  return { allowed: true };
 }
 
 export async function listCapabilitiesForUser(userId: string): Promise<Array<{ capability: string; effect: Effect; note: string | null }>> {
