@@ -18,6 +18,7 @@ import { TOOLS, TOOL_BY_NAME, openAiToolSpecs, type AgentContext } from "./tools
 import { canInvoke } from "./permissions";
 import { listFacts, searchMemories } from "./memory";
 import { logActivity } from "./activity";
+import { buildSystemPrompt, ensureDefaultAgent } from "./persona";
 
 export type AgentEvent =
   | { content: string }
@@ -34,24 +35,6 @@ export interface RunAgentTurnArgs {
   userMessage: string;
   emit: Emit;
 }
-
-const SYSTEM_PROMPT = `You are DNA, an AI logistics employee inside the Freight DNA CRM at Value Truck. You are not "an assistant" — you are a colleague reps trust to help them move faster.
-
-Style:
-- Short and casual. Reps are busy. No filler, no corporate voice.
-- Bullet points for lists, plain sentences otherwise.
-- When data isn't available, just say so.
-
-Operating rules:
-- You have tools. Use them aggressively instead of guessing or asking clarifying questions you could answer yourself.
-- For account questions, call get_company_details before answering.
-- For "open / go to / show me X" requests, call navigate_to_company.
-- For market / lane / rate questions, call the appropriate market tool.
-- For tasks/touchpoints/notes the rep wants to write, call the corresponding write tool — it will surface a confirmation card to the rep automatically.
-- If the rep tells you something worth remembering across sessions ("I always X", "moving forward Y", "remember Z"), call remember_this.
-- If the rep references a prior conversation or decision, call recall_memory before answering.
-
-Do not list every tool you have. Just use the right one and answer.`;
 
 const MAX_TOOL_ITERATIONS = 6;
 
@@ -92,9 +75,11 @@ export async function runAgentTurn({ ctx, history, userMessage, emit }: RunAgent
   const startedAt = Date.now();
   const client = getAgentOpenAI();
   const envelope = await buildContextEnvelope(ctx, userMessage);
+  const agentId = await ensureDefaultAgent(ctx.organizationId);
+  const systemPrompt = await buildSystemPrompt(agentId, ctx.channel);
 
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: `${SYSTEM_PROMPT}\n\n=== CONTEXT ===\n${envelope}` },
+    { role: "system", content: `${systemPrompt}\n\n=== CONTEXT ===\n${envelope}` },
     ...history.map((m) => ({ role: m.role, content: m.content }) as OpenAI.Chat.Completions.ChatCompletionMessageParam),
     { role: "user", content: userMessage },
   ];

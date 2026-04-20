@@ -16,7 +16,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Loader2, Trash2, Plus, Pin, Sparkles, Activity, Shield, Users, Settings as SettingsIcon,
   ArrowDownLeft, ArrowUpRight, Wrench, AlertTriangle, CheckCircle2, XCircle, RotateCcw, Brain,
+  BookOpen, ChevronDown, ChevronRight, History, Save,
 } from "lucide-react";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { format, formatDistanceToNow } from "date-fns";
 
 type Effect = "allow" | "deny" | "auto";
@@ -118,6 +120,9 @@ export default function AiAgentPortal() {
           {isAdmin && <TabsTrigger value="permissions" data-testid="tab-permissions">
             <Shield className="h-4 w-4 mr-2" />Permissions
           </TabsTrigger>}
+          {isAdmin && <TabsTrigger value="persona" data-testid="tab-persona">
+            <BookOpen className="h-4 w-4 mr-2" />Persona & Playbook
+          </TabsTrigger>}
           {isAdmin && <TabsTrigger value="org-defaults" data-testid="tab-org-defaults">
             <Sparkles className="h-4 w-4 mr-2" />Org Defaults
           </TabsTrigger>}
@@ -134,6 +139,9 @@ export default function AiAgentPortal() {
         </TabsContent>}
         {isAdmin && <TabsContent value="permissions" className="mt-4">
           <PermissionsAdminPanel />
+        </TabsContent>}
+        {isAdmin && <TabsContent value="persona" className="mt-4">
+          <PersonaPlaybookPanel />
         </TabsContent>}
         {isAdmin && <TabsContent value="org-defaults" className="mt-4">
           <OrgDefaultsPanel />
@@ -687,6 +695,426 @@ function OrgDefaultsPanel() {
           {save.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
           Save changes
         </Button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PANEL: Persona & Playbook (admin)
+// ═══════════════════════════════════════════════════════════════════════════
+type ChannelSlot = "base" | "in_app" | "email" | "sms_voice" | "teams";
+interface PersonaChannel {
+  channel: ChannelSlot;
+  body: string | null;
+  version: number;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+interface PersonaResponse {
+  agentId: string;
+  defaultBody: string;
+  channels: PersonaChannel[];
+}
+interface Play {
+  id: string;
+  agentId: string;
+  name: string;
+  whenToUse: string;
+  body: string;
+  enabled: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+interface PersonaHistoryRow {
+  id: string;
+  channel: string;
+  body: string;
+  version: number;
+  isActive: boolean;
+  createdBy: string | null;
+  createdByName: string | null;
+  createdAt: string;
+}
+
+const SLOT_LABELS: Record<ChannelSlot, { label: string; help: string }> = {
+  base: {
+    label: "Base persona",
+    help: "Foundation prompt used everywhere DNA shows up. Channel overlays and plays are appended on top.",
+  },
+  in_app: {
+    label: "In-app chat overlay",
+    help: "Tone & format adjustments for the in-app chatbot. Leave blank to use base only.",
+  },
+  email: {
+    label: "Email overlay",
+    help: "Adjustments when DNA replies via email (longer-form, formal closings, signature, etc.).",
+  },
+  sms_voice: {
+    label: "SMS / Voice overlay",
+    help: "Adjustments for SMS and voice channels. Keep responses short and skimmable.",
+  },
+  teams: {
+    label: "Microsoft Teams overlay",
+    help: "Adjustments when DNA posts inside Teams threads.",
+  },
+};
+
+function PersonaPlaybookPanel() {
+  return (
+    <div className="space-y-6">
+      <PersonaCard />
+      <PlaysCard />
+    </div>
+  );
+}
+
+function PersonaCard() {
+  const { toast } = useToast();
+  const { data, isLoading } = useQuery<PersonaResponse>({ queryKey: ["/api/agent/admin/persona"] });
+  const [openSlot, setOpenSlot] = useState<ChannelSlot | null>("base");
+  const [drafts, setDrafts] = useState<Partial<Record<ChannelSlot, string>>>({});
+
+  const save = useMutation({
+    mutationFn: async ({ channel, body }: { channel: ChannelSlot; body: string }) =>
+      apiRequest("PUT", "/api/agent/admin/persona", { channel, body }),
+    onSuccess: (_r, vars) => {
+      setDrafts((d) => { const n = { ...d }; delete n[vars.channel]; return n; });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent/admin/persona"] });
+      toast({ title: "Persona saved" });
+    },
+    onError: () => toast({ title: "Failed to save", variant: "destructive" }),
+  });
+  const reset = useMutation({
+    mutationFn: async (channel: ChannelSlot) =>
+      apiRequest("POST", "/api/agent/admin/persona/reset", { channel }),
+    onSuccess: (_r, channel) => {
+      setDrafts((d) => { const n = { ...d }; delete n[channel]; return n; });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent/admin/persona"] });
+      toast({ title: "Reset to default" });
+    },
+    onError: () => toast({ title: "Failed to reset", variant: "destructive" }),
+  });
+
+  if (isLoading || !data) return <Loader2 className="h-6 w-6 animate-spin" />;
+  const slots: ChannelSlot[] = ["base", "in_app", "email", "sms_voice", "teams"];
+  const byChannel = new Map(data.channels.map((c) => [c.channel, c]));
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <BookOpen className="h-5 w-5" /> Persona
+        </CardTitle>
+        <CardDescription>
+          The base persona is what DNA "is" everywhere. Add channel overlays only when the channel needs different behavior.
+          Reps see the same DNA — only the wording changes per channel.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {slots.map((slot) => {
+          const ch = byChannel.get(slot)!;
+          const open = openSlot === slot;
+          const draft = drafts[slot];
+          const liveBody = ch.body ?? (slot === "base" ? data.defaultBody : "");
+          const value = draft !== undefined ? draft : liveBody;
+          const dirty = draft !== undefined && draft !== liveBody;
+          const isUsingDefault = slot === "base" && ch.body === null;
+          const isOverlayEmpty = slot !== "base" && ch.body === null;
+
+          return (
+            <div key={slot} className="rounded-md border" data-testid={`row-persona-${slot}`}>
+              <button
+                type="button"
+                className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-muted/40"
+                onClick={() => setOpenSlot(open ? null : slot)}
+                data-testid={`toggle-persona-${slot}`}
+              >
+                <div className="flex items-center gap-2">
+                  {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                  <div className="text-left">
+                    <div className="font-medium">{SLOT_LABELS[slot].label}</div>
+                    <div className="text-xs text-muted-foreground">{SLOT_LABELS[slot].help}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {dirty && <Badge variant="outline" className="text-amber-700 border-amber-300">Unsaved</Badge>}
+                  {isUsingDefault && <Badge variant="outline">Built-in default</Badge>}
+                  {isOverlayEmpty && <Badge variant="outline">No overlay</Badge>}
+                  {ch.body !== null && <Badge variant="secondary">v{ch.version}</Badge>}
+                </div>
+              </button>
+
+              {open && (
+                <div className="px-4 pb-4 space-y-3 border-t pt-3">
+                  <Textarea
+                    rows={slot === "base" ? 14 : 8}
+                    value={value}
+                    onChange={(e) => setDrafts((d) => ({ ...d, [slot]: e.target.value }))}
+                    placeholder={slot === "base" ? "" : "Optional overlay applied on top of the base persona…"}
+                    className="font-mono text-xs"
+                    data-testid={`textarea-persona-${slot}`}
+                  />
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="text-xs text-muted-foreground">
+                      {ch.updatedAt && <>Last edit {formatDistanceToNow(new Date(ch.updatedAt), { addSuffix: true })}</>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <PersonaHistorySheet channel={slot} />
+                      {ch.body !== null && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={reset.isPending}
+                          onClick={() => reset.mutate(slot)}
+                          data-testid={`button-reset-${slot}`}
+                        >
+                          <RotateCcw className="h-3 w-3 mr-1" />
+                          {slot === "base" ? "Use built-in default" : "Remove overlay"}
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        disabled={!dirty || save.isPending || !value.trim()}
+                        onClick={() => save.mutate({ channel: slot, body: value })}
+                        data-testid={`button-save-persona-${slot}`}
+                      >
+                        {save.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
+                        Save
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PersonaHistorySheet({ channel }: { channel: ChannelSlot }) {
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const { data, isLoading } = useQuery<PersonaHistoryRow[]>({
+    queryKey: ["/api/agent/admin/persona/history", { channel }],
+    queryFn: async () => {
+      const res = await fetch(`/api/agent/admin/persona/history?channel=${channel}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: open,
+  });
+  const restore = useMutation({
+    mutationFn: async (versionId: string) => apiRequest("POST", "/api/agent/admin/persona/restore", { versionId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/agent/admin/persona"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/agent/admin/persona/history", { channel }] });
+      toast({ title: "Restored" });
+      setOpen(false);
+    },
+    onError: () => toast({ title: "Failed to restore", variant: "destructive" }),
+  });
+
+  return (
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetTrigger asChild>
+        <Button variant="ghost" size="sm" data-testid={`button-history-${channel}`}>
+          <History className="h-3 w-3 mr-1" /> History
+        </Button>
+      </SheetTrigger>
+      <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
+        <SheetHeader>
+          <SheetTitle>{SLOT_LABELS[channel].label} — version history</SheetTitle>
+        </SheetHeader>
+        <div className="mt-4 space-y-3">
+          {isLoading && <Loader2 className="h-5 w-5 animate-spin" />}
+          {!isLoading && (data ?? []).length === 0 && (
+            <div className="text-sm text-muted-foreground py-12 text-center">No saved versions yet.</div>
+          )}
+          {(data ?? []).map((row) => (
+            <div key={row.id} className="rounded-md border p-3 space-y-2" data-testid={`row-history-${row.id}`}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Badge variant={row.isActive ? "default" : "outline"}>v{row.version}{row.isActive ? " · active" : ""}</Badge>
+                  <span className="text-xs text-muted-foreground">
+                    {format(new Date(row.createdAt), "MMM d, yyyy h:mma")} · {row.createdByName ?? "system"}
+                  </span>
+                </div>
+                {!row.isActive && (
+                  <Button size="sm" variant="outline" disabled={restore.isPending}
+                    onClick={() => restore.mutate(row.id)} data-testid={`button-restore-${row.id}`}>
+                    Restore
+                  </Button>
+                )}
+              </div>
+              <pre className="whitespace-pre-wrap break-words text-xs bg-muted/40 rounded p-2 max-h-48 overflow-y-auto">{row.body}</pre>
+            </div>
+          ))}
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function PlaysCard() {
+  const { toast } = useToast();
+  const { data, isLoading } = useQuery<Play[]>({ queryKey: ["/api/agent/admin/plays"] });
+  const [editing, setEditing] = useState<string | "new" | null>(null);
+  const blank = { name: "", whenToUse: "", body: "", enabled: true, sortOrder: 0 };
+  const [draft, setDraft] = useState<typeof blank>(blank);
+
+  const create = useMutation({
+    mutationFn: async () => apiRequest("POST", "/api/agent/admin/plays", draft),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/agent/admin/plays"] });
+      setEditing(null); setDraft(blank); toast({ title: "Play added" });
+    },
+    onError: () => toast({ title: "Failed to add", variant: "destructive" }),
+  });
+  const update = useMutation({
+    mutationFn: async ({ id, patch }: { id: string; patch: Partial<typeof blank> }) =>
+      apiRequest("PUT", `/api/agent/admin/plays/${id}`, patch),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/agent/admin/plays"] });
+      setEditing(null);
+    },
+    onError: () => toast({ title: "Failed to update", variant: "destructive" }),
+  });
+  const del = useMutation({
+    mutationFn: async (id: string) => apiRequest("DELETE", `/api/agent/admin/plays/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/agent/admin/plays"] });
+      toast({ title: "Removed" });
+    },
+  });
+
+  const startNew = () => { setDraft(blank); setEditing("new"); };
+  const startEdit = (p: Play) => {
+    setDraft({ name: p.name, whenToUse: p.whenToUse, body: p.body, enabled: p.enabled, sortOrder: p.sortOrder });
+    setEditing(p.id);
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle className="flex items-center gap-2"><Sparkles className="h-5 w-5" /> Plays</CardTitle>
+          <CardDescription>
+            Reusable response approaches DNA can apply when the situation matches a play's "When to use".
+            Disabled plays are hidden from the prompt. Total budget: ~5KB.
+          </CardDescription>
+        </div>
+        <Button size="sm" onClick={startNew} disabled={editing === "new"} data-testid="button-add-play">
+          <Plus className="h-4 w-4 mr-1" /> New play
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {editing === "new" && (
+          <PlayEditor
+            draft={draft} setDraft={setDraft}
+            onCancel={() => { setEditing(null); setDraft(blank); }}
+            onSave={() => create.mutate()}
+            saving={create.isPending}
+            testIdSuffix="new"
+          />
+        )}
+        {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : (
+          (data ?? []).length === 0 && editing !== "new" ? (
+            <div className="text-sm text-muted-foreground py-8 text-center" data-testid="text-empty-plays">
+              No plays yet. Add one to teach DNA a reusable approach.
+            </div>
+          ) : (
+            (data ?? []).map((p) => editing === p.id ? (
+              <PlayEditor
+                key={p.id}
+                draft={draft} setDraft={setDraft}
+                onCancel={() => setEditing(null)}
+                onSave={() => update.mutate({ id: p.id, patch: draft })}
+                saving={update.isPending}
+                testIdSuffix={p.id}
+              />
+            ) : (
+              <div key={p.id} className="rounded-md border p-3 space-y-2" data-testid={`row-play-${p.id}`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{p.name}</span>
+                      {!p.enabled && <Badge variant="outline" className="text-muted-foreground">Disabled</Badge>}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      <span className="font-medium">When:</span> {p.whenToUse}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Switch
+                      checked={p.enabled}
+                      onCheckedChange={(v) => update.mutate({ id: p.id, patch: { enabled: v } })}
+                      data-testid={`switch-play-${p.id}`}
+                    />
+                    <Button variant="ghost" size="sm" onClick={() => startEdit(p)} data-testid={`button-edit-play-${p.id}`}>
+                      Edit
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => del.mutate(p.id)} data-testid={`button-delete-play-${p.id}`}>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+                <pre className="whitespace-pre-wrap break-words text-xs bg-muted/40 rounded p-2">{p.body}</pre>
+              </div>
+            ))
+          )
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function PlayEditor({
+  draft, setDraft, onSave, onCancel, saving, testIdSuffix,
+}: {
+  draft: { name: string; whenToUse: string; body: string; enabled: boolean; sortOrder: number };
+  setDraft: (d: any) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  saving: boolean;
+  testIdSuffix: string;
+}) {
+  const valid = draft.name.trim().length >= 2 && draft.whenToUse.trim().length >= 2 && draft.body.trim().length >= 2;
+  return (
+    <div className="rounded-md border p-3 space-y-3 bg-muted/20" data-testid={`editor-play-${testIdSuffix}`}>
+      <div className="space-y-1">
+        <Label>Name</Label>
+        <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+          placeholder="e.g. Lane lost — find win-back angle" data-testid={`input-play-name-${testIdSuffix}`} />
+      </div>
+      <div className="space-y-1">
+        <Label>When to use</Label>
+        <Textarea rows={2} value={draft.whenToUse} onChange={(e) => setDraft({ ...draft, whenToUse: e.target.value })}
+          placeholder="One sentence — describe the situation that triggers this play."
+          data-testid={`input-play-when-${testIdSuffix}`} />
+      </div>
+      <div className="space-y-1">
+        <Label>Approach</Label>
+        <Textarea rows={6} value={draft.body} onChange={(e) => setDraft({ ...draft, body: e.target.value })}
+          placeholder="Step-by-step approach DNA should follow."
+          data-testid={`input-play-body-${testIdSuffix}`} />
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Switch checked={draft.enabled} onCheckedChange={(v) => setDraft({ ...draft, enabled: v })}
+            data-testid={`switch-play-enabled-${testIdSuffix}`} />
+          <span className="text-sm">Enabled</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={onCancel} data-testid={`button-cancel-play-${testIdSuffix}`}>Cancel</Button>
+          <Button size="sm" disabled={!valid || saving} onClick={onSave} data-testid={`button-save-play-${testIdSuffix}`}>
+            {saving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
+            Save
+          </Button>
+        </div>
       </div>
     </div>
   );

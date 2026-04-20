@@ -1,5 +1,5 @@
 import type { Express, Request, Response } from "express";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../storage";
 import { requireAuth, getCurrentUser } from "../auth";
@@ -9,9 +9,20 @@ import {
   agentMemories,
   agentActivity,
   agentOrgSettings,
+  agents as agentsTable,
+  agentPersonas,
+  agentPlays,
   users,
   type UserRole,
 } from "@shared/schema";
+import {
+  ensureDefaultAgent,
+  invalidatePersonaCache,
+  isChannelSlot,
+  listChannelSlots,
+  DEFAULT_BASE_PERSONA,
+  type ChannelSlot,
+} from "../agent/persona";
 import {
   ROLE_DEFAULTS,
   defaultEffectFor,
@@ -519,6 +530,297 @@ export function registerAgentAdminRoutes(app: Express) {
     } catch (err: any) {
       if (err?.issues) return res.status(400).json({ error: err.issues });
       res.status(500).json({ error: "Failed to save settings" });
+    }
+  });
+
+  // ─── Admin: Persona & Playbook ────────────────────────────────────────────
+  // Returns the org's DNA agent + the active persona body for every channel
+  // slot. Slots with no saved row return body=null and the loader will use
+  // the built-in default at runtime.
+  app.get("/api/agent/admin/persona", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+
+      const agentId = await ensureDefaultAgent(me.organizationId);
+      const slots = listChannelSlots();
+
+      const channels = await Promise.all(slots.map(async (slot) => {
+        const [row] = await db.select().from(agentPersonas)
+          .where(and(
+            eq(agentPersonas.agentId, agentId),
+            eq(agentPersonas.channel, slot),
+            eq(agentPersonas.isActive, true),
+          ))
+          .orderBy(desc(agentPersonas.version))
+          .limit(1);
+        return {
+          channel: slot,
+          body: row?.body ?? null,
+          version: row?.version ?? 0,
+          updatedAt: row?.createdAt ?? null,
+          updatedBy: row?.createdBy ?? null,
+        };
+      }));
+
+      res.json({
+        agentId,
+        defaultBody: DEFAULT_BASE_PERSONA,
+        channels,
+      });
+    } catch (err: any) {
+      console.error("[agent-admin] persona GET:", err);
+      res.status(500).json({ error: "Failed to load persona" });
+    }
+  });
+
+  const personaPutSchema = z.object({
+    channel: z.string().min(1),
+    body: z.string().min(1).max(20000),
+  });
+  app.put("/api/agent/admin/persona", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+      const parsed = personaPutSchema.parse(req.body);
+      if (!isChannelSlot(parsed.channel)) {
+        return res.status(400).json({ error: "Unknown channel slot" });
+      }
+      const agentId = await ensureDefaultAgent(me.organizationId);
+
+      // Compute next version, deactivate any current active rows for this slot,
+      // then insert a new active row. Keeping prior rows around gives us version
+      // history for free.
+      const [latest] = await db.select({ version: agentPersonas.version })
+        .from(agentPersonas)
+        .where(and(eq(agentPersonas.agentId, agentId), eq(agentPersonas.channel, parsed.channel)))
+        .orderBy(desc(agentPersonas.version))
+        .limit(1);
+      const nextVersion = (latest?.version ?? 0) + 1;
+
+      await db.update(agentPersonas)
+        .set({ isActive: false })
+        .where(and(
+          eq(agentPersonas.agentId, agentId),
+          eq(agentPersonas.channel, parsed.channel),
+          eq(agentPersonas.isActive, true),
+        ));
+
+      await db.insert(agentPersonas).values({
+        agentId,
+        channel: parsed.channel,
+        body: parsed.body,
+        isActive: true,
+        version: nextVersion,
+        createdBy: me.id,
+      });
+
+      invalidatePersonaCache(agentId);
+      res.json({ ok: true, version: nextVersion });
+    } catch (err: any) {
+      if (err?.issues) return res.status(400).json({ error: err.issues });
+      console.error("[agent-admin] persona PUT:", err);
+      res.status(500).json({ error: "Failed to save persona" });
+    }
+  });
+
+  const personaResetSchema = z.object({ channel: z.string().min(1) });
+  app.post("/api/agent/admin/persona/reset", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+      const parsed = personaResetSchema.parse(req.body);
+      if (!isChannelSlot(parsed.channel)) {
+        return res.status(400).json({ error: "Unknown channel slot" });
+      }
+      const agentId = await ensureDefaultAgent(me.organizationId);
+      await db.update(agentPersonas)
+        .set({ isActive: false })
+        .where(and(
+          eq(agentPersonas.agentId, agentId),
+          eq(agentPersonas.channel, parsed.channel),
+          eq(agentPersonas.isActive, true),
+        ));
+      invalidatePersonaCache(agentId);
+      res.json({ ok: true });
+    } catch (err: any) {
+      if (err?.issues) return res.status(400).json({ error: err.issues });
+      res.status(500).json({ error: "Failed to reset persona" });
+    }
+  });
+
+  app.get("/api/agent/admin/persona/history", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+      const channel = String(req.query.channel || "base") as ChannelSlot;
+      if (!isChannelSlot(channel)) return res.status(400).json({ error: "Unknown channel slot" });
+      const agentId = await ensureDefaultAgent(me.organizationId);
+
+      const rows = await db.select({
+        id: agentPersonas.id,
+        channel: agentPersonas.channel,
+        body: agentPersonas.body,
+        version: agentPersonas.version,
+        isActive: agentPersonas.isActive,
+        createdBy: agentPersonas.createdBy,
+        createdAt: agentPersonas.createdAt,
+      })
+        .from(agentPersonas)
+        .where(and(eq(agentPersonas.agentId, agentId), eq(agentPersonas.channel, channel)))
+        .orderBy(desc(agentPersonas.version))
+        .limit(10);
+
+      const ids = Array.from(new Set(rows.map((r) => r.createdBy).filter(Boolean) as string[]));
+      const nameRows = ids.length
+        ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, ids))
+        : [];
+      const nameMap = new Map(nameRows.map((n) => [n.id, n.name]));
+      res.json(rows.map((r) => ({ ...r, createdByName: r.createdBy ? nameMap.get(r.createdBy) ?? null : null })));
+    } catch (err: any) {
+      console.error("[agent-admin] persona history:", err);
+      res.status(500).json({ error: "Failed to load history" });
+    }
+  });
+
+  const personaRestoreSchema = z.object({ versionId: z.string().min(1) });
+  app.post("/api/agent/admin/persona/restore", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+      const parsed = personaRestoreSchema.parse(req.body);
+      const agentId = await ensureDefaultAgent(me.organizationId);
+
+      const [source] = await db.select().from(agentPersonas).where(eq(agentPersonas.id, parsed.versionId));
+      if (!source || source.agentId !== agentId) {
+        return res.status(404).json({ error: "Version not found" });
+      }
+
+      const [latest] = await db.select({ version: agentPersonas.version })
+        .from(agentPersonas)
+        .where(and(eq(agentPersonas.agentId, agentId), eq(agentPersonas.channel, source.channel)))
+        .orderBy(desc(agentPersonas.version))
+        .limit(1);
+      const nextVersion = (latest?.version ?? 0) + 1;
+
+      await db.update(agentPersonas)
+        .set({ isActive: false })
+        .where(and(
+          eq(agentPersonas.agentId, agentId),
+          eq(agentPersonas.channel, source.channel),
+          eq(agentPersonas.isActive, true),
+        ));
+
+      await db.insert(agentPersonas).values({
+        agentId,
+        channel: source.channel,
+        body: source.body,
+        isActive: true,
+        version: nextVersion,
+        createdBy: me.id,
+      });
+
+      invalidatePersonaCache(agentId);
+      res.json({ ok: true, version: nextVersion });
+    } catch (err: any) {
+      if (err?.issues) return res.status(400).json({ error: err.issues });
+      res.status(500).json({ error: "Failed to restore version" });
+    }
+  });
+
+  // ─── Plays ────────────────────────────────────────────────────────────────
+  app.get("/api/agent/admin/plays", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+      const agentId = await ensureDefaultAgent(me.organizationId);
+      const rows = await db.select().from(agentPlays)
+        .where(eq(agentPlays.agentId, agentId))
+        .orderBy(agentPlays.sortOrder, agentPlays.createdAt);
+      res.json(rows);
+    } catch (err: any) {
+      console.error("[agent-admin] plays GET:", err);
+      res.status(500).json({ error: "Failed to load plays" });
+    }
+  });
+
+  const playSchema = z.object({
+    name: z.string().min(2).max(120),
+    whenToUse: z.string().min(2).max(500),
+    body: z.string().min(2).max(4000),
+    enabled: z.boolean().optional(),
+    sortOrder: z.number().int().optional(),
+  });
+  app.post("/api/agent/admin/plays", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+      const parsed = playSchema.parse(req.body);
+      const agentId = await ensureDefaultAgent(me.organizationId);
+      const [row] = await db.insert(agentPlays).values({
+        agentId,
+        name: parsed.name,
+        whenToUse: parsed.whenToUse,
+        body: parsed.body,
+        enabled: parsed.enabled ?? true,
+        sortOrder: parsed.sortOrder ?? 0,
+        createdBy: me.id,
+      }).returning();
+      invalidatePersonaCache(agentId);
+      res.json(row);
+    } catch (err: any) {
+      if (err?.issues) return res.status(400).json({ error: err.issues });
+      res.status(500).json({ error: "Failed to create play" });
+    }
+  });
+
+  const playPatchSchema = playSchema.partial();
+  app.put("/api/agent/admin/plays/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+      const id = String(req.params.id);
+      const agentId = await ensureDefaultAgent(me.organizationId);
+      const [existing] = await db.select().from(agentPlays).where(eq(agentPlays.id, id));
+      if (!existing || existing.agentId !== agentId) {
+        return res.status(404).json({ error: "Play not found" });
+      }
+      const patch = playPatchSchema.parse(req.body);
+      await db.update(agentPlays)
+        .set({ ...patch, updatedAt: new Date() })
+        .where(eq(agentPlays.id, id));
+      invalidatePersonaCache(agentId);
+      res.json({ ok: true });
+    } catch (err: any) {
+      if (err?.issues) return res.status(400).json({ error: err.issues });
+      res.status(500).json({ error: "Failed to update play" });
+    }
+  });
+
+  app.delete("/api/agent/admin/plays/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+      const id = String(req.params.id);
+      const agentId = await ensureDefaultAgent(me.organizationId);
+      const [existing] = await db.select().from(agentPlays).where(eq(agentPlays.id, id));
+      if (!existing || existing.agentId !== agentId) {
+        return res.status(404).json({ error: "Play not found" });
+      }
+      await db.delete(agentPlays).where(eq(agentPlays.id, id));
+      invalidatePersonaCache(agentId);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to delete play" });
     }
   });
 }

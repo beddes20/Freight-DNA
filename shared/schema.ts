@@ -2800,6 +2800,80 @@ export const insertAgentOrgSettingsSchema = createInsertSchema(agentOrgSettings)
 export type InsertAgentOrgSettings = z.infer<typeof insertAgentOrgSettingsSchema>;
 export type AgentOrgSettings = typeof agentOrgSettings.$inferSelect;
 
+// ─── Agents (admin-managed) ──────────────────────────────────────────────
+// Phase-1: a single seeded "DNA" agent per organization. Tables are keyed by
+// agent_id from day one so the upcoming multi-agent registry can populate
+// additional rows without schema churn.
+export const agents = pgTable(
+  "agents",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    slug: text("slug").notNull(),
+    name: text("name").notNull(),
+    description: text("description"),
+    isDefault: boolean("is_default").notNull().default(false),
+    status: text("status").notNull().default("published"),
+    createdBy: varchar("created_by"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("agents_org_slug_idx").on(table.organizationId, table.slug),
+    index("agents_org_default_idx").on(table.organizationId, table.isDefault),
+  ],
+);
+export const insertAgentSchema = createInsertSchema(agents).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertAgent = z.infer<typeof insertAgentSchema>;
+export type Agent = typeof agents.$inferSelect;
+
+// Versioned persona body per (agent, channel slot). Latest row with isActive=true
+// is the live one. Channel slot is `base` for the global default, or one of
+// `in_app | email | sms_voice | teams` for per-channel overlays.
+export const agentPersonas = pgTable(
+  "agent_personas",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    agentId: varchar("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+    channel: text("channel").notNull(),
+    body: text("body").notNull(),
+    isActive: boolean("is_active").notNull().default(true),
+    version: integer("version").notNull().default(1),
+    createdBy: varchar("created_by"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("agent_personas_active_idx").on(table.agentId, table.channel, table.isActive),
+    index("agent_personas_history_idx").on(table.agentId, table.channel, table.createdAt),
+  ],
+);
+export const insertAgentPersonaSchema = createInsertSchema(agentPersonas).omit({ id: true, createdAt: true });
+export type InsertAgentPersona = z.infer<typeof insertAgentPersonaSchema>;
+export type AgentPersona = typeof agentPersonas.$inferSelect;
+
+// Reusable, named response approaches DNA can apply when situations match.
+export const agentPlays = pgTable(
+  "agent_plays",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    agentId: varchar("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    whenToUse: text("when_to_use").notNull(),
+    body: text("body").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdBy: varchar("created_by"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("agent_plays_agent_idx").on(table.agentId, table.enabled),
+  ],
+);
+export const insertAgentPlaySchema = createInsertSchema(agentPlays).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertAgentPlay = z.infer<typeof insertAgentPlaySchema>;
+export type AgentPlay = typeof agentPlays.$inferSelect;
+
 // Consent tracking for first-contact gating with external parties (drivers, dispatchers).
 export const externalContactConsent = pgTable(
   "external_contact_consent",
