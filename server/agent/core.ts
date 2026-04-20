@@ -14,11 +14,12 @@
  */
 import type OpenAI from "openai";
 import { getAgentOpenAI, AGENT_MODELS } from "./openai";
-import { TOOLS, TOOL_BY_NAME, openAiToolSpecs, type AgentContext } from "./tools";
+import { TOOLS, TOOL_BY_NAME, openAiToolSpecs, type AgentContext, type AgentTool } from "./tools";
 import { canInvoke } from "./permissions";
 import { listFacts, searchMemories } from "./memory";
 import { logActivity } from "./activity";
-import { buildSystemPrompt, ensureDefaultAgent } from "./persona";
+import { buildSystemPrompt, ensureDefaultAgent, getAgentRuntime } from "./persona";
+import { retrieveContext, formatHitsForPrompt } from "./retrieval";
 
 export type AgentEvent =
   | { content: string }
@@ -34,11 +35,19 @@ export interface RunAgentTurnArgs {
   history: Array<{ role: "user" | "assistant" | "system"; content: string }>;
   userMessage: string;
   emit: Emit;
+  /** Optional explicit agent id (ValueIQ multi-agent support). Defaults to org's DNA agent. */
+  agentId?: string;
+  /** Optional ValueIQ project id for project-pinned context retrieval. */
+  projectId?: string | null;
 }
 
 const MAX_TOOL_ITERATIONS = 6;
 
-async function buildContextEnvelope(ctx: AgentContext, userMessage: string): Promise<string> {
+async function buildContextEnvelope(
+  ctx: AgentContext,
+  userMessage: string,
+  projectId?: string | null,
+): Promise<{ envelope: string; degraded: boolean }> {
   const today = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
   const lines: string[] = [
     `Today is ${today}.`,
@@ -66,27 +75,59 @@ async function buildContextEnvelope(ctx: AgentContext, userMessage: string): Pro
     }
   } catch {}
 
-  return lines.join("\n");
+  // ValueIQ retrieval — org corpus + personal Library + project pin.
+  let degraded = false;
+  try {
+    const result = await retrieveContext({
+      organizationId: ctx.organizationId,
+      userId: ctx.rep.id,
+      query: userMessage,
+      projectId: projectId ?? null,
+      perBucket: 4,
+    });
+    degraded = result.degraded;
+    const formatted = formatHitsForPrompt(result.hits, 3500);
+    if (formatted) lines.push(formatted);
+  } catch (err) {
+    console.warn("[agent.core] retrieval failed:", err);
+    degraded = true;
+  }
+
+  return { envelope: lines.join("\n"), degraded };
 }
 
-export async function runAgentTurn({ ctx, history, userMessage, emit }: RunAgentTurnArgs): Promise<{ assistantText: string; hadError: boolean; surfacedAction: boolean }> {
+export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: agentIdArg, projectId }: RunAgentTurnArgs): Promise<{ assistantText: string; hadError: boolean; surfacedAction: boolean; agentId: string }> {
   let hadError = false;
   let surfacedAction = false;
   const startedAt = Date.now();
   const client = getAgentOpenAI();
-  const envelope = await buildContextEnvelope(ctx, userMessage);
-  const agentId = await ensureDefaultAgent(ctx.organizationId);
+  const { envelope, degraded } = await buildContextEnvelope(ctx, userMessage, projectId);
+  const agentId = agentIdArg ?? (await ensureDefaultAgent(ctx.organizationId));
+  const runtime = await getAgentRuntime(agentId);
   const systemPrompt = await buildSystemPrompt(agentId, ctx.channel);
 
+  // Per-agent tool allowlist. When the agent has no explicit allowlist row,
+  // we expose the entire registry (the rep's individual permissions still
+  // apply at execute time via canInvoke).
+  const activeTools: AgentTool[] = runtime?.toolAllowlist
+    ? TOOLS.filter((t) => runtime.toolAllowlist!.includes(t.capability))
+    : TOOLS;
+  const activeToolNames = new Set(activeTools.map((t) => t.name));
+  const activeToolSpecs = openAiToolSpecs().filter((spec: any) => activeToolNames.has(spec.function?.name));
+
+  const grounding = degraded
+    ? "\n\nNOTE: The retrieval layer is degraded right now — answer from your tools and memory; mention this if the rep asks for grounded data."
+    : "";
+
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: `${systemPrompt}\n\n=== CONTEXT ===\n${envelope}` },
+    { role: "system", content: `${systemPrompt}\n\n=== CONTEXT ===\n${envelope}${grounding}` },
     ...history.map((m) => ({ role: m.role, content: m.content }) as OpenAI.Chat.Completions.ChatCompletionMessageParam),
     { role: "user", content: userMessage },
   ];
 
   let assistantText = "";
   let iterations = 0;
-  let model: string = AGENT_MODELS.reasoning;
+  let model: string = runtime?.model || AGENT_MODELS.reasoning;
 
   void logActivity({
     organizationId: ctx.organizationId,
@@ -107,8 +148,8 @@ export async function runAgentTurn({ ctx, history, userMessage, emit }: RunAgent
       stream = await client.chat.completions.create({
         model,
         messages,
-        tools: openAiToolSpecs(),
-        tool_choice: "auto",
+        tools: activeToolSpecs.length ? activeToolSpecs : undefined,
+        tool_choice: activeToolSpecs.length ? "auto" : undefined,
         stream: true,
         max_tokens: 1200,
       });
@@ -184,6 +225,8 @@ export async function runAgentTurn({ ctx, history, userMessage, emit }: RunAgent
       let toolResultText = "";
       if (!tool) {
         toolResultText = `Tool "${tc.name}" not registered.`;
+      } else if (!activeToolNames.has(tool.name)) {
+        toolResultText = `Tool "${tc.name}" is not enabled for this agent. Pick another approach or tell the rep this isn't in your toolkit.`;
       } else {
         const decision = await canInvoke(ctx.rep, tool.capability);
         // Phase 1 semantics: write/external tools that surface action cards
@@ -272,5 +315,5 @@ export async function runAgentTurn({ ctx, history, userMessage, emit }: RunAgent
     outcome: "ok",
   });
 
-  return { assistantText, hadError, surfacedAction };
+  return { assistantText, hadError, surfacedAction, agentId };
 }

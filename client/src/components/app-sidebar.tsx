@@ -106,8 +106,8 @@ const laneToolItems: NavItem[] = [
     roles: ["admin", "director", "national_account_manager", "logistics_manager", "account_manager"],
   },
   {
-    title: "AI Intelligence",
-    url: "/ai-intelligence",
+    title: "ValueIQ",
+    url: "/valueiq",
     icon: Brain,
     roles: ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"],
   },

@@ -2812,6 +2812,11 @@ export const agents = pgTable(
     slug: text("slug").notNull(),
     name: text("name").notNull(),
     description: text("description"),
+    avatarUrl: text("avatar_url"),
+    ownerId: varchar("owner_id"),
+    model: text("model"),
+    accessScope: text("access_scope").notNull().default("everyone"),
+    allowedRoles: text("allowed_roles").array(),
     isDefault: boolean("is_default").notNull().default(false),
     status: text("status").notNull().default("published"),
     createdBy: varchar("created_by"),
@@ -2897,3 +2902,184 @@ export const externalContactConsent = pgTable(
 export const insertExternalContactConsentSchema = createInsertSchema(externalContactConsent).omit({ id: true });
 export type InsertExternalContactConsent = z.infer<typeof insertExternalContactConsentSchema>;
 export type ExternalContactConsent = typeof externalContactConsent.$inferSelect;
+
+// ─── ValueIQ Workspace & Multi-Agent Registry (Task #291) ────────────────
+// Per-agent tool allowlist (capability strings from server/agent/tools.ts).
+export const agentTools = pgTable(
+  "agent_tools",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    agentId: varchar("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+    capability: text("capability").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("agent_tools_agent_cap_idx").on(table.agentId, table.capability),
+  ],
+);
+export const insertAgentToolSchema = createInsertSchema(agentTools).omit({ id: true, createdAt: true });
+export type InsertAgentTool = z.infer<typeof insertAgentToolSchema>;
+export type AgentTool = typeof agentTools.$inferSelect;
+
+export const agentChannelAccess = pgTable(
+  "agent_channel_access",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    agentId: varchar("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+    channel: text("channel").notNull(),
+    enabled: boolean("enabled").notNull().default(true),
+  },
+  (table) => [
+    uniqueIndex("agent_channel_access_agent_chan_idx").on(table.agentId, table.channel),
+  ],
+);
+export type AgentChannelAccess = typeof agentChannelAccess.$inferSelect;
+
+export const agentUserAccess = pgTable(
+  "agent_user_access",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    agentId: varchar("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    enabled: boolean("enabled").notNull().default(true),
+  },
+  (table) => [
+    uniqueIndex("agent_user_access_agent_user_idx").on(table.agentId, table.userId),
+    index("agent_user_access_user_idx").on(table.userId),
+  ],
+);
+export type AgentUserAccess = typeof agentUserAccess.$inferSelect;
+
+// ValueIQ thread projects — folders that pin reusable context across threads.
+export const threadProjects = pgTable(
+  "thread_projects",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    pinnedContext: text("pinned_context"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [index("thread_projects_user_idx").on(table.userId, table.createdAt)],
+);
+export const insertThreadProjectSchema = createInsertSchema(threadProjects).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertThreadProject = z.infer<typeof insertThreadProjectSchema>;
+export type ThreadProject = typeof threadProjects.$inferSelect;
+
+// A ValueIQ thread = a single conversation row, optionally inside a project.
+export const threads = pgTable(
+  "threads",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    projectId: varchar("project_id"),
+    title: text("title").notNull().default("New thread"),
+    defaultAgentId: varchar("default_agent_id"),
+    surface: text("surface").notNull().default("valueiq"),
+    pinned: boolean("pinned").notNull().default(false),
+    archivedAt: timestamp("archived_at"),
+    lastMessageAt: timestamp("last_message_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("threads_user_idx").on(table.userId, table.archivedAt, table.lastMessageAt),
+    index("threads_project_idx").on(table.projectId),
+    index("threads_org_idx").on(table.organizationId, table.createdAt),
+  ],
+);
+export const insertThreadSchema = createInsertSchema(threads).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertThread = z.infer<typeof insertThreadSchema>;
+export type Thread = typeof threads.$inferSelect;
+
+export const threadMessages = pgTable(
+  "thread_messages",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    threadId: varchar("thread_id").notNull().references(() => threads.id, { onDelete: "cascade" }),
+    role: text("role").notNull(),
+    agentId: varchar("agent_id"),
+    agentName: text("agent_name"),
+    content: text("content").notNull(),
+    attachments: jsonb("attachments"),
+    rating: integer("rating"),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("thread_messages_thread_idx").on(table.threadId, table.createdAt),
+  ],
+);
+export const insertThreadMessageSchema = createInsertSchema(threadMessages).omit({ id: true, createdAt: true });
+export type InsertThreadMessage = z.infer<typeof insertThreadMessageSchema>;
+export type ThreadMessage = typeof threadMessages.$inferSelect;
+
+export const threadAttachments = pgTable(
+  "thread_attachments",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    threadId: varchar("thread_id").notNull().references(() => threads.id, { onDelete: "cascade" }),
+    messageId: varchar("message_id"),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    fileName: text("file_name").notNull(),
+    mimeType: text("mime_type"),
+    byteSize: integer("byte_size").notNull().default(0),
+    parsedText: text("parsed_text"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("thread_attachments_thread_idx").on(table.threadId),
+    index("thread_attachments_message_idx").on(table.messageId),
+  ],
+);
+export type ThreadAttachment = typeof threadAttachments.$inferSelect;
+
+// Personal Library — a rep's private memory store. kind is one of:
+// memory | file | thread | fact. `embedding` is populated when content is
+// substantive enough to retrieve over.
+export const libraryItems = pgTable(
+  "library_items",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    sourceId: varchar("source_id"),
+    title: text("title").notNull(),
+    body: text("body"),
+    embedding: vector1536("embedding"),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("library_items_user_idx").on(table.userId, table.createdAt),
+    index("library_items_kind_idx").on(table.userId, table.kind),
+  ],
+);
+export type LibraryItem = typeof libraryItems.$inferSelect;
+
+// Org corpus — chunked, embedded representation of the org's CRM data so the
+// agent can ground responses without a full table dump.
+export const orgCorpusChunks = pgTable(
+  "org_corpus_chunks",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    sourceKind: text("source_kind").notNull(),
+    sourceId: text("source_id").notNull(),
+    chunkIndex: integer("chunk_index").notNull().default(0),
+    text: text("text").notNull(),
+    embedding: vector1536("embedding"),
+    metadata: jsonb("metadata"),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("org_corpus_kind_src_chunk_idx").on(table.organizationId, table.sourceKind, table.sourceId, table.chunkIndex),
+    index("org_corpus_org_kind_idx").on(table.organizationId, table.sourceKind),
+  ],
+);
+export type OrgCorpusChunk = typeof orgCorpusChunks.$inferSelect;

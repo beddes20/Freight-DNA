@@ -70,6 +70,7 @@ import ContactSuggestionsPage from "@/pages/contact-suggestions";
 import EmailIntelligencePage from "@/pages/email-intelligence";
 import ProvenTacticsPage from "@/pages/proven-tactics";
 import AIIntelligencePage from "@/pages/ai-intelligence";
+import ValueIQPage from "@/pages/valueiq";
 import AdminMonitoredMailboxesPage from "@/pages/admin-monitored-mailboxes";
 import ProfilePage from "@/pages/profile";
 import AiAgentPortal from "@/pages/ai-agent";
@@ -168,7 +169,9 @@ function Router() {
       <Route path="/contact-suggestions" component={ContactSuggestionsPage} />
       <Route path="/email-intelligence" component={EmailIntelligencePage} />
       <Route path="/proven-tactics" component={ProvenTacticsPage} />
-      <Route path="/ai-intelligence" component={AIIntelligencePage} />
+      <Route path="/valueiq" component={ValueIQPage} />
+      <Route path="/ai-intelligence">{() => { window.location.replace("/valueiq?tab=insights"); return null; }}</Route>
+      <Route path="/ai-intelligence-legacy" component={AIIntelligencePage} />
       <Route path="/privacy" component={PrivacyPage} />
       <Route path="/terms" component={TermsPage} />
       <Route path="/profile" component={ProfilePage} />

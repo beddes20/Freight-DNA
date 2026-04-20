@@ -8,7 +8,7 @@
  */
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../storage";
-import { agents, agentPersonas, agentPlays } from "@shared/schema";
+import { agents, agentPersonas, agentPlays, agentTools } from "@shared/schema";
 
 export const DEFAULT_BASE_PERSONA = `You are DNA, an AI logistics employee inside the Freight DNA CRM at Value Truck. You are not "an assistant" — you are a colleague reps trust to help them move faster.
 
@@ -66,6 +66,50 @@ function cacheGet<T>(map: Map<string, CacheEntry<T>>, key: string): T | undefine
     return undefined;
   }
   return hit.value;
+}
+
+const runtimeCache = new Map<string, CacheEntry<AgentRuntime>>();
+
+export interface AgentRuntime {
+  id: string;
+  name: string;
+  slug: string;
+  organizationId: string;
+  model: string;
+  toolAllowlist: string[] | null;
+  description: string | null;
+  status: string;
+}
+
+/**
+ * Load the runtime config for a given agent (model, tool allowlist, name).
+ * `toolAllowlist` is null when the agent has no explicit row — in that case
+ * core.ts treats it as "every tool the rep has permission for".
+ */
+export async function getAgentRuntime(agentId: string): Promise<AgentRuntime | null> {
+  const cached = cacheGet(runtimeCache, agentId);
+  if (cached) return cached;
+  const [row] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
+  if (!row) return null;
+  const tools = await db.select({ capability: agentTools.capability })
+    .from(agentTools).where(eq(agentTools.agentId, agentId));
+  const runtime: AgentRuntime = {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    organizationId: row.organizationId,
+    model: row.model || "gpt-4o",
+    toolAllowlist: tools.length ? tools.map((t) => t.capability) : null,
+    description: row.description,
+    status: row.status,
+  };
+  runtimeCache.set(agentId, { value: runtime, ts: Date.now() });
+  return runtime;
+}
+
+export function invalidateAgentRuntime(agentId?: string) {
+  if (!agentId) runtimeCache.clear();
+  else runtimeCache.delete(agentId);
 }
 
 export function invalidatePersonaCache(agentId?: string) {

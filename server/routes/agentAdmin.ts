@@ -12,12 +12,15 @@ import {
   agents as agentsTable,
   agentPersonas,
   agentPlays,
+  agentTools as agentToolsT,
+  agentUserAccess as agentUserAccessT,
   users,
   type UserRole,
 } from "@shared/schema";
 import {
   ensureDefaultAgent,
   invalidatePersonaCache,
+  invalidateAgentRuntime,
   isChannelSlot,
   listChannelSlots,
   DEFAULT_BASE_PERSONA,
@@ -822,5 +825,172 @@ export function registerAgentAdminRoutes(app: Express) {
     } catch (err: any) {
       res.status(500).json({ error: "Failed to delete play" });
     }
+  });
+
+  // ─── Agent Registry CRUD (Task #291) ──────────────────────────────────────
+  // Admin-only. Org-scoped. The default DNA agent cannot be archived.
+  app.get("/api/admin/agents", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+      const rows = await db.select().from(agentsTable)
+        .where(eq(agentsTable.organizationId, me.organizationId))
+        .orderBy(desc(agentsTable.isDefault), agentsTable.name);
+      res.json(rows);
+    } catch {
+      res.status(500).json({ error: "Failed to load agents" });
+    }
+  });
+
+  const agentBodySchema = z.object({
+    name: z.string().min(1).max(120),
+    slug: z.string().min(1).max(80).regex(/^[a-z0-9-]+$/),
+    description: z.string().max(1000).optional().nullable(),
+    avatarUrl: z.string().max(500).optional().nullable(),
+    model: z.string().max(80).optional().nullable(),
+    accessScope: z.enum(["everyone", "roles", "specific_users"]).default("everyone"),
+    allowedRoles: z.array(z.string()).optional().nullable(),
+    status: z.enum(["draft", "published", "archived"]).optional(),
+  });
+
+  app.post("/api/admin/agents", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+      const body = agentBodySchema.parse(req.body);
+      const [row] = await db.insert(agentsTable).values({
+        organizationId: me.organizationId,
+        slug: body.slug, name: body.name,
+        description: body.description ?? null, avatarUrl: body.avatarUrl ?? null,
+        ownerId: me.id, model: body.model ?? "gpt-4o",
+        accessScope: body.accessScope, allowedRoles: body.allowedRoles ?? null,
+        status: body.status ?? "published", createdBy: me.id, isDefault: false,
+      }).returning();
+      res.json(row);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message ?? "Invalid agent" });
+    }
+  });
+
+  app.patch("/api/admin/agents/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+      const body = agentBodySchema.partial().parse(req.body);
+      const [row] = await db.update(agentsTable).set({ ...body, updatedAt: new Date() } as any)
+        .where(and(eq(agentsTable.id, req.params.id), eq(agentsTable.organizationId, me.organizationId)))
+        .returning();
+      if (!row) return res.status(404).json({ error: "Not found" });
+      invalidateAgentRuntime(row.id);
+      invalidatePersonaCache(row.id);
+      res.json(row);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message ?? "Failed" });
+    }
+  });
+
+  app.post("/api/admin/agents/:id/archive", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+      const [row] = await db.select().from(agentsTable)
+        .where(and(eq(agentsTable.id, req.params.id), eq(agentsTable.organizationId, me.organizationId))).limit(1);
+      if (!row) return res.status(404).json({ error: "Not found" });
+      if (row.isDefault) return res.status(400).json({ error: "Cannot archive the default agent" });
+      const [updated] = await db.update(agentsTable).set({ status: "archived", updatedAt: new Date() })
+        .where(eq(agentsTable.id, row.id)).returning();
+      invalidateAgentRuntime(row.id);
+      res.json(updated);
+    } catch {
+      res.status(500).json({ error: "Failed to archive agent" });
+    }
+  });
+
+  app.post("/api/admin/agents/:id/publish", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const me = await getCurrentUser(req);
+      if (!me) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+      const [updated] = await db.update(agentsTable).set({ status: "published", updatedAt: new Date() })
+        .where(and(eq(agentsTable.id, req.params.id), eq(agentsTable.organizationId, me.organizationId))).returning();
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      invalidateAgentRuntime(updated.id);
+      res.json(updated);
+    } catch {
+      res.status(500).json({ error: "Failed to publish" });
+    }
+  });
+
+  // Helper: load an agent and verify it belongs to the caller's org. Returns
+  // null if missing or cross-org. Callers should 404 on null.
+  async function loadOrgAgent(agentId: string, orgId: string) {
+    const [row] = await db.select().from(agentsTable)
+      .where(and(eq(agentsTable.id, agentId), eq(agentsTable.organizationId, orgId)))
+      .limit(1);
+    return row ?? null;
+  }
+
+  // Tool allowlist
+  app.get("/api/admin/agents/:id/tools", requireAuth, async (req: Request, res: Response) => {
+    const me = await getCurrentUser(req);
+    if (!me) return res.status(401).json({ error: "Unauthorized" });
+    if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+    const agent = await loadOrgAgent(req.params.id, me.organizationId);
+    if (!agent) return res.status(404).json({ error: "Not found" });
+    const rows = await db.select().from(agentToolsT).where(eq(agentToolsT.agentId, agent.id));
+    res.json({
+      capabilities: ALL_CAPABILITIES,
+      enabled: rows.map((r) => r.capability),
+    });
+  });
+  app.put("/api/admin/agents/:id/tools", requireAuth, async (req: Request, res: Response) => {
+    const me = await getCurrentUser(req);
+    if (!me) return res.status(401).json({ error: "Unauthorized" });
+    if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+    const agent = await loadOrgAgent(req.params.id, me.organizationId);
+    if (!agent) return res.status(404).json({ error: "Not found" });
+    const caps = z.array(z.string()).parse(req.body?.capabilities ?? []);
+    const valid = caps.filter((c) => (ALL_CAPABILITIES as string[]).includes(c));
+    await db.delete(agentToolsT).where(eq(agentToolsT.agentId, agent.id));
+    if (valid.length) {
+      await db.insert(agentToolsT).values(valid.map((c) => ({ agentId: agent.id, capability: c as Capability })));
+    }
+    invalidateAgentRuntime(agent.id);
+    res.json({ ok: true, count: valid.length });
+  });
+
+  // Per-user access
+  app.get("/api/admin/agents/:id/access", requireAuth, async (req: Request, res: Response) => {
+    const me = await getCurrentUser(req);
+    if (!me) return res.status(401).json({ error: "Unauthorized" });
+    if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+    const agent = await loadOrgAgent(req.params.id, me.organizationId);
+    if (!agent) return res.status(404).json({ error: "Not found" });
+    const rows = await db.select().from(agentUserAccessT).where(eq(agentUserAccessT.agentId, agent.id));
+    res.json({ userIds: rows.filter((r) => r.enabled).map((r) => r.userId) });
+  });
+  app.put("/api/admin/agents/:id/access", requireAuth, async (req: Request, res: Response) => {
+    const me = await getCurrentUser(req);
+    if (!me) return res.status(401).json({ error: "Unauthorized" });
+    if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
+    const agent = await loadOrgAgent(req.params.id, me.organizationId);
+    if (!agent) return res.status(404).json({ error: "Not found" });
+    const userIds = z.array(z.string()).parse(req.body?.userIds ?? []);
+    // Restrict assigned users to the same org.
+    const orgUsers = userIds.length
+      ? await db.select({ id: users.id }).from(users)
+          .where(and(eq(users.organizationId, me.organizationId), sql`${users.id} = ANY(${userIds})`))
+      : [];
+    const allowed = new Set(orgUsers.map((u) => u.id));
+    const filtered = userIds.filter((u) => allowed.has(u));
+    await db.delete(agentUserAccessT).where(eq(agentUserAccessT.agentId, agent.id));
+    if (filtered.length) {
+      await db.insert(agentUserAccessT).values(filtered.map((u) => ({ agentId: agent.id, userId: u })));
+    }
+    res.json({ ok: true, count: filtered.length });
   });
 }

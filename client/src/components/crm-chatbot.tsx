@@ -606,6 +606,16 @@ export function CrmChatbot() {
               >
                 <Plus className="h-4 w-4" />
               </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 text-white/80 hover:text-white hover:bg-white/20"
+                onClick={() => { window.location.href = "/valueiq?tab=threads"; }}
+                title="Open in ValueIQ"
+                data-testid="chatbot-open-valueiq"
+              >
+                <Sparkles className="h-4 w-4" />
+              </Button>
             </div>
           </div>
 

@@ -2796,6 +2796,152 @@ export async function runMigrations() {
     clientAgents.release();
   }
 
+  // ── ValueIQ Workspace + Multi-Agent Registry (Task #291) ──
+  const clientV = await pool.connect();
+  try {
+    await clientV.query(`ALTER TABLE agents ADD COLUMN IF NOT EXISTS avatar_url text`);
+    await clientV.query(`ALTER TABLE agents ADD COLUMN IF NOT EXISTS owner_id varchar`);
+    await clientV.query(`ALTER TABLE agents ADD COLUMN IF NOT EXISTS model text`);
+    await clientV.query(`ALTER TABLE agents ADD COLUMN IF NOT EXISTS access_scope text NOT NULL DEFAULT 'everyone'`);
+    await clientV.query(`ALTER TABLE agents ADD COLUMN IF NOT EXISTS allowed_roles text[]`);
+
+    await clientV.query(`
+      CREATE TABLE IF NOT EXISTS agent_tools (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        agent_id varchar NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        capability text NOT NULL,
+        created_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientV.query(`CREATE UNIQUE INDEX IF NOT EXISTS agent_tools_agent_cap_idx ON agent_tools(agent_id, capability)`);
+
+    await clientV.query(`
+      CREATE TABLE IF NOT EXISTS agent_channel_access (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        agent_id varchar NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        channel text NOT NULL,
+        enabled boolean NOT NULL DEFAULT true
+      )
+    `);
+    await clientV.query(`CREATE UNIQUE INDEX IF NOT EXISTS agent_channel_access_agent_chan_idx ON agent_channel_access(agent_id, channel)`);
+
+    await clientV.query(`
+      CREATE TABLE IF NOT EXISTS agent_user_access (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        agent_id varchar NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+        user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        enabled boolean NOT NULL DEFAULT true
+      )
+    `);
+    await clientV.query(`CREATE UNIQUE INDEX IF NOT EXISTS agent_user_access_agent_user_idx ON agent_user_access(agent_id, user_id)`);
+    await clientV.query(`CREATE INDEX IF NOT EXISTS agent_user_access_user_idx ON agent_user_access(user_id)`);
+
+    await clientV.query(`
+      CREATE TABLE IF NOT EXISTS thread_projects (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name text NOT NULL,
+        pinned_context text,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientV.query(`CREATE INDEX IF NOT EXISTS thread_projects_user_idx ON thread_projects(user_id, created_at)`);
+
+    await clientV.query(`
+      CREATE TABLE IF NOT EXISTS threads (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        project_id varchar,
+        title text NOT NULL DEFAULT 'New thread',
+        default_agent_id varchar,
+        surface text NOT NULL DEFAULT 'valueiq',
+        pinned boolean NOT NULL DEFAULT false,
+        archived_at timestamp,
+        last_message_at timestamp,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientV.query(`CREATE INDEX IF NOT EXISTS threads_user_idx ON threads(user_id, archived_at, last_message_at)`);
+    await clientV.query(`CREATE INDEX IF NOT EXISTS threads_project_idx ON threads(project_id)`);
+    await clientV.query(`CREATE INDEX IF NOT EXISTS threads_org_idx ON threads(organization_id, created_at)`);
+
+    await clientV.query(`
+      CREATE TABLE IF NOT EXISTS thread_messages (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        thread_id varchar NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+        role text NOT NULL,
+        agent_id varchar,
+        agent_name text,
+        content text NOT NULL,
+        attachments jsonb,
+        rating integer,
+        metadata jsonb,
+        created_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientV.query(`CREATE INDEX IF NOT EXISTS thread_messages_thread_idx ON thread_messages(thread_id, created_at)`);
+
+    await clientV.query(`
+      CREATE TABLE IF NOT EXISTS thread_attachments (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        thread_id varchar NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+        message_id varchar,
+        user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind text NOT NULL,
+        file_name text NOT NULL,
+        mime_type text,
+        byte_size integer NOT NULL DEFAULT 0,
+        parsed_text text,
+        created_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientV.query(`CREATE INDEX IF NOT EXISTS thread_attachments_thread_idx ON thread_attachments(thread_id)`);
+    await clientV.query(`CREATE INDEX IF NOT EXISTS thread_attachments_message_idx ON thread_attachments(message_id)`);
+
+    await clientV.query(`
+      CREATE TABLE IF NOT EXISTS library_items (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind text NOT NULL,
+        source_id varchar,
+        title text NOT NULL,
+        body text,
+        embedding vector(1536),
+        metadata jsonb,
+        created_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientV.query(`CREATE INDEX IF NOT EXISTS library_items_user_idx ON library_items(user_id, created_at)`);
+    await clientV.query(`CREATE INDEX IF NOT EXISTS library_items_kind_idx ON library_items(user_id, kind)`);
+
+    await clientV.query(`
+      CREATE TABLE IF NOT EXISTS org_corpus_chunks (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        source_kind text NOT NULL,
+        source_id text NOT NULL,
+        chunk_index integer NOT NULL DEFAULT 0,
+        text text NOT NULL,
+        embedding vector(1536),
+        metadata jsonb,
+        updated_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientV.query(`CREATE UNIQUE INDEX IF NOT EXISTS org_corpus_kind_src_chunk_idx ON org_corpus_chunks(organization_id, source_kind, source_id, chunk_index)`);
+    await clientV.query(`CREATE INDEX IF NOT EXISTS org_corpus_org_kind_idx ON org_corpus_chunks(organization_id, source_kind)`);
+
+    console.log("[migrations] ValueIQ + multi-agent registry tables ensured (Task #291)");
+  } catch (err) {
+    console.error("[migrations] ValueIQ migration error:", err);
+  } finally {
+    clientV.release();
+  }
+
   // ── contacts.mobile (Task #263) ──
   // Secondary phone number so Webex call sync can auto-attach calls placed to
   // either a contact's direct line or their cell.

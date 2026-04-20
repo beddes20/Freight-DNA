@@ -3164,6 +3164,28 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerWebexRoutes(app);
   const { registerAgentAdminRoutes } = await import("./routes/agentAdmin");
   registerAgentAdminRoutes(app);
+  const { registerValueIQRoutes } = await import("./routes/valueiq");
+  registerValueIQRoutes(app);
+
+  // Org corpus indexer — nightly reindex + admin trigger.
+  {
+    const cron = (await import("node-cron")).default;
+    const { indexAllOrgs, indexOrg } = await import("./agent/corpusIndexer");
+    cron.schedule("0 3 * * *", () => {
+      console.log("[corpus] nightly indexAllOrgs starting");
+      indexAllOrgs().catch((err) => console.error("[corpus] nightly failed:", err));
+    });
+    app.post("/api/admin/agents/reindex-corpus", requireAuth, async (req, res) => {
+      try {
+        const me = await getCurrentUser(req);
+        if (!me || me.role !== "admin") return res.status(403).json({ error: "Admin only" });
+        const result = await indexOrg(me.organizationId);
+        res.json(result);
+      } catch (err: any) {
+        res.status(500).json({ error: err.message ?? "Failed" });
+      }
+    });
+  }
 
   registerFinancialRoutes(app);
   // ── Company Historical Trends ─────────────────────────────────────────────
