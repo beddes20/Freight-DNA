@@ -214,6 +214,16 @@ async function initStripe() {
   }
 
   setupAuth(app);
+
+  // Backfill DNA agent + base persona for every existing org so the loader
+  // never has to seed lazily on the first user turn (Task #290).
+  try {
+    const { backfillDefaultAgentsForAllOrgs } = await import("./agent/persona");
+    await backfillDefaultAgentsForAllOrgs();
+  } catch (err) {
+    console.error("[startup] DNA agent backfill failed:", err);
+  }
+
   await registerRoutes(httpServer, app);
   await initStripe();
 

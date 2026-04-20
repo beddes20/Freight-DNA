@@ -703,7 +703,7 @@ function OrgDefaultsPanel() {
 // ═══════════════════════════════════════════════════════════════════════════
 // PANEL: Persona & Playbook (admin)
 // ═══════════════════════════════════════════════════════════════════════════
-type ChannelSlot = "base" | "in_app" | "email" | "sms_voice" | "teams";
+type ChannelSlot = "base" | "in_app" | "email" | "sms" | "voice" | "teams";
 interface PersonaChannel {
   channel: ChannelSlot;
   body: string | null;
@@ -751,9 +751,13 @@ const SLOT_LABELS: Record<ChannelSlot, { label: string; help: string }> = {
     label: "Email overlay",
     help: "Adjustments when DNA replies via email (longer-form, formal closings, signature, etc.).",
   },
-  sms_voice: {
-    label: "SMS / Voice overlay",
-    help: "Adjustments for SMS and voice channels. Keep responses short and skimmable.",
+  sms: {
+    label: "SMS overlay",
+    help: "Adjustments when DNA replies via SMS. Keep responses tight — one or two sentences.",
+  },
+  voice: {
+    label: "Voice overlay",
+    help: "Adjustments when DNA speaks aloud. Plain spoken language, no markdown.",
   },
   teams: {
     label: "Microsoft Teams overlay",
@@ -798,7 +802,7 @@ function PersonaCard() {
   });
 
   if (isLoading || !data) return <Loader2 className="h-6 w-6 animate-spin" />;
-  const slots: ChannelSlot[] = ["base", "in_app", "email", "sms_voice", "teams"];
+  const slots: ChannelSlot[] = ["base", "in_app", "email", "sms", "voice", "teams"];
   const byChannel = new Map(data.channels.map((c) => [c.channel, c]));
 
   return (

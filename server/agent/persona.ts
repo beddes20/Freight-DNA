@@ -28,9 +28,9 @@ Operating rules:
 
 Do not list every tool you have. Just use the right one and answer.`;
 
-export type ChannelSlot = "base" | "in_app" | "email" | "sms_voice" | "teams";
+export type ChannelSlot = "base" | "in_app" | "email" | "sms" | "voice" | "teams";
 
-const ALL_SLOTS: ChannelSlot[] = ["base", "in_app", "email", "sms_voice", "teams"];
+const ALL_SLOTS: ChannelSlot[] = ["base", "in_app", "email", "sms", "voice", "teams"];
 
 export function isChannelSlot(value: string): value is ChannelSlot {
   return (ALL_SLOTS as string[]).includes(value);
@@ -40,10 +40,13 @@ export function listChannelSlots(): ChannelSlot[] {
   return [...ALL_SLOTS];
 }
 
-/** Map a runtime channel name onto the persona slot used in the DB. */
+/**
+ * Map a runtime channel name onto the persona slot used in the DB. Each
+ * supported channel has its own slot so SMS and voice can diverge over time
+ * without another migration.
+ */
 export function mapChannelToSlot(channel: string): ChannelSlot {
-  if (channel === "sms" || channel === "voice") return "sms_voice";
-  if (channel === "in_app" || channel === "email" || channel === "teams") return channel;
+  if (isChannelSlot(channel)) return channel;
   return "base";
 }
 
@@ -101,6 +104,31 @@ async function seedBasePersonaIfMissing(agentId: string) {
   } catch (err) {
     // Partial unique index may race with a concurrent seed — that's fine.
     console.warn("[agent.persona] base seed race (ignored):", (err as Error)?.message);
+  }
+}
+
+/**
+ * Backfill: ensure every organization has a DNA agent and an active base
+ * persona row. Called once at server startup so we don't have to wait for the
+ * first user turn to seed an org. Failures are logged but never crash boot —
+ * the lazy ensureDefaultAgent in runtime paths covers any miss.
+ */
+export async function backfillDefaultAgentsForAllOrgs(): Promise<void> {
+  try {
+    const { organizations } = await import("@shared/schema");
+    const orgs = await db.select({ id: organizations.id }).from(organizations);
+    let created = 0;
+    for (const o of orgs) {
+      try {
+        await ensureDefaultAgent(o.id);
+        created++;
+      } catch (err) {
+        console.error(`[agent.persona] backfill failed for org ${o.id}:`, err);
+      }
+    }
+    console.log(`[agent.persona] startup backfill complete — ${created}/${orgs.length} orgs have DNA agent + base persona`);
+  } catch (err) {
+    console.error("[agent.persona] backfill skipped (will run lazily per org):", err);
   }
 }
 
@@ -193,7 +221,15 @@ export async function buildSystemPrompt(agentId: string, runtimeChannel: string)
     console.error("[agent.persona] loader failed, falling back to defaults:", err);
   }
 
-  let prompt = (base && base.trim()) ? base.trim() : DEFAULT_BASE_PERSONA;
+  let prompt: string;
+  if (base && base.trim()) {
+    prompt = base.trim();
+  } else {
+    if (base !== null && base !== undefined && !base.trim()) {
+      console.warn(`[agent.persona] active base persona for agent ${agentId} is blank — falling back to built-in default`);
+    }
+    prompt = DEFAULT_BASE_PERSONA;
+  }
 
   if (overlay && overlay.trim()) {
     prompt += `\n\n=== Channel overlay (${slot}) ===\n${overlay.trim()}`;
