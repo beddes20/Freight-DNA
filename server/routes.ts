@@ -3162,6 +3162,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerEmailDraftingRoutes(app);
   registerMonitoredMailboxRoutes(app);
   registerWebexRoutes(app);
+  const { registerAgentAdminRoutes } = await import("./routes/agentAdmin");
+  registerAgentAdminRoutes(app);
 
   registerFinancialRoutes(app);
   // ── Company Historical Trends ─────────────────────────────────────────────

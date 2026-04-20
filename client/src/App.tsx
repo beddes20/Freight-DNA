@@ -72,6 +72,9 @@ import ProvenTacticsPage from "@/pages/proven-tactics";
 import AIIntelligencePage from "@/pages/ai-intelligence";
 import AdminMonitoredMailboxesPage from "@/pages/admin-monitored-mailboxes";
 import ProfilePage from "@/pages/profile";
+import SettingsAiAssistantPage from "@/pages/settings-ai-assistant";
+import AdminAiPermissionsPage from "@/pages/admin-ai-permissions";
+import AgentActivityPage from "@/pages/agent-activity";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -171,6 +174,9 @@ function Router() {
       <Route path="/privacy" component={PrivacyPage} />
       <Route path="/terms" component={TermsPage} />
       <Route path="/profile" component={ProfilePage} />
+      <Route path="/settings/ai-assistant" component={SettingsAiAssistantPage} />
+      <Route path="/admin/ai-permissions" component={AdminAiPermissionsPage} />
+      <Route path="/agent-activity" component={AgentActivityPage} />
       <Route component={NotFound} />
     </Switch>
   );

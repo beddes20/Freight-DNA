@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, BrainCircuit, Lightbulb, Brain, MailCheck, ChevronDown, type LucideIcon } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, BrainCircuit, Lightbulb, Brain, MailCheck, ChevronDown, Sparkles, Activity, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -426,6 +426,24 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
+                {user?.role === "admin" && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/ai-permissions"}>
+                      <Link href="/admin/ai-permissions" data-testid="link-admin-ai-permissions">
+                        <Sparkles className="h-4 w-4" />
+                        <span>AI Permissions</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={location === "/agent-activity"}>
+                    <Link href="/agent-activity" data-testid="link-agent-activity">
+                      <Activity className="h-4 w-4" />
+                      <span>Agent Activity</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
                 <SidebarMenuItem>
                   <SidebarMenuButton asChild isActive={location === "/financials"}>
                     <Link href="/financials" data-testid="link-financials">

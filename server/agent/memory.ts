@@ -128,10 +128,12 @@ export async function saveMemory(args: SaveMemoryArgs): Promise<string> {
   return row?.id ?? "";
 }
 
-export async function deleteMemory(userId: string, memoryId: string): Promise<boolean> {
+export async function deleteMemory(userId: string, memoryId: string, organizationId?: string): Promise<boolean> {
+  const conds = [eq(agentMemories.id, memoryId), eq(agentMemories.userId, userId)];
+  if (organizationId) conds.push(eq(agentMemories.organizationId, organizationId));
   const result = await db
     .delete(agentMemories)
-    .where(and(eq(agentMemories.id, memoryId), eq(agentMemories.userId, userId)))
+    .where(and(...conds))
     .returning({ id: agentMemories.id });
   return result.length > 0;
 }
@@ -155,10 +157,12 @@ export async function addFact(args: { organizationId: string; userId: string; fa
   return row;
 }
 
-export async function deleteFact(userId: string, factId: string): Promise<boolean> {
+export async function deleteFact(userId: string, factId: string, organizationId?: string): Promise<boolean> {
+  const conds = [eq(agentFacts.id, factId), eq(agentFacts.userId, userId)];
+  if (organizationId) conds.push(eq(agentFacts.organizationId, organizationId));
   const result = await db
     .delete(agentFacts)
-    .where(and(eq(agentFacts.id, factId), eq(agentFacts.userId, userId)))
+    .where(and(...conds))
     .returning({ id: agentFacts.id });
   return result.length > 0;
 }
