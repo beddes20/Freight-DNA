@@ -43,7 +43,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable, emailMessages, emailSignals, onboardingMilestoneToggleSchema, type OnboardingMilestones, upsertSidebarTooltipSchema } from "@shared/schema";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable, emailMessages, emailSignals, onboardingMilestoneToggleSchema, type OnboardingMilestones, upsertSidebarTooltipSchema, type Contact, type RecurringLane } from "@shared/schema";
 import { normalizeLaneLocation, normalizeEquipmentType } from "@shared/laneFormatters";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
@@ -9419,7 +9419,9 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
         const limit = Math.min(Number(req.query.limit ?? 200), 200);
         cards = await storage.getVisibleNbaCardsForOrg(currentUser.organizationId, limit);
       } else {
-        const limit = Math.min(Number(req.query.limit ?? 5), 5);
+        // Default cap is 5 (focused triage) but reps can request up to 50 when
+        // they are sorting/filtering by at-stake $ (Task #372 — triage by impact).
+        const limit = Math.min(Number(req.query.limit ?? 5), 50);
         cards = await storage.getVisibleNbaCards(currentUser.id, limit);
       }
       // Exclude cards tied to archived companies
@@ -9431,6 +9433,49 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       if (!laneOutreachEnabled) {
         activeCards = activeCards.filter(c => c.ruleType !== "recurring_lane_capacity");
       }
+
+      // Task #372 — enrich every card with primary contact + primary lane display info
+      const allContactIds = [
+        ...new Set(activeCards.map(c => c.primaryContactId).filter((v): v is string => !!v)),
+      ];
+      const allLaneIds = [
+        ...new Set([
+          ...activeCards.map(c => c.primaryLaneId).filter((v): v is string => !!v),
+          ...activeCards.map(c => c.linkedLaneId).filter((v): v is string => !!v),
+        ]),
+      ];
+      const [contactRows, laneRows] = await Promise.all([
+        Promise.all(
+          allContactIds.map(id =>
+            storage.getContact ? storage.getContact(id).catch(() => null) : Promise.resolve(null),
+          ),
+        ),
+        Promise.all(allLaneIds.map(id => storage.getRecurringLane(id).catch(() => null))),
+      ]);
+      const contactMap = new Map<string, Contact>(
+        contactRows
+          .filter((c): c is Contact => !!c)
+          .map(c => [c.id, c]),
+      );
+      const laneInfoMap = new Map<string, RecurringLane>(
+        laneRows
+          .filter((l): l is RecurringLane => !!l)
+          .map(l => [l.id, l]),
+      );
+      activeCards = activeCards.map(c => {
+        const pc = c.primaryContactId ? contactMap.get(c.primaryContactId) : null;
+        const pl = c.primaryLaneId
+          ? laneInfoMap.get(c.primaryLaneId)
+          : (c.linkedLaneId ? laneInfoMap.get(c.linkedLaneId) : null);
+        return {
+          ...c,
+          primaryContactName: pc?.name ?? null,
+          primaryContactRelationshipBase: pc?.relationshipBase ?? null,
+          primaryLaneLabel: pl
+            ? `${pl.origin}${pl.originState ? ", " + pl.originState : ""} → ${pl.destination}${pl.destinationState ? ", " + pl.destinationState : ""}`
+            : null,
+        };
+      });
 
       // Annotate lane-capacity cards with owner/overseer names for admin/director chip display
       const laneCards = activeCards.filter(c => c.ruleType === "recurring_lane_capacity" && c.linkedLaneId);

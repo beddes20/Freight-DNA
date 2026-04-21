@@ -1154,6 +1154,11 @@ export const nbaCards = pgTable("nba_cards", {
   playLabel: text("play_label"),
   outcomeLinkedAt: text("outcome_linked_at"),
   outcomeTypeLinked: text("outcome_type_linked"),
+  // ── Task #372: at-stake $ impact + universal account/contact/lane linkage ──
+  atStakeAmount: decimal("at_stake_amount", { precision: 14, scale: 2 }),
+  atStakeBasis: text("at_stake_basis"),
+  primaryContactId: varchar("primary_contact_id").references(() => contacts.id, { onDelete: "set null" }),
+  primaryLaneId: varchar("primary_lane_id").references(() => recurringLanes.id, { onDelete: "set null" }),
   createdAt: text("created_at").notNull(),
   resolvedAt: text("resolved_at"),
 });

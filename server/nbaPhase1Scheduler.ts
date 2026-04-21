@@ -114,6 +114,11 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
             contactId: result.winner.contactId,
             linkedTaskId: result.winner.linkedTaskId,
             playLabel: play?.name ?? null,
+            // Task #372 — universal at-stake + linkage
+            atStakeAmount: result.winner.atStakeAmount != null ? String(result.winner.atStakeAmount) : null,
+            atStakeBasis: result.winner.atStakeBasis ?? null,
+            primaryContactId: result.winner.primaryContactId ?? result.winner.contactId ?? null,
+            primaryLaneId: result.winner.primaryLaneId ?? result.winner.linkedLaneId ?? null,
           });
           companiesWithCardsThisRun.add(result.companyId);
           totalGenerated++;
@@ -147,6 +152,11 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
             createdAt: now,
             linkedLaneId: spec.laneId,
             playLabel: lanePlay?.name ?? null,
+            // Task #372 — universal at-stake + linkage
+            atStakeAmount: spec.candidate.atStakeAmount != null ? String(spec.candidate.atStakeAmount) : null,
+            atStakeBasis: spec.candidate.atStakeBasis ?? null,
+            primaryContactId: spec.candidate.primaryContactId ?? null,
+            primaryLaneId: spec.candidate.primaryLaneId ?? spec.laneId,
           });
           totalGenerated++;
         }
@@ -272,8 +282,35 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
               const laneSummary = validLanes.slice(0, 3).map(l => `${l.origin}→${l.destination}`).join(", ");
               const laneCount = validLanes.length;
 
-              const r13 = evalR13MarketTightening(company, tier, votriWoWAvg, laneSummary, laneCount);
-              const r14 = evalR14MarketLoosening(company, tier, votriWoWAvg, laneSummary, laneCount);
+              // Task #372 — resolve primary contact + lane for universal linkage
+              let primaryContactId: string | null = null;
+              let primaryLaneId: string | null = null;
+              try {
+                const [contacts, recLanes] = await Promise.all([
+                  storage.getContactsByCompany(company.id),
+                  storage.getRecurringLanesByCompany(company.id).catch(() => [] as RecurringLane[]),
+                ]);
+                const rankBase = (b: string | null | undefined) => {
+                  const v = (b ?? "").toLowerCase();
+                  if (v.includes("home")) return 5;
+                  if (v.includes("3rd")) return 4;
+                  if (v.includes("2nd")) return 3;
+                  if (v.includes("1st")) return 2;
+                  if (v.includes("on deck") || v.includes("on-deck")) return 1;
+                  return 0;
+                };
+                const c = [...contacts].sort((a, b) => rankBase(b.relationshipBase) - rankBase(a.relationshipBase))[0];
+                primaryContactId = c?.id ?? null;
+                const lanes: RecurringLane[] = recLanes ?? [];
+                const today = new Date().toISOString().split("T")[0];
+                const eligible = lanes.filter(l => l.isEligible !== false && (!l.snoozedUntil || l.snoozedUntil <= today));
+                const top = (eligible.length > 0 ? eligible : lanes)
+                  .sort((a, b) => Number(b.laneScore ?? 0) - Number(a.laneScore ?? 0))[0];
+                primaryLaneId = top?.id ?? null;
+              } catch { /* non-fatal */ }
+
+              const r13 = evalR13MarketTightening(company, tier, votriWoWAvg, laneSummary, laneCount, primaryContactId, primaryLaneId);
+              const r14 = evalR14MarketLoosening(company, tier, votriWoWAvg, laneSummary, laneCount, primaryContactId, primaryLaneId);
               const marketCard = r13 ?? r14;
               if (!marketCard) continue;
 
@@ -303,6 +340,11 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
                 status: "visible",
                 createdAt: now,
                 playLabel: mktPlay?.name ?? null,
+                // Task #372 — universal at-stake + linkage
+                atStakeAmount: marketCard.atStakeAmount != null ? String(marketCard.atStakeAmount) : null,
+                atStakeBasis: marketCard.atStakeBasis ?? null,
+                primaryContactId: marketCard.primaryContactId ?? null,
+                primaryLaneId: marketCard.primaryLaneId ?? null,
               });
               companiesWithCardsThisRun.add(company.id);
               totalGenerated++;

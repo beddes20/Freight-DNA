@@ -52,6 +52,14 @@ export interface NbaCardData {
   laneOwnerName?: string | null;
   laneOverseerName?: string | null;
   playLabel?: string | null;
+  // Task #372 — at-stake $ + universal account/contact/lane linkage
+  atStakeAmount?: string | number | null;
+  atStakeBasis?: string | null;
+  primaryContactId?: string | null;
+  primaryContactName?: string | null;
+  primaryContactRelationshipBase?: string | null;
+  primaryLaneId?: string | null;
+  primaryLaneLabel?: string | null;
 }
 
 export interface NbaCardProps {
@@ -75,6 +83,15 @@ const RULE_LABELS: Record<string, string> = {
   stalled_award_lanes:    "Stalled Award",
   recurring_lane_capacity:"Lane Capacity",
   webex_missed_call:      "Missed Call",
+  // Task #372 — sharper signal labels
+  margin_slippage:        "Margin Slippage",
+  rfp_expiring:           "RFP / Award Expiring",
+  win_back:               "Win-Back Opportunity",
+  lane_volume_drop:       "Lane Volume Drop",
+  payment_credit_issue:   "Payment / Credit Issue",
+  market_surge_customer_outreach: "Market Surge",
+  R_MARKET_TIGHT:         "Market Tightening",
+  R_MARKET_LOOSE:         "Market Loosening",
 };
 
 const OUTCOME_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
@@ -279,6 +296,49 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
             {card.companyName}
             {card.companyId && <Link2 className="w-2.5 h-2.5 opacity-40" />}
           </a>
+        )}
+
+        {/* Task #372 — At-Stake $ + universal account/contact/lane linkage chips */}
+        {(card.atStakeAmount != null || card.primaryContactName || card.primaryLaneLabel) && (
+          <div className="flex flex-col gap-1" data-testid={`nba-card-linkage-${card.id}`}>
+            <div className="flex flex-wrap items-center gap-1">
+              {card.atStakeAmount != null && Number(card.atStakeAmount) > 0 && (
+                <span
+                  className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 font-semibold"
+                  title={card.atStakeBasis ?? undefined}
+                  data-testid={`nba-card-at-stake-${card.id}`}
+                >
+                  ${Number(card.atStakeAmount) >= 1000 ? `${Math.round(Number(card.atStakeAmount) / 1000)}k` : Math.round(Number(card.atStakeAmount))} at stake
+                </span>
+              )}
+              {card.primaryContactName && (
+                <span
+                  className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-blue-500/12 border border-blue-500/20 text-blue-300/80"
+                  data-testid={`nba-card-primary-contact-${card.id}`}
+                >
+                  <UserCircle className="w-2.5 h-2.5 shrink-0" />
+                  {card.primaryContactName}{card.primaryContactRelationshipBase ? ` · ${card.primaryContactRelationshipBase}` : ""}
+                </span>
+              )}
+              {card.primaryLaneLabel && (
+                <span
+                  className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/12 border border-emerald-500/20 text-emerald-300/80"
+                  data-testid={`nba-card-primary-lane-${card.id}`}
+                >
+                  <Truck className="w-2.5 h-2.5 shrink-0" />
+                  {card.primaryLaneLabel}
+                </span>
+              )}
+            </div>
+            {card.atStakeAmount != null && Number(card.atStakeAmount) > 0 && card.atStakeBasis && (
+              <p
+                className="text-[10px] leading-tight text-amber-300/70"
+                data-testid={`nba-card-at-stake-basis-${card.id}`}
+              >
+                Basis: {card.atStakeBasis}
+              </p>
+            )}
+          </div>
         )}
 
         {/* Why this now — clamped to 2 lines */}

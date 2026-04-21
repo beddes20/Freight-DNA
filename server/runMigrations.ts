@@ -3628,4 +3628,41 @@ export async function runMigrations() {
   } finally {
     clientCI.release();
   }
+
+  // ── Task #372: NBA $-at-stake + universal account/contact/lane linkage ──────
+  const client372 = await pool.connect();
+  try {
+    await client372.query(`ALTER TABLE nba_cards ADD COLUMN IF NOT EXISTS at_stake_amount numeric(14,2)`);
+    await client372.query(`ALTER TABLE nba_cards ADD COLUMN IF NOT EXISTS at_stake_basis text`);
+    await client372.query(`ALTER TABLE nba_cards ADD COLUMN IF NOT EXISTS primary_contact_id varchar`);
+    await client372.query(`ALTER TABLE nba_cards ADD COLUMN IF NOT EXISTS primary_lane_id varchar`);
+    // Add FKs only if the constraint isn't already present (defensive — safe to re-run)
+    await client372.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE constraint_name = 'nba_cards_primary_contact_id_fkey'
+        ) THEN
+          ALTER TABLE nba_cards
+            ADD CONSTRAINT nba_cards_primary_contact_id_fkey
+            FOREIGN KEY (primary_contact_id) REFERENCES contacts(id) ON DELETE SET NULL;
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.table_constraints
+          WHERE constraint_name = 'nba_cards_primary_lane_id_fkey'
+        ) THEN
+          ALTER TABLE nba_cards
+            ADD CONSTRAINT nba_cards_primary_lane_id_fkey
+            FOREIGN KEY (primary_lane_id) REFERENCES recurring_lanes(id) ON DELETE SET NULL;
+        END IF;
+      END$$;
+    `);
+    await client372.query(`CREATE INDEX IF NOT EXISTS nba_cards_at_stake_amount_idx ON nba_cards (at_stake_amount DESC NULLS LAST)`);
+    console.log("[migrations] nba_cards at-stake + linkage columns ensured (Task #372)");
+  } catch (err) {
+    console.error("[migrations] Task #372 migration error:", err);
+  } finally {
+    client372.release();
+  }
 }

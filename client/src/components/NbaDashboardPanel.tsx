@@ -7,7 +7,7 @@ import { NbaCard } from "./NbaCard";
 import type { NbaCardData } from "./NbaCard";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Brain, RefreshCw } from "lucide-react";
+import { Brain, RefreshCw, ArrowDownAZ } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -24,9 +24,22 @@ export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps)
   // Local sets for instant optimistic removal — avoids waiting for query refetch
   const [dismissed, setDismissed] = useState<Set<string>>(new Set());
   const [actioned, setActioned] = useState<Set<string>>(new Set());
+  // Task #372 — sort + filter by at-stake $
+  const [sortMode, setSortMode] = useState<"default" | "at_stake">("default");
+  const [minAtStake, setMinAtStake] = useState<number>(0);
 
+  // When the user is sorting/filtering by at-stake $, request a larger
+  // candidate set so non-portfolio reps can actually triage by impact
+  // (otherwise the server caps non-admin users at 5 cards).
+  const triageActive = sortMode === "at_stake" || minAtStake > 0;
   const { data: cards = [], isLoading, refetch } = useQuery<NbaCardData[]>({
-    queryKey: ["/api/nba/cards"],
+    queryKey: ["/api/nba/cards", triageActive ? "triage" : "default"],
+    queryFn: async () => {
+      const url = triageActive ? "/api/nba/cards?limit=50" : "/api/nba/cards";
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load cards");
+      return res.json();
+    },
     staleTime: 60_000,
   });
 
@@ -44,9 +57,14 @@ export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps)
 
   // Portfolio roles (admin/director) see all cards from the server; others are capped at 5
   const isPortfolioRole = ["admin", "director"].includes(userRole);
-  const visible = cards
+  const stakeNum = (c: NbaCardData) => Number(c.atStakeAmount ?? 0) || 0;
+  const filtered = cards
     .filter(c => !dismissed.has(c.id) && !actioned.has(c.id))
-    .slice(0, isPortfolioRole ? 200 : 5);
+    .filter(c => minAtStake === 0 || stakeNum(c) >= minAtStake);
+  const sorted = sortMode === "at_stake"
+    ? [...filtered].sort((a, b) => stakeNum(b) - stakeNum(a))
+    : filtered;
+  const visible = sorted.slice(0, isPortfolioRole ? 200 : 5);
 
   // During initial load show a skeleton so the panel doesn't flash in/out.
   if (isLoading) {
@@ -81,6 +99,32 @@ export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps)
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {/* Task #372 — sort/filter by at-stake */}
+          <button
+            onClick={() => setSortMode(m => m === "at_stake" ? "default" : "at_stake")}
+            className={`inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border transition-colors ${
+              sortMode === "at_stake"
+                ? "bg-amber-500/15 border-amber-500/30 text-amber-300"
+                : "bg-white/5 border-white/10 text-white/40 hover:text-white/70"
+            }`}
+            title="Sort by $ at stake"
+            data-testid="nba-panel-sort-at-stake"
+          >
+            <ArrowDownAZ className="w-3 h-3" />
+            $ at stake
+          </button>
+          <select
+            value={minAtStake}
+            onChange={(e) => setMinAtStake(Number(e.target.value))}
+            className="text-[11px] bg-white/5 border border-white/10 text-white/60 rounded px-1.5 py-1 hover:text-white/80"
+            data-testid="nba-panel-min-at-stake"
+          >
+            <option value={0}>Any $</option>
+            <option value={5000}>≥ $5k</option>
+            <option value={25000}>≥ $25k</option>
+            <option value={100000}>≥ $100k</option>
+            <option value={500000}>≥ $500k</option>
+          </select>
           <Button
             variant="ghost"
             size="sm"

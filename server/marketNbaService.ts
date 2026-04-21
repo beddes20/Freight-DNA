@@ -15,7 +15,7 @@
  */
 
 import type { IStorage } from "./storage";
-import type { MarketSignal } from "../shared/schema";
+import type { MarketSignal, RecurringLane, Contact, InsertNbaCard } from "../shared/schema";
 import { getExposedAccounts, MAX_ACCOUNTS_PER_SIGNAL, type AccountExposureEvidence, type ExposedAccount } from "./marketNbaExposureService";
 
 const RULE_TYPE = "market_surge_customer_outreach" as const;
@@ -170,6 +170,39 @@ export async function syncMarketSignalNbas(orgId: string, storage: IStorage): Pr
       const regionLabel = signal.scopeKey ?? "the region";
       const equipLabel = signal.equipmentType ? ` ${signal.equipmentType}` : "";
 
+      // Task #372 — resolve primary contact + lane and at-stake estimate
+      let primaryContactId: string | null = null;
+      let primaryLaneId: string | null = null;
+      try {
+        const [contacts, recLanes] = await Promise.all([
+          storage.getContactsByCompany(account.companyId),
+          storage.getRecurringLanesByCompany(account.companyId).catch(() => [] as RecurringLane[]),
+        ]);
+        const rankBase = (b: string | null | undefined) => {
+          const v = (b ?? "").toLowerCase();
+          if (v.includes("home")) return 5;
+          if (v.includes("3rd")) return 4;
+          if (v.includes("2nd")) return 3;
+          if (v.includes("1st")) return 2;
+          if (v.includes("on deck") || v.includes("on-deck")) return 1;
+          return 0;
+        };
+        const c = [...(contacts ?? [])]
+          .sort((a: Contact, b: Contact) => rankBase(b.relationshipBase) - rankBase(a.relationshipBase))[0];
+        primaryContactId = c?.id ?? null;
+        const lanes: RecurringLane[] = recLanes ?? [];
+        const today = new Date().toISOString().split("T")[0];
+        const eligible = lanes.filter(l => l.isEligible !== false && (!l.snoozedUntil || l.snoozedUntil <= today));
+        const top = (eligible.length > 0 ? eligible : lanes)
+          .sort((a, b) => Number(b.laneScore ?? 0) - Number(a.laneScore ?? 0))[0];
+        primaryLaneId = top?.id ?? null;
+      } catch { /* non-fatal */ }
+
+      const accountExtras = account as ExposedAccount & { annualSpend?: number | string | null; estimatedFreightSpend?: number | string | null };
+      const annualSpend = Number(accountExtras.annualSpend ?? accountExtras.estimatedFreightSpend ?? 0);
+      const sevWeight = signal.severity === "critical" ? 0.5 : signal.severity === "high" ? 0.3 : signal.severity === "medium" ? 0.15 : 0.05;
+      const atStakeAmount = annualSpend > 0 ? Math.round(annualSpend * sevWeight) : null;
+
       await storage.createNbaCard({
         orgId,
         userId: ownerId,
@@ -179,7 +212,7 @@ export async function syncMarketSignalNbas(orgId: string, storage: IStorage): Pr
         outcomeType: "grow",
         confidence: signal.severity === "critical" || signal.severity === "high" ? "high" : "medium",
         signalCount: signalSummaryLines.length,
-        signalSummary: [explanation, ...signalSummaryLines] as any,
+        signalSummary: [explanation, ...signalSummaryLines] as unknown as InsertNbaCard["signalSummary"],
         whyThisNow: `Market signal detected in ${regionLabel}${equipLabel}: ${signal.signalType} (${signal.severity} severity). ${account.companyName} has activity in this corridor.`,
         suggestedAction: explanation.suggestedOutreachScript,
         expectedOutcome: `Position Value Truck as the preferred${equipLabel} carrier for ${account.companyName}'s ${regionLabel} lanes before capacity tightens.`,
@@ -190,6 +223,11 @@ export async function syncMarketSignalNbas(orgId: string, storage: IStorage): Pr
         marketSignalId: signal.id,
         playLabel: "Market Signal Outreach",
         createdAt: new Date().toISOString(),
+        // Task #372 — universal at-stake + linkage
+        atStakeAmount: atStakeAmount != null ? String(atStakeAmount) : null,
+        atStakeBasis: atStakeAmount != null ? `Annual freight spend × ${signal.severity}-severity exposure` : null,
+        primaryContactId,
+        primaryLaneId,
       });
 
       created++;
