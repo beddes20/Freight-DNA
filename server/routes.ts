@@ -6,6 +6,7 @@ import { registerEngagementRoutes } from "./routes/engagement";
 import { registerCoachingRoutes } from "./routes/coaching";
 import { registerProspectRoutes } from "./routes/prospects";
 import { registerFinancialRoutes } from "./routes/financials";
+import { registerLoadFactRoutes } from "./routes/loadFact";
 import { registerGoalRoutes } from "./routes/goals";
 import { registerDashboardRoutes } from "./routes/dashboard";
 import { registerForcedFocusRoutes } from "./routes/forcedFocus";
@@ -3211,6 +3212,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   }
 
   registerFinancialRoutes(app);
+  registerLoadFactRoutes(app);
   // ── Company Historical Trends ─────────────────────────────────────────────
   app.get("/api/companies/:id/historical-trends", requireAuth, async (req, res) => {
     try {

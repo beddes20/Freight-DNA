@@ -3228,4 +3228,127 @@ export async function runMigrations() {
   } finally {
     clientSla.release();
   }
+
+  // ── Task #368: load_fact widening + audit table ─────────────────────────
+  const clientLF = await pool.connect();
+  try {
+    // Belt-and-braces: foundation tables must exist deterministically on a
+    // fresh DB where Drizzle push hasn't run yet, otherwise the importer +
+    // history writes will throw at runtime.
+    await clientLF.query(`
+      CREATE TABLE IF NOT EXISTS load_fact (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL,
+        order_id text NOT NULL,
+        company_id varchar,
+        customer_name text,
+        carrier_name text,
+        carrier_payee_code text,
+        origin_city text,
+        origin_state text,
+        destination_city text,
+        destination_state text,
+        equipment_type text,
+        pickup_date text,
+        delivery_date text,
+        month text,
+        move_status text,
+        bucket text NOT NULL DEFAULT 'available',
+        revenue numeric(14,2),
+        cost numeric(14,2),
+        margin numeric(14,2),
+        load_count integer NOT NULL DEFAULT 1,
+        raw_row jsonb,
+        source_file_name text,
+        source_kind text NOT NULL DEFAULT 'powerbi',
+        imported_at timestamp NOT NULL DEFAULT now(),
+        last_changed_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientLF.query(`CREATE UNIQUE INDEX IF NOT EXISTS load_fact_org_order_uq ON load_fact (org_id, order_id)`);
+    await clientLF.query(`CREATE INDEX IF NOT EXISTS load_fact_org_bucket_idx ON load_fact (org_id, bucket)`);
+    await clientLF.query(`CREATE INDEX IF NOT EXISTS load_fact_org_carrier_idx ON load_fact (org_id, carrier_name)`);
+    await clientLF.query(`CREATE INDEX IF NOT EXISTS load_fact_org_month_idx ON load_fact (org_id, month)`);
+    await clientLF.query(`CREATE INDEX IF NOT EXISTS load_fact_org_company_idx ON load_fact (org_id, company_id)`);
+    await clientLF.query(`CREATE INDEX IF NOT EXISTS load_fact_org_pickup_idx ON load_fact (org_id, pickup_date)`);
+
+    await clientLF.query(`
+      CREATE TABLE IF NOT EXISTS load_fact_history (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        load_fact_id varchar NOT NULL,
+        org_id varchar NOT NULL,
+        changed_at timestamp NOT NULL DEFAULT now(),
+        field_name text NOT NULL,
+        old_value text,
+        new_value text,
+        import_batch_id varchar
+      )
+    `);
+    await clientLF.query(`CREATE INDEX IF NOT EXISTS load_fact_history_load_changed_idx ON load_fact_history (load_fact_id, changed_at)`);
+    await clientLF.query(`CREATE INDEX IF NOT EXISTS load_fact_history_org_changed_idx ON load_fact_history (org_id, changed_at)`);
+
+    const wideCols = [
+      "ADD COLUMN IF NOT EXISTS origin_zip text",
+      "ADD COLUMN IF NOT EXISTS destination_zip text",
+      "ADD COLUMN IF NOT EXISTS account_manager text",
+      "ADD COLUMN IF NOT EXISTS dispatcher text",
+      "ADD COLUMN IF NOT EXISTS pickup_appt_start text",
+      "ADD COLUMN IF NOT EXISTS pickup_appt_end text",
+      "ADD COLUMN IF NOT EXISTS delivery_appt_start text",
+      "ADD COLUMN IF NOT EXISTS delivery_appt_end text",
+      "ADD COLUMN IF NOT EXISTS arrived_at_pickup text",
+      "ADD COLUMN IF NOT EXISTS arrived_at_delivery text",
+      "ADD COLUMN IF NOT EXISTS total_stops integer",
+      "ADD COLUMN IF NOT EXISTS total_miles numeric(10,2)",
+      "ADD COLUMN IF NOT EXISTS margin_pct numeric(7,4)",
+      "ADD COLUMN IF NOT EXISTS last_seen_at timestamp NOT NULL DEFAULT now()",
+      "ADD COLUMN IF NOT EXISTS expired_at timestamp",
+    ];
+    await clientLF.query(`ALTER TABLE load_fact ${wideCols.join(", ")}`);
+    await clientLF.query(`CREATE INDEX IF NOT EXISTS load_fact_org_account_manager_idx ON load_fact (org_id, account_manager)`);
+    await clientLF.query(`CREATE INDEX IF NOT EXISTS load_fact_org_dispatcher_idx ON load_fact (org_id, dispatcher)`);
+    await clientLF.query(`CREATE INDEX IF NOT EXISTS load_fact_org_last_seen_idx ON load_fact (org_id, last_seen_at)`);
+    // Lane lookups (Available freight matching) and pickup-window scheduling.
+    await clientLF.query(`CREATE INDEX IF NOT EXISTS load_fact_org_origin_dest_zip_idx ON load_fact (org_id, origin_zip, destination_zip)`);
+    await clientLF.query(`CREATE INDEX IF NOT EXISTS load_fact_org_status_pickup_idx ON load_fact (org_id, move_status, pickup_appt_start)`);
+    await clientLF.query(`
+      CREATE TABLE IF NOT EXISTS load_fact_import_audit (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL,
+        file_name text,
+        file_hash text,
+        replay_token text,
+        total_rows integer NOT NULL DEFAULT 0,
+        inserted integer NOT NULL DEFAULT 0,
+        updated integer NOT NULL DEFAULT 0,
+        unchanged integer NOT NULL DEFAULT 0,
+        transitioned integer NOT NULL DEFAULT 0,
+        expired integer NOT NULL DEFAULT 0,
+        skipped integer NOT NULL DEFAULT 0,
+        bucket_available integer NOT NULL DEFAULT 0,
+        bucket_realized integer NOT NULL DEFAULT 0,
+        bucket_cancelled integer NOT NULL DEFAULT 0,
+        bucket_unknown integer NOT NULL DEFAULT 0,
+        warnings jsonb,
+        actor_user_id varchar,
+        triggered_by text NOT NULL DEFAULT 'manual',
+        kind text NOT NULL DEFAULT 'powerbi',
+        error text,
+        duration_ms integer,
+        created_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientLF.query(`ALTER TABLE load_fact_import_audit ADD COLUMN IF NOT EXISTS file_hash text`);
+    await clientLF.query(`ALTER TABLE load_fact_import_audit ADD COLUMN IF NOT EXISTS replay_token text`);
+    await clientLF.query(`ALTER TABLE load_fact_import_audit ADD COLUMN IF NOT EXISTS transitioned integer NOT NULL DEFAULT 0`);
+    await clientLF.query(`ALTER TABLE load_fact_import_audit ADD COLUMN IF NOT EXISTS expired integer NOT NULL DEFAULT 0`);
+    await clientLF.query(`ALTER TABLE load_fact_import_audit ADD COLUMN IF NOT EXISTS skipped integer NOT NULL DEFAULT 0`);
+    await clientLF.query(`CREATE INDEX IF NOT EXISTS load_fact_import_audit_org_created_idx ON load_fact_import_audit (org_id, created_at)`);
+    await clientLF.query(`CREATE INDEX IF NOT EXISTS load_fact_import_audit_org_replay_idx ON load_fact_import_audit (org_id, replay_token)`);
+    console.log("[migrations] load_fact widened + load_fact_import_audit ensured (Task #368)");
+  } catch (err) {
+    console.error("[migrations] load_fact migration error:", err);
+  } finally {
+    clientLF.release();
+  }
 }

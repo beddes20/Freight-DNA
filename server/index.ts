@@ -7,6 +7,7 @@ import { createServer } from "http";
 import { initMonthlyGoalScheduler } from "./monthlyGoalScheduler";
 import { initMonthlyDataRefreshScheduler } from "./monthlyDataRefreshScheduler";
 import { initAvailableFreightImportScheduler } from "./availableFreightScheduler";
+import { initLoadFactScheduler } from "./loadFactScheduler";
 import { initRfpDeadlineScheduler } from "./rfpDeadlineScheduler";
 import { initDailyDigestScheduler } from "./dailyDigestScheduler";
 import { initRepReportScheduler } from "./repReportScheduler";
@@ -289,6 +290,7 @@ async function initStripe() {
       initMonthlyGoalScheduler();
       initMonthlyDataRefreshScheduler();
       initAvailableFreightImportScheduler();
+      initLoadFactScheduler();
       initRfpDeadlineScheduler();
       initDailyDigestScheduler();
       initRepReportScheduler();

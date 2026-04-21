@@ -3784,3 +3784,139 @@ export const adapterStatus = pgTable(
   ],
 );
 export type AdapterStatus = typeof adapterStatus.$inferSelect;
+
+// ─── Carrier Intelligence — load_fact substrate (Task #368) ─────────────────
+//
+// Single trusted freight load substrate. Every TMS row from the unified
+// PowerBI/OneDrive extract becomes one row here, keyed by (org_id, order_id).
+// `move_status` is the canonical state — Available vs Realized bucketing is
+// derived from it inside the carrierIntelligence service, never from legacy
+// `financial_uploads.rows` or `freight_opportunities.status`.
+//
+// This table is intentionally wide: it keeps the raw-row JSON alongside the
+// normalized columns so downstream code can read either path while the
+// org migrates. The unique (org_id, order_id) constraint enforces "one
+// row per TMS load" idempotency.
+export const loadFact = pgTable("load_fact", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  orderId: text("order_id").notNull(),
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }),
+  customerName: text("customer_name"),
+  carrierName: text("carrier_name"),
+  carrierPayeeCode: text("carrier_payee_code"),
+  // Geography — wide enough to cover Available, Active and Realized lookups.
+  originCity: text("origin_city"),
+  originState: text("origin_state"),
+  originZip: text("origin_zip"),
+  destinationCity: text("destination_city"),
+  destinationState: text("destination_state"),
+  destinationZip: text("destination_zip"),
+  // Ownership — required so dashboards can roll up by AM/dispatcher.
+  accountManager: text("account_manager"),
+  dispatcher: text("dispatcher"),
+  equipmentType: text("equipment_type"),
+  // Schedule — date strings preserved as-is from the TMS extract for parity.
+  pickupDate: text("pickup_date"),
+  deliveryDate: text("delivery_date"),
+  pickupApptStart: text("pickup_appt_start"),
+  pickupApptEnd: text("pickup_appt_end"),
+  deliveryApptStart: text("delivery_appt_start"),
+  deliveryApptEnd: text("delivery_appt_end"),
+  arrivedAtPickup: text("arrived_at_pickup"),
+  arrivedAtDelivery: text("arrived_at_delivery"),
+  totalStops: integer("total_stops"),
+  totalMiles: decimal("total_miles", { precision: 10, scale: 2 }),
+  month: text("month"), // YYYY-MM
+  // State — `move_status` is the canonical TMS state; `bucket` is the
+  // service-derived Available/Realized/Cancelled/Unknown classification.
+  moveStatus: text("move_status"),
+  bucket: text("bucket").notNull().default("available"),
+  revenue: decimal("revenue", { precision: 14, scale: 2 }),
+  cost: decimal("cost", { precision: 14, scale: 2 }),
+  margin: decimal("margin", { precision: 14, scale: 2 }),
+  marginPct: decimal("margin_pct", { precision: 7, scale: 4 }),
+  loadCount: integer("load_count").notNull().default(1),
+  rawRow: jsonb("raw_row"),
+  sourceFileName: text("source_file_name"),
+  sourceKind: text("source_kind").notNull().default("powerbi"),
+  // Lifecycle — `lastSeenAt` updated every time an import sees this order; if
+  // an Available row is absent from a fresh extract it gets `expiredAt` set
+  // and rolled into the `cancelled` bucket so dashboards do not double-count
+  // dropped freight.
+  importedAt: timestamp("imported_at").defaultNow().notNull(),
+  lastChangedAt: timestamp("last_changed_at").defaultNow().notNull(),
+  lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
+  expiredAt: timestamp("expired_at"),
+}, (t) => ({
+  orgOrderUq: uniqueIndex("load_fact_org_order_uq").on(t.orgId, t.orderId),
+  orgBucketIdx: index("load_fact_org_bucket_idx").on(t.orgId, t.bucket),
+  orgCarrierIdx: index("load_fact_org_carrier_idx").on(t.orgId, t.carrierName),
+  orgMonthIdx: index("load_fact_org_month_idx").on(t.orgId, t.month),
+  orgCompanyIdx: index("load_fact_org_company_idx").on(t.orgId, t.companyId),
+  orgPickupIdx: index("load_fact_org_pickup_idx").on(t.orgId, t.pickupDate),
+  orgAcctMgrIdx: index("load_fact_org_account_manager_idx").on(t.orgId, t.accountManager),
+  orgDispatcherIdx: index("load_fact_org_dispatcher_idx").on(t.orgId, t.dispatcher),
+  orgLastSeenIdx: index("load_fact_org_last_seen_idx").on(t.orgId, t.lastSeenAt),
+}));
+export const insertLoadFactSchema = createInsertSchema(loadFact)
+  .omit({ id: true, importedAt: true, lastChangedAt: true, lastSeenAt: true, expiredAt: true });
+export type InsertLoadFact = z.infer<typeof insertLoadFactSchema>;
+export type LoadFact = typeof loadFact.$inferSelect;
+
+// Import audit — one row per importer/backfill run. Captures the file hash
+// + replay token so the same source can be re-applied deterministically and
+// the post-cutover surfaces can prove which run produced which numbers.
+export const loadFactImportAudit = pgTable("load_fact_import_audit", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull(),
+  fileName: text("file_name"),
+  fileHash: text("file_hash"),
+  replayToken: text("replay_token"),
+  totalRows: integer("total_rows").notNull().default(0),
+  inserted: integer("inserted").notNull().default(0),
+  updated: integer("updated").notNull().default(0),
+  unchanged: integer("unchanged").notNull().default(0),
+  transitioned: integer("transitioned").notNull().default(0),
+  expired: integer("expired").notNull().default(0),
+  skipped: integer("skipped").notNull().default(0),
+  bucketAvailable: integer("bucket_available").notNull().default(0),
+  bucketRealized: integer("bucket_realized").notNull().default(0),
+  bucketCancelled: integer("bucket_cancelled").notNull().default(0),
+  bucketUnknown: integer("bucket_unknown").notNull().default(0),
+  warnings: jsonb("warnings"),
+  actorUserId: varchar("actor_user_id"),
+  triggeredBy: text("triggered_by").notNull().default("manual"),
+  kind: text("kind").notNull().default("powerbi"),
+  error: text("error"),
+  durationMs: integer("duration_ms"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  orgCreatedIdx: index("load_fact_import_audit_org_created_idx").on(t.orgId, t.createdAt),
+  orgReplayIdx: index("load_fact_import_audit_org_replay_idx").on(t.orgId, t.replayToken),
+}));
+export const insertLoadFactImportAuditSchema = createInsertSchema(loadFactImportAudit)
+  .omit({ id: true, createdAt: true });
+export type InsertLoadFactImportAudit = z.infer<typeof insertLoadFactImportAuditSchema>;
+export type LoadFactImportAudit = typeof loadFactImportAudit.$inferSelect;
+
+// Append-only field-change history for each load_fact row. Lets the parity
+// harness and audit views reconstruct what changed across imports without
+// blowing up the main table with snapshot rows.
+export const loadFactHistory = pgTable("load_fact_history", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  loadFactId: varchar("load_fact_id").notNull().references(() => loadFact.id, { onDelete: "cascade" }),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  changedAt: timestamp("changed_at").defaultNow().notNull(),
+  fieldName: text("field_name").notNull(),
+  oldValue: text("old_value"),
+  newValue: text("new_value"),
+  importBatchId: varchar("import_batch_id"),
+}, (t) => ({
+  loadChangedIdx: index("load_fact_history_load_changed_idx").on(t.loadFactId, t.changedAt),
+  orgChangedIdx: index("load_fact_history_org_changed_idx").on(t.orgId, t.changedAt),
+}));
+export const insertLoadFactHistorySchema = createInsertSchema(loadFactHistory)
+  .omit({ id: true, changedAt: true });
+export type InsertLoadFactHistory = z.infer<typeof insertLoadFactHistorySchema>;
+export type LoadFactHistory = typeof loadFactHistory.$inferSelect;
