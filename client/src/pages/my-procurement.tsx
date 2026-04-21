@@ -9,10 +9,13 @@
  * against recurring_lanes, so "Open in LWQ" deep-links identically for both sources.
  */
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
+import { useAuth } from "@/hooks/use-auth";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Eye, X } from "lucide-react";
 import { formatLaneDisplay, normalizeEquipmentType } from "@shared/laneFormatters";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -96,12 +99,28 @@ interface MyProcurementData {
   lwqLanes: LwqLane[];
   awardTasks: AwardTask[];
   triggeredPlays?: TriggeredPlay[];
+  viewing?: { id: string; name: string; isOther: boolean } | null;
   pagination?: {
     limit: number;
     lwqNextCursor: string | null;
     tasksNextCursor: string | null;
   };
 }
+
+interface TeamMemberOption {
+  id: string;
+  name?: string | null;
+  email?: string | null;
+  role?: string | null;
+}
+
+const VIEW_OTHERS_ROLES = new Set([
+  "admin",
+  "director",
+  "sales_director",
+  "national_account_manager",
+  "logistics_manager",
+]);
 
 const COMPLETION_THRESHOLD = 3;
 
@@ -232,7 +251,7 @@ function OpenInLwqButton({
 
 // ── LWQ Lane Card ──────────────────────────────────────────────────────────────
 
-function LwqLaneCard({ item, onResolve }: { item: LwqLane; onResolve: (id: string) => void }) {
+function LwqLaneCard({ item, onResolve, readOnly }: { item: LwqLane; onResolve: (id: string) => void; readOnly?: boolean }) {
   const contacted = item.carriersContactedCount ?? 0;
   const laneDisplay = formatLaneDisplay(
     item.origin,
@@ -328,7 +347,7 @@ function LwqLaneCard({ item, onResolve }: { item: LwqLane; onResolve: (id: strin
       {/* Actions */}
       <div className="flex items-center gap-2 shrink-0">
         <OpenInLwqButton laneId={item.laneId} testId={`btn-open-lwq-${item.laneId}`} />
-        {contacted >= COMPLETION_THRESHOLD && (
+        {!readOnly && contacted >= COMPLETION_THRESHOLD && (
           <Button
             size="sm"
             variant="outline"
@@ -347,7 +366,7 @@ function LwqLaneCard({ item, onResolve }: { item: LwqLane; onResolve: (id: strin
 
 // ── Award Task Card ────────────────────────────────────────────────────────────
 
-function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: string) => void }) {
+function AwardTaskCard({ item, onClose, readOnly }: { item: AwardTask; onClose: (id: string) => void; readOnly?: boolean }) {
   const [, navigate] = useLocation();
   const laneDisplay =
     item.origin && item.destination
@@ -452,16 +471,18 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
             Award
           </Button>
         )}
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-8 text-xs gap-1.5 border-emerald-700 text-emerald-400 hover:bg-emerald-950/30"
-          data-testid={`btn-close-task-${item.taskId}`}
-          onClick={() => onClose(item.taskId)}
-        >
-          <CheckCircle2 className="w-3.5 h-3.5" />
-          Mark Done
-        </Button>
+        {!readOnly && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 text-xs gap-1.5 border-emerald-700 text-emerald-400 hover:bg-emerald-950/30"
+            data-testid={`btn-close-task-${item.taskId}`}
+            onClick={() => onClose(item.taskId)}
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            Mark Done
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -472,21 +493,59 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
 export default function MyProcurementPage() {
   const { toast } = useToast();
   const [, navigate] = useLocation();
+  const search = useSearch();
+  const { user: currentUser } = useAuth();
   const [activeTab, setActiveTab] = useState<"all" | "lwq" | "award">("all");
 
+  const canViewOthers = !!currentUser && VIEW_OTHERS_ROLES.has(currentUser.role);
+  const viewingUserId = useMemo(() => {
+    const params = new URLSearchParams(search || "");
+    return params.get("userId");
+  }, [search]);
+  const isViewingOther = canViewOthers && !!viewingUserId && viewingUserId !== currentUser?.id;
+
+  const procurementUrl = isViewingOther
+    ? `/api/my-procurement?userId=${encodeURIComponent(viewingUserId!)}`
+    : "/api/my-procurement";
+
+  const procurementQueryKey = ["/api/my-procurement", viewingUserId ?? null] as const;
+
   const { data, isLoading, isError, refetch, isFetching } = useQuery<MyProcurementData>({
-    queryKey: ["/api/my-procurement"],
+    queryKey: procurementQueryKey,
+    queryFn: () => fetch(procurementUrl, { credentials: "include" }).then((r) => {
+      if (!r.ok) throw new Error("Failed to load procurement data");
+      return r.json();
+    }),
     staleTime: 60_000,
     refetchInterval: 90_000,
   });
+
+  const teamMembersQ = useQuery<TeamMemberOption[]>({
+    queryKey: ["/api/users", { includeManagers: true }],
+    queryFn: () =>
+      fetch("/api/users?includeManagers=true", { credentials: "include" }).then((r) => {
+        if (!r.ok) throw new Error("Failed to load team members");
+        return r.json();
+      }),
+    enabled: canViewOthers,
+    staleTime: 5 * 60_000,
+  });
+
+  function setViewing(userId: string | null) {
+    const params = new URLSearchParams(search || "");
+    if (userId) params.set("userId", userId);
+    else params.delete("userId");
+    const qs = params.toString();
+    navigate(`/my-procurement${qs ? `?${qs}` : ""}`);
+  }
 
   const resolveMutation = useMutation({
     mutationFn: (laneId: string) =>
       apiRequest("POST", `/api/my-procurement/lwq-lane/${laneId}/resolve`).then((r) => r.json()),
     onMutate: async (laneId: string) => {
-      await queryClient.cancelQueries({ queryKey: ["/api/my-procurement"] });
-      const previous = queryClient.getQueryData<MyProcurementData>(["/api/my-procurement"]);
-      queryClient.setQueryData<MyProcurementData>(["/api/my-procurement"], (old) => {
+      await queryClient.cancelQueries({ queryKey: procurementQueryKey });
+      const previous = queryClient.getQueryData<MyProcurementData>(procurementQueryKey);
+      queryClient.setQueryData<MyProcurementData>(procurementQueryKey, (old) => {
         if (!old) return old;
         return { ...old, lwqLanes: old.lwqLanes.filter((l) => l.laneId !== laneId) };
       });
@@ -496,11 +555,11 @@ export default function MyProcurementPage() {
       toast({ title: "Lane marked as done" });
     },
     onError: (_err, _laneId, ctx) => {
-      if (ctx?.previous) queryClient.setQueryData(["/api/my-procurement"], ctx.previous);
+      if (ctx?.previous) queryClient.setQueryData(procurementQueryKey, ctx.previous);
       toast({ title: "Failed to mark done", variant: "destructive" });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/my-procurement"] });
+      queryClient.invalidateQueries({ queryKey: procurementQueryKey });
     },
   });
 
@@ -508,9 +567,9 @@ export default function MyProcurementPage() {
     mutationFn: (taskId: string) =>
       apiRequest("POST", `/api/my-procurement/award-task/${taskId}/close`).then((r) => r.json()),
     onMutate: async (taskId: string) => {
-      await queryClient.cancelQueries({ queryKey: ["/api/my-procurement"] });
-      const previous = queryClient.getQueryData<MyProcurementData>(["/api/my-procurement"]);
-      queryClient.setQueryData<MyProcurementData>(["/api/my-procurement"], (old) => {
+      await queryClient.cancelQueries({ queryKey: procurementQueryKey });
+      const previous = queryClient.getQueryData<MyProcurementData>(procurementQueryKey);
+      queryClient.setQueryData<MyProcurementData>(procurementQueryKey, (old) => {
         if (!old) return old;
         return { ...old, awardTasks: old.awardTasks.filter((t) => t.taskId !== taskId) };
       });
@@ -520,11 +579,11 @@ export default function MyProcurementPage() {
       toast({ title: "Task closed" });
     },
     onError: (_err, _taskId, ctx) => {
-      if (ctx?.previous) queryClient.setQueryData(["/api/my-procurement"], ctx.previous);
+      if (ctx?.previous) queryClient.setQueryData(procurementQueryKey, ctx.previous);
       toast({ title: "Failed to close task", variant: "destructive" });
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/my-procurement"] });
+      queryClient.invalidateQueries({ queryKey: procurementQueryKey });
     },
   });
 
@@ -542,13 +601,61 @@ export default function MyProcurementPage() {
           <div>
             <h1 className="text-lg md:text-xl font-semibold flex items-center gap-2">
               <Briefcase className="w-5 h-5 text-primary" />
-              My Procurement
+              {isViewingOther && data?.viewing
+                ? `Procurement — ${data.viewing.name}`
+                : "My Procurement"}
             </h1>
             <p className="text-xs md:text-sm text-muted-foreground mt-0.5">
-              All your active procurement work in one place
+              {isViewingOther
+                ? "Read-only view of another rep's procurement queue"
+                : "All your active procurement work in one place"}
             </p>
           </div>
           <div className="flex items-center gap-3">
+            {canViewOthers && (
+              <div className="flex items-center gap-2" data-testid="rep-picker-wrapper">
+                <Eye className="w-4 h-4 text-muted-foreground" />
+                <Select
+                  value={viewingUserId ?? "__self__"}
+                  onValueChange={(v) => setViewing(v === "__self__" ? null : v)}
+                >
+                  <SelectTrigger className="h-8 w-[220px]" data-testid="select-view-rep">
+                    <SelectValue placeholder="Viewing my queue" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__self__" data-testid="option-rep-self">
+                      My queue ({currentUser?.name ?? "me"})
+                    </SelectItem>
+                    {(teamMembersQ.data ?? [])
+                      .filter((u) => u.id !== currentUser?.id)
+                      .sort((a, b) =>
+                        (a.name ?? a.email ?? "").localeCompare(b.name ?? b.email ?? "")
+                      )
+                      .map((u) => (
+                        <SelectItem
+                          key={u.id}
+                          value={u.id}
+                          data-testid={`option-rep-${u.id}`}
+                        >
+                          {u.name ?? u.email ?? u.id}
+                          {u.role ? ` · ${u.role}` : ""}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+                {isViewingOther && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2"
+                    onClick={() => setViewing(null)}
+                    data-testid="btn-clear-view-rep"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </Button>
+                )}
+              </div>
+            )}
             {/* Summary stats */}
             <div className="flex items-center gap-4 text-sm">
               <div className="text-center" data-testid="stat-total">
@@ -709,6 +816,7 @@ export default function MyProcurementPage() {
                     key={lane.laneId}
                     item={lane}
                     onResolve={(id) => resolveMutation.mutate(id)}
+                    readOnly={isViewingOther}
                   />
                 ))}
                 {awardTasks.map((task) => (
@@ -716,6 +824,7 @@ export default function MyProcurementPage() {
                     key={task.taskId}
                     item={task}
                     onClose={(id) => closeMutation.mutate(id)}
+                    readOnly={isViewingOther}
                   />
                 ))}
               </div>
@@ -732,6 +841,7 @@ export default function MyProcurementPage() {
                       key={lane.laneId}
                       item={lane}
                       onResolve={(id) => resolveMutation.mutate(id)}
+                      readOnly={isViewingOther}
                     />
                   ))}
                 </div>
@@ -749,6 +859,7 @@ export default function MyProcurementPage() {
                       key={task.taskId}
                       item={task}
                       onClose={(id) => closeMutation.mutate(id)}
+                      readOnly={isViewingOther}
                     />
                   ))}
                 </div>

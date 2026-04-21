@@ -45,8 +45,40 @@ export function registerMyProcurementRoutes(app: Express) {
    */
   app.get("/api/my-procurement", async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const viewer = await getCurrentUser(req);
+      if (!viewer) return res.status(401).json({ error: "Unauthorized" });
+
+      // Optional ?userId= lets privileged roles view another rep's queue (read-only).
+      // Allowed roles: admin (any user in org), or
+      //   director / sales_director / national_account_manager / logistics_manager
+      //   restricted to users in their reporting chain.
+      const requestedUserId = (req.query.userId as string | undefined) || null;
+      let user = viewer;
+      let viewing: { id: string; name: string; isOther: boolean } | null = null;
+      if (requestedUserId && requestedUserId !== viewer.id) {
+        const VIEWER_ROLES = new Set([
+          "admin",
+          "director",
+          "sales_director",
+          "national_account_manager",
+          "logistics_manager",
+        ]);
+        if (!VIEWER_ROLES.has(viewer.role)) {
+          return res.status(403).json({ error: "Not allowed to view another user's procurement" });
+        }
+        const target = await storage.getUser(requestedUserId);
+        if (!target || target.organizationId !== viewer.organizationId) {
+          return res.status(404).json({ error: "User not found" });
+        }
+        if (viewer.role !== "admin") {
+          const teamIds = await storage.getTeamMemberIds(viewer.id, viewer.organizationId);
+          if (!teamIds.includes(target.id)) {
+            return res.status(403).json({ error: "Target user is not in your team" });
+          }
+        }
+        user = target;
+        viewing = { id: target.id, name: target.name ?? target.email ?? target.id, isOther: true };
+      }
 
       // Pagination params — default page size 50, max 200
       const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? "50"), 10) || 50));
@@ -400,6 +432,7 @@ export function registerMyProcurementRoutes(app: Express) {
         lwqLanes,
         awardTasks,
         triggeredPlays,
+        viewing,
         pagination: {
           limit,
           lwqNextCursor,
