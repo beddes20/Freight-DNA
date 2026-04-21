@@ -24,6 +24,7 @@ import { and, desc, eq, or, inArray, gte, isNull } from "drizzle-orm";
 import { plays, playRuns, freightOpportunities } from "@shared/schema";
 import { evaluatePlayTriggersForOrg } from "./playbook";
 import { performAvailableFreightImport, listAvailableFreightImports, availableFreightSettingKey } from "../availableFreightImporter";
+import { notifyFreightDelegated, notifyFreightApproved } from "../freightOpportunityNotifications";
 import { z } from "zod";
 
 const APPROVER_ROLES = new Set([
@@ -629,6 +630,15 @@ export function registerMyProcurementRoutes(app: Express) {
           targetName: target?.name ?? null,
         },
       });
+      if (updated && target?.id && target.id !== opp.delegatedToUserId) {
+        await notifyFreightDelegated({
+          storage,
+          opportunity: updated,
+          newDelegateUserId: target.id,
+          actorUserId: user.id,
+          actorName: user.name ?? null,
+        });
+      }
       return res.json({ opportunity: updated });
     } catch (err) {
       console.error("[my-procurement/freight-opp/delegate]", err);
@@ -741,6 +751,14 @@ export function registerMyProcurementRoutes(app: Express) {
           note: parsed.data.note ?? null,
         },
       });
+      if (approving && updated && !opp.approvedAt) {
+        await notifyFreightApproved({
+          storage,
+          opportunity: updated,
+          approverUserId: user.id,
+          approverName: user.name ?? null,
+        });
+      }
       return res.json({ opportunity: updated });
     } catch (err) {
       console.error("[my-procurement/freight-opp/approve]", err);
@@ -867,7 +885,7 @@ export function registerMyProcurementRoutes(app: Express) {
           skipped.push({ id, reason: `not_open_status:${opp.status}` });
           continue;
         }
-        await storage.updateFreightOpportunity(user.organizationId, opp.id, {
+        const updatedOpp = await storage.updateFreightOpportunity(user.organizationId, opp.id, {
           approvedAt: now,
           approvedById: user.id,
         });
@@ -877,6 +895,14 @@ export function registerMyProcurementRoutes(app: Express) {
           actorUserId: user.id,
           payload: { approved: true, kind: "bulk_approve" },
         });
+        if (updatedOpp) {
+          await notifyFreightApproved({
+            storage,
+            opportunity: updatedOpp,
+            approverUserId: user.id,
+            approverName: user.name ?? null,
+          });
+        }
         approved.push(opp.id);
       }
       return res.json({ approved, skipped });
