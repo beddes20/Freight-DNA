@@ -410,7 +410,7 @@ function AuthenticatedAppContent({ user, isLoading, handleInactivityLogout }: {
           <AppSidebar />
           <div className="flex flex-col flex-1 overflow-hidden">
             {user?.isImpersonating && (
-              <div className="flex items-center justify-between px-4 py-2 bg-amber-400 text-amber-950 text-sm font-medium shrink-0" data-testid="banner-impersonation">
+              <div className="flex items-center justify-between px-4 py-2 bg-amber-400 dark:bg-amber-600 text-amber-950 dark:text-white text-sm font-medium shrink-0" data-testid="banner-impersonation">
                 <div className="flex items-center gap-2">
                   <UserX className="w-4 h-4" />
                   <span>You are viewing as <strong>{user.name}</strong> ({user.role?.replace(/_/g, " ")})</span>
@@ -418,7 +418,7 @@ function AuthenticatedAppContent({ user, isLoading, handleInactivityLogout }: {
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-7 text-xs border-amber-700 text-amber-900 hover:bg-amber-500"
+                  className="h-7 text-xs border-amber-700 dark:border-amber-200 bg-white dark:bg-amber-900 text-amber-900 dark:text-white hover:bg-amber-100 dark:hover:bg-amber-800 hover:text-amber-950 dark:hover:text-white"
                   onClick={() => stopImpersonatingMutation.mutate()}
                   disabled={stopImpersonatingMutation.isPending}
                   data-testid="button-stop-impersonating"
