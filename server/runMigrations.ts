@@ -2639,6 +2639,39 @@ export async function runMigrations() {
     clientArchive.release();
   }
 
+  // ── (Task #285) Ensure (org_id, thread_id) uniqueness on email_conversation_threads ──
+  // The thread row is conceptually a singleton per (org, thread). The original
+  // migration omitted the unique index, so concurrent ingestion races could
+  // produce duplicates. The backfill job and on-demand materialisation rely
+  // on ON CONFLICT to stay race-safe, so we add it here.
+  const clientEctUniq = await pool.connect();
+  try {
+    // De-dupe any pre-existing duplicates so the unique index can be created.
+    // Keeps the most recently updated row per (org_id, thread_id) and deletes
+    // the rest. Safe in practice: ingestion routinely upserts to the latest.
+    await clientEctUniq.query(`
+      DELETE FROM email_conversation_threads e
+      USING (
+        SELECT id,
+               ROW_NUMBER() OVER (
+                 PARTITION BY org_id, thread_id
+                 ORDER BY updated_at DESC, created_at DESC
+               ) AS rn
+        FROM email_conversation_threads
+      ) d
+      WHERE e.id = d.id AND d.rn > 1
+    `);
+    await clientEctUniq.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_ect_org_thread
+      ON email_conversation_threads(org_id, thread_id)
+    `);
+    console.log("[migrations] uq_ect_org_thread unique index ensured (Task #285)");
+  } catch (err) {
+    console.error("[migrations] uq_ect_org_thread migration error:", err);
+  } finally {
+    clientEctUniq.release();
+  }
+
   const clientManualCache = await pool.connect();
   try {
     await clientManualCache.query(`ALTER TABLE lane_summary_cache ADD COLUMN IF NOT EXISTS is_manual BOOLEAN NOT NULL DEFAULT false`);

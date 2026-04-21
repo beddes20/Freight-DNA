@@ -315,6 +315,25 @@ async function initStripe() {
         storage.preWarmFinancialUploadsCache().catch(() => {});
       }, 5000); // 5-second delay so migrations complete and pool is settled
 
+      // Task #285: One-time-on-startup backfill so any orphan email threads
+      // (messages/signals without an email_conversation_threads row) get
+      // materialised and become assignable. Idempotent across restarts.
+      setTimeout(async () => {
+        try {
+          const { backfillMissingConversationThreads } = await import(
+            "./services/conversationThreadBackfillService"
+          );
+          const result = await backfillMissingConversationThreads();
+          if (result.scanned > 0 || result.inserted > 0) {
+            console.log(
+              `[conv-thread-backfill] startup pass: scanned=${result.scanned} inserted=${result.inserted} (${result.durationMs}ms)`,
+            );
+          }
+        } catch (err) {
+          console.error("[conv-thread-backfill] startup error:", err);
+        }
+      }, 6000);
+
       // Warm lane_summary_cache so the cache-first work-queue path is active
       // before the first rep loads the Lane Work Queue. Runs non-blocking in
       // the background; errors per org are logged but never crash the server.

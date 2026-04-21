@@ -29,6 +29,10 @@ import {
 import { requireAuth, getCurrentUser } from "../auth";
 import { setWaitingState, setPriority } from "../services/conversationWaitingStateService";
 import { assignOwner } from "../services/conversationOwnershipService";
+import {
+  backfillMissingConversationThreads,
+  materializeConversationThreadIfMissing,
+} from "../services/conversationThreadBackfillService";
 
 export function registerConversationsRoutes(app: Express): void {
 
@@ -439,6 +443,14 @@ export function registerConversationsRoutes(app: Express): void {
 
       if (idParam.startsWith("thread:")) {
         threadIdForMessages = idParam.slice("thread:".length);
+        // Task #285: opening an orphan upgrades it to a real conversation row
+        // so the rep can immediately assign owner / waiting state / priority.
+        // Failure here never blocks message reads — viewing always works.
+        try {
+          await materializeConversationThreadIfMissing(user.organizationId, threadIdForMessages);
+        } catch (matErr) {
+          console.error("[conversations] thread materialise error:", matErr);
+        }
       } else {
         const thread = await storage.getEmailConversationThreadById(idParam);
         if (thread && thread.orgId === user.organizationId) {
@@ -602,4 +614,31 @@ export function registerConversationsRoutes(app: Express): void {
       res.status(500).json({ error: "Failed to fetch diagnostic" });
     }
   });
+
+  // ── POST /api/internal/admin/conversations/backfill-missing-threads (Task #285) ──
+  // Materialises an email_conversation_threads row for every (org_id, thread_id)
+  // that has email_messages but no thread record. Idempotent — re-running it
+  // after the initial backfill is a no-op.
+  app.post(
+    "/api/internal/admin/conversations/backfill-missing-threads",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        if (!["admin", "director", "sales_director"].includes(user.role)) {
+          return res.status(403).json({ error: "Admin access required" });
+        }
+
+        const scopeAllOrgs = req.body?.allOrgs === true && user.role === "admin";
+        const result = await backfillMissingConversationThreads({
+          orgId: scopeAllOrgs ? undefined : user.organizationId,
+        });
+        res.json({ ok: true, scope: scopeAllOrgs ? "all_orgs" : "current_org", ...result });
+      } catch (err) {
+        console.error("[conversations] POST /admin/conversations/backfill-missing-threads error:", err);
+        res.status(500).json({ error: "Failed to run backfill" });
+      }
+    },
+  );
 }

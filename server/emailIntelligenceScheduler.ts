@@ -86,7 +86,12 @@ async function runEmailIntelligenceBatch(): Promise<void> {
 
       // ── Conversation thread ownership + waiting state upsert ────────────────
       // Fault-isolated: failure here never interrupts ingestion.
-      if (msg.threadId && msg.orgId && (msg.linkedAccountId || msg.linkedCarrierId)) {
+      // Task #285: previously gated on (linkedAccountId || linkedCarrierId),
+      // which left every unlinked thread without an email_conversation_threads
+      // row and thus surfaced as a synthetic `thread:` orphan in drilldowns.
+      // We now create a thread record for every (org_id, thread_id) so reps
+      // can always assign owners and track waiting state.
+      if (msg.threadId && msg.orgId) {
         try {
           const now = new Date();
           const existing = await storage.getEmailConversationThreadByThreadId(msg.orgId, msg.threadId);
