@@ -3296,9 +3296,20 @@ export const FREIGHT_OPPORTUNITY_EXCLUDED_REASONS = [
 export type FreightOpportunityExcludedReason = typeof FREIGHT_OPPORTUNITY_EXCLUDED_REASONS[number];
 
 export const FREIGHT_OPPORTUNITY_RESPONSE_OUTCOMES = [
+  // Phase 4 canonical outcomes (task #306). Positive interest is bucketed by
+  // urgency horizon so ranking signals can decay appropriately.
+  "interested_now",
+  "interested_few_days",
+  "interested_next_week",
+  "interested_future",
+  "declined",
+  "not_qualified",
+  "no_response",
+  "booked",
+  "do_not_contact_lane",
+  // Legacy values retained for back-compat with rows written before #306.
   "accepted",
   "quoted",
-  "interested_future",
   "passed_busy",
   "passed_rate",
   "passed_lane_fit",
@@ -3316,7 +3327,11 @@ export const FREIGHT_OPPORTUNITY_AUDIT_EVENTS = [
   "carrier_reordered",
   "outreach_queued",
   "outreach_sent",
+  "outreach_blocked",
+  "wave_scheduled",
+  "template_edited",
   "response_recorded",
+  "signal_fed_back",
   "status_changed",
   "expired",
   "cancelled",
@@ -3413,10 +3428,20 @@ export const freightOpportunityCarriers = pgTable("freight_opportunity_carriers"
   excludedReason: text("excluded_reason"),
   outreachLogId: varchar("outreach_log_id").references(() => carrierOutreachLogs.id, { onDelete: "set null" }),
   lastResponseId: varchar("last_response_id"),
+  // Phase 4 — phased-wave + thread-tracking fields. All optional so existing
+  // rows (Phase 2/3) remain valid.
+  wave: integer("wave"),
+  scheduledFor: timestamp("scheduled_for"),
+  sentAt: timestamp("sent_at"),
+  threadId: text("thread_id"),
+  internetMessageId: text("internet_message_id"),
+  lastSendError: text("last_send_error"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
   oppRankIdx: index("freight_opp_carriers_opp_rank_idx").on(t.opportunityId, t.rank),
   carrierCreatedIdx: index("freight_opp_carriers_carrier_created_idx").on(t.carrierId, t.createdAt),
+  scheduledIdx: index("freight_opp_carriers_scheduled_idx").on(t.scheduledFor, t.sentAt),
+  threadIdx: index("freight_opp_carriers_thread_idx").on(t.threadId),
 }));
 export const insertFreightOpportunityCarrierSchema = createInsertSchema(freightOpportunityCarriers)
   .omit({ id: true, createdAt: true });
@@ -3466,6 +3491,40 @@ export const insertFreightOpportunityAuditSchema = createInsertSchema(freightOpp
   });
 export type InsertFreightOpportunityAudit = z.infer<typeof insertFreightOpportunityAuditSchema>;
 export type FreightOpportunityAudit = typeof freightOpportunityAudit.$inferSelect;
+
+/**
+ * freight_outreach_templates — admin-editable email templates per org for the
+ * Phase 4 outreach engine. Two `kind`s are supported (one row each per org):
+ *   - exact_load     — used when an opportunity has a specific shipment.
+ *   - lane_building  — used for future-freight / capacity-development sweeps.
+ *
+ * Templates support `{{variable}}` substitution. Available variables:
+ *   {{carrier_name}}, {{rep_name}}, {{rep_email}}, {{customer_name}},
+ *   {{lane_display}}, {{origin}}, {{destination}}, {{equipment}},
+ *   {{pickup_window}}, {{load_count}}, {{has_history}}, {{history_phrase}}
+ *
+ * Unknown variables render as the empty string so admins cannot break sends
+ * with a typo.
+ */
+export const FREIGHT_OUTREACH_TEMPLATE_KINDS = ["exact_load", "lane_building"] as const;
+export type FreightOutreachTemplateKind = typeof FREIGHT_OUTREACH_TEMPLATE_KINDS[number];
+
+export const freightOutreachTemplates = pgTable("freight_outreach_templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),
+  subject: text("subject").notNull(),
+  body: text("body").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  updatedById: varchar("updated_by_id").references(() => users.id, { onDelete: "set null" }),
+}, (t) => ({
+  orgKindUq: index("freight_outreach_templates_org_kind_uq").on(t.orgId, t.kind),
+}));
+export const insertFreightOutreachTemplateSchema = createInsertSchema(freightOutreachTemplates)
+  .omit({ id: true, updatedAt: true })
+  .extend({ kind: z.enum(FREIGHT_OUTREACH_TEMPLATE_KINDS) });
+export type InsertFreightOutreachTemplate = z.infer<typeof insertFreightOutreachTemplateSchema>;
+export type FreightOutreachTemplate = typeof freightOutreachTemplates.$inferSelect;
 
 // ─── Manager Coaching Mode (Task #301) ──────────────────────────────────────
 // Manager-authored coaching notes tied to a specific Coaching Card item

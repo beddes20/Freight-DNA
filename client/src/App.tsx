@@ -79,6 +79,7 @@ import PlaybookAnalyticsPage from "@/pages/playbook-analytics";
 import AIIntelligencePage from "@/pages/ai-intelligence";
 import ValueIQPage from "@/pages/valueiq";
 import AdminMonitoredMailboxesPage from "@/pages/admin-monitored-mailboxes";
+import AdminFreightOutreachTemplatesPage from "@/pages/admin-freight-outreach-templates";
 import ProfilePage from "@/pages/profile";
 import AiAgentPortal from "@/pages/ai-agent";
 import AiCenterPage from "@/pages/ai-center";
@@ -171,6 +172,7 @@ function Router() {
       <Route path="/admin/users" component={AdminUsers} />
       <Route path="/admin/carriers" component={AdminCarriers} />
       <Route path="/admin/monitored-mailboxes" component={AdminMonitoredMailboxesPage} />
+      <Route path="/admin/freight-outreach-templates" component={AdminFreightOutreachTemplatesPage} />
       <Route path="/reps/:userId" component={RepCustomers} />
       <Route path="/financials" component={Financials} />
       <Route path="/historical-data" component={HistoricalData} />

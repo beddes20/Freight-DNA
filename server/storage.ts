@@ -210,6 +210,10 @@ import {
   freightOpportunityAudit,
   type FreightOpportunityAudit,
   type InsertFreightOpportunityAudit,
+  freightOutreachTemplates,
+  type FreightOutreachTemplate,
+  type InsertFreightOutreachTemplate,
+  type FreightOutreachTemplateKind,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -1054,6 +1058,15 @@ export interface IStorage {
   listFreightOpportunityAudit(opportunityId: string): Promise<FreightOpportunityAudit[]>;
   /** Distinct carrier IDs that received outreach within the given lookback window (cross-lane). */
   getRecentlyContactedCarrierIds(orgId: string, sinceDate: Date): Promise<string[]>;
+
+  // PAFOE Phase 4 — outreach templates + scheduled-wave + thread lookup helpers
+  listFreightOutreachTemplates(orgId: string): Promise<FreightOutreachTemplate[]>;
+  getFreightOutreachTemplate(orgId: string, kind: FreightOutreachTemplateKind): Promise<FreightOutreachTemplate | undefined>;
+  upsertFreightOutreachTemplate(data: InsertFreightOutreachTemplate): Promise<FreightOutreachTemplate>;
+  /** Carrier rows due to send (scheduled_for <= now AND sent_at IS NULL). */
+  listDueScheduledOpportunityCarriers(now: Date, limit?: number): Promise<FreightOpportunityCarrier[]>;
+  /** Find any opportunity-carrier rows whose Outlook thread/message ID matches an inbound reply. */
+  findOpportunityCarriersByThreadOrMessage(orgId: string, opts: { threadId?: string | null; internetMessageId?: string | null }): Promise<FreightOpportunityCarrier[]>;
 }
 
 const pool = new Pool({
@@ -7166,6 +7179,54 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(freightOpportunityAudit)
       .where(eq(freightOpportunityAudit.opportunityId, opportunityId))
       .orderBy(asc(freightOpportunityAudit.createdAt));
+  }
+
+  async listFreightOutreachTemplates(orgId: string): Promise<FreightOutreachTemplate[]> {
+    return db.select().from(freightOutreachTemplates)
+      .where(eq(freightOutreachTemplates.orgId, orgId))
+      .orderBy(asc(freightOutreachTemplates.kind));
+  }
+
+  async getFreightOutreachTemplate(orgId: string, kind: FreightOutreachTemplateKind): Promise<FreightOutreachTemplate | undefined> {
+    const [row] = await db.select().from(freightOutreachTemplates)
+      .where(and(eq(freightOutreachTemplates.orgId, orgId), eq(freightOutreachTemplates.kind, kind)));
+    return row;
+  }
+
+  async upsertFreightOutreachTemplate(data: InsertFreightOutreachTemplate): Promise<FreightOutreachTemplate> {
+    const existing = await this.getFreightOutreachTemplate(data.orgId, data.kind as FreightOutreachTemplateKind);
+    if (existing) {
+      const [row] = await db.update(freightOutreachTemplates)
+        .set({ subject: data.subject, body: data.body, updatedAt: new Date(), updatedById: data.updatedById ?? null })
+        .where(eq(freightOutreachTemplates.id, existing.id))
+        .returning();
+      return row;
+    }
+    const [row] = await db.insert(freightOutreachTemplates).values(data).returning();
+    return row;
+  }
+
+  async listDueScheduledOpportunityCarriers(now: Date, limit = 100): Promise<FreightOpportunityCarrier[]> {
+    return db.select().from(freightOpportunityCarriers)
+      .where(and(
+        isNotNull(freightOpportunityCarriers.scheduledFor),
+        lte(freightOpportunityCarriers.scheduledFor, now),
+        isNull(freightOpportunityCarriers.sentAt),
+      ))
+      .limit(limit);
+  }
+
+  async findOpportunityCarriersByThreadOrMessage(orgId: string, opts: { threadId?: string | null; internetMessageId?: string | null }): Promise<FreightOpportunityCarrier[]> {
+    const conds: SQL[] = [];
+    if (opts.threadId) conds.push(eq(freightOpportunityCarriers.threadId, opts.threadId));
+    if (opts.internetMessageId) conds.push(eq(freightOpportunityCarriers.internetMessageId, opts.internetMessageId));
+    if (conds.length === 0) return [];
+    // Tenant-isolated via the opportunity row
+    const rows = await db.select({ c: freightOpportunityCarriers })
+      .from(freightOpportunityCarriers)
+      .innerJoin(freightOpportunities, eq(freightOpportunities.id, freightOpportunityCarriers.opportunityId))
+      .where(and(eq(freightOpportunities.orgId, orgId), or(...conds)!));
+    return rows.map(r => r.c);
   }
 
   async getRecentlyContactedCarrierIds(orgId: string, sinceDate: Date): Promise<string[]> {

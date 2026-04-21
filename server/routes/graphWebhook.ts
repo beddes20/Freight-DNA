@@ -332,6 +332,25 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
     }
   }
 
+  // PAFOE Phase 4 — match inbound replies back to a freight_opportunity_carriers
+  // row by Outlook thread/message ID and record a structured outcome + signal.
+  try {
+    const { classifyOpportunityReply } = await import("../freightOpportunityOutreachService");
+    const { storage } = await import("../storage");
+    await classifyOpportunityReply(storage, {
+      orgId,
+      conversationId: conversationId ?? null,
+      internetMessageId: providerMessageId,
+      fromEmail,
+      subject,
+      bodyFull,
+      providerMessageId,
+      emailMessageId: null,
+    });
+  } catch (e) {
+    log(`[pafoe-classify] error: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
   if (carrierMatch.confidence === "unmatched" && !accountMatch) {
     log(`Unmatched inbound email: from=${fromEmail} msgId=${providerMessageId} — no carrier or CRM contact found`);
   }
@@ -507,7 +526,7 @@ async function processUserMailboxEmail(params: {
       await storage.upsertEmailConversationThread({
         orgId,
         threadId: conversationId,
-        linkedAccountId: accountMatch.companyId,
+        linkedAccountId: accountMatch?.companyId ?? null,
         linkedCarrierId: null,
         update: { ...update, ownerUserId },
       });
@@ -529,6 +548,22 @@ async function processUserMailboxEmail(params: {
       });
     } catch (e) {
       log(`[user-mailbox] play-outcome classify error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    // PAFOE Phase 4 freight-opportunity classifier (parallel to play-outcome)
+    try {
+      const { classifyOpportunityReply } = await import("../freightOpportunityOutreachService");
+      await classifyOpportunityReply(storage, {
+        orgId,
+        conversationId,
+        internetMessageId: providerMessageId,
+        fromEmail,
+        subject,
+        bodyFull,
+        providerMessageId,
+        emailMessageId: null,
+      });
+    } catch (e) {
+      log(`[user-mailbox] pafoe-classify error: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

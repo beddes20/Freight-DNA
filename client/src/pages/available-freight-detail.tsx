@@ -7,22 +7,67 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   ArrowLeft, AlertTriangle, ShieldAlert, Truck, MapPin, Calendar,
-  Pin, PinOff, ArrowUp, ArrowDown, Search, Info,
+  Pin, PinOff, ArrowUp, ArrowDown, Search, Info, Send, Mail, MessageSquare,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type {
   Company, Carrier, FreightOpportunity, FreightOpportunityCarrier,
   FreightOpportunityAudit, FreightOpportunityBucket,
-  FreightOpportunityExcludedReason,
+  FreightOpportunityExcludedReason, FreightOpportunityResponse,
+  FreightOpportunityResponseOutcome,
 } from "@shared/schema";
+
+type DetailCarrier = FreightOpportunityCarrier & {
+  responses?: FreightOpportunityResponse[];
+  lastResponse?: FreightOpportunityResponse | null;
+};
 
 interface DetailResponse {
   opportunity: FreightOpportunity;
-  carriers: FreightOpportunityCarrier[];
+  carriers: DetailCarrier[];
   audit: FreightOpportunityAudit[];
+}
+
+const OUTCOME_LABELS: Record<string, { label: string; tone: "good" | "warn" | "bad" | "neutral" }> = {
+  interested_now: { label: "Interested now", tone: "good" },
+  interested_few_days: { label: "Interested · few days", tone: "good" },
+  interested_next_week: { label: "Interested · next week", tone: "good" },
+  interested_future: { label: "Future capacity", tone: "good" },
+  booked: { label: "Booked", tone: "good" },
+  declined: { label: "Declined", tone: "bad" },
+  not_qualified: { label: "Not qualified", tone: "bad" },
+  do_not_contact_lane: { label: "Do not contact (lane)", tone: "bad" },
+  no_response: { label: "No response", tone: "neutral" },
+  // legacy
+  accepted: { label: "Accepted", tone: "good" },
+  quoted: { label: "Quoted", tone: "good" },
+  passed_busy: { label: "Passed (busy)", tone: "warn" },
+  passed_rate: { label: "Passed (rate)", tone: "warn" },
+  passed_lane_fit: { label: "Passed (lane fit)", tone: "warn" },
+  passed_other: { label: "Passed", tone: "warn" },
+  auto_no_reply: { label: "No reply", tone: "neutral" },
+};
+
+function OutcomeBadge({ outcome }: { outcome: string }) {
+  const def = OUTCOME_LABELS[outcome] ?? { label: outcome.replace(/_/g, " "), tone: "neutral" as const };
+  const tone = def.tone === "good"
+    ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
+    : def.tone === "bad"
+      ? "bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30"
+      : def.tone === "warn"
+        ? "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30"
+        : "bg-muted text-muted-foreground border-border";
+  return (
+    <Badge variant="outline" className={`text-[10px] ${tone}`} data-testid={`badge-outcome-${outcome}`}>
+      {def.label}
+    </Badge>
+  );
 }
 
 const BUCKET_LABELS: Record<FreightOpportunityBucket, string> = {
@@ -113,26 +158,43 @@ function ExplanationChips({ row }: { row: FreightOpportunityCarrier }) {
 }
 
 function CarrierRow({
-  row, rank, included, onToggleInclude, onPin, onMove, isFirstInBucket, isLastInBucket,
+  row, rank, included, selected, onSelectChange,
+  onToggleInclude, onPin, onMove, onLogOutcome,
+  isFirstInBucket, isLastInBucket,
 }: {
-  row: FreightOpportunityCarrier & { _carrier?: Carrier | null };
+  row: DetailCarrier & { _carrier?: Carrier | null };
   rank: number;
   included: boolean;
+  selected: boolean;
+  onSelectChange: (id: string, sel: boolean) => void;
   onToggleInclude: (id: string, include: boolean) => void;
   onPin: (id: string, pin: boolean) => void;
   onMove: (id: string, dir: -1 | 1) => void;
+  onLogOutcome: (row: DetailCarrier) => void;
   isFirstInBucket: boolean;
   isLastInBucket: boolean;
 }) {
   const carrier = row._carrier ?? null;
   const excluded = !!row.excludedReason;
   const isPinned = row.bucket === "rep_added";
+  const sentAt = row.sentAt ? new Date(row.sentAt) : null;
+  const scheduledFor = row.scheduledFor ? new Date(row.scheduledFor) : null;
 
   return (
     <div
       className={`flex items-start gap-3 px-3 py-2 border-b last:border-b-0 ${excluded ? "opacity-60" : ""}`}
       data-testid={`row-carrier-${row.id}`}
     >
+      <div className="flex items-start pt-1.5 shrink-0">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={(e) => onSelectChange(row.id, e.target.checked)}
+          disabled={excluded || !!sentAt}
+          className="h-4 w-4 rounded border-input"
+          data-testid={`checkbox-select-${row.id}`}
+        />
+      </div>
       <div className="flex flex-col items-center gap-1 shrink-0 w-12">
         <div className="text-xs font-semibold tabular-nums" data-testid={`text-rank-${row.id}`}>
           #{rank}
@@ -173,6 +235,24 @@ function CarrierRow({
               {EXCLUDED_LABELS[row.excludedReason as FreightOpportunityExcludedReason] ?? row.excludedReason}
             </Badge>
           )}
+          {sentAt && (
+            <Badge variant="outline" className="bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/30 text-[10px]" data-testid={`badge-sent-${row.id}`}>
+              <Mail className="h-3 w-3 mr-1" />
+              Sent {sentAt.toLocaleDateString()}{row.wave ? ` · wave ${row.wave}` : ""}
+            </Badge>
+          )}
+          {!sentAt && scheduledFor && (
+            <Badge variant="outline" className="bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/30 text-[10px]" data-testid={`badge-scheduled-${row.id}`}>
+              <Calendar className="h-3 w-3 mr-1" />
+              Scheduled {scheduledFor.toLocaleString()}
+            </Badge>
+          )}
+          {row.lastResponse && <OutcomeBadge outcome={row.lastResponse.outcome} />}
+          {row.lastSendError && (
+            <Badge variant="outline" className="bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30 text-[10px]" title={row.lastSendError}>
+              Send failed
+            </Badge>
+          )}
         </div>
         {row.explanation && (
           <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2" data-testid={`text-explanation-${row.id}`}>
@@ -182,6 +262,18 @@ function CarrierRow({
         <ExplanationChips row={row} />
       </div>
       <div className="flex items-center gap-2 shrink-0">
+        {sentAt && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => onLogOutcome(row)}
+            title="Log carrier response"
+            data-testid={`button-log-outcome-${row.id}`}
+          >
+            <MessageSquare className="h-3.5 w-3.5 mr-1" />
+            Log
+          </Button>
+        )}
         <Button
           size="icon"
           variant="ghost"
@@ -206,11 +298,139 @@ function CarrierRow({
   );
 }
 
+function SendModalBody({
+  oppId, mode, carrierIds, carriersById, opportunityCarriers,
+  draftIndex, setDraftIndex, overrides, setOverrides, scheduleAt, setScheduleAt,
+}: {
+  oppId: string;
+  mode: string;
+  carrierIds: string[];
+  carriersById: Map<string, Carrier>;
+  opportunityCarriers: DetailCarrier[];
+  draftIndex: number;
+  setDraftIndex: (n: number) => void;
+  overrides: Record<string, { subject: string; body: string }>;
+  setOverrides: (fn: (prev: Record<string, { subject: string; body: string }>) => Record<string, { subject: string; body: string }>) => void;
+  scheduleAt: string;
+  setScheduleAt: (s: string) => void;
+}) {
+  const safeIndex = Math.min(draftIndex, Math.max(0, carrierIds.length - 1));
+  const currentRowId = carrierIds[safeIndex];
+  const currentRow = opportunityCarriers.find(r => r.id === currentRowId);
+  const currentCarrier = currentRow ? carriersById.get(currentRow.carrierId) : null;
+
+  const draftQuery = useQuery<{ draft: { subject: string; body: string; toEmail: string | null; templateKind: string } }>({
+    queryKey: ["/api/freight-opportunities", oppId, "carriers", currentRowId, "draft"],
+    enabled: !!currentRowId,
+  });
+
+  const ov = currentRowId ? overrides[currentRowId] : undefined;
+  const subjectValue = ov?.subject ?? draftQuery.data?.draft.subject ?? "";
+  const bodyValue = ov?.body ?? draftQuery.data?.draft.body ?? "";
+
+  return (
+    <div className="space-y-3">
+      <div className="text-xs text-muted-foreground">
+        Template: <span className="font-medium">{mode === "lane_building" ? "Lane-building" : "Exact load"}</span>
+        {" · "}Edits below override the rendered template per-carrier for this send only.
+      </div>
+      {carrierIds.length > 1 && (
+        <div className="flex items-center gap-1 flex-wrap" data-testid="tabs-draft-carriers">
+          {carrierIds.map((rid, i) => {
+            const r = opportunityCarriers.find(x => x.id === rid);
+            const c = r ? carriersById.get(r.carrierId) : null;
+            const edited = !!overrides[rid];
+            return (
+              <Button
+                key={rid}
+                size="sm"
+                variant={i === safeIndex ? "secondary" : "ghost"}
+                className="h-7 text-xs"
+                onClick={() => setDraftIndex(i)}
+                data-testid={`tab-draft-${rid}`}
+              >
+                {c?.name ?? `#${i + 1}`}{edited ? " ●" : ""}
+              </Button>
+            );
+          })}
+        </div>
+      )}
+      {currentRowId && (
+        <>
+          <div className="text-[11px] text-muted-foreground">
+            To: <span className="font-medium">{draftQuery.data?.draft.toEmail ?? (draftQuery.isLoading ? "…" : "(no email on file)")}</span>
+            {currentCarrier && <> · {currentCarrier.name}</>}
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground">Subject</label>
+            <Input
+              value={subjectValue}
+              disabled={draftQuery.isLoading}
+              onChange={(e) => setOverrides(prev => ({
+                ...prev,
+                [currentRowId]: { subject: e.target.value, body: prev[currentRowId]?.body ?? bodyValue },
+              }))}
+              data-testid="input-draft-subject"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground">Body</label>
+            <Textarea
+              rows={10}
+              value={bodyValue}
+              disabled={draftQuery.isLoading}
+              onChange={(e) => setOverrides(prev => ({
+                ...prev,
+                [currentRowId]: { subject: prev[currentRowId]?.subject ?? subjectValue, body: e.target.value },
+              }))}
+              data-testid="textarea-draft-body"
+            />
+            {ov && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-1 h-6 text-[11px]"
+                onClick={() => setOverrides(prev => {
+                  const { [currentRowId]: _drop, ...rest } = prev;
+                  return rest;
+                })}
+                data-testid="button-reset-draft"
+              >
+                Reset to template
+              </Button>
+            )}
+          </div>
+        </>
+      )}
+      <div>
+        <label className="text-xs text-muted-foreground">Schedule (optional)</label>
+        <Input
+          type="datetime-local"
+          value={scheduleAt}
+          onChange={(e) => setScheduleAt(e.target.value)}
+          data-testid="input-schedule-at"
+        />
+        <p className="text-[11px] text-muted-foreground mt-1">
+          Leave blank to send wave 1 immediately. Follow-up waves auto-cascade every 48h until a positive reply lands.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function AvailableFreightDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id!;
   const { toast } = useToast();
   const [carrierSearch, setCarrierSearch] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [sendModalOpen, setSendModalOpen] = useState(false);
+  const [scheduleAt, setScheduleAt] = useState<string>("");
+  const [outcomeRow, setOutcomeRow] = useState<DetailCarrier | null>(null);
+  const [outcomeValue, setOutcomeValue] = useState<FreightOpportunityResponseOutcome>("interested_now");
+  const [outcomeNotes, setOutcomeNotes] = useState("");
+  const [draftIndex, setDraftIndex] = useState(0);
+  const [overrides, setOverrides] = useState<Record<string, { subject: string; body: string }>>({});
 
   const { data, isLoading, isError } = useQuery<DetailResponse>({
     queryKey: ["/api/freight-opportunities", id],
@@ -264,6 +484,57 @@ export default function AvailableFreightDetailPage() {
     },
   });
 
+  const sendMutation = useMutation({
+    mutationFn: async ({ carrierRowIds, scheduleAtIso, overrides: ov }: { carrierRowIds: string[]; scheduleAtIso?: string | null; overrides?: Record<string, { subject: string; body: string }> }) => {
+      const res = await apiRequest("POST", `/api/freight-opportunities/${id}/send`, {
+        carrierRowIds,
+        scheduleAt: scheduleAtIso ?? null,
+        overrides: ov && Object.keys(ov).length > 0 ? ov : undefined,
+      });
+      return res.json() as Promise<{ results: Array<{ carrierName: string; status: string; blockedReason?: string; error?: string }> }>;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities"], exact: false });
+      const sent = data.results.filter(r => r.status === "sent").length;
+      const sched = data.results.filter(r => r.status === "scheduled").length;
+      const blocked = data.results.filter(r => r.status === "blocked" || r.status === "no_email" || r.status === "failed").length;
+      toast({
+        title: sent + sched > 0 ? "Outreach queued" : "No outreach sent",
+        description: `Sent: ${sent}, scheduled: ${sched}, blocked/failed: ${blocked}`,
+        variant: blocked > 0 && sent + sched === 0 ? "destructive" : "default",
+      });
+      setSendModalOpen(false);
+      setSelected(new Set());
+      setScheduleAt("");
+      setOverrides({});
+      setDraftIndex(0);
+    },
+    onError: (err: any) => {
+      toast({ title: "Send failed", description: err?.message ?? "Please try again", variant: "destructive" });
+    },
+  });
+
+  const outcomeMutation = useMutation({
+    mutationFn: async ({ rowId, outcome, notes }: { rowId: string; outcome: string; notes: string }) => {
+      const res = await apiRequest(
+        "POST",
+        `/api/freight-opportunities/${id}/carriers/${rowId}/response`,
+        { outcome, notes: notes || null },
+      );
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities", id] });
+      toast({ title: "Outcome logged" });
+      setOutcomeRow(null);
+      setOutcomeNotes("");
+    },
+    onError: (err: any) => {
+      toast({ title: "Couldn't log outcome", description: err?.message ?? "Please try again", variant: "destructive" });
+    },
+  });
+
   const swapCarrierMutation = useMutation({
     mutationFn: async ({ rowId, otherRowId }: { rowId: string; otherRowId: string }) => {
       const res = await apiRequest(
@@ -311,6 +582,14 @@ export default function AvailableFreightDetailPage() {
 
   const includedCount = carriers.filter(c => !c.excludedReason).length;
   const totalCount = carriers.length;
+  const selectableRows = useMemo(
+    () => carriers.filter(c => !c.excludedReason && !c.sentAt),
+    [carriers],
+  );
+  const sentCount = carriers.filter(c => !!c.sentAt).length;
+  const respondedCount = carriers.filter(c => !!c.lastResponse).length;
+  const positiveCount = carriers.filter(c =>
+    c.lastResponse && (OUTCOME_LABELS[c.lastResponse.outcome]?.tone === "good")).length;
 
   if (isLoading) {
     return (
@@ -444,15 +723,47 @@ export default function AvailableFreightDetailPage() {
                 Grouped into buckets by fit. Excluded carriers stay visible so you can override.
               </CardDescription>
             </div>
-            <div className="relative w-full sm:w-64">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                className="pl-8"
-                placeholder="Filter carriers"
-                value={carrierSearch}
-                onChange={(e) => setCarrierSearch(e.target.value)}
-                data-testid="input-carrier-search"
-              />
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="text-xs text-muted-foreground tabular-nums" data-testid="text-outreach-summary">
+                {sentCount} sent · {respondedCount} replied · {positiveCount} positive
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={selected.size === 0}
+                onClick={() => {
+                  setScheduleAt("");
+                  setSendModalOpen(true);
+                }}
+                data-testid="button-open-send"
+              >
+                <Send className="h-4 w-4 mr-1.5" />
+                Send outreach ({selected.size})
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setSelected(prev => {
+                    if (prev.size === selectableRows.length) return new Set();
+                    return new Set(selectableRows.map(r => r.id));
+                  });
+                }}
+                disabled={selectableRows.length === 0}
+                data-testid="button-select-all"
+              >
+                {selected.size === selectableRows.length && selectableRows.length > 0 ? "Clear" : "Select all"}
+              </Button>
+              <div className="relative w-full sm:w-64">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  className="pl-8"
+                  placeholder="Filter carriers"
+                  value={carrierSearch}
+                  onChange={(e) => setCarrierSearch(e.target.value)}
+                  data-testid="input-carrier-search"
+                />
+              </div>
             </div>
           </div>
         </CardHeader>
@@ -491,6 +802,19 @@ export default function AvailableFreightDetailPage() {
                         row={row}
                         rank={row.rank ?? idx + 1}
                         included={!row.excludedReason}
+                        selected={selected.has(row.id)}
+                        onSelectChange={(rowId, sel) => {
+                          setSelected(prev => {
+                            const next = new Set(prev);
+                            if (sel) next.add(rowId); else next.delete(rowId);
+                            return next;
+                          });
+                        }}
+                        onLogOutcome={(r) => {
+                          setOutcomeRow(r);
+                          setOutcomeValue("interested_now");
+                          setOutcomeNotes("");
+                        }}
                         isFirstInBucket={idx === 0}
                         isLastInBucket={idx === rows.length - 1}
                         onToggleInclude={(carrierRowId, include) => {
@@ -522,6 +846,92 @@ export default function AvailableFreightDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={sendModalOpen} onOpenChange={setSendModalOpen}>
+        <DialogContent data-testid="dialog-send-outreach">
+          <DialogHeader>
+            <DialogTitle>Send outreach</DialogTitle>
+            <DialogDescription>
+              {selected.size} carrier{selected.size === 1 ? "" : "s"} selected. Templates and per-carrier subject/body
+              are rendered server-side. Guardrails are re-checked at send time — anyone newly blocked will be skipped.
+            </DialogDescription>
+          </DialogHeader>
+          <SendModalBody
+            oppId={id}
+            mode={opp.mode}
+            carrierIds={Array.from(selected)}
+            carriersById={carrierById}
+            opportunityCarriers={carriers}
+            draftIndex={draftIndex}
+            setDraftIndex={setDraftIndex}
+            overrides={overrides}
+            setOverrides={setOverrides}
+            scheduleAt={scheduleAt}
+            setScheduleAt={setScheduleAt}
+          />
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setSendModalOpen(false)} data-testid="button-cancel-send">
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                const carrierRowIds = Array.from(selected);
+                const scheduleAtIso = scheduleAt ? new Date(scheduleAt).toISOString() : null;
+                sendMutation.mutate({ carrierRowIds, scheduleAtIso, overrides });
+              }}
+              disabled={sendMutation.isPending || selected.size === 0}
+              data-testid="button-confirm-send"
+            >
+              {sendMutation.isPending ? "Sending…" : scheduleAt ? "Schedule wave" : "Send now"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!outcomeRow} onOpenChange={(o) => !o && setOutcomeRow(null)}>
+        <DialogContent data-testid="dialog-log-outcome">
+          <DialogHeader>
+            <DialogTitle>Log carrier response</DialogTitle>
+            <DialogDescription>
+              Record what this carrier said. Positive outcomes feed back into lane-fit signals; do-not-contact and
+              decline outcomes suppress future outreach on this lane.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Select value={outcomeValue} onValueChange={(v) => setOutcomeValue(v as FreightOpportunityResponseOutcome)}>
+              <SelectTrigger data-testid="select-outcome">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(OUTCOME_LABELS)
+                  .filter(([k]) => ["interested_now","interested_few_days","interested_next_week","interested_future","booked","declined","not_qualified","do_not_contact_lane","no_response"].includes(k))
+                  .map(([k, v]) => (
+                    <SelectItem key={k} value={k} data-testid={`option-outcome-${k}`}>{v.label}</SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+            <Textarea
+              placeholder="Notes (optional)"
+              value={outcomeNotes}
+              onChange={(e) => setOutcomeNotes(e.target.value)}
+              data-testid="textarea-outcome-notes"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setOutcomeRow(null)} data-testid="button-cancel-outcome">Cancel</Button>
+            <Button
+              onClick={() => {
+                if (!outcomeRow) return;
+                outcomeMutation.mutate({ rowId: outcomeRow.id, outcome: outcomeValue, notes: outcomeNotes });
+              }}
+              disabled={outcomeMutation.isPending}
+              data-testid="button-confirm-outcome"
+            >
+              {outcomeMutation.isPending ? "Saving…" : "Save outcome"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {data?.audit && data.audit.length > 0 && (
         <Card>

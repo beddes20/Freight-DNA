@@ -307,6 +307,24 @@ async function initStripe() {
         initConversationArchiveScheduler();
       }, 2000);
 
+      // PAFOE Phase 4 — scheduled-wave dispatcher (every 2 minutes)
+      setTimeout(() => {
+        const tick = async () => {
+          try {
+            const { processDueScheduledWaves } = await import("./freightOpportunityOutreachService");
+            const { storage: s } = await import("./storage");
+            const r = await processDueScheduledWaves(s);
+            if (r.processed > 0) {
+              console.log(`[pafoe-scheduler] processed=${r.processed} sent=${r.sent} blocked=${r.blocked} failed=${r.failed}`);
+            }
+          } catch (e) {
+            console.warn("[pafoe-scheduler] tick error:", e instanceof Error ? e.message : e);
+          }
+        };
+        tick();
+        setInterval(tick, 120_000);
+      }, 6000);
+
       setTimeout(() => {
         startIntelEmailScheduler();
         startEmailIntelligenceScheduler();

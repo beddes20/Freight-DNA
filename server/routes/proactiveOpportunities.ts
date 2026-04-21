@@ -15,8 +15,18 @@ import { storage } from "../storage";
 import { z } from "zod";
 import { loadEffectivePolicy } from "../proactiveOpportunityService";
 import {
+  buildOpportunityDraft,
+  cancelPendingWaves,
+  feedbackToCarrierIntel,
+  getOrSeedTemplate,
+  sendOpportunityWave,
+} from "../freightOpportunityOutreachService";
+import {
   FREIGHT_OPPORTUNITY_MODES,
+  FREIGHT_OPPORTUNITY_RESPONSE_OUTCOMES,
   FREIGHT_OPPORTUNITY_STATUSES,
+  FREIGHT_OUTREACH_TEMPLATE_KINDS,
+  type FreightOutreachTemplateKind,
   type InsertCompanyOutreachPolicy,
 } from "@shared/schema";
 
@@ -98,7 +108,17 @@ export function registerProactiveOpportunityRoutes(app: Express) {
         storage.listFreightOpportunityCarriers(opp.id),
         storage.listFreightOpportunityAudit(opp.id),
       ]);
-      res.json({ opportunity: opp, carriers, audit });
+      // Phase 4: hydrate per-carrier response history so the UI can show
+      // outcomes (last + count) without N follow-up calls.
+      const responsesByRow = await Promise.all(
+        carriers.map(c => storage.listFreightOpportunityResponses(c.id)),
+      );
+      const carriersWithResponses = carriers.map((c, i) => ({
+        ...c,
+        responses: responsesByRow[i],
+        lastResponse: responsesByRow[i][0] ?? null,
+      }));
+      res.json({ opportunity: opp, carriers: carriersWithResponses, audit });
     } catch (err) {
       console.error("[freight-opps] detail error:", err);
       res.status(500).json({ error: "Failed to fetch freight opportunity" });
@@ -197,6 +217,163 @@ export function registerProactiveOpportunityRoutes(app: Express) {
     } catch (err) {
       console.error("[freight-opps] policy get error:", err);
       res.status(500).json({ error: "Failed to fetch outreach policy" });
+    }
+  });
+
+  // ── PHASE 4: TEMPLATES ────────────────────────────────────────────────────
+  // Org-scoped editable templates with safe defaults seeded on first read.
+  app.get("/api/freight-outreach-templates", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const items = await Promise.all(
+        FREIGHT_OUTREACH_TEMPLATE_KINDS.map(k => getOrSeedTemplate(storage, org, k)),
+      );
+      res.json({ items });
+    } catch (err) {
+      console.error("[freight-opps] templates list error:", err);
+      res.status(500).json({ error: "Failed to load templates" });
+    }
+  });
+
+  const templatePutSchema = z.object({
+    subject: z.string().min(1).max(500),
+    body: z.string().min(1).max(20_000),
+  });
+  app.put("/api/freight-outreach-templates/:kind", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const uid = userId(req);
+      // Admin-only: outreach templates are org-wide configuration; reps must
+      // not be able to mutate what every other rep on the team will send.
+      const actor = uid ? await storage.getUser(uid) : null;
+      if (!actor || actor.role !== "admin") {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const kind = String(req.params.kind);
+      if (!(FREIGHT_OUTREACH_TEMPLATE_KINDS as readonly string[]).includes(kind)) {
+        return res.status(400).json({ error: "Invalid template kind" });
+      }
+      const parsed = templatePutSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid template payload", details: parsed.error.flatten() });
+      }
+      const tmpl = await storage.upsertFreightOutreachTemplate({
+        orgId: org,
+        kind: kind as FreightOutreachTemplateKind,
+        subject: parsed.data.subject,
+        body: parsed.data.body,
+        updatedById: uid,
+      });
+      res.json({ template: tmpl });
+    } catch (err) {
+      console.error("[freight-opps] template upsert error:", err);
+      res.status(500).json({ error: "Failed to save template" });
+    }
+  });
+
+  // ── PHASE 4: PER-CARRIER DRAFT PREVIEW (used by the Send modal) ───────────
+  app.get("/api/freight-opportunities/:oppId/carriers/:carrierRowId/draft", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const opp = await storage.getFreightOpportunity(org, String(req.params.oppId));
+      if (!opp) return res.status(404).json({ error: "Opportunity not found" });
+      const carriers = await storage.listFreightOpportunityCarriers(opp.id);
+      const row = carriers.find(c => c.id === String(req.params.carrierRowId));
+      if (!row) return res.status(404).json({ error: "Carrier row not found" });
+      const uid = userId(req);
+      const rep = uid ? await storage.getUser(uid) : null;
+      if (!rep) return res.status(401).json({ error: "Not authenticated" });
+      const draft = await buildOpportunityDraft(storage, opp, row, rep);
+      res.json({ draft });
+    } catch (err) {
+      console.error("[freight-opps] draft error:", err);
+      res.status(500).json({ error: "Failed to build draft" });
+    }
+  });
+
+  // ── PHASE 4: SEND or SCHEDULE A WAVE ──────────────────────────────────────
+  const sendWaveSchema = z.object({
+    carrierRowIds: z.array(z.string().min(1)).min(1).max(100),
+    scheduleAt: z.string().datetime().nullable().optional(),
+    wave: z.number().int().min(1).max(10).optional(),
+    overrides: z.record(z.object({
+      subject: z.string().max(500).optional(),
+      body: z.string().max(20_000).optional(),
+    })).optional(),
+  });
+  app.post("/api/freight-opportunities/:oppId/send", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const uid = userId(req);
+      if (!uid) return res.status(401).json({ error: "Not authenticated" });
+      const rep = await storage.getUser(uid);
+      if (!rep) return res.status(401).json({ error: "Rep not found" });
+      const parsed = sendWaveSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid send payload", details: parsed.error.flatten() });
+      }
+      const out = await sendOpportunityWave(storage, org, String(req.params.oppId), rep, parsed.data);
+      res.json(out);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[freight-opps] send error:", msg);
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // ── PHASE 4: MANUAL OUTCOME OVERRIDE (Phase 3 UI button) ──────────────────
+  const outcomePostSchema = z.object({
+    outcome: z.enum(FREIGHT_OPPORTUNITY_RESPONSE_OUTCOMES),
+    notes: z.string().max(2000).nullable().optional(),
+    quotedRate: z.string().max(50).nullable().optional(),
+  });
+  app.post("/api/freight-opportunities/:oppId/carriers/:carrierRowId/response", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const opp = await storage.getFreightOpportunity(org, String(req.params.oppId));
+      if (!opp) return res.status(404).json({ error: "Opportunity not found" });
+      const carriers = await storage.listFreightOpportunityCarriers(opp.id);
+      const row = carriers.find(c => c.id === String(req.params.carrierRowId));
+      if (!row) return res.status(404).json({ error: "Carrier row not found" });
+      const parsed = outcomePostSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid outcome payload", details: parsed.error.flatten() });
+      }
+      const uid = userId(req);
+      const response = await storage.createFreightOpportunityResponse({
+        opportunityCarrierId: row.id,
+        outcome: parsed.data.outcome,
+        replySource: "manual_log",
+        emailMessageId: null,
+        notes: parsed.data.notes ?? null,
+        recordedById: uid,
+        quotedRate: parsed.data.quotedRate ?? null,
+      });
+      await storage.updateFreightOpportunityCarrier(row.id, { lastResponseId: response.id });
+      // If the rep logged a positive outcome, halt any pending automated waves.
+      if (["interested_now","interested_few_days","interested_next_week","interested_future","booked"].includes(parsed.data.outcome)) {
+        await cancelPendingWaves(storage, opp.id, "positive_response_manual").catch(() => undefined);
+      }
+      await storage.appendFreightOpportunityAudit({
+        opportunityId: opp.id,
+        eventType: "response_recorded",
+        actorUserId: uid,
+        payload: { carrierId: row.carrierId, outcome: parsed.data.outcome, source: "manual" },
+      });
+      // Feed the signal back into ranking (additive, no master-data overwrite)
+      await feedbackToCarrierIntel(storage, {
+        orgId: org,
+        carrierId: row.carrierId,
+        opportunity: opp,
+        outcome: parsed.data.outcome,
+        confidence: 95,
+        sourceNote: parsed.data.notes ?? "Rep-logged outcome",
+        actorUserId: uid,
+      });
+      res.json({ response });
+    } catch (err) {
+      console.error("[freight-opps] response error:", err);
+      res.status(500).json({ error: "Failed to record response" });
     }
   });
 
