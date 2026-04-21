@@ -79,12 +79,6 @@ const laneToolItems: NavItem[] = [
     roles: ["admin", "director", "national_account_manager", "logistics_manager"],
   },
   {
-    title: "Intel",
-    url: "/intel",
-    icon: Radio,
-    roles: ["admin"],
-  },
-  {
     title: "Conversations",
     url: "/conversations",
     icon: MessageSquare,

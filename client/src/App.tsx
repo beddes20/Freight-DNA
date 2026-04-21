@@ -68,7 +68,6 @@ import LmCheckinHistoryPage from "@/pages/lm-checkin-history";
 import { PortletErrorBoundary } from "@/components/portlet-error-boundary";
 import LaneWorkQueuePage from "@/pages/lane-work-queue";
 import MyProcurementPage from "@/pages/my-procurement";
-import IntelPage from "@/pages/intel";
 import ConversationsPage from "@/pages/conversations";
 import ContactSuggestionsPage from "@/pages/contact-suggestions";
 import EmailIntelligencePage from "@/pages/email-intelligence";
@@ -205,7 +204,7 @@ function Router() {
       <Route path="/available-freight" component={AvailableFreightPage} />
       <Route path="/available-freight/:id" component={AvailableFreightDetailPage} />
       <Route path="/my-procurement" component={MyProcurementPage} />
-      <Route path="/intel" component={IntelPage} />
+      <Route path="/intel">{() => { window.location.replace("/valueiq?tab=insights"); return null; }}</Route>
       <Route path="/conversations" component={ConversationsPage} />
       <Route path="/contact-suggestions" component={ContactSuggestionsPage} />
       <Route path="/email-intelligence" component={EmailIntelligencePage} />
