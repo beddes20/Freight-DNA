@@ -43,7 +43,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable, emailMessages, emailSignals, onboardingMilestoneToggleSchema, type OnboardingMilestones } from "@shared/schema";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable, emailMessages, emailSignals, onboardingMilestoneToggleSchema, type OnboardingMilestones, upsertSidebarTooltipSchema } from "@shared/schema";
 import { normalizeLaneLocation, normalizeEquipmentType } from "@shared/laneFormatters";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
@@ -9831,6 +9831,53 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
   registerGeographicResponsibilitiesRoutes(app);
   registerContactGeographySuggestionRoutes(app);
   registerAIIntelligenceRoutes(app);
+
+  // ── Sidebar tooltip overrides (Task #385) ──────────────────────────────
+  app.get("/api/sidebar-tooltips", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const items = await storage.getSidebarTooltips(currentUser.organizationId);
+      res.json({ items });
+    } catch (err: any) {
+      console.error("[sidebar-tooltips GET]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to load sidebar tooltips" });
+    }
+  });
+
+  app.put("/api/sidebar-tooltips", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+      const parsed = upsertSidebarTooltipSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid payload", issues: parsed.error.issues });
+      const { itemKey, description } = parsed.data;
+      const trimmed = description.trim();
+      if (!trimmed) {
+        await storage.deleteSidebarTooltip(currentUser.organizationId, itemKey);
+        return res.json({ deleted: true, itemKey });
+      }
+      const row = await storage.upsertSidebarTooltip(currentUser.organizationId, itemKey, trimmed, currentUser.id);
+      res.json(row);
+    } catch (err: any) {
+      console.error("[sidebar-tooltips PUT]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to save sidebar tooltip" });
+    }
+  });
+
+  app.delete("/api/sidebar-tooltips/:itemKey", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+      await storage.deleteSidebarTooltip(currentUser.organizationId, req.params.itemKey);
+      res.json({ ok: true });
+    } catch (err: any) {
+      console.error("[sidebar-tooltips DELETE]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to reset sidebar tooltip" });
+    }
+  });
 
   return httpServer;
 }

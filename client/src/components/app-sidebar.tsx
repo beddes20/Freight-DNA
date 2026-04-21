@@ -29,6 +29,8 @@ import { useNotificationCounts } from "@/hooks/use-notifications";
 import { NotificationBell } from "@/components/notification-bell";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { SIDEBAR_TOOLTIP_DEFAULT_MAP } from "@/lib/sidebar-tooltip-catalog";
+import type { SidebarTooltip } from "@shared/schema";
 import vtLogoWhite from "@assets/value-truck-logo-white.png";
 
 const SALES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
@@ -211,11 +213,31 @@ function navTooltip(title: string, description: string) {
   };
 }
 
-function NavLink({ item, isActive, badge, badgeColor }: { item: NavItem; isActive: boolean; badge?: number; badgeColor?: "red" | "green" }) {
+function useSidebarTooltipOverrides() {
+  const { user } = useAuth();
+  const { data } = useQuery<{ items: SidebarTooltip[] }>({
+    queryKey: ["/api/sidebar-tooltips"],
+    enabled: !!user,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const map: Record<string, string> = {};
+  for (const t of data?.items ?? []) map[t.itemKey] = t.description;
+  return map;
+}
+
+function resolveDescription(key: string, fallback: string, overrides: Record<string, string>): string {
+  const o = overrides[key];
+  if (typeof o === "string" && o.trim().length > 0) return o;
+  return fallback;
+}
+
+function NavLink({ item, isActive, badge, badgeColor, overrides }: { item: NavItem; isActive: boolean; badge?: number; badgeColor?: "red" | "green"; overrides: Record<string, string> }) {
   const Icon = item.icon;
+  const description = resolveDescription(item.title, item.description, overrides);
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton asChild isActive={isActive} tooltip={navTooltip(item.title, item.description)}>
+      <SidebarMenuButton asChild isActive={isActive} tooltip={navTooltip(item.title, description)}>
         <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(/[\s&]+/g, "-")}`} className="relative">
           <Icon className="h-4 w-4" />
           <span>{item.title}</span>
@@ -271,6 +293,9 @@ export function AppSidebar() {
   const unactionedReplyCount = useUnactionedReplyCount();
   const conversationsWaitingCount = useConversationsWaitingCount();
   const pendingIntelCount = usePendingIntelCount();
+  const tooltipOverrides = useSidebarTooltipOverrides();
+  const desc = (key: string, fallback?: string) =>
+    resolveDescription(key, fallback ?? SIDEBAR_TOOLTIP_DEFAULT_MAP[key] ?? "", tooltipOverrides);
   const { toast } = useToast();
   const [profileOpen, setProfileOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -406,6 +431,7 @@ export function AppSidebar() {
                     item={item}
                     isActive={isActive(item.url)}
                     badge={item.title === "Tasks" ? taskCount : undefined}
+                    overrides={tooltipOverrides}
                   />
                 ))}
             </SidebarMenu>
@@ -417,7 +443,7 @@ export function AppSidebar() {
           <CollapsibleGroup label="Pipeline">
             {pipelineItems
               .filter(item => !item.roles || (user?.role && item.roles.includes(user.role)))
-              .map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
+              .map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} overrides={tooltipOverrides} />)}
           </CollapsibleGroup>
         )}
 
@@ -432,6 +458,7 @@ export function AppSidebar() {
                   key={item.title}
                   item={item}
                   isActive={isActive(item.url)}
+                  overrides={tooltipOverrides}
                   badge={
                     (item.title === "Lane Work Queue" || item.title === "My Procurement")
                       ? unactionedReplyCount
@@ -465,7 +492,7 @@ export function AppSidebar() {
         {(user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager" || user?.role === "sales" || user?.role === "sales_director") && (
           <CollapsibleGroup label={user?.role === "admin" ? "Admin" : "Team"} defaultOpen={false}>
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location === "/admin/users"} tooltip={navTooltip(user?.role === "admin" ? "User Management" : "My Team", "Manage team members and their access.")}>
+                  <SidebarMenuButton asChild isActive={location === "/admin/users"} tooltip={navTooltip(user?.role === "admin" ? "User Management" : "My Team", desc("User Management"))}>
                     <Link href="/admin/users" data-testid="link-admin-users">
                       <Users className="h-4 w-4" />
                       <span>{user?.role === "admin" ? "User Management" : "My Team"}</span>
@@ -474,7 +501,7 @@ export function AppSidebar() {
                 </SidebarMenuItem>
                 {(user?.role === "admin" || user?.role === "director") && (
                   <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={location === "/admin/carriers"} tooltip={navTooltip("Carrier Catalog", "Master list of carriers and their details.")}>
+                    <SidebarMenuButton asChild isActive={location === "/admin/carriers"} tooltip={navTooltip("Carrier Catalog", desc("Carrier Catalog"))}>
                       <Link href="/admin/carriers" data-testid="link-admin-carriers">
                         <Truck className="h-4 w-4" />
                         <span>Carrier Catalog</span>
@@ -484,7 +511,7 @@ export function AppSidebar() {
                 )}
                 {(user?.role === "admin" || user?.role === "director" || user?.role === "sales_director") && (
                   <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={location === "/admin/monitored-mailboxes"} tooltip={navTooltip("Monitored Mailboxes", "Mailboxes the system watches for activity.")}>
+                    <SidebarMenuButton asChild isActive={location === "/admin/monitored-mailboxes"} tooltip={navTooltip("Monitored Mailboxes", desc("Monitored Mailboxes"))}>
                       <Link href="/admin/monitored-mailboxes" data-testid="link-admin-monitored-mailboxes">
                         <MailCheck className="h-4 w-4" />
                         <span>Monitored Mailboxes</span>
@@ -494,7 +521,7 @@ export function AppSidebar() {
                 )}
                 {["admin", "director", "national_account_manager", "sales_director", "logistics_manager"].includes(user?.role ?? "") && (
                   <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={location === "/admin/available-freight/imports"} tooltip={navTooltip("Freight Import Health", "Status of recent freight feed imports.")}>
+                    <SidebarMenuButton asChild isActive={location === "/admin/available-freight/imports"} tooltip={navTooltip("Freight Import Health", desc("Freight Import Health"))}>
                       <Link href="/admin/available-freight/imports" data-testid="link-admin-freight-imports">
                         <Truck className="h-4 w-4" />
                         <span>Freight Import Health</span>
@@ -544,7 +571,7 @@ export function AppSidebar() {
                 {/* Coordinators Corner moved here — role-specific, not main nav */}
                 {["admin", "director", "national_account_manager", "logistics_manager", "logistics_coordinator"].includes(user?.role ?? "") && (
                   <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={location === "/coordinators-corner"} tooltip={navTooltip("Coordinators Corner", "Tools and resources for coordinators.")}>
+                    <SidebarMenuButton asChild isActive={location === "/coordinators-corner"} tooltip={navTooltip("Coordinators Corner", desc("Coordinators Corner"))}>
                       <Link href="/coordinators-corner" data-testid="link-coordinators-corner">
                         <KeyRound className="h-4 w-4" />
                         <span>Coordinators Corner</span>
@@ -554,7 +581,7 @@ export function AppSidebar() {
                 )}
                 {/* PTO Passoff moved here — used infrequently */}
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location === "/pto-passoff"} tooltip={navTooltip("PTO Passoff", "Hand off accounts during time off.")}>
+                  <SidebarMenuButton asChild isActive={location === "/pto-passoff"} tooltip={navTooltip("PTO Passoff", desc("PTO Passoff"))}>
                     <Link href="/pto-passoff" data-testid="link-pto-passoff">
                       <Plane className="h-4 w-4" />
                       <span>PTO Passoff</span>
@@ -563,16 +590,26 @@ export function AppSidebar() {
                 </SidebarMenuItem>
                 {/* Touchpoint History moved here — review tool, not daily nav */}
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location === "/touchpoint-history"} tooltip={navTooltip("Touchpoint History", "Past calls, emails, and customer touches.")}>
+                  <SidebarMenuButton asChild isActive={location === "/touchpoint-history"} tooltip={navTooltip("Touchpoint History", desc("Touchpoint History"))}>
                     <Link href="/touchpoint-history" data-testid="link-touchpoint-history">
                       <Phone className="h-4 w-4" />
                       <span>Touchpoint History</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+                {user?.role === "admin" && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/sidebar-tooltips"} tooltip={navTooltip("Sidebar Tooltips", desc("Sidebar Tooltips"))}>
+                      <Link href="/admin/sidebar-tooltips" data-testid="link-admin-sidebar-tooltips">
+                        <HelpCircle className="h-4 w-4" />
+                        <span>Sidebar Tooltips</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
                 {(user?.role === "admin" || user?.role === "director") && (
                   <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={location === "/feedback-inbox"} tooltip={navTooltip("Feedback Inbox", "User-submitted bugs and feature requests.")}>
+                    <SidebarMenuButton asChild isActive={location === "/feedback-inbox"} tooltip={navTooltip("Feedback Inbox", desc("Feedback Inbox"))}>
                       <Link href="/feedback-inbox" data-testid="link-feedback-inbox">
                         <Inbox className="h-4 w-4" />
                         <span>Feedback Inbox</span>
@@ -614,7 +651,7 @@ export function AppSidebar() {
                 <TooltipContent side="top" align="center">
                   <div className="max-w-[15rem]">
                     <p className="font-medium">Help &amp; Resources</p>
-                    <p className="text-xs text-muted-foreground">Resources, training, and keyboard shortcuts.</p>
+                    <p className="text-xs text-muted-foreground">{desc("Help & Resources")}</p>
                   </div>
                 </TooltipContent>
               </Tooltip>
@@ -634,7 +671,7 @@ export function AppSidebar() {
                 <TooltipContent side="top" align="center">
                   <div className="max-w-[15rem]">
                     <p className="font-medium">My Profile</p>
-                    <p className="text-xs text-muted-foreground">Edit your profile and email signature.</p>
+                    <p className="text-xs text-muted-foreground">{desc("My Profile")}</p>
                   </div>
                 </TooltipContent>
               </Tooltip>
@@ -654,7 +691,7 @@ export function AppSidebar() {
                 <TooltipContent side="top" align="center">
                   <div className="max-w-[15rem]">
                     <p className="font-medium">Sign Out</p>
-                    <p className="text-xs text-muted-foreground">Sign out of your account.</p>
+                    <p className="text-xs text-muted-foreground">{desc("Sign Out")}</p>
                   </div>
                 </TooltipContent>
               </Tooltip>

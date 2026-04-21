@@ -129,6 +129,8 @@ import {
   type CarrierOutreachLog,
   type InsertCarrierOutreachLog,
   featureFlags,
+  sidebarTooltips,
+  type SidebarTooltip,
   type FeatureFlag,
   carrierImportBatches,
   type CarrierImportBatch,
@@ -774,6 +776,9 @@ export interface IStorage {
   // Lane Carrier Outreach v1 — Feature Flags
   getFeatureFlag(orgId: string, flagKey: string): Promise<boolean>;
   setFeatureFlag(orgId: string, flagKey: string, enabled: boolean, updatedById?: string): Promise<void>;
+  getSidebarTooltips(orgId: string): Promise<SidebarTooltip[]>;
+  upsertSidebarTooltip(orgId: string, itemKey: string, description: string, updatedById: string): Promise<SidebarTooltip>;
+  deleteSidebarTooltip(orgId: string, itemKey: string): Promise<void>;
   getEmailLiveModeAcrossOrgs(): Promise<boolean>;
 
   // Lane Carrier Outreach v2 — External Import + Sourcing
@@ -4627,6 +4632,26 @@ export class DatabaseStorage implements IStorage {
         target: [featureFlags.orgId, featureFlags.flagKey],
         set: { enabled, updatedAt: new Date(), updatedById: updatedById ?? null },
       });
+  }
+
+  async getSidebarTooltips(orgId: string): Promise<SidebarTooltip[]> {
+    return db.select().from(sidebarTooltips).where(eq(sidebarTooltips.orgId, orgId));
+  }
+
+  async upsertSidebarTooltip(orgId: string, itemKey: string, description: string, updatedById: string): Promise<SidebarTooltip> {
+    const [row] = await db.insert(sidebarTooltips)
+      .values({ orgId, itemKey, description, updatedById })
+      .onConflictDoUpdate({
+        target: [sidebarTooltips.orgId, sidebarTooltips.itemKey],
+        set: { description, updatedAt: new Date(), updatedById },
+      })
+      .returning();
+    return row;
+  }
+
+  async deleteSidebarTooltip(orgId: string, itemKey: string): Promise<void> {
+    await db.delete(sidebarTooltips)
+      .where(and(eq(sidebarTooltips.orgId, orgId), eq(sidebarTooltips.itemKey, itemKey)));
   }
 
   async getEmailLiveModeAcrossOrgs(): Promise<boolean> {

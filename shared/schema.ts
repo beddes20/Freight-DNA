@@ -1703,6 +1703,28 @@ export const insertFeatureFlagSchema = createInsertSchema(featureFlags).omit({ i
 export type InsertFeatureFlag = z.infer<typeof insertFeatureFlagSchema>;
 export type FeatureFlag = typeof featureFlags.$inferSelect;
 
+// ─── Sidebar Tooltip Overrides (Task #385) ──────────────────────────────────
+// Admins can override the default tooltip copy for sidebar items.
+// itemKey matches the catalog key in client/src/lib/sidebar-tooltip-catalog.ts
+export const sidebarTooltips = pgTable("sidebar_tooltips", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  itemKey: text("item_key").notNull(),
+  description: text("description").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  updatedById: varchar("updated_by_id").references(() => users.id),
+}, (table) => [
+  uniqueIndex("sidebar_tooltips_org_key").on(table.orgId, table.itemKey),
+]);
+export const insertSidebarTooltipSchema = createInsertSchema(sidebarTooltips).omit({ id: true, updatedAt: true });
+export type InsertSidebarTooltip = z.infer<typeof insertSidebarTooltipSchema>;
+export type SidebarTooltip = typeof sidebarTooltips.$inferSelect;
+export const upsertSidebarTooltipSchema = z.object({
+  itemKey: z.string().min(1).max(120),
+  description: z.string().max(500),
+});
+export type UpsertSidebarTooltip = z.infer<typeof upsertSidebarTooltipSchema>;
+
 // ─── Email Intelligence Layer (Task #190) ────────────────────────────────────
 
 export type CustomerIntentType =
