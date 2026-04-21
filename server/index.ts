@@ -318,6 +318,9 @@ async function initStripe() {
       // Task #285: One-time-on-startup backfill so any orphan email threads
       // (messages/signals without an email_conversation_threads row) get
       // materialised and become assignable. Idempotent across restarts.
+      // Task #286: Also start a periodic safety sweep cron so any future
+      // ingestion path that bypasses the inline thread upsert still gets
+      // its orphans rescued within one cadence interval.
       setTimeout(async () => {
         try {
           const { backfillMissingConversationThreads } = await import(
@@ -331,6 +334,14 @@ async function initStripe() {
           }
         } catch (err) {
           console.error("[conv-thread-backfill] startup error:", err);
+        }
+        try {
+          const { initConversationThreadBackfillScheduler } = await import(
+            "./conversationThreadBackfillScheduler"
+          );
+          initConversationThreadBackfillScheduler();
+        } catch (err) {
+          console.error("[conv-thread-backfill-cron] init error:", err);
         }
       }, 6000);
 
