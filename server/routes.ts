@@ -3182,6 +3182,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerCallTrendlineRoutes(app);
   const { registerAgentAdminRoutes } = await import("./routes/agentAdmin");
   registerAgentAdminRoutes(app);
+  const { registerAgentAnalyticsRoutes } = await import("./routes/agentAnalytics");
+  registerAgentAnalyticsRoutes(app);
   const { registerValueIQRoutes } = await import("./routes/valueiq");
   registerValueIQRoutes(app);
   const { registerAccountReviewRoutes } = await import("./routes/accountReviews");

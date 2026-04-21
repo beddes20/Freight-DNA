@@ -35,7 +35,44 @@ export type AgentEvent =
   | { progress: string }
   | { meta: AnswerMeta }
   | { error: string }
+  | { confidence: number; route: string }
   | { done: true };
+
+const HEDGE_PATTERNS = [
+  /i (?:don'?t|do not) (?:know|have)/i,
+  /i'?m not sure/i,
+  /unable to (?:find|determine|confirm)/i,
+  /no (?:data|information|results?)/i,
+  /couldn'?t (?:find|locate)/i,
+  /i don'?t have access/i,
+];
+
+/** Heuristic confidence score: tools called, retrieval not degraded, no hedging. */
+export function deriveRoute(opts: { surfacedAction: boolean; toolsRun: number; lastTool: string | null; hadError: boolean }): string {
+  if (opts.surfacedAction) return `action:${opts.lastTool ?? "unknown"}`;
+  if (opts.toolsRun > 0) return `tools:${opts.lastTool ?? "unknown"}`;
+  if (opts.hadError) return "error";
+  return "chat";
+}
+
+export function deriveOutcome(opts: { hadError: boolean; toolErrors: number; toolsDenied: number; confidence: number }): "error" | "tool_error" | "denied" | "low_confidence" | "ok" {
+  if (opts.hadError) return "error";
+  if (opts.toolErrors > 0) return "tool_error";
+  if (opts.toolsDenied > 0) return "denied";
+  if (opts.confidence < 0.5) return "low_confidence";
+  return "ok";
+}
+
+export function scoreConfidence(opts: { toolsRun: number; toolErrors: number; degraded: boolean; hedged: boolean; hadError: boolean; assistantText: string }): number {
+  if (opts.hadError) return 0.1;
+  let score = 0.65;
+  if (opts.toolsRun > 0) score += 0.2;
+  if (opts.toolErrors > 0) score -= 0.25;
+  if (opts.degraded) score -= 0.15;
+  if (opts.hedged) score -= 0.3;
+  if (opts.assistantText.trim().length < 40 && opts.toolsRun === 0) score -= 0.15;
+  return Math.max(0, Math.min(1, Number(score.toFixed(2))));
+}
 
 export type Emit = (event: AgentEvent) => void;
 
@@ -107,9 +144,13 @@ async function buildContextEnvelope(
   return { envelope: lines.join("\n"), degraded };
 }
 
-export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: agentIdArg, projectId, pageContextBlock }: RunAgentTurnArgs): Promise<{ assistantText: string; hadError: boolean; surfacedAction: boolean; agentId: string; meta: AnswerMeta }> {
+export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: agentIdArg, projectId, pageContextBlock }: RunAgentTurnArgs): Promise<{ assistantText: string; hadError: boolean; surfacedAction: boolean; agentId: string; meta: AnswerMeta; confidence: number; route: string }> {
   let hadError = false;
   let surfacedAction = false;
+  let toolsRun = 0;
+  let toolErrors = 0;
+  let toolsDenied = 0;
+  let lastTool: string | null = null;
   const sources: AnswerMeta["sources"] = [];
   const startedAt = Date.now();
   const client = getAgentOpenAI();
@@ -258,6 +299,8 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
         }
         if (!decision.allowed) {
           toolResultText = `Permission denied for ${tool.capability}: ${decision.reason}. Tell the user this isn't enabled for them yet — they can request access in Settings → AI Assistant.`;
+          toolsDenied++;
+          lastTool = tc.name;
           void logActivity({
             organizationId: ctx.organizationId, userId: ctx.rep.id,
             channel: ctx.channel, conversationRef: ctx.conversationRef,
@@ -269,6 +312,8 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
           const toolStart = Date.now();
           try {
             const result = await tool.execute(ctx, args);
+            toolsRun++;
+            lastTool = tc.name;
             void logActivity({
               organizationId: ctx.organizationId, userId: ctx.rep.id,
               channel: ctx.channel, conversationRef: ctx.conversationRef,
@@ -305,6 +350,8 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             toolResultText = `Tool ${tc.name} failed: ${msg}`;
+            toolErrors++;
+            lastTool = tc.name;
             void logActivity({
               organizationId: ctx.organizationId, userId: ctx.rep.id,
               channel: ctx.channel, conversationRef: ctx.conversationRef,
@@ -329,6 +376,13 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
     model = AGENT_MODELS.fast;
   }
 
+  const hedged = HEDGE_PATTERNS.some((p) => p.test(assistantText));
+  const confidence = scoreConfidence({ toolsRun, toolErrors, degraded, hedged, hadError, assistantText });
+  const route = deriveRoute({ surfacedAction, toolsRun, lastTool, hadError });
+  const outcome = deriveOutcome({ hadError, toolErrors, toolsDenied, confidence });
+
+  try { emit({ confidence, route }); } catch {}
+
   void logActivity({
     organizationId: ctx.organizationId,
     userId: ctx.rep.id,
@@ -338,7 +392,10 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
     summary: `${iterations} iteration(s)`,
     model,
     latencyMs: Date.now() - startedAt,
-    outcome: "ok",
+    outcome,
+    confidence: String(confidence) as any,
+    route,
+    actionOutcome: surfacedAction ? "surfaced" : null,
   });
 
   // Build follow-up suggestions from the assistant's reply.
@@ -351,76 +408,5 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
   };
   if (meta.sources?.length || meta.followUps?.length) emit({ meta });
 
-  return { assistantText, hadError, surfacedAction, agentId, meta };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-function friendlyToolLabel(toolName: string, args: any): string | null {
-  switch (toolName) {
-    case "get_company_details": return `Looking up ${args?.company_name ?? "that account"}…`;
-    case "carrier_lane_search":  return `Searching carriers on ${args?.origin ?? "?"} → ${args?.destination ?? "?"}…`;
-    case "query_national_rates": return "Pulling national market data…";
-    case "query_market_otri":    return `Checking OTRI for ${args?.market ?? "that market"}…`;
-    case "query_lane_signal":    return `Reading lane signal ${args?.origin ?? "?"} → ${args?.destination ?? "?"}…`;
-    case "get_rate_positioning_summary": return "Summarising rate positioning…";
-    case "list_open_tasks":      return "Reading your open tasks…";
-    case "list_recent_touchpoints": return "Pulling recent touchpoints…";
-    case "team_touchpoint_tally": return "Tallying team touchpoints…";
-    case "reps_missing_touchpoints": return "Finding reps with no touchpoints…";
-    case "recall_memory":        return "Searching prior memories…";
-    case "navigate_to_company":  return `Opening ${args?.company_name ?? "the account"}…`;
-    case "log_touchpoint":       return "Drafting touchpoint card…";
-    case "create_task":          return "Drafting task card…";
-    case "complete_task":        return "Looking up that task…";
-    case "mark_meaningful":      return "Finding that touchpoint…";
-    case "remember_this":        return "Saving that to memory…";
-    case "draft_email":          return "Drafting email…";
-    case "open_filtered_queue":  return "Building filtered view…";
-    default: return null;
-  }
-}
-
-function extractCompanyLabel(text: string): string | null {
-  // Tools tend to start their data block with "Account: NAME" or "**NAME**".
-  const m1 = text.match(/^\s*\*\*([^*]+)\*\*/);
-  if (m1) return m1[1].trim();
-  const m2 = text.match(/^\s*Account:\s*(.+?)(?:\n|$)/);
-  if (m2) return m2[1].trim();
-  return null;
-}
-
-function dedupeSources(arr: NonNullable<AnswerMeta["sources"]>) {
-  const seen = new Set<string>();
-  const out: typeof arr = [];
-  for (const s of arr) {
-    const key = `${s.kind}:${s.id ?? s.label}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(s);
-  }
-  return out;
-}
-
-const FOLLOW_UP_PATTERNS: Array<{ test: RegExp; suggestions: string[] }> = [
-  { test: /\bopen tasks?\b/i, suggestions: ["Show overdue ones", "Create a new task"] },
-  { test: /\btouchpoint(s)?\b/i, suggestions: ["Mark the latest meaningful", "Log a new touchpoint"] },
-  { test: /\bcarriers?\b/i, suggestions: ["Show our top 3", "What are we paying them?"] },
-  { test: /\bRFP\b/i, suggestions: ["Which lanes are competitive?", "Suggest a bid strategy"] },
-  { test: /\bOTRI\b|\bmarket\b/i, suggestions: ["Compare to last week", "Show the lane signal"] },
-];
-
-function inferFollowUps(text: string, sources: NonNullable<AnswerMeta["sources"]>): string[] {
-  if (!text) return [];
-  const out = new Set<string>();
-  for (const p of FOLLOW_UP_PATTERNS) {
-    if (p.test.test(text)) p.suggestions.forEach((s) => out.add(s));
-    if (out.size >= 3) break;
-  }
-  if (sources.some((s) => s.kind === "company") && out.size < 3) {
-    out.add("Recommend next actions");
-  }
-  return Array.from(out).slice(0, 3);
+  return { assistantText, hadError, surfacedAction, agentId, meta, confidence, route };
 }

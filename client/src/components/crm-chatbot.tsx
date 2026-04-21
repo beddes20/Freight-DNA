@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Bot, X, Send, Plus, Trash2, ChevronLeft, MessageSquare, Loader2, Lightbulb, CheckCircle2, Globe, Users, Bug, Wrench, Sparkles, ClipboardList, ExternalLink, Phone, Mail, MessageSquareText, MapPin, Check, AlertTriangle, Star, PanelRight, Maximize2, Minimize2 } from "lucide-react";
+import { Bot, X, Send, Plus, Trash2, ChevronLeft, MessageSquare, Loader2, Lightbulb, CheckCircle2, Globe, Users, Bug, Wrench, Sparkles, ClipboardList, ExternalLink, Phone, Mail, MessageSquareText, MapPin, Check, AlertTriangle, Star, PanelRight, Maximize2, Minimize2, ThumbsUp, ThumbsDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -39,6 +39,10 @@ interface ChatMessage {
     failed?: boolean;
   };
   meta?: AnswerMeta;
+  confidence?: number;
+  route?: string;
+  isError?: boolean;
+  feedback?: "up" | "down" | null;
 }
 
 interface NudgesResponse {
@@ -422,6 +426,42 @@ export function CrmChatbot() {
 
   useEffect(() => { scrollToBottom(); }, [localMessages, streamingContent]);
 
+  const recordActionAudit = async (msgId: number, action: NonNullable<ChatMessage["action"]>, result: "success" | "failure" | "dismissed", errorMessage?: string) => {
+    try {
+      await apiRequest("POST", "/api/agent/actions/audit", {
+        conversationRef: activeConvoId ? String(activeConvoId) : null,
+        messageId: typeof msgId === "number" && msgId > 0 && msgId < 1e12 ? msgId : null,
+        tool: action.tool,
+        args: action.args,
+        result,
+        errorMessage: errorMessage ?? null,
+      });
+    } catch { /* non-fatal */ }
+  };
+
+  const submitFeedback = async (msgId: number, rating: "up" | "down", comment?: string) => {
+    try {
+      await apiRequest("POST", "/api/agent/feedback", {
+        conversationRef: activeConvoId ? String(activeConvoId) : null,
+        messageId: typeof msgId === "number" && msgId > 0 && msgId < 1e12 ? msgId : null,
+        rating,
+        comment: comment ?? null,
+      });
+      setLocalMessages(prev => prev.map(m => m.id === msgId ? { ...m, feedback: rating } : m));
+    } catch { /* non-fatal */ }
+  };
+
+  const reportError = async (msgId: number, message: string) => {
+    try {
+      await apiRequest("POST", "/api/agent/error-report", {
+        conversationRef: activeConvoId ? String(activeConvoId) : null,
+        messageId: typeof msgId === "number" && msgId > 0 && msgId < 1e12 ? msgId : null,
+        message,
+      });
+      setLocalMessages(prev => prev.map(m => m.id === msgId ? { ...m, feedback: "down" } : m));
+    } catch { /* non-fatal */ }
+  };
+
   // Handle confirming a pending action (log touchpoint or create task)
   const confirmAction = async (msgId: number, action: NonNullable<ChatMessage["action"]>) => {
     try {
@@ -476,17 +516,24 @@ export function CrmChatbot() {
         m.id === msgId && m.action ? { ...m, action: { ...m.action, confirmed: true } } : m
       ));
       setPendingAction(null);
-    } catch {
+      void recordActionAudit(msgId, action, "success");
+    } catch (err: any) {
+      const errMsg = err instanceof Error ? err.message : String(err ?? "Unknown error");
       setLocalMessages(prev => prev.map(m =>
         m.id === msgId && m.action ? { ...m, action: { ...m.action, failed: true } } : m
       ));
+      void recordActionAudit(msgId, action, "failure", errMsg);
     }
   };
 
   const dismissAction = (msgId: number) => {
-    setLocalMessages(prev => prev.map(m =>
-      m.id === msgId && m.action ? { ...m, action: { ...m.action, confirmed: true } } : m
-    ));
+    setLocalMessages(prev => {
+      const target = prev.find(m => m.id === msgId);
+      if (target?.action) void recordActionAudit(msgId, target.action, "dismissed");
+      return prev.map(m =>
+        m.id === msgId && m.action ? { ...m, action: { ...m.action, confirmed: true } } : m
+      );
+    });
     setPendingAction(null);
   };
 
@@ -537,6 +584,10 @@ export function CrmChatbot() {
       let full = "";
       let detectedAction: { tool: string; args: Record<string, string> } | null = null;
       let detectedMeta: AnswerMeta | null = null;
+      let detectedConfidence: number | undefined;
+      let detectedRoute: string | undefined;
+      let detectedMessageId: number | undefined;
+      let detectedError: string | undefined;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -563,20 +614,43 @@ export function CrmChatbot() {
             if (evt.action) {
               detectedAction = evt.action;
             }
+            if (typeof evt.confidence === "number") {
+              detectedConfidence = evt.confidence;
+              if (typeof evt.route === "string") detectedRoute = evt.route;
+            }
+            if (typeof evt.messageId === "number") {
+              detectedMessageId = evt.messageId;
+            }
+            if (typeof evt.error === "string") {
+              detectedError = evt.error;
+            }
             if (evt.navigate) {
               navigate(evt.navigate);
             }
             if (evt.done) {
-              const assistantMsg: ChatMessage = {
-                id: Date.now() + 1,
-                conversationId: convoId!,
-                role: "assistant",
-                content: full,
-                createdAt: new Date().toISOString(),
-                action: detectedAction || undefined,
-                meta: detectedMeta || undefined,
-              };
-              setLocalMessages((prev) => [...prev, assistantMsg]);
+              if (detectedError && !full.trim()) {
+                setLocalMessages((prev) => [...prev, {
+                  id: Date.now() + 2,
+                  conversationId: convoId!,
+                  role: "assistant",
+                  content: detectedError!,
+                  createdAt: new Date().toISOString(),
+                  isError: true,
+                }]);
+              } else {
+                const assistantMsg: ChatMessage = {
+                  id: detectedMessageId ?? (Date.now() + 1),
+                  conversationId: convoId!,
+                  role: "assistant",
+                  content: full,
+                  createdAt: new Date().toISOString(),
+                  action: detectedAction || undefined,
+                  meta: detectedMeta || undefined,
+                  confidence: detectedConfidence,
+                  route: detectedRoute,
+                };
+                setLocalMessages((prev) => [...prev, assistantMsg]);
+              }
               setStreamingContent("");
               setStreamingMeta(null);
               setProgressLine(null);
@@ -593,6 +667,7 @@ export function CrmChatbot() {
         role: "assistant",
         content: "Sorry, something went wrong. Please try again.",
         createdAt: new Date().toISOString(),
+        isError: true,
       }]);
     } finally {
       setIsStreaming(false);
@@ -1020,8 +1095,10 @@ export function CrmChatbot() {
               {allMessages.map((msg) => (
                 <div key={msg.id} className={cn("flex gap-3", msg.role === "user" && "flex-row-reverse")}>
                   {msg.role === "assistant" && (
-                    <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
-                      <Bot className="h-4 w-4 text-primary" />
+                    <div className={cn("h-7 w-7 rounded-full flex items-center justify-center shrink-0 mt-0.5",
+                      msg.isError ? "bg-red-100 dark:bg-red-950/40" : "bg-primary/10"
+                    )}>
+                      {msg.isError ? <AlertTriangle className="h-4 w-4 text-red-600" /> : <Bot className="h-4 w-4 text-primary" />}
                     </div>
                   )}
                   <div className={cn(
@@ -1029,12 +1106,33 @@ export function CrmChatbot() {
                     mode === "docked" ? "max-w-[290px]" : "max-w-[80%]",
                     msg.role === "user"
                       ? "bg-primary text-primary-foreground rounded-tr-sm"
-                      : "bg-muted rounded-tl-sm"
+                      : msg.isError
+                        ? "bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 rounded-tl-sm"
+                        : "bg-muted rounded-tl-sm"
                   )}>
                     {msg.role === "assistant"
                       ? (
                         <>
-                          <MarkdownText content={msg.content} />
+                          {msg.isError ? (
+                            <div className="space-y-2">
+                              <p className="text-sm font-medium text-red-700 dark:text-red-300">Something went wrong</p>
+                              <p className="text-xs text-red-600 dark:text-red-400">{msg.content}</p>
+                              <div className="flex items-center gap-1.5">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-6 text-[11px] border-red-300 dark:border-red-800"
+                                  onClick={() => reportError(msg.id, msg.content)}
+                                  disabled={msg.feedback === "down"}
+                                  data-testid={`button-report-error-${msg.id}`}
+                                >
+                                  {msg.feedback === "down" ? "Reported" : "Report this"}
+                                </Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <MarkdownText content={msg.content} />
+                          )}
                           {msg.action && (
                             <ActionCard
                               action={msg.action}
@@ -1048,6 +1146,32 @@ export function CrmChatbot() {
                               onFollowUp={(t) => sendMessage(t)}
                               onSource={(href) => navigate(href)}
                             />
+                          )}
+                          {!msg.isError && msg.role === "assistant" && msg.content && (
+                            <div className="flex items-center gap-1.5 mt-2 pt-1.5 border-t border-border/40">
+                              {typeof msg.confidence === "number" && msg.confidence < 0.5 && (
+                                <span className="inline-flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-400 mr-auto" data-testid={`badge-low-confidence-${msg.id}`}>
+                                  <AlertTriangle className="h-3 w-3" /> Low confidence — try rephrasing
+                                </span>
+                              )}
+                              {(typeof msg.confidence !== "number" || msg.confidence >= 0.5) && <span className="mr-auto" />}
+                              <button
+                                title="Helpful"
+                                onClick={() => submitFeedback(msg.id, "up")}
+                                className={cn("p-1 rounded hover:bg-background", msg.feedback === "up" && "text-green-600")}
+                                data-testid={`button-thumbs-up-${msg.id}`}
+                              >
+                                <ThumbsUp className="h-3 w-3" />
+                              </button>
+                              <button
+                                title="Not helpful"
+                                onClick={() => submitFeedback(msg.id, "down")}
+                                className={cn("p-1 rounded hover:bg-background", msg.feedback === "down" && "text-red-600")}
+                                data-testid={`button-thumbs-down-${msg.id}`}
+                              >
+                                <ThumbsDown className="h-3 w-3" />
+                              </button>
+                            </div>
                           )}
                         </>
                       )

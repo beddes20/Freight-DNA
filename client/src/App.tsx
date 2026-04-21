@@ -41,6 +41,7 @@ import LandingPage from "@/pages/landing";
 import PrivacyPage from "@/pages/privacy";
 import TermsPage from "@/pages/terms";
 import AdminUsers from "@/pages/admin-users";
+import AdminCopilotAnalyticsPage from "@/pages/admin-copilot-analytics";
 import AdminCarriers from "@/pages/admin-carriers";
 import RepCustomers from "@/pages/rep-customers";
 import Financials from "@/pages/financials";
@@ -171,6 +172,7 @@ function Router() {
       <Route path="/carrier-hub" component={CarrierHub} />
       <Route path="/research-tasks" component={ResearchTasks} />
       <Route path="/admin/users" component={AdminUsers} />
+      <Route path="/admin/copilot-analytics" component={AdminCopilotAnalyticsPage} />
       <Route path="/admin/carriers" component={AdminCarriers} />
       <Route path="/admin/monitored-mailboxes" component={AdminMonitoredMailboxesPage} />
       <Route path="/admin/freight-outreach-templates" component={AdminFreightOutreachTemplatesPage} />

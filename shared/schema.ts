@@ -2819,6 +2819,13 @@ export const agentActivity = pgTable(
     latencyMs: integer("latency_ms"),
     outcome: text("outcome").notNull().default("ok"),
     errorMessage: text("error_message"),
+    // Task #360 — analytics enrichment
+    confidence: decimal("confidence", { precision: 4, scale: 3 }),
+    sourceIds: text("source_ids").array(),
+    route: text("route"),
+    actionOutcome: text("action_outcome"),
+    feedbackRating: text("feedback_rating"),
+    messageId: integer("message_id"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
@@ -2826,8 +2833,61 @@ export const agentActivity = pgTable(
     index("agent_activity_org_idx").on(table.organizationId, table.createdAt),
     index("agent_activity_tool_idx").on(table.tool),
     index("agent_activity_company_idx").on(table.relatedCompanyId),
+    index("agent_activity_outcome_idx").on(table.organizationId, table.outcome, table.createdAt),
+    index("agent_activity_message_idx").on(table.messageId),
   ],
 );
+
+// ─── Task #360: Per-turn feedback (thumbs up/down + optional comment) ─────
+export const copilotFeedback = pgTable(
+  "copilot_feedback",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    conversationRef: text("conversation_ref"),
+    messageId: integer("message_id"),
+    rating: text("rating").notNull(),
+    comment: text("comment"),
+    capturedAt: timestamp("captured_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("copilot_feedback_org_idx").on(t.organizationId, t.capturedAt),
+    index("copilot_feedback_user_idx").on(t.userId, t.capturedAt),
+    index("copilot_feedback_msg_idx").on(t.messageId),
+  ],
+);
+export const insertCopilotFeedbackSchema = createInsertSchema(copilotFeedback).omit({ id: true, capturedAt: true });
+export type InsertCopilotFeedback = z.infer<typeof insertCopilotFeedbackSchema>;
+export type CopilotFeedback = typeof copilotFeedback.$inferSelect;
+
+// ─── Task #360: Action audit (every confirmed action card execution) ─────
+export const copilotActions = pgTable(
+  "copilot_actions",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    confirmedByUserId: varchar("confirmed_by_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    conversationRef: text("conversation_ref"),
+    messageId: integer("message_id"),
+    tool: text("tool").notNull(),
+    args: jsonb("args"),
+    result: text("result").notNull().default("success"),
+    errorMessage: text("error_message"),
+    relatedCompanyId: varchar("related_company_id"),
+    relatedContactId: varchar("related_contact_id"),
+    completedAt: timestamp("completed_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("copilot_actions_org_idx").on(t.organizationId, t.completedAt),
+    index("copilot_actions_user_idx").on(t.confirmedByUserId, t.completedAt),
+    index("copilot_actions_company_idx").on(t.relatedCompanyId, t.completedAt),
+    index("copilot_actions_tool_idx").on(t.tool),
+  ],
+);
+export const insertCopilotActionSchema = createInsertSchema(copilotActions).omit({ id: true, completedAt: true });
+export type InsertCopilotAction = z.infer<typeof insertCopilotActionSchema>;
+export type CopilotAction = typeof copilotActions.$inferSelect;
 export const insertAgentActivitySchema = createInsertSchema(agentActivity).omit({ id: true, createdAt: true });
 export type InsertAgentActivity = z.infer<typeof insertAgentActivitySchema>;
 export type AgentActivity = typeof agentActivity.$inferSelect;

@@ -637,6 +637,8 @@ export function registerChatbotRoutes(app: Express): void {
       let assistantText = "";
       let hadError = false;
       let surfacedAction = false;
+      let confidence: number | undefined;
+      let route: string | undefined;
 
       if (routed.handled) {
         assistantText = routed.assistantText || "";
@@ -665,19 +667,44 @@ export function registerChatbotRoutes(app: Express): void {
         assistantText = result.assistantText;
         hadError = result.hadError;
         surfacedAction = result.surfacedAction;
+        confidence = (result as any).confidence;
+        route = (result as any).route;
       }
 
       // Only persist an assistant message if the turn produced something
       // meaningful. Skip on transport errors (no empty bubbles) but keep a
       // placeholder when the agent surfaced an action card without prose.
       const persisted = assistantText.trim() || (surfacedAction ? "(action proposed)" : "");
+      let assistantMsgId: number | null = null;
       if (!hadError && persisted) {
-        await db.insert(chatMessages).values({
+        const [inserted] = await db.insert(chatMessages).values({
           conversationId,
           role: "assistant",
           content: persisted,
           createdAt: new Date().toISOString(),
-        });
+        }).returning();
+        assistantMsgId = inserted?.id ?? null;
+        if (assistantMsgId) {
+          // Back-fill the messageId on the most recent turn_complete row so
+          // analytics / feedback can pivot from the chat bubble.
+          try {
+            const { agentActivity } = await import("@shared/schema");
+            const recent = await db.select({ id: agentActivity.id })
+              .from(agentActivity)
+              .where(and(
+                eq(agentActivity.conversationRef, String(conversationId)),
+                eq(agentActivity.userId, user.id),
+                eq(agentActivity.direction, "turn_complete"),
+              ))
+              .orderBy(desc(agentActivity.createdAt))
+              .limit(1);
+            if (recent[0]) {
+              await db.update(agentActivity)
+                .set({ messageId: assistantMsgId })
+                .where(eq(agentActivity.id, recent[0].id));
+            }
+          } catch (e) { /* non-fatal */ }
+        }
       }
 
       if (!hadError && history.length <= 1) {
@@ -685,6 +712,10 @@ export function registerChatbotRoutes(app: Express): void {
         await db.update(chatConversations).set({ title: shortTitle }).where(eq(chatConversations.id, conversationId));
       }
 
+      // Surface the assistant message id so the client can wire feedback.
+      if (assistantMsgId) {
+        res.write(`data: ${JSON.stringify({ messageId: assistantMsgId })}\n\n`);
+      }
       res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
       res.end();
     } catch (err: any) {

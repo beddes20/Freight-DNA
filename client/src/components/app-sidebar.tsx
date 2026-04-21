@@ -439,6 +439,16 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
+                {user?.role === "admin" && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/copilot-analytics"}>
+                      <Link href="/admin/copilot-analytics" data-testid="link-copilot-analytics">
+                        <Activity className="h-4 w-4" />
+                        <span>Copilot Analytics</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
                 {/* AI Center — single consolidated entry point for all AI management
                     (agents, approvals, pods, adapters, admin). Replaces the previous
                     four separate sidebar entries. ValueIQ stays its own rep workspace. */}
