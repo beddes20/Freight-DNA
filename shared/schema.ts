@@ -3206,3 +3206,34 @@ export const playOutcomes = pgTable(
   ],
 );
 export type PlayOutcome = typeof playOutcomes.$inferSelect;
+
+// Auto Weekly Account Reviews. One row per (rep, company, weekOf). Body is the
+// rendered markdown one-pager; sections holds the structured inputs the
+// composer used so we can re-render or audit.
+export const accountReviews = pgTable(
+  "account_reviews",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    repUserId: varchar("rep_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+    weekOf: text("week_of").notNull(),
+    body: text("body").notNull(),
+    sections: jsonb("sections"),
+    sourceSnapshots: jsonb("source_snapshots"),
+    libraryItemId: varchar("library_item_id"),
+    followUpThreadId: varchar("follow_up_thread_id"),
+    generatedBy: text("generated_by").notNull().default("scheduled"),
+    rating: integer("rating"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("account_reviews_rep_company_week_idx").on(table.repUserId, table.companyId, table.weekOf),
+    index("account_reviews_company_idx").on(table.companyId, table.weekOf),
+    index("account_reviews_rep_idx").on(table.repUserId, table.weekOf),
+    index("account_reviews_org_idx").on(table.organizationId, table.weekOf),
+  ],
+);
+export const insertAccountReviewSchema = createInsertSchema(accountReviews).omit({ id: true, createdAt: true });
+export type InsertAccountReview = z.infer<typeof insertAccountReviewSchema>;
+export type AccountReview = typeof accountReviews.$inferSelect;

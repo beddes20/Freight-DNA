@@ -8,7 +8,7 @@ import { sql } from "drizzle-orm";
 import { db } from "../storage";
 import { embed } from "./memory";
 
-export type LibraryKind = "memory" | "file" | "thread" | "fact";
+export type LibraryKind = "memory" | "file" | "thread" | "fact" | "account-review";
 
 export interface AddLibraryItemArgs {
   organizationId: string;

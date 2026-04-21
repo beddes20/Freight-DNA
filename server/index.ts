@@ -14,6 +14,7 @@ import { initHealthAlertScheduler } from "./healthAlertScheduler";
 import { initValueIQTodayScheduler } from "./valueiqTodayScheduler";
 import { initPtoReturnScheduler } from "./ptoReturnScheduler";
 import { initWeeklyGoalRecapScheduler } from "./weeklyGoalRecapScheduler";
+import { initWeeklyAccountReviewScheduler } from "./weeklyAccountReviewScheduler";
 import { initLmCheckinScheduler } from "./lmCheckinScheduler";
 import { initNbaPhase1Scheduler } from "./nbaPhase1Scheduler";
 import { initMarketSignalScheduler } from "./marketSignalScheduler";
@@ -292,6 +293,7 @@ async function initStripe() {
       initValueIQTodayScheduler().catch((e) => console.error("[valueiq-today] init error:", e));
       initPtoReturnScheduler();
       initWeeklyGoalRecapScheduler();
+      initWeeklyAccountReviewScheduler();
       initLmCheckinScheduler();
 
       setTimeout(() => {

@@ -192,6 +192,9 @@ import {
   type InsertWebexUserToken,
   apiResponseCache,
   type ApiResponseCache,
+  accountReviews,
+  type AccountReview,
+  type InsertAccountReview,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -626,6 +629,14 @@ export interface IStorage {
 
   // Account Growth Score
   upsertGrowthScore(data: import('../shared/schema').InsertAccountGrowthScore): Promise<import('../shared/schema').AccountGrowthScore>;
+  // ── Account Reviews (Auto Weekly Account Review) ─────────────────────────
+  upsertAccountReview(data: InsertAccountReview): Promise<AccountReview>;
+  getAccountReviewById(id: string, organizationId: string): Promise<AccountReview | undefined>;
+  getAccountReviewByKey(repUserId: string, companyId: string, weekOf: string): Promise<AccountReview | undefined>;
+  getAccountReviewsByCompany(companyId: string, organizationId: string, limit?: number): Promise<AccountReview[]>;
+  getAccountReviewsByRep(repUserId: string, organizationId: string, weekOf?: string, limit?: number): Promise<AccountReview[]>;
+  rateAccountReview(id: string, organizationId: string, rating: number | null): Promise<AccountReview | undefined>;
+
   getGrowthScore(companyId: string): Promise<import('../shared/schema').AccountGrowthScore | undefined>;
   getGrowthScoresByOrg(organizationId: string, companyIds: string[]): Promise<import('../shared/schema').AccountGrowthScore[]>;
 
@@ -6931,6 +6942,65 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(apiResponseCache)
       .where(eq(apiResponseCache.source, source))
       .orderBy(desc(apiResponseCache.fetchedAt));
+  }
+
+  // ── Account Reviews ────────────────────────────────────────────────────────
+  async upsertAccountReview(data: InsertAccountReview): Promise<AccountReview> {
+    const [row] = await db.insert(accountReviews).values(data)
+      .onConflictDoUpdate({
+        target: [accountReviews.repUserId, accountReviews.companyId, accountReviews.weekOf],
+        set: {
+          body: data.body,
+          sections: data.sections ?? null,
+          sourceSnapshots: data.sourceSnapshots ?? null,
+          libraryItemId: data.libraryItemId ?? null,
+          generatedBy: data.generatedBy ?? "scheduled",
+        },
+      })
+      .returning();
+    return row;
+  }
+
+  async getAccountReviewById(id: string, organizationId: string): Promise<AccountReview | undefined> {
+    const [row] = await db.select().from(accountReviews)
+      .where(and(eq(accountReviews.id, id), eq(accountReviews.organizationId, organizationId)))
+      .limit(1);
+    return row;
+  }
+
+  async getAccountReviewByKey(repUserId: string, companyId: string, weekOf: string): Promise<AccountReview | undefined> {
+    const [row] = await db.select().from(accountReviews)
+      .where(and(
+        eq(accountReviews.repUserId, repUserId),
+        eq(accountReviews.companyId, companyId),
+        eq(accountReviews.weekOf, weekOf),
+      ))
+      .limit(1);
+    return row;
+  }
+
+  async getAccountReviewsByCompany(companyId: string, organizationId: string, limit = 8): Promise<AccountReview[]> {
+    return db.select().from(accountReviews)
+      .where(and(eq(accountReviews.companyId, companyId), eq(accountReviews.organizationId, organizationId)))
+      .orderBy(desc(accountReviews.weekOf))
+      .limit(limit);
+  }
+
+  async getAccountReviewsByRep(repUserId: string, organizationId: string, weekOf?: string, limit = 50): Promise<AccountReview[]> {
+    const conds = [eq(accountReviews.repUserId, repUserId), eq(accountReviews.organizationId, organizationId)];
+    if (weekOf) conds.push(eq(accountReviews.weekOf, weekOf));
+    return db.select().from(accountReviews)
+      .where(and(...conds))
+      .orderBy(desc(accountReviews.weekOf), desc(accountReviews.createdAt))
+      .limit(limit);
+  }
+
+  async rateAccountReview(id: string, organizationId: string, rating: number | null): Promise<AccountReview | undefined> {
+    const [row] = await db.update(accountReviews)
+      .set({ rating })
+      .where(and(eq(accountReviews.id, id), eq(accountReviews.organizationId, organizationId)))
+      .returning();
+    return row;
   }
 
   async cleanExpiredApiCache(): Promise<number> {

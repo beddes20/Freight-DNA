@@ -17,10 +17,12 @@ import {
   Package,
   DollarSign,
   Percent,
+  Sparkles,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import type { Company, Contact, User } from "@shared/schema";
 import { matchRepName, fmtMoney } from "@/lib/rep-utils";
+import { useAuth } from "@/hooks/use-auth";
 
 type SafeUser = Omit<User, "password">;
 
@@ -161,7 +163,7 @@ export default function RepCustomers() {
     queryFn: async () => {
       if (!rep) return [];
       const params = new URLSearchParams({ period });
-      if ((rep as any).financialRepId) params.set("repId", (rep as any).financialRepId);
+      if (rep.financialRepId) params.set("repId", rep.financialRepId);
       params.set("repName", rep.name);
       const res = await fetch(`/api/financials/salesperson-accounts?${params}`, { credentials: "include" });
       if (!res.ok) return [];
@@ -170,6 +172,18 @@ export default function RepCustomers() {
     enabled: isSalesRep && !!rep,
   });
   const directReports = allUsers.filter((u) => u.managerId === userId).sort((a, b) => a.name.localeCompare(b.name));
+
+  const { user: viewer } = useAuth();
+  const canManagerView = !!viewer && viewer.id !== userId
+    && (viewer.role === "admin" || viewer.role === "director" || viewer.role === "national_account_manager" || viewer.role === "sales_director" || viewer.id === rep?.managerId);
+
+  const { data: repReviews = [] } = useQuery<Array<{
+    id: string; companyId: string; weekOf: string; body: string;
+    companyName: string | null; rating: number | null; createdAt: string;
+  }>>({
+    queryKey: ["/api/account-reviews/rep", userId],
+    enabled: !!userId && !!canManagerView,
+  });
 
   const repCompanies = companies.filter((c) => c.assignedTo === userId).sort((a, b) => a.name.localeCompare(b.name));
   const filtered = repCompanies.filter((c) =>
@@ -289,6 +303,35 @@ export default function RepCustomers() {
                 </Link>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {canManagerView && repReviews.length > 0 && (
+        <div data-testid="section-manager-account-reviews">
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2 mb-3">
+            <Sparkles className="h-4 w-4" />
+            Recent Account Reviews ({repReviews.length})
+          </h2>
+          <div className="grid gap-2">
+            {repReviews.slice(0, 16).map((rv) => (
+              <Link
+                key={rv.id}
+                href={`/companies/${rv.companyId}?tab=reviews`}
+                className="flex items-start justify-between p-3 rounded-lg border border-border bg-muted/20 hover-elevate"
+                data-testid={`row-rep-review-${rv.id}`}
+              >
+                <div className="min-w-0 pr-3">
+                  <p className="text-sm font-medium truncate">{rv.companyName ?? "Account"}</p>
+                  <p className="text-xs text-muted-foreground">Week of {rv.weekOf}</p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {rv.rating === 1 && <Badge variant="default" className="text-xs">👍</Badge>}
+                  {rv.rating === -1 && <Badge variant="destructive" className="text-xs">👎</Badge>}
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                </div>
+              </Link>
+            ))}
           </div>
         </div>
       )}

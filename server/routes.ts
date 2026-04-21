@@ -3179,6 +3179,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerAgentAdminRoutes(app);
   const { registerValueIQRoutes } = await import("./routes/valueiq");
   registerValueIQRoutes(app);
+  const { registerAccountReviewRoutes } = await import("./routes/accountReviews");
+  registerAccountReviewRoutes(app);
 
   // Org corpus indexer — nightly reindex + admin trigger.
   {

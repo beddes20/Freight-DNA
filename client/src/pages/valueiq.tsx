@@ -43,7 +43,11 @@ interface AgentRow { id: string; slug: string; name: string; description: string
 interface ProjectRow { id: string; name: string; pinnedContext: string | null; }
 interface ThreadRow { id: string; title: string; pinned: boolean; archivedAt: string | null; lastMessageAt: string | null; createdAt: string; defaultAgentId: string | null; projectId: string | null; }
 interface MessageRow { id: string; role: string; content: string; agentName: string | null; rating: number | null; createdAt: string; }
-interface LibraryRow { id: string; kind: string; title: string; body: string | null; createdAt: string; }
+interface LibraryRow { id: string; kind: string; title: string; body: string | null; createdAt: string; metadata?: Record<string, unknown> | null; }
+
+interface AccountReviewThreadMessage {
+  id: string; role: "user" | "assistant" | "system"; content: string; createdAt: string;
+}
 
 function useTabFromUrl(): [string, (t: string) => void] {
   const [location, setLocation] = useLocation();
@@ -538,24 +542,166 @@ function LibraryPane() {
             <div className="space-y-2 pr-2">
               {filtered.length === 0 && <div className="text-sm text-muted-foreground py-8 text-center">No items yet.</div>}
               {filtered.map(it => (
-                <div key={it.id} className="border rounded-md p-3" data-testid={`library-item-${it.id}`}>
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="font-medium text-sm truncate">{it.title}</span>
-                        <Badge variant="outline" className="text-xs">{it.kind}</Badge>
+                it.kind === "account-review"
+                  ? <AccountReviewLibraryItem key={it.id} item={it} onDelete={() => del.mutate(it.id)} />
+                  : (
+                    <div key={it.id} className="border rounded-md p-3" data-testid={`library-item-${it.id}`}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-medium text-sm truncate">{it.title}</span>
+                            <Badge variant="outline" className="text-xs">{it.kind}</Badge>
+                          </div>
+                          {it.body && <div className="text-sm text-muted-foreground whitespace-pre-wrap line-clamp-3">{it.body}</div>}
+                          <div className="text-xs text-muted-foreground mt-1">{new Date(it.createdAt).toLocaleString()}</div>
+                        </div>
+                        <Button size="icon" variant="ghost" onClick={() => del.mutate(it.id)} data-testid={`button-lib-del-${it.id}`}><Trash2 className="h-3 w-3" /></Button>
                       </div>
-                      {it.body && <div className="text-sm text-muted-foreground whitespace-pre-wrap line-clamp-3">{it.body}</div>}
-                      <div className="text-xs text-muted-foreground mt-1">{new Date(it.createdAt).toLocaleString()}</div>
                     </div>
-                    <Button size="icon" variant="ghost" onClick={() => del.mutate(it.id)} data-testid={`button-lib-del-${it.id}`}><Trash2 className="h-3 w-3" /></Button>
-                  </div>
-                </div>
+                  )
               ))}
             </div>
           </ScrollArea>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// ─── Account Review library card ───────────────────────────────────────────
+// Opens the review inline with its full body, company/week metadata, and an
+// inline follow-up thread that reuses /api/account-reviews/:id/follow-up.
+function AccountReviewLibraryItem({ item, onDelete }: { item: LibraryRow; onDelete: () => void }) {
+  const { toast } = useToast();
+  const [expanded, setExpanded] = useState(false);
+  const [followUp, setFollowUp] = useState("");
+
+  const meta = (item.metadata ?? {}) as {
+    companyId?: string;
+    weekOf?: string;
+    repName?: string;
+    accountReviewId?: string;
+  };
+
+  // Resolve the canonical account review id from the library metadata. If the
+  // writer didn't stamp it we fall back to looking it up by (companyId, weekOf).
+  const reviewQ = useQuery<{ id: string; followUpThreadId: string | null } | null>({
+    queryKey: ["/api/account-reviews/lookup-from-library", item.id, meta.accountReviewId, meta.companyId, meta.weekOf],
+    enabled: expanded,
+    queryFn: async () => {
+      if (meta.accountReviewId) return { id: meta.accountReviewId, followUpThreadId: null };
+      if (!meta.companyId) return null;
+      const rows = await fetch(`/api/account-reviews/company/${meta.companyId}`, { credentials: "include" }).then(r => r.json());
+      if (!Array.isArray(rows)) return null;
+      const match = rows.find((r: { weekOf?: string }) => r.weekOf === meta.weekOf) || rows[0];
+      return match ? { id: match.id, followUpThreadId: match.followUpThreadId ?? null } : null;
+    },
+  });
+  const reviewId = reviewQ.data?.id ?? null;
+
+  const threadQ = useQuery<{ threadId: string | null; messages: AccountReviewThreadMessage[] }>({
+    queryKey: ["/api/account-reviews", reviewId, "follow-up"],
+    enabled: !!reviewId && expanded,
+    queryFn: async () => fetch(`/api/account-reviews/${reviewId}/follow-up`, { credentials: "include" }).then(r => r.json()),
+  });
+
+  const followUpMut = useMutation({
+    mutationFn: async (message: string) => apiRequest("POST", `/api/account-reviews/${reviewId}/follow-up`, { message }),
+    onSuccess: () => {
+      setFollowUp("");
+      queryClient.invalidateQueries({ queryKey: ["/api/account-reviews", reviewId, "follow-up"] });
+      toast({ title: "Agent replied in thread" });
+    },
+    onError: (e: unknown) => toast({ title: "Follow-up failed", description: e instanceof Error ? e.message : String(e), variant: "destructive" }),
+  });
+
+  const conversation = (threadQ.data?.messages ?? [])
+    .slice()
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
+    .slice(1); // drop the seeded review body
+
+  return (
+    <div className="border rounded-md p-3" data-testid={`library-item-${item.id}`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <span className="font-medium text-sm">{item.title}</span>
+            <Badge variant="outline" className="text-xs">account review</Badge>
+            {meta.weekOf && <Badge variant="secondary" className="text-xs">Week of {meta.weekOf}</Badge>}
+            {meta.repName && <Badge variant="outline" className="text-xs">{meta.repName}</Badge>}
+          </div>
+          {!expanded && item.body && (
+            <div className="text-sm text-muted-foreground whitespace-pre-wrap line-clamp-3">{item.body}</div>
+          )}
+          <div className="text-xs text-muted-foreground mt-1">{new Date(item.createdAt).toLocaleString()}</div>
+        </div>
+        <div className="flex items-center gap-1">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setExpanded(v => !v)}
+            data-testid={`button-lib-open-${item.id}`}
+          >
+            {expanded ? "Close" : "Open"}
+          </Button>
+          <Button size="icon" variant="ghost" onClick={onDelete} data-testid={`button-lib-del-${item.id}`}>
+            <Trash2 className="h-3 w-3" />
+          </Button>
+        </div>
+      </div>
+      {expanded && (
+        <div className="mt-3 space-y-3" data-testid={`library-review-detail-${item.id}`}>
+          {item.body && (
+            <pre
+              className="whitespace-pre-wrap text-sm font-sans leading-relaxed border-t pt-3"
+              data-testid={`library-review-body-${item.id}`}
+            >
+              {item.body}
+            </pre>
+          )}
+          <div className="border-t pt-3 space-y-2">
+            <div className="text-xs font-medium text-muted-foreground">Follow-up thread</div>
+            {reviewQ.isLoading && <div className="text-xs text-muted-foreground">Loading…</div>}
+            {!reviewQ.isLoading && !reviewId && (
+              <div className="text-xs text-muted-foreground">Could not resolve the linked review.</div>
+            )}
+            {conversation.length > 0 && (
+              <div className="space-y-2">
+                {conversation.map(m => (
+                  <div
+                    key={m.id}
+                    className={`text-sm rounded-md p-2 whitespace-pre-wrap ${m.role === "user" ? "bg-muted/50" : "bg-primary/5"}`}
+                    data-testid={`lib-thread-msg-${m.id}`}
+                  >
+                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-0.5">
+                      {m.role === "user" ? "You" : "Agent"}
+                    </div>
+                    {m.content}
+                  </div>
+                ))}
+              </div>
+            )}
+            <Textarea
+              rows={2}
+              placeholder="Ask a follow-up about this review…"
+              value={followUp}
+              onChange={e => setFollowUp(e.target.value)}
+              disabled={!reviewId}
+              data-testid={`input-lib-follow-up-${item.id}`}
+            />
+            <div className="flex justify-end">
+              <Button
+                size="sm"
+                disabled={!reviewId || !followUp.trim() || followUpMut.isPending}
+                onClick={() => followUpMut.mutate(followUp.trim())}
+                data-testid={`button-lib-follow-up-${item.id}`}
+              >
+                {followUpMut.isPending ? "Asking…" : "Ask follow-up"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

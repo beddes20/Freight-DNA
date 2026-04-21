@@ -68,6 +68,7 @@ import { RelationshipFreightCompanyPortlet } from "@/components/relationship-fre
 import { OutlookComposeDialog } from "@/components/outlook-compose-dialog";
 import { OverviewTab } from "./company-detail/tabs/OverviewTab";
 import { ActivityTab } from "./company-detail/tabs/ActivityTab";
+import { AccountReviewsTab } from "./company-detail/tabs/AccountReviewsTab";
 import { IntelTab } from "./company-detail/tabs/IntelTab";
 import { PeopleTab } from "./company-detail/tabs/PeopleTab";
 import { RfpTab } from "./company-detail/tabs/RfpTab";
@@ -833,13 +834,14 @@ export default function CompanyDetail() {
       )}
 
       <Tabs value={detailTab} onValueChange={(t) => { setDetailTab(t); localStorage.setItem("cd_tab", t); }}>
-        <TabsList className="w-full flex md:grid md:grid-cols-6 mb-1 overflow-x-auto no-scrollbar">
+        <TabsList className="w-full flex md:grid md:grid-cols-7 mb-1 overflow-x-auto no-scrollbar">
           <TabsTrigger value="overview" className="flex-shrink-0" data-testid="tab-detail-overview">Overview</TabsTrigger>
           <TabsTrigger value="activity" className="flex-shrink-0" data-testid="tab-detail-activity">Activity</TabsTrigger>
           <TabsTrigger value="intelligence" className="flex-shrink-0" data-testid="tab-detail-intelligence">Intel</TabsTrigger>
           <TabsTrigger value="people" className="flex-shrink-0" data-testid="tab-detail-people">People</TabsTrigger>
           <TabsTrigger value="opportunities" className="flex-shrink-0" data-testid="tab-detail-opportunities"><span className="md:hidden">Opps</span><span className="hidden md:inline">Opportunities</span></TabsTrigger>
           <TabsTrigger value="rfp" className="flex-shrink-0" data-testid="tab-detail-rfp"><span className="md:hidden">RFP</span><span className="hidden md:inline">RFP & Lanes</span></TabsTrigger>
+          <TabsTrigger value="reviews" className="flex-shrink-0" data-testid="tab-detail-reviews"><span className="md:hidden">Reviews</span><span className="hidden md:inline">Account Reviews</span></TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4 mt-2">
@@ -974,6 +976,10 @@ export default function CompanyDetail() {
               setContactDialogOpen(true);
             }}
           />
+        </TabsContent>
+
+        <TabsContent value="reviews" className="space-y-4 mt-2">
+          <AccountReviewsTab companyId={companyId} companyName={company!.name} />
         </TabsContent>
       </Tabs>
 

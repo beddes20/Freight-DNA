@@ -3135,4 +3135,38 @@ export async function runMigrations() {
   } finally {
     clientValueIQToday.release();
   }
+
+  // ── account_reviews + follow_up_thread_id (Task #299) ──
+  // Auto Weekly Account Review storage. Idempotent CREATE TABLE + ALTER for
+  // the follow-up thread reference column.
+  const clientAR = await pool.connect();
+  try {
+    await clientAR.query(`
+      CREATE TABLE IF NOT EXISTS account_reviews (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        rep_user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        week_of text NOT NULL,
+        body text NOT NULL,
+        sections jsonb,
+        source_snapshots jsonb,
+        library_item_id varchar,
+        follow_up_thread_id varchar,
+        generated_by text NOT NULL DEFAULT 'scheduled',
+        rating integer,
+        created_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientAR.query(`ALTER TABLE account_reviews ADD COLUMN IF NOT EXISTS follow_up_thread_id varchar`);
+    await clientAR.query(`CREATE UNIQUE INDEX IF NOT EXISTS account_reviews_rep_company_week_idx ON account_reviews(rep_user_id, company_id, week_of)`);
+    await clientAR.query(`CREATE INDEX IF NOT EXISTS account_reviews_company_idx ON account_reviews(company_id, week_of)`);
+    await clientAR.query(`CREATE INDEX IF NOT EXISTS account_reviews_rep_idx ON account_reviews(rep_user_id, week_of)`);
+    await clientAR.query(`CREATE INDEX IF NOT EXISTS account_reviews_org_idx ON account_reviews(organization_id, week_of)`);
+    console.log("[migrations] account_reviews table + follow_up_thread_id column ensured (Task #299)");
+  } catch (err) {
+    console.error("[migrations] account_reviews migration error:", err);
+  } finally {
+    clientAR.release();
+  }
 }
