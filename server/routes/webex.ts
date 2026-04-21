@@ -1834,6 +1834,122 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
+  /**
+   * GET /api/webex/usage-report/rep-calls
+   * Drill-down for the Phone Usage rep-ranking row. Returns the individual
+   * Webex call touchpoints attributed to a single rep within the same
+   * date range + team-scope filter the user already has applied on the
+   * Phone Usage page (Task #329).
+   *
+   * Query params:
+   *   userId    — required, the rep whose calls to list
+   *   range     — "today" | "7d" | "30d" | "90d" (matches usage-report)
+   *   managerId — optional team scope; if set, the rep must belong to it
+   */
+  app.get("/api/webex/usage-report/rep-calls", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "sales_director", "director", "national_account_manager"].includes(user.role)) {
+        return res.status(403).json({ error: "Access restricted to leadership roles" });
+      }
+
+      const userId = String(req.query.userId ?? "").trim();
+      if (!userId) return res.status(400).json({ error: "userId is required" });
+
+      const range = String(req.query.range ?? "7d");
+      const managerId = (req.query.managerId as string | undefined) || null;
+      const rangeDays = range === "today" ? 1 : range === "30d" ? 30 : range === "90d" ? 90 : 7;
+      const now = Date.now();
+      let startMs: number;
+      if (range === "today") {
+        const d = new Date(now);
+        d.setHours(0, 0, 0, 0);
+        startMs = d.getTime();
+      } else {
+        startMs = now - rangeDays * 24 * 3600 * 1000;
+      }
+
+      // Confirm the rep exists in this org and respect the team filter when set.
+      const orgUsers = await storage.getUsers(user.organizationId);
+      const rep = orgUsers.find(u => u.id === userId);
+      if (!rep) return res.status(404).json({ error: "Rep not found in this organization" });
+      if (managerId && rep.managerId !== managerId && rep.id !== managerId) {
+        return res.status(403).json({ error: "Rep is outside the selected team" });
+      }
+
+      // Pull the rep's call-type touchpoints in the window. We use the
+      // existing per-user fetch to avoid scanning every org touchpoint.
+      const sinceISO = new Date(startMs).toISOString();
+      const repTps = await storage.getTouchpointsByUser(userId, sinceISO);
+      const callTps = repTps.filter(tp =>
+        tp.type === "call" &&
+        typeof tp.notes === "string" &&
+        tp.notes.includes("[Webex CDR:") &&
+        Date.parse(tp.createdAt) >= startMs &&
+        Date.parse(tp.createdAt) <= now,
+      );
+
+      // Hydrate company + contact display names in batched lookups. Resolve
+      // contacts by their actual contactId (not by company) so reassigned
+      // contacts still display the right name even if they no longer belong
+      // to the company on the touchpoint.
+      const companyIds = Array.from(new Set(callTps.map(tp => tp.companyId).filter((v): v is string => !!v)));
+      const contactIds = Array.from(new Set(callTps.map(tp => tp.contactId).filter((v): v is string => !!v)));
+
+      const companies = companyIds.length > 0
+        ? await storage.getCompaniesByIds(companyIds, user.organizationId)
+        : [];
+      const companyById = new Map(companies.map(c => [c.id, c] as const));
+
+      const resolvedContacts = contactIds.length > 0
+        ? await Promise.all(contactIds.map(id => storage.getContact(id)))
+        : [];
+      const contactById = new Map(
+        resolvedContacts
+          .filter((c): c is NonNullable<typeof c> => !!c)
+          .map(c => [c.id, c] as const),
+      );
+
+      // Notes format: "[Webex CDR: <id>] <Direction> call with <name> (<num>), duration: <min> min."
+      const calls = callTps
+        .map(tp => {
+          const notes = tp.notes ?? "";
+          const cdrMatch = notes.match(/\[Webex CDR:\s*([^\]]+)\]/);
+          const dirMatch = notes.match(/\b(Inbound|Outbound)\b/i);
+          const durMatch = notes.match(/duration:\s*(\d+)\s*min/i);
+          const company = tp.companyId ? companyById.get(tp.companyId) ?? null : null;
+          const contact = tp.contactId ? contactById.get(tp.contactId) ?? null : null;
+          return {
+            touchpointId: tp.id,
+            cdrId: cdrMatch?.[1] ?? null,
+            timestamp: tp.createdAt,
+            direction: (dirMatch?.[1] ?? "").toLowerCase() as "inbound" | "outbound" | "",
+            durationMinutes: durMatch ? parseInt(durMatch[1], 10) : null,
+            companyId: tp.companyId,
+            companyName: company?.name ?? null,
+            contactId: tp.contactId,
+            contactName: contact?.name ?? null,
+            sentiment: tp.sentiment ?? null,
+          };
+        })
+        .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
+
+      res.json({
+        userId,
+        repName: rep.name || rep.username || "Rep",
+        range,
+        startISO: new Date(startMs).toISOString(),
+        endISO: new Date(now).toISOString(),
+        totalCalls: calls.length,
+        calls,
+      });
+    } catch (err) {
+      log(`Rep call drill-down error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: "Failed to load rep call detail" });
+    }
+  });
+
   app.post("/api/webex/presence-batch", requireAuth, async (req: Request, res: Response) => {
     try {
       if (!webexCredentialsConfigured()) {

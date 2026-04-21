@@ -1,12 +1,21 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Phone, PhoneIncoming, PhoneOutgoing, Clock, Users,
   TrendingUp, TrendingDown, AlertCircle, Trophy, Moon,
+  ChevronRight, ExternalLink,
 } from "lucide-react";
 
 type Rep = {
@@ -74,10 +83,183 @@ function HeatmapCell({ value, max }: { value: number; max: number }) {
   );
 }
 
+type RepCall = {
+  touchpointId: string;
+  cdrId: string | null;
+  timestamp: string;
+  direction: "inbound" | "outbound" | "";
+  durationMinutes: number | null;
+  companyId: string | null;
+  companyName: string | null;
+  contactId: string | null;
+  contactName: string | null;
+  sentiment: string | null;
+};
+
+type RepCallsResponse = {
+  userId: string;
+  repName: string;
+  range: string;
+  startISO: string;
+  endISO: string;
+  totalCalls: number;
+  calls: RepCall[];
+};
+
+function formatTimestamp(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function RepCallsDialog({
+  rep,
+  range,
+  managerId,
+  open,
+  onOpenChange,
+}: {
+  rep: Rep | null;
+  range: string;
+  managerId: string;
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+}) {
+  const enabled = open && !!rep;
+  const { data, isLoading, error } = useQuery<RepCallsResponse>({
+    queryKey: ["/api/webex/usage-report/rep-calls", rep?.userId ?? "", range, managerId],
+    queryFn: async () => {
+      const qs = new URLSearchParams({ userId: rep!.userId, range });
+      if (managerId !== "all") qs.set("managerId", managerId);
+      const res = await fetch(`/api/webex/usage-report/rep-calls?${qs.toString()}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled,
+  });
+
+  const rangeLabel = RANGES.find(r => r.value === range)?.label ?? range;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col" data-testid="dialog-rep-calls">
+        <DialogHeader>
+          <DialogTitle data-testid="text-dialog-title">
+            {rep?.name ?? "Rep"} — Calls ({rangeLabel})
+          </DialogTitle>
+          <DialogDescription>
+            {data
+              ? `${data.totalCalls} Webex call${data.totalCalls === 1 ? "" : "s"} in the selected window.`
+              : "Loading call history…"}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex-1 overflow-auto">
+          {isLoading && (
+            <div className="space-y-2 py-2" data-testid="state-rep-calls-loading">
+              {[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-10 w-full" />)}
+            </div>
+          )}
+
+          {error && !isLoading && (
+            <div className="flex flex-col items-center justify-center py-10 gap-3" data-testid="state-rep-calls-error">
+              <AlertCircle className="h-8 w-8 text-destructive" />
+              <p className="text-sm text-muted-foreground">Failed to load this rep's calls.</p>
+            </div>
+          )}
+
+          {data && !isLoading && data.calls.length === 0 && (
+            <p className="text-sm text-muted-foreground text-center py-10" data-testid="text-no-rep-calls">
+              No Webex calls attributed to this rep in the selected window.
+            </p>
+          )}
+
+          {data && !isLoading && data.calls.length > 0 && (
+            <table className="w-full text-sm" data-testid="table-rep-calls">
+              <thead>
+                <tr className="border-b border-border sticky top-0 bg-background">
+                  <th className="text-left py-2 pr-3 text-xs font-medium text-muted-foreground">When</th>
+                  <th className="text-left py-2 pr-3 text-xs font-medium text-muted-foreground">Direction</th>
+                  <th className="text-left py-2 pr-3 text-xs font-medium text-muted-foreground">Contact / Account</th>
+                  <th className="text-right py-2 pr-3 text-xs font-medium text-muted-foreground">Duration</th>
+                  <th className="py-2 text-xs font-medium text-muted-foreground"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/50">
+                {data.calls.map(call => {
+                  const isInbound = call.direction === "inbound";
+                  const isOutbound = call.direction === "outbound";
+                  const dirIcon = isInbound
+                    ? <PhoneIncoming className="h-3.5 w-3.5 text-blue-500" />
+                    : isOutbound
+                    ? <PhoneOutgoing className="h-3.5 w-3.5 text-emerald-500" />
+                    : <Phone className="h-3.5 w-3.5 text-muted-foreground" />;
+                  const dirLabel = isInbound ? "Inbound" : isOutbound ? "Outbound" : "—";
+                  return (
+                    <tr key={call.touchpointId} data-testid={`row-rep-call-${call.touchpointId}`}>
+                      <td className="py-2 pr-3 whitespace-nowrap text-foreground" data-testid={`text-call-time-${call.touchpointId}`}>
+                        {formatTimestamp(call.timestamp)}
+                      </td>
+                      <td className="py-2 pr-3" data-testid={`text-call-direction-${call.touchpointId}`}>
+                        <span className="inline-flex items-center gap-1.5 text-xs">
+                          {dirIcon}
+                          {dirLabel}
+                        </span>
+                      </td>
+                      <td className="py-2 pr-3" data-testid={`text-call-party-${call.touchpointId}`}>
+                        <div className="flex flex-col">
+                          <span className="text-foreground">{call.contactName ?? "Unknown contact"}</span>
+                          {call.companyName && (
+                            <span className="text-xs text-muted-foreground">{call.companyName}</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-2 pr-3 text-right text-muted-foreground whitespace-nowrap" data-testid={`text-call-duration-${call.touchpointId}`}>
+                        {call.durationMinutes != null ? `${call.durationMinutes} min` : "—"}
+                      </td>
+                      <td className="py-2 text-right">
+                        {call.companyId ? (
+                          <Link
+                            href={`/companies/${call.companyId}`}
+                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                            data-testid={`link-call-company-${call.touchpointId}`}
+                          >
+                            Open <ExternalLink className="h-3 w-3" />
+                          </Link>
+                        ) : (
+                          // Touchpoints can lack a company in edge cases — fall back to
+                          // the touchpoint history page so every row stays linkable.
+                          <Link
+                            href={`/touchpoint-history?focus=${call.touchpointId}`}
+                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                            data-testid={`link-call-touchpoint-${call.touchpointId}`}
+                          >
+                            View <ExternalLink className="h-3 w-3" />
+                          </Link>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function PhoneUsagePage() {
   const { user } = useAuth();
   const [range, setRange] = useState<typeof RANGES[number]["value"]>("7d");
   const [teamFilter, setTeamFilter] = useState<string>("all");
+  const [drillRep, setDrillRep] = useState<Rep | null>(null);
 
   const { data, isLoading, error } = useQuery<UsageReport>({
     queryKey: ["/api/webex/usage-report", range, teamFilter],
@@ -316,12 +498,34 @@ export default function PhoneUsagePage() {
                         : isDown
                         ? "text-muted-foreground"
                         : "text-muted-foreground";
+                      // Drop-off rows have count=0 but still warrant a drill-down so
+                      // leaders can confirm "yep, truly zero calls in window."
+                      const canDrill = true;
                       return (
-                        <tr key={rep.userId} data-testid={`row-rep-${rep.userId}`}>
+                        <tr
+                          key={rep.userId}
+                          onClick={() => canDrill && setDrillRep(rep)}
+                          onKeyDown={(e) => {
+                            if (!canDrill) return;
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              setDrillRep(rep);
+                            }
+                          }}
+                          tabIndex={canDrill ? 0 : -1}
+                          role={canDrill ? "button" : undefined}
+                          aria-label={canDrill ? `View calls for ${rep.name}` : undefined}
+                          title={canDrill ? "View this rep's calls" : "No calls in selected window"}
+                          className={canDrill ? "cursor-pointer hover:bg-muted/50 focus:bg-muted/50 outline-none" : ""}
+                          data-testid={`row-rep-${rep.userId}`}
+                        >
                           <td className="py-2.5 pr-4">
                             <div className="flex items-center gap-2">
                               {i === 0 && rep.count > 0 && <Trophy className="h-3.5 w-3.5 text-amber-500 shrink-0" />}
                               <span className="font-medium text-foreground">{rep.name}</span>
+                              {canDrill && (
+                                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60 ml-0.5" aria-hidden="true" />
+                              )}
                               {rep.flag === "spike" && (
                                 <Badge variant="outline" className="text-[10px] border-emerald-500 text-emerald-600 dark:text-emerald-400" data-testid={`badge-spike-${rep.userId}`}>
                                   spike
@@ -361,6 +565,14 @@ export default function PhoneUsagePage() {
           </Card>
         </>
       )}
+
+      <RepCallsDialog
+        rep={drillRep}
+        range={range}
+        managerId={teamFilter}
+        open={!!drillRep}
+        onOpenChange={(next) => { if (!next) setDrillRep(null); }}
+      />
     </div>
   );
 }
