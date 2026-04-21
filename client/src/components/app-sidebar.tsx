@@ -18,6 +18,7 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
 import { SignatureEditor } from "@/components/signature-editor";
 import { WebexMyConnection } from "@/components/webex-my-connection";
@@ -37,81 +38,91 @@ type NavItem = {
   title: string;
   url: string;
   icon: LucideIcon;
+  description: string;
   roles?: string[];
   badge?: number;
 };
 
 const navItems: NavItem[] = [
-  { title: "Dashboard",         url: "/",                 icon: LayoutGrid    },
-  { title: "Launchpad",         url: "/prospects",        icon: Crosshair,     roles: PROSPECTS_ROLES },
-  { title: "Customers",         url: "/customers",        icon: Network,       roles: SALES_ROLES },
-  { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           roles: SALES_ROLES },
-  { title: "1:1's",             url: "/one-on-one",       icon: MessagesSquare },
-  { title: "Tasks",             url: "/tasks",            icon: ListTodo      },
+  { title: "Dashboard",         url: "/",                 icon: LayoutGrid,    description: "Your home view with daily priorities and updates." },
+  { title: "Launchpad",         url: "/prospects",        icon: Crosshair,     description: "Find and qualify new prospects to pursue.", roles: PROSPECTS_ROLES },
+  { title: "Customers",         url: "/customers",        icon: Network,       description: "Browse customer accounts and account history.", roles: SALES_ROLES },
+  { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           description: "High-value opportunities ranked by potential impact.", roles: SALES_ROLES },
+  { title: "1:1's",             url: "/one-on-one",       icon: MessagesSquare,description: "Manager check-ins and one-on-one notes." },
+  { title: "Tasks",             url: "/tasks",            icon: ListTodo,      description: "Your personal to-do list and reminders." },
   {
     title: "Team Performance",
     url: "/team-performance",
     icon: TrendingUp,
+    description: "Team metrics, leaderboards, and performance trends.",
     roles: ["admin", "director", "national_account_manager", "sales", "sales_director"],
   },
-  { title: "Goals",        url: "/goals",      icon: Target        },
-  { title: "My Scorecard", url: "/report/me",  icon: FileBarChart2, roles: ["account_manager", "sales", "logistics_manager", "logistics_coordinator"] },
+  { title: "Goals",        url: "/goals",      icon: Target,        description: "Track personal and team sales goals." },
+  { title: "My Scorecard", url: "/report/me",  icon: FileBarChart2, description: "Your individual performance scorecard.", roles: ["account_manager", "sales", "logistics_manager", "logistics_coordinator"] },
 ];
 
 const pipelineItems: NavItem[] = [
-  { title: "RFP & Awards",    url: "/rfp-awards",      icon: Trophy   },
-  { title: "RFP Calendar",    url: "/rfp-calendar",    icon: Calendar },
-  { title: "Rep Scorecard",   url: "/rep-scorecard",   icon: Medal,   roles: ["admin", "director", "national_account_manager", "sales_director"] },
-  { title: "Coaching",        url: "/coaching",        icon: Sparkles,roles: ["admin", "director", "national_account_manager", "sales_director"] },
-  { title: "LM Check-In Log", url: "/lm-checkin-history", icon: History, roles: ["admin", "director", "national_account_manager", "account_manager", "sales_director"] },
+  { title: "RFP & Awards",    url: "/rfp-awards",      icon: Trophy,   description: "Active RFPs and awarded business tracking." },
+  { title: "RFP Calendar",    url: "/rfp-calendar",    icon: Calendar, description: "Upcoming RFP deadlines and key dates." },
+  { title: "Rep Scorecard",   url: "/rep-scorecard",   icon: Medal,    description: "Compare reps and review performance metrics.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
+  { title: "Coaching",        url: "/coaching",        icon: Sparkles, description: "Coaching notes and rep development plans.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
+  { title: "LM Check-In Log", url: "/lm-checkin-history", icon: History, description: "History of logistics manager check-ins.", roles: ["admin", "director", "national_account_manager", "account_manager", "sales_director"] },
 ];
 
 const laneToolItems: NavItem[] = [
-  { title: "Lane Intelligence",  url: "/research-tasks",  icon: ClipboardList },
-  { title: "My Procurement",     url: "/my-procurement",  icon: Briefcase     },
-  { title: "Lane Work Queue",    url: "/lanes/work-queue",icon: ListFilter    },
+  { title: "Lane Intelligence",  url: "/research-tasks",  icon: ClipboardList, description: "Research lanes and gather pricing intelligence." },
+  { title: "My Procurement",     url: "/my-procurement",  icon: Briefcase,     description: "Lanes you're actively procuring carriers for." },
+  { title: "Lane Work Queue",    url: "/lanes/work-queue",icon: ListFilter,    description: "Lanes awaiting your reply or next action." },
   { title: "Available Freight",  url: "/available-freight", icon: Truck,
+    description: "Freight loads currently available to cover.",
     roles: ["admin", "director", "national_account_manager", "sales_director", "logistics_manager", "account_manager", "sales"] },
   {
     title: "Carrier Hub",
     url: "/carrier-hub",
     icon: Building2,
+    description: "Manage carriers and review their submitted intel.",
     roles: ["admin", "director", "national_account_manager", "logistics_manager"],
   },
   {
     title: "Conversations",
     url: "/conversations",
     icon: MessageSquare,
+    description: "Inbound carrier and customer messages.",
     roles: ["admin", "director", "national_account_manager", "logistics_manager", "account_manager"],
   },
   {
     title: "Contact Suggestions",
     url: "/contact-suggestions",
     icon: UserPlus,
+    description: "Suggested new contacts to add to accounts.",
     roles: ["admin", "director", "national_account_manager", "account_manager"],
   },
   {
     title: "Email Intelligence",
     url: "/email-intelligence",
     icon: BrainCircuit,
+    description: "AI insights pulled from your inbound emails.",
     roles: ["admin", "director", "national_account_manager", "sales_director"],
   },
   {
     title: "Proven Tactics",
     url: "/proven-tactics",
     icon: Lightbulb,
+    description: "Reusable plays that have closed deals.",
     roles: ["admin", "director", "national_account_manager", "logistics_manager", "account_manager"],
   },
   {
     title: "Playbook",
     url: "/playbook",
     icon: ClipboardList,
+    description: "Step-by-step guides for common sales situations.",
     roles: ["admin", "director", "national_account_manager", "sales_director", "logistics_manager", "account_manager", "sales"],
   },
   {
     title: "ValueIQ",
     url: "/valueiq",
     icon: Brain,
+    description: "Daily AI briefing on your top accounts.",
     roles: ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"],
   },
 ];
@@ -161,11 +172,23 @@ function NotificationBadge({ count, color = "red" }: { count: number; color?: "r
   );
 }
 
+function navTooltip(title: string, description: string) {
+  return {
+    alwaysShow: true,
+    children: (
+      <div className="max-w-[15rem]">
+        <p className="font-medium">{title}</p>
+        <p className="text-xs text-muted-foreground">{description}</p>
+      </div>
+    ),
+  };
+}
+
 function NavLink({ item, isActive, badge, badgeColor }: { item: NavItem; isActive: boolean; badge?: number; badgeColor?: "red" | "green" }) {
   const Icon = item.icon;
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton asChild isActive={isActive} tooltip={item.title}>
+      <SidebarMenuButton asChild isActive={isActive} tooltip={navTooltip(item.title, item.description)}>
         <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(/[\s&]+/g, "-")}`} className="relative">
           <Icon className="h-4 w-4" />
           <span>{item.title}</span>
@@ -402,7 +425,7 @@ export function AppSidebar() {
         {(user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager" || user?.role === "sales" || user?.role === "sales_director") && (
           <CollapsibleGroup label={user?.role === "admin" ? "Admin" : "Team"} defaultOpen={false}>
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location === "/admin/users"}>
+                  <SidebarMenuButton asChild isActive={location === "/admin/users"} tooltip={navTooltip(user?.role === "admin" ? "User Management" : "My Team", "Manage team members and their access.")}>
                     <Link href="/admin/users" data-testid="link-admin-users">
                       <Users className="h-4 w-4" />
                       <span>{user?.role === "admin" ? "User Management" : "My Team"}</span>
@@ -411,7 +434,7 @@ export function AppSidebar() {
                 </SidebarMenuItem>
                 {(user?.role === "admin" || user?.role === "director") && (
                   <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={location === "/admin/carriers"}>
+                    <SidebarMenuButton asChild isActive={location === "/admin/carriers"} tooltip={navTooltip("Carrier Catalog", "Master list of carriers and their details.")}>
                       <Link href="/admin/carriers" data-testid="link-admin-carriers">
                         <Truck className="h-4 w-4" />
                         <span>Carrier Catalog</span>
@@ -421,7 +444,7 @@ export function AppSidebar() {
                 )}
                 {(user?.role === "admin" || user?.role === "director" || user?.role === "sales_director") && (
                   <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={location === "/admin/monitored-mailboxes"}>
+                    <SidebarMenuButton asChild isActive={location === "/admin/monitored-mailboxes"} tooltip={navTooltip("Monitored Mailboxes", "Mailboxes the system watches for activity.")}>
                       <Link href="/admin/monitored-mailboxes" data-testid="link-admin-monitored-mailboxes">
                         <MailCheck className="h-4 w-4" />
                         <span>Monitored Mailboxes</span>
@@ -431,7 +454,7 @@ export function AppSidebar() {
                 )}
                 {["admin", "director", "national_account_manager", "sales_director", "logistics_manager"].includes(user?.role ?? "") && (
                   <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={location === "/admin/available-freight/imports"}>
+                    <SidebarMenuButton asChild isActive={location === "/admin/available-freight/imports"} tooltip={navTooltip("Freight Import Health", "Status of recent freight feed imports.")}>
                       <Link href="/admin/available-freight/imports" data-testid="link-admin-freight-imports">
                         <Truck className="h-4 w-4" />
                         <span>Freight Import Health</span>
@@ -454,7 +477,7 @@ export function AppSidebar() {
                     four separate sidebar entries. ValueIQ stays its own rep workspace. */}
                 {["admin", "manager", "director", "national_account_manager", "sales_director"].includes(user?.role ?? "") && (
                   <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={location.startsWith("/ai")}>
+                    <SidebarMenuButton asChild isActive={location.startsWith("/ai")} tooltip={navTooltip("AI Center", "Configure AI agents, approvals, and adapters.")}>
                       <Link href="/ai" data-testid="link-ai-center">
                         <Sparkles className="h-4 w-4" />
                         <span>AI Center</span>
@@ -463,7 +486,7 @@ export function AppSidebar() {
                   </SidebarMenuItem>
                 )}
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location === "/financials"}>
+                  <SidebarMenuButton asChild isActive={location === "/financials"} tooltip={navTooltip("Financials", "Revenue, margin, and financial reports.")}>
                     <Link href="/financials" data-testid="link-financials">
                       <BarChart3 className="h-4 w-4" />
                       <span>Financials</span>
@@ -471,7 +494,7 @@ export function AppSidebar() {
                   </SidebarMenuButton>
                 </SidebarMenuItem>
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location === "/historical-data"}>
+                  <SidebarMenuButton asChild isActive={location === "/historical-data"} tooltip={navTooltip("Lane Analytics", "Historical lane volumes and pricing trends.")}>
                     <Link href="/historical-data" data-testid="link-historical-data">
                       <History className="h-4 w-4" />
                       <span>Lane Analytics</span>
@@ -481,7 +504,7 @@ export function AppSidebar() {
                 {/* Coordinators Corner moved here — role-specific, not main nav */}
                 {["admin", "director", "national_account_manager", "logistics_manager", "logistics_coordinator"].includes(user?.role ?? "") && (
                   <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={location === "/coordinators-corner"}>
+                    <SidebarMenuButton asChild isActive={location === "/coordinators-corner"} tooltip={navTooltip("Coordinators Corner", "Tools and resources for coordinators.")}>
                       <Link href="/coordinators-corner" data-testid="link-coordinators-corner">
                         <KeyRound className="h-4 w-4" />
                         <span>Coordinators Corner</span>
@@ -491,7 +514,7 @@ export function AppSidebar() {
                 )}
                 {/* PTO Passoff moved here — used infrequently */}
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location === "/pto-passoff"}>
+                  <SidebarMenuButton asChild isActive={location === "/pto-passoff"} tooltip={navTooltip("PTO Passoff", "Hand off accounts during time off.")}>
                     <Link href="/pto-passoff" data-testid="link-pto-passoff">
                       <Plane className="h-4 w-4" />
                       <span>PTO Passoff</span>
@@ -500,7 +523,7 @@ export function AppSidebar() {
                 </SidebarMenuItem>
                 {/* Touchpoint History moved here — review tool, not daily nav */}
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location === "/touchpoint-history"}>
+                  <SidebarMenuButton asChild isActive={location === "/touchpoint-history"} tooltip={navTooltip("Touchpoint History", "Past calls, emails, and customer touches.")}>
                     <Link href="/touchpoint-history" data-testid="link-touchpoint-history">
                       <Phone className="h-4 w-4" />
                       <span>Touchpoint History</span>
@@ -509,7 +532,7 @@ export function AppSidebar() {
                 </SidebarMenuItem>
                 {(user?.role === "admin" || user?.role === "director") && (
                   <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={location === "/feedback-inbox"}>
+                    <SidebarMenuButton asChild isActive={location === "/feedback-inbox"} tooltip={navTooltip("Feedback Inbox", "User-submitted bugs and feature requests.")}>
                       <Link href="/feedback-inbox" data-testid="link-feedback-inbox">
                         <Inbox className="h-4 w-4" />
                         <span>Feedback Inbox</span>
@@ -535,36 +558,66 @@ export function AppSidebar() {
             </div>
             <div className="flex items-center gap-1 shrink-0">
               <NotificationBell />
-              <Button
-                variant="ghost"
-                size="icon"
-                className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
-                onClick={() => setHelpOpen(true)}
-                data-testid="button-help"
-                title="Help & Resources"
-              >
-                <HelpCircle className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
-                onClick={openProfile}
-                data-testid="button-my-profile"
-                title="My profile"
-              >
-                <Settings className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
-                onClick={() => logout.mutate()}
-                data-testid="button-logout"
-                title="Log out"
-              >
-                <LogOut className="h-4 w-4" />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+                    onClick={() => setHelpOpen(true)}
+                    data-testid="button-help"
+                    aria-label="Help & Resources"
+                  >
+                    <HelpCircle className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top" align="center">
+                  <div className="max-w-[15rem]">
+                    <p className="font-medium">Help &amp; Resources</p>
+                    <p className="text-xs text-muted-foreground">Resources, training, and keyboard shortcuts.</p>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+                    onClick={openProfile}
+                    data-testid="button-my-profile"
+                    aria-label="My profile"
+                  >
+                    <Settings className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top" align="center">
+                  <div className="max-w-[15rem]">
+                    <p className="font-medium">My Profile</p>
+                    <p className="text-xs text-muted-foreground">Edit your profile and email signature.</p>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+                    onClick={() => logout.mutate()}
+                    data-testid="button-logout"
+                    aria-label="Sign out"
+                  >
+                    <LogOut className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top" align="center">
+                  <div className="max-w-[15rem]">
+                    <p className="font-medium">Sign Out</p>
+                    <p className="text-xs text-muted-foreground">Sign out of your account.</p>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
             </div>
           </div>
         )}
