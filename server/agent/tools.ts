@@ -13,7 +13,10 @@ import { db } from "../storage";
 import { storage } from "../storage";
 import {
   companies, contacts, tasks, touchpoints, users, freightOpportunities, type User,
+  loadFact, carrierRecommendation, carrierScorecardFact,
 } from "@shared/schema";
+import { getBlendedRate } from "../pricingBlendService";
+import { recommendCarriersForLoad } from "../carrierRecommendationEngine";
 import { listAvailableFreightImports } from "../availableFreightImporter";
 import {
   getNationalMarketSummary, getMarketOtris, getLaneVotrisBatch,
@@ -723,6 +726,158 @@ export const TOOLS: AgentTool[] = [
         importance: 2,
       });
       return { kind: "data", text: `Saved. I'll remember: "${content}"` };
+    },
+  },
+
+  // ─── CARRIER INTELLIGENCE (Task #371) ────────────────────────────────────
+  {
+    name: "recommend_carriers_for_order",
+    capability: "read.carrier",
+    description: "Carrier Intelligence: return the top ranked carrier candidates for a specific Available load (from carrier_recommendation). Use when the user asks 'who should I call for order X', 'best carriers for load #...', or 'who can cover this load'. Accepts the TMS order id OR the load_fact id.",
+    parameters: {
+      type: "object",
+      properties: {
+        order_id: { type: "string", description: "TMS order id (load_fact.order_id) or load_fact.id" },
+        limit: { type: "number", description: "Max candidates to return (default 5, max 10)" },
+      },
+      required: ["order_id"],
+    },
+    async execute(ctx, args) {
+      const orderId = String(args.order_id || "").trim();
+      if (!orderId) return { kind: "data", text: "order_id is required." };
+      const limit = Math.min(10, Math.max(1, Number(args.limit) || 5));
+      const [load] = await db.select().from(loadFact)
+        .where(and(
+          eq(loadFact.orgId, ctx.organizationId),
+          sql`(${loadFact.orderId} = ${orderId} OR ${loadFact.id} = ${orderId})`,
+        )).limit(1);
+      if (!load) return { kind: "data", text: `No Available load found for order ${orderId}.` };
+      let recs = await db.select().from(carrierRecommendation)
+        .where(and(
+          eq(carrierRecommendation.orgId, ctx.organizationId),
+          eq(carrierRecommendation.loadFactId, load.id),
+        ))
+        .orderBy(carrierRecommendation.rank)
+        .limit(limit);
+      if (recs.length === 0) {
+        try {
+          const fresh = await recommendCarriersForLoad(ctx.organizationId, load.id, { limit });
+          const cands = fresh.candidates ?? [];
+          if (cands.length === 0) {
+            return { kind: "data", text: `No carrier recommendations available for order ${orderId}.` };
+          }
+          const lines = [
+            `Top ${cands.length} carriers for order ${load.orderId} (${load.originCity ?? load.originState ?? "?"} → ${load.destinationCity ?? load.destinationState ?? "?"}, ${load.equipmentType ?? "ALL"}):`,
+            ...cands.map((c, i) => {
+              const rate = c.targetBuyRpm != null ? `$${Number(c.targetBuyRpm).toFixed(2)}/mi` : "no rate";
+              const conf = c.pricingConfidence ?? "low";
+              const urg = c.coverageUrgency ?? "green";
+              return `${i + 1}. ${c.carrierName} — score ${c.totalScore ?? "?"} · target ${rate} (${conf} confidence) · urgency ${urg}${c.reason ? ` · ${c.reason}` : ""}`;
+            }),
+          ];
+          return { kind: "data", text: lines.join("\n") };
+        } catch (err) {
+          return { kind: "data", text: `Could not generate recommendations for order ${orderId}: ${err instanceof Error ? err.message : String(err)}` };
+        }
+      }
+      const lines = [
+        `Top ${recs.length} carriers for order ${load.orderId} (${load.originCity ?? load.originState ?? "?"} → ${load.destinationCity ?? load.destinationState ?? "?"}, ${load.equipmentType ?? "ALL"}):`,
+        ...recs.map((r, i) => {
+          const rate = r.targetBuyRpm != null ? `$${Number(r.targetBuyRpm).toFixed(2)}/mi` : "no rate";
+          return `${i + 1}. ${r.carrierName} — score ${r.totalScore} (fit ${r.fitScore} · perf ${r.performanceScore}) · target ${rate} (${r.pricingConfidence}) · urgency ${r.coverageUrgency}${r.reason ? ` · ${r.reason}` : ""}`;
+        }),
+      ];
+      return { kind: "data", text: lines.join("\n") };
+    },
+  },
+  {
+    name: "suggest_buy_rate_for_lane",
+    capability: "read.lane",
+    description: "Carrier Intelligence: return the blended target buy rate ($/mi) for a lane, combining Sonar TRAC market and the org's realized history. Use when the user asks 'what should I pay on this lane', 'suggested rate for X to Y', or wants a buy-rate target before quoting.",
+    parameters: {
+      type: "object",
+      properties: {
+        origin: { type: "string", description: "Origin city or city,ST (e.g. 'Atlanta, GA')" },
+        destination: { type: "string", description: "Destination city or city,ST" },
+        origin_state: { type: "string", description: "2-letter state code for origin (improves history match)" },
+        destination_state: { type: "string", description: "2-letter state code for destination" },
+        equipment_type: { type: "string", description: "Trailer type (e.g. VAN, REEFER, FLATBED). Default VAN." },
+        customer_name: { type: "string", description: "Customer name for (lane,customer) specificity" },
+      },
+      required: ["origin", "destination"],
+    },
+    async execute(ctx, args) {
+      const origin = String(args.origin || "").trim();
+      const destination = String(args.destination || "").trim();
+      if (!origin || !destination) return { kind: "data", text: "origin and destination are required." };
+      const result = await getBlendedRate({
+        orgId: ctx.organizationId,
+        origin,
+        destination,
+        originState: args.origin_state ? String(args.origin_state).toUpperCase().slice(0, 2) : null,
+        destinationState: args.destination_state ? String(args.destination_state).toUpperCase().slice(0, 2) : null,
+        equipmentType: args.equipment_type ? String(args.equipment_type).toUpperCase() : null,
+        customerName: args.customer_name ? String(args.customer_name) : null,
+      });
+      if (result.targetBuyRpm == null) {
+        return { kind: "data", text: `No buy rate available for ${origin} → ${destination}: ${result.reason}` };
+      }
+      const lines = [
+        `Suggested buy rate for ${origin} → ${destination}${args.equipment_type ? ` (${String(args.equipment_type).toUpperCase()})` : ""}: $${result.targetBuyRpm.toFixed(2)}/mi (${result.confidence} confidence).`,
+      ];
+      if (result.suggestedSellRpm != null) {
+        lines.push(`Suggested sell ask: $${result.suggestedSellRpm.toFixed(2)}/mi.`);
+      }
+      if (result.expectedMarginPct) {
+        lines.push(`Expected margin band: ${result.expectedMarginPct.low.toFixed(1)}% – ${result.expectedMarginPct.high.toFixed(1)}%.`);
+      }
+      const sonarRate = result.legs.sonar?.ratePerMile;
+      const histRate = result.legs.history?.avgCostPerMile;
+      lines.push(
+        `Legs: Sonar ${sonarRate != null ? `$${Number(sonarRate).toFixed(2)}/mi` : "n/a"} (${(result.weights.sonar * 100).toFixed(0)}%) · History ${histRate != null ? `$${Number(histRate).toFixed(2)}/mi` : "n/a"} (${(result.weights.history * 100).toFixed(0)}%, ${result.legs.history?.loads ?? 0} loads, ${result.historyFallbackTier}).`,
+      );
+      if (result.sonarWeightAutoBumped) lines.push("⚠ Sonar weight was auto-bumped because history is sparse.");
+      if (result.refusedBelowThreshold) lines.push("⚠ Refused: both legs below the minimum confidence threshold.");
+      return { kind: "data", text: lines.join("\n") };
+    },
+  },
+  {
+    name: "top_carriers_by_realized_margin",
+    capability: "read.carrier",
+    description: "Carrier Intelligence: list the org's top carriers ranked by realized margin from carrier_scorecard_fact, scoped to the scorecard's rolling window (typically 180 days — NOT current month). Use when the user asks 'who are our best carriers', 'top carriers by margin', or 'who's making us money over the last few months'. The output line states the actual window in days. If the user asks specifically about 'this month' or a custom date range, do NOT use this tool — fall back to a financial query. Optional equipment filter.",
+    parameters: {
+      type: "object",
+      properties: {
+        equipment_type: { type: "string", description: "Trailer type filter (default ALL = cross-equipment rollup)" },
+        limit: { type: "number", description: "Max carriers to return (default 10, max 25)" },
+        min_loads: { type: "number", description: "Minimum realized loads in the window (default 5)" },
+      },
+    },
+    async execute(ctx, args) {
+      const equipment = args.equipment_type ? String(args.equipment_type).toUpperCase() : "ALL";
+      const limit = Math.min(25, Math.max(1, Number(args.limit) || 10));
+      const minLoads = Math.max(0, Number(args.min_loads ?? 5));
+      const rows = await db.select().from(carrierScorecardFact)
+        .where(and(
+          eq(carrierScorecardFact.orgId, ctx.organizationId),
+          eq(carrierScorecardFact.equipmentType, equipment),
+          sql`${carrierScorecardFact.loads} >= ${minLoads}`,
+          sql`${carrierScorecardFact.doNotUse} = false`,
+        ))
+        .orderBy(sql`${carrierScorecardFact.margin} DESC`)
+        .limit(limit);
+      if (rows.length === 0) {
+        return { kind: "data", text: `No carriers in scorecard for equipment=${equipment} with ≥${minLoads} realized loads.` };
+      }
+      const lines = [
+        `Top ${rows.length} carriers by realized margin (equipment=${equipment}, ≥${minLoads} loads, ${rows[0].windowDays}d window):`,
+        ...rows.map((r, i) => {
+          const margin = Number(r.margin || 0);
+          const marginPct = Number(r.marginPct || 0) * 100;
+          return `${i + 1}. ${r.carrierName} — $${margin.toLocaleString(undefined, { maximumFractionDigits: 0 })} margin (${marginPct.toFixed(1)}%) · ${r.loads} loads · tier ${r.tier} · score ${r.performanceScore}${r.daysSinceLastLoad != null ? ` · last load ${r.daysSinceLastLoad}d ago` : ""}`;
+        }),
+      ];
+      return { kind: "data", text: lines.join("\n") };
     },
   },
 ];

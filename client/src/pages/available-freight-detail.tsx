@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   ArrowLeft, AlertTriangle, ShieldAlert, Truck, MapPin, Calendar,
   Pin, PinOff, ArrowUp, ArrowDown, Search, Info, Send, Mail, MessageSquare,
+  DollarSign, TrendingUp,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -154,6 +155,138 @@ function ExplanationChips({ row }: { row: FreightOpportunityCarrier }) {
         </Badge>
       ))}
     </div>
+  );
+}
+
+interface BlendedRateResponse {
+  targetBuyRpm: number | null;
+  suggestedSellRpm: number | null;
+  expectedMarginPct: { low: number; high: number } | null;
+  confidence: "high" | "medium" | "low" | "none";
+  legs: {
+    sonar: { ratePerMile: number | null; source: string; isStale: boolean };
+    history: {
+      avgCostPerMile: number | null;
+      medianCostPerMile: number | null;
+      loads: number;
+      loads30d: number;
+      fallbackTier: string;
+    } | null;
+  };
+  weights: { sonar: number; history: number };
+  sonarWeightAutoBumped: boolean;
+  refusedBelowThreshold: boolean;
+  reason: string;
+  historyFallbackTier: string;
+}
+
+function CarrierIntelligencePanel({ opp, customerName }: { opp: FreightOpportunity; customerName: string | null }) {
+  const params = new URLSearchParams({
+    origin: opp.origin,
+    destination: opp.destination,
+  });
+  if (opp.originState) params.set("originState", opp.originState);
+  if (opp.destinationState) params.set("destinationState", opp.destinationState);
+  if (opp.equipmentType) params.set("trailer", opp.equipmentType);
+  if (customerName) params.set("customer", customerName);
+
+  const { data, isLoading, isError } = useQuery<BlendedRateResponse>({
+    queryKey: ["/api/carrier-intelligence/lane-pricing", params.toString()],
+    queryFn: async () => {
+      const res = await fetch(`/api/carrier-intelligence/lane-pricing?${params.toString()}`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(`Lane pricing failed (${res.status})`);
+      return res.json();
+    },
+  });
+
+  const confidenceTone =
+    data?.confidence === "high"
+      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
+      : data?.confidence === "medium"
+        ? "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30"
+        : "bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30";
+
+  return (
+    <Card data-testid="card-carrier-intelligence">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <DollarSign className="h-4 w-4" />
+              Carrier Intelligence — Suggested Buy Rate
+            </CardTitle>
+            <CardDescription className="text-xs">
+              Blended Sonar TRAC market rate + your realized history on this lane.
+            </CardDescription>
+          </div>
+          {data && (
+            <Badge variant="outline" className={`text-[10px] ${confidenceTone}`} data-testid="badge-pricing-confidence">
+              {data.confidence === "none" ? "no rate" : `${data.confidence} confidence`}
+            </Badge>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="text-sm">
+        {isLoading && <Skeleton className="h-20 w-full" />}
+        {isError && (
+          <p className="text-xs text-muted-foreground" data-testid="text-pricing-error">
+            Lane pricing temporarily unavailable.
+          </p>
+        )}
+        {data && (
+          <div className="space-y-3">
+            {data.targetBuyRpm == null ? (
+              <p className="text-xs text-muted-foreground" data-testid="text-no-rate">
+                No buy rate suggestion: {data.reason}
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div data-testid="metric-target-buy">
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Target buy</div>
+                  <div className="text-2xl font-semibold tabular-nums">${data.targetBuyRpm.toFixed(2)}<span className="text-xs text-muted-foreground font-normal">/mi</span></div>
+                </div>
+                {data.suggestedSellRpm != null && (
+                  <div data-testid="metric-suggested-sell">
+                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Suggested ask</div>
+                    <div className="text-2xl font-semibold tabular-nums">${data.suggestedSellRpm.toFixed(2)}<span className="text-xs text-muted-foreground font-normal">/mi</span></div>
+                  </div>
+                )}
+                {data.expectedMarginPct && (
+                  <div data-testid="metric-margin-band">
+                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Expected margin</div>
+                    <div className="text-2xl font-semibold tabular-nums">{data.expectedMarginPct.low.toFixed(1)}–{data.expectedMarginPct.high.toFixed(1)}<span className="text-xs text-muted-foreground font-normal">%</span></div>
+                  </div>
+                )}
+              </div>
+            )}
+            <div className="border-t pt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1" data-testid="text-leg-sonar">
+                <TrendingUp className="h-3 w-3" />
+                Sonar: {data.legs.sonar?.ratePerMile != null ? `$${Number(data.legs.sonar.ratePerMile).toFixed(2)}/mi` : "n/a"}
+                {" "}({Math.round(data.weights.sonar * 100)}%)
+                {data.legs.sonar?.isStale && <span className="text-amber-600 dark:text-amber-400">· stale</span>}
+              </span>
+              <span data-testid="text-leg-history">
+                History: {data.legs.history?.avgCostPerMile != null ? `$${Number(data.legs.history.avgCostPerMile).toFixed(2)}/mi` : "n/a"}
+                {" "}({Math.round(data.weights.history * 100)}%, {data.legs.history?.loads ?? 0} loads · {data.historyFallbackTier})
+              </span>
+              {data.sonarWeightAutoBumped && (
+                <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30">
+                  Sonar auto-bumped (sparse history)
+                </Badge>
+              )}
+              {data.refusedBelowThreshold && (
+                <Badge variant="outline" className="text-[10px] bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30">
+                  Below refusal threshold
+                </Badge>
+              )}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -713,6 +846,8 @@ export default function AvailableFreightDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      <CarrierIntelligencePanel opp={opp} customerName={company?.name ?? null} />
 
       <Card>
         <CardHeader className="pb-2">

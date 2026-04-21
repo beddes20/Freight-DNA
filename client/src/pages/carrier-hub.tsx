@@ -33,6 +33,7 @@ import { ConversationThreadBadges } from "@/components/conversation-thread-badge
 import { resolveLaneLocationWithConfidence } from "@/lib/laneLocationNormalizer";
 import { LaneLocationFeedback, EMPTY_NORM_STATE, type FieldNormState } from "@/components/lane-location-feedback";
 import { CityAutocompleteInput } from "@/components/city-autocomplete-input";
+import { MoveStatusFilter, sumByMoveStatus, type MoveStatus } from "@/components/move-status-filter";
 
 // ── Source channel helpers ─────────────────────────────────────────────────────
 
@@ -696,6 +697,124 @@ function SuggestionCard({
 
 // ── Carrier Profile Drawer ─────────────────────────────────────────────────────
 
+// ── Realized Scorecard subsection (Task #371) ───────────────────────────────
+// Renders the canonical executed-loads / revenue / margin numbers from
+// carrier_scorecard_fact alongside a Move Status filter so the user can
+// flip between Realized / Active / Available counts pulled from the same
+// new Carrier Intelligence APIs that power the DNA Guru tools.
+function CarrierRealizedScorecardSection({
+  isLoading,
+  isError,
+  data,
+}: {
+  isLoading: boolean;
+  isError: boolean;
+  data:
+    | {
+        carrier: { id: string | null; name: string; status: string | null; tags: string[] };
+        scorecard: {
+          equipmentType: string;
+          loads: number;
+          activeLoads: number;
+          availableLoads: number;
+          revenue: number;
+          cost: number;
+          margin: number;
+          onTimePct: number | null;
+          lastLoadDate: string | null;
+        };
+        equipmentSplits: Array<{ equipmentType: string; loads: number; revenue: number; margin: number }>;
+      }
+    | undefined;
+}) {
+  const [moveStatus, setMoveStatus] = useState<MoveStatus[]>(["realized"]);
+  if (isLoading) {
+    return (
+      <div className="border-t pt-4 mt-4 flex items-center gap-2 text-xs text-muted-foreground" data-testid="scorecard-loading">
+        <Loader2 className="w-4 h-4 animate-spin" /> Loading realized scorecard…
+      </div>
+    );
+  }
+  if (isError || !data) {
+    return (
+      <div className="border-t pt-4 mt-4" data-testid="scorecard-empty">
+        <h3 className="text-sm font-semibold flex items-center gap-2">
+          Realized Scorecard
+          <Badge variant="outline" className="text-[9px] py-0 px-1 border-emerald-500/30 text-emerald-400 bg-emerald-500/10">Carrier Intelligence</Badge>
+        </h3>
+        <p className="text-xs text-muted-foreground italic mt-2">
+          No scorecard yet — this carrier has not been synced into <code>carrier_scorecard_fact</code>.
+        </p>
+      </div>
+    );
+  }
+  const sc = data.scorecard;
+  const loadCount = sumByMoveStatus(
+    { loads: sc.loads, activeLoads: sc.activeLoads, availableLoads: sc.availableLoads },
+    moveStatus,
+  );
+  const marginPct = sc.revenue > 0 ? (sc.margin / sc.revenue) * 100 : null;
+  return (
+    <div className="border-t pt-4 mt-4 space-y-3" data-testid="scorecard-section">
+      <div className="flex items-start justify-between gap-2 flex-wrap">
+        <div>
+          <h3 className="text-sm font-semibold flex items-center gap-2">
+            Realized Scorecard
+            <Badge variant="outline" className="text-[9px] py-0 px-1 border-emerald-500/30 text-emerald-400 bg-emerald-500/10">
+              Carrier Intelligence
+            </Badge>
+          </h3>
+          <p className="text-[11px] text-muted-foreground">
+            From <code>carrier_scorecard_fact</code> · same source as recommendations and Guru tools.
+          </p>
+        </div>
+        <MoveStatusFilter value={moveStatus} onChange={setMoveStatus} testIdPrefix="chip-scorecard-status" />
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+        <div data-testid="scorecard-loads">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Loads</div>
+          <div className="text-xl font-semibold tabular-nums">{loadCount.toLocaleString()}</div>
+        </div>
+        <div data-testid="scorecard-revenue">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Revenue</div>
+          <div className="text-xl font-semibold tabular-nums">${Math.round(sc.revenue).toLocaleString()}</div>
+        </div>
+        <div data-testid="scorecard-margin">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Margin</div>
+          <div className="text-xl font-semibold tabular-nums">${Math.round(sc.margin).toLocaleString()}</div>
+          {marginPct != null && (
+            <div className="text-[10px] text-muted-foreground tabular-nums">{marginPct.toFixed(1)}%</div>
+          )}
+        </div>
+        <div data-testid="scorecard-ontime">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">On-time</div>
+          <div className="text-xl font-semibold tabular-nums">{sc.onTimePct != null ? `${sc.onTimePct.toFixed(0)}%` : "—"}</div>
+          {sc.lastLoadDate && (
+            <div className="text-[10px] text-muted-foreground">last: {sc.lastLoadDate}</div>
+          )}
+        </div>
+      </div>
+      {data.equipmentSplits.length > 1 && (
+        <div className="flex flex-wrap gap-1.5 pt-1" data-testid="scorecard-equipment-splits">
+          {data.equipmentSplits
+            .filter(s => s.equipmentType !== "ALL")
+            .slice(0, 8)
+            .map((s, i) => (
+              <Badge
+                key={i}
+                variant="outline"
+                className="text-[10px] py-0.5 px-2 border-border text-foreground"
+                data-testid={`scorecard-equip-${s.equipmentType}`}
+              >
+                {s.equipmentType}: {s.loads} loads · ${Math.round(s.margin).toLocaleString()} margin
+              </Badge>
+            ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () => void }) {
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -777,6 +896,35 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
       return r.json();
     },
     enabled: !!carrierId && activeTab === "intelligence",
+  });
+
+  // ── Carrier Intelligence realized scorecard (Task #371) ──
+  // Pulls from carrier_scorecard_fact via the new /api/carrier-intelligence
+  // surface so the drawer shows the canonical executed-loads/revenue/margin
+  // numbers that drive recommendations and the DNA Guru tools.
+  const { data: scorecardData, isLoading: scorecardLoading, isError: scorecardError } = useQuery<{
+    carrier: { id: string | null; name: string; status: string | null; tags: string[] };
+    scorecard: {
+      equipmentType: string;
+      loads: number;
+      activeLoads: number;
+      availableLoads: number;
+      revenue: number;
+      cost: number;
+      margin: number;
+      onTimePct: number | null;
+      lastLoadDate: string | null;
+    };
+    equipmentSplits: Array<{ equipmentType: string; loads: number; revenue: number; margin: number }>;
+  }>({
+    queryKey: ["/api/carrier-intelligence/carriers", carrierId],
+    queryFn: async () => {
+      const r = await fetch(`/api/carrier-intelligence/carriers/${carrierId}`, { credentials: "include" });
+      if (!r.ok) throw new Error(`scorecard ${r.status}`);
+      return r.json();
+    },
+    enabled: !!carrierId && activeTab === "intelligence",
+    retry: false,
   });
 
   const acceptSuggestion = useMutation({
@@ -1541,6 +1689,13 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
             {!intelLoading && !intelData && (
               <p className="text-sm text-muted-foreground italic py-4 text-center">Unable to load intelligence data.</p>
             )}
+
+            {/* ── Realized Scorecard (Carrier Intelligence — Task #371) ── */}
+            <CarrierRealizedScorecardSection
+              isLoading={scorecardLoading}
+              isError={scorecardError}
+              data={scorecardData}
+            />
           </TabsContent>
         </div>
       </Tabs>
