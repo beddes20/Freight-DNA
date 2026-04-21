@@ -81,6 +81,7 @@ import ValueIQPage from "@/pages/valueiq";
 import AdminMonitoredMailboxesPage from "@/pages/admin-monitored-mailboxes";
 import ProfilePage from "@/pages/profile";
 import AiAgentPortal from "@/pages/ai-agent";
+import AiCenterPage from "@/pages/ai-center";
 import AvailableFreightPage from "@/pages/available-freight";
 import AvailableFreightDetailPage from "@/pages/available-freight-detail";
 
@@ -216,14 +217,24 @@ function Router() {
       <Route path="/privacy" component={PrivacyPage} />
       <Route path="/terms" component={TermsPage} />
       <Route path="/profile" component={ProfilePage} />
-      <Route path="/ai-agent" component={AiAgentPortal} />
-      <Route path="/agents" component={AgenticIndexPage} />
-      <Route path="/agents/:slug" component={AgentDetailPage} />
-      <Route path="/pods" component={PodsPage} />
-      <Route path="/approvals" component={ApprovalsPage} />
-      <Route path="/settings/ai-assistant">{() => { window.location.replace("/ai-agent#my-assistant"); return null; }}</Route>
-      <Route path="/admin/ai-permissions">{() => { window.location.replace("/ai-agent#permissions"); return null; }}</Route>
-      <Route path="/agent-activity">{() => { window.location.replace("/ai-agent#activity"); return null; }}</Route>
+      {/* Unified AI Center — single management module for every AI capability. */}
+      <Route path="/ai" component={AiCenterPage} />
+      <Route path="/ai/agents" component={AiCenterPage} />
+      <Route path="/ai/agents/:slug" component={AiCenterPage} />
+      <Route path="/ai/approvals" component={AiCenterPage} />
+      <Route path="/ai/pods" component={AiCenterPage} />
+      <Route path="/ai/adapters" component={AiCenterPage} />
+      <Route path="/ai/admin" component={AiCenterPage} />
+
+      {/* Legacy redirects — old standalone pages now live as AI Center tabs. */}
+      <Route path="/ai-agent">{() => { window.location.replace("/ai/admin"); return null; }}</Route>
+      <Route path="/agents">{() => { window.location.replace("/ai/agents"); return null; }}</Route>
+      <Route path="/agents/:slug">{(p: { slug: string }) => { window.location.replace(`/ai/agents/${p.slug}`); return null; }}</Route>
+      <Route path="/pods">{() => { window.location.replace("/ai/pods"); return null; }}</Route>
+      <Route path="/approvals">{() => { window.location.replace("/ai/approvals"); return null; }}</Route>
+      <Route path="/settings/ai-assistant">{() => { window.location.replace("/ai/admin#my-assistant"); return null; }}</Route>
+      <Route path="/admin/ai-permissions">{() => { window.location.replace("/ai/admin#permissions"); return null; }}</Route>
+      <Route path="/agent-activity">{() => { window.location.replace("/ai/admin#activity"); return null; }}</Route>
       <Route component={NotFound} />
     </Switch>
   );

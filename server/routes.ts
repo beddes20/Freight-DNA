@@ -3186,6 +3186,10 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   const { registerAgenticRoutes } = await import("./routes/agentic");
   registerAgenticRoutes(app);
 
+  // Unified AI Center read-side aggregation (combined fleet across both kinds).
+  const { registerAiCenterRoutes } = await import("./routes/aiCenter");
+  registerAiCenterRoutes(app);
+
   // Org corpus indexer — nightly reindex + admin trigger.
   {
     const cron = (await import("node-cron")).default;

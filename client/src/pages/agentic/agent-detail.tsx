@@ -16,8 +16,11 @@ import { useToast } from "@/hooks/use-toast";
 const AUTONOMY = ["off", "suggest", "draft", "auto_hitl", "auto"] as const;
 
 export default function AgentDetailPage() {
-  const [, params] = useRoute("/agents/:slug");
-  const slug = params?.slug ?? "";
+  // Detail page is reachable from both the legacy /agents/:slug path and the
+  // unified /ai/agents/:slug path. Try both so the slug resolves either way.
+  const [, paramsLegacy] = useRoute("/agents/:slug");
+  const [, paramsAi] = useRoute("/ai/agents/:slug");
+  const slug = paramsAi?.slug ?? paramsLegacy?.slug ?? "";
   const { toast } = useToast();
   const { data, isLoading } = useQuery<any>({ queryKey: ["/api/agentic/agents", slug], enabled: !!slug });
 
@@ -47,7 +50,7 @@ export default function AgentDetailPage() {
     <div className="container mx-auto py-6 space-y-6" data-testid={`page-agent-${slug}`}>
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-start gap-3">
-          <Link href="/agents"><Button size="icon" variant="ghost"><ArrowLeft className="h-4 w-4" /></Button></Link>
+          <Link href="/ai/agents"><Button size="icon" variant="ghost"><ArrowLeft className="h-4 w-4" /></Button></Link>
           <div>
             <h1 className="text-2xl font-semibold">{a.name}</h1>
             <p className="text-sm text-muted-foreground max-w-2xl">{a.description}</p>

@@ -32,8 +32,8 @@ export default function AgenticIndexPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Link href="/approvals"><Button variant="outline" data-testid="link-approvals">Approvals Inbox</Button></Link>
-          <Link href="/pods"><Button variant="outline" data-testid="link-pods">Pods</Button></Link>
+          <Link href="/ai/approvals"><Button variant="outline" data-testid="link-approvals">Approvals Inbox</Button></Link>
+          <Link href="/ai/pods"><Button variant="outline" data-testid="link-pods">Pods</Button></Link>
         </div>
       </div>
 
@@ -72,7 +72,7 @@ export default function AgenticIndexPage() {
                   </span>
                   {a.targetMetric && (<><span className="text-muted-foreground">·</span><span className="text-muted-foreground">target: {a.targetMetric}</span></>)}
                 </div>
-                <Link href={`/agents/${a.slug}`}>
+                <Link href={`/ai/agents/${a.slug}`}>
                   <Button variant="ghost" size="sm" className="w-full justify-between" data-testid={`link-agent-${a.slug}`}>
                     Open cockpit <ArrowRight className="h-4 w-4" />
                   </Button>

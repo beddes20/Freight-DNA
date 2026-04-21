@@ -435,36 +435,15 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location.startsWith("/ai-agent")}>
-                    <Link href="/ai-agent" data-testid="link-ai-agent">
-                      <Sparkles className="h-4 w-4" />
-                      <span>AI Agent</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location.startsWith("/agents")}>
-                    <Link href="/agents" data-testid="link-agentic-fleet">
-                      <Sparkles className="h-4 w-4" />
-                      <span>Agent Fleet</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location === "/approvals"}>
-                    <Link href="/approvals" data-testid="link-agentic-approvals">
-                      <Sparkles className="h-4 w-4" />
-                      <span>Approvals</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                {(user?.role === "admin" || user?.role === "manager" || user?.role === "director" || user?.role === "national_account_manager") && (
+                {/* AI Center — single consolidated entry point for all AI management
+                    (agents, approvals, pods, adapters, admin). Replaces the previous
+                    four separate sidebar entries. ValueIQ stays its own rep workspace. */}
+                {["admin", "manager", "director", "national_account_manager", "sales_director"].includes(user?.role ?? "") && (
                   <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={location.startsWith("/pods")}>
-                      <Link href="/pods" data-testid="link-agentic-pods">
+                    <SidebarMenuButton asChild isActive={location.startsWith("/ai")}>
+                      <Link href="/ai" data-testid="link-ai-center">
                         <Sparkles className="h-4 w-4" />
-                        <span>Pods</span>
+                        <span>AI Center</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
