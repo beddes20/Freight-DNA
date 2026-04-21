@@ -1639,6 +1639,201 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
+  // ── Org-wide phone usage report (Task #318) ───────────────────────────────
+  // Aggregates Webex-synced call touchpoints into KPIs, a dow×hour heatmap,
+  // and a ranked rep table with 30-day baseline deltas. Read-only; built on
+  // top of the existing call touchpoint records (notes contain `[Webex CDR:`).
+  app.get("/api/webex/usage-report", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "sales_director", "director", "national_account_manager"].includes(user.role)) {
+        return res.status(403).json({ error: "Access restricted to leadership roles" });
+      }
+
+      const range = String(req.query.range ?? "7d");
+      const managerId = (req.query.managerId as string | undefined) || null;
+
+      const rangeDays = range === "today" ? 1 : range === "30d" ? 30 : range === "90d" ? 90 : 7;
+      const now = Date.now();
+      // For "today" use start of today; otherwise rolling N-day window.
+      let startMs: number;
+      if (range === "today") {
+        const d = new Date(now);
+        d.setHours(0, 0, 0, 0);
+        startMs = d.getTime();
+      } else {
+        startMs = now - rangeDays * 24 * 3600 * 1000;
+      }
+      const baselineStartMs = now - 30 * 24 * 3600 * 1000;
+
+      // Pull org users and resolve "team" (direct reports of selected managerId).
+      const orgUsers = await storage.getUsers(user.organizationId);
+      const userById = new Map(orgUsers.map(u => [u.id, u] as const));
+
+      // Build the candidate user-id set for the selected team filter.
+      let scopedUserIds: Set<string> | null = null;
+      if (managerId) {
+        const team = orgUsers.filter(u => u.managerId === managerId || u.id === managerId);
+        scopedUserIds = new Set(team.map(u => u.id));
+      }
+
+      // Pull all call touchpoints for the org once. Filtered downstream by
+      // CDR marker (Webex-sourced) and by time window.
+      const allTouchpoints = await storage.getTouchpointsByOrg(user.organizationId);
+      const callTps = allTouchpoints.filter(tp =>
+        tp.type === "call" && typeof tp.notes === "string" && tp.notes.includes("[Webex CDR:")
+      );
+
+      const inWindow = (tp: typeof callTps[number]) => {
+        const t = Date.parse(tp.createdAt);
+        return Number.isFinite(t) && t >= startMs && t <= now;
+      };
+      const inBaseline = (tp: typeof callTps[number]) => {
+        const t = Date.parse(tp.createdAt);
+        return Number.isFinite(t) && t >= baselineStartMs && t <= now;
+      };
+      const matchesScope = (tp: typeof callTps[number]) =>
+        !scopedUserIds || scopedUserIds.has(tp.loggedById);
+
+      const rangeTps = callTps.filter(tp => inWindow(tp) && matchesScope(tp));
+      const baselineTps = callTps.filter(tp => inBaseline(tp) && matchesScope(tp));
+
+      // KPIs.
+      let inboundCalls = 0;
+      let outboundCalls = 0;
+      let afterHoursCalls = 0;
+      const heatmap: number[][] = Array.from({ length: 7 }, () => Array(24).fill(0));
+      const repCounts = new Map<string, { count: number; inbound: number; outbound: number }>();
+
+      for (const tp of rangeTps) {
+        const isInbound = tp.notes?.startsWith("[Webex CDR:") && / Inbound /i.test(tp.notes);
+        const isOutbound = tp.notes?.startsWith("[Webex CDR:") && / Outbound /i.test(tp.notes);
+        if (isInbound) inboundCalls++;
+        else if (isOutbound) outboundCalls++;
+
+        const d = new Date(tp.createdAt);
+        const dow = d.getDay();
+        const hour = d.getHours();
+        heatmap[dow][hour]++;
+        if (hour < 8 || hour >= 18 || dow === 0 || dow === 6) afterHoursCalls++;
+
+        const r = repCounts.get(tp.loggedById) ?? { count: 0, inbound: 0, outbound: 0 };
+        r.count++;
+        if (isInbound) r.inbound++;
+        if (isOutbound) r.outbound++;
+        repCounts.set(tp.loggedById, r);
+      }
+
+      const totalCalls = rangeTps.length;
+      const repsWithActivity = repCounts.size;
+      const totalReps = scopedUserIds ? scopedUserIds.size : orgUsers.length;
+      const avgCallsPerRep = totalReps > 0 ? Math.round((totalCalls / totalReps) * 10) / 10 : 0;
+      const pctAfterHours = totalCalls > 0 ? Math.round((afterHoursCalls / totalCalls) * 100) : 0;
+
+      // Per-rep 30-day baseline (avg calls/day).
+      const baselineByRep = new Map<string, number>();
+      for (const tp of baselineTps) {
+        baselineByRep.set(tp.loggedById, (baselineByRep.get(tp.loggedById) ?? 0) + 1);
+      }
+
+      const reps = Array.from(repCounts.entries()).map(([userId, r]) => {
+        const u = userById.get(userId);
+        const baselineTotal = baselineByRep.get(userId) ?? 0;
+        const baselineAvgPerDay = baselineTotal / 30;
+        const expectedForWindow = baselineAvgPerDay * rangeDays;
+        let deltaPct = 0;
+        if (expectedForWindow > 0) {
+          deltaPct = Math.round(((r.count - expectedForWindow) / expectedForWindow) * 100);
+        } else if (r.count > 0) {
+          deltaPct = 100;
+        }
+        let flag: "spike" | "drop" | null = null;
+        // Only flag when we have meaningful baseline (>=5 calls in 30d) and
+        // the current window represents a real shift, not single-day noise.
+        if (baselineTotal >= 5) {
+          if (deltaPct >= 50 && r.count >= 3) flag = "spike";
+          else if (deltaPct <= -50 && rangeDays >= 7) flag = "drop";
+        }
+        return {
+          userId,
+          name: u?.name || u?.username || "Unknown",
+          managerId: u?.managerId ?? null,
+          count: r.count,
+          inbound: r.inbound,
+          outbound: r.outbound,
+          baselineAvgPerDay: Math.round(baselineAvgPerDay * 10) / 10,
+          deltaPct,
+          flag,
+        };
+      });
+
+      // Surface reps with zero activity in the range when they have a baseline
+      // — these are the "drop-offs" leadership most wants to see.
+      if (rangeDays >= 7) {
+        for (const [userId, baselineTotal] of baselineByRep.entries()) {
+          if (repCounts.has(userId)) continue;
+          if (scopedUserIds && !scopedUserIds.has(userId)) continue;
+          if (baselineTotal < 5) continue;
+          const u = userById.get(userId);
+          if (!u) continue;
+          const baselineAvgPerDay = baselineTotal / 30;
+          reps.push({
+            userId,
+            name: u.name || u.username || "Unknown",
+            managerId: u.managerId ?? null,
+            count: 0,
+            inbound: 0,
+            outbound: 0,
+            baselineAvgPerDay: Math.round(baselineAvgPerDay * 10) / 10,
+            deltaPct: -100,
+            flag: "drop",
+          });
+        }
+      }
+
+      reps.sort((a, b) => b.count - a.count);
+
+      // Distinct managers with at least one direct report — used to populate
+      // the team filter dropdown on the client.
+      const managerIds = new Set<string>();
+      for (const u of orgUsers) {
+        if (u.managerId) managerIds.add(u.managerId);
+      }
+      const teams = Array.from(managerIds)
+        .map(mid => {
+          const mgr = userById.get(mid);
+          if (!mgr) return null;
+          const repCount = orgUsers.filter(u => u.managerId === mid).length;
+          return { managerId: mid, managerName: mgr.name || mgr.username || "Manager", repCount };
+        })
+        .filter((t): t is { managerId: string; managerName: string; repCount: number } => !!t)
+        .sort((a, b) => b.repCount - a.repCount);
+
+      res.json({
+        range,
+        startISO: new Date(startMs).toISOString(),
+        endISO: new Date(now).toISOString(),
+        kpis: {
+          totalCalls,
+          inboundCalls,
+          outboundCalls,
+          avgCallsPerRep,
+          pctAfterHours,
+          afterHoursCalls,
+          totalReps,
+          repsWithActivity,
+        },
+        heatmap,
+        reps,
+        teams,
+      });
+    } catch (err) {
+      log(`Usage report error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: "Failed to load Webex usage report" });
+    }
+  });
+
   app.post("/api/webex/presence-batch", requireAuth, async (req: Request, res: Response) => {
     try {
       if (!webexCredentialsConfigured()) {

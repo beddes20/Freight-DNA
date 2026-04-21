@@ -88,6 +88,7 @@ import AiCenterPage from "@/pages/ai-center";
 import AvailableFreightPage from "@/pages/available-freight";
 import AvailableFreightDetailPage from "@/pages/available-freight-detail";
 import AdminAvailableFreightImports from "@/pages/admin-available-freight-imports";
+import PhoneUsagePage from "@/pages/phone-usage";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -200,6 +201,7 @@ function Router() {
       <Route path="/feedback-inbox" component={FeedbackInboxPage} />
       <Route path="/prospects" component={ProspectsPage} />
       <Route path="/pipeline-analytics" component={PipelineAnalyticsRedirect} />
+      <Route path="/phone-usage" component={PhoneUsagePage} />
       <Route path="/touchpoint-history" component={TouchpointHistoryPage} />
       <Route path="/rfp-calendar" component={RfpCalendarPage} />
       <Route path="/rep-scorecard" component={RepScorecardPage} />
