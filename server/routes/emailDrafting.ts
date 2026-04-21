@@ -8,7 +8,7 @@ import {
   companies, contacts, touchpoints, emailMessages, draftFeedback, sentEmailCorrections,
 } from "@shared/schema";
 
-const PLAY_TYPES: Record<string, { label: string; intent: string }> = {
+export const PLAY_TYPES: Record<string, { label: string; intent: string }> = {
   "check_in": { label: "Relationship Check-In", intent: "Maintain the relationship with a casual, helpful touchpoint" },
   "stale_reactivation": { label: "Stale Account Reactivation", intent: "Re-engage a contact who hasn't been touched in 30+ days" },
   "lane_expansion": { label: "Lane Expansion", intent: "Pitch a new lane or corridor based on freight data" },
@@ -38,7 +38,7 @@ interface DataAnchor {
   value: string;
 }
 
-async function gatherDataAnchors(
+export async function gatherDataAnchors(
   orgId: string,
   accountId?: string,
   contactId?: string,
@@ -243,7 +243,7 @@ async function gatherFeedbackContext(orgId: string, playType: string): Promise<s
   }
 }
 
-async function generateDraft(params: {
+export async function generateDraft(params: {
   voiceProfile: Awaited<ReturnType<typeof getVoiceProfile>>;
   playType: string;
   dataContext: string;

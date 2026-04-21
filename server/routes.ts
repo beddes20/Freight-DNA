@@ -32,6 +32,7 @@ import { registerCallIntelligenceRoutes } from "./routes/callIntelligence";
 import { registerAIIntelligenceRoutes } from "./routes/aiIntelligence";
 import { getPlayForRuleType } from "./playsRegistry";
 import { registerEmailDraftingRoutes } from "./routes/emailDrafting";
+import { registerNbaReadyToActRoutes } from "./routes/nbaReadyToAct";
 import { registerMonitoredMailboxRoutes } from "./routes/monitoredMailboxes";
 import { registerWebexRoutes } from "./routes/webex";
 import { registerCallTrendlineRoutes } from "./routes/callTrendlines";
@@ -3179,6 +3180,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerCoachingRoutes(app);
   registerProspectRoutes(app);
   registerEmailDraftingRoutes(app);
+  registerNbaReadyToActRoutes(app);
   registerMonitoredMailboxRoutes(app);
   registerWebexRoutes(app);
   registerCallTrendlineRoutes(app);

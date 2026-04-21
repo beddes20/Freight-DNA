@@ -30,6 +30,12 @@ interface NbaLogTouchDialogProps {
   companyName: string;
   /** Pre-selected contact id when the card targets a specific contact */
   contactId?: string | null;
+  /** Pre-fill the touch type (e.g. when launched from "Log this touch" on a Ready-to-Act card) */
+  defaultTouchType?: "call" | "email" | "text" | "site_visit";
+  /** Pre-fill the note (e.g. with the draft body) */
+  defaultNote?: string;
+  /** Pre-tag a play executed */
+  defaultPlayLabel?: string;
   onActioned: () => void;
 }
 
@@ -73,15 +79,18 @@ export function NbaLogTouchDialog({
   companyId,
   companyName,
   contactId,
+  defaultTouchType,
+  defaultNote,
+  defaultPlayLabel,
   onActioned,
 }: NbaLogTouchDialogProps) {
   const { toast } = useToast();
   const [selectedContactId, setSelectedContactId] = useState(contactId ?? "");
-  const [touchType, setTouchType]   = useState<string>("call");
+  const [touchType, setTouchType]   = useState<string>(defaultTouchType ?? "call");
   const [vibe, setVibe]             = useState("");
-  const [note, setNote]             = useState("");
+  const [note, setNote]             = useState(defaultNote ?? "");
   const [meaningful, setMeaningful] = useState(false);
-  const [playLabel, setPlayLabel]   = useState("");
+  const [playLabel, setPlayLabel]   = useState(defaultPlayLabel ?? "");
 
   // Fetch company contacts so the rep can choose when no contactId is pre-set
   const { data: contacts = [], isLoading: contactsLoading } = useQuery<Contact[]>({
@@ -124,11 +133,11 @@ export function NbaLogTouchDialog({
 
   function handleClose() {
     setSelectedContactId(contactId ?? "");
-    setTouchType("call");
+    setTouchType(defaultTouchType ?? "call");
     setVibe("");
-    setNote("");
+    setNote(defaultNote ?? "");
     setMeaningful(false);
-    setPlayLabel("");
+    setPlayLabel(defaultPlayLabel ?? "");
     onClose();
   }
 

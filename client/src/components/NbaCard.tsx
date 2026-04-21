@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { NbaLogTouchDialog } from "./NbaLogTouchDialog";
 import { CarrierOutreachPanel } from "./CarrierOutreachPanel";
 import { DraftEmailModal } from "./DraftEmailModal";
+import { NbaReadyToActPanel } from "./NbaReadyToActPanel";
 import {
   AlertTriangle,
   Zap,
@@ -24,6 +25,8 @@ import {
   UserCog,
   BookOpen,
   Sparkles,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 interface TeamMember { id: string; name: string; role: string; }
@@ -132,6 +135,7 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
   const [showLogTouch, setShowLogTouch] = useState(false);
   const [showCarrierOutreach, setShowCarrierOutreach] = useState(false);
   const [showDraftEmail, setShowDraftEmail] = useState(false);
+  const [showReadyToAct, setShowReadyToAct] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { user: currentUser } = useAuth();
@@ -245,10 +249,10 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
   // ── Normal fixed-height view ──────────────────────────────────────────────
   return (
     <div
-      className="rounded-xl border border-white/8 bg-white/4 hover:bg-white/6 transition-colors p-3 flex flex-col justify-between"
-      style={{ minHeight: 128 }}
+      className="rounded-xl border border-white/8 bg-white/4 hover:bg-white/6 transition-colors p-3 flex flex-col"
       data-testid={`nba-card-${card.id}`}
     >
+     <div className="flex flex-col justify-between flex-1" style={{ minHeight: 122 }}>
       {/* Top section: badges + company + why */}
       <div className="flex flex-col gap-1.5">
         {/* Badge row */}
@@ -475,6 +479,19 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
           {card.companyId && !isLaneCapacityCard && (
             <Button
               size="sm"
+              onClick={() => setShowReadyToAct(v => !v)}
+              disabled={resolveMutation.isPending}
+              className="h-6 text-[10px] px-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30"
+              data-testid={`nba-card-ready-to-act-${card.id}`}
+            >
+              <Sparkles className="w-3 h-3 mr-0.5" />
+              Ready to Act
+              {showReadyToAct ? <ChevronUp className="w-3 h-3 ml-0.5" /> : <ChevronDown className="w-3 h-3 ml-0.5" />}
+            </Button>
+          )}
+          {card.companyId && !isLaneCapacityCard && (
+            <Button
+              size="sm"
               onClick={() => setShowDraftEmail(true)}
               disabled={resolveMutation.isPending}
               className="h-6 text-[10px] px-2 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/30"
@@ -522,6 +539,21 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
           ) : null}
         </div>
       </div>
+     </div>
+
+      {/* Task #373 — Ready-to-Act panel: lazily fetched on expand */}
+      {showReadyToAct && card.companyId && !isLaneCapacityCard && (
+        <NbaReadyToActPanel
+          cardId={card.id}
+          companyId={card.companyId}
+          companyName={card.companyName}
+          cardContactId={card.contactId}
+          onActioned={() => {
+            onActioned?.(card.id);
+            setShowReadyToAct(false);
+          }}
+        />
+      )}
 
       {/* Log Touch dialog — only mounted when triggered */}
       {card.companyId && showLogTouch && (
