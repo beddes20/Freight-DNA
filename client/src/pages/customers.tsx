@@ -283,13 +283,13 @@ export default function Customers() {
     queryKey: ["/api/research-tasks"],
   });
 
-  const { data: suggestionCounts = [] } = useQuery<{ accountId: string; count: number }[]>({
+  const { data: suggestionCounts = [] } = useQuery<{ accountId: string; accountName: string; pendingCount: number }[]>({
     queryKey: ["/api/internal/accounts/suggestion-counts"],
     staleTime: 5 * 60 * 1000,
     retry: false,
   });
   const suggestionCountMap = useMemo(
-    () => new Map(suggestionCounts.map(r => [r.accountId, r.count])),
+    () => new Map(suggestionCounts.map(r => [r.accountId, r.pendingCount])),
     [suggestionCounts],
   );
 

@@ -972,7 +972,7 @@ export interface IStorage {
   // Account Contact Suggestions (Task #201)
   upsertAccountContactSuggestion(data: import('@shared/schema').InsertAccountContactSuggestion): Promise<import('@shared/schema').AccountContactSuggestion>;
   getAccountContactSuggestions(accountId: string, status?: string): Promise<import('@shared/schema').AccountContactSuggestion[]>;
-  countPendingContactSuggestionsByOrg(orgId: string): Promise<{ accountId: string; count: number }[]>;
+  countPendingContactSuggestionsByOrg(orgId: string): Promise<{ accountId: string; accountName: string; pendingCount: number }[]>;
   getAccountContactSuggestion(id: string): Promise<import('@shared/schema').AccountContactSuggestion | undefined>;
   updateAccountContactSuggestionStatus(id: string, status: string, opts: { userId?: string; snoozedUntil?: Date | null }): Promise<import('@shared/schema').AccountContactSuggestion | undefined>;
   getContactByEmailAndCompany(email: string, companyId: string): Promise<import('@shared/schema').Contact | undefined>;
@@ -6233,16 +6233,19 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  async countPendingContactSuggestionsByOrg(orgId: string): Promise<{ accountId: string; count: number }[]> {
+  async countPendingContactSuggestionsByOrg(orgId: string): Promise<{ accountId: string; accountName: string; pendingCount: number }[]> {
     const rows = await db
       .select({
         accountId: accountContactSuggestions.accountId,
-        count: sql<number>`count(*)::int`,
+        accountName: companies.name,
+        pendingCount: sql<number>`count(*)::int`,
       })
       .from(accountContactSuggestions)
+      .innerJoin(companies, eq(companies.id, accountContactSuggestions.accountId))
       .where(
         and(
           eq(accountContactSuggestions.orgId, orgId),
+          eq(companies.organizationId, orgId),
           or(
             eq(accountContactSuggestions.status, "pending"),
             and(
@@ -6252,8 +6255,8 @@ export class DatabaseStorage implements IStorage {
           ),
         ),
       )
-      .groupBy(accountContactSuggestions.accountId);
-    return rows as { accountId: string; count: number }[];
+      .groupBy(accountContactSuggestions.accountId, companies.name);
+    return rows as { accountId: string; accountName: string; pendingCount: number }[];
   }
 
   async getAccountContactSuggestion(id: string): Promise<AccountContactSuggestion | undefined> {
