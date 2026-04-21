@@ -37,7 +37,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable, emailMessages, emailSignals } from "@shared/schema";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable, emailMessages, emailSignals, onboardingMilestoneToggleSchema, type OnboardingMilestones } from "@shared/schema";
 import { normalizeLaneLocation, normalizeEquipmentType } from "@shared/laneFormatters";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
@@ -1510,11 +1510,22 @@ RULES FOR YOUR RESPONSES:
       if (!(await canAccessCompany(currentUser, req.params.id))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const { milestones } = req.body;
-      if (!Array.isArray(milestones)) return res.status(400).json({ error: "milestones must be an array" });
+      const parsed = onboardingMilestoneToggleSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid milestone payload", details: parsed.error.flatten() });
+      }
+      const { milestoneId, completed } = parsed.data;
+      const existing = await storage.getCompany(req.params.id);
+      if (!existing) return res.status(404).json({ error: "Company not found" });
+      const stored = existing.onboardingMilestones;
+      const current: OnboardingMilestones =
+        stored && typeof stored === "object" && !Array.isArray(stored)
+          ? { ...(stored as OnboardingMilestones) }
+          : {};
+      current[milestoneId] = completed;
       const updated = await storage.updateCompany(req.params.id, currentUser.organizationId, {
-        onboardingMilestones: milestones,
-      } as any);
+        onboardingMilestones: current,
+      });
       if (!updated) return res.status(404).json({ error: "Company not found" });
       res.json(updated);
     } catch (error) {

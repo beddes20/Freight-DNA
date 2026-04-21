@@ -53,6 +53,22 @@ export const sharedRepSchema = z.object({
 });
 export type SharedRep = z.infer<typeof sharedRepSchema>;
 
+export const ONBOARDING_MILESTONE_IDS = [
+  "kickoff_call",
+  "system_access",
+  "first_load",
+  "rate_process_review",
+  "primary_contact",
+  "routing_guide",
+  "thirty_day_checkin",
+] as const;
+export type OnboardingMilestoneId = typeof ONBOARDING_MILESTONE_IDS[number];
+export type OnboardingMilestones = Partial<Record<OnboardingMilestoneId, boolean>>;
+export const onboardingMilestoneToggleSchema = z.object({
+  milestoneId: z.enum(ONBOARDING_MILESTONE_IDS),
+  completed: z.boolean(),
+});
+
 export const insertCompanySchema = createInsertSchema(companies).omit({
   id: true,
 });
