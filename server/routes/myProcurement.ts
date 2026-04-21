@@ -656,6 +656,16 @@ export function registerMyProcurementRoutes(app: Express) {
       const opp = await storage.getFreightOpportunity(user.organizationId, String(req.params.id));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
 
+      // Gate: this endpoint is purpose-built for routing import-sourced
+      // opportunities (the "Unassigned" bucket on the Available Freight tab).
+      // Reassignment of carrier-procurement / manual opportunities flows
+      // through other surfaces, so reject those here to keep the API surface
+      // honest with the UI intent.
+      const sourceKind = (opp.sourceRef as { kind?: string } | null)?.kind;
+      if (sourceKind !== "available_freight_import") {
+        return res.status(400).json({ error: "Only imported freight opportunities can be assigned via this endpoint" });
+      }
+
       const parsed = assignSchema.safeParse(req.body ?? {});
       if (!parsed.success) return res.status(400).json({ error: "Invalid assign payload" });
 
