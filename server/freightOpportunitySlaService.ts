@@ -28,7 +28,24 @@
 import { and, eq, isNull, isNotNull, lte, inArray, or, sql } from "drizzle-orm";
 import { db, storage } from "./storage";
 import { freightOpportunities, users } from "@shared/schema";
-import type { FreightOpportunity, User } from "@shared/schema";
+import type { FreightOpportunity, FreightOpportunityAudit, User } from "@shared/schema";
+
+interface SlaAuditPayload {
+  level?: "L1" | "L2";
+  ageHours?: number;
+  recipientUserIds?: string[];
+  thresholdHours?: number;
+}
+
+function parseSlaAuditPayload(payload: unknown): SlaAuditPayload | null {
+  if (!payload || typeof payload !== "object") return null;
+  const p = payload as Record<string, unknown>;
+  const recipients = Array.isArray(p.recipientUserIds)
+    ? p.recipientUserIds.filter((x): x is string => typeof x === "string")
+    : undefined;
+  const level = p.level === "L1" || p.level === "L2" ? p.level : undefined;
+  return { level, recipientUserIds: recipients };
+}
 
 const APPROVER_ROLES = new Set([
   "admin",
@@ -60,7 +77,7 @@ export function computeSlaState(
 ): { state: SlaState; ageHours: number | null; awaitingSince: string | null } {
   if (opp.approvedAt) return { state: "ok", ageHours: null, awaitingSince: null };
   if (!opp.awaitingApprovalSince) return { state: "ok", ageHours: null, awaitingSince: null };
-  if (opp.status !== "ready_to_send" && opp.status !== "new") {
+  if (opp.status !== "ready_to_send") {
     return { state: "ok", ageHours: null, awaitingSince: null };
   }
   const startMs = opp.awaitingApprovalSince instanceof Date
@@ -93,7 +110,7 @@ export async function listOverSlaOpportunities(
     eq(freightOpportunities.orgId, orgId),
     isNull(freightOpportunities.approvedAt),
     isNotNull(freightOpportunities.awaitingApprovalSince),
-    inArray(freightOpportunities.status, ["new", "ready_to_send"]),
+    eq(freightOpportunities.status, "ready_to_send"),
     lte(freightOpportunities.awaitingApprovalSince, cutoff),
   ));
 }
@@ -155,8 +172,14 @@ async function tryClaimSlaStamp(
       AND approved_at IS NULL
     RETURNING id
   `);
-  const rows = (result as any).rows ?? result;
-  return Array.isArray(rows) && rows.length > 0;
+  // node-pg returns { rows: [...] }; some drivers return the array directly.
+  const maybeRows = (result as unknown as { rows?: unknown[] }).rows;
+  const rows: unknown[] = Array.isArray(maybeRows)
+    ? maybeRows
+    : Array.isArray(result)
+      ? (result as unknown as unknown[])
+      : [];
+  return rows.length > 0;
 }
 
 /**
@@ -296,17 +319,20 @@ export async function runOrgSlaSweep(orgId: string, now: Date = new Date()): Pro
         const audits = await storage.listFreightOpportunityAudit(opp.id);
         // listFreightOpportunityAudit orders ASC (oldest first) — scan in
         // reverse to get the most recent L1 nudge after multi-cycle resets.
-        let lastL1: typeof audits[number] | undefined;
+        let lastL1: FreightOpportunityAudit | undefined;
+        let lastL1Payload: SlaAuditPayload | null = null;
         for (let i = audits.length - 1; i >= 0; i--) {
           const a = audits[i];
-          if (a.eventType === "sla_nudged" && (a.payload as any)?.level === "L1") {
+          if (a.eventType !== "sla_nudged") continue;
+          const parsed = parseSlaAuditPayload(a.payload);
+          if (parsed?.level === "L1") {
             lastL1 = a;
+            lastL1Payload = parsed;
             break;
           }
         }
-        const recipientIds: string[] = Array.isArray((lastL1?.payload as any)?.recipientUserIds)
-          ? (lastL1!.payload as any).recipientUserIds
-          : [];
+        void lastL1;
+        const recipientIds: string[] = lastL1Payload?.recipientUserIds ?? [];
         if (recipientIds.length > 0) {
           const recovered = await loadUsersByIds(recipientIds);
           l1ActualRecipients = Array.from(recovered.values());
@@ -442,7 +468,7 @@ export async function countOverSlaForOrg(orgId: string): Promise<number> {
       eq(freightOpportunities.orgId, orgId),
       isNull(freightOpportunities.approvedAt),
       isNotNull(freightOpportunities.awaitingApprovalSince),
-      inArray(freightOpportunities.status, ["new", "ready_to_send"]),
+      eq(freightOpportunities.status, "ready_to_send"),
       lte(freightOpportunities.awaitingApprovalSince, cutoff),
     ));
   return n ?? 0;
