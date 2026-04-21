@@ -17,9 +17,12 @@
  */
 
 import type { Express } from "express";
-import { storage } from "../storage";
+import { storage, db } from "../storage";
 import { getCurrentUser } from "../auth";
 import { normalizeLaneLocation, normalizeEquipmentType } from "@shared/laneFormatters";
+import { and, desc, eq } from "drizzle-orm";
+import { plays, playRuns } from "@shared/schema";
+import { evaluatePlayTriggersForOrg } from "./playbook";
 
 /**
  * SQL expression that applies the same normalization as normalizeLaneLocation() to a column.
@@ -338,9 +341,65 @@ export function registerMyProcurementRoutes(app: Express) {
         ? `${lastTask.createdAt ?? ""}|${lastTask.taskId}`
         : null;
 
+      // Triggered Plays bucket (Task #300) — surfaced as actionable items in the
+      // rep's procurement queue. Best-effort: failures don't block the response.
+      let triggeredPlays: Array<{
+        runId: string;
+        playId: string;
+        playName: string;
+        channel: string;
+        audience: string;
+        suggestedAt: string;
+        signalType: string | null;
+      }> = [];
+      try {
+        await evaluatePlayTriggersForOrg(user.organizationId).catch(() => {});
+        const rows = await db.select({
+          runId: playRuns.id,
+          playId: plays.id,
+          playName: plays.name,
+          channel: plays.channel,
+          audience: plays.audience,
+          suggestedAt: playRuns.suggestedAt,
+          signalType: plays.signalType,
+          accountId: playRuns.accountId,
+        })
+          .from(playRuns)
+          .innerJoin(plays, eq(plays.id, playRuns.playId))
+          .where(and(
+            eq(playRuns.orgId, user.organizationId),
+            eq(playRuns.status, "suggested"),
+          ))
+          .orderBy(desc(playRuns.suggestedAt))
+          .limit(20);
+        // Rep-scope triggered plays: prefer runs whose accountId matches a
+        // company already in the rep's lane work queue or award tasks. If
+        // none of the rep's accounts match, fall back to org-wide so the rep
+        // still sees newly fired triggers waiting for assignment.
+        const repAccountIds = new Set<string>([
+          ...lwqLanes.map(l => l.companyId).filter((x): x is string => !!x),
+          ...awardTasks.map(t => t.companyId).filter((x): x is string => !!x),
+        ]);
+        const all = rows.map(r => ({
+          runId: r.runId,
+          playId: r.playId,
+          playName: r.playName,
+          channel: r.channel,
+          audience: r.audience,
+          suggestedAt: r.suggestedAt instanceof Date ? r.suggestedAt.toISOString() : String(r.suggestedAt),
+          signalType: r.signalType ?? null,
+          accountId: r.accountId ?? null,
+        }));
+        const scoped = all.filter(p => p.accountId && repAccountIds.has(p.accountId));
+        triggeredPlays = (scoped.length > 0 ? scoped : all).map(({ accountId, ...rest }) => rest);
+      } catch (pbErr) {
+        console.error("[my-procurement] triggered plays warning:", pbErr);
+      }
+
       return res.json({
         lwqLanes,
         awardTasks,
+        triggeredPlays,
         pagination: {
           limit,
           lwqNextCursor,

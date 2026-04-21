@@ -17,6 +17,7 @@ import { storage } from "./storage";
 import { runPhase1EngineForOrg, evalR13MarketTightening, evalR14MarketLoosening } from "./nbaPhase1Engine";
 import { runRecurringLaneEngineForOrg } from "./recurringLaneCapacityEngine";
 import { scoreAllEligibleLanes } from "./laneScoringService";
+import { evaluatePlayTriggersForOrg } from "./routes/playbook";
 import { syncMarketSignalNbas } from "./marketNbaService";
 import { generateConversationOwnershipNbas } from "./nextBestActionEngine";
 import { getAvgVotriWoW, getLaneVotrisBatch, getLaneVotrisBatchFresh, buildVotriQualifier } from "./sonarClient";
@@ -49,6 +50,14 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
       log(`Processing org ${org.id}…`);
       try {
         await storage.processExpiredNbaCards(org.id);
+
+        // Playbook trigger evaluator (Task #300) — non-fatal.
+        try {
+          const { created } = await evaluatePlayTriggersForOrg(org.id);
+          if (created > 0) log(`Org ${org.id}: playbook triggered ${created} suggested run(s)`);
+        } catch (pbErr: any) {
+          log(`Org ${org.id}: playbook trigger warning: ${pbErr?.message ?? pbErr}`);
+        }
 
         // Refresh recurring lane data and scores before card generation
         // Only runs when the feature flag is on for this org — avoids unnecessary

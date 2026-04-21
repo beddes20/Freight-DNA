@@ -106,6 +106,12 @@ const laneToolItems: NavItem[] = [
     roles: ["admin", "director", "national_account_manager", "logistics_manager", "account_manager"],
   },
   {
+    title: "Playbook",
+    url: "/playbook",
+    icon: ClipboardList,
+    roles: ["admin", "director", "national_account_manager", "sales_director", "logistics_manager", "account_manager", "sales"],
+  },
+  {
     title: "ValueIQ",
     url: "/valueiq",
     icon: Brain,

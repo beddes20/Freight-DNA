@@ -3104,3 +3104,105 @@ export const orgCorpusChunks = pgTable(
   ],
 );
 export type OrgCorpusChunk = typeof orgCorpusChunks.$inferSelect;
+
+// ─── Playbook Module (Task #300) ────────────────────────────────────────────
+// First-class plays managers can author, version, publish, and roll up to
+// outcome analytics. Independent of agent_plays (which feed DNA's persona).
+
+export const plays = pgTable(
+  "plays",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    audience: text("audience").notNull().default("customer"),     // customer | carrier
+    channel: text("channel").notNull().default("email"),          // email | call | in_person
+    triggerType: text("trigger_type").notNull().default("manual"),// manual | quote_no_response | award_no_carrier | sentiment_drop | signal_match
+    triggerConfig: jsonb("trigger_config").$type<Record<string, unknown>>().default({}),
+    signalType: text("signal_type"),                              // optional link to proven_tactics signal_type
+    recommendedSteps: text("recommended_steps").array().notNull().default(sql`ARRAY[]::text[]`),
+    templateBody: text("template_body").notNull().default(""),
+    successMetric: text("success_metric").notNull().default(""),
+    outcomeWindowHours: integer("outcome_window_hours").notNull().default(96),
+    status: text("status").notNull().default("draft"),            // draft | published | archived
+    currentVersion: integer("current_version").notNull().default(1),
+    sourceLegacyId: varchar("source_legacy_id"),                  // agent_plays.id when migrated
+    createdBy: varchar("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("plays_org_status_idx").on(table.orgId, table.status),
+    index("plays_org_trigger_idx").on(table.orgId, table.triggerType),
+  ],
+);
+export const insertPlaySchema = createInsertSchema(plays).omit({
+  id: true, createdAt: true, updatedAt: true, currentVersion: true,
+});
+export type InsertPlay = z.infer<typeof insertPlaySchema>;
+export type Play = typeof plays.$inferSelect;
+
+export const playVersions = pgTable(
+  "play_versions",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    playId: varchar("play_id").notNull().references(() => plays.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    snapshot: jsonb("snapshot").$type<Record<string, unknown>>().notNull(),
+    publishedAt: timestamp("published_at"),
+    createdBy: varchar("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("play_versions_play_version_idx").on(table.playId, table.version),
+  ],
+);
+export type PlayVersion = typeof playVersions.$inferSelect;
+
+export const playRuns = pgTable(
+  "play_runs",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    playId: varchar("play_id").notNull().references(() => plays.id, { onDelete: "cascade" }),
+    playVersion: integer("play_version").notNull(),
+    repUserId: varchar("rep_user_id").references(() => users.id, { onDelete: "set null" }),
+    accountId: varchar("account_id").references(() => companies.id, { onDelete: "set null" }),
+    accountName: text("account_name"),
+    laneId: varchar("lane_id"),
+    contactId: varchar("contact_id"),
+    referenceType: text("reference_type"),                        // lane | award | contact | thread | other
+    referenceId: text("reference_id"),
+    status: text("status").notNull().default("suggested"),        // suggested | open | completed | cancelled
+    triggerSnapshot: jsonb("trigger_snapshot").$type<Record<string, unknown>>(),
+    suggestedAt: timestamp("suggested_at").defaultNow().notNull(),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+  },
+  (table) => [
+    index("play_runs_org_status_idx").on(table.orgId, table.status),
+    index("play_runs_rep_status_idx").on(table.repUserId, table.status),
+    index("play_runs_play_idx").on(table.playId),
+  ],
+);
+export const insertPlayRunSchema = createInsertSchema(playRuns).omit({ id: true, suggestedAt: true });
+export type InsertPlayRun = z.infer<typeof insertPlayRunSchema>;
+export type PlayRun = typeof playRuns.$inferSelect;
+
+export const playOutcomes = pgTable(
+  "play_outcomes",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    playRunId: varchar("play_run_id").notNull().references(() => playRuns.id, { onDelete: "cascade" }),
+    outcome: text("outcome").notNull(),                           // success | fail | no_response
+    notes: text("notes"),
+    timeToOutcomeHours: integer("time_to_outcome_hours"),
+    recordedBy: varchar("recorded_by").references(() => users.id, { onDelete: "set null" }),
+    recordedAt: timestamp("recorded_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("play_outcomes_run_idx").on(table.playRunId),
+  ],
+);
+export type PlayOutcome = typeof playOutcomes.$inferSelect;

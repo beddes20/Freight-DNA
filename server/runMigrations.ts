@@ -2975,6 +2975,132 @@ export async function runMigrations() {
     clientV.release();
   }
 
+  // ── Playbook Module (Task #300) ──
+  // First-class plays: managers author, version, publish, and we track runs+outcomes.
+  const clientPb = await pool.connect();
+  try {
+    await clientPb.query(`
+      CREATE TABLE IF NOT EXISTS plays (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        name text NOT NULL,
+        description text,
+        audience text NOT NULL DEFAULT 'customer',
+        channel text NOT NULL DEFAULT 'email',
+        trigger_type text NOT NULL DEFAULT 'manual',
+        trigger_config jsonb DEFAULT '{}'::jsonb,
+        signal_type text,
+        recommended_steps text[] NOT NULL DEFAULT ARRAY[]::text[],
+        template_body text NOT NULL DEFAULT '',
+        success_metric text NOT NULL DEFAULT '',
+        outcome_window_hours integer NOT NULL DEFAULT 96,
+        status text NOT NULL DEFAULT 'draft',
+        current_version integer NOT NULL DEFAULT 1,
+        source_legacy_id varchar,
+        created_by varchar REFERENCES users(id) ON DELETE SET NULL,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientPb.query(`CREATE INDEX IF NOT EXISTS plays_org_status_idx ON plays(org_id, status)`);
+    await clientPb.query(`CREATE INDEX IF NOT EXISTS plays_org_trigger_idx ON plays(org_id, trigger_type)`);
+
+    await clientPb.query(`
+      CREATE TABLE IF NOT EXISTS play_versions (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        play_id varchar NOT NULL REFERENCES plays(id) ON DELETE CASCADE,
+        version integer NOT NULL,
+        snapshot jsonb NOT NULL,
+        published_at timestamp,
+        created_by varchar REFERENCES users(id) ON DELETE SET NULL,
+        created_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientPb.query(`CREATE UNIQUE INDEX IF NOT EXISTS play_versions_play_version_idx ON play_versions(play_id, version)`);
+
+    await clientPb.query(`
+      CREATE TABLE IF NOT EXISTS play_runs (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        play_id varchar NOT NULL REFERENCES plays(id) ON DELETE CASCADE,
+        play_version integer NOT NULL,
+        rep_user_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        account_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        account_name text,
+        lane_id varchar,
+        contact_id varchar,
+        reference_type text,
+        reference_id text,
+        status text NOT NULL DEFAULT 'suggested',
+        trigger_snapshot jsonb,
+        suggested_at timestamp NOT NULL DEFAULT now(),
+        started_at timestamp,
+        completed_at timestamp
+      )
+    `);
+    await clientPb.query(`CREATE INDEX IF NOT EXISTS play_runs_org_status_idx ON play_runs(org_id, status)`);
+    await clientPb.query(`CREATE INDEX IF NOT EXISTS play_runs_rep_status_idx ON play_runs(rep_user_id, status)`);
+    await clientPb.query(`CREATE INDEX IF NOT EXISTS play_runs_play_idx ON play_runs(play_id)`);
+    // Hardened idempotency for trigger-generated suggested runs (Task #300):
+    // (play_id, reference_type, reference_id) is unique among 'suggested' rows
+    // so concurrent evaluator passes can't seed duplicates. Once a run is
+    // promoted to open/completed/skipped this constraint no longer applies.
+    await clientPb.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS play_runs_suggested_ref_uidx
+      ON play_runs(play_id, reference_type, reference_id)
+      WHERE status = 'suggested' AND reference_type IS NOT NULL AND reference_id IS NOT NULL
+    `);
+
+    await clientPb.query(`
+      CREATE TABLE IF NOT EXISTS play_outcomes (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        play_run_id varchar NOT NULL REFERENCES play_runs(id) ON DELETE CASCADE,
+        outcome text NOT NULL,
+        notes text,
+        time_to_outcome_hours integer,
+        recorded_by varchar REFERENCES users(id) ON DELETE SET NULL,
+        recorded_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientPb.query(`CREATE UNIQUE INDEX IF NOT EXISTS play_outcomes_run_idx ON play_outcomes(play_run_id)`);
+
+    // Backfill: copy existing agent_plays into plays as v1 records (per-org via agents.organization_id).
+    // Idempotent: source_legacy_id uniqueness is enforced via the WHERE NOT EXISTS guard.
+    await clientPb.query(`
+      INSERT INTO plays (org_id, name, description, audience, channel, trigger_type, recommended_steps,
+                         template_body, success_metric, status, current_version, source_legacy_id, created_by, created_at, updated_at)
+      SELECT a.organization_id, ap.name, NULL, 'customer', 'email', 'manual',
+             ARRAY[ap.when_to_use]::text[], ap.body, '', 'published', 1,
+             ap.id, ap.created_by, ap.created_at, ap.updated_at
+      FROM agent_plays ap
+      JOIN agents a ON a.id = ap.agent_id
+      WHERE NOT EXISTS (SELECT 1 FROM plays p WHERE p.source_legacy_id = ap.id)
+    `);
+
+    // Seed v1 versions for every play that has no versions yet.
+    await clientPb.query(`
+      INSERT INTO play_versions (play_id, version, snapshot, published_at, created_by, created_at)
+      SELECT p.id, 1,
+             jsonb_build_object(
+               'name', p.name, 'description', p.description, 'audience', p.audience,
+               'channel', p.channel, 'triggerType', p.trigger_type, 'triggerConfig', p.trigger_config,
+               'signalType', p.signal_type, 'recommendedSteps', to_jsonb(p.recommended_steps),
+               'templateBody', p.template_body, 'successMetric', p.success_metric,
+               'outcomeWindowHours', p.outcome_window_hours
+             ),
+             CASE WHEN p.status = 'published' THEN p.created_at ELSE NULL END,
+             p.created_by, p.created_at
+      FROM plays p
+      WHERE NOT EXISTS (SELECT 1 FROM play_versions v WHERE v.play_id = p.id)
+    `);
+
+    console.log("[migrations] Playbook module tables ensured (Task #300)");
+  } catch (err) {
+    console.error("[migrations] playbook migration error:", err);
+  } finally {
+    clientPb.release();
+  }
+
   // ── contacts.mobile (Task #263) ──
   // Secondary phone number so Webex call sync can auto-attach calls placed to
   // either a contact's direct line or their cell.

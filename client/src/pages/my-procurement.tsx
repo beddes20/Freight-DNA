@@ -82,9 +82,20 @@ interface AwardTask {
   matchedLaneId: string | null;
 }
 
+interface TriggeredPlay {
+  runId: string;
+  playId: string;
+  playName: string;
+  channel: string;
+  audience: string;
+  suggestedAt: string;
+  signalType: string | null;
+}
+
 interface MyProcurementData {
   lwqLanes: LwqLane[];
   awardTasks: AwardTask[];
+  triggeredPlays?: TriggeredPlay[];
   pagination?: {
     limit: number;
     lwqNextCursor: string | null;
@@ -460,6 +471,7 @@ function AwardTaskCard({ item, onClose }: { item: AwardTask; onClose: (id: strin
 
 export default function MyProcurementPage() {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const [activeTab, setActiveTab] = useState<"all" | "lwq" | "award">("all");
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery<MyProcurementData>({
@@ -605,6 +617,70 @@ export default function MyProcurementPage() {
             </p>
           </div>
         ) : (
+          <>
+          {(data?.triggeredPlays?.length ?? 0) > 0 && (
+            <div className="mb-4 rounded-md border border-border/60 bg-card/40 p-3" data-testid="section-triggered-plays">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-sm font-semibold flex items-center gap-2">
+                  Triggered Plays
+                  <span className="text-xs text-muted-foreground">({data?.triggeredPlays?.length})</span>
+                </h2>
+                <Button variant="ghost" size="sm" onClick={() => navigate("/playbook")} data-testid="link-open-playbook">
+                  Open Playbook <ExternalLink className="w-3 h-3 ml-1" />
+                </Button>
+              </div>
+              <div className="space-y-1.5">
+                {(data?.triggeredPlays ?? []).slice(0, 5).map((tp) => (
+                  <div
+                    key={tp.runId}
+                    className="flex items-center justify-between text-sm py-1.5 px-2 rounded hover-elevate"
+                    data-testid={`triggered-play-${tp.runId}`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-medium truncate">{tp.playName}</span>
+                      <span className="text-xs text-muted-foreground">{tp.channel} · {tp.audience}</span>
+                      {tp.signalType && (
+                        <span className="text-xs text-muted-foreground">· {tp.signalType}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 ml-3">
+                      <span className="text-xs text-muted-foreground whitespace-nowrap">
+                        {new Date(tp.suggestedAt).toLocaleDateString()}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="default"
+                        className="h-7 px-2"
+                        data-testid={`button-run-triggered-${tp.runId}`}
+                        onClick={async () => {
+                          try {
+                            const resp = await apiRequest("POST", `/api/playbook/plays/${tp.playId}/run`, { suggestedRunId: tp.runId });
+                            const data = await resp.json();
+                            queryClient.invalidateQueries({ queryKey: ["/api/my-procurement"] });
+                            queryClient.invalidateQueries({ queryKey: ["/api/playbook/runs"] });
+                            const action = data?.nextAction;
+                            if (action?.type === "compose_email") {
+                              try { navigator.clipboard?.writeText(action.body); } catch {}
+                              toast({ title: "Play started — email body copied", description: "Paste into compose to send." });
+                            } else if (action?.type === "open_task") {
+                              toast({ title: "Play started — task created", description: "Find it in your Tasks list." });
+                            } else {
+                              toast({ title: "Play started" });
+                            }
+                          } catch (e) {
+                            toast({ title: "Failed to start play", variant: "destructive" });
+                          }
+                        }}
+                      >
+                        Run
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
             <TabsList className="mb-4" data-testid="tabs-procurement">
               <TabsTrigger value="all" data-testid="tab-all">
@@ -679,6 +755,7 @@ export default function MyProcurementPage() {
               )}
             </TabsContent>
           </Tabs>
+          </>
         )}
       </div>
     </div>
