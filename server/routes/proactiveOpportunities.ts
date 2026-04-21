@@ -377,6 +377,182 @@ export function registerProactiveOpportunityRoutes(app: Express) {
     }
   });
 
+  /**
+   * POST /api/freight-opportunities/:oppId/cover
+   * Task #366 — Mark a freight opportunity as covered and emit a coaching/
+   * rate-positioning row to load_fact. This is what closes the loop between
+   * the My Procurement work surface and the Coaching/Rate Intelligence
+   * pipeline: every covered load contributes a real rep + carrier + paid
+   * rate + customer rate datapoint that downstream features can learn from.
+   *
+   * Body: { carrierId: string, paidRate: number, customerRate: number,
+   *         carrierName?: string, notes?: string }
+   *
+   * carrierId is a carriers.id reference (the source carrier of truth).
+   * carrierName is optional and overrides the looked-up name (useful when
+   * the rep covered with a brand-new carrier that hasn't been catalogued
+   * yet). paidRate is what we pay the carrier; customerRate is what the
+   * customer pays us. revenue/cost/margin are computed as rate × loadCount
+   * so a small lane-building sweep contributes correctly.
+   */
+  const coverSchema = z.object({
+    carrierId: z.string().min(1).optional(),
+    carrierName: z.string().min(1).max(200).optional(),
+    paidRate: z.number().positive().max(999999),
+    customerRate: z.number().positive().max(999999),
+    notes: z.string().max(2000).nullable().optional(),
+  }).refine(d => d.carrierId || d.carrierName, {
+    message: "carrierId or carrierName is required",
+  });
+  app.post("/api/freight-opportunities/:oppId/cover", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const uid = userId(req);
+      if (!uid) return res.status(401).json({ error: "Not authenticated" });
+      const opp = await storage.getFreightOpportunity(org, String(req.params.oppId));
+      if (!opp) return res.status(404).json({ error: "Opportunity not found" });
+      // Anyone with line-of-sight to the opp may close it: owner, delegate,
+      // or a manager (managers may close on behalf of an out-of-office rep).
+      const rep = await storage.getUser(uid);
+      if (!rep) return res.status(401).json({ error: "Rep not found" });
+      const isOwner = opp.ownerUserId === uid || opp.delegatedToUserId === uid;
+      const isManager = ["admin", "director", "national_account_manager", "sales_director", "manager"].includes(rep.role);
+      if (!isOwner && !isManager) {
+        return res.status(403).json({ error: "Only the owner, delegate, or a manager can mark covered" });
+      }
+      const parsed = coverSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid cover payload", details: parsed.error.flatten() });
+      }
+      if (opp.status === "covered") {
+        return res.status(400).json({ error: "Opportunity is already covered" });
+      }
+
+      // Resolve carrier name (either explicit or from the catalog).
+      let carrierName: string | null = parsed.data.carrierName ?? null;
+      if (!carrierName && parsed.data.carrierId) {
+        const c = await storage.getCarrier(parsed.data.carrierId);
+        carrierName = c?.name ?? null;
+        if (c && c.organizationId !== org) {
+          return res.status(403).json({ error: "Carrier does not belong to your organization" });
+        }
+      }
+      if (!carrierName) {
+        return res.status(400).json({ error: "Could not resolve carrier name" });
+      }
+
+      // Resolve the customer name for the load_fact row.
+      const company = await storage.getCompany(opp.companyId);
+      const customerName = company?.name ?? null;
+
+      const loadCount = Math.max(1, opp.loadCount ?? 1);
+      const revenue = parsed.data.customerRate * loadCount;
+      const cost = parsed.data.paidRate * loadCount;
+      const margin = revenue - cost;
+      const marginPct = revenue > 0 ? margin / revenue : 0;
+
+      const updated = await storage.updateFreightOpportunity(org, opp.id, {
+        status: "covered",
+        // Clear any pending SLA clock — covered freight no longer needs
+        // approval reminders.
+        awaitingApprovalSince: null,
+      });
+      await storage.appendFreightOpportunityAudit({
+        opportunityId: opp.id,
+        eventType: "status_changed",
+        actorUserId: uid,
+        payload: {
+          kind: "covered",
+          carrierId: parsed.data.carrierId ?? null,
+          carrierName,
+          paidRate: parsed.data.paidRate,
+          customerRate: parsed.data.customerRate,
+          revenue,
+          cost,
+          margin,
+          loadCount,
+          notes: parsed.data.notes ?? null,
+        },
+      });
+
+      // Emit to load_fact so coaching / rate positioning sees the win.
+      // Order id is deterministic so re-running cover (e.g. a follow-up
+      // edit) updates the same row instead of inserting duplicates.
+      const { upsertLoadFact } = await import("../carrierIntelligenceService");
+      const month = (opp.pickupWindowStart || new Date().toISOString()).slice(0, 7);
+      let loadFactEmit: { inserted: boolean; updated: boolean; loadFactId?: string } | null = null;
+      try {
+        const out = await upsertLoadFact({
+          orgId: org,
+          orderId: `freight_opp:${opp.id}`,
+          companyId: opp.companyId,
+          customerName,
+          carrierName,
+          carrierPayeeCode: null,
+          originCity: opp.origin,
+          originState: opp.originState ?? null,
+          originZip: null,
+          destinationCity: opp.destination,
+          destinationState: opp.destinationState ?? null,
+          destinationZip: null,
+          accountManager: rep.name ?? rep.email ?? null,
+          dispatcher: null,
+          equipmentType: opp.equipmentType ?? null,
+          pickupDate: opp.pickupWindowStart ?? null,
+          deliveryDate: null,
+          pickupApptStart: null,
+          pickupApptEnd: null,
+          deliveryApptStart: null,
+          deliveryApptEnd: null,
+          arrivedAtPickup: null,
+          arrivedAtDelivery: null,
+          totalStops: null,
+          totalMiles: null,
+          month,
+          moveStatus: "covered",
+          bucket: "realized",
+          revenue: revenue.toFixed(2),
+          cost: cost.toFixed(2),
+          margin: margin.toFixed(2),
+          marginPct: marginPct.toFixed(4),
+          loadCount,
+          rawRow: { source: "freight_opp_coverage", oppId: opp.id, repUserId: uid },
+          sourceFileName: null,
+          sourceKind: "freight_opp_coverage",
+        });
+        loadFactEmit = { inserted: out.inserted, updated: out.updated, loadFactId: out.loadFactId };
+        await storage.appendFreightOpportunityAudit({
+          opportunityId: opp.id,
+          eventType: "load_fact_emitted",
+          actorUserId: uid,
+          payload: {
+            loadFactId: out.loadFactId,
+            inserted: out.inserted,
+            updated: out.updated,
+            changedFields: out.changedFields,
+          },
+        });
+      } catch (emitErr) {
+        // Coverage status transition still wins even if the load_fact emit
+        // fails — log loudly so an admin can backfill, but don't roll back
+        // the manual close (which would erase the rep's work).
+        console.error("[freight-opps] cover load_fact emit failed:", emitErr);
+        await storage.appendFreightOpportunityAudit({
+          opportunityId: opp.id,
+          eventType: "load_fact_emit_failed",
+          actorUserId: uid,
+          payload: { error: emitErr instanceof Error ? emitErr.message : String(emitErr) },
+        });
+      }
+
+      return res.json({ opportunity: updated, loadFact: loadFactEmit });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[freight-opps] cover error:", msg);
+      return res.status(500).json({ error: "Failed to mark covered" });
+    }
+  });
+
   app.patch("/api/companies/:id/outreach-policy", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);

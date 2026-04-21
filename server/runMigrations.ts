@@ -3229,6 +3229,30 @@ export async function runMigrations() {
     clientSla.release();
   }
 
+  // Task #366 — composite index for the My Procurement freight bucket query.
+  // The hot WHERE filter is (org_id, owner_user_id|delegated_to_user_id,
+  // status IN (...), pickup_window_end >= today). The two existing single-
+  // column indexes (org_status_urgency, owner) each only cover part of that
+  // filter, so the planner had to sort-merge. This composite covers the
+  // common case where a rep is paging their own queue.
+  const clientFI = await pool.connect();
+  try {
+    await clientFI.query(`
+      CREATE INDEX IF NOT EXISTS freight_opps_owner_status_pickup_idx
+      ON freight_opportunities(org_id, owner_user_id, status, pickup_window_end)
+    `);
+    await clientFI.query(`
+      CREATE INDEX IF NOT EXISTS freight_opps_delegated_status_pickup_idx
+      ON freight_opportunities(org_id, delegated_to_user_id, status, pickup_window_end)
+      WHERE delegated_to_user_id IS NOT NULL
+    `);
+    console.log("[migrations] freight_opportunities owner/delegate composite indexes ensured (Task #366)");
+  } catch (err) {
+    console.error("[migrations] freight composite-index migration error:", err);
+  } finally {
+    clientFI.release();
+  }
+
   // ── Task #368: load_fact widening + audit table ─────────────────────────
   const clientLF = await pool.connect();
   try {

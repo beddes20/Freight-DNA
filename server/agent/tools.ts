@@ -12,8 +12,9 @@ import { eq, and, desc, ilike, sql, inArray, gte, lte, isNull } from "drizzle-or
 import { db } from "../storage";
 import { storage } from "../storage";
 import {
-  companies, contacts, tasks, touchpoints, users, type User,
+  companies, contacts, tasks, touchpoints, users, freightOpportunities, type User,
 } from "@shared/schema";
+import { listAvailableFreightImports } from "../availableFreightImporter";
 import {
   getNationalMarketSummary, getMarketOtris, getLaneVotrisBatch,
   getLaneMarketRate, buildVotriQualifier,
@@ -360,6 +361,89 @@ export const TOOLS: AgentTool[] = [
       return { kind: "data", text: hits.map((h, i) => `${i + 1}. ${h.content}${h.similarity != null ? ` (sim ${(h.similarity * 100).toFixed(0)}%)` : ""}`).join("\n") };
     },
   },
+  // ─── AVAILABLE FREIGHT (Task #366) ───────────────────────────────────────
+  {
+    name: "list_available_freight",
+    capability: "read.opportunity",
+    description: "List the rep's open Available Freight opportunities (today's loads owned by or delegated to them). Use when the rep asks 'what freight do I have', 'what's in my procurement queue', or 'show me my open loads'.",
+    parameters: {
+      type: "object",
+      properties: {
+        status: { type: "string", description: "Optional status filter (new, ready_to_send, sent, awaiting_carrier_reply, awaiting_customer_confirm, partially_covered)" },
+        limit: { type: "number", description: "Max rows to return (default 10, max 25)" },
+      },
+    },
+    async execute(ctx, args) {
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const lim = Math.min(25, Math.max(1, Number(args.limit || 10)));
+      const wantStatus = args.status ? String(args.status) : null;
+      const conds = [
+        eq(freightOpportunities.orgId, ctx.organizationId),
+        sql`(${freightOpportunities.ownerUserId} = ${ctx.rep.id} OR ${freightOpportunities.delegatedToUserId} = ${ctx.rep.id})`,
+        sql`(${freightOpportunities.pickupWindowEnd} IS NULL OR ${freightOpportunities.pickupWindowEnd} >= ${todayIso})`,
+      ];
+      if (wantStatus) {
+        conds.push(eq(freightOpportunities.status, wantStatus));
+      } else {
+        conds.push(inArray(freightOpportunities.status, [
+          "new", "ready_to_send", "sent",
+          "awaiting_carrier_reply", "awaiting_customer_confirm", "partially_covered",
+        ]));
+      }
+      const rows = await db.select({
+        id: freightOpportunities.id,
+        companyId: freightOpportunities.companyId,
+        origin: freightOpportunities.origin,
+        originState: freightOpportunities.originState,
+        destination: freightOpportunities.destination,
+        destinationState: freightOpportunities.destinationState,
+        equipmentType: freightOpportunities.equipmentType,
+        pickupWindowStart: freightOpportunities.pickupWindowStart,
+        loadCount: freightOpportunities.loadCount,
+        status: freightOpportunities.status,
+        urgencyScore: freightOpportunities.urgencyScore,
+        approvedAt: freightOpportunities.approvedAt,
+      }).from(freightOpportunities)
+        .where(and(...conds))
+        .orderBy(desc(freightOpportunities.urgencyScore), desc(freightOpportunities.generatedAt))
+        .limit(lim);
+      if (rows.length === 0) {
+        return { kind: "data", text: wantStatus ? `No open Available Freight opportunities with status "${wantStatus}".` : "No open Available Freight opportunities right now." };
+      }
+      const companyIds = Array.from(new Set(rows.map(r => r.companyId)));
+      const cos = await storage.getCompaniesByIds(companyIds, ctx.organizationId);
+      const nameMap = new Map(cos.map(c => [c.id, c.name]));
+      const lines = rows.map((r, i) => {
+        const o = `${r.origin}${r.originState ? `, ${r.originState}` : ""}`;
+        const d = `${r.destination}${r.destinationState ? `, ${r.destinationState}` : ""}`;
+        const approved = r.approvedAt ? "✓ approved" : "needs approval";
+        return `${i + 1}. ${nameMap.get(r.companyId) ?? r.companyId} — ${o} → ${d} (${r.equipmentType ?? "?"}, ${r.loadCount}L, pickup ${r.pickupWindowStart}, status=${r.status}, ${approved}, urgency=${r.urgencyScore})`;
+      });
+      return { kind: "data", text: lines.join("\n") };
+    },
+  },
+  {
+    name: "freight_import_status",
+    capability: "read.opportunity",
+    description: "Show the most recent Available Freight import runs (the daily OneDrive pull): when, file name, rows in/updated/expired, unmatched companies, errors. Use when a rep asks 'did the freight upload work', 'when was the last import', or 'why don't I see today's loads'.",
+    parameters: {
+      type: "object",
+      properties: { limit: { type: "number", description: "Max imports to show (default 5, max 15)" } },
+    },
+    async execute(ctx, args) {
+      const lim = Math.min(15, Math.max(1, Number(args.limit || 5)));
+      const imports = await listAvailableFreightImports(ctx.organizationId, lim);
+      if (imports.length === 0) {
+        return { kind: "data", text: "No Available Freight imports have been recorded yet for this org." };
+      }
+      const lines = imports.map((r, i) => {
+        const when = typeof r.created_at === "string" ? r.created_at : new Date(r.created_at).toISOString();
+        const status = r.error ? `ERROR: ${r.error.slice(0, 120)}` : `${r.inserted} new, ${r.updated} updated, ${r.expired} expired, ${r.unmatchedCompanies} unmatched`;
+        return `${i + 1}. ${when} (${r.triggeredBy}) — ${r.fileName ?? "?"} — ${status}`;
+      });
+      return { kind: "data", text: lines.join("\n") };
+    },
+  },
   // ─── NAVIGATE ────────────────────────────────────────────────────────────
   {
     name: "navigate_to_company",
@@ -474,6 +558,66 @@ export const TOOLS: AgentTool[] = [
         tool: "mark_meaningful",
         args: { touchpoint_id: tp.id, company_name: company.name, type: tp.type, date: tp.date, note: tp.notes || "" },
         preface: "Touchpoint ready to mark meaningful:",
+      };
+    },
+  },
+  {
+    name: "approve_freight_opportunity",
+    capability: "write.opportunity",
+    description: "Approve a pending Available Freight opportunity by company name (so its outreach can be sent). Manager-only — renders an action card the rep must confirm. Use when a manager says 'approve the X load', 'approve [company]'s freight', etc.",
+    parameters: {
+      type: "object",
+      properties: {
+        company_name: { type: "string", description: "Company whose pending freight opp to approve" },
+        opportunity_id: { type: "string", description: "Optional explicit opp id (skips the company lookup)" },
+      },
+    },
+    async execute(ctx, args) {
+      // Manager-only — fall back to a soft no when a non-manager invokes it.
+      const isManager = ["admin", "director", "national_account_manager", "sales_director", "manager"].includes(ctx.rep.role);
+      if (!isManager) {
+        return { kind: "data", text: "Only managers can approve Available Freight opportunities." };
+      }
+
+      let target: { id: string; companyId: string; pickupWindowStart: string | null; origin: string; destination: string } | null = null;
+      const explicit = args.opportunity_id ? String(args.opportunity_id) : null;
+      if (explicit) {
+        const opp = await storage.getFreightOpportunity(ctx.organizationId, explicit);
+        if (opp) target = { id: opp.id, companyId: opp.companyId, pickupWindowStart: opp.pickupWindowStart, origin: opp.origin, destination: opp.destination };
+      } else {
+        const company = await findCompanyByName(ctx.organizationId, String(args.company_name || ""));
+        if (!company) return { kind: "data", text: `No company found matching "${args.company_name}".` };
+        // Pick the oldest unapproved row for that company.
+        const rows = await db.select({
+          id: freightOpportunities.id,
+          companyId: freightOpportunities.companyId,
+          pickupWindowStart: freightOpportunities.pickupWindowStart,
+          origin: freightOpportunities.origin,
+          destination: freightOpportunities.destination,
+        }).from(freightOpportunities)
+          .where(and(
+            eq(freightOpportunities.orgId, ctx.organizationId),
+            eq(freightOpportunities.companyId, company.id),
+            isNull(freightOpportunities.approvedAt),
+            inArray(freightOpportunities.status, ["new", "ready_to_send"]),
+          ))
+          .orderBy(desc(freightOpportunities.urgencyScore))
+          .limit(1);
+        if (rows[0]) target = rows[0];
+      }
+      if (!target) return { kind: "data", text: "No pending freight opportunity found to approve." };
+      const co = await storage.getCompany(target.companyId);
+      return {
+        kind: "action",
+        tool: "approve_freight_opportunity",
+        args: {
+          opportunity_id: target.id,
+          company_name: co?.name ?? target.companyId,
+          origin: target.origin,
+          destination: target.destination,
+          pickup: target.pickupWindowStart,
+        },
+        preface: "Freight opportunity ready to approve — confirm:",
       };
     },
   },

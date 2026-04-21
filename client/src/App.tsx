@@ -85,6 +85,7 @@ import AiAgentPortal from "@/pages/ai-agent";
 import AiCenterPage from "@/pages/ai-center";
 import AvailableFreightPage from "@/pages/available-freight";
 import AvailableFreightDetailPage from "@/pages/available-freight-detail";
+import AdminAvailableFreightImports from "@/pages/admin-available-freight-imports";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -206,6 +207,7 @@ function Router() {
       <Route path="/lanes/work-queue" component={LaneWorkQueuePage} />
       <Route path="/available-freight" component={AvailableFreightPage} />
       <Route path="/available-freight/:id" component={AvailableFreightDetailPage} />
+      <Route path="/admin/available-freight/imports" component={AdminAvailableFreightImports} />
       <Route path="/my-procurement" component={MyProcurementPage} />
       <Route path="/intel">{() => { window.location.replace("/valueiq?tab=insights"); return null; }}</Route>
       <Route path="/conversations" component={ConversationsPage} />

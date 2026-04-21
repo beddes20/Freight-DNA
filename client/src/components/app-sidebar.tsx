@@ -429,6 +429,16 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
+                {(user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager" || user?.role === "sales_director") && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/available-freight/imports"}>
+                      <Link href="/admin/available-freight/imports" data-testid="link-admin-freight-imports">
+                        <Truck className="h-4 w-4" />
+                        <span>Freight Import Health</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
                 {/* AI Center — single consolidated entry point for all AI management
                     (agents, approvals, pods, adapters, admin). Replaces the previous
                     four separate sidebar entries. ValueIQ stays its own rep workspace. */}

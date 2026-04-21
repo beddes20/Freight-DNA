@@ -513,7 +513,10 @@ export function registerMyProcurementRoutes(app: Express) {
           ownershipFilter,
         ))
         .orderBy(desc(freightOpportunities.urgencyScore), desc(freightOpportunities.generatedAt))
-        .limit(200);
+        // Task #366 — cap the My Procurement bucket at 100 newest. The full
+        // list with pagination lives at /available-freight; this endpoint is
+        // the rep's "today" surface, not their archive.
+        .limit(100);
 
       const companyIds = Array.from(new Set(freightOppRows.map(r => r.companyId)));
       const companyMap = new Map<string, string>();
@@ -1179,6 +1182,92 @@ export function registerMyProcurementRoutes(app: Express) {
       return res.status(500).json({ error: "Failed to read setting" });
     }
   });
+  /**
+   * POST /api/available-freight/onedrive-url/test
+   * Task #366 — Admin-only "Test connection" button. Verifies that the
+   * configured share/Graph URL actually resolves to a downloadable workbook
+   * without running the full importer (no row inserts, no audit pollution).
+   * Surfaces the most common failure modes (no credentials, bad URL format,
+   * Graph 401/403/404) so an admin can fix the setting before the next 5am
+   * scheduled pull instead of waiting for the silent failure.
+   */
+  app.post("/api/available-freight/onedrive-url/test", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+
+      // Allow either a body-supplied URL (admin testing a draft before save)
+      // or fall back to the persisted setting (admin re-testing the live one).
+      const bodyUrl = String((req.body ?? {}).url ?? "").trim();
+      const filePath = bodyUrl || (await storage.getSetting(availableFreightSettingKey(user.organizationId))) || "";
+      if (!filePath) {
+        return res.status(400).json({ ok: false, error: "No OneDrive URL configured or supplied" });
+      }
+
+      const { azureCredentialsConfigured, getGraphAccessToken } = await import("../graphService");
+      if (!azureCredentialsConfigured()) {
+        return res.status(400).json({
+          ok: false,
+          error: "Azure credentials are not configured (OUTLOOK_TENANT_ID / OUTLOOK_CLIENT_ID / OUTLOOK_CLIENT_SECRET)",
+        });
+      }
+
+      const trimmed = filePath.trim();
+      let metaUrl: string;
+      if (
+        trimmed.startsWith("https://1drv.ms/") ||
+        trimmed.startsWith("https://onedrive.live.com/") ||
+        trimmed.includes("sharepoint.com/")
+      ) {
+        const encoded = "u!" + Buffer.from(trimmed).toString("base64").replace(/=/g, "").replace(/\//g, "_").replace(/\+/g, "-");
+        metaUrl = `https://graph.microsoft.com/v1.0/shares/${encoded}/driveItem`;
+      } else if (trimmed.startsWith("https://graph.microsoft.com/")) {
+        // Strip a trailing /content so we hit the metadata endpoint instead.
+        metaUrl = trimmed.endsWith("/content") ? trimmed.slice(0, -"/content".length) : trimmed;
+      } else if (trimmed.startsWith("/") || trimmed.startsWith("drives/") || trimmed.startsWith("users/") || trimmed.startsWith("me/")) {
+        const rel = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
+        const stripped = rel.endsWith("/content") ? rel.slice(0, -"/content".length) : rel;
+        metaUrl = `https://graph.microsoft.com/v1.0/${stripped}`;
+      } else {
+        return res.status(400).json({
+          ok: false,
+          error: "Unrecognized OneDrive path format. Use a OneDrive/SharePoint share link, full Graph URL, or a relative drives/{driveId}/items/{itemId} path.",
+        });
+      }
+
+      let token: string;
+      try {
+        token = await getGraphAccessToken();
+      } catch (err) {
+        return res.status(400).json({ ok: false, error: `Failed to acquire Graph token: ${err instanceof Error ? err.message : String(err)}` });
+      }
+
+      const resp = await fetch(metaUrl, { headers: { Authorization: `Bearer ${token}` } });
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => "");
+        return res.status(400).json({
+          ok: false,
+          status: resp.status,
+          error: `Graph API returned HTTP ${resp.status}`,
+          detail: body.slice(0, 400),
+        });
+      }
+      const meta = await resp.json().catch(() => ({}));
+      return res.json({
+        ok: true,
+        name: (meta as any).name ?? null,
+        size: (meta as any).size ?? null,
+        webUrl: (meta as any).webUrl ?? null,
+        lastModifiedDateTime: (meta as any).lastModifiedDateTime ?? null,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[available-freight/onedrive-url/test]", msg);
+      return res.status(500).json({ ok: false, error: msg });
+    }
+  });
+
   app.put("/api/available-freight/onedrive-url", async (req, res) => {
     try {
       const user = await getCurrentUser(req);
