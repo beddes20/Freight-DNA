@@ -1161,6 +1161,45 @@ export const insertNbaCardSchema = createInsertSchema(nbaCards).omit({ id: true 
 export type InsertNbaCard = z.infer<typeof insertNbaCardSchema>;
 export type NbaCard = typeof nbaCards.$inferSelect;
 
+// ─── Missed Inbound Calls (Task #317) ────────────────────────────────────────
+/**
+ * One row per unanswered inbound Webex CDR (org-wide). Captured by the call
+ * sync regardless of whether the calling number matches a known CRM contact —
+ * unknown callers are still surfaced so coordinators can decide whether to
+ * call back. Deduped on (orgId, cdrId).
+ */
+export const missedInboundCalls = pgTable("missed_inbound_calls", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  cdrId: text("cdr_id").notNull(),
+  callingNumber: text("calling_number").notNull(),
+  calledNumber: text("called_number"),
+  ringDurationSeconds: integer("ring_duration_seconds").notNull().default(0),
+  voicemailLeft: boolean("voicemail_left").notNull().default(false),
+  startTime: text("start_time").notNull(),
+  /** Resolved CRM contact (null when caller unknown). */
+  contactId: varchar("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+  /** Resolved CRM company via the matched contact. */
+  companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }),
+  /** Internal user the call rang (resolved via webex user mapping). */
+  attributedUserId: varchar("attributed_user_id").references(() => users.id, { onDelete: "set null" }),
+  webexPersonId: text("webex_person_id"),
+  webexUserEmail: text("webex_user_email"),
+  /** True when startTime is outside 8a–6p local (org-wide heuristic). */
+  afterHours: boolean("after_hours").notNull().default(false),
+  /** NBA card created by the callback action (null until clicked). */
+  nbaCardId: varchar("nba_card_id"),
+  callbackCreatedAt: text("callback_created_at"),
+  createdAt: text("created_at").notNull(),
+}, (t) => ({
+  cdrUnique: uniqueIndex("missed_inbound_calls_org_cdr_unique").on(t.orgId, t.cdrId),
+  orgStartIdx: index("missed_inbound_calls_org_start_idx").on(t.orgId, t.startTime),
+}));
+
+export const insertMissedInboundCallSchema = createInsertSchema(missedInboundCalls).omit({ id: true });
+export type InsertMissedInboundCall = z.infer<typeof insertMissedInboundCallSchema>;
+export type MissedInboundCall = typeof missedInboundCalls.$inferSelect;
+
 // ─── Forced Focus ─────────────────────────────────────────────────────────────
 export const forcedFocus = pgTable("forced_focus", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

@@ -111,6 +111,9 @@ import {
   nbaCards,
   type NbaCard,
   type InsertNbaCard,
+  missedInboundCalls,
+  type MissedInboundCall,
+  type InsertMissedInboundCall,
   carriers,
   type Carrier,
   type InsertCarrier,
@@ -694,6 +697,13 @@ export interface IStorage {
   getNbaCardsByUserId(userId: string, ruleType?: string): Promise<NbaCard[]>;
   getNbaCardByMarketSignalDedup(companyId: string, signalId: string, ruleType: string): Promise<NbaCard | undefined>;
   dismissNbaCardsByMarketSignal(signalId: string): Promise<number>;
+
+  // Missed Inbound Calls (Task #317)
+  upsertMissedInboundCall(data: InsertMissedInboundCall): Promise<MissedInboundCall>;
+  getMissedInboundCallByCdr(orgId: string, cdrId: string): Promise<MissedInboundCall | undefined>;
+  getMissedInboundCall(id: string): Promise<MissedInboundCall | undefined>;
+  getMissedInboundCallsForOrg(orgId: string, sinceIso: string): Promise<MissedInboundCall[]>;
+  setMissedInboundCallback(id: string, nbaCardId: string): Promise<MissedInboundCall | undefined>;
   // Recurring lanes by company (for exposure matching)
   getRecurringLanesByCompany(companyId: string): Promise<RecurringLane[]>;
 
@@ -3913,6 +3923,56 @@ export class DatabaseStorage implements IStorage {
         )
       );
     return result.rowCount ?? 0;
+  }
+
+  // ── Missed Inbound Calls (Task #317) ─────────────────────────────────────────
+
+  async upsertMissedInboundCall(data: InsertMissedInboundCall): Promise<MissedInboundCall> {
+    const [row] = await db.insert(missedInboundCalls)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [missedInboundCalls.orgId, missedInboundCalls.cdrId],
+        set: {
+          contactId: data.contactId ?? null,
+          companyId: data.companyId ?? null,
+          attributedUserId: data.attributedUserId ?? null,
+          voicemailLeft: data.voicemailLeft ?? false,
+          ringDurationSeconds: data.ringDurationSeconds ?? 0,
+          afterHours: data.afterHours ?? false,
+        } as any,
+      })
+      .returning();
+    return row;
+  }
+
+  async getMissedInboundCallByCdr(orgId: string, cdrId: string): Promise<MissedInboundCall | undefined> {
+    const [row] = await db.select().from(missedInboundCalls)
+      .where(and(eq(missedInboundCalls.orgId, orgId), eq(missedInboundCalls.cdrId, cdrId)))
+      .limit(1);
+    return row;
+  }
+
+  async getMissedInboundCall(id: string): Promise<MissedInboundCall | undefined> {
+    const [row] = await db.select().from(missedInboundCalls).where(eq(missedInboundCalls.id, id)).limit(1);
+    return row;
+  }
+
+  async getMissedInboundCallsForOrg(orgId: string, sinceIso: string): Promise<MissedInboundCall[]> {
+    return db.select().from(missedInboundCalls)
+      .where(and(
+        eq(missedInboundCalls.orgId, orgId),
+        gte(missedInboundCalls.startTime, sinceIso),
+      ))
+      .orderBy(desc(missedInboundCalls.startTime));
+  }
+
+  async setMissedInboundCallback(id: string, nbaCardId: string): Promise<MissedInboundCall | undefined> {
+    const now = new Date().toISOString();
+    const [row] = await db.update(missedInboundCalls)
+      .set({ nbaCardId, callbackCreatedAt: now } as any)
+      .where(eq(missedInboundCalls.id, id))
+      .returning();
+    return row;
   }
 
   // ── Recurring lanes by company ────────────────────────────────────────────────

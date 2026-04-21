@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import type { Company, Contact } from "@shared/schema";
+import { MissedInboundPortlet } from "@/components/missed-inbound-portlet";
 
 function useCopy() {
   const { toast } = useToast();
@@ -326,6 +327,8 @@ export default function CoordinatorsCornerPage() {
           {relevantCompanies.length} accounts
         </Badge>
       </div>
+
+      <MissedInboundPortlet hours={48} title="Missed Inbound Calls (last 48h)" />
 
       {/* Search */}
       <div className="relative">

@@ -227,12 +227,10 @@ async function syncCallsForOrg(
       }
     }
 
-    if (!matchedContact) continue;
-
     // Resolve which internal user this Webex call should be attributed to.
     // In per-user (forUser) mode the token already belongs to a specific rep
     // so attribute directly. Otherwise look up the webex_user_mappings row.
-    let attributedUserId = defaultUserId;
+    let attributedUserId: string | null = defaultUserId ?? null;
     if (opts?.forUser) {
       attributedUserId = opts.forUser.userId;
     } else {
@@ -255,6 +253,37 @@ async function syncCallsForOrg(
     }
 
     if (!record.answered && record.direction === "TERMINATING") {
+      // Persist every missed inbound — known and unknown callers — so the
+      // Missed Inbound portlet and weekly recap have a complete picture
+      // regardless of whether the caller matches a CRM contact.
+      try {
+        const startDate = new Date(record.startTime);
+        const localHour = startDate.getHours();
+        const afterHours = localHour < 8 || localHour >= 18 || startDate.getDay() === 0 || startDate.getDay() === 6;
+        await storage.upsertMissedInboundCall({
+          orgId,
+          cdrId: record.id,
+          callingNumber: record.callingNumber,
+          calledNumber: record.calledNumber ?? null,
+          ringDurationSeconds: record.duration ?? 0,
+          voicemailLeft: !!record.voicemailLeft,
+          startTime: record.startTime,
+          contactId: matchedContact?.id ?? null,
+          companyId: matchedContact?.companyId ?? null,
+          attributedUserId: attributedUserId ?? null,
+          webexPersonId: record.webexPersonId ?? null,
+          webexUserEmail: record.webexUserEmail ?? null,
+          afterHours,
+          nbaCardId: null,
+          callbackCreatedAt: null,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (miErr) {
+        log(`Failed to record missed inbound call ${record.id}: ${miErr instanceof Error ? miErr.message : String(miErr)}`);
+      }
+
+      if (!matchedContact) continue;
+      if (!attributedUserId) continue;
       if (existingMissedCallCdrIds.has(record.id)) continue;
 
       try {
@@ -293,6 +322,19 @@ async function syncCallsForOrg(
         });
 
         createdNbaCards.push(nbaCard);
+
+        // Link the NBA card back to the missed_inbound_calls row so the
+        // callback endpoint short-circuits instead of creating a duplicate
+        // card when the coordinator clicks "Call back" on the portlet.
+        try {
+          const missedRow = await storage.getMissedInboundCallByCdr(orgId, record.id);
+          if (missedRow && !missedRow.nbaCardId) {
+            await storage.setMissedInboundCallback(missedRow.id, nbaCard.id);
+          }
+        } catch (linkErr) {
+          log(`Failed to link NBA card to missed_inbound_calls: ${linkErr instanceof Error ? linkErr.message : String(linkErr)}`);
+        }
+
         log(`Created missed-call NBA card for ${matchedContact.name}`);
       } catch (err) {
         log(`Failed to create missed-call NBA card: ${err instanceof Error ? err.message : String(err)}`);
@@ -301,6 +343,8 @@ async function syncCallsForOrg(
     }
 
     if (!record.answered) continue;
+    if (!matchedContact) continue;
+    if (!attributedUserId) continue;
 
     try {
       const callDate = new Date(record.startTime);
@@ -1336,6 +1380,171 @@ export function registerWebexRoutes(app: Express) {
     } catch (err) {
       log(`device-usage error: ${err instanceof Error ? err.message : String(err)}`);
       res.status(500).json({ error: err instanceof Error ? err.message : "Failed to load device usage" });
+    }
+  });
+
+  // ─── Missed Inbound Visibility (Task #317) ────────────────────────────────
+  // Returns missed inbound calls for the current user's org within the
+  // requested window, hydrated with contact/company/attributed-rep details
+  // so the portlet can render callback actions without follow-up requests.
+  app.get("/api/webex/missed-inbound", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const hours = Math.min(Math.max(parseInt((req.query.hours as string) || "48", 10) || 48, 1), 24 * 14);
+      const sinceIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+      const rows = await storage.getMissedInboundCallsForOrg(user.organizationId, sinceIso);
+
+      const contactIds = Array.from(new Set(rows.map(r => r.contactId).filter((v): v is string => !!v)));
+      const companyIds = Array.from(new Set(rows.map(r => r.companyId).filter((v): v is string => !!v)));
+      const userIds = Array.from(new Set(rows.map(r => r.attributedUserId).filter((v): v is string => !!v)));
+
+      const [contacts, companies, users] = await Promise.all([
+        Promise.all(contactIds.map(id => storage.getContact(id))),
+        Promise.all(companyIds.map(id => storage.getCompany(id))),
+        Promise.all(userIds.map(id => storage.getUser(id))),
+      ]);
+      const contactMap = new Map(contacts.filter(Boolean).map(c => [c!.id, c!]));
+      const companyMap = new Map(companies.filter(Boolean).map(c => [c!.id, c!]));
+      const userMap = new Map(users.filter(Boolean).map(u => [u!.id, u!]));
+
+      // Repeat-caller detection within the window — surfaces patterns like
+      // "this number has called 3 times today" so coordinators prioritize.
+      const byPhone = new Map<string, number>();
+      for (const r of rows) {
+        const key = phoneMatchKey(r.callingNumber);
+        byPhone.set(key, (byPhone.get(key) ?? 0) + 1);
+      }
+
+      const hydrated = rows.map(r => {
+        const contact = r.contactId ? contactMap.get(r.contactId) : null;
+        const company = r.companyId ? companyMap.get(r.companyId) : null;
+        const attributedUser = r.attributedUserId ? userMap.get(r.attributedUserId) : null;
+        return {
+          id: r.id,
+          cdrId: r.cdrId,
+          callingNumber: r.callingNumber,
+          calledNumber: r.calledNumber,
+          ringDurationSeconds: r.ringDurationSeconds,
+          voicemailLeft: r.voicemailLeft,
+          startTime: r.startTime,
+          afterHours: r.afterHours,
+          callbackCreatedAt: r.callbackCreatedAt,
+          nbaCardId: r.nbaCardId,
+          contact: contact ? { id: contact.id, name: contact.name, title: contact.title ?? null } : null,
+          company: company ? { id: company.id, name: company.name } : null,
+          attributedUser: attributedUser ? { id: attributedUser.id, name: attributedUser.name } : null,
+          repeatCount: byPhone.get(phoneMatchKey(r.callingNumber)) ?? 1,
+          known: !!r.contactId,
+        };
+      });
+
+      res.json({ calls: hydrated, windowHours: hours });
+    } catch (err) {
+      log(`Missed inbound list error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: "Failed to load missed inbound calls" });
+    }
+  });
+
+  // Click-to-callback: creates a `webex_missed_call` NBA card on the
+  // attributed rep (or the calling user when no rep is attributed / caller is
+  // unknown) and returns a navigation target so the UI can open the contact
+  // record or a quick-add screen for unknown numbers.
+  app.post("/api/webex/missed-inbound/:id/callback", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const missed = await storage.getMissedInboundCall(req.params.id);
+      if (!missed || missed.orgId !== user.organizationId) {
+        return res.status(404).json({ error: "Missed call not found" });
+      }
+
+      // Short-circuit if a callback NBA card has already been created for
+      // this missed call — return the existing navigation target so the
+      // client can simply deep-link the user into the contact/unknown flow.
+      if (missed.nbaCardId) {
+        return res.json({
+          nbaCardId: missed.nbaCardId,
+          contactId: missed.contactId,
+          companyId: missed.companyId,
+          navigate: missed.contactId
+            ? { kind: "contact", contactId: missed.contactId }
+            : { kind: "unknown", phone: missed.callingNumber },
+        });
+      }
+
+      // Unknown callers (no CRM contact match) route to a coordinator queue
+      // rather than the clicking user — otherwise an admin or ops lead
+      // investigating the portlet would silently own every stranger that
+      // dials in. Prefer the rep the call actually rang; if there's no
+      // attribution, pick the first available coordinator/ops user in the
+      // org, and only fall back to the clicking user as a last resort.
+      async function pickCoordinator(): Promise<string> {
+        try {
+          const orgUsers = await storage.getUsers(user!.organizationId);
+          const coord = orgUsers.find(u =>
+            u.role === "logistics_coordinator" ||
+            u.role === "coordinator" ||
+            u.role === "operations"
+          );
+          return coord?.id ?? user!.id;
+        } catch {
+          return user!.id;
+        }
+      }
+      const assignTo = missed.contactId
+        ? (missed.attributedUserId ?? user.id)
+        : (missed.attributedUserId ?? await pickCoordinator());
+      const play = getPlayForRuleType("webex_missed_call");
+      const contact = missed.contactId ? await storage.getContact(missed.contactId) : null;
+      const company = missed.companyId ? await storage.getCompany(missed.companyId) : null;
+
+      const minutesAgo = Math.floor((Date.now() - new Date(missed.startTime).getTime()) / 60_000);
+      const urgency = minutesAgo < 60 ? 90 : minutesAgo < 360 ? 60 : 40;
+      const callerLabel = contact?.name ?? `unknown caller ${missed.callingNumber}`;
+
+      const nbaCard = await storage.createNbaCard({
+        orgId: missed.orgId,
+        userId: assignTo,
+        companyId: missed.companyId ?? null,
+        contactId: missed.contactId ?? null,
+        companyName: company?.name ?? null,
+        ruleType: "webex_missed_call",
+        outcomeType: "protect",
+        confidence: contact ? "high" : "medium",
+        signalCount: 1,
+        signalSummary: [
+          `Missed ${missed.voicemailLeft ? "call + voicemail" : "call"} from ${callerLabel} (${missed.callingNumber}) [CDR:${missed.cdrId}]`,
+          `Call time: ${new Date(missed.startTime).toLocaleString()}${missed.afterHours ? " (after hours)" : ""}`,
+        ],
+        whyThisNow: contact
+          ? `${contact.name} called and you missed it.${missed.voicemailLeft ? " They left a voicemail." : ""} Inbound interest from a known contact should be returned promptly.`
+          : `An unknown number (${missed.callingNumber}) reached out and no one picked up.${missed.voicemailLeft ? " They left a voicemail." : ""} Qualify the caller and add them to the CRM if warranted.`,
+        suggestedAction: contact
+          ? `Call ${contact.name} back at ${missed.callingNumber}.`
+          : `Call ${missed.callingNumber} back and capture who they are.`,
+        expectedOutcome: "Return the call and capture any inbound opportunity.",
+        urgencyScore: urgency,
+        playLabel: play?.name ?? null,
+        status: "visible",
+        createdAt: new Date().toISOString(),
+      });
+
+      await storage.setMissedInboundCallback(missed.id, nbaCard.id);
+
+      res.json({
+        nbaCardId: nbaCard.id,
+        contactId: missed.contactId,
+        companyId: missed.companyId,
+        navigate: missed.contactId
+          ? { kind: "contact", contactId: missed.contactId }
+          : { kind: "unknown", phone: missed.callingNumber },
+      });
+    } catch (err) {
+      log(`Missed inbound callback error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: "Failed to create callback" });
     }
   });
 

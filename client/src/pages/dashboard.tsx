@@ -73,6 +73,7 @@ import { TodaysBriefingPortlet } from "@/components/todays-briefing-portlet";
 import { RecentlyVisitedPortlet } from "@/components/recently-visited-portlet";
 import { useRecentlyVisited } from "@/hooks/use-recently-visited";
 import { PinnedAccountsPortlet } from "@/components/pinned-accounts-portlet";
+import { MissedInboundPortlet } from "@/components/missed-inbound-portlet";
 import { useWebexConnectionStatus } from "@/hooks/use-webex";
 import { VideoOff } from "lucide-react";
 
@@ -1637,6 +1638,12 @@ export default function Dashboard() {
           teamMembers={teamMembers as SafeUser[]}
         />
       </PortletErrorBoundary>
+
+      <div style={{ order: getOrder("missed-inbound") }} className={!isVisible("missed-inbound") ? "hidden" : ""}>
+        <PortletErrorBoundary label="Missed Inbound Calls">
+          <MissedInboundPortlet />
+        </PortletErrorBoundary>
+      </div>
 
       <div style={{ order: getOrder("cold-contacts") }} className={(!isVisible("cold-contacts") || isAm) ? "hidden" : ""} data-tour="tour-contacts-attention">
       {coldContacts.length > 0 && (

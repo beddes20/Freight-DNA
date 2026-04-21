@@ -19,6 +19,7 @@ import { initPtoReturnScheduler } from "./ptoReturnScheduler";
 import { initWeeklyGoalRecapScheduler } from "./weeklyGoalRecapScheduler";
 import { initWeeklyAccountReviewScheduler } from "./weeklyAccountReviewScheduler";
 import { initCoachingDigestScheduler } from "./coachingDigestScheduler";
+import { initMissedInboundRecapScheduler } from "./missedInboundRecapScheduler";
 import { initLmCheckinScheduler } from "./lmCheckinScheduler";
 import { initNbaPhase1Scheduler } from "./nbaPhase1Scheduler";
 import { initMarketSignalScheduler } from "./marketSignalScheduler";
@@ -302,6 +303,7 @@ async function initStripe() {
       initWeeklyGoalRecapScheduler();
       initWeeklyAccountReviewScheduler();
       initCoachingDigestScheduler();
+      initMissedInboundRecapScheduler();
       initLmCheckinScheduler();
 
       setTimeout(() => {

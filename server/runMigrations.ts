@@ -3137,6 +3137,47 @@ export async function runMigrations() {
     clientContactMobile.release();
   }
 
+  // Task #317 — Missed Inbound Call Visibility.
+  // One row per unanswered inbound Webex CDR, deduped by (org_id, cdr_id).
+  // Captured for BOTH known (matched contact) and unknown callers so the
+  // Missed Inbound portlet and weekly coordinator recap have the full picture
+  // even when auto-contact-creation is out of scope.
+  const clientMissedInbound = await pool.connect();
+  try {
+    await clientMissedInbound.query(`
+      CREATE TABLE IF NOT EXISTS missed_inbound_calls (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        cdr_id text NOT NULL,
+        calling_number text NOT NULL,
+        called_number text,
+        ring_duration_seconds integer NOT NULL DEFAULT 0,
+        voicemail_left boolean NOT NULL DEFAULT false,
+        start_time text NOT NULL,
+        contact_id varchar REFERENCES contacts(id) ON DELETE SET NULL,
+        company_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        attributed_user_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        webex_person_id text,
+        webex_user_email text,
+        after_hours boolean NOT NULL DEFAULT false,
+        nba_card_id varchar,
+        callback_created_at text,
+        created_at text NOT NULL
+      )
+    `);
+    await clientMissedInbound.query(
+      `CREATE UNIQUE INDEX IF NOT EXISTS missed_inbound_calls_org_cdr_unique ON missed_inbound_calls (org_id, cdr_id)`
+    );
+    await clientMissedInbound.query(
+      `CREATE INDEX IF NOT EXISTS missed_inbound_calls_org_start_idx ON missed_inbound_calls (org_id, start_time)`
+    );
+    console.log("[migrations] missed_inbound_calls table ensured (Task #317)");
+  } catch (err) {
+    console.error("[migrations] missed_inbound_calls migration error:", err);
+  } finally {
+    clientMissedInbound.release();
+  }
+
   // Task #298 — ValueIQ as the rep's daily start screen.
   // Adds the per-user opt-out flag, three org-level controls (landing on/off,
   // morning seed on/off, morning seed timezone), and a discriminator on

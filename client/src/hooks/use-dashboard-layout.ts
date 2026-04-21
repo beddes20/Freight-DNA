@@ -31,6 +31,7 @@ export const DIRECTOR_PORTLETS: PortletDef[] = [
   { id: "one-on-one",      label: "1:1 Sessions",            description: "Manager-rep 1:1 discussion topics and session history" },
   { id: "team-directory",  label: "Team Directory",          description: "NAM and AM roster with account counts" },
   { id: "tasks",           label: "My Tasks",                description: "Tasks assigned to you or created by you" },
+  { id: "missed-inbound",  label: "Missed Inbound Calls",    description: "Unanswered Webex calls (known + unknown) with click-to-callback" },
   { id: "cold-contacts",   label: "Cold Contacts",           description: "Contacts with no touchpoint in 30+ days" },
   { id: "meaningful-overdue", label: "Meaningful Conversations", description: "Contacts overdue for a meaningful conversation" },
   { id: "feed",            label: "Activity Feed",           description: "Team posts, trends, and internal communications" },
