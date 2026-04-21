@@ -448,6 +448,25 @@ export function registerMyProcurementRoutes(app: Express) {
       // so we compare against today's date as a string for correct lexical
       // ordering.
       const todayIso = new Date().toISOString().slice(0, 10);
+      // Managers viewing their own queue also see imports that didn't match
+      // any rep email (ownerUserId IS NULL AND delegatedToUserId IS NULL).
+      // This is the "unassigned import queue" — they need a single place to
+      // route those rows to a rep before they go stale.
+      const isManagerSelfView = !viewing && APPROVER_ROLES.has(viewer.role);
+      const ownershipFilter = isManagerSelfView
+        ? or(
+            eq(freightOpportunities.ownerUserId, user.id),
+            eq(freightOpportunities.delegatedToUserId, user.id),
+            and(
+              isNull(freightOpportunities.ownerUserId),
+              isNull(freightOpportunities.delegatedToUserId),
+            ),
+          )
+        : or(
+            eq(freightOpportunities.ownerUserId, user.id),
+            eq(freightOpportunities.delegatedToUserId, user.id),
+          );
+
       const freightOppRows = await db.select({
         id: freightOpportunities.id,
         companyId: freightOpportunities.companyId,
@@ -478,10 +497,7 @@ export function registerMyProcurementRoutes(app: Express) {
             isNull(freightOpportunities.pickupWindowEnd),
             gte(freightOpportunities.pickupWindowEnd, todayIso),
           ),
-          or(
-            eq(freightOpportunities.ownerUserId, user.id),
-            eq(freightOpportunities.delegatedToUserId, user.id),
-          ),
+          ownershipFilter,
         ))
         .orderBy(desc(freightOpportunities.urgencyScore), desc(freightOpportunities.generatedAt))
         .limit(200);
@@ -515,6 +531,7 @@ export function registerMyProcurementRoutes(app: Express) {
         sourceFileName: r.sourceFileName,
         isDelegatedToMe: r.delegatedToUserId === user.id,
         needsApproval: !r.approvedAt && r.status === "ready_to_send",
+        isUnassigned: !r.ownerUserId && !r.delegatedToUserId,
       }));
 
       return res.json({
@@ -616,6 +633,57 @@ export function registerMyProcurementRoutes(app: Express) {
     } catch (err) {
       console.error("[my-procurement/freight-opp/delegate]", err);
       return res.status(500).json({ error: "Failed to delegate opportunity" });
+    }
+  });
+
+  /**
+   * POST /api/my-procurement/freight-opp/:id/assign
+   * Manager-only. Routes an unassigned (or already owned) imported freight
+   * row to a specific rep — used by the "Unassigned" filter in the My
+   * Procurement Available Freight tab. Sets ownerUserId and clears any
+   * existing delegate (the new owner can re-delegate themselves if they want).
+   */
+  const assignSchema = z.object({
+    ownerUserId: z.string().min(1),
+  });
+  app.post("/api/my-procurement/freight-opp/:id/assign", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!APPROVER_ROLES.has(user.role)) {
+        return res.status(403).json({ error: "Only managers can assign freight opportunities" });
+      }
+      const opp = await storage.getFreightOpportunity(user.organizationId, String(req.params.id));
+      if (!opp) return res.status(404).json({ error: "Opportunity not found" });
+
+      const parsed = assignSchema.safeParse(req.body ?? {});
+      if (!parsed.success) return res.status(400).json({ error: "Invalid assign payload" });
+
+      const target = await storage.getUser(parsed.data.ownerUserId);
+      if (!target || target.organizationId !== user.organizationId) {
+        return res.status(404).json({ error: "Target user not found in this org" });
+      }
+
+      const updated = await storage.updateFreightOpportunity(user.organizationId, opp.id, {
+        ownerUserId: target.id,
+        delegatedToUserId: null,
+      });
+      await storage.appendFreightOpportunityAudit({
+        opportunityId: opp.id,
+        eventType: "status_changed",
+        actorUserId: user.id,
+        payload: {
+          kind: "assigned",
+          from: opp.ownerUserId,
+          to: target.id,
+          targetName: target.name ?? target.email ?? null,
+          previousDelegate: opp.delegatedToUserId,
+        },
+      });
+      return res.json({ opportunity: updated });
+    } catch (err) {
+      console.error("[my-procurement/freight-opp/assign]", err);
+      return res.status(500).json({ error: "Failed to assign opportunity" });
     }
   });
 

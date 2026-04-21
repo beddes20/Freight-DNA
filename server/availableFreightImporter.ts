@@ -440,7 +440,67 @@ async function runImportFromWorkbook(
   let updated = 0;
   let unmatchedCompanies = 0;
 
+  // Build a fast lookup of existing opps for soft-dupe (window slip) detection.
+  // Key is (companyId|normOrigin|normDest|normEquip) → list of opps. We only
+  // include rows from THIS feed so we don't accidentally absorb a manually
+  // created freight_opportunity into the import flow.
+  const softDupeIdx = new Map<string, FreightOpportunity[]>();
+  function softDupeKey(companyId: string, origin: string, destination: string, equipment: string | null): string {
+    return [
+      companyId,
+      origin.trim().toLowerCase(),
+      destination.trim().toLowerCase(),
+      (equipment ?? "").trim().toLowerCase(),
+    ].join("|");
+  }
+  for (const opp of existingFromThisFeed) {
+    const key = softDupeKey(opp.companyId, opp.origin, opp.destination, opp.equipmentType);
+    const list = softDupeIdx.get(key) ?? [];
+    list.push(opp);
+    softDupeIdx.set(key, list);
+  }
+
+  // ±2 day window-slip tolerance: yesterday's row with pickup 4/22 should
+  // soft-merge into today's row with pickup 4/23 instead of stacking duplicates.
+  // Semantics: expand BOTH windows by ±N days then test interval overlap.
+  // This correctly handles unequal-span windows where endpoint-distance alone
+  // would produce false negatives (e.g. 4/1-4/10 vs 4/12-4/15 with N=2 should
+  // merge because expanded windows touch) or false positives (one endpoint
+  // close while the other has shifted materially).
+  const SOFT_DUPE_TOLERANCE_DAYS = 2;
+  function shiftIso(iso: string, days: number): string {
+    const t = new Date(iso).getTime();
+    if (isNaN(t)) return iso;
+    return new Date(t + days * 86_400_000).toISOString().slice(0, 10);
+  }
+  function windowsOverlapWithTolerance(aStart: string, aEnd: string, bStart: string, bEnd: string, tolDays: number): boolean {
+    const aS = shiftIso(aStart, -tolDays);
+    const aE = shiftIso(aEnd, tolDays);
+    const bS = shiftIso(bStart, -tolDays);
+    const bE = shiftIso(bEnd, tolDays);
+    return aS <= bE && bS <= aE;
+  }
+
+  // Index helpers — maintain byKey + softDupeIdx as canonical state evolves
+  // within this single workbook pass. Without this, a workbook containing the
+  // same lane on two rows could insert duplicates because the second row would
+  // not see the first row's just-inserted opp.
+  function indexUpsert(opp: FreightOpportunity, oldStableKey?: string | null) {
+    const newKey = (opp.sourceRef as { stableKey?: string } | null)?.stableKey;
+    if (oldStableKey && oldStableKey !== newKey) byKey.delete(oldStableKey);
+    if (newKey) byKey.set(newKey, opp);
+    // Rebuild this lane's softDupeIdx bucket so window/key updates are visible
+    // immediately to subsequent rows.
+    const sdKey = softDupeKey(opp.companyId, opp.origin, opp.destination, opp.equipmentType);
+    const list = (softDupeIdx.get(sdKey) ?? []).filter(c => c.id !== opp.id);
+    list.push(opp);
+    softDupeIdx.set(sdKey, list);
+  }
+
   for (const load of loads) {
+    // Dedupe within a single workbook: if we've already processed this
+    // stableKey in this pass (rare but seen with copy-paste rows), skip.
+    if (seenKeys.has(load.stableKey)) continue;
     seenKeys.add(load.stableKey);
     const company = companyIdx.get(load.customerName.trim().toLowerCase());
     if (!company) {
@@ -450,13 +510,63 @@ async function runImportFromWorkbook(
     }
     const owner = load.ownerEmail ? userIdx.get(load.ownerEmail) ?? null : null;
 
-    const existingOpp = byKey.get(load.stableKey);
+    let existingOpp = byKey.get(load.stableKey);
+    let softMergedFrom: { previousStableKey: string; previousStart: string; previousEnd: string } | null = null;
+
+    // Soft-dupe detection: if no exact stableKey match, look for an existing
+    // open row on the same lane+equipment whose pickup window overlaps or is
+    // within ±2 days of the incoming row. If found we treat THAT row as the
+    // canonical one and rewrite its window/stableKey instead of inserting a
+    // brand-new row. This prevents "window slip" duplicates when a customer
+    // pushes a load by a day.
+    if (!existingOpp) {
+      const candidateKey = softDupeKey(company.id, load.origin, load.destination, load.equipmentType);
+      const candidates = softDupeIdx.get(candidateKey) ?? [];
+      // Skip candidates whose stableKey we've already consumed in this same run.
+      const candidate = candidates.find(c => {
+        const k = (c.sourceRef as { stableKey?: string } | null)?.stableKey;
+        if (k && seenKeys.has(k) && k !== load.stableKey) return false;
+        return windowsOverlapWithTolerance(
+          c.pickupWindowStart, c.pickupWindowEnd,
+          load.pickupWindowStart, load.pickupWindowEnd,
+          SOFT_DUPE_TOLERANCE_DAYS,
+        );
+      });
+      if (candidate) {
+        existingOpp = candidate;
+        const previousStableKey = (candidate.sourceRef as { stableKey?: string } | null)?.stableKey ?? "";
+        softMergedFrom = {
+          previousStableKey,
+          previousStart: candidate.pickupWindowStart,
+          previousEnd: candidate.pickupWindowEnd,
+        };
+        // Treat the candidate's old key as "seen" so the vanish-pass below
+        // doesn't expire it after we just merged into it.
+        if (previousStableKey) seenKeys.add(previousStableKey);
+      }
+    }
+
     if (existingOpp) {
-      // Refresh mutable fields. Owner/delegate are preserved across imports
-      // (re-importing should never reassign work that was already delegated).
-      // Approval, however, is *intentionally cleared* — managers must re-approve
-      // each morning so the previous day's send authorization cannot leak
-      // forward.
+      // Material fingerprint = the fields a manager actually approved against.
+      // If none of these changed, preserve the prior approval so reps don't
+      // wait for re-approval every morning on identical loads. If any changed
+      // (window slip, equipment swap, load count change) we clear approval and
+      // record exactly what changed in the audit trail.
+      const materialChanges: Record<string, { from: unknown; to: unknown }> = {};
+      if (existingOpp.pickupWindowStart !== load.pickupWindowStart) {
+        materialChanges.pickupWindowStart = { from: existingOpp.pickupWindowStart, to: load.pickupWindowStart };
+      }
+      if (existingOpp.pickupWindowEnd !== load.pickupWindowEnd) {
+        materialChanges.pickupWindowEnd = { from: existingOpp.pickupWindowEnd, to: load.pickupWindowEnd };
+      }
+      if ((existingOpp.equipmentType ?? null) !== (load.equipmentType ?? null)) {
+        materialChanges.equipmentType = { from: existingOpp.equipmentType, to: load.equipmentType };
+      }
+      if (existingOpp.loadCount !== load.loadCount) {
+        materialChanges.loadCount = { from: existingOpp.loadCount, to: load.loadCount };
+      }
+      const materialChanged = Object.keys(materialChanges).length > 0 || !!softMergedFrom;
+
       const previousApprovedAt = existingOpp.approvedAt;
       const previousApprovedBy = existingOpp.approvedById;
       const previousStatus = existingOpp.status;
@@ -472,30 +582,67 @@ async function runImportFromWorkbook(
         equipmentType: load.equipmentType,
         notes: load.notes,
         sourceFileName: fileName,
-        approvedAt: null,
-        approvedById: null,
       };
+      // Always rewrite sourceRef so the (possibly new) stableKey + fileName
+      // are recorded for tomorrow's vanish-pass.
+      (patch as Record<string, unknown>).sourceRef = {
+        kind: "available_freight_import",
+        stableKey: load.stableKey,
+        fileName,
+        importedAt: new Date().toISOString(),
+        ...(softMergedFrom ? { mergedFromStableKey: softMergedFrom.previousStableKey } : {}),
+      };
+      if (materialChanged) {
+        patch.approvedAt = null;
+        patch.approvedById = null;
+      }
       if (shouldReopen) patch.status = "ready_to_send";
       if (!existingOpp.ownerUserId && owner) patch.ownerUserId = owner.id;
-      await storage.updateFreightOpportunity(orgId, existingOpp.id, patch);
+      const oldStableKeyForIndex = (existingOpp.sourceRef as { stableKey?: string } | null)?.stableKey ?? null;
+      const updatedOpp = await storage.updateFreightOpportunity(orgId, existingOpp.id, patch);
+      if (updatedOpp) indexUpsert(updatedOpp, oldStableKeyForIndex);
       await storage.appendFreightOpportunityAudit({
         opportunityId: existingOpp.id,
         eventType: "generated",
         actorUserId,
-        payload: { kind: "available_freight_reimport", fileName, stableKey: load.stableKey },
+        payload: softMergedFrom
+          ? {
+              kind: "soft_merge_window_slip",
+              fileName,
+              stableKey: load.stableKey,
+              previousStableKey: softMergedFrom.previousStableKey,
+              previousWindow: { start: softMergedFrom.previousStart, end: softMergedFrom.previousEnd },
+              newWindow: { start: load.pickupWindowStart, end: load.pickupWindowEnd },
+            }
+          : { kind: "available_freight_reimport", fileName, stableKey: load.stableKey },
       });
       if (previousApprovedAt) {
-        await storage.appendFreightOpportunityAudit({
-          opportunityId: existingOpp.id,
-          eventType: "approved",
-          actorUserId,
-          payload: {
-            approved: false,
-            kind: "approval_reset_on_reimport",
-            previousApprovedAt: previousApprovedAt instanceof Date ? previousApprovedAt.toISOString() : previousApprovedAt,
-            previousApprovedById: previousApprovedBy,
-          },
-        });
+        if (materialChanged) {
+          await storage.appendFreightOpportunityAudit({
+            opportunityId: existingOpp.id,
+            eventType: "approved",
+            actorUserId,
+            payload: {
+              approved: false,
+              kind: "approval_reset_on_reimport",
+              reason: softMergedFrom ? "window_slip_merge" : "material_fields_changed",
+              materialChanges,
+              previousApprovedAt: previousApprovedAt instanceof Date ? previousApprovedAt.toISOString() : previousApprovedAt,
+              previousApprovedById: previousApprovedBy,
+            },
+          });
+        } else {
+          await storage.appendFreightOpportunityAudit({
+            opportunityId: existingOpp.id,
+            eventType: "approved",
+            actorUserId,
+            payload: {
+              approved: true,
+              kind: "approval_preserved_on_reimport",
+              reason: "material_fields_unchanged",
+            },
+          });
+        }
       }
       updated++;
       continue;
@@ -527,6 +674,7 @@ async function runImportFromWorkbook(
       notes: load.notes,
     };
     const created = await storage.createFreightOpportunity(insert);
+    indexUpsert(created);
     await storage.appendFreightOpportunityAudit({
       opportunityId: created.id,
       eventType: "generated",

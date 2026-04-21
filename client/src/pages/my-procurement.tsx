@@ -133,6 +133,7 @@ interface AvailableFreightOpp {
   sourceFileName: string | null;
   isDelegatedToMe: boolean;
   needsApproval: boolean;
+  isUnassigned: boolean;
 }
 
 interface MyProcurementData {
@@ -957,7 +958,7 @@ function AvailableFreightPanel({
   queryKey: readonly unknown[];
 }) {
   const { toast } = useToast();
-  const [filter, setFilter] = useState<"all" | "awaiting-approval" | "approved">("all");
+  const [filter, setFilter] = useState<"all" | "awaiting-approval" | "approved" | "unassigned">("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const refreshMutation = useMutation({
@@ -990,10 +991,12 @@ function AvailableFreightPanel({
   const visible = useMemo(() => {
     if (filter === "awaiting-approval") return items.filter((o) => !o.approvedAt);
     if (filter === "approved") return items.filter((o) => !!o.approvedAt);
+    if (filter === "unassigned") return items.filter((o) => o.isUnassigned);
     return items;
   }, [items, filter]);
 
   const awaitingCount = items.filter((o) => !o.approvedAt).length;
+  const unassignedCount = items.filter((o) => o.isUnassigned).length;
 
   return (
     <div className="space-y-3">
@@ -1014,6 +1017,17 @@ function AvailableFreightPanel({
             data-testid="filter-af-awaiting"
           >
             Awaiting my approval ({awaitingCount})
+          </Button>
+        )}
+        {isManager && (
+          <Button
+            size="sm"
+            variant={filter === "unassigned" ? "default" : "outline"}
+            onClick={() => setFilter("unassigned")}
+            data-testid="filter-af-unassigned"
+            className={unassignedCount > 0 && filter !== "unassigned" ? "border-amber-500/60 text-amber-400" : ""}
+          >
+            Unassigned ({unassignedCount})
           </Button>
         )}
         <Button
@@ -1113,9 +1127,11 @@ function AvailableFreightCard({
   const [, navigate] = useLocation();
   const [editorOpen, setEditorOpen] = useState(false);
   const [delegateOpen, setDelegateOpen] = useState(false);
+  const [assignOpen, setAssignOpen] = useState(false);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [delegateUserId, setDelegateUserId] = useState<string>("");
+  const [assignUserId, setAssignUserId] = useState<string>("");
 
   // Managers can act on any opportunity in their org, including when viewing
   // another rep. Reps can only act on their own (owner or current delegate).
@@ -1127,7 +1143,7 @@ function AvailableFreightCard({
 
   const teamMembersQuery = useQuery<TeamMemberOption[]>({
     queryKey: ["/api/team-members"],
-    enabled: delegateOpen,
+    enabled: delegateOpen || assignOpen,
   });
 
   const approveMutation = useMutation({
@@ -1151,6 +1167,19 @@ function AvailableFreightCard({
       queryClient.invalidateQueries({ queryKey });
     },
     onError: (err: Error) => toast({ title: "Delegate failed", description: err.message, variant: "destructive" }),
+  });
+
+  const assignMutation = useMutation({
+    mutationFn: (userId: string) =>
+      apiRequest("POST", `/api/my-procurement/freight-opp/${item.id}/assign`, {
+        ownerUserId: userId,
+      }).then((r) => r.json()),
+    onSuccess: () => {
+      toast({ title: "Assigned to rep" });
+      setAssignOpen(false);
+      queryClient.invalidateQueries({ queryKey });
+    },
+    onError: (err: Error) => toast({ title: "Assign failed", description: err.message, variant: "destructive" }),
   });
 
   const overrideMutation = useMutation({
@@ -1192,6 +1221,11 @@ function AvailableFreightCard({
               </span>
               {item.isDelegatedToMe && (
                 <Badge variant="secondary" className="text-[10px]">Delegated to you</Badge>
+              )}
+              {item.isUnassigned && (
+                <Badge variant="outline" className="text-[10px] border-amber-500/60 text-amber-400" data-testid={`badge-unassigned-${item.id}`}>
+                  Unassigned
+                </Badge>
               )}
               {item.hasTemplateOverride && (
                 <Badge variant="outline" className="text-[10px]">Custom template</Badge>
@@ -1251,6 +1285,20 @@ function AvailableFreightCard({
                 data-testid={`button-delegate-${item.id}`}
               >
                 <UserCheck className="w-3.5 h-3.5 mr-1.5" /> Delegate
+              </Button>
+            )}
+            {isManager && item.isUnassigned && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setAssignUserId("");
+                  setAssignOpen(true);
+                }}
+                data-testid={`button-assign-${item.id}`}
+                className="border-amber-500/60 text-amber-400 hover:bg-amber-950/30"
+              >
+                <UserCheck className="w-3.5 h-3.5 mr-1.5" /> Assign
               </Button>
             )}
             {isManager && !isApproved && (
@@ -1327,6 +1375,45 @@ function AvailableFreightCard({
               >
                 {overrideMutation.isPending && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
                 Save
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {assignOpen && (
+        <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
+          <DialogContent data-testid={`dialog-assign-${item.id}`}>
+            <DialogHeader>
+              <DialogTitle>Assign this freight to a rep</DialogTitle>
+              <DialogDescription>
+                This row came in from the daily import without an owner. The selected rep becomes the owner; any existing delegate is cleared.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <Select value={assignUserId} onValueChange={setAssignUserId}>
+                <SelectTrigger data-testid={`select-assign-user-${item.id}`}>
+                  <SelectValue placeholder="Choose a rep" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(teamMembersQuery.data ?? []).map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.name ?? m.email ?? m.id}
+                      {m.role ? ` · ${m.role}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setAssignOpen(false)}>Cancel</Button>
+              <Button
+                onClick={() => assignUserId && assignMutation.mutate(assignUserId)}
+                disabled={!assignUserId || assignMutation.isPending}
+                data-testid={`button-confirm-assign-${item.id}`}
+              >
+                {assignMutation.isPending && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+                Assign
               </Button>
             </DialogFooter>
           </DialogContent>
