@@ -89,6 +89,10 @@ import AvailableFreightPage from "@/pages/available-freight";
 import AvailableFreightDetailPage from "@/pages/available-freight-detail";
 import AdminAvailableFreightImports from "@/pages/admin-available-freight-imports";
 import PhoneUsagePage from "@/pages/phone-usage";
+import CarrierIntelligenceScorecardPage from "@/pages/carrier-intelligence-scorecard";
+import CarrierIntelligenceAvailableLoadsPage from "@/pages/carrier-intelligence-available-loads";
+import CarrierIntelligenceLanePricingPage from "@/pages/carrier-intelligence-lane-pricing";
+import CarrierIntelligenceSettingsPage from "@/pages/carrier-intelligence-settings";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -181,6 +185,10 @@ function Router() {
       <Route path="/admin/carrier-intelligence" component={AdminCarrierIntelligencePage} />
       <Route path="/admin/carrier-intelligence/scoring" component={AdminCarrierIntelligenceScoringPage} />
       <Route path="/admin/carrier-intelligence/imports" component={AdminCarrierIntelligencePage} />
+      <Route path="/admin/carrier-intelligence/settings" component={CarrierIntelligenceSettingsPage} />
+      <Route path="/carrier-intelligence/scorecard" component={CarrierIntelligenceScorecardPage} />
+      <Route path="/carrier-intelligence/available-loads" component={CarrierIntelligenceAvailableLoadsPage} />
+      <Route path="/carrier-intelligence/lane-pricing" component={CarrierIntelligenceLanePricingPage} />
       <Route path="/reps/:userId" component={RepCustomers} />
       <Route path="/financials" component={Financials} />
       <Route path="/historical-data" component={HistoricalData} />

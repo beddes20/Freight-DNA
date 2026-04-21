@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, BrainCircuit, Lightbulb, Brain, MailCheck, ChevronDown, Sparkles, Activity, type LucideIcon } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, BrainCircuit, Lightbulb, Brain, MailCheck, ChevronDown, Sparkles, Activity, Compass, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -125,6 +125,32 @@ const laneToolItems: NavItem[] = [
     icon: Brain,
     description: "Daily AI briefing on your top accounts.",
     roles: ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"],
+  },
+];
+
+const CARRIER_INTEL_ROLES = ["admin", "director", "national_account_manager", "logistics_manager", "logistics_coordinator", "sales_director"];
+const CARRIER_INTEL_SETTINGS_ROLES = ["admin", "director"];
+
+const carrierIntelItems: NavItem[] = [
+  {
+    title: "Carrier Scorecard", url: "/carrier-intelligence/scorecard", icon: Trophy,
+    description: "Tiered carrier performance from realized loads, with active and available counts.",
+    roles: CARRIER_INTEL_ROLES,
+  },
+  {
+    title: "Available Loads", url: "/carrier-intelligence/available-loads", icon: Truck,
+    description: "Open loads ranked with the top 3 suggested carriers and a target buy rate.",
+    roles: CARRIER_INTEL_ROLES,
+  },
+  {
+    title: "Lane Pricing", url: "/carrier-intelligence/lane-pricing", icon: Compass,
+    description: "Blend Sonar TRAC with your realized history and a confidence chip.",
+    roles: CARRIER_INTEL_ROLES,
+  },
+  {
+    title: "Settings", url: "/admin/carrier-intelligence/settings", icon: Settings,
+    description: "Imports, scoring math, and org-wide UI defaults.",
+    roles: CARRIER_INTEL_SETTINGS_ROLES,
   },
 ];
 
@@ -417,6 +443,19 @@ export function AppSidebar() {
                   }
                   badgeColor={item.title === "Conversations" ? "red" : item.title === "Carrier Hub" ? "red" : "green"}
                 />
+              ))}
+            </CollapsibleGroup>
+          );
+        })()}
+
+        {/* ── Carrier Intelligence ── */}
+        {(() => {
+          const visible = carrierIntelItems.filter(item => !item.roles || (user?.role && item.roles.includes(user.role)));
+          if (visible.length === 0) return null;
+          return (
+            <CollapsibleGroup label="Carrier Intelligence">
+              {visible.map(item => (
+                <NavLink key={item.title} item={item} isActive={isActive(item.url)} />
               ))}
             </CollapsibleGroup>
           );
