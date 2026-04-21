@@ -1211,6 +1211,7 @@ function ManualFreightDialog({
     () => new Date(Date.now() + 86400000).toISOString().slice(0, 10),
   );
   const [loadCount, setLoadCount] = useState(1);
+  const [targetRate, setTargetRate] = useState<string>("");
   const [notes, setNotes] = useState("");
   const [companyQuery, setCompanyQuery] = useState("");
 
@@ -1239,6 +1240,7 @@ function ManualFreightDialog({
         pickupWindowStart,
         pickupWindowEnd,
         loadCount,
+        targetRate: targetRate ? Number(targetRate) : null,
         notes: notes || null,
       }).then((r) => r.json()),
     onSuccess: () => {
@@ -1252,6 +1254,7 @@ function ManualFreightDialog({
       setDestinationState("");
       setEquipmentType("");
       setLoadCount(1);
+      setTargetRate("");
       setNotes("");
     },
     onError: (err: Error) =>
@@ -1367,6 +1370,19 @@ function ManualFreightDialog({
                 value={loadCount}
                 onChange={(e) => setLoadCount(Math.max(1, parseInt(e.target.value || "1", 10)))}
                 data-testid="input-manual-load-count"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium block mb-1">Target rate (USD, all-in)</label>
+              <input
+                type="number"
+                min={0}
+                step="0.01"
+                placeholder="e.g. 2150"
+                className="w-full px-2 py-1.5 text-sm border rounded bg-background"
+                value={targetRate}
+                onChange={(e) => setTargetRate(e.target.value)}
+                data-testid="input-manual-target-rate"
               />
             </div>
             <div>

@@ -996,6 +996,9 @@ export function registerMyProcurementRoutes(app: Express) {
     loadCount: z.number().int().positive().max(999).optional(),
     notes: z.string().max(2000).nullable().optional(),
     ownerUserId: z.string().min(1).optional(),
+    // Task #365 — target rate (USD, all-in). Persisted on sourceRef so we
+    // avoid a column migration; surfaced back via opp.sourceRef.targetRate.
+    targetRate: z.number().positive().max(999999).nullable().optional(),
   });
   app.post("/api/available-freight/manual", async (req, res) => {
     try {
@@ -1051,7 +1054,11 @@ export function registerMyProcurementRoutes(app: Express) {
         pickupWindowStart: data.pickupWindowStart,
         pickupWindowEnd: data.pickupWindowEnd,
         loadCount: data.loadCount ?? 1,
-        sourceRef: { kind: "manual", createdById: user.id },
+        sourceRef: {
+          kind: "manual",
+          createdById: user.id,
+          targetRate: data.targetRate ?? null,
+        },
         urgencyScore: 60,
         confidenceFlag: "normal",
         status: "ready_to_send",

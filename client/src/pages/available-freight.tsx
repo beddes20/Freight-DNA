@@ -252,6 +252,9 @@ export default function AvailableFreightPage() {
                 <SelectItem value="new">New</SelectItem>
                 <SelectItem value="ready_to_send">Ready</SelectItem>
                 <SelectItem value="sent">Sent</SelectItem>
+                <SelectItem value="awaiting_carrier_reply">Awaiting carrier</SelectItem>
+                <SelectItem value="awaiting_customer_confirm">Confirm w/ customer</SelectItem>
+                <SelectItem value="partially_covered">Partial</SelectItem>
                 <SelectItem value="covered">Covered</SelectItem>
                 <SelectItem value="expired">Expired</SelectItem>
                 <SelectItem value="cancelled">Cancelled</SelectItem>

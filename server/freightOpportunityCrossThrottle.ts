@@ -20,8 +20,15 @@
 
 import { db } from "./storage";
 import { sql } from "drizzle-orm";
+import { HIGH_FREQUENCY_CONFIG } from "./carrierRankingService";
 
-export const FREIGHT_CROSS_THROTTLE_HOURS = 48;
+/**
+ * Re-export the LWQ canonical per-carrier dedup window so the freight
+ * opportunity cross-throttle uses the SAME value LWQ uses (currently 48h).
+ * Never define a new constant here — drift between the two queues would let
+ * carriers be double-touched.
+ */
+export const FREIGHT_CROSS_THROTTLE_HOURS = HIGH_FREQUENCY_CONFIG.outreachDedupWindowHours;
 
 export interface CrossThrottleQuery {
   orgId: string;
