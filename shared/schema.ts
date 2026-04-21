@@ -3335,6 +3335,8 @@ export const FREIGHT_OPPORTUNITY_AUDIT_EVENTS = [
   "status_changed",
   "expired",
   "cancelled",
+  "sla_nudged",
+  "sla_escalated",
 ] as const;
 export type FreightOpportunityAuditEvent = typeof FREIGHT_OPPORTUNITY_AUDIT_EVENTS[number];
 
@@ -3406,12 +3408,20 @@ export const freightOpportunities = pgTable("freight_opportunities", {
   approvedAt: timestamp("approved_at"),
   approvedById: varchar("approved_by_id").references(() => users.id, { onDelete: "set null" }),
   sourceFileName: text("source_file_name"),
+  // Task #364 — Approval SLA tracking. `awaitingApprovalSince` starts when the
+  // row enters ready_to_send with no approval (and is cleared on approve).
+  // The two `slaNotified*` columns are dedup stamps so the 15-min cron does
+  // not spam managers — they reset whenever the awaiting clock restarts.
+  awaitingApprovalSince: timestamp("awaiting_approval_since"),
+  slaNotifiedL1At: timestamp("sla_notified_l1_at"),
+  slaNotifiedL2At: timestamp("sla_notified_l2_at"),
 }, (t) => ({
   orgStatusUrgencyIdx: index("freight_opps_org_status_urgency_idx").on(t.orgId, t.status, t.urgencyScore),
   companyPickupIdx: index("freight_opps_company_pickup_idx").on(t.companyId, t.pickupWindowStart),
   recurringLaneIdx: index("freight_opps_recurring_lane_idx").on(t.recurringLaneId),
   ownerIdx: index("freight_opps_owner_idx").on(t.ownerUserId),
   delegatedIdx: index("freight_opps_delegated_idx").on(t.delegatedToUserId),
+  awaitingIdx: index("freight_opps_awaiting_idx").on(t.awaitingApprovalSince),
 }));
 export const insertFreightOpportunitySchema = createInsertSchema(freightOpportunities)
   .omit({ id: true, generatedAt: true })

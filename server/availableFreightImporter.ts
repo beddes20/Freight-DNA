@@ -596,6 +596,17 @@ async function runImportFromWorkbook(
       if (materialChanged) {
         patch.approvedAt = null;
         patch.approvedById = null;
+        // Material change resets approval → restart the SLA clock and arm
+        // both nudge levels (Task #364).
+        patch.awaitingApprovalSince = new Date();
+        patch.slaNotifiedL1At = null;
+        patch.slaNotifiedL2At = null;
+      } else if (shouldReopen && !previousApprovedAt) {
+        // Reopening yesterday's worked-but-unapproved row → start the clock
+        // (preserve the original since-timestamp if one was already set).
+        patch.awaitingApprovalSince = existingOpp.awaitingApprovalSince ?? new Date();
+        patch.slaNotifiedL1At = null;
+        patch.slaNotifiedL2At = null;
       }
       if (shouldReopen) patch.status = "ready_to_send";
       if (!existingOpp.ownerUserId && owner) patch.ownerUserId = owner.id;
@@ -697,6 +708,8 @@ async function runImportFromWorkbook(
       ownerUserId: owner?.id ?? null,
       sourceFileName: fileName,
       notes: load.notes,
+      // Task #364 — start the approval SLA clock for newly imported rows.
+      awaitingApprovalSince: new Date(),
     };
     const created = await storage.createFreightOpportunity(insert);
     indexUpsert(created);

@@ -25,6 +25,7 @@ import { plays, playRuns, freightOpportunities } from "@shared/schema";
 import { evaluatePlayTriggersForOrg } from "./playbook";
 import { performAvailableFreightImport, listAvailableFreightImports, availableFreightSettingKey } from "../availableFreightImporter";
 import { notifyFreightDelegated, notifyFreightApproved } from "../freightOpportunityNotifications";
+import { computeSlaState, countOverSlaForOrg, SLA_L1_HOURS, SLA_L2_HOURS } from "../freightOpportunitySlaService";
 import { z } from "zod";
 
 const APPROVER_ROLES = new Set([
@@ -510,30 +511,66 @@ export function registerMyProcurementRoutes(app: Express) {
         for (const c of cos) companyMap.set(c.id, c.name);
       }
 
-      const availableFreight = freightOppRows.map(r => ({
-        id: r.id,
-        companyId: r.companyId,
-        companyName: companyMap.get(r.companyId) ?? null,
-        origin: r.origin,
-        originState: r.originState,
-        destination: r.destination,
-        destinationState: r.destinationState,
-        equipmentType: r.equipmentType,
-        pickupWindowStart: r.pickupWindowStart,
-        pickupWindowEnd: r.pickupWindowEnd,
-        loadCount: r.loadCount,
-        status: r.status,
-        urgencyScore: r.urgencyScore,
-        ownerUserId: r.ownerUserId,
-        delegatedToUserId: r.delegatedToUserId,
-        approvedAt: r.approvedAt instanceof Date ? r.approvedAt.toISOString() : (r.approvedAt as string | null),
-        approvedById: r.approvedById,
-        hasTemplateOverride: !!(r.templateOverrideSubject || r.templateOverrideBody),
-        sourceFileName: r.sourceFileName,
-        isDelegatedToMe: r.delegatedToUserId === user.id,
-        needsApproval: !r.approvedAt && r.status === "ready_to_send",
-        isUnassigned: !r.ownerUserId && !r.delegatedToUserId,
-      }));
+      // Pull awaiting-approval columns alongside the existing select so we
+      // can compute SLA state without rewriting the projection above.
+      const slaRowsById = new Map<string, { awaitingSince: Date | null; l1: Date | null; l2: Date | null }>();
+      if (freightOppRows.length > 0) {
+        const slaRows = await db.select({
+          id: freightOpportunities.id,
+          awaitingSince: freightOpportunities.awaitingApprovalSince,
+          l1: freightOpportunities.slaNotifiedL1At,
+          l2: freightOpportunities.slaNotifiedL2At,
+        }).from(freightOpportunities).where(inArray(freightOpportunities.id, freightOppRows.map(r => r.id)));
+        for (const s of slaRows) slaRowsById.set(s.id, { awaitingSince: s.awaitingSince, l1: s.l1, l2: s.l2 });
+      }
+
+      const availableFreight = freightOppRows.map(r => {
+        const sla = slaRowsById.get(r.id);
+        const slaInfo = computeSlaState({
+          approvedAt: r.approvedAt,
+          status: r.status,
+          awaitingApprovalSince: sla?.awaitingSince ?? null,
+        });
+        return {
+          id: r.id,
+          companyId: r.companyId,
+          companyName: companyMap.get(r.companyId) ?? null,
+          origin: r.origin,
+          originState: r.originState,
+          destination: r.destination,
+          destinationState: r.destinationState,
+          equipmentType: r.equipmentType,
+          pickupWindowStart: r.pickupWindowStart,
+          pickupWindowEnd: r.pickupWindowEnd,
+          loadCount: r.loadCount,
+          status: r.status,
+          urgencyScore: r.urgencyScore,
+          ownerUserId: r.ownerUserId,
+          delegatedToUserId: r.delegatedToUserId,
+          approvedAt: r.approvedAt instanceof Date ? r.approvedAt.toISOString() : (r.approvedAt as string | null),
+          approvedById: r.approvedById,
+          hasTemplateOverride: !!(r.templateOverrideSubject || r.templateOverrideBody),
+          sourceFileName: r.sourceFileName,
+          isDelegatedToMe: r.delegatedToUserId === user.id,
+          needsApproval: !r.approvedAt && r.status === "ready_to_send",
+          isUnassigned: !r.ownerUserId && !r.delegatedToUserId,
+          // Task #364 — SLA fields surfaced for the badge + dashboard count.
+          awaitingApprovalSince: slaInfo.awaitingSince,
+          slaState: slaInfo.state,
+          slaAgeHours: slaInfo.ageHours != null ? Number(slaInfo.ageHours.toFixed(2)) : null,
+        };
+      });
+
+      // Manager-visible org-wide over-SLA count (drives the dashboard badge).
+      // Only fired for managers viewing their own queue so reps stay minimal.
+      let overSlaCount: number | null = null;
+      if (isManagerSelfView) {
+        try {
+          overSlaCount = await countOverSlaForOrg(user.organizationId);
+        } catch (slaErr) {
+          console.error("[my-procurement] over-SLA count failed:", slaErr);
+        }
+      }
 
       return res.json({
         lwqLanes,
@@ -545,6 +582,11 @@ export function registerMyProcurementRoutes(app: Express) {
           limit,
           lwqNextCursor,
           tasksNextCursor,
+        },
+        sla: {
+          l1Hours: SLA_L1_HOURS,
+          l2Hours: SLA_L2_HOURS,
+          orgOverSlaCount: overSlaCount,
         },
       });
     } catch (err) {
@@ -684,9 +726,16 @@ export function registerMyProcurementRoutes(app: Express) {
         return res.status(404).json({ error: "Target user not found in this org" });
       }
 
+      // Task #364 — assigning an unassigned import is when the SLA clock
+      // truly should "start ticking against a person." If the row had no
+      // awaitingApprovalSince yet (e.g. legacy rows pre-#364), stamp it now.
+      const slaStartPatch: Record<string, unknown> = opp.awaitingApprovalSince
+        ? {}
+        : { awaitingApprovalSince: new Date(), slaNotifiedL1At: null, slaNotifiedL2At: null };
       const updated = await storage.updateFreightOpportunity(user.organizationId, opp.id, {
         ownerUserId: target.id,
         delegatedToUserId: null,
+        ...slaStartPatch,
       });
       await storage.appendFreightOpportunityAudit({
         opportunityId: opp.id,
@@ -738,9 +787,14 @@ export function registerMyProcurementRoutes(app: Express) {
         }
       }
 
+      // Task #364 — clear / restart the SLA clock alongside approval.
+      const slaPatch: Record<string, unknown> = approving
+        ? { awaitingApprovalSince: null, slaNotifiedL1At: null, slaNotifiedL2At: null }
+        : { awaitingApprovalSince: new Date(), slaNotifiedL1At: null, slaNotifiedL2At: null };
       const updated = await storage.updateFreightOpportunity(user.organizationId, opp.id, {
         approvedAt: approving ? new Date() : null,
         approvedById: approving ? user.id : null,
+        ...slaPatch,
       });
       await storage.appendFreightOpportunityAudit({
         opportunityId: opp.id,
@@ -888,6 +942,10 @@ export function registerMyProcurementRoutes(app: Express) {
         const updatedOpp = await storage.updateFreightOpportunity(user.organizationId, opp.id, {
           approvedAt: now,
           approvedById: user.id,
+          // Task #364 — clear SLA clock on bulk approval too.
+          awaitingApprovalSince: null,
+          slaNotifiedL1At: null,
+          slaNotifiedL2At: null,
         });
         await storage.appendFreightOpportunityAudit({
           opportunityId: opp.id,

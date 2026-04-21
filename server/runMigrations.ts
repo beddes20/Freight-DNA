@@ -3192,4 +3192,40 @@ export async function runMigrations() {
   } finally {
     clientAR.release();
   }
+
+  // Task #364 — Available Freight approval SLA + escalation columns
+  const clientSla = await pool.connect();
+  try {
+    const cols = await clientSla.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_name='freight_opportunities'
+        AND column_name IN ('awaiting_approval_since','sla_notified_l1_at','sla_notified_l2_at')
+    `);
+    const have = new Set<string>(cols.rows.map((r: any) => r.column_name));
+    if (!have.has("awaiting_approval_since")) {
+      await clientSla.query(`ALTER TABLE freight_opportunities ADD COLUMN awaiting_approval_since timestamp`);
+    }
+    if (!have.has("sla_notified_l1_at")) {
+      await clientSla.query(`ALTER TABLE freight_opportunities ADD COLUMN sla_notified_l1_at timestamp`);
+    }
+    if (!have.has("sla_notified_l2_at")) {
+      await clientSla.query(`ALTER TABLE freight_opportunities ADD COLUMN sla_notified_l2_at timestamp`);
+    }
+    // Backfill: any unapproved opp without an SLA clock gets stamped at generated_at
+    await clientSla.query(`
+      UPDATE freight_opportunities
+      SET awaiting_approval_since = COALESCE(generated_at, NOW())
+      WHERE approved_at IS NULL AND awaiting_approval_since IS NULL
+    `);
+    await clientSla.query(`
+      CREATE INDEX IF NOT EXISTS freight_opps_awaiting_idx
+      ON freight_opportunities(org_id, awaiting_approval_since)
+      WHERE approved_at IS NULL AND awaiting_approval_since IS NOT NULL
+    `);
+    console.log("[migrations] freight_opportunities approval-SLA columns + index ensured (Task #364)");
+  } catch (err) {
+    console.error("[migrations] freight SLA migration error:", err);
+  } finally {
+    clientSla.release();
+  }
 }

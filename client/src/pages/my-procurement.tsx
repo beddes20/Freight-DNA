@@ -134,6 +134,9 @@ interface AvailableFreightOpp {
   isDelegatedToMe: boolean;
   needsApproval: boolean;
   isUnassigned: boolean;
+  awaitingApprovalSince: string | null;
+  slaState: "ok" | "warning" | "over" | "escalated";
+  slaAgeHours: number | null;
 }
 
 interface MyProcurementData {
@@ -146,6 +149,11 @@ interface MyProcurementData {
     limit: number;
     lwqNextCursor: string | null;
     tasksNextCursor: string | null;
+  };
+  sla?: {
+    l1Hours: number;
+    l2Hours: number;
+    orgOverSlaCount: number | null;
   };
 }
 
@@ -914,6 +922,7 @@ export default function MyProcurementPage() {
                 currentUserId={currentUser?.id ?? null}
                 isViewingOther={isViewingOther}
                 queryKey={procurementQueryKey}
+                sla={data?.sla}
               />
             </TabsContent>
 
@@ -950,12 +959,14 @@ function AvailableFreightPanel({
   currentUserId,
   isViewingOther,
   queryKey,
+  sla,
 }: {
   items: AvailableFreightOpp[];
   isManager: boolean;
   currentUserId: string | null;
   isViewingOther: boolean;
   queryKey: readonly unknown[];
+  sla?: { l1Hours: number; l2Hours: number; orgOverSlaCount: number | null };
 }) {
   const { toast } = useToast();
   const [filter, setFilter] = useState<"all" | "awaiting-approval" | "approved" | "unassigned">("all");
@@ -997,6 +1008,8 @@ function AvailableFreightPanel({
 
   const awaitingCount = items.filter((o) => !o.approvedAt).length;
   const unassignedCount = items.filter((o) => o.isUnassigned).length;
+  const overSlaInView = items.filter((o) => o.slaState === "over" || o.slaState === "escalated").length;
+  const orgOverSla = sla && sla.orgOverSlaCount !== null ? sla.orgOverSlaCount : null;
 
   return (
     <div className="space-y-3">
@@ -1015,9 +1028,31 @@ function AvailableFreightPanel({
             variant={filter === "awaiting-approval" ? "default" : "outline"}
             onClick={() => setFilter("awaiting-approval")}
             data-testid="filter-af-awaiting"
+            className={overSlaInView > 0 && filter !== "awaiting-approval" ? "border-red-500/60 text-red-400" : ""}
           >
             Awaiting my approval ({awaitingCount})
+            {overSlaInView > 0 && (
+              <span
+                className="ml-1.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-600/90 text-white text-[10px] font-semibold"
+                data-testid="badge-over-sla-in-view"
+                title={`${overSlaInView} over SLA in this view`}
+              >
+                <AlertTriangle className="w-2.5 h-2.5" />
+                {overSlaInView}
+              </span>
+            )}
           </Button>
+        )}
+        {isManager && orgOverSla !== null && orgOverSla > 0 && (
+          <Badge
+            variant="outline"
+            className="text-xs border-red-600/70 text-red-400 bg-red-950/30"
+            data-testid="badge-org-over-sla"
+            title={`Org-wide: ${orgOverSla} freight opps awaiting approval > ${sla?.l1Hours ?? 2}h`}
+          >
+            <AlertTriangle className="w-3 h-3 mr-1" />
+            Org over SLA: {orgOverSla}
+          </Badge>
         )}
         {isManager && (
           <Button
@@ -1234,9 +1269,40 @@ function AvailableFreightCard({
                 <Badge className="text-[10px] bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
                   <ShieldCheck className="w-3 h-3 mr-1" /> Approved
                 </Badge>
+              ) : item.slaState === "escalated" ? (
+                <Badge
+                  className="text-[10px] bg-red-600 text-white border-red-700 animate-pulse"
+                  data-testid={`badge-sla-escalated-${item.id}`}
+                  title={`Escalation: > ${item.slaAgeHours?.toFixed(1)}h waiting for approval`}
+                >
+                  <AlertTriangle className="w-3 h-3 mr-1" />
+                  Escalated · {item.slaAgeHours?.toFixed(1)}h
+                </Badge>
+              ) : item.slaState === "over" ? (
+                <Badge
+                  className="text-[10px] bg-amber-600 text-white border-amber-700"
+                  data-testid={`badge-sla-over-${item.id}`}
+                  title={`Awaiting approval > SLA (${item.slaAgeHours?.toFixed(1)}h)`}
+                >
+                  <AlertTriangle className="w-3 h-3 mr-1" />
+                  Over SLA · {item.slaAgeHours?.toFixed(1)}h
+                </Badge>
+              ) : item.slaState === "warning" ? (
+                <Badge
+                  variant="outline"
+                  className="text-[10px] text-amber-700 border-amber-400 bg-amber-50 dark:bg-amber-950/30"
+                  data-testid={`badge-sla-warning-${item.id}`}
+                >
+                  <Clock className="w-3 h-3 mr-1" />
+                  Approaching SLA · {item.slaAgeHours?.toFixed(1)}h
+                </Badge>
               ) : (
-                <Badge variant="outline" className="text-[10px] text-amber-700 border-amber-300">
-                  Awaiting approval
+                <Badge
+                  variant="outline"
+                  className="text-[10px] text-amber-700 border-amber-300"
+                  data-testid={`badge-awaiting-${item.id}`}
+                >
+                  Awaiting approval{item.slaAgeHours != null ? ` · ${item.slaAgeHours.toFixed(1)}h` : ""}
                 </Badge>
               )}
             </div>
