@@ -190,8 +190,10 @@ export function setupAuth(app: any) {
 const RESOLVED_USER = Symbol("resolvedUser");
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
-  // Dev-only bypass: auto-attach the bypass user so the route handler just works
-  if (DEV_AUTH_BYPASS_USER_ID) {
+  // Dev-only bypass: auto-attach the bypass user so the route handler just works.
+  // BUT: an active session (from /api/auth/login or impersonation) takes precedence
+  // so dev login as a different user actually works.
+  if (DEV_AUTH_BYPASS_USER_ID && !req.session?.userId && !getAuth(req).userId) {
     const user = await storage.getUser(DEV_AUTH_BYPASS_USER_ID);
     if (user) {
       (req as any)[RESOLVED_USER] = user;
@@ -236,13 +238,15 @@ export async function getCurrentUser(req: Request): Promise<User | null> {
   // Return cached value if requireAuth already resolved it
   if ((req as any)[RESOLVED_USER]) return (req as any)[RESOLVED_USER];
 
-  // Dev-only bypass: return the bypass user directly
-  if (DEV_AUTH_BYPASS_USER_ID) {
-    const user = await storage.getUser(DEV_AUTH_BYPASS_USER_ID);
-    if (user) return user;
+  // An active session (dev /api/auth/login) takes precedence over the dev bypass
+  // so logging in as a different user in dev actually changes who you are.
+  if (!IS_PROD && req.session?.userId) {
+    const sessionUser = await storage.getUser(req.session.userId);
+    if (sessionUser) return sessionUser;
   }
 
-  // Check Clerk first
+  // Check Clerk before falling back to the dev bypass — a real Clerk session
+  // should also win over the bypass.
   const { userId: clerkUserId } = getAuth(req);
   if (clerkUserId) {
     // Check impersonation map
@@ -270,13 +274,15 @@ export async function getCurrentUser(req: Request): Promise<User | null> {
     return null;
   }
 
-  // Dev/test: session-based
+  // Dev/test: session-based (already handled at the top, kept for impersonation clarity)
   if (!IS_PROD && req.session?.userId) {
-    // Check session impersonation
-    if (req.session.impersonatingAdminId) {
-      return (await storage.getUser(req.session.userId)) ?? null;
-    }
     return (await storage.getUser(req.session.userId)) ?? null;
+  }
+
+  // Final fallback: dev bypass user (only when no session and no Clerk auth)
+  if (DEV_AUTH_BYPASS_USER_ID) {
+    const user = await storage.getUser(DEV_AUTH_BYPASS_USER_ID);
+    if (user) return user;
   }
 
   return null;
