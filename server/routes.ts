@@ -3183,6 +3183,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerValueIQRoutes(app);
   const { registerAccountReviewRoutes } = await import("./routes/accountReviews");
   registerAccountReviewRoutes(app);
+  const { registerAgenticRoutes } = await import("./routes/agentic");
+  registerAgenticRoutes(app);
 
   // Org corpus indexer — nightly reindex + admin trigger.
   {

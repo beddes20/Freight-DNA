@@ -444,6 +444,32 @@ export function AppSidebar() {
                   </SidebarMenuButton>
                 </SidebarMenuItem>
                 <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={location.startsWith("/agents")}>
+                    <Link href="/agents" data-testid="link-agentic-fleet">
+                      <Sparkles className="h-4 w-4" />
+                      <span>Agent Fleet</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={location === "/approvals"}>
+                    <Link href="/approvals" data-testid="link-agentic-approvals">
+                      <Sparkles className="h-4 w-4" />
+                      <span>Approvals</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                {(user?.role === "admin" || user?.role === "manager" || user?.role === "director" || user?.role === "national_account_manager") && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location.startsWith("/pods")}>
+                      <Link href="/pods" data-testid="link-agentic-pods">
+                        <Sparkles className="h-4 w-4" />
+                        <span>Pods</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                <SidebarMenuItem>
                   <SidebarMenuButton asChild isActive={location === "/financials"}>
                     <Link href="/financials" data-testid="link-financials">
                       <BarChart3 className="h-4 w-4" />

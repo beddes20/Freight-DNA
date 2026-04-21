@@ -23,6 +23,10 @@ import { LogTouchProvider } from "@/context/log-touch-context";
 import { MobileBottomNav } from "@/components/mobile-bottom-nav";
 import { TourProvider } from "@/components/app-tour";
 import NotFound from "@/pages/not-found";
+import AgenticIndexPage from "@/pages/agentic";
+import AgentDetailPage from "@/pages/agentic/agent-detail";
+import PodsPage from "@/pages/agentic/pods";
+import ApprovalsPage from "@/pages/agentic/approvals";
 import Dashboard from "@/pages/dashboard";
 import CompanyDetail from "@/pages/company-detail";
 import RfpAwards from "@/pages/rfp-awards";
@@ -213,6 +217,10 @@ function Router() {
       <Route path="/terms" component={TermsPage} />
       <Route path="/profile" component={ProfilePage} />
       <Route path="/ai-agent" component={AiAgentPortal} />
+      <Route path="/agents" component={AgenticIndexPage} />
+      <Route path="/agents/:slug" component={AgentDetailPage} />
+      <Route path="/pods" component={PodsPage} />
+      <Route path="/approvals" component={ApprovalsPage} />
       <Route path="/settings/ai-assistant">{() => { window.location.replace("/ai-agent#my-assistant"); return null; }}</Route>
       <Route path="/admin/ai-permissions">{() => { window.location.replace("/ai-agent#permissions"); return null; }}</Route>
       <Route path="/agent-activity">{() => { window.location.replace("/ai-agent#activity"); return null; }}</Route>

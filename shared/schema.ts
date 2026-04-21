@@ -3497,3 +3497,207 @@ export const insertCoachingNoteSchema = createInsertSchema(coachingNotes).omit({
 });
 export type InsertCoachingNote = z.infer<typeof insertCoachingNoteSchema>;
 export type CoachingNote = typeof coachingNotes.$inferSelect;
+// ─── Agentic Brokerage Program (Task #314) ───────────────────────────────
+// Workflow agents: outcome-owning bots that monitor signals, plan actions, and
+// execute through the adapter+HITL layer. Distinct from the chat agents in
+// `agents` (which power ValueIQ/DNA conversational turns).
+export const workflowAgents = pgTable(
+  "workflow_agents",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    slug: text("slug").notNull(),                  // pricing | order_schedule | coverage | risk | execution | billing
+    name: text("name").notNull(),
+    description: text("description"),
+    loop: text("loop").notNull(),                  // rfq_to_quote | win_to_load | coverage | risk | execution | billing
+    autonomy: text("autonomy").notNull().default("off"), // off | suggest | draft | auto_hitl | auto
+    enabled: boolean("enabled").notNull().default(false),
+    scope: jsonb("scope").$type<{ customers?: string[]; lanes?: string[]; equipment?: string[]; pods?: string[] }>(),
+    guardrails: jsonb("guardrails").$type<{
+      marginFloorUsd?: number; maxDollarPerAction?: number; maxRiskScore?: number;
+      allowedHoursStart?: string; allowedHoursEnd?: string;
+      dailySendCapEmail?: number; dailySendCapSms?: number;
+      blockedCustomerIds?: string[]; blockedCarrierIds?: string[];
+    }>(),
+    triggers: jsonb("triggers").$type<{ schedule?: string; events?: string[] }>(),
+    targetMetric: text("target_metric"),
+    personaOverlay: text("persona_overlay"),
+    model: text("model").notNull().default("gpt-4o"),
+    killSwitch: boolean("kill_switch").notNull().default(false),
+    createdBy: varchar("created_by"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("workflow_agents_org_slug_idx").on(table.organizationId, table.slug),
+    index("workflow_agents_org_enabled_idx").on(table.organizationId, table.enabled),
+  ],
+);
+export const insertWorkflowAgentSchema = createInsertSchema(workflowAgents).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertWorkflowAgent = z.infer<typeof insertWorkflowAgentSchema>;
+export type WorkflowAgent = typeof workflowAgents.$inferSelect;
+
+// Pods: small human+agent teams owning a book of business end-to-end.
+export const pods = pgTable(
+  "pods",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    podType: text("pod_type").notNull().default("vertical"), // vertical | cross_border | trailer_pool | large_shipper | other
+    description: text("description"),
+    managerId: varchar("manager_id"),
+    scope: jsonb("scope").$type<{ customers?: string[]; verticals?: string[]; lanes?: string[] }>(),
+    kpis: jsonb("kpis").$type<{ pAndL?: number; otdPct?: number; marginPct?: number; trailerRoic?: number }>(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("pods_org_idx").on(table.organizationId),
+  ],
+);
+export const insertPodSchema = createInsertSchema(pods).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertPod = z.infer<typeof insertPodSchema>;
+export type Pod = typeof pods.$inferSelect;
+
+export const podMembers = pgTable(
+  "pod_members",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    podId: varchar("pod_id").notNull().references(() => pods.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    role: text("role").notNull().default("rep"), // manager | rep | lc | analyst
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("pod_members_pod_user_idx").on(table.podId, table.userId),
+    index("pod_members_user_idx").on(table.userId),
+  ],
+);
+export type PodMember = typeof podMembers.$inferSelect;
+
+export const podAgents = pgTable(
+  "pod_agents",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    podId: varchar("pod_id").notNull().references(() => pods.id, { onDelete: "cascade" }),
+    workflowAgentId: varchar("workflow_agent_id").notNull().references(() => workflowAgents.id, { onDelete: "cascade" }),
+    autonomyOverride: text("autonomy_override"), // null = inherit from agent
+    enabled: boolean("enabled").notNull().default(true),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("pod_agents_pod_agent_idx").on(table.podId, table.workflowAgentId),
+  ],
+);
+export type PodAgent = typeof podAgents.$inferSelect;
+
+// HITL inbox — actions staged by workflow agents above their autonomy threshold.
+export const hitlActions = pgTable(
+  "hitl_actions",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    workflowAgentId: varchar("workflow_agent_id").notNull().references(() => workflowAgents.id, { onDelete: "cascade" }),
+    podId: varchar("pod_id").references(() => pods.id, { onDelete: "set null" }),
+    suggestionId: varchar("suggestion_id"),
+    actionKind: text("action_kind").notNull(), // send_email | send_sms | accept_tender | post_truck | start_detention_claim | send_invoice | book_carrier | other
+    title: text("title").notNull(),
+    summary: text("summary"),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    reasoning: text("reasoning"),
+    adapterMode: text("adapter_mode").notNull().default("dry_run"), // dry_run | live
+    routedToUserId: varchar("routed_to_user_id"),
+    relatedCompanyId: varchar("related_company_id"),
+    relatedLaneKey: text("related_lane_key"),
+    status: text("status").notNull().default("pending"), // pending | approved | rejected | edited | expired
+    decidedByUserId: varchar("decided_by_user_id"),
+    decisionNote: text("decision_note"),
+    decidedAt: timestamp("decided_at"),
+    expiresAt: timestamp("expires_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("hitl_actions_org_status_idx").on(table.organizationId, table.status),
+    index("hitl_actions_routed_idx").on(table.routedToUserId, table.status),
+    index("hitl_actions_pod_idx").on(table.podId, table.status),
+    index("hitl_actions_agent_idx").on(table.workflowAgentId),
+  ],
+);
+export const insertHitlActionSchema = createInsertSchema(hitlActions).omit({ id: true, createdAt: true });
+export type InsertHitlAction = z.infer<typeof insertHitlActionSchema>;
+export type HitlAction = typeof hitlActions.$inferSelect;
+
+// Every suggestion the agent makes — feeds the learning loop.
+export const agentSuggestions = pgTable(
+  "agent_suggestions",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    workflowAgentId: varchar("workflow_agent_id").notNull().references(() => workflowAgents.id, { onDelete: "cascade" }),
+    podId: varchar("pod_id"),
+    loopStep: text("loop_step").notNull(), // sense | plan | draft | act | learn
+    inputContext: jsonb("input_context"),
+    suggestion: jsonb("suggestion").$type<Record<string, unknown>>().notNull(),
+    reasoning: text("reasoning"),
+    confidence: integer("confidence"),
+    relatedCompanyId: varchar("related_company_id"),
+    relatedLaneKey: text("related_lane_key"),
+    adapterMode: text("adapter_mode").notNull().default("dry_run"),
+    promptVersion: text("prompt_version"),
+    model: text("model"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("agent_suggestions_agent_idx").on(table.workflowAgentId, table.createdAt),
+    index("agent_suggestions_org_idx").on(table.organizationId, table.createdAt),
+  ],
+);
+export const insertAgentSuggestionSchema = createInsertSchema(agentSuggestions).omit({ id: true, createdAt: true });
+export type InsertAgentSuggestion = z.infer<typeof insertAgentSuggestionSchema>;
+export type AgentSuggestion = typeof agentSuggestions.$inferSelect;
+
+// Outcome of a suggestion (won/lost/covered/on_time/paid/disputed/etc.) — joined back into proven_tactics scoring.
+export const agentOutcomes = pgTable(
+  "agent_outcomes",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    workflowAgentId: varchar("workflow_agent_id").notNull().references(() => workflowAgents.id, { onDelete: "cascade" }),
+    suggestionId: varchar("suggestion_id").references(() => agentSuggestions.id, { onDelete: "set null" }),
+    hitlActionId: varchar("hitl_action_id").references(() => hitlActions.id, { onDelete: "set null" }),
+    overrideKind: text("override_kind").notNull().default("none"), // none | edited | rejected | replaced
+    realizedOutcome: text("realized_outcome"), // won | lost | covered | on_time | late | paid | disputed | unpaid | n/a
+    metricValue: decimal("metric_value", { precision: 14, scale: 4 }),
+    notes: text("notes"),
+    recordedBy: varchar("recorded_by"),
+    recordedAt: timestamp("recorded_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("agent_outcomes_agent_idx").on(table.workflowAgentId, table.recordedAt),
+  ],
+);
+export const insertAgentOutcomeSchema = createInsertSchema(agentOutcomes).omit({ id: true, recordedAt: true });
+export type InsertAgentOutcome = z.infer<typeof insertAgentOutcomeSchema>;
+export type AgentOutcome = typeof agentOutcomes.$inferSelect;
+
+// Adapter readiness state per organization — drives the live-flip checklist
+// in the Rollout view.
+export const adapterStatus = pgTable(
+  "adapter_status",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    adapterKey: text("adapter_key").notNull(), // dat | truckstop | sonar | highway | carrier411 | valuetms | edi | graph_mail | twilio | payment_portal | customer_portal
+    mode: text("mode").notNull().default("dry_run"), // dry_run | live
+    credentialsConfigured: boolean("credentials_configured").notNull().default(false),
+    lastCheckedAt: timestamp("last_checked_at"),
+    notes: text("notes"),
+    updatedBy: varchar("updated_by"),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("adapter_status_org_key_idx").on(table.organizationId, table.adapterKey),
+  ],
+);
+export type AdapterStatus = typeof adapterStatus.$inferSelect;
