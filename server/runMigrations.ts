@@ -3375,4 +3375,45 @@ export async function runMigrations() {
   } finally {
     clientLF.release();
   }
+
+  // ── Performance indexes (Task #272) ──
+  // Composite indexes on the hot filter paths used by Intel / Dashboard /
+  // Tasks / Carrier Hub so list queries stop sequential-scanning large tables.
+  // All idempotent — safe to re-run.
+  const clientPerf272 = await pool.connect();
+  try {
+    const stmts: string[] = [
+      // tasks
+      `CREATE INDEX IF NOT EXISTS tasks_org_status_idx          ON tasks (org_id, status)`,
+      `CREATE INDEX IF NOT EXISTS tasks_org_assigned_to_idx     ON tasks (org_id, assigned_to)`,
+      `CREATE INDEX IF NOT EXISTS tasks_org_assigned_by_idx     ON tasks (org_id, assigned_by)`,
+      `CREATE INDEX IF NOT EXISTS tasks_company_status_idx      ON tasks (company_id, status)`,
+      `CREATE INDEX IF NOT EXISTS tasks_due_date_idx            ON tasks (due_date)`,
+      // touchpoints
+      `CREATE INDEX IF NOT EXISTS touchpoints_logged_by_date_idx ON touchpoints (logged_by_id, date DESC)`,
+      `CREATE INDEX IF NOT EXISTS touchpoints_company_date_idx   ON touchpoints (company_id, date DESC)`,
+      `CREATE INDEX IF NOT EXISTS touchpoints_date_idx           ON touchpoints (date DESC)`,
+      // contacts
+      `CREATE INDEX IF NOT EXISTS contacts_created_at_idx        ON contacts (created_at)`,
+      `CREATE INDEX IF NOT EXISTS contacts_base_advanced_at_idx  ON contacts (base_advanced_at) WHERE base_advanced_at IS NOT NULL`,
+      // companies
+      `CREATE INDEX IF NOT EXISTS companies_organization_id_idx  ON companies (organization_id)`,
+      `CREATE INDEX IF NOT EXISTS companies_sales_person_id_idx  ON companies (sales_person_id)`,
+      // task_comments
+      `CREATE INDEX IF NOT EXISTS task_comments_task_id_idx      ON task_comments (task_id)`,
+      // intel rate lookups
+      `CREATE INDEX IF NOT EXISTS intel_tracked_lanes_org_active_idx ON intel_tracked_lanes (org_id, active)`,
+      `CREATE INDEX IF NOT EXISTS intel_lane_rates_tracked_lane_idx  ON intel_lane_rates (tracked_lane_id)`,
+      // notifications
+      `CREATE INDEX IF NOT EXISTS notifications_user_read_idx    ON notifications (user_id, read)`,
+    ];
+    for (const s of stmts) {
+      try { await clientPerf272.query(s); } catch (e) { /* per-statement non-blocking */ void e; }
+    }
+    console.log("[migrations] Task #272 performance indexes ensured");
+  } catch (err) {
+    console.error("[migrations] Task #272 perf indexes error:", err);
+  } finally {
+    clientPerf272.release();
+  }
 }

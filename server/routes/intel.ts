@@ -15,7 +15,7 @@ import { intelTrackedLanes, intelLaneRates, recurringLanes } from "../../shared/
 import { requireAuth, getCurrentUser } from "../auth";
 import { cityToKma, toTracEquipment } from "../kmaMapping";
 import { fetchFullLaneBatch } from "../tracService";
-import { generateAlert, generateDriverText, tracLaneDirectionSignal } from "../tracAlertEngine";
+import { generateAlert, generateDriverText } from "../tracAlertEngine";
 import { resolveColumns, getRepFromRow, getCustomerFromRow, getStatusFromRow } from "../colResolver";
 import { isExcludedRow } from "../financialHelpers";
 import {
@@ -779,15 +779,55 @@ async function computeMyLanes(
     console.log("[intel] TRAC rate lookup for My Lanes failed (non-blocking):", err);
   }
 
-  const rows: MyLanesRow[] = await Promise.all(dedupedLanes.map(async (lane) => {
+  // Task #272 perf — batch TRAC forecast calls for every unique KMA pair in
+  // a single request instead of firing one HTTP call per lane.
+  const tracDirMap = new Map<string, string>(); // "ORIG_KMA|DEST_KMA" → direction
+  try {
+    const { fetchTracForecast } = await import("../tracService");
+    const { tracDirectionSignal } = await import("../tracAlertEngine");
+    const seen = new Set<string>();
+    const tracInputs: { lane_id: string; origin: string; destination: string; origin_country_code: string; destination_country_code: string; equipment_type: string; key: string }[] = [];
+    for (const lane of dedupedLanes) {
+      const o = cityToKma(lane.origin);
+      const d = cityToKma(lane.destination);
+      if (!o || !d) continue;
+      const key = `${o.kma}|${d.kma}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      tracInputs.push({
+        lane_id: `${o.kma}-${d.kma}-VAN`,
+        origin: o.kma, destination: d.kma,
+        origin_country_code: "USA", destination_country_code: "USA",
+        equipment_type: "VAN",
+        key,
+      });
+    }
+    if (tracInputs.length) {
+      const forecastResults = await fetchTracForecast(tracInputs).catch(() => [] as { laneId: string; days: any[] }[]);
+      const byLaneId = new Map(forecastResults.map(r => [r.laneId, r.days]));
+      for (const input of tracInputs) {
+        const days = byLaneId.get(input.lane_id) ?? [];
+        if (!days.length) continue;
+        const { direction } = tracDirectionSignal(days as any);
+        if (direction) tracDirMap.set(input.key, direction);
+      }
+    }
+  } catch {
+    // TRAC failures are non-blocking — VOTRI signal still shows.
+  }
+
+  const rows: MyLanesRow[] = dedupedLanes.map((lane) => {
     const qualifier = buildVotriQualifier(lane.origin, lane.destination);
     const votriData = votriMap.get(qualifier);
     const votri = votriData?.votri ?? null;
     const votriWoW = votriData?.votriWoW ?? null;
     let signal = votriData?.signal ?? null;
 
-    const tracDir = await tracLaneDirectionSignal(lane.origin, lane.destination).catch(() => null);
-    if (tracDir) signal = tracDir;
+    const oKma = cityToKma(lane.origin);
+    const dKma = cityToKma(lane.destination);
+    const dirKey = oKma && dKma ? `${oKma.kma}|${dKma.kma}` : null;
+    const tracDir = dirKey ? tracDirMap.get(dirKey) : null;
+    if (tracDir) signal = tracDir as any;
 
     const avgMiles = 500;
     const avgCustomerRatePerMile = lane.avgPayPerLoad > 0 ? lane.avgPayPerLoad / avgMiles : null;
@@ -824,7 +864,7 @@ async function computeMyLanes(
       totalLoads: lane.totalLoads,
       companyName: lane.companyName,
     };
-  }));
+  });
 
   rows.sort((a, b) => (b.votri ?? -1) !== (a.votri ?? -1) ? (b.votri ?? -1) - (a.votri ?? -1) : b.totalLoads - a.totalLoads);
   return rows;
@@ -1743,6 +1783,16 @@ export function registerIntelRoutes(app: Express): void {
         ? req.query.userId.trim()
         : user.id;
 
+      // ── Task #272 perf ───────────────────────────────────────────────────
+      // Cache the expensive My Lanes payload (VOTRI + weather + batched TRAC
+      // + RFP merge) with a short TTL. Matches staleTime on the client so a
+      // full reload is near-instant if the cache is warm.
+      const myLanesCacheKey = `intel:my-lanes:${orgId}:${filterUserId}`;
+      const cached = await getDbCached<{ lanes: MyLanesRow[]; lastUpdated: string; userId: string }>(myLanesCacheKey);
+      if (cached) {
+        return res.json(cached);
+      }
+
       // Reuse the cached lane build shared with /api/intel and /api/intel/brief.
       const { allLanes } = await getAllLanesForOrg(orgId);
       const userLanes = allLanes.filter(l => l.ownerUserId === filterUserId);
@@ -1819,11 +1869,15 @@ export function registerIntelRoutes(app: Express): void {
       const allMyLanes = [...myLanes, ...rfpRows];
       allMyLanes.sort((a, b) => b.votri !== a.votri ? b.votri - a.votri : b.totalLoads - a.totalLoads);
 
-      res.json({
+      const payload = {
         lanes: allMyLanes,
         lastUpdated: new Date().toISOString(),
         userId: filterUserId,
-      });
+      };
+      // 15-minute TTL — matches the client staleTime and keeps the page
+      // near-instant on subsequent visits within the session.
+      setDbCached(myLanesCacheKey, payload, 15 * 60, "intel-my-lanes");
+      res.json(payload);
     } catch (err: any) {
       console.error("[intel] My-lanes error:", err);
       res.status(500).json({ error: "Failed to load my lanes" });

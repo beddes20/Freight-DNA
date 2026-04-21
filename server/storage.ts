@@ -412,6 +412,7 @@ export interface IStorage {
   searchUsers(query: string, roles: string[], organizationId: string): Promise<Omit<User, 'password'>[]>;
 
   getTasks(): Promise<Task[]>;
+  getTasksByOrg(organizationId: string): Promise<Task[]>;
   getTasksByCompany(companyId: string): Promise<Task[]>;
   getTask(id: string): Promise<Task | undefined>;
   findProcurementTask(awardId: string, lane: string): Promise<Task | undefined>;
@@ -1569,6 +1570,25 @@ export class DatabaseStorage implements IStorage {
 
   async getTasks(): Promise<Task[]> {
     return db.select().from(tasks);
+  }
+
+  /**
+   * Org-scoped task fetch — used by the tasks page and dashboard portlets so
+   * we never pull every org's tasks into memory just to filter them out.
+   * Includes legacy rows where org_id is null but the task links to a company
+   * in the target org (the column was back-filled over time; some older rows
+   * still have NULL).
+   */
+  async getTasksByOrg(organizationId: string): Promise<Task[]> {
+    return db
+      .select()
+      .from(tasks)
+      .where(
+        or(
+          eq(tasks.orgId, organizationId),
+          sql`${tasks.orgId} IS NULL AND ${tasks.companyId} IN (SELECT id FROM companies WHERE organization_id = ${organizationId})`,
+        ),
+      );
   }
 
   async getTasksByCompany(companyId: string): Promise<Task[]> {

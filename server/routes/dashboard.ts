@@ -372,11 +372,13 @@ export function registerDashboardRoutes(app: Express): void {
       }
       if (!amIds.length) return res.json([]);
 
+      // Task #272: org-scope touchpoints and tasks so we don't pull every
+      // org's rows then discard them in JS.
       const [allTouchpoints, allGoals, allCompanies, allTasks] = await Promise.all([
-        storage.getTouchpoints(),
+        storage.getTouchpointsByOrg(user.organizationId),
         storage.getGoals({ namId: user.role === "admin" || user.role === "director" ? undefined : user.id }),
         storage.getCompanies(user.organizationId),
-        storage.getTasks(),
+        storage.getTasksByOrg(user.organizationId),
       ]);
 
       // Last touch per company
@@ -436,11 +438,12 @@ export function registerDashboardRoutes(app: Express): void {
       const orgId = req.session.organizationId!;
       const today = new Date().toISOString().slice(0, 10);
 
-      // Fetch all data in parallel — companies, users, touchpoints, and contacts are independent
+      // Fetch all data in parallel — companies, users, touchpoints, and contacts are independent.
+      // Task #272: org-scoped touchpoints + today-filtered contacts via SQL.
       const [orgCompanies, allUsers, allTouchpoints, allContacts] = await Promise.all([
         storage.getCompanies(orgId),
         storage.getUsers(orgId),
-        storage.getTouchpoints(),
+        storage.getTouchpointsByOrg(orgId),
         storage.getContacts(),
       ]);
 
@@ -540,7 +543,7 @@ export function registerDashboardRoutes(app: Express): void {
 
       if (type === "touches" || type === "meaningful") {
         const [allTouchpoints, allContacts] = await Promise.all([
-          storage.getTouchpoints(),
+          storage.getTouchpointsByOrg(orgId),
           storage.getContacts(),
         ]);
         const contactMap = new Map(allContacts.map(c => [c.id, c]));

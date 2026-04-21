@@ -9,19 +9,30 @@ export function registerTaskRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const allTasks = await storage.getTasks();
-      let filtered: typeof allTasks;
+
+      // ── Task #272 perf ──────────────────────────────────────────────────
+      // Org-scope the task fetch in SQL instead of loading every org's tasks
+      // into memory and filtering in JS. Companies and team-ids are fetched
+      // in parallel with the task query.
+      const [orgTasks, teamIds, orgCompanies] = await Promise.all([
+        storage.getTasksByOrg(user.organizationId),
+        (user.role === "director" || user.role === "national_account_manager" ||
+         user.role === "sales" || user.role === "sales_director")
+          ? storage.getTeamMemberIds(user.id, user.organizationId)
+          : Promise.resolve<string[]>([]),
+        storage.getCompanies(user.organizationId),
+      ]);
+
+      let filtered: typeof orgTasks;
       if (user.role === "admin") {
-        filtered = allTasks;
+        filtered = orgTasks;
       } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
-        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
-        filtered = allTasks.filter(t => teamIds.includes(t.assignedTo) || teamIds.includes(t.assignedBy));
+        const teamSet = new Set(teamIds);
+        filtered = orgTasks.filter(t => teamSet.has(t.assignedTo) || teamSet.has(t.assignedBy));
       } else {
-        filtered = allTasks.filter(t => t.assignedTo === user.id || t.assignedBy === user.id);
+        filtered = orgTasks.filter(t => t.assignedTo === user.id || t.assignedBy === user.id);
       }
-      // Exclude tasks tied to archived companies from the dashboard.
-      // Tasks with no companyId (standalone tasks) are always kept.
-      const orgCompanies = await storage.getCompanies(user.organizationId);
+      // Exclude tasks tied to archived companies. Tasks with no companyId are always kept.
       const archivedCompanyIds = new Set(orgCompanies.filter(c => c.archivedAt).map(c => c.id));
       filtered = filtered.filter(t => !t.companyId || !archivedCompanyIds.has(t.companyId));
       const counts = await storage.getTaskCommentCounts(filtered.map(t => t.id));
