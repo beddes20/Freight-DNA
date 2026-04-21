@@ -637,6 +637,66 @@ export const TOOLS: AgentTool[] = [
     },
   },
   {
+    name: "draft_email",
+    capability: "write.email.draft",
+    description: "Draft an email to a contact (subject + body). Renders an action card the rep confirms before sending. Use when the rep asks to 'email X', 'draft a note to X', 'follow up with X by email'.",
+    parameters: {
+      type: "object",
+      properties: {
+        company_name: { type: "string" },
+        contact_name: { type: "string" },
+        subject: { type: "string" },
+        body: { type: "string" },
+      },
+      required: ["subject", "body"],
+    },
+    async execute(_ctx, args) {
+      return {
+        kind: "action",
+        tool: "draft_email",
+        args: {
+          company_name: String(args.company_name || ""),
+          contact_name: String(args.contact_name || ""),
+          subject: String(args.subject || ""),
+          body: String(args.body || ""),
+        },
+        preface: "Email draft ready — review, edit, then send:",
+      };
+    },
+  },
+  {
+    name: "open_filtered_queue",
+    capability: "navigate.crm",
+    description: "Open a CRM list pre-filtered by query params (e.g. tasks page filtered to overdue, customers filtered to 'no touch in 30d'). Use 'queue' for one of: tasks, customers, prospects, rfp_awards, touchpoint_history.",
+    parameters: {
+      type: "object",
+      properties: {
+        queue: { type: "string", enum: ["tasks", "customers", "prospects", "rfp_awards", "touchpoint_history"] },
+        filter: { type: "string", description: "Free-form filter label (e.g. 'overdue', 'no_touch_30d', 'this_week')." },
+      },
+      required: ["queue"],
+    },
+    async execute(_ctx, args) {
+      const queue = String(args.queue || "tasks");
+      const filter = String(args.filter || "").trim();
+      const ROUTES: Record<string, string> = {
+        tasks: "/tasks",
+        customers: "/customers",
+        prospects: "/prospects",
+        rfp_awards: "/rfp-awards",
+        touchpoint_history: "/touchpoint-history",
+      };
+      const base = ROUTES[queue] ?? "/tasks";
+      const path = filter ? `${base}?filter=${encodeURIComponent(filter)}` : base;
+      return {
+        kind: "action",
+        tool: "open_filtered_queue",
+        args: { queue, filter, path, label: `${queue.replace(/_/g, " ")}${filter ? ` (${filter.replace(/_/g, " ")})` : ""}` },
+        preface: "Open this filtered view?",
+      };
+    },
+  },
+  {
     name: "remember_this",
     capability: "write.memory",
     description: "Save a fact, preference, or decision the user wants you to remember across future conversations.",

@@ -21,10 +21,19 @@ import { logActivity } from "./activity";
 import { buildSystemPrompt, ensureDefaultAgent, getAgentRuntime } from "./persona";
 import { retrieveContext, formatHitsForPrompt } from "./retrieval";
 
+export interface AnswerMeta {
+  sources?: Array<{ kind: string; id?: string; label: string; href?: string }>;
+  followUps?: string[];
+  scope?: string;
+  confidence?: "high" | "medium" | "low";
+}
+
 export type AgentEvent =
   | { content: string }
   | { navigate: string }
   | { action: { tool: string; args: Record<string, unknown> } }
+  | { progress: string }
+  | { meta: AnswerMeta }
   | { error: string }
   | { done: true };
 
@@ -39,6 +48,8 @@ export interface RunAgentTurnArgs {
   agentId?: string;
   /** Optional ValueIQ project id for project-pinned context retrieval. */
   projectId?: string | null;
+  /** Optional pre-built page context block (from the smart router). */
+  pageContextBlock?: string | null;
 }
 
 const MAX_TOOL_ITERATIONS = 6;
@@ -96,12 +107,14 @@ async function buildContextEnvelope(
   return { envelope: lines.join("\n"), degraded };
 }
 
-export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: agentIdArg, projectId }: RunAgentTurnArgs): Promise<{ assistantText: string; hadError: boolean; surfacedAction: boolean; agentId: string }> {
+export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: agentIdArg, projectId, pageContextBlock }: RunAgentTurnArgs): Promise<{ assistantText: string; hadError: boolean; surfacedAction: boolean; agentId: string; meta: AnswerMeta }> {
   let hadError = false;
   let surfacedAction = false;
+  const sources: AnswerMeta["sources"] = [];
   const startedAt = Date.now();
   const client = getAgentOpenAI();
-  const { envelope, degraded } = await buildContextEnvelope(ctx, userMessage, projectId);
+  const { envelope: baseEnvelope, degraded } = await buildContextEnvelope(ctx, userMessage, projectId);
+  const envelope = pageContextBlock ? `${baseEnvelope}\n\n${pageContextBlock}` : baseEnvelope;
   const agentId = agentIdArg ?? (await ensureDefaultAgent(ctx.organizationId));
   const runtime = await getAgentRuntime(agentId);
   const systemPrompt = await buildSystemPrompt(agentId, ctx.channel);
@@ -157,7 +170,7 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
       console.error("[agent.core] OpenAI call failed:", err);
       hadError = true;
       emit({ error: "AI service temporarily unavailable. Please try again." });
-      return { assistantText, hadError, surfacedAction, agentId };
+      return { assistantText, hadError, surfacedAction, agentId, meta: { confidence: "low" } };
     }
 
     let textThisTurn = "";
@@ -221,6 +234,11 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
       let args: any = {};
       try { args = JSON.parse(tc.args || "{}"); } catch {}
 
+      // Progressive loading — emit a short status line per tool call so the
+      // client can show "Looking up X…" instead of an indefinite spinner.
+      const progressLabel = friendlyToolLabel(tc.name, args);
+      if (progressLabel) emit({ progress: progressLabel });
+
       // Permission check
       let toolResultText = "";
       if (!tool) {
@@ -262,6 +280,14 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
 
             if (result.kind === "data") {
               toolResultText = result.text;
+              if (result.relatedCompanyId) {
+                sources!.push({
+                  kind: "company",
+                  id: result.relatedCompanyId,
+                  label: extractCompanyLabel(result.text) || tc.name,
+                  href: `/companies/${result.relatedCompanyId}`,
+                });
+              }
             } else if (result.kind === "navigate") {
               if (result.preface) { emit({ content: result.preface }); assistantText += result.preface; }
               emit({ navigate: result.path });
@@ -315,5 +341,86 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
     outcome: "ok",
   });
 
-  return { assistantText, hadError, surfacedAction, agentId };
+  // Build follow-up suggestions from the assistant's reply.
+  const followUps = inferFollowUps(assistantText, sources!);
+  const meta: AnswerMeta = {
+    sources: dedupeSources(sources!).slice(0, 6),
+    followUps,
+    scope: ctx.scope === "everyone" ? "Org-wide view" : "My team",
+    confidence: hadError ? "low" : (sources!.length ? "high" : "medium"),
+  };
+  if (meta.sources?.length || meta.followUps?.length) emit({ meta });
+
+  return { assistantText, hadError, surfacedAction, agentId, meta };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function friendlyToolLabel(toolName: string, args: any): string | null {
+  switch (toolName) {
+    case "get_company_details": return `Looking up ${args?.company_name ?? "that account"}…`;
+    case "carrier_lane_search":  return `Searching carriers on ${args?.origin ?? "?"} → ${args?.destination ?? "?"}…`;
+    case "query_national_rates": return "Pulling national market data…";
+    case "query_market_otri":    return `Checking OTRI for ${args?.market ?? "that market"}…`;
+    case "query_lane_signal":    return `Reading lane signal ${args?.origin ?? "?"} → ${args?.destination ?? "?"}…`;
+    case "get_rate_positioning_summary": return "Summarising rate positioning…";
+    case "list_open_tasks":      return "Reading your open tasks…";
+    case "list_recent_touchpoints": return "Pulling recent touchpoints…";
+    case "team_touchpoint_tally": return "Tallying team touchpoints…";
+    case "reps_missing_touchpoints": return "Finding reps with no touchpoints…";
+    case "recall_memory":        return "Searching prior memories…";
+    case "navigate_to_company":  return `Opening ${args?.company_name ?? "the account"}…`;
+    case "log_touchpoint":       return "Drafting touchpoint card…";
+    case "create_task":          return "Drafting task card…";
+    case "complete_task":        return "Looking up that task…";
+    case "mark_meaningful":      return "Finding that touchpoint…";
+    case "remember_this":        return "Saving that to memory…";
+    case "draft_email":          return "Drafting email…";
+    case "open_filtered_queue":  return "Building filtered view…";
+    default: return null;
+  }
+}
+
+function extractCompanyLabel(text: string): string | null {
+  // Tools tend to start their data block with "Account: NAME" or "**NAME**".
+  const m1 = text.match(/^\s*\*\*([^*]+)\*\*/);
+  if (m1) return m1[1].trim();
+  const m2 = text.match(/^\s*Account:\s*(.+?)(?:\n|$)/);
+  if (m2) return m2[1].trim();
+  return null;
+}
+
+function dedupeSources(arr: NonNullable<AnswerMeta["sources"]>) {
+  const seen = new Set<string>();
+  const out: typeof arr = [];
+  for (const s of arr) {
+    const key = `${s.kind}:${s.id ?? s.label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
+}
+
+const FOLLOW_UP_PATTERNS: Array<{ test: RegExp; suggestions: string[] }> = [
+  { test: /\bopen tasks?\b/i, suggestions: ["Show overdue ones", "Create a new task"] },
+  { test: /\btouchpoint(s)?\b/i, suggestions: ["Mark the latest meaningful", "Log a new touchpoint"] },
+  { test: /\bcarriers?\b/i, suggestions: ["Show our top 3", "What are we paying them?"] },
+  { test: /\bRFP\b/i, suggestions: ["Which lanes are competitive?", "Suggest a bid strategy"] },
+  { test: /\bOTRI\b|\bmarket\b/i, suggestions: ["Compare to last week", "Show the lane signal"] },
+];
+
+function inferFollowUps(text: string, sources: NonNullable<AnswerMeta["sources"]>): string[] {
+  if (!text) return [];
+  const out = new Set<string>();
+  for (const p of FOLLOW_UP_PATTERNS) {
+    if (p.test.test(text)) p.suggestions.forEach((s) => out.add(s));
+    if (out.size >= 3) break;
+  }
+  if (sources.some((s) => s.kind === "company") && out.size < 3) {
+    out.add("Recommend next actions");
+  }
+  return Array.from(out).slice(0, 3);
 }

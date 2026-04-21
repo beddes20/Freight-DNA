@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from "react";
-import { Bot, X, Send, Plus, Trash2, ChevronLeft, MessageSquare, Loader2, Lightbulb, CheckCircle2, Globe, Users, Bug, Wrench, Sparkles, ClipboardList, ExternalLink, Phone, Mail, MessageSquareText, MapPin, Check, AlertTriangle, Star } from "lucide-react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { Bot, X, Send, Plus, Trash2, ChevronLeft, MessageSquare, Loader2, Lightbulb, CheckCircle2, Globe, Users, Bug, Wrench, Sparkles, ClipboardList, ExternalLink, Phone, Mail, MessageSquareText, MapPin, Check, AlertTriangle, Star, PanelRight, Maximize2, Minimize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,13 @@ import { invalidateAfterTouchpoint } from "@/lib/invalidations";
 import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
+import { useChatPageContext } from "@/hooks/use-chat-page-context";
+import { getSuggestedPrompts } from "./dna-copilot/prompts";
+import { AnswerCardMeta, type AnswerMeta } from "./dna-copilot/answer-card";
+import { DraftEmailCard, OpenQueueCard } from "./dna-copilot/extra-action-cards";
+
+type CopilotMode = "docked" | "side" | "workspace";
+const MODE_STORAGE_KEY = "dna-copilot-mode";
 
 type ReportType = "bug" | "improvement" | "feature";
 
@@ -31,6 +38,7 @@ interface ChatMessage {
     confirmed?: boolean;
     failed?: boolean;
   };
+  meta?: AnswerMeta;
 }
 
 interface NudgesResponse {
@@ -80,6 +88,13 @@ function ActionCard({
 }) {
   const [editedArgs, setEditedArgs] = useState<Record<string, string>>({ ...action.args });
   const set = (key: string, val: string) => setEditedArgs(prev => ({ ...prev, [key]: val }));
+
+  if (action.tool === "draft_email") {
+    return <DraftEmailCard args={action.args} confirmed={action.confirmed} failed={action.failed} onConfirm={onConfirm} onDismiss={onDismiss} />;
+  }
+  if (action.tool === "open_filtered_queue") {
+    return <OpenQueueCard args={action.args} confirmed={action.confirmed} failed={action.failed} onConfirm={onConfirm} onDismiss={onDismiss} />;
+  }
 
   if (action.confirmed) {
     const labels: Record<string, string> = {
@@ -261,10 +276,24 @@ export function CrmChatbot() {
   const [suggestionSent, setSuggestionSent] = useState(false);
   const [input, setInput] = useState("");
   const [streamingContent, setStreamingContent] = useState("");
+  const [streamingMeta, setStreamingMeta] = useState<AnswerMeta | null>(null);
+  const [progressLine, setProgressLine] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<{ tool: string; args: Record<string, string> } | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
   const [scope, setScope] = useState<"my_team" | "everyone">("my_team");
+  const [mode, setMode] = useState<CopilotMode>(() => {
+    if (typeof window === "undefined") return "docked";
+    const v = localStorage.getItem(MODE_STORAGE_KEY);
+    return v === "side" || v === "workspace" ? v : "docked";
+  });
+  const pageContext = useChatPageContext();
+  useEffect(() => {
+    try { localStorage.setItem(MODE_STORAGE_KEY, mode); } catch {}
+  }, [mode]);
+  const cycleMode = useCallback(() => {
+    setMode((m) => (m === "docked" ? "side" : m === "side" ? "workspace" : "docked"));
+  }, []);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -276,7 +305,7 @@ export function CrmChatbot() {
   const effectiveScope = user?.role === "admin" ? "everyone" : (isAdminOrDirector ? "my_team" : scope);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || mode !== "docked") return;
     const handler = (e: PointerEvent) => {
       if (
         panelRef.current?.contains(e.target as Node) ||
@@ -286,7 +315,7 @@ export function CrmChatbot() {
     };
     document.addEventListener("pointerdown", handler);
     return () => document.removeEventListener("pointerdown", handler);
-  }, [open]);
+  }, [open, mode]);
 
   // Load personalized nudges when chatbot opens
   const { data: nudges } = useQuery<NudgesResponse>({
@@ -295,11 +324,15 @@ export function CrmChatbot() {
     staleTime: 5 * 60 * 1000,
   });
 
-  const SUGGESTIONS = nudges?.suggestions?.length
-    ? nudges.suggestions
-    : effectiveScope === "everyone"
-      ? ["Who has the most new contacts this month?", "Which rep has the most touchpoints this month?", "Show me open RFPs across all accounts", "Which accounts have the most contacts?", "What's the leaderboard for touches this week?", "Which reps are behind on their goals?"]
-      : ["Which contacts haven't been touched in 30+ days?", "What RFPs are due soon?", "Show me my open tasks", "What accounts should I prioritize today?", "Which accounts have no touchpoints this month?", "Who are my key contacts at my top accounts?"];
+  const pagePrompts = useMemo(
+    () => getSuggestedPrompts(user?.role, pageContext?.entityType ?? null),
+    [user?.role, pageContext?.entityType],
+  );
+  // Page/role-aware prompts take priority. Server-side nudges still surface as
+  // a secondary "alerts" feed in the empty state above this list.
+  const SUGGESTIONS = pageContext?.entityType
+    ? pagePrompts
+    : (nudges?.suggestions?.length ? nudges.suggestions : pagePrompts);
 
   const { data: conversations = [] } = useQuery<Conversation[]>({
     queryKey: ["/api/chatbot/conversations"],
@@ -480,6 +513,8 @@ export function CrmChatbot() {
     setInput("");
     setIsStreaming(true);
     setStreamingContent("");
+    setStreamingMeta(null);
+    setProgressLine(null);
     setPendingAction(null);
 
     try {
@@ -487,7 +522,11 @@ export function CrmChatbot() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ content: text.trim(), scope: effectiveScope }),
+        body: JSON.stringify({
+          content: text.trim(),
+          scope: effectiveScope,
+          pageContext: pageContext || undefined,
+        }),
       });
 
       if (!response.ok) throw new Error("Request failed");
@@ -497,6 +536,7 @@ export function CrmChatbot() {
       let buffer = "";
       let full = "";
       let detectedAction: { tool: string; args: Record<string, string> } | null = null;
+      let detectedMeta: AnswerMeta | null = null;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -511,6 +551,14 @@ export function CrmChatbot() {
             if (evt.content) {
               full += evt.content;
               setStreamingContent(full);
+              setProgressLine(null);
+            }
+            if (evt.progress) {
+              setProgressLine(typeof evt.progress === "string" ? evt.progress : evt.progress.label || null);
+            }
+            if (evt.meta) {
+              detectedMeta = { ...(detectedMeta || {}), ...evt.meta };
+              setStreamingMeta(detectedMeta);
             }
             if (evt.action) {
               detectedAction = evt.action;
@@ -526,9 +574,12 @@ export function CrmChatbot() {
                 content: full,
                 createdAt: new Date().toISOString(),
                 action: detectedAction || undefined,
+                meta: detectedMeta || undefined,
               };
               setLocalMessages((prev) => [...prev, assistantMsg]);
               setStreamingContent("");
+              setStreamingMeta(null);
+              setProgressLine(null);
               qc.invalidateQueries({ queryKey: ["/api/chatbot/conversations"] });
               qc.invalidateQueries({ queryKey: ["/api/chatbot/conversations", convoId, "messages"] });
             }
@@ -580,10 +631,12 @@ export function CrmChatbot() {
       {/* Chat panel */}
       {open && (
         <div ref={panelRef} className={cn(
-          "fixed bottom-40 right-6 z-50 w-[390px] h-[600px] rounded-2xl shadow-2xl border border-border/50",
-          "bg-background flex flex-col overflow-hidden",
-          "animate-in slide-in-from-bottom-4 fade-in-0 duration-200"
-        )}>
+          "fixed z-50 border bg-background flex flex-col overflow-hidden",
+          "animate-in fade-in-0 duration-200",
+          mode === "docked" && "bottom-40 right-6 w-[390px] h-[600px] rounded-2xl shadow-2xl border-border/50 slide-in-from-bottom-4",
+          mode === "side" && "top-0 right-0 bottom-0 w-[420px] shadow-xl border-l border-border slide-in-from-right-4",
+          mode === "workspace" && "inset-4 md:inset-8 rounded-2xl shadow-2xl border-border/50 zoom-in-95",
+        )} data-testid={`copilot-panel-${mode}`}>
           {/* Header */}
           <div className="flex items-center gap-3 px-4 py-3 border-b bg-sidebar text-sidebar-foreground rounded-t-2xl">
             <div className="h-8 w-8 rounded-full bg-white/20 flex items-center justify-center shrink-0">
@@ -596,6 +649,16 @@ export function CrmChatbot() {
               </p>
             </div>
             <div className="flex items-center gap-1">
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 text-white/80 hover:text-white hover:bg-white/20"
+                onClick={cycleMode}
+                title={`Layout: ${mode} (click to cycle)`}
+                data-testid="chatbot-mode-toggle"
+              >
+                {mode === "docked" ? <PanelRight className="h-4 w-4" /> : mode === "side" ? <Maximize2 className="h-4 w-4" /> : <Minimize2 className="h-4 w-4" />}
+              </Button>
               <Button
                 size="icon"
                 variant="ghost"
@@ -910,9 +973,11 @@ export function CrmChatbot() {
                         Hey{user?.name ? ` ${user.name.split(" ")[0]}` : ""}! I'm DNA Guru.
                       </p>
                       <p className="text-xs text-muted-foreground mt-1">
-                        {isAdminOrDirector
-                          ? "I can see all reps, accounts, and teams."
-                          : "I have live access to your CRM data — ask me anything."}
+                        {pageContext?.entityName
+                          ? `I see you're on ${pageContext.entityName}. Ask me anything about it.`
+                          : isAdminOrDirector
+                            ? "I can see all reps, accounts, and teams."
+                            : "I have live access to your CRM data — ask me anything."}
                       </p>
                     </div>
                   </div>
@@ -960,7 +1025,8 @@ export function CrmChatbot() {
                     </div>
                   )}
                   <div className={cn(
-                    "rounded-2xl px-3.5 py-2.5 max-w-[290px]",
+                    "rounded-2xl px-3.5 py-2.5",
+                    mode === "docked" ? "max-w-[290px]" : "max-w-[80%]",
                     msg.role === "user"
                       ? "bg-primary text-primary-foreground rounded-tr-sm"
                       : "bg-muted rounded-tl-sm"
@@ -974,6 +1040,13 @@ export function CrmChatbot() {
                               action={msg.action}
                               onConfirm={(editedArgs) => confirmAction(msg.id, { ...msg.action!, args: editedArgs })}
                               onDismiss={() => dismissAction(msg.id)}
+                            />
+                          )}
+                          {msg.meta && (
+                            <AnswerCardMeta
+                              meta={msg.meta}
+                              onFollowUp={(t) => sendMessage(t)}
+                              onSource={(href) => navigate(href)}
                             />
                           )}
                         </>
@@ -990,22 +1063,38 @@ export function CrmChatbot() {
                   <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
                     <Bot className="h-4 w-4 text-primary" />
                   </div>
-                  <div className="bg-muted rounded-2xl rounded-tl-sm px-3.5 py-2.5 max-w-[290px]">
+                  <div className={cn("bg-muted rounded-2xl rounded-tl-sm px-3.5 py-2.5", mode === "docked" ? "max-w-[290px]" : "max-w-[80%]")}>
                     <MarkdownText content={streamingContent} />
+                    {streamingMeta && (
+                      <AnswerCardMeta
+                        meta={streamingMeta}
+                        onFollowUp={(t) => sendMessage(t)}
+                        onSource={(href) => navigate(href)}
+                      />
+                    )}
                   </div>
                 </div>
               )}
 
-              {/* Loading dots */}
+              {/* Progressive tool-call loading */}
               {isStreaming && !streamingContent && (
                 <div className="flex gap-3">
                   <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
                     <Bot className="h-4 w-4 text-primary" />
                   </div>
-                  <div className="bg-muted rounded-2xl rounded-tl-sm px-3.5 py-3 flex items-center gap-1">
-                    <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:0ms]" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:150ms]" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:300ms]" />
+                  <div className="bg-muted rounded-2xl rounded-tl-sm px-3.5 py-3 flex items-center gap-2 min-w-[120px]">
+                    {progressLine ? (
+                      <>
+                        <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                        <span className="text-xs text-muted-foreground" data-testid="copilot-progress">{progressLine}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:0ms]" />
+                        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:150ms]" />
+                        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:300ms]" />
+                      </>
+                    )}
                   </div>
                 </div>
               )}

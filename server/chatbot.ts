@@ -577,7 +577,7 @@ export function registerChatbotRoutes(app: Express): void {
 
   app.post("/api/chatbot/conversations/:id/messages", async (req: Request, res: Response) => {
     if (!req.session?.userId) return res.status(401).json({ error: "Unauthorized" });
-    const { content, scope = "my_team" } = req.body;
+    const { content, scope = "my_team", pageContext } = req.body;
     if (!content?.trim()) return res.status(400).json({ error: "Message content required" });
 
     const conversationId = parseInt(req.params.id as string);
@@ -609,6 +609,7 @@ export function registerChatbotRoutes(app: Express): void {
 
       const { runAgentTurn } = await import("./agent/core");
       const { hasModuleAccess } = await import("./agent/permissions");
+      const { tryRoute, buildPageContextBlock } = await import("./agent/router");
       const access = await hasModuleAccess(user);
       if (!access.allowed) {
         res.write(`data: ${JSON.stringify({ content: access.reason || "AI Agent module is not available." })}\n\n`);
@@ -620,18 +621,51 @@ export function registerChatbotRoutes(app: Express): void {
         .slice(0, -1) // exclude the user message we just inserted; agent passes it as `userMessage`
         .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
-      const { assistantText, hadError, surfacedAction } = await runAgentTurn({
-        ctx: {
-          rep: user,
-          organizationId: req.session.organizationId!,
-          channel: "in_app",
-          conversationRef: String(conversationId),
-          scope: effectiveScope as "my_team" | "everyone",
-        },
-        history: priorHistory,
-        userMessage: content.trim(),
-        emit: (event) => { res.write(`data: ${JSON.stringify(event)}\n\n`); },
+      const emit = (event: any) => { res.write(`data: ${JSON.stringify(event)}\n\n`); };
+      const conversationRef = String(conversationId);
+
+      // 1. Smart router — deterministic intents short-circuit the LLM.
+      const routed = await tryRoute({
+        rep: user,
+        organizationId: req.session.organizationId!,
+        conversationRef,
+        message: content.trim(),
+        pageContext,
+        emit,
       });
+
+      let assistantText = "";
+      let hadError = false;
+      let surfacedAction = false;
+
+      if (routed.handled) {
+        assistantText = routed.assistantText || "";
+        surfacedAction = !!routed.surfacedAction;
+      } else {
+        // 2. Page-aware context block (also seeds the per-conversation memo).
+        const pageContextBlock = await buildPageContextBlock(
+          req.session.organizationId!,
+          conversationRef,
+          pageContext,
+        );
+
+        const result = await runAgentTurn({
+          ctx: {
+            rep: user,
+            organizationId: req.session.organizationId!,
+            channel: "in_app",
+            conversationRef,
+            scope: effectiveScope as "my_team" | "everyone",
+          },
+          history: priorHistory,
+          userMessage: content.trim(),
+          emit,
+          pageContextBlock,
+        });
+        assistantText = result.assistantText;
+        hadError = result.hadError;
+        surfacedAction = result.surfacedAction;
+      }
 
       // Only persist an assistant message if the turn produced something
       // meaningful. Skip on transport errors (no empty bubbles) but keep a
