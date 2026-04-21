@@ -316,6 +316,20 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
     log(`Customer inbound email_message created: from=${fromEmail} contact=${accountMatch.contactName} company=${accountMatch.companyId} msgId=${providerMessageId}`);
   }
 
+  // Task #302 — Play outcome auto-tagging. Runs even when account didn't
+  // match (e.g. bounce DSN from mailer-daemon@) because the play_run is
+  // keyed by Outlook conversationId, not by sender identity.
+  if (conversationId) {
+    try {
+      const { classifyAndPersistInboundReply } = await import("../services/playOutcomeClassifierService");
+      await classifyAndPersistInboundReply({
+        orgId, conversationId, fromEmail, subject, bodyFull, providerMessageId,
+      });
+    } catch (e) {
+      log(`[play-outcome] classify error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   if (carrierMatch.confidence === "unmatched" && !accountMatch) {
     log(`Unmatched inbound email: from=${fromEmail} msgId=${providerMessageId} — no carrier or CRM contact found`);
   }
@@ -400,7 +414,14 @@ async function processUserMailboxEmail(params: {
   // message — there's nothing to link it to. (If the thread exists but has
   // no linkedAccountId, we still save the message below with linkedAccountId
   // = null so the thread continuity is preserved.)
-  if (!accountMatch && !existingThreadExists) {
+  //
+  // EXCEPTION (Task #302): outbound rep emails must always reach the
+  // play-run stamping block below so we can attribute the send to a play
+  // run via tier-3 (unbound recent run) matching, even when the recipient
+  // doesn't match a CRM contact and no thread exists yet. Without this
+  // bypass, a class of rep-sent Outlook emails would never enter the
+  // outcome loop.
+  if (!accountMatch && !existingThreadExists && direction !== "outbound") {
     return;
   }
 
@@ -485,6 +506,92 @@ async function processUserMailboxEmail(params: {
       log(`[user-mailbox] Conversation thread upserted: threadId=${conversationId} owner=${ownerUserId}`);
     } catch (convErr) {
       log(`[user-mailbox] Conversation upsert error: ${convErr instanceof Error ? convErr.message : String(convErr)}`);
+    }
+  }
+
+  // Task #302 — auto-tag play outcomes from inbound replies on monitored
+  // mailboxes (this is the primary delivery path for customer email).
+  if (direction === "inbound" && conversationId) {
+    try {
+      const { classifyAndPersistInboundReply } = await import("../services/playOutcomeClassifierService");
+      await classifyAndPersistInboundReply({
+        orgId, conversationId, fromEmail, subject, bodyFull,
+        providerMessageId,
+      });
+    } catch (e) {
+      log(`[user-mailbox] play-outcome classify error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // Outbound capture: when the rep sends a play email from their monitored
+  // mailbox, link the play_run to this Graph conversationId + messageId so
+  // future inbound replies can be matched.
+  //
+  // Match priority (most → least specific) so attribution is deterministic
+  // even when account matching fails:
+  //   1. open run owned by this rep, account-matched to the recipient's
+  //      company, started in the last 24h
+  //   2. open run owned by this rep, contact-matched on contact email,
+  //      started in the last 24h
+  //   3. open run owned by this rep with NO account binding yet, started
+  //      in the last 6h (guard against hijacking older work)
+  // Whichever matches first gets stamped; we never stamp more than one run
+  // per outbound send.
+  if (direction === "outbound" && conversationId) {
+    try {
+      const { db } = await import("../storage");
+      const { sql: sqlTag } = await import("drizzle-orm");
+      const recipientEmail = (counterpartyEmails[0] ?? "").toLowerCase();
+      await db.execute(sqlTag`
+        UPDATE play_runs r
+        SET thread_id = ${conversationId},
+            provider_message_id = ${providerMessageId},
+            sent_at = NOW()
+        WHERE r.id = (
+          SELECT r2.id FROM play_runs r2
+          JOIN plays p ON p.id = r2.play_id
+          LEFT JOIN contacts c ON c.id = r2.contact_id
+          WHERE r2.org_id = ${orgId}
+            AND r2.rep_user_id = ${monitoredMailbox.userId}
+            AND r2.status IN ('open', 'suggested')
+            AND r2.thread_id IS NULL
+            AND p.channel = 'email'
+            AND (
+              -- Tier 1: account-matched + 24h
+              (${accountMatch?.companyId ?? null}::varchar IS NOT NULL
+                 AND r2.account_id = ${accountMatch?.companyId ?? null}
+                 AND COALESCE(r2.started_at, r2.suggested_at) > NOW() - INTERVAL '24 hours')
+              -- Tier 2: contact-email matched + 24h
+              OR (${recipientEmail}::text <> ''
+                  AND LOWER(c.email) = ${recipientEmail}
+                  AND COALESCE(r2.started_at, r2.suggested_at) > NOW() - INTERVAL '24 hours')
+              -- Tier 3: rep's only unbound recent run + 6h
+              OR (r2.account_id IS NULL
+                  AND COALESCE(r2.started_at, r2.suggested_at) > NOW() - INTERVAL '6 hours')
+            )
+          ORDER BY
+            -- Prefer account-matched, then contact-matched, then unbound
+            (CASE WHEN r2.account_id = ${accountMatch?.companyId ?? null} THEN 0
+                  WHEN LOWER(c.email) = ${recipientEmail} THEN 1
+                  ELSE 2 END),
+            COALESCE(r2.started_at, r2.suggested_at) DESC
+          LIMIT 1
+        )
+      `);
+      // Seed the pending play_outcome row so the window-expiry sweep and the
+      // inbound classifier both have something to update.
+      await db.execute(sqlTag`
+        INSERT INTO play_outcomes (play_run_id, outcome, status, window_expires_at)
+        SELECT r.id, 'no_response', 'pending',
+               NOW() + (p.outcome_window_hours::int * INTERVAL '1 hour')
+        FROM play_runs r
+        JOIN plays p ON p.id = r.play_id
+        WHERE r.thread_id = ${conversationId}
+          AND r.org_id = ${orgId}
+        ON CONFLICT (play_run_id) DO NOTHING
+      `);
+    } catch (e) {
+      log(`[user-mailbox] play-run send-link error: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

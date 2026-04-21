@@ -3094,7 +3094,30 @@ export async function runMigrations() {
       WHERE NOT EXISTS (SELECT 1 FROM play_versions v WHERE v.play_id = p.id)
     `);
 
+    // ── Task #302 — Email Play Outcome-Tagging ──
+    // Extends play_runs with outbound-send attribution (sentAt + Graph IDs) so
+    // inbound replies can be matched back to the run that produced them, and
+    // extends play_outcomes with classifier metadata, an override audit trail,
+    // and a status/window for the expiry sweep.
+    await clientPb.query(`ALTER TABLE play_runs ADD COLUMN IF NOT EXISTS sent_at timestamp`);
+    await clientPb.query(`ALTER TABLE play_runs ADD COLUMN IF NOT EXISTS thread_id text`);
+    await clientPb.query(`ALTER TABLE play_runs ADD COLUMN IF NOT EXISTS provider_message_id text`);
+    await clientPb.query(`CREATE INDEX IF NOT EXISTS play_runs_thread_idx ON play_runs(thread_id)`);
+
+    await clientPb.query(`ALTER TABLE play_outcomes ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'recorded'`);
+    await clientPb.query(`ALTER TABLE play_outcomes ADD COLUMN IF NOT EXISTS classifier_label text`);
+    await clientPb.query(`ALTER TABLE play_outcomes ADD COLUMN IF NOT EXISTS classifier_confidence integer`);
+    await clientPb.query(`ALTER TABLE play_outcomes ADD COLUMN IF NOT EXISTS source_signal_ids text[] NOT NULL DEFAULT ARRAY[]::text[]`);
+    await clientPb.query(`ALTER TABLE play_outcomes ADD COLUMN IF NOT EXISTS evidence jsonb`);
+    await clientPb.query(`ALTER TABLE play_outcomes ADD COLUMN IF NOT EXISTS window_expires_at timestamp`);
+    await clientPb.query(`ALTER TABLE play_outcomes ADD COLUMN IF NOT EXISTS override_label text`);
+    await clientPb.query(`ALTER TABLE play_outcomes ADD COLUMN IF NOT EXISTS override_user_id varchar REFERENCES users(id) ON DELETE SET NULL`);
+    await clientPb.query(`ALTER TABLE play_outcomes ADD COLUMN IF NOT EXISTS override_reason text`);
+    await clientPb.query(`ALTER TABLE play_outcomes ADD COLUMN IF NOT EXISTS override_at timestamp`);
+    await clientPb.query(`CREATE INDEX IF NOT EXISTS play_outcomes_status_window_idx ON play_outcomes(status, window_expires_at)`);
+
     console.log("[migrations] Playbook module tables ensured (Task #300)");
+    console.log("[migrations] Play outcome tagging columns ensured (Task #302)");
   } catch (err) {
     console.error("[migrations] playbook migration error:", err);
   } finally {

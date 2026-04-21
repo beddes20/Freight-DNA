@@ -3178,12 +3178,16 @@ export const playRuns = pgTable(
     triggerSnapshot: jsonb("trigger_snapshot").$type<Record<string, unknown>>(),
     suggestedAt: timestamp("suggested_at").defaultNow().notNull(),
     startedAt: timestamp("started_at"),
+    sentAt: timestamp("sent_at"),                                 // when the play's email was actually sent (Task #302)
+    threadId: text("thread_id"),                                  // Graph conversationId for inbound matching
+    providerMessageId: text("provider_message_id"),               // Graph message id of the outbound send
     completedAt: timestamp("completed_at"),
   },
   (table) => [
     index("play_runs_org_status_idx").on(table.orgId, table.status),
     index("play_runs_rep_status_idx").on(table.repUserId, table.status),
     index("play_runs_play_idx").on(table.playId),
+    index("play_runs_thread_idx").on(table.threadId),
   ],
 );
 export const insertPlayRunSchema = createInsertSchema(playRuns).omit({ id: true, suggestedAt: true });
@@ -3200,9 +3204,21 @@ export const playOutcomes = pgTable(
     timeToOutcomeHours: integer("time_to_outcome_hours"),
     recordedBy: varchar("recorded_by").references(() => users.id, { onDelete: "set null" }),
     recordedAt: timestamp("recorded_at").defaultNow().notNull(),
+    // Task #302 — Email Play Outcome-Tagging
+    status: text("status").notNull().default("recorded"),         // pending | classified | overridden | expired | recorded | bounced
+    classifierLabel: text("classifier_label"),                    // won | lost | partial | no_response | bounced
+    classifierConfidence: integer("classifier_confidence"),       // 0..100
+    sourceSignalIds: text("source_signal_ids").array().notNull().default(sql`ARRAY[]::text[]`),
+    evidence: jsonb("evidence").$type<Record<string, unknown>>(), // {reasoning, quotedText, fromEmail, subject}
+    windowExpiresAt: timestamp("window_expires_at"),
+    overrideLabel: text("override_label"),                        // rep override final label
+    overrideUserId: varchar("override_user_id").references(() => users.id, { onDelete: "set null" }),
+    overrideReason: text("override_reason"),
+    overrideAt: timestamp("override_at"),
   },
   (table) => [
     uniqueIndex("play_outcomes_run_idx").on(table.playRunId),
+    index("play_outcomes_status_window_idx").on(table.status, table.windowExpiresAt),
   ],
 );
 export type PlayOutcome = typeof playOutcomes.$inferSelect;

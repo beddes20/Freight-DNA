@@ -12,7 +12,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ClipboardList, BarChart3, Plus, Send, CheckCircle2, XCircle, Clock, Sparkles, Pencil, Archive, Upload, History } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ClipboardList, BarChart3, Plus, Send, CheckCircle2, XCircle, Clock, Sparkles, Pencil, Archive, Upload, History, Info, AlertTriangle } from "lucide-react";
 
 interface Play {
   id: string;
@@ -46,6 +47,39 @@ interface PlayRunRow {
     triggerSnapshot: Record<string, unknown> | null;
   };
   play: { id: string; name: string; channel: string; audience: string; signalType?: string | null };
+  outcome?: {
+    id: string;
+    status: string;                                          // pending | classified | overridden | expired | recorded | bounced
+    classifierLabel: string | null;                          // won | lost | partial | no_response | bounced
+    classifierConfidence: number | null;
+    overrideLabel: string | null;
+    overrideReason: string | null;
+    evidence: Record<string, unknown> | null;
+    windowExpiresAt: string | null;
+    recordedAt: string;
+  } | null;
+}
+
+type FinalLabel = "won" | "lost" | "partial" | "no_response" | "bounced";
+
+function effectiveLabel(o: PlayRunRow["outcome"]): FinalLabel | null {
+  if (!o) return null;
+  if (o.overrideLabel) return o.overrideLabel as FinalLabel;
+  if (o.classifierLabel) return o.classifierLabel as FinalLabel;
+  return null;
+}
+
+function outcomeChip(label: FinalLabel | null, status?: string) {
+  if (!label) return null;
+  const map: Record<FinalLabel, { cls: string; text: string }> = {
+    won:        { cls: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200", text: "Won" },
+    lost:       { cls: "bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200", text: "Lost" },
+    partial:    { cls: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200", text: "Partial" },
+    no_response:{ cls: "bg-muted text-muted-foreground", text: status === "expired" ? "No reply (expired)" : "No reply" },
+    bounced:    { cls: "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200", text: "Bounced" },
+  };
+  const m = map[label];
+  return <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium ${m.cls}`}>{m.text}</span>;
 }
 
 const TRIGGER_LABELS: Record<string, string> = {
@@ -227,6 +261,19 @@ export default function PlaybookPage() {
       setSelectedRun(null);
       setOutcomeNotes("");
       toast({ title: "Outcome recorded" });
+    },
+  });
+
+  const overrideMutation = useMutation({
+    mutationFn: async (args: { runId: string; label: FinalLabel; reason?: string }) =>
+      apiRequest("POST", `/api/playbook/runs/${args.runId}/override`, { label: args.label, reason: args.reason ?? null }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/playbook/runs"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/playbook/analytics"] });
+      toast({ title: "Outcome overridden" });
+    },
+    onError: (e: any) => {
+      toast({ title: "Override failed", description: String(e?.message ?? e), variant: "destructive" });
     },
   });
 
@@ -427,7 +474,10 @@ export default function PlaybookPage() {
           {myRuns.length === 0 ? (
             <Card><CardContent className="p-4 text-sm text-muted-foreground">No runs yet.</CardContent></Card>
           ) : (
-            myRuns.slice(0, 12).map(r => (
+            myRuns.slice(0, 12).map(r => {
+              const label = effectiveLabel(r.outcome);
+              const isAutoTagged = !!(r.outcome?.classifierLabel && !r.outcome?.overrideLabel);
+              return (
               <Card key={r.run.id} data-testid={`run-${r.run.id}`}>
                 <CardContent className="p-3">
                   <div className="flex items-start justify-between gap-2">
@@ -438,11 +488,66 @@ export default function PlaybookPage() {
                         {r.run.startedAt ? `Started ${new Date(r.run.startedAt).toLocaleString()}` : `Suggested ${new Date(r.run.suggestedAt).toLocaleString()}`}
                       </div>
                     </div>
-                    <Badge variant={r.run.status === "completed" ? "default" : r.run.status === "open" ? "outline" : "secondary"} className="text-xs">
-                      {r.run.status}
-                    </Badge>
+                    <div className="flex items-center gap-1 flex-wrap justify-end">
+                      {label && (
+                        <span data-testid={`chip-outcome-${r.run.id}`}>{outcomeChip(label, r.outcome?.status)}</span>
+                      )}
+                      {!label && r.outcome?.status === "pending" && (
+                        <span className="text-[11px] text-muted-foreground" data-testid={`chip-pending-${r.run.id}`}>Awaiting reply</span>
+                      )}
+                      <Badge variant={r.run.status === "completed" ? "default" : r.run.status === "open" ? "outline" : "secondary"} className="text-xs">
+                        {r.run.status}
+                      </Badge>
+                    </div>
                   </div>
-                  {r.run.status === "open" && (
+                  {/* Why? + Override row for completed runs with an outcome */}
+                  {r.outcome && (label || r.outcome.status === "bounced") && (
+                    <div className="flex items-center gap-1 mt-2 flex-wrap">
+                      {r.outcome.evidence && (
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <Button size="sm" variant="ghost" className="h-6 text-xs px-1.5"
+                              data-testid={`button-why-${r.run.id}`}>
+                              <Info className="h-3 w-3 mr-1" /> Why?
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-80 text-xs space-y-1" data-testid={`popover-why-${r.run.id}`}>
+                            <div className="font-medium">
+                              {isAutoTagged ? `Auto-tagged ${label}` : `Overridden to ${label}`}
+                              {r.outcome.classifierConfidence != null && isAutoTagged && (
+                                <span className="text-muted-foreground"> ({r.outcome.classifierConfidence}% confidence)</span>
+                              )}
+                            </div>
+                            {typeof r.outcome.evidence.reasoning === "string" && (
+                              <div className="text-muted-foreground">{String(r.outcome.evidence.reasoning)}</div>
+                            )}
+                            {typeof r.outcome.evidence.quotedText === "string" && r.outcome.evidence.quotedText && (
+                              <div className="border-l-2 pl-2 italic">"{String(r.outcome.evidence.quotedText)}"</div>
+                            )}
+                            {typeof r.outcome.evidence.fromEmail === "string" && (
+                              <div className="text-muted-foreground">From: {String(r.outcome.evidence.fromEmail)}</div>
+                            )}
+                            {r.outcome.overrideReason && (
+                              <div className="border-t pt-1 mt-1"><span className="font-medium">Override note:</span> {r.outcome.overrideReason}</div>
+                            )}
+                            {r.outcome.status === "expired" && (
+                              <div className="flex items-center gap-1 text-muted-foreground"><AlertTriangle className="h-3 w-3" />Window elapsed without a reply.</div>
+                            )}
+                          </PopoverContent>
+                        </Popover>
+                      )}
+                      {(["won", "lost", "partial", "no_response"] as FinalLabel[]).map(opt => (
+                        opt !== label && (
+                          <Button key={opt} size="sm" variant="ghost" className="h-6 text-xs px-1.5"
+                            onClick={() => overrideMutation.mutate({ runId: r.run.id, label: opt })}
+                            data-testid={`button-override-${opt}-${r.run.id}`}>
+                            {opt === "won" ? "Won" : opt === "lost" ? "Lost" : opt === "partial" ? "Partial" : "No reply"}
+                          </Button>
+                        )
+                      ))}
+                    </div>
+                  )}
+                  {r.run.status === "open" && !r.outcome && (
                     <div className="flex gap-2 mt-2">
                       <Button size="sm" variant="ghost" className="h-7 text-emerald-700"
                         onClick={() => outcomeMutation.mutate({ runId: r.run.id, outcome: "success" })}
@@ -463,7 +568,8 @@ export default function PlaybookPage() {
                   )}
                 </CardContent>
               </Card>
-            ))
+              );
+            })
           )}
         </div>
       </div>

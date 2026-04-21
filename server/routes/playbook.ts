@@ -558,6 +558,121 @@ export function registerPlaybookRoutes(app: Express): void {
     }
   });
 
+  // ── Mark a play run's email as sent (Task #302) ──────────────────────────
+  // Client calls this after the rep actually sends the play email so we can
+  // (a) stamp the Outlook conversationId/messageId for inbound matching,
+  // (b) seed the pending play_outcome row whose window_expires_at drives the
+  //     no_response sweep when nobody replies in the configured window.
+  const sentSchema = z.object({
+    threadId: z.string().min(1).max(512),
+    providerMessageId: z.string().min(1).max(512),
+    sentAt: z.string().datetime().optional(),
+  });
+  app.post("/api/playbook/runs/:runId/sent", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const [run] = await db.select().from(playRuns)
+        .where(and(eq(playRuns.id, String(req.params.runId)), eq(playRuns.orgId, user.organizationId)));
+      if (!run) return res.status(404).json({ error: "Run not found" });
+      if (run.repUserId && run.repUserId !== user.id && !isAuthor(user.role)) {
+        return res.status(403).json({ error: "Only the assigned rep or a manager can mark this run sent" });
+      }
+      const parsed = sentSchema.parse(req.body);
+      const sentAt = parsed.sentAt ? new Date(parsed.sentAt) : new Date();
+
+      const [play] = await db.select().from(plays).where(eq(plays.id, run.playId));
+      if (!play) return res.status(404).json({ error: "Play not found" });
+
+      await db.update(playRuns).set({
+        threadId: parsed.threadId,
+        providerMessageId: parsed.providerMessageId,
+        sentAt,
+      }).where(eq(playRuns.id, run.id));
+
+      const windowExpiresAt = new Date(sentAt.getTime() + play.outcomeWindowHours * 36e5);
+      const [existing] = await db.select().from(playOutcomes).where(eq(playOutcomes.playRunId, run.id));
+      if (existing) {
+        // Only re-arm if still pending; never reset a classified/overridden row.
+        if (existing.status === "pending") {
+          await db.update(playOutcomes).set({ windowExpiresAt }).where(eq(playOutcomes.id, existing.id));
+        }
+      } else {
+        await db.insert(playOutcomes).values({
+          playRunId: run.id,
+          outcome: "no_response",
+          status: "pending",
+          windowExpiresAt,
+        });
+      }
+      res.json({ ok: true, runId: run.id, windowExpiresAt: windowExpiresAt.toISOString() });
+    } catch (err: any) {
+      if (err?.issues) return res.status(400).json({ error: err.issues });
+      console.error("[playbook] sent error:", err);
+      res.status(500).json({ error: "Failed to mark run sent" });
+    }
+  });
+
+  // ── Override a classifier-assigned outcome (Task #302) ───────────────────
+  const overrideSchema = z.object({
+    label: z.enum(["won", "lost", "partial", "no_response", "bounced"]),
+    reason: z.string().max(1000).optional().nullable(),
+  });
+  app.post("/api/playbook/runs/:runId/override", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const [run] = await db.select().from(playRuns)
+        .where(and(eq(playRuns.id, String(req.params.runId)), eq(playRuns.orgId, user.organizationId)));
+      if (!run) return res.status(404).json({ error: "Run not found" });
+      const isOwner = run.repUserId === user.id;
+      if (!isOwner && !isAuthor(user.role)) {
+        return res.status(403).json({ error: "Only the rep who started this run or a manager can override its outcome" });
+      }
+      const parsed = overrideSchema.parse(req.body);
+
+      // Map to legacy outcome enum so existing analytics keep working.
+      const legacyOutcome = parsed.label === "won" || parsed.label === "partial"
+        ? "success"
+        : parsed.label === "lost"
+          ? "fail"
+          : "no_response";
+
+      const [existing] = await db.select().from(playOutcomes).where(eq(playOutcomes.playRunId, run.id));
+      if (existing) {
+        await db.update(playOutcomes).set({
+          status: "overridden",
+          overrideLabel: parsed.label,
+          overrideUserId: user.id,
+          overrideReason: parsed.reason ?? null,
+          overrideAt: new Date(),
+          outcome: legacyOutcome,
+          recordedBy: user.id,
+        }).where(eq(playOutcomes.id, existing.id));
+      } else {
+        await db.insert(playOutcomes).values({
+          playRunId: run.id,
+          outcome: legacyOutcome,
+          status: "overridden",
+          overrideLabel: parsed.label,
+          overrideUserId: user.id,
+          overrideReason: parsed.reason ?? null,
+          overrideAt: new Date(),
+          recordedBy: user.id,
+        });
+      }
+      await db.update(playRuns).set({
+        status: "completed",
+        completedAt: run.completedAt ?? new Date(),
+      }).where(eq(playRuns.id, run.id));
+      res.json({ ok: true, runId: run.id, label: parsed.label });
+    } catch (err: any) {
+      if (err?.issues) return res.status(400).json({ error: err.issues });
+      console.error("[playbook] override error:", err);
+      res.status(500).json({ error: "Failed to override outcome" });
+    }
+  });
+
   // ── Record outcome on a run ──────────────────────────────────────────────
   const outcomeSchema = z.object({
     outcome: z.enum(["success", "fail", "no_response"]),
@@ -585,7 +700,10 @@ export function registerPlaybookRoutes(app: Express): void {
       const startedAt = run.startedAt ?? run.suggestedAt;
       const hours = startedAt ? Math.max(1, Math.round((Date.now() - new Date(startedAt).getTime()) / 36e5)) : null;
 
-      // Upsert outcome (one outcome per run).
+      // Upsert outcome (one outcome per run). Setting status='recorded'
+      // here is critical (Task #302): it takes the row out of the 'pending'
+      // bucket so the window-expiry sweep can never overwrite a manually
+      // recorded success/fail with no_response when the window elapses.
       const [existing] = await db.select().from(playOutcomes).where(eq(playOutcomes.playRunId, run.id));
       if (existing) {
         await db.update(playOutcomes).set({
@@ -594,6 +712,7 @@ export function registerPlaybookRoutes(app: Express): void {
           timeToOutcomeHours: hours,
           recordedBy: user.id,
           recordedAt: new Date(),
+          status: "recorded",
         }).where(eq(playOutcomes.id, existing.id));
       } else {
         await db.insert(playOutcomes).values({
@@ -602,6 +721,7 @@ export function registerPlaybookRoutes(app: Express): void {
           notes: parsed.notes ?? null,
           timeToOutcomeHours: hours,
           recordedBy: user.id,
+          status: "recorded",
         });
       }
 
@@ -635,9 +755,11 @@ export function registerPlaybookRoutes(app: Express): void {
       const rows = await db.select({
         run: playRuns,
         play: { id: plays.id, name: plays.name, channel: plays.channel, audience: plays.audience },
+        outcome: playOutcomes,
       })
         .from(playRuns)
         .innerJoin(plays, eq(plays.id, playRuns.playId))
+        .leftJoin(playOutcomes, eq(playOutcomes.playRunId, playRuns.id))
         .where(and(...conds))
         .orderBy(desc(playRuns.suggestedAt))
         .limit(200);
@@ -697,6 +819,8 @@ export function registerPlaybookRoutes(app: Express): void {
         no_response_count: number;
         median_hours: number | null;
       };
+      // Bounced outcomes are intentionally excluded from win-rate math
+      // (Task #302) — they reflect contact-data hygiene, not play quality.
       const result = await db.execute<AnalyticsRow>(sql`
         SELECT
           p.id AS play_id,
@@ -704,11 +828,11 @@ export function registerPlaybookRoutes(app: Express): void {
           p.audience,
           p.channel,
           p.status,
-          COUNT(r.id) FILTER (WHERE r.status = 'completed')::int AS completed_runs,
-          COUNT(o.id) FILTER (WHERE o.outcome = 'success')::int AS success_count,
-          COUNT(o.id) FILTER (WHERE o.outcome = 'fail')::int AS fail_count,
-          COUNT(o.id) FILTER (WHERE o.outcome = 'no_response')::int AS no_response_count,
-          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY o.time_to_outcome_hours)::int AS median_hours
+          COUNT(r.id) FILTER (WHERE r.status = 'completed' AND COALESCE(o.status, '') <> 'bounced')::int AS completed_runs,
+          COUNT(o.id) FILTER (WHERE o.outcome = 'success' AND o.status <> 'bounced')::int AS success_count,
+          COUNT(o.id) FILTER (WHERE o.outcome = 'fail' AND o.status <> 'bounced')::int AS fail_count,
+          COUNT(o.id) FILTER (WHERE o.outcome = 'no_response' AND o.status <> 'bounced')::int AS no_response_count,
+          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY o.time_to_outcome_hours) FILTER (WHERE o.status <> 'bounced')::int AS median_hours
         FROM plays p
         LEFT JOIN play_runs r ON r.play_id = p.id
         LEFT JOIN play_outcomes o ON o.play_run_id = r.id
@@ -718,19 +842,23 @@ export function registerPlaybookRoutes(app: Express): void {
       `);
       const playRows = result.rows ?? [];
 
+      // Per-rep stats: same exclusion rule as play-level analytics —
+      // status='bounced' rows are contact-data hygiene events, not play
+      // results, so they don't count as a run OR a win for the rep.
       type RepRow = { play_id: string; rep_user_id: string; rep_name: string; runs: number; wins: number };
       const reps = await db.execute<RepRow>(sql`
         SELECT
           r.play_id,
           r.rep_user_id,
           u.name AS rep_name,
-          COUNT(*)::int AS runs,
-          COUNT(o.id) FILTER (WHERE o.outcome = 'success')::int AS wins
+          COUNT(*) FILTER (WHERE COALESCE(o.status, '') <> 'bounced')::int AS runs,
+          COUNT(o.id) FILTER (WHERE o.outcome = 'success' AND o.status <> 'bounced')::int AS wins
         FROM play_runs r
         JOIN users u ON u.id = r.rep_user_id
         LEFT JOIN play_outcomes o ON o.play_run_id = r.id
         WHERE r.org_id = ${user.organizationId} AND r.rep_user_id IS NOT NULL
         GROUP BY r.play_id, r.rep_user_id, u.name
+        HAVING COUNT(*) FILTER (WHERE COALESCE(o.status, '') <> 'bounced') > 0
         ORDER BY wins DESC, runs DESC
       `);
       const repRows = reps.rows ?? [];
