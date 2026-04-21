@@ -409,6 +409,33 @@ export interface WebexCallRecord {
   webexPersonId?: string;
   /** Webex email of the user that placed/received this call (when available). */
   webexUserEmail?: string;
+  /** Raw Webex client type — e.g., WXC_CLIENT, WXC_DEVICE, WXC_THIRD_PARTY. */
+  clientType?: string;
+  /** Raw Webex OS type — e.g., IOS, ANDROID, WINDOWS, MAC, LINUX, OTHER. */
+  osType?: string;
+  /** Hardware MAC of the device used (when reported), e.g. for desk phones. */
+  deviceMac?: string;
+  /** Vendor model of the device, e.g. "Cisco 8865". */
+  deviceModel?: string;
+  /** Headset/accessory model when the call was placed via a paired headset. */
+  headsetModel?: string;
+  /** Headset/accessory vendor name when reported. */
+  headsetMake?: string;
+}
+
+export interface WebexDevice {
+  id: string;
+  displayName: string;
+  product: string | null;
+  productType: string | null;
+  type: string | null;
+  mac: string | null;
+  serial: string | null;
+  personId: string | null;
+  workspaceId: string | null;
+  connectionStatus: string | null;
+  lastConnectionAt: string | null;
+  created: string | null;
 }
 
 export interface WebexPerson {
@@ -506,6 +533,12 @@ export async function fetchCallHistory(
         voicemailLeft: item.voicemailLeft === true,
         webexPersonId: item.userId ?? item.personId ?? item.user?.id ?? undefined,
         webexUserEmail: item.userEmail ?? item.user?.email ?? undefined,
+        clientType: item.clientType ?? item.deviceType ?? undefined,
+        osType: item.osType ?? item.clientOsType ?? undefined,
+        deviceMac: item.deviceMac ?? item.deviceMacAddress ?? undefined,
+        deviceModel: item.deviceModel ?? item.deviceProduct ?? undefined,
+        headsetModel: item.headsetModel ?? item.accessoryModel ?? undefined,
+        headsetMake: item.headsetMake ?? item.accessoryMake ?? item.accessoryType ?? undefined,
       });
     }
 
@@ -637,6 +670,75 @@ export async function fetchCallRecording(recordingId: string): Promise<Buffer | 
 
   const arrayBuffer = await audioRes.arrayBuffer();
   return Buffer.from(arrayBuffer);
+}
+
+/**
+ * List provisioned Webex devices in the configured organization. Used by the
+ * admin Device Usage panel to surface unused/last-connected devices.
+ */
+export async function listWebexDevices(maxResults = 1000): Promise<WebexDevice[]> {
+  const token = await getWebexAccessToken();
+  const orgId = process.env.WEBEX_ORG_ID!;
+
+  const all: WebexDevice[] = [];
+  const params = new URLSearchParams({ orgId, max: "100" });
+  let url: string = `https://webexapis.com/v1/devices?${params.toString()}`;
+
+  while (url && all.length < maxResults) {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      const text = await res.text();
+      log(`listWebexDevices error ${res.status}: ${text}`);
+      break;
+    }
+    const data = await res.json();
+    for (const d of data.items ?? []) {
+      all.push({
+        id: d.id ?? "",
+        displayName: d.displayName ?? d.product ?? "Unnamed device",
+        product: d.product ?? null,
+        productType: d.productType ?? null,
+        type: d.type ?? null,
+        mac: d.mac ?? null,
+        serial: d.serial ?? null,
+        personId: d.personId ?? null,
+        workspaceId: d.workspaceId ?? null,
+        connectionStatus: d.connectionStatus ?? null,
+        lastConnectionAt: d.lastSeen ?? d.lastConnectionTime ?? d.firstSeen ?? null,
+        created: d.created ?? null,
+      });
+    }
+    const linkHeader = res.headers.get("link");
+    if (linkHeader) {
+      const m = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
+      url = m ? m[1] : "";
+    } else {
+      url = "";
+    }
+  }
+  log(`listWebexDevices fetched ${all.length} devices`);
+  return all;
+}
+
+export type DeviceCategory = "desk_app" | "mobile" | "desk_phone" | "other";
+
+/**
+ * Bucketize a Webex CDR into a coarse device category for analytics. Falls
+ * back to "other" when the API doesn't report enough hints to classify.
+ */
+export function categorizeWebexCallDevice(record: {
+  clientType?: string;
+  osType?: string;
+  deviceModel?: string;
+}): DeviceCategory {
+  const ct = (record.clientType ?? "").toUpperCase();
+  const os = (record.osType ?? "").toUpperCase();
+  if (ct.includes("WXC_DEVICE") || ct.includes("IP_PHONE") || ct.includes("MPP")) return "desk_phone";
+  if (os === "IOS" || os === "ANDROID") return "mobile";
+  if (ct.includes("MOBILE")) return "mobile";
+  if (ct.includes("WXC_CLIENT") || ct.includes("WEBEX_APP") || ct.includes("CLIENT")) return "desk_app";
+  if (os === "WINDOWS" || os === "MAC" || os === "LINUX") return "desk_app";
+  return "other";
 }
 
 export function buildWebexCallDeepLink(phoneNumber: string): string {

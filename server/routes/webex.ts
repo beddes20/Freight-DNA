@@ -21,7 +21,10 @@ import {
   phonesMatch,
   phoneMatchKey,
   buildWebexCallDeepLink,
+  listWebexDevices,
+  categorizeWebexCallDevice,
   type WebexCallRecord,
+  type DeviceCategory,
 } from "../webexService";
 import { db } from "../storage";
 import {
@@ -1112,6 +1115,227 @@ export function registerWebexRoutes(app: Express) {
     } catch (err) {
       log(`Delete mapping error: ${err instanceof Error ? err.message : String(err)}`);
       res.status(500).json({ error: "Failed to delete mapping" });
+    }
+  });
+
+  // ── Device & Workspace Usage Analytics (Task #319) ────────────────────────
+  //
+  // Admin-only read-only view. Aggregates per-rep device mix over the window
+  // and surfaces unused provisioned devices. Attribution is via the existing
+  // webex_user_mappings table (CDR personId/email -> internal userId).
+  app.get("/api/webex/device-usage", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      if (!webexCredentialsConfigured()) {
+        return res.status(400).json({ error: "Webex credentials not configured" });
+      }
+      if (!hasWebexTokens()) {
+        return res.status(400).json({ error: "Webex not authorized. Visit /api/webex/authorize to connect." });
+      }
+      if (webexNeedsReauth()) {
+        return res.status(400).json({ error: "Webex needs re-authorization." });
+      }
+
+      const daysRaw = Number(req.query.days);
+      const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(daysRaw, 90) : 30;
+      const managerFilter = (req.query.managerId as string | undefined)?.trim() || null;
+
+      // Fetch CDRs across the window in chunks (Webex caps windows). We page
+      // 48h at a time and cap total records to keep the admin call bounded.
+      const chunkHours = 48;
+      const endMs = Date.now();
+      const allRecords: WebexCallRecord[] = [];
+      const MAX_RECORDS = 5000;
+      for (let offset = 0; offset < days * 24 && allRecords.length < MAX_RECORDS; offset += chunkHours) {
+        const chunkEndMs = endMs - offset * 3600_000;
+        const chunkStartMs = chunkEndMs - Math.min(chunkHours, days * 24 - offset) * 3600_000;
+        try {
+          const chunk = await fetchCallHistory(
+            new Date(chunkStartMs).toISOString(),
+            new Date(chunkEndMs).toISOString(),
+            Math.min(500, MAX_RECORDS - allRecords.length),
+          );
+          allRecords.push(...chunk);
+        } catch (e) {
+          log(`device-usage chunk fetch failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+
+      // Build person -> internal user index from mappings.
+      const mappings = await storage.getWebexUserMappings(user.organizationId);
+      const byPersonId = new Map<string, typeof mappings[number]>();
+      const byEmail = new Map<string, typeof mappings[number]>();
+      for (const m of mappings) {
+        if (m.webexPersonId) byPersonId.set(m.webexPersonId, m);
+        if (m.webexEmail) byEmail.set(m.webexEmail.toLowerCase(), m);
+      }
+
+      const orgUsers = await storage.getUsers(user.organizationId);
+      const usersById = new Map(orgUsers.map(u => [u.id, u]));
+
+      // Manager filter = direct reports of this manager (managerId match).
+      const includeUserId = (uid: string | null | undefined): boolean => {
+        if (!managerFilter) return true;
+        if (!uid) return false;
+        const u = usersById.get(uid);
+        if (!u) return false;
+        return u.managerId === managerFilter;
+      };
+
+      type PerRep = {
+        userId: string;
+        userName: string;
+        webexDisplayName: string | null;
+        totalCalls: number;
+        deskAppCalls: number;
+        mobileCalls: number;
+        deskPhoneCalls: number;
+        otherCalls: number;
+        headsetCalls: number;
+        lastCallAt: string | null;
+      };
+      const perRep = new Map<string, PerRep>();
+      const lastUseByMac = new Map<string, string>();
+      const lastUseByPersonId = new Map<string, Map<DeviceCategory, string>>();
+
+      for (const rec of allRecords) {
+        // Track device last-use by MAC even if we can't attribute the call.
+        if (rec.deviceMac) {
+          const prev = lastUseByMac.get(rec.deviceMac);
+          if (!prev || rec.startTime > prev) lastUseByMac.set(rec.deviceMac, rec.startTime);
+        }
+
+        // Attribute call to internal user via mapping table.
+        let mapping = rec.webexPersonId ? byPersonId.get(rec.webexPersonId) : undefined;
+        if (!mapping && rec.webexUserEmail) mapping = byEmail.get(rec.webexUserEmail.toLowerCase());
+        const internalUserId = mapping?.userId ?? null;
+        if (!internalUserId) continue;
+        if (!includeUserId(internalUserId)) continue;
+
+        const userRec = usersById.get(internalUserId);
+        const key = internalUserId;
+        let entry = perRep.get(key);
+        if (!entry) {
+          entry = {
+            userId: internalUserId,
+            userName: userRec?.name || userRec?.username || "Unknown",
+            webexDisplayName: mapping?.webexDisplayName ?? null,
+            totalCalls: 0,
+            deskAppCalls: 0,
+            mobileCalls: 0,
+            deskPhoneCalls: 0,
+            otherCalls: 0,
+            headsetCalls: 0,
+            lastCallAt: null,
+          };
+          perRep.set(key, entry);
+        }
+        entry.totalCalls++;
+        if (!entry.lastCallAt || rec.startTime > entry.lastCallAt) entry.lastCallAt = rec.startTime;
+        const cat = categorizeWebexCallDevice(rec);
+        if (cat === "desk_app") entry.deskAppCalls++;
+        else if (cat === "mobile") entry.mobileCalls++;
+        else if (cat === "desk_phone") entry.deskPhoneCalls++;
+        else entry.otherCalls++;
+        if (rec.headsetModel || rec.headsetMake) entry.headsetCalls++;
+
+        // Track personId-level last-use-by-category for person-owned devices.
+        if (rec.webexPersonId) {
+          let catMap = lastUseByPersonId.get(rec.webexPersonId);
+          if (!catMap) { catMap = new Map(); lastUseByPersonId.set(rec.webexPersonId, catMap); }
+          const prev = catMap.get(cat);
+          if (!prev || rec.startTime > prev) catMap.set(cat, rec.startTime);
+        }
+      }
+
+      // Pull device list and compute unused flags.
+      let devices: Awaited<ReturnType<typeof listWebexDevices>> = [];
+      try {
+        devices = await listWebexDevices();
+      } catch (e) {
+        log(`device-usage: listWebexDevices failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+
+      const nowMs = Date.now();
+      const UNUSED_THRESHOLD_MS = 30 * 24 * 3600 * 1000;
+      const deviceRows = devices.map(d => {
+        const categoryGuess: DeviceCategory =
+          /headset/i.test(d.product ?? "") || /headset/i.test(d.productType ?? "") ? "other" :
+          /phone/i.test(d.product ?? "") || /phone/i.test(d.productType ?? "") ? "desk_phone" :
+          /app|client|desktop|mobile/i.test(d.productType ?? "") ? "desk_app" : "other";
+
+        // Prefer MAC-level last use from CDRs; fall back to connectionStatus
+        // last-seen timestamp, then finally to "unknown".
+        let lastUsedAt: string | null = null;
+        if (d.mac && lastUseByMac.has(d.mac)) lastUsedAt = lastUseByMac.get(d.mac)!;
+        else if (d.personId && categoryGuess !== "other") {
+          const catMap = lastUseByPersonId.get(d.personId);
+          if (catMap) lastUsedAt = catMap.get(categoryGuess) ?? null;
+        }
+        if (!lastUsedAt) lastUsedAt = d.lastConnectionAt;
+
+        const lastUsedMs = lastUsedAt ? new Date(lastUsedAt).getTime() : null;
+        const daysSinceLastUse =
+          lastUsedMs && Number.isFinite(lastUsedMs)
+            ? Math.floor((nowMs - lastUsedMs) / (24 * 3600 * 1000))
+            : null;
+        const unused = daysSinceLastUse === null || daysSinceLastUse >= 30;
+
+        // Map Webex personId -> our internal user when possible, so admins
+        // can see "John Smith's desk phone" rather than a raw Webex ID.
+        let assignedUserId: string | null = null;
+        let assignedUserName: string | null = null;
+        if (d.personId) {
+          const m = byPersonId.get(d.personId);
+          if (m?.userId) {
+            assignedUserId = m.userId;
+            const u = usersById.get(m.userId);
+            assignedUserName = u?.name ?? u?.username ?? null;
+          }
+        }
+
+        return {
+          id: d.id,
+          displayName: d.displayName,
+          product: d.product,
+          productType: d.productType,
+          type: d.type,
+          mac: d.mac,
+          connectionStatus: d.connectionStatus,
+          lastUsedAt,
+          daysSinceLastUse,
+          unused,
+          assignedUserId,
+          assignedUserName,
+          webexPersonId: d.personId,
+          workspaceId: d.workspaceId,
+        };
+      });
+
+      // Managers for the dropdown (users who have at least one direct report).
+      const managerIds = new Set<string>();
+      for (const u of orgUsers) if (u.managerId) managerIds.add(u.managerId);
+      const managers = orgUsers
+        .filter(u => managerIds.has(u.id))
+        .map(u => ({ id: u.id, name: u.name || u.username }));
+
+      res.json({
+        days,
+        totalCalls: allRecords.length,
+        truncated: allRecords.length >= MAX_RECORDS,
+        perRep: Array.from(perRep.values()).sort((a, b) => b.totalCalls - a.totalCalls),
+        devices: deviceRows
+          .filter(d => !managerFilter || !d.assignedUserId || includeUserId(d.assignedUserId))
+          .sort((a, b) => {
+            if (a.unused !== b.unused) return a.unused ? -1 : 1;
+            return (b.daysSinceLastUse ?? 0) - (a.daysSinceLastUse ?? 0);
+          }),
+        managers,
+      });
+    } catch (err) {
+      log(`device-usage error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to load device usage" });
     }
   });
 

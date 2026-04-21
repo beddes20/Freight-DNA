@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   TrendingUp, TrendingDown, Minus, Users, Trophy, AlertCircle, Target,
   ArrowRight, BarChart2, Clock, Flame, Building2,
-  Snowflake, UserCheck, DollarSign,
+  Snowflake, UserCheck, DollarSign, Monitor, Smartphone, Phone, Headphones,
 } from "lucide-react";
 import {
   PROSPECT_STAGE_LABELS,
@@ -755,6 +755,9 @@ export function ExecAnalyticsDashboard() {
         )}
       </Card>
 
+      {/* ── Admin-only: Webex Device Usage ── */}
+      {user?.role === "admin" && <DeviceUsageAdminPanel />}
+
       {/* ── Rep Leaderboard ── */}
       {data.repStats.length > 0 && (
         <Card className="p-5 space-y-4" data-testid="section-exec-rep-leaderboard">
@@ -817,5 +820,280 @@ export function ExecAnalyticsDashboard() {
         </Card>
       )}
     </div>
+  );
+}
+
+// ─── Admin-only: Webex Device & Workspace Usage (Task #319) ──────────────────
+
+type DeviceUsageRep = {
+  userId: string;
+  userName: string;
+  webexDisplayName: string | null;
+  totalCalls: number;
+  deskAppCalls: number;
+  mobileCalls: number;
+  deskPhoneCalls: number;
+  otherCalls: number;
+  headsetCalls: number;
+  lastCallAt: string | null;
+};
+
+type DeviceUsageDevice = {
+  id: string;
+  displayName: string;
+  product: string | null;
+  productType: string | null;
+  type: string | null;
+  mac: string | null;
+  connectionStatus: string | null;
+  lastUsedAt: string | null;
+  daysSinceLastUse: number | null;
+  unused: boolean;
+  assignedUserId: string | null;
+  assignedUserName: string | null;
+  workspaceId?: string | null;
+};
+
+type DeviceUsageResponse = {
+  days: number;
+  totalCalls: number;
+  truncated: boolean;
+  perRep: DeviceUsageRep[];
+  devices: DeviceUsageDevice[];
+  managers: { id: string; name: string }[];
+};
+
+const USAGE_DAY_RANGES = [7, 14, 30, 60, 90] as const;
+
+function pct(part: number, total: number): number {
+  if (!total) return 0;
+  return Math.round((part / total) * 100);
+}
+
+function relativeDays(days: number | null): string {
+  if (days === null) return "Never";
+  if (days === 0) return "Today";
+  if (days === 1) return "1 day ago";
+  return `${days} days ago`;
+}
+
+export function DeviceUsageAdminPanel() {
+  const [days, setDays] = useState<number>(30);
+  const [managerId, setManagerId] = useState<string>("");
+
+  const { data, isLoading, error, refetch, isFetching } = useQuery<DeviceUsageResponse>({
+    queryKey: ["/api/webex/device-usage", days, managerId],
+    queryFn: async () => {
+      const params = new URLSearchParams({ days: String(days) });
+      if (managerId) params.set("managerId", managerId);
+      const res = await fetch(`/api/webex/device-usage?${params.toString()}`, { credentials: "include" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error ?? `Failed (${res.status})`);
+      }
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  return (
+    <Card className="p-5 space-y-4" data-testid="section-webex-device-usage">
+      <div className="flex items-center gap-2 flex-wrap">
+        <Monitor className="h-4 w-4 text-muted-foreground" />
+        <h2 className="font-semibold text-sm text-foreground">Webex Device Usage</h2>
+        <Badge variant="outline" className="text-[10px]">Admin only</Badge>
+        <span className="text-xs text-muted-foreground ml-auto">
+          Last {days} days · {data?.totalCalls ?? 0} calls
+          {data?.truncated ? " (capped)" : ""}
+        </span>
+      </div>
+
+      {/* Filters */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-1 border rounded-md overflow-hidden" data-testid="device-usage-range-filter">
+          {USAGE_DAY_RANGES.map(d => (
+            <button
+              key={d}
+              onClick={() => setDays(d)}
+              className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                days === d ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"
+              }`}
+              data-testid={`device-usage-range-${d}`}
+            >
+              {d}d
+            </button>
+          ))}
+        </div>
+        {data && data.managers.length > 0 && (
+          <select
+            value={managerId}
+            onChange={(e) => setManagerId(e.target.value)}
+            className="text-xs border rounded-md px-2 py-1.5 bg-background"
+            data-testid="device-usage-team-filter"
+          >
+            <option value="">All teams</option>
+            {data.managers.map(m => (
+              <option key={m.id} value={m.id}>{m.name}'s team</option>
+            ))}
+          </select>
+        )}
+        <button
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="text-xs px-2 py-1.5 border rounded-md hover:bg-muted text-muted-foreground disabled:opacity-50"
+          data-testid="button-device-usage-refresh"
+        >
+          {isFetching ? "Refreshing…" : "Refresh"}
+        </button>
+      </div>
+
+      {isLoading ? (
+        <div className="space-y-2">
+          <Skeleton className="h-10" />
+          <Skeleton className="h-32" />
+        </div>
+      ) : error ? (
+        <div className="flex items-center gap-2 text-sm text-destructive py-2" data-testid="device-usage-error">
+          <AlertCircle className="h-4 w-4" />
+          <span>{(error as Error).message || "Failed to load device usage."}</span>
+        </div>
+      ) : !data ? null : (
+        <>
+          {/* Per-rep breakdown */}
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+              Per-rep device mix
+            </p>
+            {data.perRep.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-3" data-testid="device-usage-empty-reps">
+                No attributed Webex calls in this window.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="text-left py-2 pr-4 text-xs font-medium text-muted-foreground">Rep</th>
+                      <th className="text-right py-2 pr-3 text-xs font-medium text-muted-foreground">Calls</th>
+                      <th className="text-right py-2 pr-3 text-xs font-medium text-muted-foreground">
+                        <span className="inline-flex items-center gap-1"><Monitor className="h-3 w-3" />Desk App</span>
+                      </th>
+                      <th className="text-right py-2 pr-3 text-xs font-medium text-muted-foreground">
+                        <span className="inline-flex items-center gap-1"><Smartphone className="h-3 w-3" />Mobile</span>
+                      </th>
+                      <th className="text-right py-2 pr-3 text-xs font-medium text-muted-foreground">
+                        <span className="inline-flex items-center gap-1"><Phone className="h-3 w-3" />Desk Phone</span>
+                      </th>
+                      <th className="text-right py-2 text-xs font-medium text-muted-foreground">
+                        <span className="inline-flex items-center gap-1"><Headphones className="h-3 w-3" />Headset</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/50">
+                    {data.perRep.map(rep => {
+                      const headsetPct = pct(rep.headsetCalls, rep.totalCalls);
+                      const headsetFlag = rep.totalCalls >= 10 && headsetPct < 30;
+                      return (
+                        <tr key={rep.userId} data-testid={`device-usage-rep-${rep.userId}`}>
+                          <td className="py-2.5 pr-4">
+                            <div className="text-xs font-medium text-foreground">{rep.userName}</div>
+                            {rep.webexDisplayName && rep.webexDisplayName !== rep.userName && (
+                              <div className="text-[10px] text-muted-foreground">{rep.webexDisplayName}</div>
+                            )}
+                          </td>
+                          <td className="py-2.5 pr-3 text-right text-xs text-foreground tabular-nums">{rep.totalCalls}</td>
+                          <td className="py-2.5 pr-3 text-right text-xs tabular-nums">
+                            <span className="text-foreground">{pct(rep.deskAppCalls, rep.totalCalls)}%</span>
+                            <span className="text-muted-foreground ml-1">({rep.deskAppCalls})</span>
+                          </td>
+                          <td className="py-2.5 pr-3 text-right text-xs tabular-nums">
+                            <span className="text-foreground">{pct(rep.mobileCalls, rep.totalCalls)}%</span>
+                            <span className="text-muted-foreground ml-1">({rep.mobileCalls})</span>
+                          </td>
+                          <td className="py-2.5 pr-3 text-right text-xs tabular-nums">
+                            <span className="text-foreground">{pct(rep.deskPhoneCalls, rep.totalCalls)}%</span>
+                            <span className="text-muted-foreground ml-1">({rep.deskPhoneCalls})</span>
+                          </td>
+                          <td className="py-2.5 text-right text-xs tabular-nums">
+                            <span
+                              className={headsetFlag ? "text-amber-600 dark:text-amber-400 font-semibold inline-flex items-center gap-1" : "text-foreground"}
+                              title={headsetFlag ? "Low headset usage — may indicate audio quality issues" : undefined}
+                            >
+                              {headsetFlag && <Flame className="h-3 w-3" />}
+                              {headsetPct}%
+                            </span>
+                            <span className="text-muted-foreground ml-1">({rep.headsetCalls})</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <p className="text-[11px] text-muted-foreground mt-2">
+                  <Flame className="h-3 w-3 inline text-amber-500 mx-0.5" />
+                  Amber = under 30% headset usage across 10+ calls — flag for call quality review.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Provisioned devices */}
+          <div className="pt-2 border-t border-border/60">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2 mt-3">
+              Provisioned devices ({data.devices.length})
+            </p>
+            {data.devices.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-3" data-testid="device-usage-empty-devices">
+                No provisioned devices found for this org.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="text-left py-2 pr-4 text-xs font-medium text-muted-foreground">Device</th>
+                      <th className="text-left py-2 pr-4 text-xs font-medium text-muted-foreground">Assigned to</th>
+                      <th className="text-left py-2 pr-4 text-xs font-medium text-muted-foreground">Product</th>
+                      <th className="text-left py-2 pr-4 text-xs font-medium text-muted-foreground">Last used</th>
+                      <th className="text-right py-2 text-xs font-medium text-muted-foreground">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/50">
+                    {data.devices.map(d => (
+                      <tr key={d.id} data-testid={`device-usage-device-${d.id}`}>
+                        <td className="py-2.5 pr-4 text-xs text-foreground">
+                          {d.displayName}
+                          {d.mac && <div className="text-[10px] text-muted-foreground font-mono">{d.mac}</div>}
+                        </td>
+                        <td className="py-2.5 pr-4 text-xs text-muted-foreground">
+                          {d.assignedUserName ?? (d.workspaceId ? "Workspace" : "—")}
+                        </td>
+                        <td className="py-2.5 pr-4 text-xs text-muted-foreground">
+                          {d.product ?? d.productType ?? d.type ?? "—"}
+                        </td>
+                        <td className="py-2.5 pr-4 text-xs text-muted-foreground">
+                          {relativeDays(d.daysSinceLastUse)}
+                        </td>
+                        <td className="py-2.5 text-right">
+                          {d.unused ? (
+                            <Badge variant="outline" className="text-[10px] border-amber-500 text-amber-600 dark:text-amber-400">
+                              Unused 30d+
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-[10px] border-emerald-500 text-emerald-600 dark:text-emerald-400">
+                              Active
+                            </Badge>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </Card>
   );
 }
