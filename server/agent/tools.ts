@@ -8,11 +8,11 @@
  *   - "navigate" → emit a navigation event + optional message; loop ends
  */
 import { z } from "zod";
-import { eq, and, desc, ilike } from "drizzle-orm";
+import { eq, and, desc, ilike, sql, inArray, gte, lte, isNull } from "drizzle-orm";
 import { db } from "../storage";
 import { storage } from "../storage";
 import {
-  companies, contacts, tasks, touchpoints, type User,
+  companies, contacts, tasks, touchpoints, users, type User,
 } from "@shared/schema";
 import {
   getNationalMarketSummary, getMarketOtris, getLaneVotrisBatch,
@@ -232,6 +232,116 @@ export const TOOLS: AgentTool[] = [
       return {
         kind: "data",
         text: rows.map((r) => `• ${r.tp.date} ${r.tp.type} @ ${r.c?.name ?? "?"}${r.tp.notes ? `: ${r.tp.notes.slice(0, 80)}` : ""}`).join("\n"),
+      };
+    },
+  },
+  {
+    name: "team_touchpoint_tally",
+    capability: "read.touchpoint",
+    description:
+      "Manager-only: per-rep touchpoint count for a date window. Use for questions like 'how many touchpoints has each rep made today/this week', 'who's been most active', 'team activity rollup'. Defaults to today. Only available to admin/director/sales_director or when the viewer is in 'everyone' scope.",
+    parameters: {
+      type: "object",
+      properties: {
+        date_start: { type: "string", description: "ISO date (YYYY-MM-DD). Default: today." },
+        date_end: { type: "string", description: "ISO date (YYYY-MM-DD). Default: same as date_start." },
+        include_zero: { type: "boolean", description: "Include reps with 0 touchpoints. Default true." },
+      },
+    },
+    async execute(ctx, args) {
+      const isManager = ["admin", "director", "sales_director"].includes(ctx.rep.role) || ctx.scope === "everyone";
+      if (!isManager) {
+        return { kind: "data", text: "This rollup is only available to managers (admin / director / sales director). Ask about your own activity instead." };
+      }
+      const today = new Date().toISOString().slice(0, 10);
+      const start = (args?.date_start && /^\d{4}-\d{2}-\d{2}$/.test(String(args.date_start))) ? String(args.date_start) : today;
+      const end = (args?.date_end && /^\d{4}-\d{2}-\d{2}$/.test(String(args.date_end))) ? String(args.date_end) : start;
+      const includeZero = args?.include_zero !== false;
+
+      const repRows = await db.select({ id: users.id, name: users.name, username: users.username, role: users.role })
+        .from(users)
+        .where(eq(users.organizationId, ctx.organizationId));
+      const salesRoles = new Set(["account_manager", "national_account_manager", "sales", "sales_director", "director", "admin"]);
+      const reps = repRows.filter((r) => salesRoles.has(r.role));
+      if (!reps.length) return { kind: "data", text: "No reps found in this organization." };
+
+      const counts = await db.select({
+        loggedById: touchpoints.loggedById,
+        n: sql<number>`count(*)::int`,
+      })
+        .from(touchpoints)
+        .where(and(
+          inArray(touchpoints.loggedById, reps.map(r => r.id)),
+          gte(touchpoints.date, start),
+          lte(touchpoints.date, end),
+        ))
+        .groupBy(touchpoints.loggedById);
+
+      const countMap = new Map<string, number>(counts.map(c => [c.loggedById!, Number(c.n)]));
+      const tallied = reps.map(r => ({
+        name: r.name || r.username,
+        role: r.role,
+        count: countMap.get(r.id) ?? 0,
+      }));
+      const filtered = includeZero ? tallied : tallied.filter(t => t.count > 0);
+      filtered.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+
+      const total = filtered.reduce((s, t) => s + t.count, 0);
+      const window = start === end ? start : `${start} → ${end}`;
+      const lines = filtered.map(t => `• ${t.name} (${t.role}) — ${t.count}`);
+      return {
+        kind: "data",
+        text: `Touchpoints by rep for ${window} (total ${total}):\n${lines.join("\n")}`,
+      };
+    },
+  },
+  {
+    name: "reps_missing_touchpoints",
+    capability: "read.touchpoint",
+    description:
+      "Manager-only: list sales reps who have logged ZERO touchpoints in a date window. Use for 'who hasn't logged a touchpoint today', 'which reps are dark this week', 'who needs a nudge'. Defaults to today.",
+    parameters: {
+      type: "object",
+      properties: {
+        date_start: { type: "string", description: "ISO date (YYYY-MM-DD). Default: today." },
+        date_end: { type: "string", description: "ISO date (YYYY-MM-DD). Default: same as date_start." },
+      },
+    },
+    async execute(ctx, args) {
+      const isManager = ["admin", "director", "sales_director"].includes(ctx.rep.role) || ctx.scope === "everyone";
+      if (!isManager) {
+        return { kind: "data", text: "This rollup is only available to managers (admin / director / sales director)." };
+      }
+      const today = new Date().toISOString().slice(0, 10);
+      const start = (args?.date_start && /^\d{4}-\d{2}-\d{2}$/.test(String(args.date_start))) ? String(args.date_start) : today;
+      const end = (args?.date_end && /^\d{4}-\d{2}-\d{2}$/.test(String(args.date_end))) ? String(args.date_end) : start;
+
+      const repRows = await db.select({ id: users.id, name: users.name, username: users.username, role: users.role })
+        .from(users)
+        .where(eq(users.organizationId, ctx.organizationId));
+      const salesRoles = new Set(["account_manager", "national_account_manager", "sales", "sales_director"]);
+      const reps = repRows.filter((r) => salesRoles.has(r.role));
+      if (!reps.length) return { kind: "data", text: "No sales reps found in this organization." };
+
+      const active = await db.select({ loggedById: touchpoints.loggedById })
+        .from(touchpoints)
+        .where(and(
+          inArray(touchpoints.loggedById, reps.map(r => r.id)),
+          gte(touchpoints.date, start),
+          lte(touchpoints.date, end),
+        ))
+        .groupBy(touchpoints.loggedById);
+      const activeIds = new Set(active.map(a => a.loggedById));
+
+      const missing = reps.filter(r => !activeIds.has(r.id));
+      const window = start === end ? start : `${start} → ${end}`;
+      if (!missing.length) return { kind: "data", text: `Every sales rep logged at least one touchpoint for ${window}. ✅` };
+      const lines = missing
+        .sort((a, b) => (a.name || a.username).localeCompare(b.name || b.username))
+        .map(r => `• ${r.name || r.username} (${r.role})`);
+      return {
+        kind: "data",
+        text: `${missing.length} rep${missing.length === 1 ? "" : "s"} with no touchpoints for ${window}:\n${lines.join("\n")}`,
       };
     },
   },
