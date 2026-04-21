@@ -87,6 +87,7 @@ function ActionCard({
       create_task: "Task created!",
       complete_task: "Task marked complete!",
       mark_meaningful: "Marked as meaningful!",
+      approve_freight_opportunity: "Freight opportunity approved!",
     };
     return (
       <div className="mt-2 flex items-center gap-2 text-xs text-green-600 dark:text-green-400">
@@ -187,6 +188,28 @@ function ActionCard({
         <div className="flex gap-2 pt-1">
           <Button size="sm" className="h-7 text-xs bg-green-600 hover:bg-green-700 text-white flex-1" onClick={() => onConfirm(editedArgs)} data-testid="action-confirm-complete-task">
             <Check className="h-3.5 w-3.5 mr-1" /> Mark complete
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={onDismiss} data-testid="action-dismiss">Dismiss</Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (action.tool === "approve_freight_opportunity") {
+    return (
+      <div className="mt-2 border border-emerald-200 dark:border-emerald-800 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 p-3 space-y-2">
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+          <CheckCircle2 className="h-4 w-4" />
+          Approve Freight Opportunity
+        </div>
+        <div className="text-xs space-y-0.5">
+          <p><span className="text-muted-foreground">Account:</span> <span className="font-medium">{editedArgs.company_name}</span></p>
+          <p><span className="text-muted-foreground">Lane:</span> {editedArgs.origin} → {editedArgs.destination}</p>
+          {editedArgs.pickup && <p><span className="text-muted-foreground">Pickup:</span> {editedArgs.pickup}</p>}
+        </div>
+        <div className="flex gap-2 pt-1">
+          <Button size="sm" className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white flex-1" onClick={() => onConfirm(editedArgs)} data-testid="action-confirm-approve-freight">
+            <Check className="h-3.5 w-3.5 mr-1" /> Approve
           </Button>
           <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={onDismiss} data-testid="action-dismiss">Dismiss</Button>
         </div>
@@ -410,6 +433,11 @@ export function CrmChatbot() {
         await apiRequest("PATCH", `/api/touchpoints/${action.args.touchpoint_id}`, { isMeaningful: true });
         qc.invalidateQueries({ queryKey: ["/api/touchpoints/today"] });
         qc.invalidateQueries({ queryKey: ["/api/touchpoints"] });
+      } else if (action.tool === "approve_freight_opportunity") {
+        if (!action.args.opportunity_id) throw new Error("No opportunity ID");
+        await apiRequest("POST", `/api/my-procurement/freight-opp/${action.args.opportunity_id}/approve`, { approve: true });
+        qc.invalidateQueries({ queryKey: ["/api/freight-opportunities"] });
+        qc.invalidateQueries({ queryKey: ["/api/my-procurement"] });
       }
       setLocalMessages(prev => prev.map(m =>
         m.id === msgId && m.action ? { ...m, action: { ...m.action, confirmed: true } } : m

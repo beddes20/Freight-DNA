@@ -383,6 +383,14 @@ export const TOOLS: AgentTool[] = [
       const filterRaw = String(args.filter ?? "mine");
       const filter: "mine" | "delegated" | "awaiting_approval" | "all" =
         filterRaw === "delegated" || filterRaw === "awaiting_approval" || filterRaw === "all" ? filterRaw : "mine";
+      // Scope-aware (matches the read.touchpoint convention used by the
+      // touchpoint-rollup tools above): when a manager is in "everyone"
+      // scope, drop the per-rep filter on the "all" / "awaiting_approval"
+      // branches so the manager sees the team-wide pipeline. "mine" and
+      // "delegated" stay literally about the asking rep regardless of
+      // scope — they're personal queries.
+      const isManager = ["admin", "director", "national_account_manager", "sales_director", "manager"].includes(ctx.rep.role);
+      const teamScope = isManager && ctx.scope === "everyone";
       const conds = [
         eq(freightOpportunities.orgId, ctx.organizationId),
         sql`(${freightOpportunities.pickupWindowEnd} IS NULL OR ${freightOpportunities.pickupWindowEnd} >= ${todayIso})`,
@@ -392,10 +400,16 @@ export const TOOLS: AgentTool[] = [
       } else if (filter === "delegated") {
         conds.push(eq(freightOpportunities.delegatedToUserId, ctx.rep.id));
       } else if (filter === "awaiting_approval") {
-        conds.push(sql`(${freightOpportunities.ownerUserId} = ${ctx.rep.id} OR ${freightOpportunities.delegatedToUserId} = ${ctx.rep.id})`);
+        if (!teamScope) {
+          conds.push(sql`(${freightOpportunities.ownerUserId} = ${ctx.rep.id} OR ${freightOpportunities.delegatedToUserId} = ${ctx.rep.id})`);
+        }
         conds.push(isNull(freightOpportunities.approvedAt));
       } else {
-        conds.push(sql`(${freightOpportunities.ownerUserId} = ${ctx.rep.id} OR ${freightOpportunities.delegatedToUserId} = ${ctx.rep.id})`);
+        // "all": individual rep sees own + delegated; manager-in-everyone
+        // sees the whole org's open pipeline.
+        if (!teamScope) {
+          conds.push(sql`(${freightOpportunities.ownerUserId} = ${ctx.rep.id} OR ${freightOpportunities.delegatedToUserId} = ${ctx.rep.id})`);
+        }
       }
       conds.push(inArray(freightOpportunities.status, [
         "new", "ready_to_send", "sent",
@@ -419,7 +433,13 @@ export const TOOLS: AgentTool[] = [
         .orderBy(desc(freightOpportunities.urgencyScore), desc(freightOpportunities.generatedAt))
         .limit(lim);
       if (rows.length === 0) {
-        return { kind: "data", text: wantStatus ? `No open Available Freight opportunities with status "${wantStatus}".` : "No open Available Freight opportunities right now." };
+        const empty: Record<typeof filter, string> = {
+          mine: "You have no open Available Freight opportunities right now.",
+          delegated: "Nothing has been delegated to you right now.",
+          awaiting_approval: "No freight opportunities are awaiting approval.",
+          all: "No open Available Freight opportunities right now.",
+        };
+        return { kind: "data", text: empty[filter] };
       }
       const companyIds = Array.from(new Set(rows.map(r => r.companyId)));
       const cos = await storage.getCompaniesByIds(companyIds, ctx.organizationId);
