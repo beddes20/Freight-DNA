@@ -74,6 +74,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { CarrierOutreachPanel } from "@/components/CarrierOutreachPanel";
+import { SendReplyAuditPanel } from "@/components/lane-work-queue/SendReplyAuditPanel";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useMutation } from "@tanstack/react-query";
@@ -1774,6 +1775,7 @@ export default function LaneWorkQueuePage() {
   });
 
   const isAdminOrDirector = ["admin", "director"].includes(user?.role ?? "");
+  const isManagerScope = MANAGER_ROLES.includes(user?.role ?? "");
 
   const { data: engineStatus } = useQuery<{ meta: EngineRunMeta | null }>({
     queryKey: ["/api/recurring-lanes/engine-status"],
@@ -2120,6 +2122,15 @@ export default function LaneWorkQueuePage() {
                   </button>
                 )}
               </div>
+            )}
+
+            {/* Send & Reply Audit — visible to all reps; managers can swap rep */}
+            {user && (
+              <SendReplyAuditPanel
+                currentUser={{ id: user.id, name: user.name, role: user.role }}
+                isManager={isManagerScope}
+                teamMembers={teamMembers}
+              />
             )}
 
             {/* Admin engine metadata debug panel */}

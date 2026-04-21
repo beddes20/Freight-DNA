@@ -266,34 +266,36 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
     return;
   }
 
-  if (carrierMatch.carrierId || carrierMatch.confidence !== "unmatched") {
-    await storage.createCarrierOutreachLog({
-      orgId,
-      laneId,
-      companyId: null,
-      carrierIds: carrierMatch.carrierId ? [carrierMatch.carrierId] : [],
-      carrierNames: [],
-      actorUserId: systemUser.id,
-      ownerUserId: null,
-      overseerUserId: null,
-      outreachMode: "lane_building",
-      emailDrafts: [],
-      direction: "inbound",
-      providerMessageId,
-      conversationId,
-      fromEmail,
-      toEmail,
-      subject,
-      bodyPreview,
-      receivedAt,
-      processStatus: "processed",
-      matchedCarrierId: carrierMatch.carrierId,
-      matchedLaneId: laneId,
-      matchConfidence: carrierMatch.confidence,
-      deliveryStatus: "received",
-    });
-    log(`Carrier inbound logged: from=${fromEmail} confidence=${carrierMatch.confidence} laneId=${laneId ?? "none"} msgId=${providerMessageId}`);
-  }
+  // Always write a row for every inbound webhook delivery — even when the
+  // sender doesn't match a known carrier — so the LWQ Send & Reply Audit
+  // panel can show "we received this reply but couldn't match it" rather
+  // than dropping the evidence on the floor (Task #344).
+  await storage.createCarrierOutreachLog({
+    orgId,
+    laneId,
+    companyId: null,
+    carrierIds: carrierMatch.carrierId ? [carrierMatch.carrierId] : [],
+    carrierNames: [],
+    actorUserId: systemUser.id,
+    ownerUserId: null,
+    overseerUserId: null,
+    outreachMode: "lane_building",
+    emailDrafts: [],
+    direction: "inbound",
+    providerMessageId,
+    conversationId,
+    fromEmail,
+    toEmail,
+    subject,
+    bodyPreview,
+    receivedAt,
+    processStatus: "processed",
+    matchedCarrierId: carrierMatch.carrierId,
+    matchedLaneId: laneId,
+    matchConfidence: carrierMatch.confidence,
+    deliveryStatus: "received",
+  });
+  log(`Carrier inbound logged: from=${fromEmail} confidence=${carrierMatch.confidence} laneId=${laneId ?? "none"} msgId=${providerMessageId}`);
 
   if (accountMatch) {
     await storage.insertEmailMessage({
@@ -335,6 +337,13 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
   }
 }
 
+// NOTE: This monitored-mailbox path handles all mail flowing through a rep's
+// own Outlook mailbox (CRM contacts, accounts, etc.) and writes to
+// `email_messages` / `email_conversation_threads`. It is intentionally NOT
+// mirrored into `carrier_outreach_logs` — that table is reserved for the
+// LWQ/procurement carrier-outreach lane flow (shared reply mailbox path).
+// The LWQ Send & Reply Audit panel (Task #344) reads `carrier_outreach_logs`
+// and surfaces per-rep mailbox health from `monitored_mailboxes` separately.
 async function processUserMailboxEmail(params: {
   orgId: string;
   monitoredMailbox: { id: string; userId: string; email: string };

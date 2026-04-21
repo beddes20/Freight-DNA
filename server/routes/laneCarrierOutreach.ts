@@ -36,10 +36,10 @@ import { rankCarriersForLane, isHighFrequencyLane, buildHighFrequencyIndex, isHi
 import { runRecurringLaneEngineForOrg, LANE_CONFIG } from "../recurringLaneCapacityEngine";
 import { scoreAllEligibleLanes, scoreLane } from "../laneScoringService";
 import { getLaneCoverageProfile, shouldUseIncumbentFirstFlow } from "../laneCoverageService";
-import { insertCarrierSchema, insertLaneCarrierInterestSchema, carrierClaimedLanes, type InsertCarrier, type Carrier } from "@shared/schema";
+import { insertCarrierSchema, insertLaneCarrierInterestSchema, carrierClaimedLanes, carrierOutreachLogs, recurringLanes, type InsertCarrier, type Carrier } from "@shared/schema";
 import { formatLaneDisplay, formatWeeklyLoadRange, normalizeEquipmentType, buildFallbackEmail as buildFallbackEmailHelper } from "../laneOutreachEmailBuilder";
 import { z } from "zod";
-import { inArray, eq } from "drizzle-orm";
+import { inArray, eq, and, gte, lte, desc, isNull, or } from "drizzle-orm";
 import { sendEmail } from "../emailService";
 import { setEmailLiveMode, EMAIL_LIVE_MODE_FLAG } from "../emailGate";
 import { sendOutlookEmail, outlookEnabled } from "../outlookService";
@@ -2325,10 +2325,21 @@ Rules for suggestions:
       const draft = emailDrafts[i];
       const result = results[i];
       if (!result) continue;
-      const perCarrierStatus = result.status === "sent" ? "sent" :
+      // Map send-handler status → audit-friendly deliveryStatus.
+      // Budget-gated attempts (daily cap / too-soon) are persisted as "failed"
+      // with a clearly diagnosable failureReason so the audit panel surfaces
+      // them as failures (not silently lumped with dedup). True dedup-skip
+      // (already-contacted) keeps its own "dedup_skipped" classification.
+      const perCarrierStatus =
+        result.status === "sent" ? "sent" :
         result.status === "dedup_skipped" ? "dedup_skipped" :
-        result.status === "throttled_daily_cap" || result.status === "throttled_too_soon" ? "dedup_skipped" :
-        result.status === "failed" ? "failed" : "draft";
+        result.status === "throttled_daily_cap" || result.status === "throttled_too_soon" ? "failed" :
+        result.status === "failed" ? "failed" :
+        result.status === "no_email" ? "failed" : "draft";
+      const perCarrierFailureReason =
+        result.status === "throttled_daily_cap" ? `budget_throttle:daily_cap — ${result.error ?? "rep over per-day send cap"}` :
+        result.status === "throttled_too_soon" ? `budget_throttle:too_soon — ${result.error ?? "carrier contacted too recently"}` :
+        result.error ?? null;
       const internetMsgId = (result as { internetMessageId?: string }).internetMessageId ?? null;
       const log = await storage.createCarrierOutreachLog({
         orgId: user.organizationId,
@@ -2343,7 +2354,7 @@ Rules for suggestions:
         emailDrafts: [JSON.parse(JSON.stringify(draft))],
         sentAt: result.status === "sent" ? now : null,
         deliveryStatus: perCarrierStatus,
-        failureReason: result.error ?? null,
+        failureReason: perCarrierFailureReason,
         recipients: [JSON.parse(JSON.stringify(result))],
         threadId: internetMsgId,
         direction: "outbound",
@@ -2917,6 +2928,254 @@ Rules for suggestions:
     }
     const logs = await storage.getCarrierOutreachLogsByProcurementTaskId(user.organizationId, req.params.taskId);
     return res.json(logs);
+  });
+
+  // ── LWQ Send & Reply Audit (Task #344) ───────────────────────────────────
+  // Returns aggregate counts, per-row send list (with failure reasons),
+  // unmatched-replies list, and Graph subscription health for a given rep
+  // and date window. Used by the Send & Reply Audit panel inside the LWQ
+  // so reps and managers can self-diagnose "I sent a blast — where did it go?".
+  //
+  // Security:
+  //   - Any authenticated user can view their own audit (repId omitted or = self).
+  //   - Managers (admin / director / national_account_manager / logistics_manager)
+  //     can view any rep in their org.
+  app.get("/api/lwq/send-reply-audit", requireAuth, async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+    const MANAGER_ROLES = new Set(["admin", "director", "national_account_manager", "logistics_manager"]);
+    const isManager = MANAGER_ROLES.has(user.role);
+
+    const requestedRepId = typeof req.query.repId === "string" && req.query.repId.length > 0
+      ? req.query.repId
+      : user.id;
+
+    if (requestedRepId !== user.id && !isManager) {
+      return res.status(403).json({ error: "Only managers may view another rep's audit" });
+    }
+
+    const rep = await storage.getUser(requestedRepId);
+    if (!rep || rep.organizationId !== user.organizationId) {
+      return res.status(404).json({ error: "Rep not found in your organization" });
+    }
+
+    // Default window = last 7 days, capped at 90 to keep query bounded.
+    const now = new Date();
+    const defaultFrom = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const parseDate = (raw: unknown, fallback: Date): Date => {
+      if (typeof raw !== "string" || raw.length === 0) return fallback;
+      const d = new Date(raw);
+      return isNaN(d.getTime()) ? fallback : d;
+    };
+    let fromDate = parseDate(req.query.from, defaultFrom);
+    let toDate = parseDate(req.query.to, now);
+    if (toDate < fromDate) [fromDate, toDate] = [toDate, fromDate];
+    const maxWindowMs = 90 * 24 * 60 * 60 * 1000;
+    if (toDate.getTime() - fromDate.getTime() > maxWindowMs) {
+      fromDate = new Date(toDate.getTime() - maxWindowMs);
+    }
+
+    // ── Outbound rows attributed to this rep ─────────────────────────────
+    const outboundRows = await db
+      .select({
+        id: carrierOutreachLogs.id,
+        timestamp: carrierOutreachLogs.timestamp,
+        sentAt: carrierOutreachLogs.sentAt,
+        deliveryStatus: carrierOutreachLogs.deliveryStatus,
+        failureReason: carrierOutreachLogs.failureReason,
+        carrierNames: carrierOutreachLogs.carrierNames,
+        toEmail: carrierOutreachLogs.toEmail,
+        subject: carrierOutreachLogs.subject,
+        laneId: carrierOutreachLogs.laneId,
+        threadId: carrierOutreachLogs.threadId,
+        replyReceivedAt: carrierOutreachLogs.replyReceivedAt,
+        outreachMode: carrierOutreachLogs.outreachMode,
+      })
+      .from(carrierOutreachLogs)
+      .where(
+        and(
+          eq(carrierOutreachLogs.orgId, user.organizationId),
+          eq(carrierOutreachLogs.actorUserId, requestedRepId),
+          eq(carrierOutreachLogs.direction, "outbound"),
+          gte(carrierOutreachLogs.timestamp, fromDate),
+          lte(carrierOutreachLogs.timestamp, toDate),
+        )
+      )
+      .orderBy(desc(carrierOutreachLogs.timestamp))
+      .limit(500);
+
+    // Resolve lane labels in one pass
+    const laneIds = Array.from(new Set(outboundRows.map(r => r.laneId).filter((x): x is string => !!x)));
+    const laneById = new Map<string, { origin: string; destination: string }>();
+    if (laneIds.length > 0) {
+      const lanes = await db
+        .select({ id: recurringLanes.id, origin: recurringLanes.origin, destination: recurringLanes.destination })
+        .from(recurringLanes)
+        .where(inArray(recurringLanes.id, laneIds));
+      for (const l of lanes) laneById.set(l.id, { origin: l.origin, destination: l.destination });
+    }
+
+    // ── Aggregates ───────────────────────────────────────────────────────
+    let drafts = 0, attempted = 0, sent = 0, failed = 0, throttled = 0, replies = 0;
+    const perLane = new Map<string, { laneId: string | null; laneLabel: string; attempted: number; sent: number; failed: number; drafts: number; throttled: number; replies: number; matchRate: number | null }>();
+
+    const sendList = outboundRows.map(r => {
+      const status = r.deliveryStatus ?? "draft";
+      // "attempted" = the rep actually tried to send (sent + failed + throttled).
+      // Drafts are explicitly excluded — a draft means the rep started a message
+      // but never submitted it, which is exactly the no-attempt case Adan's
+      // diagnosis needs to distinguish from a real failed send.
+      if (status === "sent") { sent++; attempted++; }
+      else if (status === "failed") { failed++; attempted++; }
+      else if (status === "dedup_skipped") { throttled++; attempted++; }
+      else if (status === "draft") drafts++;
+      if (r.replyReceivedAt) replies++;
+
+      const laneKey = r.laneId ?? "__none__";
+      const laneLabel = r.laneId
+        ? (() => {
+            const l = laneById.get(r.laneId!);
+            return l ? `${l.origin} → ${l.destination}` : "(lane removed)";
+          })()
+        : "(no lane)";
+      if (!perLane.has(laneKey)) {
+        perLane.set(laneKey, { laneId: r.laneId, laneLabel, attempted: 0, sent: 0, failed: 0, drafts: 0, throttled: 0, replies: 0, matchRate: null });
+      }
+      const bucket = perLane.get(laneKey)!;
+      // Match top-level definition of "attempted" (excludes drafts).
+      if (status === "sent") { bucket.sent++; bucket.attempted++; }
+      else if (status === "failed") { bucket.failed++; bucket.attempted++; }
+      else if (status === "dedup_skipped") { bucket.throttled++; bucket.attempted++; }
+      else if (status === "draft") bucket.drafts++;
+      if (r.replyReceivedAt) bucket.replies++;
+
+      return {
+        id: r.id,
+        timestamp: r.timestamp,
+        sentAt: r.sentAt,
+        deliveryStatus: status,
+        failureReason: r.failureReason,
+        carrierName: r.carrierNames?.[0] ?? null,
+        toEmail: r.toEmail,
+        subject: r.subject,
+        laneId: r.laneId,
+        laneLabel,
+        threadId: r.threadId,
+        replyReceivedAt: r.replyReceivedAt,
+        outreachMode: r.outreachMode,
+      };
+    });
+
+    const matchRate = sent === 0 ? null : Math.round((replies / sent) * 100);
+
+    // ── Unmatched replies ────────────────────────────────────────────────
+    // By default, scope to *this rep* by intersecting inbound fromEmail with
+    // the set of recipient addresses this rep contacted in the window.
+    // Managers may pass ?includeOrgUnmatched=true to see all unmatched
+    // org-wide for global mailbox triage.
+    const includeOrgUnmatched = req.query.includeOrgUnmatched === "true" && isManager;
+    const repRecipientEmails = new Set(
+      outboundRows
+        .map(r => (r.toEmail ?? "").trim().toLowerCase())
+        .filter(e => e.length > 0)
+    );
+
+    const baseUnmatchedConds = [
+      eq(carrierOutreachLogs.orgId, user.organizationId),
+      eq(carrierOutreachLogs.direction, "inbound"),
+      gte(carrierOutreachLogs.timestamp, fromDate),
+      lte(carrierOutreachLogs.timestamp, toDate),
+      or(
+        eq(carrierOutreachLogs.matchConfidence, "unmatched"),
+        eq(carrierOutreachLogs.matchConfidence, "ambiguous"),
+        isNull(carrierOutreachLogs.matchedCarrierId),
+      ),
+    ];
+
+    const unmatchedRowsRaw = await db
+      .select({
+        id: carrierOutreachLogs.id,
+        receivedAt: carrierOutreachLogs.timestamp,
+        fromEmail: carrierOutreachLogs.fromEmail,
+        subject: carrierOutreachLogs.subject,
+        bodyPreview: carrierOutreachLogs.bodyPreview,
+        conversationId: carrierOutreachLogs.conversationId,
+        matchConfidence: carrierOutreachLogs.matchConfidence,
+      })
+      .from(carrierOutreachLogs)
+      .where(and(...baseUnmatchedConds))
+      .orderBy(desc(carrierOutreachLogs.timestamp))
+      .limit(includeOrgUnmatched ? 100 : 500);
+
+    const unmatchedRows = includeOrgUnmatched
+      ? unmatchedRowsRaw
+      : unmatchedRowsRaw.filter(r => {
+          const from = (r.fromEmail ?? "").trim().toLowerCase();
+          return from.length > 0 && repRecipientEmails.has(from);
+        }).slice(0, 100);
+
+    const unmatchedReplies = unmatchedRows.map(r => ({
+      id: r.id,
+      receivedAt: r.receivedAt,
+      fromEmail: r.fromEmail,
+      subject: r.subject,
+      bodyPreview: r.bodyPreview,
+      conversationId: r.conversationId,
+      matchConfidence: r.matchConfidence,
+      // Best-guess carrier hint = sender domain (the carrier company's
+      // mail domain is the most reliable cheap signal we have without
+      // running a full carrier-resolution pass).
+      bestGuessCarrier: r.fromEmail ? r.fromEmail.split("@")[1] ?? r.fromEmail : null,
+    }));
+
+    // ── Mailbox subscription health ──────────────────────────────────────
+    const sharedReplyHealth = getReplyTrackingStatus();
+    const repMailbox = rep.username
+      ? await storage.getMonitoredMailboxByEmail(user.organizationId, rep.username.trim().toLowerCase()).catch(() => null)
+      : null;
+
+    const repMailboxHealth = repMailbox
+      ? {
+          configured: true,
+          email: repMailbox.email,
+          enabled: repMailbox.enabled,
+          syncStatus: repMailbox.syncStatus,
+          syncError: repMailbox.syncError,
+          subscriptionActive: !!(repMailbox.subscriptionId || repMailbox.sentItemsSubscriptionId),
+          subscriptionExpiresAt: repMailbox.subscriptionExpiresAt,
+          lastSyncAt: repMailbox.lastSyncAt,
+        }
+      : { configured: false, email: rep.username ?? null };
+
+    return res.json({
+      rep: { id: rep.id, name: rep.name, email: rep.username },
+      window: { from: fromDate.toISOString(), to: toDate.toISOString() },
+      aggregates: {
+        drafts,
+        attempted,
+        sent,
+        // "delivered" is currently an alias for "sent": once a message hits
+        // Outlook with a 2xx response we treat it as delivered. We surface it
+        // as a distinct aggregate so the UI can show it explicitly without
+        // breaking if/when bounce-tracking is added later.
+        delivered: sent,
+        failed,
+        throttled,
+        replies,
+        matchRate,
+      },
+      perLane: Array.from(perLane.values())
+        .map(b => ({ ...b, matchRate: b.sent === 0 ? null : Math.round((b.replies / b.sent) * 100) }))
+        .sort((a, b) => b.attempted - a.attempted),
+      sendList,
+      unmatchedReplies,
+      unmatchedScope: includeOrgUnmatched ? "org" : "rep",
+      mailboxHealth: {
+        sharedReplyMailbox: sharedReplyHealth,
+        repMailbox: repMailboxHealth,
+      },
+    });
   });
 
   // ── Admin: Graph Reply Tracking Health Check ─────────────────────────────
