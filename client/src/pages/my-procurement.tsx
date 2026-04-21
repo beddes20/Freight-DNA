@@ -1008,7 +1008,7 @@ function AvailableFreightPanel({
 
   const awaitingCount = items.filter((o) => !o.approvedAt).length;
   const unassignedCount = items.filter((o) => o.isUnassigned).length;
-  const overSlaInView = items.filter((o) => o.slaState === "over" || o.slaState === "escalated").length;
+  const overSlaInView = visible.filter((o) => o.slaState === "over" || o.slaState === "escalated").length;
   const orgOverSla = sla && sla.orgOverSlaCount !== null ? sla.orgOverSlaCount : null;
 
   return (
