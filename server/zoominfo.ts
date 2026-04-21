@@ -61,22 +61,26 @@ async function getAuthToken(): Promise<string> {
     return cachedToken;
   }
 
-  const username = process.env.ZOOMINFO_USERNAME;
-  const password = process.env.ZOOMINFO_PASSWORD;
   const clientId = process.env.ZOOMINFO_CLIENT_ID;
+  const clientSecret = process.env.ZOOMINFO_CLIENT_SECRET;
 
-  if (!username || !password || !clientId) {
+  if (!clientId || !clientSecret) {
     const missing: string[] = [];
-    if (!username) missing.push("ZOOMINFO_USERNAME");
-    if (!password) missing.push("ZOOMINFO_PASSWORD");
     if (!clientId) missing.push("ZOOMINFO_CLIENT_ID");
+    if (!clientSecret) missing.push("ZOOMINFO_CLIENT_SECRET");
     throw new Error(`ZoomInfo credentials not configured. Missing: ${missing.join(", ")}`);
   }
 
-  const res = await fetch(`${ZOOMINFO_API_BASE}/authenticate`, {
+  // OAuth 2.0 Client Credentials flow per ZoomInfo Dev Portal.
+  const form = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: clientId,
+    client_secret: clientSecret,
+  });
+  const res = await fetch(`${ZOOMINFO_API_BASE}/oauth/token`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password, clientId }),
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: form.toString(),
   });
 
   if (!res.ok) {
@@ -85,14 +89,14 @@ async function getAuthToken(): Promise<string> {
   }
 
   const data = (await res.json()) as AuthResponse;
-  const token = data.jwt || data.access_token || data.token;
+  const token = data.access_token || data.jwt || data.token;
 
   if (!token) {
     throw new Error("ZoomInfo auth returned no token");
   }
 
   cachedToken = token;
-  // ZoomInfo JWTs typically expire in 1 hour; use expires_in if provided
+  // Use expires_in if provided, otherwise default to 1 hour. Refresh 60s early.
   const expiresIn = typeof data.expires_in === "number" && data.expires_in > 0
     ? data.expires_in
     : 3600;
