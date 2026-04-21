@@ -3502,4 +3502,130 @@ export async function runMigrations() {
   } finally {
     clientWca.release();
   }
+
+  // ── Task #369: Carrier Intelligence Scoring & Pricing tables ────────────
+  const clientCI = await pool.connect();
+  try {
+    await clientCI.query(`
+      CREATE TABLE IF NOT EXISTS carrier_scorecard_fact (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        carrier_name text NOT NULL,
+        equipment_type text NOT NULL DEFAULT 'ALL',
+        window_days integer NOT NULL DEFAULT 180,
+        loads integer NOT NULL DEFAULT 0,
+        loads_30d integer NOT NULL DEFAULT 0,
+        loads_90d integer NOT NULL DEFAULT 0,
+        revenue numeric(14,2) NOT NULL DEFAULT 0,
+        cost numeric(14,2) NOT NULL DEFAULT 0,
+        margin numeric(14,2) NOT NULL DEFAULT 0,
+        margin_pct numeric(7,4) NOT NULL DEFAULT 0,
+        avg_rpm numeric(8,4),
+        do_not_use boolean NOT NULL DEFAULT false,
+        performance_score integer NOT NULL DEFAULT 0,
+        tier text NOT NULL DEFAULT 'new',
+        days_since_last_load integer,
+        last_load_date text,
+        computed_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientCI.query(`CREATE UNIQUE INDEX IF NOT EXISTS carrier_scorecard_org_carrier_eq_uq ON carrier_scorecard_fact (org_id, carrier_name, equipment_type)`);
+    await clientCI.query(`CREATE INDEX IF NOT EXISTS carrier_scorecard_org_score_idx ON carrier_scorecard_fact (org_id, performance_score)`);
+
+    await clientCI.query(`
+      CREATE TABLE IF NOT EXISTS lane_rate_history (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        origin_state text NOT NULL,
+        destination_state text NOT NULL,
+        equipment_type text NOT NULL DEFAULT 'ALL',
+        window_days integer NOT NULL DEFAULT 180,
+        loads integer NOT NULL DEFAULT 0,
+        loads_30d integer NOT NULL DEFAULT 0,
+        loads_90d integer NOT NULL DEFAULT 0,
+        avg_revenue_per_mile numeric(8,4),
+        avg_cost_per_mile numeric(8,4),
+        avg_margin_pct numeric(7,4),
+        median_cost_per_mile numeric(8,4),
+        p25_cost_per_mile numeric(8,4),
+        p75_cost_per_mile numeric(8,4),
+        unique_carriers integer NOT NULL DEFAULT 0,
+        computed_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientCI.query(`CREATE UNIQUE INDEX IF NOT EXISTS lane_rate_history_lane_uq ON lane_rate_history (org_id, origin_state, destination_state, equipment_type)`);
+    await clientCI.query(`CREATE INDEX IF NOT EXISTS lane_rate_history_org_loads_idx ON lane_rate_history (org_id, loads)`);
+
+    await clientCI.query(`
+      CREATE TABLE IF NOT EXISTS carrier_lane_fit (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        carrier_name text NOT NULL,
+        origin_state text NOT NULL,
+        destination_state text NOT NULL,
+        equipment_type text NOT NULL DEFAULT 'ALL',
+        fit_score integer NOT NULL DEFAULT 0,
+        exact_lane_runs integer NOT NULL DEFAULT 0,
+        nearby_runs integer NOT NULL DEFAULT 0,
+        equipment_match boolean NOT NULL DEFAULT false,
+        region_match boolean NOT NULL DEFAULT false,
+        evidence_tier text NOT NULL DEFAULT 'none',
+        reason text,
+        computed_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientCI.query(`CREATE UNIQUE INDEX IF NOT EXISTS carrier_lane_fit_uq ON carrier_lane_fit (org_id, carrier_name, origin_state, destination_state, equipment_type)`);
+    await clientCI.query(`CREATE INDEX IF NOT EXISTS carrier_lane_fit_org_fit_idx ON carrier_lane_fit (org_id, fit_score)`);
+
+    await clientCI.query(`
+      CREATE TABLE IF NOT EXISTS carrier_recommendation (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        load_fact_id varchar NOT NULL REFERENCES load_fact(id) ON DELETE CASCADE,
+        rank integer NOT NULL,
+        carrier_name text NOT NULL,
+        total_score integer NOT NULL DEFAULT 0,
+        fit_score integer NOT NULL DEFAULT 0,
+        performance_score integer NOT NULL DEFAULT 0,
+        target_buy_rpm numeric(8,4),
+        pricing_confidence text NOT NULL DEFAULT 'low',
+        reason text,
+        rationale jsonb,
+        computed_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientCI.query(`CREATE UNIQUE INDEX IF NOT EXISTS carrier_recommendation_load_rank_uq ON carrier_recommendation (load_fact_id, rank)`);
+    await clientCI.query(`CREATE INDEX IF NOT EXISTS carrier_recommendation_org_load_idx ON carrier_recommendation (org_id, load_fact_id)`);
+
+    // Task #369 follow-on: extend scorecard / lane history / recommendation
+    // with the additional dimensions called out in the spec.
+    await clientCI.query(`ALTER TABLE carrier_scorecard_fact ADD COLUMN IF NOT EXISTS total_miles numeric(14,2) NOT NULL DEFAULT 0`);
+    await clientCI.query(`ALTER TABLE carrier_scorecard_fact ADD COLUMN IF NOT EXISTS revenue_per_load numeric(12,2)`);
+    await clientCI.query(`ALTER TABLE carrier_scorecard_fact ADD COLUMN IF NOT EXISTS on_time_pct numeric(5,2)`);
+    await clientCI.query(`ALTER TABLE carrier_scorecard_fact ADD COLUMN IF NOT EXISTS active_loads integer NOT NULL DEFAULT 0`);
+    await clientCI.query(`ALTER TABLE carrier_scorecard_fact ADD COLUMN IF NOT EXISTS available_loads integer NOT NULL DEFAULT 0`);
+
+    await clientCI.query(`ALTER TABLE lane_rate_history ADD COLUMN IF NOT EXISTS customer_name text NOT NULL DEFAULT '__ANY__'`);
+    await clientCI.query(`ALTER TABLE lane_rate_history ADD COLUMN IF NOT EXISTS loads_60d integer NOT NULL DEFAULT 0`);
+    await clientCI.query(`ALTER TABLE lane_rate_history ADD COLUMN IF NOT EXISTS min_cost_per_mile numeric(8,4)`);
+    await clientCI.query(`ALTER TABLE lane_rate_history ADD COLUMN IF NOT EXISTS max_cost_per_mile numeric(8,4)`);
+    await clientCI.query(`ALTER TABLE lane_rate_history ADD COLUMN IF NOT EXISTS avg_cost_30d numeric(8,4)`);
+    await clientCI.query(`ALTER TABLE lane_rate_history ADD COLUMN IF NOT EXISTS avg_cost_60d numeric(8,4)`);
+    await clientCI.query(`ALTER TABLE lane_rate_history ADD COLUMN IF NOT EXISTS avg_cost_90d numeric(8,4)`);
+    // Drop + recreate the unique index now that customer_name participates.
+    await clientCI.query(`DROP INDEX IF EXISTS lane_rate_history_lane_uq`);
+    await clientCI.query(`CREATE UNIQUE INDEX IF NOT EXISTS lane_rate_history_lane_uq ON lane_rate_history (org_id, origin_state, destination_state, equipment_type, customer_name)`);
+
+    await clientCI.query(`ALTER TABLE carrier_recommendation ADD COLUMN IF NOT EXISTS last_used_date text`);
+    await clientCI.query(`ALTER TABLE carrier_recommendation ADD COLUMN IF NOT EXISTS avg_historical_buy_rpm numeric(8,4)`);
+    await clientCI.query(`ALTER TABLE carrier_recommendation ADD COLUMN IF NOT EXISTS expected_margin_low_pct numeric(5,2)`);
+    await clientCI.query(`ALTER TABLE carrier_recommendation ADD COLUMN IF NOT EXISTS expected_margin_high_pct numeric(5,2)`);
+    await clientCI.query(`ALTER TABLE carrier_recommendation ADD COLUMN IF NOT EXISTS coverage_urgency text NOT NULL DEFAULT 'green'`);
+
+    console.log("[migrations] carrier intelligence scoring tables ensured (Task #369)");
+  } catch (err) {
+    console.error("[migrations] Task #369 migration error:", err);
+  } finally {
+    clientCI.release();
+  }
 }

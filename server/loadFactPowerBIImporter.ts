@@ -362,9 +362,21 @@ async function performLoadFactImportInner(
     );
     await storage.setSetting(loadFactLastImportKey(orgId), JSON.stringify({
       at: new Date().toISOString(),
-      fileName,
       ...summary,
+      fileName,
     }));
+    // Kick off the carrier-intelligence recompute (Task #369) — fire-and-forget
+    // so the import call returns promptly. The recompute orchestrator is
+    // single-flight per org, so a back-to-back import simply reuses the
+    // in-flight rebuild instead of stacking.
+    void (async () => {
+      try {
+        const { recomputeCarrierIntelligence } = await import("./carrierIntelligenceRecompute");
+        await recomputeCarrierIntelligence(orgId);
+      } catch (err) {
+        console.warn(`[load-fact] post-import carrier-intel recompute failed: ${(err as Error).message}`);
+      }
+    })();
     return summary;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

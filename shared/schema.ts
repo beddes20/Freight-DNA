@@ -4067,3 +4067,181 @@ export const insertWebexCallAnalyticsSchema = createInsertSchema(webexCallAnalyt
 });
 export type InsertWebexCallAnalytics = z.infer<typeof insertWebexCallAnalyticsSchema>;
 export type WebexCallAnalytics = typeof webexCallAnalytics.$inferSelect;
+
+// ─── Carrier Intelligence: Scoring & Pricing (Task #369) ────────────────────
+//
+// Analytical layer rebuilt from `load_fact` + Sonar TRAC. Idempotent — every
+// recompute truncates and rewrites per-org rows so we never accumulate drift.
+
+/**
+ * Per-(org, carrier) realized scorecard. Rebuilt nightly (and after every
+ * load_fact import) from realized loads only — never blends Available math.
+ * `equipmentType` is nullable: a row with NULL is the all-equipment rollup;
+ * non-null rows are per-equipment splits. Storing both lets surfaces show
+ * either dimension without re-aggregating in SQL.
+ */
+export const carrierScorecardFact = pgTable("carrier_scorecard_fact", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  carrierName: text("carrier_name").notNull(),
+  /** Equipment split. 'ALL' is the cross-equipment rollup so unique indexes stay simple. */
+  equipmentType: text("equipment_type").notNull().default("ALL"),
+  windowDays: integer("window_days").notNull().default(180),
+  loads: integer("loads").notNull().default(0),
+  loads30d: integer("loads_30d").notNull().default(0),
+  loads90d: integer("loads_90d").notNull().default(0),
+  revenue: decimal("revenue", { precision: 14, scale: 2 }).notNull().default("0"),
+  cost: decimal("cost", { precision: 14, scale: 2 }).notNull().default("0"),
+  margin: decimal("margin", { precision: 14, scale: 2 }).notNull().default("0"),
+  marginPct: decimal("margin_pct", { precision: 7, scale: 4 }).notNull().default("0"),
+  avgRpm: decimal("avg_rpm", { precision: 8, scale: 4 }),
+  /** Total miles across realized loads in the window (for revenue/mile sanity checks). */
+  totalMiles: decimal("total_miles", { precision: 14, scale: 2 }).notNull().default("0"),
+  /** Revenue per realized load. */
+  revenuePerLoad: decimal("revenue_per_load", { precision: 12, scale: 2 }),
+  /** On-time % derived from arrived_at_delivery <= delivery_appt_end. */
+  onTimePct: decimal("on_time_pct", { precision: 5, scale: 2 }),
+  /** Active load count (currently in-flight; bucket ≠ realized/cancelled). Tracked separately so it never blends into margin. */
+  activeLoads: integer("active_loads").notNull().default(0),
+  /** Available opportunity count this carrier could plausibly take (lanes they've run). */
+  availableLoads: integer("available_loads").notNull().default(0),
+  /** Carrier "do not use" signal mirrored from carriers.status for fast lookup. */
+  doNotUse: boolean("do_not_use").notNull().default(false),
+  /** 0–100 composite score from realized history (volume × margin × recency). */
+  performanceScore: integer("performance_score").notNull().default(0),
+  /** Tier derived from performanceScore: A / B / C / new. */
+  tier: text("tier").notNull().default("new"),
+  /** Days since the carrier last ran a realized load for this org. */
+  daysSinceLastLoad: integer("days_since_last_load"),
+  lastLoadDate: text("last_load_date"),
+  /** When this scorecard row was rebuilt. */
+  computedAt: timestamp("computed_at").defaultNow().notNull(),
+}, (t) => ({
+  orgCarrierEqUq: uniqueIndex("carrier_scorecard_org_carrier_eq_uq").on(t.orgId, t.carrierName, t.equipmentType),
+  orgScoreIdx: index("carrier_scorecard_org_score_idx").on(t.orgId, t.performanceScore),
+}));
+export const insertCarrierScorecardFactSchema = createInsertSchema(carrierScorecardFact)
+  .omit({ id: true, computedAt: true });
+export type InsertCarrierScorecardFact = z.infer<typeof insertCarrierScorecardFactSchema>;
+export type CarrierScorecardFact = typeof carrierScorecardFact.$inferSelect;
+
+/**
+ * Per-(origin_state, destination_state, equipment_type) lane buy/sell rate
+ * rollups built from realized loads. Powers the "history" leg of the pricing
+ * blend so we don't have to hit Sonar for every quote.
+ *
+ * Rolling at state granularity keeps cardinality low (50 × 50 × ~6 equipment
+ * types = ~15k rows max per org) while still giving meaningful comps.
+ */
+export const laneRateHistory = pgTable("lane_rate_history", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  originState: text("origin_state").notNull(),
+  destinationState: text("destination_state").notNull(),
+  equipmentType: text("equipment_type").notNull().default("ALL"),
+  /** Customer dimension for (lane, customer) variant. '__ANY__' = lane-level rollup. */
+  customerName: text("customer_name").notNull().default("__ANY__"),
+  windowDays: integer("window_days").notNull().default(180),
+  loads: integer("loads").notNull().default(0),
+  loads30d: integer("loads_30d").notNull().default(0),
+  loads60d: integer("loads_60d").notNull().default(0),
+  loads90d: integer("loads_90d").notNull().default(0),
+  avgRevenuePerMile: decimal("avg_revenue_per_mile", { precision: 8, scale: 4 }),
+  avgCostPerMile: decimal("avg_cost_per_mile", { precision: 8, scale: 4 }),
+  avgMarginPct: decimal("avg_margin_pct", { precision: 7, scale: 4 }),
+  medianCostPerMile: decimal("median_cost_per_mile", { precision: 8, scale: 4 }),
+  minCostPerMile: decimal("min_cost_per_mile", { precision: 8, scale: 4 }),
+  maxCostPerMile: decimal("max_cost_per_mile", { precision: 8, scale: 4 }),
+  p25CostPerMile: decimal("p25_cost_per_mile", { precision: 8, scale: 4 }),
+  p75CostPerMile: decimal("p75_cost_per_mile", { precision: 8, scale: 4 }),
+  /** 30/60/90-day trend buckets — average cost per mile in each window. */
+  avgCost30d: decimal("avg_cost_30d", { precision: 8, scale: 4 }),
+  avgCost60d: decimal("avg_cost_60d", { precision: 8, scale: 4 }),
+  avgCost90d: decimal("avg_cost_90d", { precision: 8, scale: 4 }),
+  uniqueCarriers: integer("unique_carriers").notNull().default(0),
+  computedAt: timestamp("computed_at").defaultNow().notNull(),
+}, (t) => ({
+  laneUq: uniqueIndex("lane_rate_history_lane_uq").on(t.orgId, t.originState, t.destinationState, t.equipmentType, t.customerName),
+  orgLoadsIdx: index("lane_rate_history_org_loads_idx").on(t.orgId, t.loads),
+}));
+export const insertLaneRateHistorySchema = createInsertSchema(laneRateHistory)
+  .omit({ id: true, computedAt: true });
+export type InsertLaneRateHistory = z.infer<typeof insertLaneRateHistorySchema>;
+export type LaneRateHistory = typeof laneRateHistory.$inferSelect;
+
+/**
+ * Per-(carrier, lane) fit snapshot — generalized from carrierRankingService
+ * so any caller (recommendation engine, lane plan UI, NBA) can ask
+ * "how good a fit is carrier X for lane Y" without re-running a 1900-line
+ * pipeline. Computed on-demand and cached; refreshed when the underlying
+ * scorecard or lane history changes.
+ */
+export const carrierLaneFit = pgTable("carrier_lane_fit", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  carrierName: text("carrier_name").notNull(),
+  originState: text("origin_state").notNull(),
+  destinationState: text("destination_state").notNull(),
+  equipmentType: text("equipment_type").notNull().default("ALL"),
+  /** 0–100 composite fit score. */
+  fitScore: integer("fit_score").notNull().default(0),
+  /** Sub-scores stored for debugging + UI breakdown. */
+  exactLaneRuns: integer("exact_lane_runs").notNull().default(0),
+  nearbyRuns: integer("nearby_runs").notNull().default(0),
+  equipmentMatch: boolean("equipment_match").notNull().default(false),
+  regionMatch: boolean("region_match").notNull().default(false),
+  /** "exact" | "nearby" | "region" | "none" — best evidence tier found. */
+  evidenceTier: text("evidence_tier").notNull().default("none"),
+  /** Human-readable reason string for surfaces. */
+  reason: text("reason"),
+  computedAt: timestamp("computed_at").defaultNow().notNull(),
+}, (t) => ({
+  fitUq: uniqueIndex("carrier_lane_fit_uq").on(t.orgId, t.carrierName, t.originState, t.destinationState, t.equipmentType),
+  orgFitIdx: index("carrier_lane_fit_org_fit_idx").on(t.orgId, t.fitScore),
+}));
+export const insertCarrierLaneFitSchema = createInsertSchema(carrierLaneFit)
+  .omit({ id: true, computedAt: true });
+export type InsertCarrierLaneFit = z.infer<typeof insertCarrierLaneFitSchema>;
+export type CarrierLaneFit = typeof carrierLaneFit.$inferSelect;
+
+/**
+ * Recommendation snapshot per Available load. One row per (loadFactId, carrier
+ * candidate). Rebuilt whenever the recommendation engine runs for a load —
+ * keyed by load_fact_id so deletions cascade with the source load.
+ */
+export const carrierRecommendation = pgTable("carrier_recommendation", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  loadFactId: varchar("load_fact_id").notNull().references(() => loadFact.id, { onDelete: "cascade" }),
+  rank: integer("rank").notNull(),
+  carrierName: text("carrier_name").notNull(),
+  /** 0–100 combined ranking score (fit × performance × pricing-fit). */
+  totalScore: integer("total_score").notNull().default(0),
+  fitScore: integer("fit_score").notNull().default(0),
+  performanceScore: integer("performance_score").notNull().default(0),
+  /** Suggested target buy rate $/mi from blended pricing engine. */
+  targetBuyRpm: decimal("target_buy_rpm", { precision: 8, scale: 4 }),
+  /** Confidence band on the buy rate: high | medium | low. */
+  pricingConfidence: text("pricing_confidence").notNull().default("low"),
+  /** Last date this carrier ran a load for this org (any lane). */
+  lastUsedDate: text("last_used_date"),
+  /** Carrier's average historical cost-per-mile across realized loads (any lane). */
+  avgHistoricalBuyRpm: decimal("avg_historical_buy_rpm", { precision: 8, scale: 4 }),
+  /** Expected margin band (low/high %) based on historical performance + suggested buy. */
+  expectedMarginLowPct: decimal("expected_margin_low_pct", { precision: 5, scale: 2 }),
+  expectedMarginHighPct: decimal("expected_margin_high_pct", { precision: 5, scale: 2 }),
+  /** Coverage urgency: red | yellow | green. Driven by pickup proximity + lane scarcity. */
+  coverageUrgency: text("coverage_urgency").notNull().default("green"),
+  reason: text("reason"),
+  /** Snapshot of the inputs used so the recommendation is reproducible. Includes
+   *  the sparse-signal fallback trace (nearby-lane → state-pair → trailer benchmark). */
+  rationale: jsonb("rationale"),
+  computedAt: timestamp("computed_at").defaultNow().notNull(),
+}, (t) => ({
+  loadRankUq: uniqueIndex("carrier_recommendation_load_rank_uq").on(t.loadFactId, t.rank),
+  orgLoadIdx: index("carrier_recommendation_org_load_idx").on(t.orgId, t.loadFactId),
+}));
+export const insertCarrierRecommendationSchema = createInsertSchema(carrierRecommendation)
+  .omit({ id: true, computedAt: true });
+export type InsertCarrierRecommendation = z.infer<typeof insertCarrierRecommendationSchema>;
+export type CarrierRecommendation = typeof carrierRecommendation.$inferSelect;

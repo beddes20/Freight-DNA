@@ -1,0 +1,300 @@
+/**
+ * Carrier Intelligence — Scoring & Pricing routes (Task #369).
+ *
+ *   GET  /api/carrier-intelligence/scorecard
+ *   GET  /api/carrier-intelligence/carriers/:carrierId         (rolodex id OR carrier_name)
+ *   GET  /api/carrier-intelligence/lane-pricing
+ *          ?origin=&destination=&originState=&destinationState=&trailer=&customer=
+ *   GET  /api/carrier-intelligence/available-loads
+ *   GET  /api/carrier-intelligence/available-loads/:orderId/recommendations
+ *
+ *   GET  /api/admin/carrier-intelligence/scoring                blend + thresholds + counts
+ *   PUT  /api/admin/carrier-intelligence/scoring                update blend/thresholds
+ *   POST /api/admin/carrier-intelligence/recompute              trigger nightly rebuild
+ */
+
+import type { Express } from "express";
+import { z } from "zod";
+import { eq, and, desc, inArray, sql, or } from "drizzle-orm";
+import { requireAuth, getCurrentUser } from "../auth";
+import { db } from "../storage";
+import {
+  carrierScorecardFact,
+  carrierRecommendation,
+  carriers as carriersTbl,
+  loadFact,
+} from "@shared/schema";
+import {
+  getBlendConfig, setBlendConfig,
+  getThresholds, setThresholds,
+} from "../carrierIntelligenceSettings";
+import { listScorecards, getScorecardForCarrier } from "../carrierScorecardService";
+import { getBlendedRate } from "../pricingBlendService";
+import { recommendCarriersForLoad } from "../carrierRecommendationEngine";
+import { recomputeCarrierIntelligence } from "../carrierIntelligenceRecompute";
+
+function orgOf(req: any): string | null {
+  return (req?.session?.organizationId as string) ?? null;
+}
+
+async function requireAdmin(req: any, res: any): Promise<{ orgId: string; userId: string } | null> {
+  const user = await getCurrentUser(req);
+  if (!user) { res.status(401).json({ error: "Unauthorized" }); return null; }
+  if (user.role !== "admin") { res.status(403).json({ error: "Admin access required" }); return null; }
+  return { orgId: user.organizationId, userId: user.id };
+}
+
+export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
+  // ── GET /api/carrier-intelligence/scorecard ──────────────────────────────
+  app.get("/api/carrier-intelligence/scorecard", requireAuth, async (req, res) => {
+    try {
+      const orgId = orgOf(req); if (!orgId) return res.status(401).json({ error: "Unauthorized" });
+      const equipment = (req.query.equipment as string | undefined) || "ALL";
+      const tier = req.query.tier as string | undefined;
+      const minLoads = req.query.minLoads ? Number(req.query.minLoads) : undefined;
+      const limit = req.query.limit ? Number(req.query.limit) : undefined;
+      const rows = await listScorecards(orgId, { equipment, tier, minLoads, limit });
+      return res.json({ rows });
+    } catch (err) {
+      console.error("[carrier-intel/scorecard]", err);
+      return res.status(500).json({ error: "Failed to fetch scorecard" });
+    }
+  });
+
+  // ── GET /api/carrier-intelligence/carriers/:carrierId ────────────────────
+  // Accepts a carrier UUID from the rolodex OR a raw carrier_name (urlencoded).
+  app.get("/api/carrier-intelligence/carriers/:carrierId", requireAuth, async (req, res) => {
+    try {
+      const orgId = orgOf(req); if (!orgId) return res.status(401).json({ error: "Unauthorized" });
+      const ident = decodeURIComponent(String(req.params.carrierId));
+      const isUuidish = /^[0-9a-f-]{20,}$/i.test(ident);
+      let carrierName = ident;
+      let carrierMeta: { id: string | null; name: string; status: string | null; tags: string[] } | null = null;
+      if (isUuidish) {
+        const [c] = await db.select().from(carriersTbl)
+          .where(and(eq(carriersTbl.orgId, orgId), eq(carriersTbl.id, ident))).limit(1);
+        if (!c) return res.status(404).json({ error: "Carrier not found in rolodex" });
+        carrierName = c.name;
+        carrierMeta = { id: c.id, name: c.name, status: c.status, tags: (c.tags ?? []) as string[] };
+      } else {
+        const [c] = await db.select().from(carriersTbl)
+          .where(and(eq(carriersTbl.orgId, orgId), eq(carriersTbl.name, carrierName))).limit(1);
+        carrierMeta = c
+          ? { id: c.id, name: c.name, status: c.status, tags: (c.tags ?? []) as string[] }
+          : { id: null, name: carrierName, status: null, tags: [] };
+      }
+      const splits = await getScorecardForCarrier(orgId, carrierName);
+      if (splits.length === 0) {
+        return res.status(404).json({ error: "Carrier not in scorecard yet", carrier: carrierMeta });
+      }
+      const all = splits.find(s => s.equipmentType === "ALL") ?? splits[0];
+      return res.json({
+        carrier: carrierMeta,
+        scorecard: all,
+        equipmentSplits: splits,
+      });
+    } catch (err) {
+      console.error("[carrier-intel/carriers/:carrierId]", err);
+      return res.status(500).json({ error: "Failed to fetch carrier scorecard" });
+    }
+  });
+
+  // ── GET /api/carrier-intelligence/lane-pricing ───────────────────────────
+  const lanePricingSchema = z.object({
+    origin: z.string().min(1),
+    destination: z.string().min(1),
+    originState: z.string().length(2).optional(),
+    destinationState: z.string().length(2).optional(),
+    trailer: z.string().optional(),
+    equipmentType: z.string().optional(), // alias accepted for backward compat
+    customer: z.string().optional(),
+  });
+  app.get("/api/carrier-intelligence/lane-pricing", requireAuth, async (req, res) => {
+    try {
+      const orgId = orgOf(req); if (!orgId) return res.status(401).json({ error: "Unauthorized" });
+      const parsed = lanePricingSchema.safeParse(req.query);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid query", details: parsed.error.flatten() });
+      const equip = parsed.data.trailer ?? parsed.data.equipmentType ?? null;
+      const result = await getBlendedRate({
+        orgId,
+        origin: parsed.data.origin,
+        destination: parsed.data.destination,
+        originState: parsed.data.originState ?? null,
+        destinationState: parsed.data.destinationState ?? null,
+        equipmentType: equip,
+        customerName: parsed.data.customer ?? null,
+      });
+      return res.json(result);
+    } catch (err) {
+      console.error("[carrier-intel/lane-pricing]", err);
+      return res.status(500).json({ error: "Failed to compute lane pricing" });
+    }
+  });
+
+  // ── GET /api/carrier-intelligence/available-loads ────────────────────────
+  app.get("/api/carrier-intelligence/available-loads", requireAuth, async (req, res) => {
+    try {
+      const orgId = orgOf(req); if (!orgId) return res.status(401).json({ error: "Unauthorized" });
+      const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
+      const loads = await db.select().from(loadFact)
+        .where(and(eq(loadFact.orgId, orgId), sql`${loadFact.bucket} IN ('available','unknown')`))
+        .orderBy(desc(loadFact.pickupDate))
+        .limit(limit);
+      const loadIds = loads.map(l => l.id);
+      const recs = loadIds.length === 0 ? [] : await db.select().from(carrierRecommendation)
+        .where(and(eq(carrierRecommendation.orgId, orgId), inArray(carrierRecommendation.loadFactId, loadIds)))
+        .orderBy(carrierRecommendation.rank);
+      const recsByLoad = new Map<string, typeof recs>();
+      for (const r of recs) {
+        const list = recsByLoad.get(r.loadFactId) ?? [];
+        if (list.length < 3) list.push(r);
+        recsByLoad.set(r.loadFactId, list);
+      }
+      return res.json({
+        loads: loads.map(l => ({
+          ...l,
+          topRecommendations: recsByLoad.get(l.id) ?? [],
+        })),
+      });
+    } catch (err) {
+      console.error("[carrier-intel/available-loads]", err);
+      return res.status(500).json({ error: "Failed to list available loads" });
+    }
+  });
+
+  // ── GET /api/carrier-intelligence/available-loads/:orderId/recommendations
+  // The path uses orderId (the TMS-facing identifier) per the spec; we
+  // resolve to load_fact.id internally.
+  app.get("/api/carrier-intelligence/available-loads/:orderId/recommendations", requireAuth, async (req, res) => {
+    try {
+      const orgId = orgOf(req); if (!orgId) return res.status(401).json({ error: "Unauthorized" });
+      const limit = Math.min(15, Math.max(1, Number(req.query.limit) || 5));
+      const refresh = req.query.refresh === "1";
+      const orderId = decodeURIComponent(String(req.params.orderId));
+      const [load] = await db.select().from(loadFact)
+        .where(and(eq(loadFact.orgId, orgId), or(eq(loadFact.orderId, orderId), eq(loadFact.id, orderId))!))
+        .limit(1);
+      if (!load) return res.status(404).json({ error: `Load not found: ${orderId}` });
+
+      if (refresh) {
+        const fresh = await recommendCarriersForLoad(orgId, load.id, { limit });
+        return res.json(fresh);
+      }
+      const cached = await db.select().from(carrierRecommendation)
+        .where(and(eq(carrierRecommendation.orgId, orgId), eq(carrierRecommendation.loadFactId, load.id)))
+        .orderBy(carrierRecommendation.rank)
+        .limit(limit);
+      if (cached.length > 0) {
+        return res.json({
+          loadFactId: load.id,
+          orderId: load.orderId,
+          origin: { city: load.originCity, state: load.originState },
+          destination: { city: load.destinationCity, state: load.destinationState },
+          equipmentType: load.equipmentType,
+          customerName: load.customerName,
+          candidates: cached,
+          fromCache: true,
+          generatedAt: cached[0]?.computedAt ?? null,
+        });
+      }
+      const fresh = await recommendCarriersForLoad(orgId, load.id, { limit });
+      return res.json(fresh);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[carrier-intel/available-loads/:orderId/recs]", msg);
+      return res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── Admin: settings + recompute ──────────────────────────────────────────
+  app.get("/api/admin/carrier-intelligence/scoring", requireAuth, async (req, res) => {
+    const ctx = await requireAdmin(req, res); if (!ctx) return;
+    try {
+      const [blend, thresholds] = await Promise.all([
+        getBlendConfig(ctx.orgId),
+        getThresholds(ctx.orgId),
+      ]);
+      const counts = await db.execute<{ scorecards: string; lanes: string; recs: string }>(sql`
+        SELECT
+          (SELECT COUNT(*)::text FROM carrier_scorecard_fact WHERE org_id = ${ctx.orgId}) AS scorecards,
+          (SELECT COUNT(*)::text FROM lane_rate_history WHERE org_id = ${ctx.orgId}) AS lanes,
+          (SELECT COUNT(*)::text FROM carrier_recommendation WHERE org_id = ${ctx.orgId}) AS recs
+      `);
+      const lastComputedRows = await db.select({ v: sql<string>`MAX(${carrierScorecardFact.computedAt})::text` })
+        .from(carrierScorecardFact).where(eq(carrierScorecardFact.orgId, ctx.orgId));
+      return res.json({
+        blend, thresholds,
+        counts: counts.rows[0] ?? { scorecards: "0", lanes: "0", recs: "0" },
+        lastComputedAt: lastComputedRows[0]?.v ?? null,
+      });
+    } catch (err) {
+      console.error("[admin/carrier-intel/scoring GET]", err);
+      return res.status(500).json({ error: "Failed to read scoring settings" });
+    }
+  });
+
+  const fallbackTierEnum = z.enum([
+    "lane_customer_trailer", "lane_customer", "lane_trailer", "lane",
+    "nearby_lane", "state_pair", "trailer_benchmark",
+  ]);
+  const perCustomerOverrideSchema = z.record(z.string(), z.object({
+    sonarWeight: z.number().min(0).max(1).optional(),
+    minHistoryLoads: z.number().min(0).max(100).optional(),
+  }));
+  const confidenceChipsSchema = z.object({
+    greenMinLoads: z.number().min(0).max(100).optional(),
+    greenMaxSpreadPct: z.number().min(0).max(100).optional(),
+    yellowMinLoads: z.number().min(0).max(100).optional(),
+  });
+  const updateSchema = z.object({
+    blend: z.object({
+      sonarWeight: z.number().min(0).max(1).optional(),
+      minHistoryLoads: z.number().min(0).max(100).optional(),
+      highConfidenceSpreadPct: z.number().min(0).max(100).optional(),
+      refreshIntervalHours: z.number().min(1).max(168).optional(),
+      sparseHistoryMultiplier: z.number().min(1).max(10).optional(),
+      sonarSparseBumpAmount: z.number().min(0).max(0.5).optional(),
+      fallbackOrder: z.array(fallbackTierEnum).optional(),
+      perCustomerOverrides: perCustomerOverrideSchema.optional(),
+    }).optional(),
+    thresholds: z.object({
+      tierAMinScore: z.number().min(0).max(100).optional(),
+      tierBMinScore: z.number().min(0).max(100).optional(),
+      recencyDecayDays: z.number().min(1).max(365).optional(),
+      refusalRateThreshold: z.number().min(0).max(1).optional(),
+      refusalMinLoads: z.number().min(0).max(100).optional(),
+      confidenceChips: confidenceChipsSchema.optional(),
+    }).optional(),
+  });
+  app.put("/api/admin/carrier-intelligence/scoring", requireAuth, async (req, res) => {
+    const ctx = await requireAdmin(req, res); if (!ctx) return;
+    try {
+      const parsed = updateSchema.safeParse(req.body ?? {});
+      if (!parsed.success) return res.status(400).json({ error: "Invalid payload", details: parsed.error.flatten() });
+      const [blend, thresholds] = await Promise.all([
+        parsed.data.blend ? setBlendConfig(ctx.orgId, parsed.data.blend) : getBlendConfig(ctx.orgId),
+        parsed.data.thresholds ? setThresholds(ctx.orgId, parsed.data.thresholds) : getThresholds(ctx.orgId),
+      ]);
+      return res.json({ ok: true, blend, thresholds });
+    } catch (err) {
+      console.error("[admin/carrier-intel/scoring PUT]", err);
+      return res.status(500).json({ error: "Failed to update scoring settings" });
+    }
+  });
+
+  app.post("/api/admin/carrier-intelligence/recompute", requireAuth, async (req, res) => {
+    const ctx = await requireAdmin(req, res); if (!ctx) return;
+    try {
+      const skipRecs = req.body?.skipRecommendations === true;
+      const summary = await recomputeCarrierIntelligence(ctx.orgId, {
+        skipRecommendations: skipRecs,
+        maxRecommendationLoads: typeof req.body?.maxLoads === "number" ? req.body.maxLoads : undefined,
+      });
+      return res.json({ ok: true, summary });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[admin/carrier-intel/recompute]", msg);
+      return res.status(500).json({ error: msg });
+    }
+  });
+}
