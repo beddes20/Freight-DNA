@@ -21,6 +21,10 @@ export interface RetrievalHit {
   text: string;
   similarity: number | null;
   metadata?: Record<string, unknown> | null;
+  /** ISO timestamp of when the source content was last updated (org corpus) or created (library). */
+  updatedAt?: string | null;
+  /** Optional human-friendly title (library items expose this). */
+  title?: string | null;
 }
 
 export interface RetrievalResult {
@@ -55,8 +59,9 @@ export async function retrieveContext(args: RetrievalArgs): Promise<RetrievalRes
     const rows = await db.execute<{
       source_kind: string; source_id: string; text: string;
       metadata: Record<string, unknown> | null; similarity: number;
+      updated_at: string | Date | null;
     }>(sql`
-      SELECT source_kind, source_id, text, metadata,
+      SELECT source_kind, source_id, text, metadata, updated_at,
              1 - (embedding <=> ${literal}::vector) AS similarity
       FROM org_corpus_chunks
       WHERE organization_id = ${args.organizationId} AND embedding IS NOT NULL
@@ -71,6 +76,7 @@ export async function retrieveContext(args: RetrievalArgs): Promise<RetrievalRes
         text: r.text,
         similarity: typeof r.similarity === "number" ? r.similarity : null,
         metadata: r.metadata,
+        updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : null,
       });
     }
   } catch (err) {
@@ -83,8 +89,9 @@ export async function retrieveContext(args: RetrievalArgs): Promise<RetrievalRes
     const rows = await db.execute<{
       id: string; kind: string; title: string; body: string | null;
       metadata: Record<string, unknown> | null; similarity: number;
+      created_at: string | Date | null;
     }>(sql`
-      SELECT id, kind, title, body, metadata,
+      SELECT id, kind, title, body, metadata, created_at,
              1 - (embedding <=> ${literal}::vector) AS similarity
       FROM library_items
       WHERE user_id = ${args.userId} AND embedding IS NOT NULL
@@ -100,6 +107,8 @@ export async function retrieveContext(args: RetrievalArgs): Promise<RetrievalRes
         text,
         similarity: typeof r.similarity === "number" ? r.similarity : null,
         metadata: r.metadata,
+        updatedAt: r.created_at ? new Date(r.created_at).toISOString() : null,
+        title: r.title,
       });
     }
   } catch (err) {
@@ -110,8 +119,8 @@ export async function retrieveContext(args: RetrievalArgs): Promise<RetrievalRes
   // Project pinned context (single blob, no embedding required)
   if (args.projectId) {
     try {
-      const rows = await db.execute<{ id: string; name: string; pinned_context: string | null }>(sql`
-        SELECT id, name, pinned_context FROM thread_projects WHERE id = ${args.projectId} AND user_id = ${args.userId} LIMIT 1
+      const rows = await db.execute<{ id: string; name: string; pinned_context: string | null; updated_at: string | Date | null }>(sql`
+        SELECT id, name, pinned_context, updated_at FROM thread_projects WHERE id = ${args.projectId} AND user_id = ${args.userId} LIMIT 1
       `);
       const row = rows.rows[0];
       if (row?.pinned_context && row.pinned_context.trim()) {
@@ -121,6 +130,8 @@ export async function retrieveContext(args: RetrievalArgs): Promise<RetrievalRes
           sourceId: row.id,
           text: `Project pinned context (${row.name}):\n${row.pinned_context.trim().slice(0, 4000)}`,
           similarity: null,
+          updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+          title: row.name,
         });
       }
     } catch (err) {

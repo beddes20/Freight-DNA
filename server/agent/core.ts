@@ -19,10 +19,19 @@ import { canInvoke } from "./permissions";
 import { listFacts, searchMemories } from "./memory";
 import { logActivity } from "./activity";
 import { buildSystemPrompt, ensureDefaultAgent, getAgentRuntime } from "./persona";
-import { retrieveContext, formatHitsForPrompt } from "./retrieval";
+import { retrieveContext, formatHitsForPrompt, type RetrievalHit } from "./retrieval";
 
 export interface AnswerMeta {
-  sources?: Array<{ kind: string; id?: string; label: string; href?: string }>;
+  sources?: Array<{
+    kind: string;
+    id?: string;
+    label: string;
+    href?: string;
+    /** ISO timestamp; client renders a relative age (e.g. "3 days old"). */
+    updatedAt?: string;
+    /** Optional bucket the source came from (org | library | project | tool). */
+    bucket?: string;
+  }>;
   followUps?: string[];
   scope?: string;
   confidence?: "high" | "medium" | "low";
@@ -95,7 +104,7 @@ async function buildContextEnvelope(
   ctx: AgentContext,
   userMessage: string,
   projectId?: string | null,
-): Promise<{ envelope: string; degraded: boolean }> {
+): Promise<{ envelope: string; degraded: boolean; hits: RetrievalHit[] }> {
   const today = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
   const lines: string[] = [
     `Today is ${today}.`,
@@ -125,6 +134,7 @@ async function buildContextEnvelope(
 
   // ValueIQ retrieval — org corpus + personal Library + project pin.
   let degraded = false;
+  let hits: RetrievalHit[] = [];
   try {
     const result = await retrieveContext({
       organizationId: ctx.organizationId,
@@ -134,6 +144,7 @@ async function buildContextEnvelope(
       perBucket: 4,
     });
     degraded = result.degraded;
+    hits = result.hits;
     const formatted = formatHitsForPrompt(result.hits, 3500);
     if (formatted) lines.push(formatted);
   } catch (err) {
@@ -141,7 +152,7 @@ async function buildContextEnvelope(
     degraded = true;
   }
 
-  return { envelope: lines.join("\n"), degraded };
+  return { envelope: lines.join("\n"), degraded, hits };
 }
 
 export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: agentIdArg, projectId, pageContextBlock }: RunAgentTurnArgs): Promise<{ assistantText: string; hadError: boolean; surfacedAction: boolean; agentId: string; meta: AnswerMeta; confidence: number; route: string }> {
@@ -154,7 +165,7 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
   const sources: AnswerMeta["sources"] = [];
   const startedAt = Date.now();
   const client = getAgentOpenAI();
-  const { envelope: baseEnvelope, degraded } = await buildContextEnvelope(ctx, userMessage, projectId);
+  const { envelope: baseEnvelope, degraded, hits: retrievalHits } = await buildContextEnvelope(ctx, userMessage, projectId);
   const envelope = pageContextBlock ? `${baseEnvelope}\n\n${pageContextBlock}` : baseEnvelope;
   const agentId = agentIdArg ?? (await ensureDefaultAgent(ctx.organizationId));
   const runtime = await getAgentRuntime(agentId);
@@ -398,10 +409,16 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
     actionOutcome: surfacedAction ? "surfaced" : null,
   });
 
+  // Merge retrieval-derived sources so reps can verify which docs/records
+  // the answer was grounded on (and how stale they are).
+  for (const h of retrievalHits.slice(0, 6)) {
+    sources!.push(retrievalHitToSource(h));
+  }
+
   // Build follow-up suggestions from the assistant's reply.
   const followUps = inferFollowUps(assistantText, sources!);
   const meta: AnswerMeta = {
-    sources: dedupeSources(sources!).slice(0, 6),
+    sources: dedupeSources(sources!).slice(0, 8),
     followUps,
     scope: ctx.scope === "everyone" ? "Org-wide view" : "My team",
     confidence: hadError ? "low" : (sources!.length ? "high" : "medium"),
@@ -409,4 +426,105 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
   if (meta.sources?.length || meta.followUps?.length) emit({ meta });
 
   return { assistantText, hadError, surfacedAction, agentId, meta, confidence, route };
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+const ORG_KIND_LABELS: Record<string, string> = {
+  company: "Company record",
+  contact: "Contact record",
+  lane: "Lane",
+  touchpoint: "Touchpoint",
+  play: "Play",
+  proven_tactic: "Proven tactic",
+  market_signal: "Market signal",
+};
+
+function retrievalHitToSource(h: RetrievalHit): NonNullable<AnswerMeta["sources"]>[number] {
+  const updatedAt = h.updatedAt ?? undefined;
+  if (h.bucket === "library") {
+    return {
+      kind: `library:${h.sourceKind}`,
+      id: h.sourceId,
+      label: h.title?.trim() || `Library — ${h.sourceKind}`,
+      updatedAt,
+      bucket: "library",
+    };
+  }
+  if (h.bucket === "project") {
+    return {
+      kind: "project_pin",
+      id: h.sourceId,
+      label: h.title ? `Project pin — ${h.title}` : "Project pinned context",
+      updatedAt,
+      bucket: "project",
+    };
+  }
+  // org corpus
+  const md = h.metadata as Record<string, unknown> | null | undefined;
+  const niceKind = ORG_KIND_LABELS[h.sourceKind] ?? h.sourceKind.replace(/_/g, " ");
+  const name = typeof md?.name === "string" ? md.name : null;
+  const companyId = typeof md?.companyId === "string" ? md.companyId : null;
+  const href = h.sourceKind === "company"
+    ? `/companies/${h.sourceId}`
+    : (companyId ? `/companies/${companyId}` : undefined);
+  return {
+    kind: h.sourceKind,
+    id: h.sourceId,
+    label: name ? `${niceKind} — ${name}` : niceKind,
+    href,
+    updatedAt,
+    bucket: "org",
+  };
+}
+
+function dedupeSources(items: NonNullable<AnswerMeta["sources"]>): NonNullable<AnswerMeta["sources"]> {
+  const seen = new Set<string>();
+  const out: NonNullable<AnswerMeta["sources"]> = [];
+  for (const s of items) {
+    const key = `${s.kind}::${s.id ?? s.label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
+}
+
+function extractCompanyLabel(text: string): string | null {
+  if (!text) return null;
+  const firstLine = text.split("\n").map((l) => l.trim()).find((l) => l.length > 0);
+  if (!firstLine) return null;
+  const trimmed = firstLine.replace(/^[#*\-\s]+/, "").slice(0, 80);
+  return trimmed || null;
+}
+
+function friendlyToolLabel(toolName: string, _args: Record<string, unknown>): string | null {
+  const map: Record<string, string> = {
+    log_touchpoint: "Preparing touchpoint…",
+    create_task: "Drafting task…",
+    complete_task: "Updating task…",
+    mark_meaningful: "Marking touchpoint…",
+    draft_email: "Drafting email…",
+    open_filtered_queue: "Opening queue…",
+    approve_freight_opportunity: "Reviewing freight opportunity…",
+    remember_this: "Saving to memory…",
+  };
+  if (map[toolName]) return map[toolName];
+  if (toolName.startsWith("get_") || toolName.startsWith("find_") || toolName.startsWith("search_") || toolName.startsWith("list_")) {
+    return `Looking up ${toolName.replace(/_/g, " ").replace(/^(get|find|search|list)\s+/, "")}…`;
+  }
+  return `Running ${toolName.replace(/_/g, " ")}…`;
+}
+
+function inferFollowUps(_assistantText: string, sources: NonNullable<AnswerMeta["sources"]>): string[] {
+  const ups: string[] = [];
+  const company = sources.find((s) => s.kind === "company" && s.label);
+  if (company) {
+    const name = company.label.replace(/^Company record\s*—\s*/, "");
+    ups.push(`Show recent touchpoints for ${name}`);
+    ups.push(`Draft an outreach for ${name}`);
+  }
+  return ups.slice(0, 3);
 }
