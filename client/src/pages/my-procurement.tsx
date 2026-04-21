@@ -53,6 +53,8 @@ import {
   UserCheck,
   ShieldCheck,
   Pencil,
+  Plus,
+  Mail,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -137,6 +139,13 @@ interface AvailableFreightOpp {
   awaitingApprovalSince: string | null;
   slaState: "ok" | "warning" | "over" | "escalated";
   slaAgeHours: number | null;
+  // Task #365 — latest customer email signal for the company (last 7 days).
+  latestCustomerSignal: {
+    intentType: string;
+    intentSubtype: string | null;
+    signalAtIso: string;
+    ageHours: number;
+  } | null;
 }
 
 interface MyProcurementData {
@@ -969,8 +978,9 @@ function AvailableFreightPanel({
   sla?: { l1Hours: number; l2Hours: number; orgOverSlaCount: number | null };
 }) {
   const { toast } = useToast();
-  const [filter, setFilter] = useState<"all" | "awaiting-approval" | "approved" | "unassigned">("all");
+  const [filter, setFilter] = useState<"all" | "awaiting-approval" | "approved" | "unassigned" | "in-flight">("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [manualOpen, setManualOpen] = useState(false);
 
   const refreshMutation = useMutation({
     mutationFn: () =>
@@ -999,15 +1009,23 @@ function AvailableFreightPanel({
     onError: (err: Error) => toast({ title: "Bulk approve failed", description: err.message, variant: "destructive" }),
   });
 
+  const isInFlight = (o: AvailableFreightOpp) =>
+    o.status === "awaiting_carrier_reply" ||
+    o.status === "awaiting_customer_confirm" ||
+    o.status === "sent" ||
+    o.status === "partially_covered";
+
   const visible = useMemo(() => {
     if (filter === "awaiting-approval") return items.filter((o) => !o.approvedAt);
     if (filter === "approved") return items.filter((o) => !!o.approvedAt);
     if (filter === "unassigned") return items.filter((o) => o.isUnassigned);
+    if (filter === "in-flight") return items.filter(isInFlight);
     return items;
   }, [items, filter]);
 
   const awaitingCount = items.filter((o) => !o.approvedAt).length;
   const unassignedCount = items.filter((o) => o.isUnassigned).length;
+  const inFlightCount = items.filter(isInFlight).length;
   const overSlaInView = visible.filter((o) => o.slaState === "over" || o.slaState === "escalated").length;
   const orgOverSla = sla && sla.orgOverSlaCount !== null ? sla.orgOverSlaCount : null;
 
@@ -1067,6 +1085,15 @@ function AvailableFreightPanel({
         )}
         <Button
           size="sm"
+          variant={filter === "in-flight" ? "default" : "outline"}
+          onClick={() => setFilter("in-flight")}
+          data-testid="filter-af-in-flight"
+          className={inFlightCount > 0 && filter !== "in-flight" ? "border-violet-500/60 text-violet-400" : ""}
+        >
+          In flight ({inFlightCount})
+        </Button>
+        <Button
+          size="sm"
           variant={filter === "approved" ? "default" : "outline"}
           onClick={() => setFilter("approved")}
           data-testid="filter-af-approved"
@@ -1074,6 +1101,15 @@ function AvailableFreightPanel({
           Approved
         </Button>
         <div className="ml-auto flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setManualOpen(true)}
+            data-testid="button-add-manual-freight"
+          >
+            <Plus className="w-3.5 h-3.5 mr-1.5" />
+            Add freight
+          </Button>
           {isManager && filter === "awaiting-approval" && selected.size > 0 && (
             <Button
               size="sm"
@@ -1135,7 +1171,267 @@ function AvailableFreightPanel({
           ))}
         </div>
       )}
+
+      <ManualFreightDialog
+        open={manualOpen}
+        onOpenChange={setManualOpen}
+        queryKey={queryKey}
+        isManager={isManager}
+        currentUserId={currentUserId}
+      />
     </div>
+  );
+}
+
+function ManualFreightDialog({
+  open,
+  onOpenChange,
+  queryKey,
+  isManager,
+  currentUserId,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  queryKey: readonly unknown[];
+  isManager: boolean;
+  currentUserId: string | null;
+}) {
+  const { toast } = useToast();
+  const [companyId, setCompanyId] = useState("");
+  const [mode, setMode] = useState<"exact_load" | "lane_building">("exact_load");
+  const [origin, setOrigin] = useState("");
+  const [originState, setOriginState] = useState("");
+  const [destination, setDestination] = useState("");
+  const [destinationState, setDestinationState] = useState("");
+  const [equipmentType, setEquipmentType] = useState("");
+  const [pickupWindowStart, setPickupWindowStart] = useState(
+    () => new Date().toISOString().slice(0, 10),
+  );
+  const [pickupWindowEnd, setPickupWindowEnd] = useState(
+    () => new Date(Date.now() + 86400000).toISOString().slice(0, 10),
+  );
+  const [loadCount, setLoadCount] = useState(1);
+  const [notes, setNotes] = useState("");
+  const [companyQuery, setCompanyQuery] = useState("");
+
+  const companiesQuery = useQuery<{ id: string; name: string }[]>({
+    queryKey: ["/api/companies/search", companyQuery],
+    queryFn: async () => {
+      const url = `/api/companies?search=${encodeURIComponent(companyQuery)}&limit=20`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) return [];
+      const json = await res.json();
+      return Array.isArray(json) ? json : json.items ?? [];
+    },
+    enabled: open,
+  });
+
+  const createMutation = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/available-freight/manual", {
+        companyId,
+        mode,
+        origin,
+        originState: originState || null,
+        destination,
+        destinationState: destinationState || null,
+        equipmentType: equipmentType || null,
+        pickupWindowStart,
+        pickupWindowEnd,
+        loadCount,
+        notes: notes || null,
+      }).then((r) => r.json()),
+    onSuccess: () => {
+      toast({ title: "Freight opportunity created" });
+      queryClient.invalidateQueries({ queryKey });
+      onOpenChange(false);
+      setCompanyId("");
+      setOrigin("");
+      setOriginState("");
+      setDestination("");
+      setDestinationState("");
+      setEquipmentType("");
+      setLoadCount(1);
+      setNotes("");
+    },
+    onError: (err: Error) =>
+      toast({ title: "Failed to create freight", description: err.message, variant: "destructive" }),
+  });
+
+  const canSubmit = companyId && origin && destination && pickupWindowStart && pickupWindowEnd;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent data-testid="dialog-manual-freight">
+        <DialogHeader>
+          <DialogTitle>Add freight opportunity</DialogTitle>
+          <DialogDescription>
+            Add a one-off load that came in by phone or email. Will follow the
+            same approval gate as imported freight.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs font-medium block mb-1">Customer</label>
+            <input
+              type="text"
+              className="w-full px-2 py-1.5 text-sm border rounded bg-background"
+              placeholder="Search customers…"
+              value={companyQuery}
+              onChange={(e) => {
+                setCompanyQuery(e.target.value);
+                setCompanyId("");
+              }}
+              data-testid="input-manual-company-search"
+            />
+            {companyQuery && (companiesQuery.data?.length ?? 0) > 0 && (
+              <div className="border rounded mt-1 max-h-40 overflow-y-auto">
+                {(companiesQuery.data ?? []).map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => {
+                      setCompanyId(c.id);
+                      setCompanyQuery(c.name);
+                    }}
+                    className={`w-full text-left px-2 py-1.5 text-sm hover-elevate ${companyId === c.id ? "bg-accent" : ""}`}
+                    data-testid={`option-company-${c.id}`}
+                  >
+                    {c.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-medium block mb-1">Origin city</label>
+              <input
+                type="text"
+                className="w-full px-2 py-1.5 text-sm border rounded bg-background"
+                value={origin}
+                onChange={(e) => setOrigin(e.target.value)}
+                data-testid="input-manual-origin"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium block mb-1">Origin state</label>
+              <input
+                type="text"
+                maxLength={2}
+                className="w-full px-2 py-1.5 text-sm border rounded bg-background"
+                value={originState}
+                onChange={(e) => setOriginState(e.target.value.toUpperCase())}
+                data-testid="input-manual-origin-state"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium block mb-1">Destination city</label>
+              <input
+                type="text"
+                className="w-full px-2 py-1.5 text-sm border rounded bg-background"
+                value={destination}
+                onChange={(e) => setDestination(e.target.value)}
+                data-testid="input-manual-destination"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium block mb-1">Dest state</label>
+              <input
+                type="text"
+                maxLength={2}
+                className="w-full px-2 py-1.5 text-sm border rounded bg-background"
+                value={destinationState}
+                onChange={(e) => setDestinationState(e.target.value.toUpperCase())}
+                data-testid="input-manual-destination-state"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium block mb-1">Equipment</label>
+              <input
+                type="text"
+                className="w-full px-2 py-1.5 text-sm border rounded bg-background"
+                placeholder="Van, Reefer, Flatbed…"
+                value={equipmentType}
+                onChange={(e) => setEquipmentType(e.target.value)}
+                data-testid="input-manual-equipment"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium block mb-1">Loads</label>
+              <input
+                type="number"
+                min={1}
+                max={999}
+                className="w-full px-2 py-1.5 text-sm border rounded bg-background"
+                value={loadCount}
+                onChange={(e) => setLoadCount(Math.max(1, parseInt(e.target.value || "1", 10)))}
+                data-testid="input-manual-load-count"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium block mb-1">Pickup start</label>
+              <input
+                type="date"
+                className="w-full px-2 py-1.5 text-sm border rounded bg-background"
+                value={pickupWindowStart}
+                onChange={(e) => setPickupWindowStart(e.target.value)}
+                data-testid="input-manual-pickup-start"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium block mb-1">Pickup end</label>
+              <input
+                type="date"
+                className="w-full px-2 py-1.5 text-sm border rounded bg-background"
+                value={pickupWindowEnd}
+                onChange={(e) => setPickupWindowEnd(e.target.value)}
+                data-testid="input-manual-pickup-end"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-medium block mb-1">Mode</label>
+            <select
+              className="w-full px-2 py-1.5 text-sm border rounded bg-background"
+              value={mode}
+              onChange={(e) => setMode(e.target.value as "exact_load" | "lane_building")}
+              data-testid="select-manual-mode"
+            >
+              <option value="exact_load">Exact load</option>
+              <option value="lane_building">Lane building</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-medium block mb-1">Notes (optional)</label>
+            <textarea
+              className="w-full px-2 py-1.5 text-sm border rounded bg-background"
+              rows={2}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              data-testid="input-manual-notes"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            data-testid="button-manual-cancel"
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={() => createMutation.mutate()}
+            disabled={!canSubmit || createMutation.isPending}
+            data-testid="button-manual-submit"
+          >
+            {createMutation.isPending && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+            Create freight
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1318,6 +1614,24 @@ function AvailableFreightCard({
               <span>{item.loadCount} load{item.loadCount === 1 ? "" : "s"}</span>
               {item.sourceFileName && <span className="opacity-70">{item.sourceFileName}</span>}
             </div>
+            {item.latestCustomerSignal && (
+              <div className="mt-1.5">
+                <Badge
+                  variant="outline"
+                  className="text-[10px] border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+                  data-testid={`badge-customer-signal-${item.id}`}
+                  title={`Customer signal · ${item.latestCustomerSignal.intentType}${item.latestCustomerSignal.intentSubtype ? ` / ${item.latestCustomerSignal.intentSubtype}` : ""} · ${item.latestCustomerSignal.ageHours.toFixed(1)}h ago`}
+                >
+                  <Mail className="w-2.5 h-2.5 mr-1" />
+                  {item.latestCustomerSignal.intentType.replace(/_/g, " ")}
+                  <span className="opacity-70 ml-1">
+                    · {item.latestCustomerSignal.ageHours < 1
+                      ? `${Math.round(item.latestCustomerSignal.ageHours * 60)}m ago`
+                      : `${item.latestCustomerSignal.ageHours.toFixed(0)}h ago`}
+                  </span>
+                </Badge>
+              </div>
+            )}
           </div>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap">

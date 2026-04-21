@@ -31,6 +31,10 @@ import {
   normalizeEquipmentType,
 } from "./laneOutreachEmailBuilder";
 import {
+  findCrossThrottledCarriers,
+  FREIGHT_CROSS_THROTTLE_HOURS,
+} from "./freightOpportunityCrossThrottle";
+import {
   carrierIntelSuggestions,
   type Carrier,
   type Company,
@@ -204,7 +208,7 @@ export interface SendWaveResult {
   opportunityCarrierId: string;
   carrierId: string;
   carrierName: string;
-  status: "sent" | "scheduled" | "blocked" | "failed" | "no_email";
+  status: "sent" | "scheduled" | "blocked" | "failed" | "no_email" | "throttled_cross_module";
   blockedReason?: string;
   error?: string;
   scheduledFor?: string;
@@ -251,7 +255,13 @@ export async function sendOpportunityWave(
   const sourceKind = (opportunity.sourceRef as { kind?: string } | null | undefined)?.kind;
   const isAvailableFreightImport = sourceKind === "available_freight_import";
   const requiresApproval = isAvailableFreightImport || policy.approvalRequired;
-  if (requiresApproval && opportunity.status !== "ready_to_send" && opportunity.status !== "sent" && opportunity.status !== "partially_covered") {
+  if (
+    requiresApproval &&
+    opportunity.status !== "ready_to_send" &&
+    opportunity.status !== "sent" &&
+    opportunity.status !== "partially_covered" &&
+    opportunity.status !== "awaiting_carrier_reply"
+  ) {
     throw new Error(`Opportunity is in status "${opportunity.status}" — cannot send`);
   }
   if (requiresApproval && !opportunity.approvedAt) {
@@ -265,6 +275,27 @@ export async function sendOpportunityWave(
   const scheduleAt = opts.scheduleAt ? new Date(opts.scheduleAt) : null;
   const wave = opts.wave ?? 1;
   const results: SendWaveResult[] = [];
+
+  // Task #365 — cross-system throttle. Pull the carrier IDs the rep is
+  // about to contact and check whether they were already pinged (by LWQ or
+  // by an earlier freight opportunity) on the same lane within the per-carrier
+  // dedup window. We compute this once per wave to amortize the SQL.
+  const candidateCarrierIds = opts.carrierRowIds
+    .map(id => carriersById.get(id)?.carrierId)
+    .filter((id): id is string => !!id);
+  const laneLabel = formatLaneDisplay(
+    opportunity.origin,
+    opportunity.originState,
+    opportunity.destination,
+    opportunity.destinationState,
+  );
+  const crossThrottled = await findCrossThrottledCarriers({
+    orgId,
+    carrierIds: candidateCarrierIds,
+    recurringLaneId: opportunity.recurringLaneId ?? null,
+    companyId: opportunity.companyId,
+    laneLabel,
+  });
 
   // Lazy-loaded outlook helpers (kept inside the loop's closure to avoid
   // import overhead when nothing is sent).
@@ -304,6 +335,42 @@ export async function sendOpportunityWave(
         carrierName: "(missing carrier)",
         status: "blocked",
         blockedReason: "Carrier no longer exists",
+      });
+      continue;
+    }
+
+    // Task #365 — cross-system throttle. Skip sends where the same carrier
+    // was already pinged on this lane (by LWQ or another freight opp) in the
+    // last FREIGHT_CROSS_THROTTLE_HOURS. The row is not terminal — clearing
+    // scheduledFor lets the rep re-include after the window expires.
+    const throttleHit = crossThrottled.get(row.carrierId);
+    if (throttleHit) {
+      const ageH = ((Date.now() - throttleHit.lastSentAt.getTime()) / 3600000).toFixed(1);
+      const message = `Skipped: contacted on this lane ${ageH}h ago (cross-module throttle, ${FREIGHT_CROSS_THROTTLE_HOURS}h window)`;
+      results.push({
+        opportunityCarrierId: rowId,
+        carrierId: row.carrierId,
+        carrierName: carrier.name,
+        status: "throttled_cross_module",
+        blockedReason: message,
+      });
+      await storage.updateFreightOpportunityCarrier(rowId, {
+        lastSendError: message,
+        scheduledFor: null,
+      });
+      await storage.appendFreightOpportunityAudit({
+        opportunityId,
+        eventType: "outreach_blocked",
+        actorUserId: rep.id,
+        payload: {
+          carrierId: row.carrierId,
+          reason: "throttled_cross_module",
+          message,
+          wave,
+          lastSentAt: throttleHit.lastSentAt.toISOString(),
+          throttleSource: throttleHit.source,
+          windowHours: FREIGHT_CROSS_THROTTLE_HOURS,
+        },
       });
       continue;
     }
@@ -542,9 +609,16 @@ export async function sendOpportunityWave(
   const anySent = results.some(r => r.status === "sent");
   let opp = opportunity;
   if (anySent) {
+    // Task #365 — once carriers go out, the opp is "awaiting_carrier_reply"
+    // (was previously a flat "sent"). Terminal states (covered) and
+    // partially_covered are preserved. The legacy "sent" value is kept stable
+    // when a row was already there (no migration), but new transitions use
+    // the more descriptive awaiting_carrier_reply.
     const next = opportunity.status === "covered" ? "covered"
-      : opportunity.status === "sent" || opportunity.status === "partially_covered" ? opportunity.status
-      : "sent";
+      : opportunity.status === "partially_covered" ? "partially_covered"
+      : opportunity.status === "awaiting_customer_confirm" ? "awaiting_customer_confirm"
+      : opportunity.status === "sent" ? "sent"
+      : "awaiting_carrier_reply";
     if (next !== opportunity.status) {
       const updated = await storage.updateFreightOpportunity(orgId, opportunityId, { status: next });
       if (updated) opp = updated;
@@ -894,6 +968,36 @@ export async function classifyOpportunityReply(
         await cancelPendingWaves(storage, oppCarrier.opportunityId, "positive_response");
       } catch (err) {
         console.warn("[pafoe-outreach] cancelPendingWaves failed:", err instanceof Error ? err.message : err);
+      }
+
+      // Task #365 — a positive carrier reply transitions an
+      // "awaiting_carrier_reply" opp to "awaiting_customer_confirm" (the rep
+      // now needs to confirm with the customer that the load is theirs).
+      // Terminal statuses (covered, partially_covered) are not changed.
+      if (
+        opp.status === "awaiting_carrier_reply" ||
+        opp.status === "sent" ||
+        opp.status === "ready_to_send"
+      ) {
+        try {
+          await storage.updateFreightOpportunity(orgId, opp.id, {
+            status: "awaiting_customer_confirm",
+          });
+          await storage.appendFreightOpportunityAudit({
+            opportunityId: opp.id,
+            eventType: "status_changed",
+            actorUserId: null,
+            payload: {
+              from: opp.status,
+              to: "awaiting_customer_confirm",
+              reason: "carrier_positive_reply",
+              outcome: cls.outcome,
+              carrierId: oppCarrier.carrierId,
+            },
+          });
+        } catch (err) {
+          console.warn("[pafoe-outreach] status transition to awaiting_customer_confirm failed:", err instanceof Error ? err.message : err);
+        }
       }
     }
 

@@ -20,8 +20,8 @@ import type { Express } from "express";
 import { storage, db } from "../storage";
 import { getCurrentUser } from "../auth";
 import { normalizeLaneLocation, normalizeEquipmentType } from "@shared/laneFormatters";
-import { and, desc, eq, or, inArray, gte, isNull } from "drizzle-orm";
-import { plays, playRuns, freightOpportunities } from "@shared/schema";
+import { and, desc, eq, or, inArray, gte, isNull, sql } from "drizzle-orm";
+import { plays, playRuns, freightOpportunities, emailSignals, type InsertFreightOpportunity } from "@shared/schema";
 import { evaluatePlayTriggersForOrg } from "./playbook";
 import { performAvailableFreightImport, listAvailableFreightImports, availableFreightSettingKey } from "../availableFreightImporter";
 import { notifyFreightDelegated, notifyFreightApproved } from "../freightOpportunityNotifications";
@@ -494,7 +494,18 @@ export function registerMyProcurementRoutes(app: Express) {
         .from(freightOpportunities)
         .where(and(
           eq(freightOpportunities.orgId, user.organizationId),
-          inArray(freightOpportunities.status, ["new", "ready_to_send"]),
+          // Task #365 — surface in-flight statuses too. Reps need visibility
+          // into opps that are awaiting carrier reply or customer confirmation
+          // (so they don't double-pitch and so the queue reflects real WIP).
+          // Terminal states (covered/expired/cancelled) stay excluded.
+          inArray(freightOpportunities.status, [
+            "new",
+            "ready_to_send",
+            "sent",
+            "awaiting_carrier_reply",
+            "awaiting_customer_confirm",
+            "partially_covered",
+          ]),
           or(
             isNull(freightOpportunities.pickupWindowEnd),
             gte(freightOpportunities.pickupWindowEnd, todayIso),
@@ -522,6 +533,52 @@ export function registerMyProcurementRoutes(app: Express) {
           l2: freightOpportunities.slaNotifiedL2At,
         }).from(freightOpportunities).where(inArray(freightOpportunities.id, freightOppRows.map(r => r.id)));
         for (const s of slaRows) slaRowsById.set(s.id, { awaitingSince: s.awaitingSince, l1: s.l1, l2: s.l2 });
+      }
+
+      // Task #365 — latest customer signal per company within last 7 days.
+      // One LATERAL-style query keyed on companyId, joined into the payload
+      // so the rep sees what the customer just said (pricing_request,
+      // urgency_signal, etc.) when deciding whether to push hard now or wait.
+      const latestSignalByCompany = new Map<string, {
+        intentType: string;
+        intentSubtype: string | null;
+        signalAtIso: string;
+        ageHours: number;
+      }>();
+      if (companyIds.length > 0) {
+        // Hard-isolate by joining email_signals → email_messages and filtering
+        // on the message's org_id. email_signals has no org_id of its own;
+        // a signal's "owner" org is the org that ingested its parent message.
+        // Without this guard a signal whose linked_account_id happens to match
+        // a same-id row in another org could leak across tenants.
+        const sigRows = await db.execute<{
+          company_id: string;
+          intent_type: string;
+          intent_subtype: string | null;
+          created_at: Date;
+        }>(sql`
+          SELECT DISTINCT ON (es.linked_account_id)
+            es.linked_account_id AS company_id,
+            es.intent_type,
+            es.intent_subtype,
+            es.created_at
+          FROM email_signals es
+          INNER JOIN email_messages em ON em.id = es.message_id
+          WHERE es.linked_account_id = ANY(${companyIds}::text[])
+            AND em.org_id = ${user.organizationId}
+            AND es.created_at > NOW() - INTERVAL '7 days'
+          ORDER BY es.linked_account_id, es.created_at DESC
+        `);
+        const rows = (sigRows as { rows?: unknown[] }).rows ?? [];
+        for (const row of rows as Array<{ company_id: string; intent_type: string; intent_subtype: string | null; created_at: string | Date }>) {
+          const at = row.created_at instanceof Date ? row.created_at : new Date(row.created_at);
+          latestSignalByCompany.set(row.company_id, {
+            intentType: row.intent_type,
+            intentSubtype: row.intent_subtype,
+            signalAtIso: at.toISOString(),
+            ageHours: Number(((Date.now() - at.getTime()) / 3600000).toFixed(1)),
+          });
+        }
       }
 
       const availableFreight = freightOppRows.map(r => {
@@ -558,6 +615,9 @@ export function registerMyProcurementRoutes(app: Express) {
           awaitingApprovalSince: slaInfo.awaitingSince,
           slaState: slaInfo.state,
           slaAgeHours: slaInfo.ageHours != null ? Number(slaInfo.ageHours.toFixed(2)) : null,
+          // Task #365 — what the customer just told us (last 7 days). Null
+          // when no signal exists; the UI hides the chip in that case.
+          latestCustomerSignal: latestSignalByCompany.get(r.companyId) ?? null,
         };
       });
 
@@ -907,6 +967,129 @@ export function registerMyProcurementRoutes(app: Express) {
     } catch (err) {
       console.error("[available-freight/imports]", err);
       return res.status(500).json({ error: "Failed to list imports" });
+    }
+  });
+
+  /**
+   * POST /api/available-freight/manual
+   * Task #365 — Rep-initiated freight opportunity. Used when a customer
+   * sends a one-off load over the phone or email and the rep wants it
+   * tracked in their procurement queue without waiting for the daily import.
+   *
+   * Behavior:
+   *  - Caller defaults as the owner (managers may target another rep via `ownerUserId`).
+   *  - sourceRef.kind = "manual" so the importer never tries to merge or expire it.
+   *  - Approval gate is enforced exactly like imported rows: when the org's
+   *    effective policy requires approval the row stays pending; otherwise
+   *    it auto-approves to the caller (so a small org can send immediately).
+   */
+  const manualFreightOppSchema = z.object({
+    companyId: z.string().min(1),
+    mode: z.enum(["exact_load", "lane_building"]),
+    origin: z.string().min(1),
+    originState: z.string().nullable().optional(),
+    destination: z.string().min(1),
+    destinationState: z.string().nullable().optional(),
+    equipmentType: z.string().nullable().optional(),
+    pickupWindowStart: z.string().min(1),
+    pickupWindowEnd: z.string().min(1),
+    loadCount: z.number().int().positive().max(999).optional(),
+    notes: z.string().max(2000).nullable().optional(),
+    ownerUserId: z.string().min(1).optional(),
+  });
+  app.post("/api/available-freight/manual", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const parsed = manualFreightOppSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: "Invalid manual freight payload",
+          details: parsed.error.flatten(),
+        });
+      }
+      const data = parsed.data;
+
+      // Owner defaults to caller. Managers may target another rep via the
+      // optional ownerUserId — non-managers may not.
+      let ownerUserId: string = user.id;
+      if (data.ownerUserId && data.ownerUserId !== user.id) {
+        if (!APPROVER_ROLES.has(user.role)) {
+          return res.status(403).json({ error: "Only managers can assign a manual freight opp to another rep" });
+        }
+        const target = await storage.getUser(data.ownerUserId);
+        if (!target || target.organizationId !== user.organizationId) {
+          return res.status(404).json({ error: "Target user not found in this org" });
+        }
+        ownerUserId = target.id;
+      }
+
+      // Verify company belongs to the org.
+      const company = await storage.getCompany(data.companyId);
+      if (!company || company.organizationId !== user.organizationId) {
+        return res.status(404).json({ error: "Company not found" });
+      }
+
+      // Approval gate — manual opps respect the same policy as imported.
+      const { loadEffectivePolicy } = await import("../proactiveOpportunityService");
+      const policy = await loadEffectivePolicy(storage, user.organizationId, data.companyId);
+      const requiresApproval = policy.approvalRequired;
+
+      const now = new Date();
+      const created = await storage.createFreightOpportunity({
+        orgId: user.organizationId,
+        companyId: data.companyId,
+        mode: data.mode,
+        recurringLaneId: null,
+        geographicLanePatternId: null,
+        origin: data.origin,
+        originState: data.originState ?? null,
+        destination: data.destination,
+        destinationState: data.destinationState ?? null,
+        equipmentType: data.equipmentType ?? null,
+        pickupWindowStart: data.pickupWindowStart,
+        pickupWindowEnd: data.pickupWindowEnd,
+        loadCount: data.loadCount ?? 1,
+        sourceRef: { kind: "manual", createdById: user.id },
+        urgencyScore: 60,
+        confidenceFlag: "normal",
+        status: "ready_to_send",
+        ownerUserId,
+        delegatedToUserId: null,
+        senderMailbox: null,
+        templateOverrideSubject: null,
+        templateOverrideBody: null,
+        cadenceConfig: null,
+        approvedAt: requiresApproval ? null : now,
+        approvedById: requiresApproval ? null : user.id,
+        sourceFileName: null,
+        awaitingApprovalSince: requiresApproval ? now : null,
+        slaNotifiedL1At: null,
+        slaNotifiedL2At: null,
+        notes: data.notes ?? null,
+        createdById: user.id,
+        policySnapshot: null,
+        expiresAt: null,
+      } as InsertFreightOpportunity);
+
+      await storage.appendFreightOpportunityAudit({
+        opportunityId: created.id,
+        eventType: "generated",
+        actorUserId: user.id,
+        payload: {
+          source: "manual",
+          companyId: data.companyId,
+          requiresApproval,
+          ownerUserId,
+        },
+      });
+
+      return res.json({ ok: true, opportunity: created });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[available-freight/manual]", msg);
+      return res.status(500).json({ error: "Failed to create manual freight opportunity" });
     }
   });
 

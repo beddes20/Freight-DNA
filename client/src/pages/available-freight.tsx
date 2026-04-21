@@ -36,6 +36,8 @@ const STATUS_LABELS: Record<FreightOpportunityStatus, string> = {
   new: "New",
   ready_to_send: "Ready",
   sent: "Sent",
+  awaiting_carrier_reply: "Awaiting carrier",
+  awaiting_customer_confirm: "Confirm w/ customer",
   partially_covered: "Partial",
   covered: "Covered",
   expired: "Expired",
@@ -104,7 +106,9 @@ export default function AvailableFreightPage() {
 
   const statusParam =
     statusFilter === "active"
-      ? "new,ready_to_send,sent,partially_covered"
+      // Task #365 — include the new in-flight statuses so newly transitioned
+      // opps stay visible in the default queue view (was excluding them).
+      ? "new,ready_to_send,sent,awaiting_carrier_reply,awaiting_customer_confirm,partially_covered"
       : statusFilter === "all"
         ? ""
         : statusFilter;

@@ -3266,6 +3266,8 @@ export const FREIGHT_OPPORTUNITY_STATUSES = [
   "new",
   "ready_to_send",
   "sent",
+  "awaiting_carrier_reply",
+  "awaiting_customer_confirm",
   "partially_covered",
   "covered",
   "expired",
