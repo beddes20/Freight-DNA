@@ -365,31 +365,42 @@ export const TOOLS: AgentTool[] = [
   {
     name: "list_available_freight",
     capability: "read.opportunity",
-    description: "List the rep's open Available Freight opportunities (today's loads owned by or delegated to them). Use when the rep asks 'what freight do I have', 'what's in my procurement queue', or 'show me my open loads'.",
+    description: "List the rep's open Available Freight opportunities (today's loads owned by, delegated to, or awaiting approval). Use when the rep asks 'what freight do I have', 'what's in my procurement queue', or 'show me my open loads'.",
     parameters: {
       type: "object",
       properties: {
-        status: { type: "string", description: "Optional status filter (new, ready_to_send, sent, awaiting_carrier_reply, awaiting_customer_confirm, partially_covered)" },
+        filter: {
+          type: "string",
+          enum: ["mine", "delegated", "awaiting_approval", "all"],
+          description: "Scope filter: 'mine' = owned by rep, 'delegated' = delegated to rep, 'awaiting_approval' = pending approval, 'all' = any opp the rep can see (owner or delegate). Defaults to 'mine'.",
+        },
         limit: { type: "number", description: "Max rows to return (default 10, max 25)" },
       },
     },
     async execute(ctx, args) {
       const todayIso = new Date().toISOString().slice(0, 10);
       const lim = Math.min(25, Math.max(1, Number(args.limit || 10)));
-      const wantStatus = args.status ? String(args.status) : null;
+      const filterRaw = String(args.filter ?? "mine");
+      const filter: "mine" | "delegated" | "awaiting_approval" | "all" =
+        filterRaw === "delegated" || filterRaw === "awaiting_approval" || filterRaw === "all" ? filterRaw : "mine";
       const conds = [
         eq(freightOpportunities.orgId, ctx.organizationId),
-        sql`(${freightOpportunities.ownerUserId} = ${ctx.rep.id} OR ${freightOpportunities.delegatedToUserId} = ${ctx.rep.id})`,
         sql`(${freightOpportunities.pickupWindowEnd} IS NULL OR ${freightOpportunities.pickupWindowEnd} >= ${todayIso})`,
       ];
-      if (wantStatus) {
-        conds.push(eq(freightOpportunities.status, wantStatus));
+      if (filter === "mine") {
+        conds.push(eq(freightOpportunities.ownerUserId, ctx.rep.id));
+      } else if (filter === "delegated") {
+        conds.push(eq(freightOpportunities.delegatedToUserId, ctx.rep.id));
+      } else if (filter === "awaiting_approval") {
+        conds.push(sql`(${freightOpportunities.ownerUserId} = ${ctx.rep.id} OR ${freightOpportunities.delegatedToUserId} = ${ctx.rep.id})`);
+        conds.push(isNull(freightOpportunities.approvedAt));
       } else {
-        conds.push(inArray(freightOpportunities.status, [
-          "new", "ready_to_send", "sent",
-          "awaiting_carrier_reply", "awaiting_customer_confirm", "partially_covered",
-        ]));
+        conds.push(sql`(${freightOpportunities.ownerUserId} = ${ctx.rep.id} OR ${freightOpportunities.delegatedToUserId} = ${ctx.rep.id})`);
       }
+      conds.push(inArray(freightOpportunities.status, [
+        "new", "ready_to_send", "sent",
+        "awaiting_carrier_reply", "awaiting_customer_confirm", "partially_covered",
+      ]));
       const rows = await db.select({
         id: freightOpportunities.id,
         companyId: freightOpportunities.companyId,
@@ -425,21 +436,27 @@ export const TOOLS: AgentTool[] = [
   {
     name: "freight_import_status",
     capability: "read.opportunity",
-    description: "Show the most recent Available Freight import runs (the daily OneDrive pull): when, file name, rows in/updated/expired, unmatched companies, errors. Use when a rep asks 'did the freight upload work', 'when was the last import', or 'why don't I see today's loads'.",
+    description: "Admin/director only. Show the most recent Available Freight import runs (the daily OneDrive pull): when, file name, rows in/updated/expired, unmatched companies, errors. Use when an admin asks 'did the freight upload work', 'when was the last import', or 'why don't I see today's loads'.",
     parameters: {
       type: "object",
       properties: { limit: { type: "number", description: "Max imports to show (default 5, max 15)" } },
     },
     async execute(ctx, args) {
+      // Role-gated even though the capability is read.opportunity — import
+      // audit data is operational metadata that only admins/directors should
+      // see (it can include file names, error stack snippets, etc.).
+      const isAdminOrDirector = ["admin", "director", "sales_director"].includes(ctx.rep.role);
+      if (!isAdminOrDirector) {
+        return { kind: "data", text: "Only an admin or director can view freight import status." };
+      }
       const lim = Math.min(15, Math.max(1, Number(args.limit || 5)));
       const imports = await listAvailableFreightImports(ctx.organizationId, lim);
       if (imports.length === 0) {
         return { kind: "data", text: "No Available Freight imports have been recorded yet for this org." };
       }
       const lines = imports.map((r, i) => {
-        const when = typeof r.created_at === "string" ? r.created_at : new Date(r.created_at).toISOString();
         const status = r.error ? `ERROR: ${r.error.slice(0, 120)}` : `${r.inserted} new, ${r.updated} updated, ${r.expired} expired, ${r.unmatchedCompanies} unmatched`;
-        return `${i + 1}. ${when} (${r.triggeredBy}) — ${r.fileName ?? "?"} — ${status}`;
+        return `${i + 1}. ${r.createdAt} (${r.triggeredBy}) — ${r.fileName ?? "?"} — ${status}`;
       });
       return { kind: "data", text: lines.join("\n") };
     },
@@ -564,58 +581,34 @@ export const TOOLS: AgentTool[] = [
   {
     name: "approve_freight_opportunity",
     capability: "write.opportunity",
-    description: "Approve a pending Available Freight opportunity by company name (so its outreach can be sent). Manager-only — renders an action card the rep must confirm. Use when a manager says 'approve the X load', 'approve [company]'s freight', etc.",
+    description: "Approve a pending Available Freight opportunity by id (so its outreach can be sent). Manager-only — renders an action card the manager must confirm. Use after the manager has surfaced the specific opportunity (via list_available_freight or the UI) and wants to approve it.",
     parameters: {
       type: "object",
       properties: {
-        company_name: { type: "string", description: "Company whose pending freight opp to approve" },
-        opportunity_id: { type: "string", description: "Optional explicit opp id (skips the company lookup)" },
+        opportunity_id: { type: "string", description: "freight_opportunities.id of the row to approve" },
       },
+      required: ["opportunity_id"],
     },
     async execute(ctx, args) {
-      // Manager-only — fall back to a soft no when a non-manager invokes it.
       const isManager = ["admin", "director", "national_account_manager", "sales_director", "manager"].includes(ctx.rep.role);
       if (!isManager) {
         return { kind: "data", text: "Only managers can approve Available Freight opportunities." };
       }
-
-      let target: { id: string; companyId: string; pickupWindowStart: string | null; origin: string; destination: string } | null = null;
-      const explicit = args.opportunity_id ? String(args.opportunity_id) : null;
-      if (explicit) {
-        const opp = await storage.getFreightOpportunity(ctx.organizationId, explicit);
-        if (opp) target = { id: opp.id, companyId: opp.companyId, pickupWindowStart: opp.pickupWindowStart, origin: opp.origin, destination: opp.destination };
-      } else {
-        const company = await findCompanyByName(ctx.organizationId, String(args.company_name || ""));
-        if (!company) return { kind: "data", text: `No company found matching "${args.company_name}".` };
-        // Pick the oldest unapproved row for that company.
-        const rows = await db.select({
-          id: freightOpportunities.id,
-          companyId: freightOpportunities.companyId,
-          pickupWindowStart: freightOpportunities.pickupWindowStart,
-          origin: freightOpportunities.origin,
-          destination: freightOpportunities.destination,
-        }).from(freightOpportunities)
-          .where(and(
-            eq(freightOpportunities.orgId, ctx.organizationId),
-            eq(freightOpportunities.companyId, company.id),
-            isNull(freightOpportunities.approvedAt),
-            inArray(freightOpportunities.status, ["new", "ready_to_send"]),
-          ))
-          .orderBy(desc(freightOpportunities.urgencyScore))
-          .limit(1);
-        if (rows[0]) target = rows[0];
-      }
-      if (!target) return { kind: "data", text: "No pending freight opportunity found to approve." };
-      const co = await storage.getCompany(target.companyId);
+      const oppId = String(args.opportunity_id || "");
+      if (!oppId) return { kind: "data", text: "opportunity_id is required." };
+      const opp = await storage.getFreightOpportunity(ctx.organizationId, oppId);
+      if (!opp) return { kind: "data", text: `No freight opportunity found with id ${oppId}.` };
+      if (opp.approvedAt) return { kind: "data", text: "That opportunity is already approved." };
+      const co = await storage.getCompany(opp.companyId);
       return {
         kind: "action",
         tool: "approve_freight_opportunity",
         args: {
-          opportunity_id: target.id,
-          company_name: co?.name ?? target.companyId,
-          origin: target.origin,
-          destination: target.destination,
-          pickup: target.pickupWindowStart,
+          opportunity_id: opp.id,
+          company_name: co?.name ?? opp.companyId,
+          origin: opp.origin,
+          destination: opp.destination,
+          pickup: opp.pickupWindowStart,
         },
         preface: "Freight opportunity ready to approve — confirm:",
       };

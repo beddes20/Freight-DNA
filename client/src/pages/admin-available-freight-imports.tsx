@@ -24,7 +24,23 @@ interface ImportRow {
   actorUserId: string | null;
   triggeredBy: string;
   error: string | null;
-  created_at: string;
+  createdAt: string;
+}
+
+interface TestResult {
+  ok: boolean;
+  status: number;
+  message: string;
+}
+
+interface ImportSummary {
+  fileName: string;
+  totalRows: number;
+  inserted: number;
+  updated: number;
+  expired: number;
+  unmatchedCompanies: number;
+  warnings: string[];
 }
 
 export default function AdminAvailableFreightImports() {
@@ -32,11 +48,7 @@ export default function AdminAvailableFreightImports() {
   const { toast } = useToast();
   const [draftUrl, setDraftUrl] = useState<string>("");
   const [editing, setEditing] = useState(false);
-  const [testResult, setTestResult] = useState<
-    | { ok: true; name: string | null; size: number | null; lastModifiedDateTime: string | null; webUrl: string | null }
-    | { ok: false; error: string; status?: number; detail?: string }
-    | null
-  >(null);
+  const [testResult, setTestResult] = useState<TestResult | null>(null);
 
   const isManager = ["admin", "director", "national_account_manager", "sales_director", "manager"].includes(user?.role ?? "");
   const isAdmin = user?.role === "admin";
@@ -60,24 +72,25 @@ export default function AdminAvailableFreightImports() {
     onError: (err: Error) => toast({ title: "Save failed", description: err.message, variant: "destructive" }),
   });
 
-  const testUrl = useMutation({
-    mutationFn: (url: string | null) =>
-      apiRequest("POST", "/api/available-freight/onedrive-url/test", url ? { url } : {}).then((r) => r.json()),
-    onSuccess: (res: any) => setTestResult(res),
-    onError: (err: Error) => setTestResult({ ok: false, error: err.message }),
+  const testUrl = useMutation<TestResult, Error, string | null>({
+    mutationFn: (url) =>
+      apiRequest("POST", "/api/available-freight/onedrive-url/test", url ? { url } : {}).then((r) => r.json() as Promise<TestResult>),
+    onSuccess: (res) => setTestResult(res),
+    onError: (err) => setTestResult({ ok: false, status: 0, message: err.message }),
   });
 
-  const runImport = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/available-freight/import", {}).then((r) => r.json()),
-    onSuccess: (res: any) => {
+  const runImport = useMutation<{ summary?: ImportSummary }, Error, void>({
+    mutationFn: () => apiRequest("POST", "/api/available-freight/import", {}).then((r) => r.json() as Promise<{ summary?: ImportSummary }>),
+    onSuccess: (res) => {
+      const s = res.summary;
       toast({
         title: "Import complete",
-        description: `${res?.summary?.inserted ?? 0} new, ${res?.summary?.updated ?? 0} updated, ${res?.summary?.expired ?? 0} expired.`,
+        description: `${s?.inserted ?? 0} new, ${s?.updated ?? 0} updated, ${s?.expired ?? 0} expired.`,
       });
       queryClient.invalidateQueries({ queryKey: ["/api/available-freight/imports"] });
       queryClient.invalidateQueries({ queryKey: ["/api/available-freight/onedrive-url"] });
     },
-    onError: (err: Error) => toast({ title: "Import failed", description: err.message, variant: "destructive" }),
+    onError: (err) => toast({ title: "Import failed", description: err.message, variant: "destructive" }),
   });
 
   if (!isManager) {
@@ -186,30 +199,16 @@ export default function AdminAvailableFreightImports() {
             {testResult && (
               <Alert variant={testResult.ok ? "default" : "destructive"} data-testid={`alert-test-result-${testResult.ok ? "ok" : "fail"}`}>
                 <AlertDescription>
-                  {testResult.ok ? (
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2 font-medium">
-                        <CheckCircle2 className="h-4 w-4 text-green-600" />
-                        Connection OK
-                      </div>
-                      <div className="text-sm">
-                        <strong>File:</strong> {testResult.name ?? "—"}
-                        {testResult.size != null && <> · {(testResult.size / 1024).toFixed(1)} KB</>}
-                      </div>
-                      {testResult.lastModifiedDateTime && (
-                        <div className="text-sm"><strong>Last modified:</strong> {new Date(testResult.lastModifiedDateTime).toLocaleString()}</div>
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 font-medium">
+                      {testResult.ok ? (
+                        <><CheckCircle2 className="h-4 w-4 text-green-600" /> Connection OK</>
+                      ) : (
+                        <><AlertTriangle className="h-4 w-4" /> Test failed{testResult.status ? ` (HTTP ${testResult.status})` : ""}</>
                       )}
                     </div>
-                  ) : (
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2 font-medium">
-                        <AlertTriangle className="h-4 w-4" />
-                        Test failed{testResult.status ? ` (HTTP ${testResult.status})` : ""}
-                      </div>
-                      <div className="text-sm">{testResult.error}</div>
-                      {testResult.detail && <pre className="text-xs whitespace-pre-wrap mt-1">{testResult.detail}</pre>}
-                    </div>
-                  )}
+                    <div className="text-sm" data-testid="text-test-message">{testResult.message}</div>
+                  </div>
                 </AlertDescription>
               </Alert>
             )}
@@ -245,7 +244,7 @@ export default function AdminAvailableFreightImports() {
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-mono text-xs text-muted-foreground">
-                      {new Date(row.created_at).toLocaleString()}
+                      {new Date(row.createdAt).toLocaleString()}
                     </span>
                     <Badge variant={row.error ? "destructive" : "secondary"} data-testid={`badge-import-trigger-${row.id}`}>
                       {row.triggeredBy}

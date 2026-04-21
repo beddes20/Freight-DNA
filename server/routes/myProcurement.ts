@@ -964,8 +964,16 @@ export function registerMyProcurementRoutes(app: Express) {
       if (!APPROVER_ROLES.has(user.role)) {
         return res.status(403).json({ error: "Manager access required" });
       }
-      const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? "25"), 10) || 25));
-      const imports = await listAvailableFreightImports(user.organizationId, limit);
+      // Rolling 30-day window: pull a generous cap then trim to anything
+      // newer than 30 days ago. Keeps the page focused on operationally
+      // relevant runs without truncating a high-volume day.
+      const cap = Math.min(500, Math.max(1, parseInt(String(req.query.limit ?? "200"), 10) || 200));
+      const cutoffMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      const all = await listAvailableFreightImports(user.organizationId, cap);
+      const imports = all.filter((r) => {
+        const t = Date.parse(r.createdAt);
+        return Number.isFinite(t) ? t >= cutoffMs : true;
+      });
       return res.json({ imports });
     } catch (err) {
       console.error("[available-freight/imports]", err);
@@ -1223,7 +1231,6 @@ export function registerMyProcurementRoutes(app: Express) {
         const encoded = "u!" + Buffer.from(trimmed).toString("base64").replace(/=/g, "").replace(/\//g, "_").replace(/\+/g, "-");
         metaUrl = `https://graph.microsoft.com/v1.0/shares/${encoded}/driveItem`;
       } else if (trimmed.startsWith("https://graph.microsoft.com/")) {
-        // Strip a trailing /content so we hit the metadata endpoint instead.
         metaUrl = trimmed.endsWith("/content") ? trimmed.slice(0, -"/content".length) : trimmed;
       } else if (trimmed.startsWith("/") || trimmed.startsWith("drives/") || trimmed.startsWith("users/") || trimmed.startsWith("me/")) {
         const rel = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
@@ -1232,7 +1239,8 @@ export function registerMyProcurementRoutes(app: Express) {
       } else {
         return res.status(400).json({
           ok: false,
-          error: "Unrecognized OneDrive path format. Use a OneDrive/SharePoint share link, full Graph URL, or a relative drives/{driveId}/items/{itemId} path.",
+          status: 400,
+          message: "Unrecognized OneDrive path format. Use a OneDrive/SharePoint share link, full Graph URL, or a relative drives/{driveId}/items/{itemId} path.",
         });
       }
 
@@ -1240,31 +1248,37 @@ export function registerMyProcurementRoutes(app: Express) {
       try {
         token = await getGraphAccessToken();
       } catch (err) {
-        return res.status(400).json({ ok: false, error: `Failed to acquire Graph token: ${err instanceof Error ? err.message : String(err)}` });
-      }
-
-      const resp = await fetch(metaUrl, { headers: { Authorization: `Bearer ${token}` } });
-      if (!resp.ok) {
-        const body = await resp.text().catch(() => "");
         return res.status(400).json({
           ok: false,
-          status: resp.status,
-          error: `Graph API returned HTTP ${resp.status}`,
-          detail: body.slice(0, 400),
+          status: 0,
+          message: `Failed to acquire Graph token: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
-      const meta = await resp.json().catch(() => ({}));
+
+      // Done-criteria says HEAD: cheap reachability probe with no body.
+      // Graph supports HEAD on driveItem metadata endpoints — if it ever
+      // returns 405 we fall back to GET so the test still surfaces a useful
+      // signal instead of a misleading "broken" result.
+      let resp = await fetch(metaUrl, { method: "HEAD", headers: { Authorization: `Bearer ${token}` } });
+      if (resp.status === 405 || resp.status === 501) {
+        resp = await fetch(metaUrl, { method: "GET", headers: { Authorization: `Bearer ${token}` } });
+      }
+      if (!resp.ok) {
+        return res.json({
+          ok: false,
+          status: resp.status,
+          message: `Graph API returned HTTP ${resp.status}`,
+        });
+      }
       return res.json({
         ok: true,
-        name: (meta as any).name ?? null,
-        size: (meta as any).size ?? null,
-        webUrl: (meta as any).webUrl ?? null,
-        lastModifiedDateTime: (meta as any).lastModifiedDateTime ?? null,
+        status: resp.status,
+        message: "OneDrive source is reachable.",
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("[available-freight/onedrive-url/test]", msg);
-      return res.status(500).json({ ok: false, error: msg });
+      return res.status(500).json({ ok: false, status: 0, message: msg });
     }
   });
 
