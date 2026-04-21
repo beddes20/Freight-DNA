@@ -70,6 +70,8 @@ const laneToolItems: NavItem[] = [
   { title: "Lane Intelligence",  url: "/research-tasks",  icon: ClipboardList },
   { title: "My Procurement",     url: "/my-procurement",  icon: Briefcase     },
   { title: "Lane Work Queue",    url: "/lanes/work-queue",icon: ListFilter    },
+  { title: "Available Freight",  url: "/available-freight", icon: Truck,
+    roles: ["admin", "director", "national_account_manager", "sales_director", "logistics_manager", "account_manager", "sales"] },
   {
     title: "Carrier Hub",
     url: "/carrier-hub",

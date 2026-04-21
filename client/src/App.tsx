@@ -77,6 +77,8 @@ import ValueIQPage from "@/pages/valueiq";
 import AdminMonitoredMailboxesPage from "@/pages/admin-monitored-mailboxes";
 import ProfilePage from "@/pages/profile";
 import AiAgentPortal from "@/pages/ai-agent";
+import AvailableFreightPage from "@/pages/available-freight";
+import AvailableFreightDetailPage from "@/pages/available-freight-detail";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -193,6 +195,8 @@ function Router() {
         </PortletErrorBoundary>
       </Route>
       <Route path="/lanes/work-queue" component={LaneWorkQueuePage} />
+      <Route path="/available-freight" component={AvailableFreightPage} />
+      <Route path="/available-freight/:id" component={AvailableFreightDetailPage} />
       <Route path="/my-procurement" component={MyProcurementPage} />
       <Route path="/intel" component={IntelPage} />
       <Route path="/conversations" component={ConversationsPage} />

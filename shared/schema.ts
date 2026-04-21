@@ -3313,6 +3313,7 @@ export const FREIGHT_OPPORTUNITY_AUDIT_EVENTS = [
   "approved",
   "carrier_excluded",
   "carrier_included_override",
+  "carrier_reordered",
   "outreach_queued",
   "outreach_sent",
   "response_recorded",

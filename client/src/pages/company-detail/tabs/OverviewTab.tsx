@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { BarChart3, Trophy, TrendingUp, DollarSign, Phone, Mail, User } from "lucide-react";
 import { ForcedFocusDialog } from "@/components/forced-focus-dialog";
 import { RelationshipFreightCompanyPortlet } from "@/components/relationship-freight-portlet";
+import { OutreachPolicyCard } from "../components/OutreachPolicyCard";
 import { NextBestActionCard } from "@/components/next-best-action-card";
 import { NbaCompanyCard } from "@/components/NbaCompanyCard";
 import { MarketShareCard } from "@/components/market-share-card";
@@ -235,6 +236,8 @@ export function OverviewTab({
       <MarketShareCard companyId={companyId} rfps={companyRfps} />
 
       <RelationshipFreightCompanyPortlet companyId={companyId} companyName={companyName} onOpenContact={onOpenContact} />
+
+      <OutreachPolicyCard companyId={companyId} />
 
       <ForcedFocusDialog
         open={ffDialogOpen}
