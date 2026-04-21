@@ -1210,14 +1210,15 @@ export function registerMyProcurementRoutes(app: Express) {
       const bodyUrl = String((req.body ?? {}).url ?? "").trim();
       const filePath = bodyUrl || (await storage.getSetting(availableFreightSettingKey(user.organizationId))) || "";
       if (!filePath) {
-        return res.status(400).json({ ok: false, error: "No OneDrive URL configured or supplied" });
+        return res.status(400).json({ ok: false, status: 0, message: "No OneDrive URL configured or supplied" });
       }
 
       const { azureCredentialsConfigured, getGraphAccessToken } = await import("../graphService");
       if (!azureCredentialsConfigured()) {
         return res.status(400).json({
           ok: false,
-          error: "Azure credentials are not configured (OUTLOOK_TENANT_ID / OUTLOOK_CLIENT_ID / OUTLOOK_CLIENT_SECRET)",
+          status: 0,
+          message: "Azure credentials are not configured (OUTLOOK_TENANT_ID / OUTLOOK_CLIENT_ID / OUTLOOK_CLIENT_SECRET)",
         });
       }
 

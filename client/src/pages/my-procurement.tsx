@@ -12,7 +12,7 @@
 import { useState, useMemo } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useLocation, useSearch } from "wouter";
+import { useLocation, useSearch, Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Eye, X } from "lucide-react";
@@ -1138,6 +1138,18 @@ function AvailableFreightPanel({
           </Button>
         </div>
       </div>
+
+      {/* The server caps this bucket at 100 rows for snappy load. When we
+          hit (or are near) that cap, surface the full Available Freight
+          page so the rep can see everything in their queue. */}
+      {items.length >= 100 && (
+        <div className="mb-2 text-xs text-muted-foreground flex items-center gap-2" data-testid="text-freight-bucket-capped">
+          <span>Showing the first 100 freight opportunities.</span>
+          <Link href="/available-freight" className="text-blue-600 hover:underline" data-testid="link-show-all-freight">
+            Show all in Available Freight →
+          </Link>
+        </div>
+      )}
 
       {visible.length === 0 ? (
         <EmptyState

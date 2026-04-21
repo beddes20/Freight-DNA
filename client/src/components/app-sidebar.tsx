@@ -429,7 +429,7 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
-                {(user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager" || user?.role === "sales_director") && (
+                {["admin", "director", "national_account_manager", "sales_director", "logistics_manager"].includes(user?.role ?? "") && (
                   <SidebarMenuItem>
                     <SidebarMenuButton asChild isActive={location === "/admin/available-freight/imports"}>
                       <Link href="/admin/available-freight/imports" data-testid="link-admin-freight-imports">

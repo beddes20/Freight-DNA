@@ -416,7 +416,7 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       const rep = await storage.getUser(uid);
       if (!rep) return res.status(401).json({ error: "Rep not found" });
       const isOwner = opp.ownerUserId === uid || opp.delegatedToUserId === uid;
-      const isManager = ["admin", "director", "national_account_manager", "sales_director", "manager"].includes(rep.role);
+      const isManager = ["admin", "director", "national_account_manager", "sales_director", "logistics_manager"].includes(rep.role);
       if (!isOwner && !isManager) {
         return res.status(403).json({ error: "Only the owner, delegate, or a manager can mark covered" });
       }

@@ -50,7 +50,7 @@ export default function AdminAvailableFreightImports() {
   const [editing, setEditing] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
 
-  const isManager = ["admin", "director", "national_account_manager", "sales_director", "manager"].includes(user?.role ?? "");
+  const isManager = ["admin", "director", "national_account_manager", "sales_director", "logistics_manager"].includes(user?.role ?? "");
   const isAdmin = user?.role === "admin";
 
   const settingQuery = useQuery<{ url: string | null; lastImport: unknown }>({

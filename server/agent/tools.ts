@@ -389,7 +389,7 @@ export const TOOLS: AgentTool[] = [
       // branches so the manager sees the team-wide pipeline. "mine" and
       // "delegated" stay literally about the asking rep regardless of
       // scope — they're personal queries.
-      const isManager = ["admin", "director", "national_account_manager", "sales_director", "manager"].includes(ctx.rep.role);
+      const isManager = ["admin", "director", "national_account_manager", "sales_director", "logistics_manager"].includes(ctx.rep.role);
       const teamScope = isManager && ctx.scope === "everyone";
       const conds = [
         eq(freightOpportunities.orgId, ctx.organizationId),
@@ -610,7 +610,7 @@ export const TOOLS: AgentTool[] = [
       required: ["opportunity_id"],
     },
     async execute(ctx, args) {
-      const isManager = ["admin", "director", "national_account_manager", "sales_director", "manager"].includes(ctx.rep.role);
+      const isManager = ["admin", "director", "national_account_manager", "sales_director", "logistics_manager"].includes(ctx.rep.role);
       if (!isManager) {
         return { kind: "data", text: "Only managers can approve Available Freight opportunities." };
       }
