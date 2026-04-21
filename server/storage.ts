@@ -195,6 +195,21 @@ import {
   accountReviews,
   type AccountReview,
   type InsertAccountReview,
+  freightOpportunities,
+  type FreightOpportunity,
+  type InsertFreightOpportunity,
+  freightOpportunityCarriers,
+  type FreightOpportunityCarrier,
+  type InsertFreightOpportunityCarrier,
+  companyOutreachPolicies,
+  type CompanyOutreachPolicy,
+  type InsertCompanyOutreachPolicy,
+  freightOpportunityResponses,
+  type FreightOpportunityResponse,
+  type InsertFreightOpportunityResponse,
+  freightOpportunityAudit,
+  type FreightOpportunityAudit,
+  type InsertFreightOpportunityAudit,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -1012,6 +1027,33 @@ export interface IStorage {
   getValidCachedApiResponses(source: string): Promise<ApiResponseCache[]>;
   getAllCachedApiResponses(source: string): Promise<ApiResponseCache[]>;
   cleanExpiredApiCache(): Promise<number>;
+
+  // Proactive Available Freight Outreach Engine — Phase 2 (Task #304)
+  getCompanyOutreachPolicy(orgId: string, companyId: string): Promise<CompanyOutreachPolicy | undefined>;
+  upsertCompanyOutreachPolicy(data: InsertCompanyOutreachPolicy): Promise<CompanyOutreachPolicy>;
+  listCompanyOutreachPolicies(orgId: string, opts?: { enabledOnly?: boolean }): Promise<CompanyOutreachPolicy[]>;
+
+  createFreightOpportunity(data: InsertFreightOpportunity): Promise<FreightOpportunity>;
+  getFreightOpportunity(orgId: string, id: string): Promise<FreightOpportunity | undefined>;
+  listFreightOpportunities(orgId: string, opts?: {
+    companyId?: string;
+    status?: string | string[];
+    limit?: number;
+    offset?: number;
+  }): Promise<FreightOpportunity[]>;
+  updateFreightOpportunity(orgId: string, id: string, fields: Partial<FreightOpportunity>): Promise<FreightOpportunity | undefined>;
+
+  insertFreightOpportunityCarriers(rows: InsertFreightOpportunityCarrier[]): Promise<FreightOpportunityCarrier[]>;
+  listFreightOpportunityCarriers(opportunityId: string): Promise<FreightOpportunityCarrier[]>;
+  updateFreightOpportunityCarrier(id: string, fields: Partial<FreightOpportunityCarrier>): Promise<FreightOpportunityCarrier | undefined>;
+
+  createFreightOpportunityResponse(data: InsertFreightOpportunityResponse): Promise<FreightOpportunityResponse>;
+  listFreightOpportunityResponses(opportunityCarrierId: string): Promise<FreightOpportunityResponse[]>;
+
+  appendFreightOpportunityAudit(data: InsertFreightOpportunityAudit): Promise<FreightOpportunityAudit>;
+  listFreightOpportunityAudit(opportunityId: string): Promise<FreightOpportunityAudit[]>;
+  /** Distinct carrier IDs that received outreach within the given lookback window (cross-lane). */
+  getRecentlyContactedCarrierIds(orgId: string, sinceDate: Date): Promise<string[]>;
 }
 
 const pool = new Pool({
@@ -7014,6 +7056,131 @@ export class DatabaseStorage implements IStorage {
       await db.delete(apiResponseCache).where(eq(apiResponseCache.cacheKey, key));
     }
     return expiredKeys.length;
+  }
+
+  // ── Proactive Available Freight Outreach Engine — Phase 2 (Task #304) ──────
+
+  async getCompanyOutreachPolicy(orgId: string, companyId: string): Promise<CompanyOutreachPolicy | undefined> {
+    const [row] = await db.select().from(companyOutreachPolicies)
+      .where(and(eq(companyOutreachPolicies.orgId, orgId), eq(companyOutreachPolicies.companyId, companyId)));
+    return row;
+  }
+
+  async upsertCompanyOutreachPolicy(data: InsertCompanyOutreachPolicy): Promise<CompanyOutreachPolicy> {
+    const existing = await this.getCompanyOutreachPolicy(data.orgId, data.companyId);
+    if (existing) {
+      const [row] = await db.update(companyOutreachPolicies)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(companyOutreachPolicies.id, existing.id))
+        .returning();
+      return row;
+    }
+    const [row] = await db.insert(companyOutreachPolicies).values(data).returning();
+    return row;
+  }
+
+  async listCompanyOutreachPolicies(orgId: string, opts: { enabledOnly?: boolean } = {}): Promise<CompanyOutreachPolicy[]> {
+    const conds = [eq(companyOutreachPolicies.orgId, orgId)];
+    if (opts.enabledOnly) conds.push(eq(companyOutreachPolicies.enabled, true));
+    return db.select().from(companyOutreachPolicies).where(and(...conds));
+  }
+
+  async createFreightOpportunity(data: InsertFreightOpportunity): Promise<FreightOpportunity> {
+    const [row] = await db.insert(freightOpportunities).values(data).returning();
+    return row;
+  }
+
+  async getFreightOpportunity(orgId: string, id: string): Promise<FreightOpportunity | undefined> {
+    const [row] = await db.select().from(freightOpportunities)
+      .where(and(eq(freightOpportunities.orgId, orgId), eq(freightOpportunities.id, id)));
+    return row;
+  }
+
+  async listFreightOpportunities(orgId: string, opts: {
+    companyId?: string;
+    status?: string | string[];
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<FreightOpportunity[]> {
+    const conds = [eq(freightOpportunities.orgId, orgId)];
+    if (opts.companyId) conds.push(eq(freightOpportunities.companyId, opts.companyId));
+    if (opts.status) {
+      const list = Array.isArray(opts.status) ? opts.status : [opts.status];
+      if (list.length) conds.push(inArray(freightOpportunities.status, list));
+    }
+    const base = db.select().from(freightOpportunities)
+      .where(and(...conds))
+      .orderBy(desc(freightOpportunities.urgencyScore), desc(freightOpportunities.generatedAt));
+    if (opts.limit != null && opts.offset != null) {
+      return base.limit(opts.limit).offset(opts.offset);
+    }
+    if (opts.limit != null) return base.limit(opts.limit);
+    if (opts.offset != null) return base.offset(opts.offset);
+    return base;
+  }
+
+  async updateFreightOpportunity(orgId: string, id: string, fields: Partial<FreightOpportunity>): Promise<FreightOpportunity | undefined> {
+    const [row] = await db.update(freightOpportunities)
+      .set(fields)
+      .where(and(eq(freightOpportunities.orgId, orgId), eq(freightOpportunities.id, id)))
+      .returning();
+    return row;
+  }
+
+  async insertFreightOpportunityCarriers(rows: InsertFreightOpportunityCarrier[]): Promise<FreightOpportunityCarrier[]> {
+    if (rows.length === 0) return [];
+    return db.insert(freightOpportunityCarriers).values(rows).returning();
+  }
+
+  async listFreightOpportunityCarriers(opportunityId: string): Promise<FreightOpportunityCarrier[]> {
+    return db.select().from(freightOpportunityCarriers)
+      .where(eq(freightOpportunityCarriers.opportunityId, opportunityId))
+      .orderBy(asc(freightOpportunityCarriers.rank));
+  }
+
+  async updateFreightOpportunityCarrier(id: string, fields: Partial<FreightOpportunityCarrier>): Promise<FreightOpportunityCarrier | undefined> {
+    const [row] = await db.update(freightOpportunityCarriers)
+      .set(fields)
+      .where(eq(freightOpportunityCarriers.id, id))
+      .returning();
+    return row;
+  }
+
+  async createFreightOpportunityResponse(data: InsertFreightOpportunityResponse): Promise<FreightOpportunityResponse> {
+    const [row] = await db.insert(freightOpportunityResponses).values(data).returning();
+    return row;
+  }
+
+  async listFreightOpportunityResponses(opportunityCarrierId: string): Promise<FreightOpportunityResponse[]> {
+    return db.select().from(freightOpportunityResponses)
+      .where(eq(freightOpportunityResponses.opportunityCarrierId, opportunityCarrierId))
+      .orderBy(desc(freightOpportunityResponses.createdAt));
+  }
+
+  async appendFreightOpportunityAudit(data: InsertFreightOpportunityAudit): Promise<FreightOpportunityAudit> {
+    const [row] = await db.insert(freightOpportunityAudit).values(data).returning();
+    return row;
+  }
+
+  async listFreightOpportunityAudit(opportunityId: string): Promise<FreightOpportunityAudit[]> {
+    return db.select().from(freightOpportunityAudit)
+      .where(eq(freightOpportunityAudit.opportunityId, opportunityId))
+      .orderBy(asc(freightOpportunityAudit.createdAt));
+  }
+
+  async getRecentlyContactedCarrierIds(orgId: string, sinceDate: Date): Promise<string[]> {
+    // Cross-lane lookup: any carrier that received outbound outreach since
+    // sinceDate. We expand the carrier_ids array via SQL so the result is a
+    // distinct set of carrier IDs.
+    const result = await pool.query<{ carrier_id: string }>(
+      `SELECT DISTINCT unnest(carrier_ids) AS carrier_id
+         FROM carrier_outreach_logs
+        WHERE org_id = $1
+          AND sent_at IS NOT NULL
+          AND sent_at >= $2`,
+      [orgId, sinceDate],
+    );
+    return result.rows.map(r => r.carrier_id).filter(Boolean);
   }
 }
 

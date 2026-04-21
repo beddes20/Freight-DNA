@@ -13,6 +13,7 @@ import { registerLaneCarrierOutreachRoutes } from "./routes/laneCarrierOutreach"
 import { registerCarrierHubRoutes } from "./routes/carrierHub";
 import { registerMyProcurementRoutes } from "./routes/myProcurement";
 import { registerProcurementOutreachRoutes } from "./routes/procurementOutreach";
+import { registerProactiveOpportunityRoutes } from "./routes/proactiveOpportunities";
 import { registerIntelRoutes } from "./routes/intel";
 import { registerGraphWebhookRoutes } from "./routes/graphWebhook";
 import { registerMarketSignalRoutes } from "./routes/marketSignals";
@@ -3160,6 +3161,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerCarrierHubRoutes(app);
   registerMyProcurementRoutes(app);
   registerProcurementOutreachRoutes(app);
+  registerProactiveOpportunityRoutes(app);
   registerIntelRoutes(app);
   registerGraphWebhookRoutes(app);
   registerMarketSignalRoutes(app);

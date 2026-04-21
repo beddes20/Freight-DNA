@@ -3237,3 +3237,216 @@ export const accountReviews = pgTable(
 export const insertAccountReviewSchema = createInsertSchema(accountReviews).omit({ id: true, createdAt: true });
 export type InsertAccountReview = z.infer<typeof insertAccountReviewSchema>;
 export type AccountReview = typeof accountReviews.$inferSelect;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Proactive Available Freight Outreach Engine ("PAFOE") — Phase 2
+// See docs/proactive-freight-outreach/phase1-audit.md §4 for the design.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const FREIGHT_OPPORTUNITY_MODES = ["exact_load", "lane_building", "both"] as const;
+export type FreightOpportunityMode = typeof FREIGHT_OPPORTUNITY_MODES[number];
+
+export const FREIGHT_OPPORTUNITY_STATUSES = [
+  "new",
+  "ready_to_send",
+  "sent",
+  "partially_covered",
+  "covered",
+  "expired",
+  "cancelled",
+] as const;
+export type FreightOpportunityStatus = typeof FREIGHT_OPPORTUNITY_STATUSES[number];
+
+export const FREIGHT_OPPORTUNITY_CONFIDENCE = ["low", "normal"] as const;
+export type FreightOpportunityConfidence = typeof FREIGHT_OPPORTUNITY_CONFIDENCE[number];
+
+export const FREIGHT_OPPORTUNITY_BUCKETS = [
+  "proven",
+  "strong_fit_underused",
+  "exploratory",
+  "rep_added",
+] as const;
+export type FreightOpportunityBucket = typeof FREIGHT_OPPORTUNITY_BUCKETS[number];
+
+export const FREIGHT_OPPORTUNITY_EXCLUDED_REASONS = [
+  "recent_contact",
+  "daily_cap",
+  "not_approved",
+  "do_not_use",
+  "opted_out",
+  "rep_override",
+  "customer_carrier_blocked",
+] as const;
+export type FreightOpportunityExcludedReason = typeof FREIGHT_OPPORTUNITY_EXCLUDED_REASONS[number];
+
+export const FREIGHT_OPPORTUNITY_RESPONSE_OUTCOMES = [
+  "accepted",
+  "quoted",
+  "interested_future",
+  "passed_busy",
+  "passed_rate",
+  "passed_lane_fit",
+  "passed_other",
+  "auto_no_reply",
+] as const;
+export type FreightOpportunityResponseOutcome = typeof FREIGHT_OPPORTUNITY_RESPONSE_OUTCOMES[number];
+
+export const FREIGHT_OPPORTUNITY_AUDIT_EVENTS = [
+  "generated",
+  "policy_blocked",
+  "approved",
+  "carrier_excluded",
+  "carrier_included_override",
+  "outreach_queued",
+  "outreach_sent",
+  "response_recorded",
+  "status_changed",
+  "expired",
+  "cancelled",
+] as const;
+export type FreightOpportunityAuditEvent = typeof FREIGHT_OPPORTUNITY_AUDIT_EVENTS[number];
+
+/**
+ * company_outreach_policies — per-shipper opt-in + guardrail configuration.
+ * Sibling table to companies (kept off the wide companies row).
+ */
+export const companyOutreachPolicies = pgTable("company_outreach_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }).unique(),
+  enabled: boolean("enabled").notNull().default(false),
+  mode: text("mode").notNull().default("exact_load"),
+  approvalRequired: boolean("approval_required").notNull().default(true),
+  maxCarriersPerOpportunity: integer("max_carriers_per_opportunity").notNull().default(25),
+  leadTimeMinDays: integer("lead_time_min_days").notNull().default(2),
+  leadTimeMaxDays: integer("lead_time_max_days").notNull().default(7),
+  approvedCarrierOnly: boolean("approved_carrier_only").notNull().default(false),
+  approvedCarrierIds: text("approved_carrier_ids").array().notNull().default(sql`'{}'::text[]`),
+  doNotAutomate: boolean("do_not_automate").notNull().default(false),
+  specialNotes: text("special_notes"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  updatedById: varchar("updated_by_id").references(() => users.id, { onDelete: "set null" }),
+}, (t) => ({
+  orgEnabledIdx: index("company_outreach_policies_org_enabled_idx").on(t.orgId, t.enabled),
+}));
+export const insertCompanyOutreachPolicySchema = createInsertSchema(companyOutreachPolicies)
+  .omit({ id: true, updatedAt: true })
+  .extend({
+    mode: z.enum(FREIGHT_OPPORTUNITY_MODES),
+  });
+export type InsertCompanyOutreachPolicy = z.infer<typeof insertCompanyOutreachPolicySchema>;
+export type CompanyOutreachPolicy = typeof companyOutreachPolicies.$inferSelect;
+
+/**
+ * freight_opportunities — one open load OR small grouped lane-building sweep.
+ */
+export const freightOpportunities = pgTable("freight_opportunities", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  mode: text("mode").notNull(),
+  recurringLaneId: varchar("recurring_lane_id").references(() => recurringLanes.id, { onDelete: "set null" }),
+  geographicLanePatternId: varchar("geographic_lane_pattern_id").references(() => geographicLanePatterns.id, { onDelete: "set null" }),
+  origin: text("origin").notNull(),
+  originState: text("origin_state"),
+  destination: text("destination").notNull(),
+  destinationState: text("destination_state"),
+  equipmentType: text("equipment_type"),
+  pickupWindowStart: text("pickup_window_start").notNull(),
+  pickupWindowEnd: text("pickup_window_end").notNull(),
+  loadCount: integer("load_count").notNull().default(1),
+  sourceRef: jsonb("source_ref"),
+  urgencyScore: integer("urgency_score").notNull().default(50),
+  confidenceFlag: text("confidence_flag").notNull().default("normal"),
+  status: text("status").notNull().default("new"),
+  policySnapshot: jsonb("policy_snapshot"),
+  generatedAt: timestamp("generated_at").defaultNow().notNull(),
+  expiresAt: timestamp("expires_at"),
+  createdById: varchar("created_by_id").references(() => users.id, { onDelete: "set null" }),
+  notes: text("notes"),
+}, (t) => ({
+  orgStatusUrgencyIdx: index("freight_opps_org_status_urgency_idx").on(t.orgId, t.status, t.urgencyScore),
+  companyPickupIdx: index("freight_opps_company_pickup_idx").on(t.companyId, t.pickupWindowStart),
+  recurringLaneIdx: index("freight_opps_recurring_lane_idx").on(t.recurringLaneId),
+}));
+export const insertFreightOpportunitySchema = createInsertSchema(freightOpportunities)
+  .omit({ id: true, generatedAt: true })
+  .extend({
+    mode: z.enum(["exact_load", "lane_building"]),
+    status: z.enum(FREIGHT_OPPORTUNITY_STATUSES).optional(),
+    confidenceFlag: z.enum(FREIGHT_OPPORTUNITY_CONFIDENCE).optional(),
+  });
+export type InsertFreightOpportunity = z.infer<typeof insertFreightOpportunitySchema>;
+export type FreightOpportunity = typeof freightOpportunities.$inferSelect;
+
+/**
+ * freight_opportunity_carriers — frozen ranked shortlist for an opportunity.
+ */
+export const freightOpportunityCarriers = pgTable("freight_opportunity_carriers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  opportunityId: varchar("opportunity_id").notNull().references(() => freightOpportunities.id, { onDelete: "cascade" }),
+  carrierId: varchar("carrier_id").notNull().references(() => carriers.id, { onDelete: "cascade" }),
+  rank: integer("rank"),
+  bucket: text("bucket"),
+  fitScore: integer("fit_score").notNull().default(0),
+  historyMatch: text("history_match").notNull().default("none"),
+  explanation: text("explanation"),
+  explanationStructured: jsonb("explanation_structured"),
+  responsivenessSnapshot: jsonb("responsiveness_snapshot"),
+  excludedReason: text("excluded_reason"),
+  outreachLogId: varchar("outreach_log_id").references(() => carrierOutreachLogs.id, { onDelete: "set null" }),
+  lastResponseId: varchar("last_response_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  oppRankIdx: index("freight_opp_carriers_opp_rank_idx").on(t.opportunityId, t.rank),
+  carrierCreatedIdx: index("freight_opp_carriers_carrier_created_idx").on(t.carrierId, t.createdAt),
+}));
+export const insertFreightOpportunityCarrierSchema = createInsertSchema(freightOpportunityCarriers)
+  .omit({ id: true, createdAt: true });
+export type InsertFreightOpportunityCarrier = z.infer<typeof insertFreightOpportunityCarrierSchema>;
+export type FreightOpportunityCarrier = typeof freightOpportunityCarriers.$inferSelect;
+
+/**
+ * freight_opportunity_responses — outcome-of-outreach (separate from carrier-truth signals).
+ */
+export const freightOpportunityResponses = pgTable("freight_opportunity_responses", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  opportunityCarrierId: varchar("opportunity_carrier_id").notNull().references(() => freightOpportunityCarriers.id, { onDelete: "cascade" }),
+  outcome: text("outcome").notNull(),
+  quotedRate: decimal("quoted_rate", { precision: 12, scale: 2 }),
+  replySource: text("reply_source").notNull().default("manual_log"),
+  emailMessageId: varchar("email_message_id").references(() => emailMessages.id, { onDelete: "set null" }),
+  notes: text("notes"),
+  recordedById: varchar("recorded_by_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertFreightOpportunityResponseSchema = createInsertSchema(freightOpportunityResponses)
+  .omit({ id: true, createdAt: true })
+  .extend({
+    outcome: z.enum(FREIGHT_OPPORTUNITY_RESPONSE_OUTCOMES),
+    replySource: z.enum(["email", "manual_log", "phone_followup"]).optional(),
+  });
+export type InsertFreightOpportunityResponse = z.infer<typeof insertFreightOpportunityResponseSchema>;
+export type FreightOpportunityResponse = typeof freightOpportunityResponses.$inferSelect;
+
+/**
+ * freight_opportunity_audit — append-only event log per opportunity.
+ */
+export const freightOpportunityAudit = pgTable("freight_opportunity_audit", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  opportunityId: varchar("opportunity_id").notNull().references(() => freightOpportunities.id, { onDelete: "cascade" }),
+  eventType: text("event_type").notNull(),
+  actorUserId: varchar("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+  payload: jsonb("payload"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  oppCreatedIdx: index("freight_opp_audit_opp_created_idx").on(t.opportunityId, t.createdAt),
+}));
+export const insertFreightOpportunityAuditSchema = createInsertSchema(freightOpportunityAudit)
+  .omit({ id: true, createdAt: true })
+  .extend({
+    eventType: z.enum(FREIGHT_OPPORTUNITY_AUDIT_EVENTS),
+  });
+export type InsertFreightOpportunityAudit = z.infer<typeof insertFreightOpportunityAuditSchema>;
+export type FreightOpportunityAudit = typeof freightOpportunityAudit.$inferSelect;
+
