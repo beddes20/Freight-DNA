@@ -389,6 +389,18 @@ export function getWebexAccessTokenExpiresAt(): number | null {
   return _cachedToken?.expiresAt ?? null;
 }
 
+export interface WebexDevice {
+  id: string;
+  name: string;
+  type: string;
+  mac?: string;
+  personId?: string;
+  orgId?: string;
+  ipAddress?: string;
+  product?: string;
+  software?: string;
+}
+
 export interface WebexCallRecord {
   id: string;
   callingNumber: string;
@@ -409,6 +421,7 @@ export interface WebexCallRecord {
   webexPersonId?: string;
   /** Webex email of the user that placed/received this call (when available). */
   webexUserEmail?: string;
+  // ── Device metadata fields (HEAD) ──────────────────────────────────
   /** Raw Webex client type — e.g., WXC_CLIENT, WXC_DEVICE, WXC_THIRD_PARTY. */
   clientType?: string;
   /** Raw Webex OS type — e.g., IOS, ANDROID, WINDOWS, MAC, LINUX, OTHER. */
@@ -421,21 +434,116 @@ export interface WebexCallRecord {
   headsetModel?: string;
   /** Headset/accessory vendor name when reported. */
   headsetMake?: string;
+  // ── Detailed analytics fields (Task #315) ────────────────────────────
+  /** Talk time in seconds (time with both legs off-hold). Optional: only
+   *  present when the Webex response exposes talk-time analytics fields. */
+  talkTimeSeconds?: number;
+  /** Total seconds this call was put on hold by the rep. */
+  holdTimeSeconds?: number;
+  /** "Dead air" / silence window in seconds, when Webex exposes it. */
+  silenceSeconds?: number;
+  /** Ring duration before answer (in seconds). */
+  ringTimeSeconds?: number;
+  /** Mean Opinion Score (1.0–5.0 scale) when Webex reports it. */
+  mosScore?: number;
+  /** Average jitter in milliseconds. */
+  jitterMs?: number;
+  /** Packet loss percentage (0–100). */
+  packetLossPct?: number;
 }
 
-export interface WebexDevice {
-  id: string;
-  displayName: string;
-  product: string | null;
-  productType: string | null;
-  type: string | null;
-  mac: string | null;
-  serial: string | null;
-  personId: string | null;
-  workspaceId: string | null;
-  connectionStatus: string | null;
-  lastConnectionAt: string | null;
-  created: string | null;
+/**
+ * Best-effort extraction of detailed call-quality/talk-time metrics from
+ * any of the shapes Webex returns across CDR, detailed-call, and analytics
+ * responses. All fields are optional — missing metrics stay undefined and
+ * downstream code is expected to degrade gracefully.
+ */
+function extractCallAnalyticsFromItem(item: any): {
+  talkTimeSeconds?: number;
+  holdTimeSeconds?: number;
+  silenceSeconds?: number;
+  ringTimeSeconds?: number;
+  mosScore?: number;
+  jitterMs?: number;
+  packetLossPct?: number;
+} {
+  const num = (v: any): number | undefined => {
+    if (v === null || v === undefined || v === "") return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const quality = item?.callQuality ?? item?.quality ?? item?.mediaQuality ?? {};
+  const talk = num(item.talkTime ?? item.talkTimeSeconds ?? item.talkDuration ?? item.conversationDuration);
+  const hold = num(item.holdTime ?? item.holdTimeSeconds ?? item.holdDuration ?? item.totalHoldTime);
+  const silence = num(item.silenceTime ?? item.silenceSeconds ?? item.deadAir ?? item.deadAirSeconds);
+  const ring = num(item.ringTime ?? item.ringTimeSeconds ?? item.ringDuration ?? item.alertingDuration);
+  const mos = num(item.averageMOS ?? item.avgMos ?? item.mos ?? quality.averageMos ?? quality.mos);
+  const jitter = num(item.averageJitter ?? item.avgJitter ?? item.jitter ?? quality.averageJitter ?? quality.jitter);
+  const packetLoss = num(
+    item.packetLoss ?? item.packetLossPercent ?? item.averagePacketLoss ?? quality.packetLoss ?? quality.averagePacketLoss,
+  );
+  return {
+    talkTimeSeconds: talk !== undefined ? Math.round(talk) : undefined,
+    holdTimeSeconds: hold !== undefined ? Math.round(hold) : undefined,
+    silenceSeconds: silence !== undefined ? Math.round(silence) : undefined,
+    ringTimeSeconds: ring !== undefined ? Math.round(ring) : undefined,
+    mosScore: mos,
+    jitterMs: jitter,
+    packetLossPct: packetLoss,
+  };
+}
+
+/**
+ * Compute a coarse letter grade from raw quality metrics. Returns null when
+ * no quality signal is available so the UI can show "—".
+ *
+ * Thresholds roughly follow Webex Control Hub's quality buckets:
+ *   A: MOS ≥ 4.2, jitter ≤ 30ms, loss ≤ 1%
+ *   B: MOS ≥ 3.8, jitter ≤ 50ms, loss ≤ 2%
+ *   C: MOS ≥ 3.3, jitter ≤ 80ms, loss ≤ 4%
+ *   D: anything worse
+ */
+export function gradeCallQuality(metrics: {
+  mosScore?: number | null;
+  jitterMs?: number | null;
+  packetLossPct?: number | null;
+}): string | null {
+  const { mosScore, jitterMs, packetLossPct } = metrics;
+  if (mosScore == null && jitterMs == null && packetLossPct == null) return null;
+  const mos = mosScore ?? 4.3;
+  const jit = jitterMs ?? 0;
+  const loss = packetLossPct ?? 0;
+  if (mos >= 4.2 && jit <= 30 && loss <= 1) return "A";
+  if (mos >= 3.8 && jit <= 50 && loss <= 2) return "B";
+  if (mos >= 3.3 && jit <= 80 && loss <= 4) return "C";
+  return "D";
+}
+
+/**
+ * Fetch detailed per-call analytics for a specific Webex call id.
+ * Used as a best-effort enrichment; returns null if the detail endpoint
+ * isn't available (e.g. missing analytics scope on the org token).
+ */
+export async function fetchCallDetail(callId: string, accessToken?: string): Promise<{
+  talkTimeSeconds?: number;
+  holdTimeSeconds?: number;
+  silenceSeconds?: number;
+  ringTimeSeconds?: number;
+  mosScore?: number;
+  jitterMs?: number;
+  packetLossPct?: number;
+} | null> {
+  if (!callId) return null;
+  const token = accessToken ?? (await getWebexAccessToken());
+  const url = `https://webexapis.com/v1/telephony/calls/${encodeURIComponent(callId)}`;
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return extractCallAnalyticsFromItem(data);
+  } catch {
+    return null;
+  }
 }
 
 export interface WebexPerson {
@@ -533,12 +641,15 @@ export async function fetchCallHistory(
         voicemailLeft: item.voicemailLeft === true,
         webexPersonId: item.userId ?? item.personId ?? item.user?.id ?? undefined,
         webexUserEmail: item.userEmail ?? item.user?.email ?? undefined,
-        clientType: item.clientType ?? item.deviceType ?? undefined,
-        osType: item.osType ?? item.clientOsType ?? undefined,
-        deviceMac: item.deviceMac ?? item.deviceMacAddress ?? undefined,
+        // Device metadata (HEAD)
+        clientType: item.clientType ?? item.deviceType ?? item.device?.type ?? undefined,
+        osType: item.osType ?? item.clientOsType ?? item.device?.os ?? undefined,
+        deviceMac: item.deviceMac ?? item.deviceMacAddress ?? item.device?.mac ?? undefined,
         deviceModel: item.deviceModel ?? item.deviceProduct ?? undefined,
         headsetModel: item.headsetModel ?? item.accessoryModel ?? undefined,
         headsetMake: item.headsetMake ?? item.accessoryMake ?? item.accessoryType ?? undefined,
+        // Analytics (Task #315)
+        ...extractCallAnalyticsFromItem(item),
       });
     }
 
@@ -745,3 +856,4 @@ export function buildWebexCallDeepLink(phoneNumber: string): string {
   const cleaned = phoneNumber.replace(/[^0-9+]/g, "");
   return `webextel://${cleaned}`;
 }
+

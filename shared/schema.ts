@@ -4019,3 +4019,51 @@ export const insertLoadFactHistorySchema = createInsertSchema(loadFactHistory)
   .omit({ id: true, changedAt: true });
 export type InsertLoadFactHistory = z.infer<typeof insertLoadFactHistorySchema>;
 export type LoadFactHistory = typeof loadFactHistory.$inferSelect;
+
+// ─── Webex Call Quality Analytics (Task #315) ────────────────────────────
+// Per-call quality, talk-time, and activity metrics pulled from the Webex
+// detailed call history API (analytics scope). One row per Webex CDR id so
+// the rest of the app can aggregate scorecards without re-hitting Webex.
+export const webexCallAnalytics = pgTable(
+  "webex_call_analytics",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    callId: text("call_id").notNull(),
+    userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
+    webexPersonId: text("webex_person_id"),
+    webexUserEmail: text("webex_user_email"),
+    direction: text("direction"),
+    remoteNumber: text("remote_number"),
+    startTime: timestamp("start_time"),
+    durationSeconds: integer("duration_seconds").notNull().default(0),
+    answered: boolean("answered").notNull().default(false),
+    talkTimeSeconds: integer("talk_time_seconds").notNull().default(0),
+    holdTimeSeconds: integer("hold_time_seconds").notNull().default(0),
+    silenceSeconds: integer("silence_seconds").notNull().default(0),
+    ringTimeSeconds: integer("ring_time_seconds").notNull().default(0),
+    mosScore: decimal("mos_score", { precision: 4, scale: 2 }),
+    jitterMs: decimal("jitter_ms", { precision: 8, scale: 2 }),
+    packetLossPct: decimal("packet_loss_pct", { precision: 6, scale: 3 }),
+    qualityGrade: text("quality_grade"),
+    afterHours: boolean("after_hours").notNull().default(false),
+    companyId: varchar("company_id"),
+    contactId: varchar("contact_id"),
+    touchpointId: varchar("touchpoint_id"),
+    syncedAt: timestamp("synced_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("webex_analytics_org_call_idx").on(table.orgId, table.callId),
+    index("webex_analytics_user_time_idx").on(table.userId, table.startTime),
+    index("webex_analytics_org_time_idx").on(table.orgId, table.startTime),
+  ],
+);
+
+export const insertWebexCallAnalyticsSchema = createInsertSchema(webexCallAnalytics).omit({
+  id: true,
+  syncedAt: true,
+  updatedAt: true,
+});
+export type InsertWebexCallAnalytics = z.infer<typeof insertWebexCallAnalyticsSchema>;
+export type WebexCallAnalytics = typeof webexCallAnalytics.$inferSelect;

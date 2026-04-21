@@ -193,6 +193,9 @@ import {
   webexUserTokens,
   type WebexUserToken,
   type InsertWebexUserToken,
+  webexCallAnalytics,
+  type WebexCallAnalytics,
+  type InsertWebexCallAnalytics,
   apiResponseCache,
   type ApiResponseCache,
   accountReviews,
@@ -1035,6 +1038,10 @@ export interface IStorage {
   updateWebexUserToken(userId: string, updates: Partial<InsertWebexUserToken>): Promise<WebexUserToken | undefined>;
   deleteWebexUserToken(userId: string): Promise<boolean>;
   getWebexUserTokensNeedingReauthEmail(emailedBefore: Date): Promise<WebexUserToken[]>;
+
+  // Webex call-quality analytics (Task #315)
+  upsertWebexCallAnalytics(data: InsertWebexCallAnalytics): Promise<WebexCallAnalytics>;
+  getWebexCallAnalyticsByCallId(orgId: string, callId: string): Promise<WebexCallAnalytics | undefined>;
 
   // API cache methods (Task #231)
   getCachedApiResponse(key: string): Promise<ApiResponseCache | undefined>;
@@ -7041,6 +7048,28 @@ export class DatabaseStorage implements IStorage {
           ),
         ),
       );
+  }
+
+  // ── Webex Call Quality Analytics (Task #315) ───────────────────────────────
+
+  async getWebexCallAnalyticsByCallId(orgId: string, callId: string): Promise<WebexCallAnalytics | undefined> {
+    const [row] = await db.select().from(webexCallAnalytics)
+      .where(and(eq(webexCallAnalytics.orgId, orgId), eq(webexCallAnalytics.callId, callId)))
+      .limit(1);
+    return row;
+  }
+
+  async upsertWebexCallAnalytics(data: InsertWebexCallAnalytics): Promise<WebexCallAnalytics> {
+    const existing = await this.getWebexCallAnalyticsByCallId(data.orgId, data.callId);
+    if (existing) {
+      const [row] = await db.update(webexCallAnalytics)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(webexCallAnalytics.id, existing.id))
+        .returning();
+      return row;
+    }
+    const [row] = await db.insert(webexCallAnalytics).values(data).returning();
+    return row;
   }
 
   // ── API Response Cache (Task #231) ──────────────────────────────────────────

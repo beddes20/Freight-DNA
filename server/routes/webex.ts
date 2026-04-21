@@ -15,9 +15,11 @@ import {
   hasWebexTokens,
   webexNeedsReauth,
   fetchCallHistory,
+  fetchCallDetail,
   fetchWebexPeople,
   fetchPersonStatus,
   fetchCallRecording,
+  gradeCallQuality,
   phonesMatch,
   phoneMatchKey,
   buildWebexCallDeepLink,
@@ -117,6 +119,68 @@ function log(msg: string) {
 const presenceCache = new Map<string, { status: string; fetchedAt: number }>();
 const PRESENCE_CACHE_TTL = 60_000;
 
+/**
+ * Classify a call as "after hours" for quality/after-hours scorecards.
+ * Business hours are 7am–7pm local server time, Monday–Friday.
+ */
+function isAfterHoursCall(startIso: string): boolean {
+  if (!startIso) return false;
+  const d = new Date(startIso);
+  if (isNaN(d.getTime())) return false;
+  const hour = d.getHours();
+  const dow = d.getDay();
+  return dow === 0 || dow === 6 || hour < 7 || hour >= 19;
+}
+
+/**
+ * Persist a Webex CDR's quality/talk-time analytics. Runs on every sync
+ * pass (including for CDRs that already have a touchpoint) so first-run
+ * backfills and later analytics-scope enablement catch up historical rows
+ * without bloating the touchpoints table.
+ */
+async function persistCallAnalytics(
+  orgId: string,
+  record: WebexCallRecord,
+  attributedUserId: string | null,
+  matchedContact: { id: string; companyId: string | null } | null,
+): Promise<void> {
+  if (!record.id) return;
+  try {
+    const otherNumber = record.direction === "ORIGINATING" ? record.calledNumber : record.callingNumber;
+    const grade = gradeCallQuality({
+      mosScore: record.mosScore ?? null,
+      jitterMs: record.jitterMs ?? null,
+      packetLossPct: record.packetLossPct ?? null,
+    });
+    await storage.upsertWebexCallAnalytics({
+      orgId,
+      callId: record.id,
+      userId: attributedUserId,
+      webexPersonId: record.webexPersonId ?? null,
+      webexUserEmail: record.webexUserEmail ?? null,
+      direction: record.direction,
+      remoteNumber: otherNumber || null,
+      startTime: record.startTime ? new Date(record.startTime) : null,
+      durationSeconds: record.duration ?? 0,
+      answered: record.answered === true,
+      talkTimeSeconds: record.talkTimeSeconds ?? Math.max(0, (record.duration ?? 0) - (record.holdTimeSeconds ?? 0)),
+      holdTimeSeconds: record.holdTimeSeconds ?? 0,
+      silenceSeconds: record.silenceSeconds ?? 0,
+      ringTimeSeconds: record.ringTimeSeconds ?? 0,
+      mosScore: record.mosScore != null ? String(record.mosScore) : null,
+      jitterMs: record.jitterMs != null ? String(record.jitterMs) : null,
+      packetLossPct: record.packetLossPct != null ? String(record.packetLossPct) : null,
+      qualityGrade: grade,
+      afterHours: isAfterHoursCall(record.startTime),
+      companyId: matchedContact?.companyId || null,
+      contactId: matchedContact?.id || null,
+      touchpointId: null,
+    });
+  } catch (err) {
+    log(`persistCallAnalytics failed for CDR ${record.id}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function syncCallsForOrg(
   orgId: string,
   hoursBack: number,
@@ -197,11 +261,38 @@ async function syncCallsForOrg(
   const createdNbaCards: any[] = [];
 
   for (const record of records) {
-    if (existingCallIds.has(record.id)) continue;
-
-    const otherNumber = record.direction === "ORIGINATING"
+    // ── Analytics persistence (Task #315) ─────────────────────────────
+    // Resolve attribution up-front so we can store it alongside quality
+    // metrics regardless of whether the call already has a touchpoint.
+    const otherNumberEarly = record.direction === "ORIGINATING"
       ? record.calledNumber
       : record.callingNumber;
+    let earlyMatchedContact: (typeof allContacts[0]) | null = null;
+    if (otherNumberEarly) {
+      const keyEarly = phoneMatchKey(otherNumberEarly);
+      if (keyEarly.length >= 7) earlyMatchedContact = contactsByPhoneKey.get(keyEarly) ?? null;
+    }
+    let earlyAttributedUserId: string | null = defaultUserId;
+    if (opts?.forUser) {
+      earlyAttributedUserId = opts.forUser.userId;
+    } else {
+      try {
+        const resolved = await resolveInternalUserIdForCall(
+          orgId,
+          record.webexPersonId,
+          record.webexUserEmail,
+        );
+        earlyAttributedUserId = resolved.userId ?? defaultUserId;
+      } catch {
+        earlyAttributedUserId = defaultUserId;
+      }
+    }
+    // Fire-and-forget analytics upsert — don't block the main sync loop.
+    persistCallAnalytics(orgId, record, earlyAttributedUserId, earlyMatchedContact).catch(() => {});
+
+    if (existingCallIds.has(record.id)) continue;
+
+    const otherNumber = otherNumberEarly;
 
     // Resolve the remote party (customer/prospect) to a known CRM contact by
     // normalized phone number. This auto-attaches the synced call to the right
@@ -1591,6 +1682,276 @@ export function registerWebexRoutes(app: Express) {
     } catch (err) {
       log(`Presence batch error: ${err instanceof Error ? err.message : String(err)}`);
       res.json({ presenceMap: {}, configured: true });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Rep Call Quality Scorecards (Task #315)
+  // ─────────────────────────────────────────────────────────────────────
+
+  /**
+   * GET /api/webex/call-quality/scorecard
+   *
+   * Aggregated per-rep scorecard rollup over a trailing window.
+   * Query params:
+   *   days     — trailing window in days (default 30, max 90)
+   *   userId   — when provided, returns a single-rep rollup (permissions enforced upstream)
+   *
+   * Returns per-rep metrics (calls, connect rate, avg talk minutes, hold %,
+   * dead-air %, avg MOS, avg jitter, avg loss, after-hours %, grade mix) and
+   * flags the reps who need coaching attention.
+   */
+  app.get("/api/webex/call-quality/scorecard", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const daysRaw = parseInt(String(req.query.days ?? "30"), 10);
+      const days = Math.min(90, Math.max(1, Number.isFinite(daysRaw) ? daysRaw : 30));
+      const singleUserId = typeof req.query.userId === "string" && req.query.userId.length > 0
+        ? String(req.query.userId)
+        : null;
+
+      const params: any[] = [user.organizationId, days];
+      let userFilter = "";
+      if (singleUserId) {
+        params.push(singleUserId);
+        userFilter = ` AND a.user_id = $${params.length}`;
+      }
+
+      const rollupSql = `
+        SELECT
+          a.user_id                                                AS user_id,
+          u.name                                           AS rep_name,
+          u.username                                               AS username,
+          COUNT(*)::int                                            AS total_calls,
+          SUM(CASE WHEN a.answered THEN 1 ELSE 0 END)::int         AS connected_calls,
+          SUM(CASE WHEN a.answered AND a.direction = 'ORIGINATING' THEN 1 ELSE 0 END)::int AS outbound_connected,
+          SUM(CASE WHEN a.direction = 'ORIGINATING' THEN 1 ELSE 0 END)::int AS outbound_calls,
+          SUM(CASE WHEN a.after_hours THEN 1 ELSE 0 END)::int      AS after_hours_calls,
+          COALESCE(SUM(a.talk_time_seconds), 0)::int               AS total_talk_seconds,
+          COALESCE(SUM(a.hold_time_seconds), 0)::int               AS total_hold_seconds,
+          COALESCE(SUM(a.silence_seconds), 0)::int                 AS total_silence_seconds,
+          COALESCE(AVG(NULLIF(a.mos_score, 0)), 0)::float          AS avg_mos,
+          COALESCE(AVG(NULLIF(a.jitter_ms, 0)), 0)::float          AS avg_jitter_ms,
+          COALESCE(AVG(NULLIF(a.packet_loss_pct, 0)), 0)::float    AS avg_packet_loss_pct,
+          SUM(CASE WHEN a.quality_grade = 'A' THEN 1 ELSE 0 END)::int AS grade_a,
+          SUM(CASE WHEN a.quality_grade = 'B' THEN 1 ELSE 0 END)::int AS grade_b,
+          SUM(CASE WHEN a.quality_grade = 'C' THEN 1 ELSE 0 END)::int AS grade_c,
+          SUM(CASE WHEN a.quality_grade = 'D' THEN 1 ELSE 0 END)::int AS grade_d,
+          COUNT(DISTINCT a.start_time::date)::int                  AS active_days
+        FROM webex_call_analytics a
+        LEFT JOIN users u ON u.id = a.user_id
+        WHERE a.org_id = $1
+          AND a.start_time >= NOW() - ($2::int || ' days')::interval
+          AND a.user_id IS NOT NULL
+          ${userFilter}
+        GROUP BY a.user_id, u.name, u.username
+        ORDER BY total_calls DESC
+      `;
+
+      const { rows } = await storage.pool.query(rollupSql, params);
+
+      const reps = rows.map((r: any) => {
+        const total = Number(r.total_calls) || 0;
+        const connected = Number(r.connected_calls) || 0;
+        const outbound = Number(r.outbound_calls) || 0;
+        const outboundConnected = Number(r.outbound_connected) || 0;
+        const talk = Number(r.total_talk_seconds) || 0;
+        const hold = Number(r.total_hold_seconds) || 0;
+        const silence = Number(r.total_silence_seconds) || 0;
+        const activeDays = Number(r.active_days) || 0;
+        const connectRate = total > 0 ? connected / total : 0;
+        const outboundConnectRate = outbound > 0 ? outboundConnected / outbound : 0;
+        const avgTalkSecondsPerConnected = connected > 0 ? talk / connected : 0;
+        const holdRatio = talk + hold > 0 ? hold / (talk + hold) : 0;
+        const deadAirRatio = talk > 0 ? silence / talk : 0;
+        const callsPerDay = activeDays > 0 ? total / activeDays : 0;
+        const afterHoursRate = total > 0 ? Number(r.after_hours_calls) / total : 0;
+
+        // Weighted attention score: more calls + lower connect + low talk-time +
+        // high hold/dead-air + poor quality grade bump the score. Higher = more
+        // coaching attention.
+        const qualityD = Number(r.grade_d) || 0;
+        const qualityC = Number(r.grade_c) || 0;
+        const qualityBadRate = total > 0 ? (qualityC + 2 * qualityD) / total : 0;
+        const attentionScore =
+          (1 - outboundConnectRate) * 30 +
+          Math.max(0, 120 - avgTalkSecondsPerConnected) / 120 * 20 +
+          holdRatio * 15 +
+          deadAirRatio * 15 +
+          qualityBadRate * 20;
+
+        return {
+          userId: r.user_id,
+          repName: r.rep_name || r.username || "Unknown",
+          totalCalls: total,
+          connectedCalls: connected,
+          outboundCalls: outbound,
+          outboundConnectedCalls: outboundConnected,
+          connectRate,
+          outboundConnectRate,
+          avgTalkSecondsPerConnected,
+          totalTalkSeconds: talk,
+          totalHoldSeconds: hold,
+          totalSilenceSeconds: silence,
+          holdRatio,
+          deadAirRatio,
+          callsPerDay,
+          afterHoursRate,
+          avgMos: Number(r.avg_mos) || null,
+          avgJitterMs: Number(r.avg_jitter_ms) || null,
+          avgPacketLossPct: Number(r.avg_packet_loss_pct) || null,
+          gradeMix: {
+            A: Number(r.grade_a) || 0,
+            B: Number(r.grade_b) || 0,
+            C: Number(r.grade_c) || 0,
+            D: Number(r.grade_d) || 0,
+          },
+          activeDays,
+          attentionScore: Math.round(attentionScore * 10) / 10,
+        };
+      });
+
+      reps.sort((a, b) => b.attentionScore - a.attentionScore);
+
+      // Team rollup
+      const teamTotals = reps.reduce(
+        (acc, r) => {
+          acc.totalCalls += r.totalCalls;
+          acc.connectedCalls += r.connectedCalls;
+          acc.outboundCalls += r.outboundCalls;
+          acc.outboundConnectedCalls += r.outboundConnectedCalls;
+          acc.totalTalkSeconds += r.totalTalkSeconds;
+          acc.totalHoldSeconds += r.totalHoldSeconds;
+          acc.totalSilenceSeconds += r.totalSilenceSeconds;
+          acc.afterHoursCalls += Math.round(r.afterHoursRate * r.totalCalls);
+          return acc;
+        },
+        {
+          totalCalls: 0,
+          connectedCalls: 0,
+          outboundCalls: 0,
+          outboundConnectedCalls: 0,
+          totalTalkSeconds: 0,
+          totalHoldSeconds: 0,
+          totalSilenceSeconds: 0,
+          afterHoursCalls: 0,
+        },
+      );
+
+      const mosVals = reps.map(r => r.avgMos).filter((v): v is number => v != null && v > 0);
+      const jitterVals = reps.map(r => r.avgJitterMs).filter((v): v is number => v != null && v > 0);
+      const lossVals = reps.map(r => r.avgPacketLossPct).filter((v): v is number => v != null && v >= 0);
+
+      res.json({
+        days,
+        team: {
+          ...teamTotals,
+          connectRate: teamTotals.totalCalls > 0 ? teamTotals.connectedCalls / teamTotals.totalCalls : 0,
+          outboundConnectRate: teamTotals.outboundCalls > 0 ? teamTotals.outboundConnectedCalls / teamTotals.outboundCalls : 0,
+          avgMos: mosVals.length ? mosVals.reduce((a, b) => a + b, 0) / mosVals.length : null,
+          avgJitterMs: jitterVals.length ? jitterVals.reduce((a, b) => a + b, 0) / jitterVals.length : null,
+          avgPacketLossPct: lossVals.length ? lossVals.reduce((a, b) => a + b, 0) / lossVals.length : null,
+          repCount: reps.length,
+        },
+        reps,
+      });
+    } catch (err) {
+      log(`Call quality scorecard error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: "Failed to build call quality scorecard" });
+    }
+  });
+
+  /**
+   * GET /api/webex/call-quality/calls
+   *
+   * Drill-in call list for a given rep (or team) over the same trailing
+   * window. Used by the Exec Analytics "Call Quality" panel to jump from a
+   * row to the underlying calls.
+   */
+  app.get("/api/webex/call-quality/calls", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const daysRaw = parseInt(String(req.query.days ?? "30"), 10);
+      const days = Math.min(90, Math.max(1, Number.isFinite(daysRaw) ? daysRaw : 30));
+      const userIdFilter = typeof req.query.userId === "string" ? String(req.query.userId) : null;
+      const gradeFilter = typeof req.query.grade === "string" ? String(req.query.grade).toUpperCase() : null;
+      const limitRaw = parseInt(String(req.query.limit ?? "200"), 10);
+      const limit = Math.min(500, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 200));
+
+      const params: any[] = [user.organizationId, days];
+      let sql = `
+        SELECT a.*, u.name AS rep_name, c.name AS contact_name, co.name AS company_name
+        FROM webex_call_analytics a
+        LEFT JOIN users u ON u.id = a.user_id
+        LEFT JOIN contacts c ON c.id = a.contact_id
+        LEFT JOIN companies co ON co.id = a.company_id
+        WHERE a.org_id = $1
+          AND a.start_time >= NOW() - ($2::int || ' days')::interval
+      `;
+      if (userIdFilter) {
+        params.push(userIdFilter);
+        sql += ` AND a.user_id = $${params.length}`;
+      }
+      if (gradeFilter && ["A", "B", "C", "D"].includes(gradeFilter)) {
+        params.push(gradeFilter);
+        sql += ` AND a.quality_grade = $${params.length}`;
+      }
+      sql += ` ORDER BY a.start_time DESC LIMIT $${params.length + 1}`;
+      params.push(limit);
+
+      const { rows } = await storage.pool.query(sql, params);
+      res.json({ calls: rows, days, total: rows.length });
+    } catch (err) {
+      log(`Call quality drill-in error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: "Failed to load call list" });
+    }
+  });
+
+  /**
+   * POST /api/webex/call-quality/backfill
+   *
+   * Admin-triggered backfill that hydrates the `webex_call_analytics` table
+   * with up to 90 days of history. Idempotent — safe to re-run; existing
+   * rows are upserted.
+   */
+  app.post("/api/webex/call-quality/backfill", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (user.role !== "admin" && user.role !== "owner") {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const daysRaw = parseInt(String((req.body as any)?.days ?? "90"), 10);
+      const days = Math.min(90, Math.max(1, Number.isFinite(daysRaw) ? daysRaw : 90));
+
+      if (!hasWebexTokens()) {
+        return res.status(400).json({ error: "Webex is not authorized. Connect Webex first." });
+      }
+
+      // Walk backward in 24-hour chunks to stay under the max=50 page cap
+      // and so partial failures don't lose everything. syncCallsForOrg
+      // already handles analytics persistence for every record.
+      let synced = 0;
+      const orgId = user.organizationId;
+      const nowMs = Date.now();
+      for (let d = 0; d < days; d++) {
+        const endMs = nowMs - d * 24 * 3600 * 1000;
+        try {
+          const result = await syncCallsForOrg(orgId, 24, endMs);
+          synced += result.touchpoints.length;
+        } catch (e) {
+          log(`Backfill day offset=${d} failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+
+      res.json({ ok: true, days, newTouchpoints: synced });
+    } catch (err) {
+      log(`Call quality backfill error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: "Backfill failed" });
     }
   });
 }

@@ -3457,4 +3457,49 @@ export async function runMigrations() {
   } finally {
     clientPerf272.release();
   }
+
+  // ── Webex Call Quality Analytics (Task #315) ──
+  // Per-call quality and talk-time metrics pulled from Webex detailed call
+  // history so Rep Call Quality Scorecards can aggregate without re-hitting
+  // Webex. Keyed by (org_id, call_id) for idempotent backfills.
+  const clientWca = await pool.connect();
+  try {
+    await clientWca.query(`
+      CREATE TABLE IF NOT EXISTS webex_call_analytics (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        call_id text NOT NULL,
+        user_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        webex_person_id text,
+        webex_user_email text,
+        direction text,
+        remote_number text,
+        start_time timestamp,
+        duration_seconds integer NOT NULL DEFAULT 0,
+        answered boolean NOT NULL DEFAULT false,
+        talk_time_seconds integer NOT NULL DEFAULT 0,
+        hold_time_seconds integer NOT NULL DEFAULT 0,
+        silence_seconds integer NOT NULL DEFAULT 0,
+        ring_time_seconds integer NOT NULL DEFAULT 0,
+        mos_score numeric(4,2),
+        jitter_ms numeric(8,2),
+        packet_loss_pct numeric(6,3),
+        quality_grade text,
+        after_hours boolean NOT NULL DEFAULT false,
+        company_id varchar,
+        contact_id varchar,
+        touchpoint_id varchar,
+        synced_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await clientWca.query(`CREATE UNIQUE INDEX IF NOT EXISTS webex_analytics_org_call_idx ON webex_call_analytics(org_id, call_id)`);
+    await clientWca.query(`CREATE INDEX IF NOT EXISTS webex_analytics_user_time_idx ON webex_call_analytics(user_id, start_time)`);
+    await clientWca.query(`CREATE INDEX IF NOT EXISTS webex_analytics_org_time_idx ON webex_call_analytics(org_id, start_time)`);
+    console.log("[migrations] webex_call_analytics table ensured (Task #315)");
+  } catch (err) {
+    console.error("[migrations] webex_call_analytics migration error:", err);
+  } finally {
+    clientWca.release();
+  }
 }

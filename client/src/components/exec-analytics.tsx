@@ -14,6 +14,7 @@ import {
   PROSPECT_LOST_REASON_LABELS,
   type ProspectStage,
 } from "@shared/schema";
+import { CallQualityPanel } from "@/components/call-quality-scorecard";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -819,6 +820,8 @@ export function ExecAnalyticsDashboard() {
           </div>
         </Card>
       )}
+
+      <CallQualityPanel />
     </div>
   );
 }
