@@ -547,25 +547,26 @@ async function runImportFromWorkbook(
     }
 
     if (existingOpp) {
-      // Material fingerprint = the fields a manager actually approved against.
-      // If none of these changed, preserve the prior approval so reps don't
-      // wait for re-approval every morning on identical loads. If any changed
-      // (window slip, equipment swap, load count change) we clear approval and
-      // record exactly what changed in the audit trail.
+      // Material fingerprint = fields a manager actually approved against.
+      // Pickup window is intentionally EXCLUDED here: it's already part of
+      // stableKey (so re-imports of the identical row can't disagree on it),
+      // and a soft-merge across a window slip is the same load shifted by a
+      // day — outreach + approval should carry forward (per Tier 1 spec).
+      // Only true content changes (equipment swap, load count change) reset
+      // approval.
       const materialChanges: Record<string, { from: unknown; to: unknown }> = {};
-      if (existingOpp.pickupWindowStart !== load.pickupWindowStart) {
-        materialChanges.pickupWindowStart = { from: existingOpp.pickupWindowStart, to: load.pickupWindowStart };
-      }
-      if (existingOpp.pickupWindowEnd !== load.pickupWindowEnd) {
-        materialChanges.pickupWindowEnd = { from: existingOpp.pickupWindowEnd, to: load.pickupWindowEnd };
-      }
       if ((existingOpp.equipmentType ?? null) !== (load.equipmentType ?? null)) {
         materialChanges.equipmentType = { from: existingOpp.equipmentType, to: load.equipmentType };
       }
       if (existingOpp.loadCount !== load.loadCount) {
         materialChanges.loadCount = { from: existingOpp.loadCount, to: load.loadCount };
       }
-      const materialChanged = Object.keys(materialChanges).length > 0 || !!softMergedFrom;
+      const materialChanged = Object.keys(materialChanges).length > 0;
+      // Track window movement separately for audit transparency even though
+      // it doesn't reset approval.
+      const windowMoved =
+        existingOpp.pickupWindowStart !== load.pickupWindowStart ||
+        existingOpp.pickupWindowEnd !== load.pickupWindowEnd;
 
       const previousApprovedAt = existingOpp.approvedAt;
       const previousApprovedBy = existingOpp.approvedById;
@@ -616,6 +617,24 @@ async function runImportFromWorkbook(
             }
           : { kind: "available_freight_reimport", fileName, stableKey: load.stableKey },
       });
+      // Soft-merge with no material change → emit a preserved-on-soft-merge
+      // audit unconditionally so traceability doesn't depend on whether the
+      // row was previously approved. (When there IS prior approval the same
+      // event also serves as the "approval carried forward" record.)
+      if (softMergedFrom && !materialChanged && !previousApprovedAt) {
+        await storage.appendFreightOpportunityAudit({
+          opportunityId: existingOpp.id,
+          eventType: "approved",
+          actorUserId,
+          payload: {
+            approved: false,
+            kind: "approval_preserved_on_soft_merge",
+            reason: "window_slip_merge_no_material_change_no_prior_approval",
+            previousWindow: { start: softMergedFrom.previousStart, end: softMergedFrom.previousEnd },
+            newWindow: { start: load.pickupWindowStart, end: load.pickupWindowEnd },
+          },
+        });
+      }
       if (previousApprovedAt) {
         if (materialChanged) {
           await storage.appendFreightOpportunityAudit({
@@ -625,21 +644,27 @@ async function runImportFromWorkbook(
             payload: {
               approved: false,
               kind: "approval_reset_on_reimport",
-              reason: softMergedFrom ? "window_slip_merge" : "material_fields_changed",
+              reason: "material_fields_changed",
               materialChanges,
               previousApprovedAt: previousApprovedAt instanceof Date ? previousApprovedAt.toISOString() : previousApprovedAt,
               previousApprovedById: previousApprovedBy,
             },
           });
         } else {
+          // Approval preserved. Use a distinct audit kind for soft-merges so
+          // managers can clearly trace "yesterday's approval carried into the
+          // window-shifted load" vs a plain idempotent re-import.
           await storage.appendFreightOpportunityAudit({
             opportunityId: existingOpp.id,
             eventType: "approved",
             actorUserId,
             payload: {
               approved: true,
-              kind: "approval_preserved_on_reimport",
-              reason: "material_fields_unchanged",
+              kind: softMergedFrom ? "approval_preserved_on_soft_merge" : "approval_preserved_on_reimport",
+              reason: softMergedFrom
+                ? "window_slip_merge_no_material_change"
+                : (windowMoved ? "window_within_same_stable_key" : "material_fields_unchanged"),
+              ...(softMergedFrom ? { previousWindow: { start: softMergedFrom.previousStart, end: softMergedFrom.previousEnd }, newWindow: { start: load.pickupWindowStart, end: load.pickupWindowEnd } } : {}),
             },
           });
         }
