@@ -12,10 +12,205 @@
 import type { Express, Request, Response } from "express";
 import { storage } from "../storage";
 import { requireAuth, getCurrentUser } from "../auth";
+import { cacheGet, cacheSet } from "../cache";
+import {
+  fetchResponsePairs,
+  summarizeBucket,
+  buildLeaderboard,
+  buildSlowestThreads,
+  buildTimeseries,
+  type Granularity,
+  type ResponsePair,
+} from "../services/emailResponseTimeAnalyticsService";
 
 export function registerEmailAnalyticsRoutes(app: Express): void {
 
   const ALLOWED_ROLES = ["admin", "director", "national_account_manager", "sales_director"];
+
+  // ─── Response Time Analytics (Task #414) ──────────────────────────────────
+  // Endpoints:
+  //   GET /api/analytics/email-response-time/kpis
+  //   GET /api/analytics/email-response-time/timeseries?granularity=day|week|month
+  //   GET /api/analytics/email-response-time/leaderboard
+  //   GET /api/analytics/email-response-time/slowest
+  // Common query params: start, end (ISO), repIds (comma-separated),
+  // accountId, businessHours (true|false, default true).
+
+  const RT_CACHE_TTL_MS = 5 * 60 * 1000;
+
+  function parseRtFilters(req: Request, orgId: string) {
+    const now = new Date();
+    const defaultStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const startStr = typeof req.query.start === "string" ? req.query.start : null;
+    const endStr = typeof req.query.end === "string" ? req.query.end : null;
+    const start = startStr ? new Date(startStr) : defaultStart;
+    const end = endStr ? new Date(endStr) : new Date(now.getTime() + 60_000);
+    const repIdsRaw = typeof req.query.repIds === "string" ? req.query.repIds : "";
+    const repIds = repIdsRaw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const accountId = typeof req.query.accountId === "string" && req.query.accountId.trim()
+      ? req.query.accountId.trim()
+      : undefined;
+    const businessHours = String(req.query.businessHours ?? "true").toLowerCase() !== "false";
+    return {
+      orgId,
+      start,
+      end,
+      repIds: repIds.length ? repIds : undefined,
+      accountId,
+      businessHours,
+    };
+  }
+
+  async function getCachedPairs(filters: ReturnType<typeof parseRtFilters>): Promise<ResponsePair[]> {
+    // Cache the *raw* pair set keyed only by inputs that affect the SQL query
+    // (org, range, repIds, accountId). Business-hours toggle does NOT change
+    // the SQL — it's applied in JS aggregation, so the same cache row serves
+    // both wall-clock and business-hours requests.
+    const cacheKey = `rt:pairs:${filters.orgId}:${filters.start.toISOString()}:${filters.end.toISOString()}:${(filters.repIds ?? []).join(",")}:${filters.accountId ?? ""}`;
+    const cached = cacheGet<ResponsePair[]>(cacheKey);
+    if (cached) {
+      return cached.map((p) => ({
+        ...p,
+        inboundAt: new Date(p.inboundAt as unknown as string),
+        outboundAt: p.outboundAt ? new Date(p.outboundAt as unknown as string) : null,
+      }));
+    }
+    const pairs = await fetchResponsePairs(filters);
+    cacheSet(cacheKey, pairs, RT_CACHE_TTL_MS);
+    return pairs;
+  }
+
+  function inRange(p: ResponsePair, start: Date, end: Date): boolean {
+    const t = p.inboundAt.getTime();
+    return t >= start.getTime() && t < end.getTime();
+  }
+
+  app.get("/api/analytics/email-response-time/kpis", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const orgId = user.organizationId;
+
+      // KPI windows are FIXED (today/7d/30d) and independent of the UI range
+      // selector — we always fetch the last 60 days so the "prior month" delta
+      // is computable. Only rep/account/businessHours filters apply.
+      const uiFilters = parseRtFilters(req, orgId);
+      const now = new Date();
+      const kpiStart = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+      const filters = {
+        ...uiFilters,
+        start: kpiStart,
+        end: new Date(now.getTime() + 60_000),
+      };
+      const pairs = await getCachedPairs(filters);
+      const biz = filters.businessHours;
+
+      const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0);
+      const dayPrevStart = new Date(dayStart.getTime() - 24 * 60 * 60 * 1000);
+
+      const weekStart = new Date(now); weekStart.setHours(0, 0, 0, 0);
+      weekStart.setDate(weekStart.getDate() - 7);
+      const weekPrevStart = new Date(weekStart.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+      const monthStart = new Date(now); monthStart.setHours(0, 0, 0, 0);
+      monthStart.setDate(monthStart.getDate() - 30);
+      const monthPrevStart = new Date(monthStart.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+      const today = summarizeBucket(pairs.filter(p => inRange(p, dayStart, now)), biz, "today", dayStart, now);
+      const todayPrev = summarizeBucket(pairs.filter(p => inRange(p, dayPrevStart, dayStart)), biz, "yesterday", dayPrevStart, dayStart);
+      const week = summarizeBucket(pairs.filter(p => inRange(p, weekStart, now)), biz, "week", weekStart, now);
+      const weekPrev = summarizeBucket(pairs.filter(p => inRange(p, weekPrevStart, weekStart)), biz, "prev_week", weekPrevStart, weekStart);
+      const month = summarizeBucket(pairs.filter(p => inRange(p, monthStart, now)), biz, "month", monthStart, now);
+      const monthPrev = summarizeBucket(pairs.filter(p => inRange(p, monthPrevStart, monthStart)), biz, "prev_month", monthPrevStart, monthStart);
+
+      res.json({
+        businessHours: biz,
+        today: { current: today, prior: todayPrev },
+        week: { current: week, prior: weekPrev },
+        month: { current: month, prior: monthPrev },
+      });
+    } catch (err) {
+      console.error("[email-response-time/kpis] error:", err);
+      res.status(500).json({ error: "Failed to load response time KPIs" });
+    }
+  });
+
+  app.get("/api/analytics/email-response-time/timeseries", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const orgId = user.organizationId;
+
+      const uiFilters = parseRtFilters(req, orgId);
+      const granularityRaw = typeof req.query.granularity === "string" ? req.query.granularity : "day";
+      const granularity: Granularity = (["day", "week", "month"] as const).includes(granularityRaw as Granularity)
+        ? (granularityRaw as Granularity)
+        : "day";
+
+      // Trend horizon is fixed by granularity per spec:
+      //   day → 30 days, week → 12 weeks, month → 12 months.
+      // The UI range selector does NOT apply to the trend chart.
+      const now = new Date();
+      const horizonDays = granularity === "day" ? 30 : granularity === "week" ? 84 : 365;
+      const start = new Date(now.getTime() - horizonDays * 24 * 60 * 60 * 1000);
+      const filters = {
+        ...uiFilters,
+        start,
+        end: new Date(now.getTime() + 60_000),
+      };
+
+      const pairs = await getCachedPairs(filters);
+      const points = buildTimeseries(pairs, filters.businessHours, granularity);
+
+      res.json({
+        granularity,
+        businessHours: filters.businessHours,
+        horizonDays,
+        points,
+      });
+    } catch (err) {
+      console.error("[email-response-time/timeseries] error:", err);
+      res.status(500).json({ error: "Failed to load response time timeseries" });
+    }
+  });
+
+  app.get("/api/analytics/email-response-time/leaderboard", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const orgId = user.organizationId;
+
+      const filters = parseRtFilters(req, orgId);
+      const pairs = await getCachedPairs(filters);
+      const rows = buildLeaderboard(pairs, filters.businessHours);
+
+      res.json({ businessHours: filters.businessHours, rows });
+    } catch (err) {
+      console.error("[email-response-time/leaderboard] error:", err);
+      res.status(500).json({ error: "Failed to load response time leaderboard" });
+    }
+  });
+
+  app.get("/api/analytics/email-response-time/slowest", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const orgId = user.organizationId;
+
+      const filters = parseRtFilters(req, orgId);
+      const pairs = await getCachedPairs(filters);
+      const limit = Math.min(50, Math.max(5, Number(req.query.limit) || 25));
+      const rows = buildSlowestThreads(pairs, filters.businessHours, new Date(), limit);
+
+      res.json({ businessHours: filters.businessHours, rows });
+    } catch (err) {
+      console.error("[email-response-time/slowest] error:", err);
+      res.status(500).json({ error: "Failed to load slowest threads" });
+    }
+  });
 
   app.get("/api/analytics/email-intelligence", requireAuth, async (req: Request, res: Response) => {
     try {

@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { ThreadDetailPanel, type ConversationThread } from "@/pages/conversations";
+import ResponseTimeTab from "@/components/email-intelligence/response-time-tab";
 
 interface SignalSummaryRow {
   intent_type: string;
@@ -514,6 +515,10 @@ export default function EmailIntelligencePage() {
                 <Badge variant="destructive" className="ml-1.5 h-4 px-1.5 text-[10px]">{urgencyUnresponded.length}</Badge>
               )}
             </TabsTrigger>
+            <TabsTrigger value="response" data-testid="tab-response-time">
+              <Clock className="w-3.5 h-3.5 mr-1.5" />
+              Response Time
+            </TabsTrigger>
             <TabsTrigger value="winloss" data-testid="tab-winloss">
               <TrendingUp className="w-3.5 h-3.5 mr-1.5" />
               Win/Loss Patterns
@@ -536,6 +541,11 @@ export default function EmailIntelligencePage() {
               )}
             </TabsTrigger>
           </TabsList>
+
+          {/* ── Response Time (Task #414) ─────────────────────────────────── */}
+          <TabsContent value="response" className="mt-0">
+            <ResponseTimeTab />
+          </TabsContent>
 
           {/* ── Urgency Tracker ───────────────────────────────────────────── */}
           <TabsContent value="urgency" className="mt-0">
