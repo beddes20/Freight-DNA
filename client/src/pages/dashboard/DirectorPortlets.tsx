@@ -14,6 +14,13 @@ import type { SafeUser, TeamActivity, RelationshipsMovedData, TrendingResponse, 
 import type { PortletType } from "@/components/dashboard-activity-sheet";
 import { SonarMarketPulsePortlet } from "@/components/sonar-market-pulse";
 import { TeamOverdueConversationsPortlet } from "@/components/team-overdue-conversations-portlet";
+import { NbaTeamRollupPortlet } from "@/components/NbaTeamRollupPortlet";
+import { NbaRulePerformancePanel } from "@/components/NbaRulePerformancePanel";
+
+function DirectorRulePerformanceWrapper() {
+  const [collapsed, setCollapsed] = useState(true);
+  return <NbaRulePerformancePanel collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} />;
+}
 
 // ── Rate Exposure Portlet ──────────────────────────────────────────────────────
 
@@ -211,6 +218,9 @@ interface DirectorPortletsProps {
   setLocation: (path: string) => void;
   teamOverdueCollapsed: boolean;
   setTeamOverdueCollapsed: (v: boolean) => void;
+  // Task #374
+  nbaRollupCollapsed: boolean;
+  onToggleNbaRollup: () => void;
 }
 
 export function DirectorPortlets({
@@ -228,11 +238,22 @@ export function DirectorPortlets({
   recentWinsCollapsed, setRecentWinsCollapsed,
   isVisible, getOrder, setActivePortlet, togglePortlet, setLocation,
   teamOverdueCollapsed, setTeamOverdueCollapsed,
+  nbaRollupCollapsed, onToggleNbaRollup,
 }: DirectorPortletsProps) {
   return (
     <>
       {/* ── Market Pulse ────────────────────────────────────────────────────── */}
       <SonarMarketPulsePortlet role="director" />
+
+      {/* ── Team NBA rollup (Task #374) — director inherits NAM portlet ─────── */}
+      <NbaTeamRollupPortlet
+        collapsed={nbaRollupCollapsed}
+        onToggle={onToggleNbaRollup}
+        setLocation={setLocation}
+      />
+
+      {/* ── NBA rule performance (Task #374) — engine learning visibility ───── */}
+      <DirectorRulePerformanceWrapper />
 
       {/* ── Team Overdue Conversations (Task #223) ────────────────────────────── */}
       <TeamOverdueConversationsPortlet

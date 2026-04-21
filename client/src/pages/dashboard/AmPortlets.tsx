@@ -9,6 +9,7 @@ import type { TrendingResponse, PersonalMetrics } from "./types";
 import type { PortletType } from "@/components/dashboard-activity-sheet";
 import { SonarMarketPulsePortlet } from "@/components/sonar-market-pulse";
 import { WaitingOnMePortlet } from "@/components/waiting-on-me-portlet";
+import { NbaImpactPanel } from "@/components/NbaImpactPanel";
 
 interface AmPortletsProps {
   setLocation: (path: string) => void;
@@ -27,6 +28,9 @@ interface AmPortletsProps {
   setActivePortlet: (v: { type: PortletType; personal: boolean; title: string }) => void;
   waitingOnMeCollapsed: boolean;
   setWaitingOnMeCollapsed: (v: boolean) => void;
+  // Task #374
+  nbaImpactCollapsed: boolean;
+  onToggleNbaImpact: () => void;
 }
 
 export function AmPortlets({
@@ -38,6 +42,7 @@ export function AmPortlets({
   personalMetricsCollapsed, onTogglePersonalMetrics,
   myGoals, todayStr, setActivePortlet,
   waitingOnMeCollapsed, setWaitingOnMeCollapsed,
+  nbaImpactCollapsed, onToggleNbaImpact,
 }: AmPortletsProps) {
   return (
     <>
@@ -50,6 +55,9 @@ export function AmPortlets({
         onToggle={() => setWaitingOnMeCollapsed(!waitingOnMeCollapsed)}
         setLocation={setLocation}
       />
+
+      {/* ── Your NBA impact (Task #374) ──────────────────────────────────────── */}
+      <NbaImpactPanel collapsed={nbaImpactCollapsed} onToggle={onToggleNbaImpact} />
 
       {/* ── Trending accounts ───────────────────────────────────────────────── */}
       <div className="grid gap-4 md:grid-cols-2" data-testid="am-trending-row">

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -142,6 +142,15 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
 
   const [showReassign, setShowReassign] = useState(false);
   const isLaneCapacityCard = card.ruleType === "recurring_lane_capacity";
+
+  // Task #374: fire view-event once per card render so the outcome loop
+  // can track fired → viewed → acted. Best-effort, silent on failure.
+  const viewedSent = useRef(false);
+  useEffect(() => {
+    if (viewedSent.current) return;
+    viewedSent.current = true;
+    apiRequest("POST", `/api/nba/cards/${card.id}/view`).catch(() => {});
+  }, [card.id]);
   const isPortfolioRole = ["admin", "director"].includes(currentUser?.role ?? "");
 
   const { data: teamMembersRaw = [] } = useQuery<TeamMember[]>({

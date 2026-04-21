@@ -4697,7 +4697,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
       const { userId } = req.params as Record<string, string>;
       const period = (req.body?.period as string) === "monthly" ? "monthly" : "weekly";
-      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
       if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
         return res.status(403).json({ error: "Access denied" });
       }
@@ -4720,7 +4720,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
-      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
       if (!managerRoles.includes(viewer.role)) return res.status(403).json({ error: "Access denied" });
 
       const allUsers = await storage.getUsers(req.session.organizationId!);
@@ -4754,7 +4754,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
-      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
       if (!managerRoles.includes(viewer.role)) return res.status(403).json({ error: "Access denied" });
 
       const period: "weekly" | "monthly" = req.body?.period === "weekly" ? "weekly" : "monthly";
@@ -4796,7 +4796,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
       const { userId } = req.params as Record<string, string>;
       const period = (req.query.period as string) === "monthly" ? "monthly" : "weekly";
-      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
       if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
         return res.status(403).json({ error: "Access denied" });
       }
@@ -4813,7 +4813,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
       const { userId } = req.params as Record<string, string>;
-      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
       if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
         return res.status(403).json({ error: "Access denied" });
       }
@@ -4839,7 +4839,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
       const { userId } = req.params as Record<string, string>;
-      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
       if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
         return res.status(403).json({ error: "Access denied" });
       }
@@ -6466,7 +6466,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!["admin", "director", "national_account_manager"].includes(user.role)) return res.status(403).json({ error: "Not authorized" });
+      if (!["admin", "director", "national_account_manager", "sales", "sales_director"].includes(user.role)) return res.status(403).json({ error: "Not authorized" });
       const { goal } = req.body;
       if (!goal || goal < 1 || goal > 50) return res.status(400).json({ error: "Goal must be between 1 and 50" });
       await storage.setSetting("streak_goal", String(goal));
@@ -7229,7 +7229,7 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
       if (!managerRoles.includes(user.role) && user.role !== "account_manager") {
         return res.status(403).json({ error: "Access denied" });
       }
@@ -9078,7 +9078,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role ?? "")) {
+      if (!["admin", "director", "national_account_manager", "sales", "sales_director"].includes(user.role ?? "")) {
         return res.status(403).json({ error: "Access denied" });
       }
 
@@ -9195,7 +9195,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role ?? "")) {
+      if (!["admin", "director", "national_account_manager", "sales", "sales_director"].includes(user.role ?? "")) {
         return res.status(403).json({ error: "Access denied" });
       }
 
@@ -9545,10 +9545,47 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
 
       const updated = await storage.resolveNbaCard(req.params.id, currentUser.id, updateData);
       if (!updated) return res.status(404).json({ error: "Card not found or not yours" });
+      // Task #374: lifecycle events — both the action-specific event and a
+      // generic "resolved" event so analytics can reason about resolution
+      // independent of the resolution kind (acted/dismissed/snoozed/alternate).
+      try {
+        await storage.recordNbaCardEvent({
+          cardId: updated.id,
+          orgId: updated.orgId,
+          userId: updated.userId,
+          eventType: action === "actioned" ? "acted" : action,
+          reason: action === "dismissed" ? (dismissReason ?? null) : null,
+          actorUserId: currentUser.id,
+          metadata: action === "snoozed" ? { snoozeUntil } : action === "alternate" ? { alternateActionNote } : null,
+        });
+        await storage.recordNbaCardEvent({
+          cardId: updated.id,
+          orgId: updated.orgId,
+          userId: updated.userId,
+          eventType: "resolved",
+          reason: action,
+          actorUserId: currentUser.id,
+          metadata: null,
+        });
+      } catch (e) { console.error("[nba/cards PATCH event]", e); }
       res.json(updated);
     } catch (err: any) {
       console.error("[nba/cards PATCH]", err?.message ?? err);
       res.status(500).json({ error: "Failed to resolve NBA card" });
+    }
+  });
+
+  // POST /api/nba/cards/:id/view — Task #374 mark a card as viewed by the rep
+  app.post("/api/nba/cards/:id/view", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const updated = await storage.markNbaCardViewed(req.params.id, currentUser.id, currentUser.organizationId);
+      if (!updated) return res.status(404).json({ error: "Card not found or not yours" });
+      res.json({ ok: true, firstViewedAt: updated.firstViewedAt });
+    } catch (err: any) {
+      console.error("[nba/cards/:id/view POST]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to record view" });
     }
   });
 
@@ -9559,19 +9596,146 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const { linkedCommitmentId, linkedTouchpointId, linkedTaskId, outcomeTypeLinked } = req.body;
       const now = new Date().toISOString();
+      // Linking an outcome implicitly resolves the card as "actioned" so it is
+      // (a) no longer visible in the rep's open queue and (b) eligible for the
+      // outcome classifier (which only scans non-visible statuses).
       const updateData: Record<string, unknown> = {
         outcomeLinkedAt: now,
         outcomeTypeLinked: outcomeTypeLinked ?? null,
         linkedCommitmentId: linkedCommitmentId ?? null,
         linkedTouchpointId: linkedTouchpointId ?? null,
         linkedTaskId: linkedTaskId ?? null,
+        status: "actioned",
+        resolutionAction: "link_outcome",
       };
       const updated = await storage.resolveNbaCard(req.params.id, currentUser.id, updateData);
       if (!updated) return res.status(404).json({ error: "Card not found or not yours" });
+      try {
+        // link-outcome implicitly resolves the card as "acted". Emit the same
+        // normalized event triple (acted + resolved + outcome_linked) the PATCH
+        // path emits so the lifecycle is uniform across all resolution paths.
+        await storage.recordNbaCardEvent({
+          cardId: updated.id,
+          orgId: updated.orgId,
+          userId: updated.userId,
+          eventType: "acted",
+          actorUserId: currentUser.id,
+          reason: "link_outcome",
+          metadata: null,
+        });
+        await storage.recordNbaCardEvent({
+          cardId: updated.id,
+          orgId: updated.orgId,
+          userId: updated.userId,
+          eventType: "resolved",
+          actorUserId: currentUser.id,
+          reason: "link_outcome",
+          metadata: null,
+        });
+        await storage.recordNbaCardEvent({
+          cardId: updated.id,
+          orgId: updated.orgId,
+          userId: updated.userId,
+          eventType: "outcome_linked",
+          actorUserId: currentUser.id,
+          metadata: { outcomeTypeLinked, linkedCommitmentId, linkedTouchpointId, linkedTaskId },
+        });
+      } catch (e) { console.error("[nba/cards/link-outcome event]", e); }
       res.json(updated);
     } catch (err: any) {
       console.error("[nba/cards/link-outcome POST]", err?.message ?? err);
       res.status(500).json({ error: "Failed to link outcome" });
+    }
+  });
+
+  // GET /api/nba/my-impact — Task #374 rep-facing "Your NBA impact" summary
+  app.get("/api/nba/my-impact", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      // Default to "this calendar month" (days elapsed since the 1st) per spec;
+      // callers can override with ?daysBack=N for an explicit rolling window.
+      const now = new Date();
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthDays = Math.max(1, Math.ceil((now.getTime() - startOfMonth.getTime()) / (24 * 60 * 60 * 1000)));
+      const daysBack = req.query.daysBack
+        ? Math.min(Number(req.query.daysBack), 90)
+        : monthDays;
+      const summary = await storage.getNbaImpactForUser(currentUser.id, currentUser.organizationId, daysBack);
+      res.json(summary);
+    } catch (err: any) {
+      console.error("[nba/my-impact GET]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to fetch NBA impact" });
+    }
+  });
+
+  // GET /api/nba/team-rollup — Task #374 NAM/Director team NBA rollup portlet
+  // Director scope = vertical (director → NAMs → AMs); NAM scope = direct AMs.
+  app.get("/api/nba/team-rollup", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { role, organizationId } = currentUser;
+      const allowed = ["admin", "director", "national_account_manager", "sales", "sales_director"];
+      if (!allowed.includes(role)) return res.status(403).json({ error: "Not authorized" });
+      const daysBack = Math.min(Number(req.query.daysBack ?? 30), 90);
+      const allUsers = await storage.getUsers(organizationId);
+      const directReports = allUsers.filter(u => u.managerId === currentUser.id);
+      let amIds: string[] = [];
+      if (role === "national_account_manager") {
+        amIds = directReports.filter(u => u.role === "account_manager").map(u => u.id);
+      } else {
+        // Director / admin: walk one more level
+        const namIds = directReports.map(u => u.id);
+        const ams = allUsers.filter(u => u.role === "account_manager"
+          && (namIds.includes(u.managerId ?? "") || u.managerId === currentUser.id));
+        amIds = ams.map(u => u.id);
+      }
+      const rollup = await storage.getNbaTeamRollup(amIds, organizationId, daysBack);
+      res.json(rollup);
+    } catch (err: any) {
+      console.error("[nba/team-rollup GET]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to fetch team rollup" });
+    }
+  });
+
+  // GET /api/nba/team-rollup/:repId/cards — Task #374 read-only drill-in into an
+  // AM's NBA feed for the rep's manager (NAM, director or admin in scope).
+  app.get("/api/nba/team-rollup/:repId/cards", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { role, organizationId } = currentUser;
+      const allowed = ["admin", "director", "national_account_manager", "sales", "sales_director"];
+      if (!allowed.includes(role)) return res.status(403).json({ error: "Not authorized" });
+      const repId = req.params.repId;
+      const allUsers = await storage.getUsers(organizationId);
+      const rep = allUsers.find(u => u.id === repId);
+      if (!rep || rep.organizationId !== organizationId) {
+        return res.status(404).json({ error: "Rep not found" });
+      }
+      // Scope check: rep must roll up to currentUser
+      const isInScope =
+        role === "admin" ||
+        rep.managerId === currentUser.id ||
+        ((role === "director" || role === "sales_director") && allUsers.some(u => u.id === rep.managerId && u.managerId === currentUser.id));
+      if (!isInScope) return res.status(403).json({ error: "Rep not in your scope" });
+      const cards = await storage.getNbaCardsForUserReadonly(repId, organizationId);
+      // Decorate with companyName so the manager drill-in shows "Acme — Title"
+      const companyIds = Array.from(new Set(cards.map(c => c.companyId).filter(Boolean) as string[]));
+      const companyNameMap = new Map<string, string>();
+      if (companyIds.length > 0) {
+        const cos = await storage.getCompaniesByIds(companyIds, organizationId);
+        for (const co of cos) companyNameMap.set(co.id, co.name);
+      }
+      const decorated = cards.map(c => ({
+        ...c,
+        companyName: c.companyId ? companyNameMap.get(c.companyId) ?? null : null,
+      }));
+      res.json({ repId, repName: rep.name, cards: decorated });
+    } catch (err: any) {
+      console.error("[nba/team-rollup/:repId/cards GET]", err?.message ?? err);
+      res.status(500).json({ error: "Failed to fetch rep cards" });
     }
   });
 
@@ -9581,7 +9745,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const { role, organizationId } = currentUser;
-      const managerRoles = ["admin", "director", "national_account_manager"];
+      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
       if (!managerRoles.includes(role)) return res.status(403).json({ error: "Not authorized" });
       const weekStart = String(req.query.weekStart ?? new Date().toISOString().split("T")[0].slice(0, 10));
       const summary = await storage.getNbaManagerSummary(organizationId, weekStart);
@@ -9598,7 +9762,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const { role, organizationId } = currentUser;
-      const managerRoles = ["admin", "director", "national_account_manager"];
+      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
       if (!managerRoles.includes(role)) return res.status(403).json({ error: "Not authorized" });
       const daysBack = Math.min(Number(req.query.daysBack ?? 30), 90);
       const performance = await storage.getNbaRulePerformance(organizationId, daysBack);

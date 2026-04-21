@@ -12,6 +12,7 @@ import type { PortletType } from "@/components/dashboard-activity-sheet";
 import { SonarMarketPulsePortlet } from "@/components/sonar-market-pulse";
 import { WaitingOnMePortlet } from "@/components/waiting-on-me-portlet";
 import { TeamOverdueConversationsPortlet } from "@/components/team-overdue-conversations-portlet";
+import { NbaTeamRollupPortlet } from "@/components/NbaTeamRollupPortlet";
 
 interface NamPortletsProps {
   namRelationshipsMoved: RelationshipsMovedData | undefined;
@@ -44,6 +45,9 @@ interface NamPortletsProps {
   setWaitingOnMeCollapsed: (v: boolean) => void;
   teamOverdueCollapsed: boolean;
   setTeamOverdueCollapsed: (v: boolean) => void;
+  // Task #374
+  nbaRollupCollapsed: boolean;
+  onToggleNbaRollup: () => void;
 }
 
 export function NamPortlets({
@@ -64,11 +68,19 @@ export function NamPortlets({
   myGoals, todayStr,
   waitingOnMeCollapsed, setWaitingOnMeCollapsed,
   teamOverdueCollapsed, setTeamOverdueCollapsed,
+  nbaRollupCollapsed, onToggleNbaRollup,
 }: NamPortletsProps) {
   return (
     <>
       {/* ── Market Pulse ────────────────────────────────────────────────────── */}
       <SonarMarketPulsePortlet role="nam" />
+
+      {/* ── Team NBA rollup (Task #374) ───────────────────────────────────────── */}
+      <NbaTeamRollupPortlet
+        collapsed={nbaRollupCollapsed}
+        onToggle={onToggleNbaRollup}
+        setLocation={setLocation}
+      />
 
       {/* ── Waiting on Me (Task #223) ────────────────────────────────────────── */}
       <WaitingOnMePortlet

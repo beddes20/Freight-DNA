@@ -3665,4 +3665,56 @@ export async function runMigrations() {
   } finally {
     client372.release();
   }
+
+  // ── Task #374: NBA outcome loop (lifecycle events + outcome classification) ──
+  const client374 = await pool.connect();
+  try {
+    // Stored as text to match the rest of nba_cards' ISO-string timestamp columns (e.g., resolved_at).
+    await client374.query(`ALTER TABLE nba_cards ADD COLUMN IF NOT EXISTS first_viewed_at text`);
+    await client374.query(`
+      CREATE TABLE IF NOT EXISTS nba_card_events (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        card_id varchar NOT NULL REFERENCES nba_cards(id) ON DELETE CASCADE,
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        event_type text NOT NULL,
+        reason text,
+        actor_user_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        metadata jsonb,
+        created_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    // Defensive: backfill columns if an older revision of this table exists
+    await client374.query(`ALTER TABLE nba_card_events ADD COLUMN IF NOT EXISTS user_id varchar`);
+    await client374.query(`ALTER TABLE nba_card_events ADD COLUMN IF NOT EXISTS actor_user_id varchar`);
+    await client374.query(`CREATE INDEX IF NOT EXISTS nba_card_events_card_idx ON nba_card_events(card_id)`);
+    await client374.query(`CREATE INDEX IF NOT EXISTS nba_card_events_org_type_idx ON nba_card_events(org_id, event_type)`);
+    await client374.query(`
+      CREATE TABLE IF NOT EXISTS nba_card_outcomes (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        card_id varchar NOT NULL REFERENCES nba_cards(id) ON DELETE CASCADE,
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        rule_type text NOT NULL,
+        outcome text NOT NULL,
+        basis text,
+        dollar_impact numeric(14,2),
+        from_action text,
+        attribution_window_days integer,
+        classified_at timestamp NOT NULL DEFAULT now(),
+        signals jsonb
+      )
+    `);
+    // Defensive: backfill any missing columns from an earlier table revision
+    await client374.query(`ALTER TABLE nba_card_outcomes ADD COLUMN IF NOT EXISTS basis text`);
+    await client374.query(`ALTER TABLE nba_card_outcomes ADD COLUMN IF NOT EXISTS from_action text`);
+    await client374.query(`CREATE UNIQUE INDEX IF NOT EXISTS nba_card_outcomes_card_unique ON nba_card_outcomes(card_id)`);
+    await client374.query(`CREATE INDEX IF NOT EXISTS nba_card_outcomes_org_user_idx ON nba_card_outcomes(org_id, user_id)`);
+    await client374.query(`CREATE INDEX IF NOT EXISTS nba_card_outcomes_rule_idx ON nba_card_outcomes(org_id, rule_type)`);
+    console.log("[migrations] nba lifecycle events + outcomes tables ensured (Task #374)");
+  } catch (err) {
+    console.error("[migrations] Task #374 migration error:", err);
+  } finally {
+    client374.release();
+  }
 }

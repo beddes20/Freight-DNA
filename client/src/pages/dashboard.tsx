@@ -131,6 +131,11 @@ export default function Dashboard() {
   const [commitPayload, setCommitPayload] = useState<CommitPayload | null>(null);
   const [tasksCollapsed, setTasksCollapsed] = useState(() => localStorage.getItem("dash_tasks_collapsed") === "true");
   const [waitingOnMeCollapsed, setWaitingOnMeCollapsed] = useState(() => localStorage.getItem("dash_waiting_on_me_collapsed") === "true");
+  // Task #374
+  const [nbaImpactCollapsed, setNbaImpactCollapsed] = useState(() => localStorage.getItem("dash_nba_impact_collapsed") === "true");
+  const [nbaRollupCollapsed, setNbaRollupCollapsed] = useState(() => localStorage.getItem("dash_nba_rollup_collapsed") === "true");
+  const toggleNbaImpact = () => setNbaImpactCollapsed(prev => { const n = !prev; localStorage.setItem("dash_nba_impact_collapsed", String(n)); return n; });
+  const toggleNbaRollup = () => setNbaRollupCollapsed(prev => { const n = !prev; localStorage.setItem("dash_nba_rollup_collapsed", String(n)); return n; });
   const [teamOverdueCollapsed, setTeamOverdueCollapsed] = useState(() => localStorage.getItem("dash_team_overdue_collapsed") === "true");
   const [feedCollapsed, setFeedCollapsed] = useState(() => localStorage.getItem("dash_feed_collapsed") !== "false");
   const [lmCheckInsGroupCollapsed, setLmCheckInsGroupCollapsed] = useState(() => localStorage.getItem("dash_lm_checkins_group_collapsed") === "true");
@@ -1267,6 +1272,8 @@ export default function Dashboard() {
           setLocation={setLocation}
           teamOverdueCollapsed={teamOverdueCollapsed}
           setTeamOverdueCollapsed={(v) => { setTeamOverdueCollapsed(v); localStorage.setItem("dash_team_overdue_collapsed", String(v)); }}
+          nbaRollupCollapsed={nbaRollupCollapsed}
+          onToggleNbaRollup={toggleNbaRollup}
         />
       )}
       </PortletErrorBoundary>
@@ -1305,6 +1312,8 @@ export default function Dashboard() {
           setWaitingOnMeCollapsed={(v) => { setWaitingOnMeCollapsed(v); localStorage.setItem("dash_waiting_on_me_collapsed", String(v)); }}
           teamOverdueCollapsed={teamOverdueCollapsed}
           setTeamOverdueCollapsed={(v) => { setTeamOverdueCollapsed(v); localStorage.setItem("dash_team_overdue_collapsed", String(v)); }}
+          nbaRollupCollapsed={nbaRollupCollapsed}
+          onToggleNbaRollup={toggleNbaRollup}
         />
         </PortletErrorBoundary>
       )}
@@ -1425,6 +1434,8 @@ export default function Dashboard() {
             setActivePortlet={setActivePortlet}
             waitingOnMeCollapsed={waitingOnMeCollapsed}
             setWaitingOnMeCollapsed={(v) => { setWaitingOnMeCollapsed(v); localStorage.setItem("dash_waiting_on_me_collapsed", String(v)); }}
+            nbaImpactCollapsed={nbaImpactCollapsed}
+            onToggleNbaImpact={toggleNbaImpact}
           />
         </PortletErrorBoundary>
       )}

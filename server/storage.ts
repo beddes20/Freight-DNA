@@ -222,6 +222,12 @@ import {
   type FreightOutreachTemplate,
   type InsertFreightOutreachTemplate,
   type FreightOutreachTemplateKind,
+  nbaCardEvents,
+  type NbaCardEvent,
+  type InsertNbaCardEvent,
+  nbaCardOutcomes,
+  type NbaCardOutcome,
+  type InsertNbaCardOutcome,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -695,7 +701,38 @@ export interface IStorage {
   getNbaRulePerformance(orgId: string, daysBack?: number): Promise<Array<{
     ruleType: string; firedCount: number; shownCount: number; actionedCount: number;
     dismissedCount: number; avgHoursToAction: number | null; outcomeLinkCount: number;
+    classifiedCount: number; workedCount: number; partialCount: number;
+    noResponseCount: number; outcomeRate: number; dollarMoved: number;
   }>>;
+  // ── NBA lifecycle events + outcome classification (Task #374) ──────────────
+  recordNbaCardEvent(event: InsertNbaCardEvent): Promise<NbaCardEvent>;
+  markNbaCardViewed(cardId: string, userId: string, orgId: string): Promise<NbaCard | undefined>;
+  getNbaCardEvents(cardId: string): Promise<NbaCardEvent[]>;
+  upsertNbaCardOutcome(data: InsertNbaCardOutcome): Promise<NbaCardOutcome>;
+  getResolvedNbaCardsAwaitingClassification(orgId: string): Promise<NbaCard[]>;
+  getNbaImpactForUser(userId: string, orgId: string, daysBack?: number): Promise<{
+    daysBack: number; fired: number; viewed: number; actioned: number; dismissed: number;
+    snoozed: number; expired: number; conversionRate: number;
+    outcomesWorked: number; outcomesNoResponse: number; dollarMoved: number;
+    byRule: Array<{ ruleType: string; fired: number; actioned: number; conversionRate: number; worked: number; dollarMoved: number }>;
+  }>;
+  getNbaTeamRollup(amUserIds: string[], orgId: string, daysBack?: number): Promise<{
+    daysBack: number;
+    perAm: Array<{
+      userId: string; userName: string; open: number; untouched3d: number;
+      fired: number; actioned: number; dismissed: number; conversionRate: number;
+      worked: number; dollarMoved: number;
+      dismissReasons: Array<{ reason: string; count: number }>;
+    }>;
+    dismissReasons: Array<{ reason: string; count: number }>;
+    topUnworked: Array<{
+      cardId: string; userId: string; userName: string;
+      companyId: string | null; companyName: string | null;
+      atStakeAmount: number; ruleType: string; ageDays: number;
+    }>;
+    totals: { open: number; untouched3d: number; conversionRate: number; dollarMoved: number; worked: number; fired: number };
+  }>;
+  getNbaCardsForUserReadonly(userId: string, orgId: string): Promise<NbaCard[]>;
   // Market Signal NBA methods
   getNbaCardsByMarketSignal(signalId: string): Promise<NbaCard[]>;
   getNbaCardsByCompanyAndRuleType(companyId: string, ruleType: string): Promise<NbaCard[]>;
@@ -3567,6 +3604,19 @@ export class DatabaseStorage implements IStorage {
     const [row] = await db.insert(nbaCards)
       .values({ ...data, createdAt: now } as any)
       .returning();
+    try {
+      await this.recordNbaCardEvent({
+        cardId: row.id,
+        orgId: row.orgId,
+        userId: row.userId,
+        eventType: "fired",
+        actorUserId: null,
+        reason: row.ruleType,
+        metadata: { atStakeAmount: row.atStakeAmount ?? null, urgencyScore: row.urgencyScore ?? null },
+      });
+    } catch (err) {
+      console.error("[nba-events] failed to record fired event", err);
+    }
     return row;
   }
 
@@ -3678,15 +3728,28 @@ export class DatabaseStorage implements IStorage {
 
   async resolveNbaCardsForLane(laneId: string): Promise<void> {
     const now = new Date().toISOString();
-    await db.update(nbaCards)
-      .set({ status: "actioned", resolvedAt: now } as any)
+    const resolved = await db.update(nbaCards)
+      .set({ status: "actioned", resolvedAt: now, resolutionAction: "auto_lane_threshold" } as any)
       .where(
         and(
           eq(nbaCards.linkedLaneId, laneId),
           eq(nbaCards.ruleType, "recurring_lane_capacity"),
           sql`${nbaCards.status} IN ('visible', 'generated')`,
         )
-      );
+      )
+      .returning({ id: nbaCards.id, orgId: nbaCards.orgId, userId: nbaCards.userId });
+    for (const r of resolved) {
+      try {
+        await this.recordNbaCardEvent({
+          cardId: r.id, orgId: r.orgId, userId: r.userId,
+          eventType: "acted", actorUserId: r.userId, reason: "auto_lane_threshold", metadata: null,
+        });
+        await this.recordNbaCardEvent({
+          cardId: r.id, orgId: r.orgId, userId: r.userId,
+          eventType: "resolved", actorUserId: r.userId, reason: "auto_lane_threshold", metadata: null,
+        });
+      } catch (err) { console.error("[nba-events] resolveNbaCardsForLane event failed", err); }
+    }
   }
 
   async findOpenLaneProcurementTask(laneId: string, assignedTo: string): Promise<Task | undefined> {
@@ -3760,35 +3823,54 @@ export class DatabaseStorage implements IStorage {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 14);
     const cutoffStr = cutoff.toISOString();
-    await db.update(nbaCards)
-      .set({ status: "expired" } as any)
+    // Set resolvedAt + resolutionAction so the outcome classifier picks these
+    // up (it requires resolved_at IS NOT NULL).
+    const expiredRows = await db.update(nbaCards)
+      .set({ status: "expired", resolvedAt: new Date().toISOString(), resolutionAction: "auto_expired" } as any)
       .where(
         and(
           eq(nbaCards.orgId, orgId),
           eq(nbaCards.status, "visible"),
           sql`${nbaCards.createdAt} < ${cutoffStr}`,
         )
-      );
+      )
+      .returning({ id: nbaCards.id, userId: nbaCards.userId, orgId: nbaCards.orgId });
+    for (const r of expiredRows) {
+      try {
+        await this.recordNbaCardEvent({
+          cardId: r.id, orgId: r.orgId, userId: r.userId,
+          eventType: "expired", actorUserId: null, reason: "stale_no_action_14d", metadata: null,
+        });
+        await this.recordNbaCardEvent({
+          cardId: r.id, orgId: r.orgId, userId: r.userId,
+          eventType: "resolved", actorUserId: null, reason: "auto_expired", metadata: null,
+        });
+      } catch (err) { console.error("[nba-events] expire event failed", err); }
+    }
     // If a touchpoint was logged, auto-resolve stale_account cards for that company
     if (touchpointCompanyId) {
-      await db.update(nbaCards)
+      const autoResolved = await db.update(nbaCards)
         .set({ status: "actioned", resolutionAction: "auto_touchpoint", resolvedAt: new Date().toISOString() } as any)
         .where(
           and(
             eq(nbaCards.companyId, touchpointCompanyId),
-            eq(nbaCards.ruleType, "stale_account"),
+            sql`${nbaCards.ruleType} IN ('stale_account','single_thread_risk')`,
             eq(nbaCards.status, "visible"),
           )
-        );
-      await db.update(nbaCards)
-        .set({ status: "actioned", resolutionAction: "auto_touchpoint", resolvedAt: new Date().toISOString() } as any)
-        .where(
-          and(
-            eq(nbaCards.companyId, touchpointCompanyId),
-            eq(nbaCards.ruleType, "single_thread_risk"),
-            eq(nbaCards.status, "visible"),
-          )
-        );
+        )
+        .returning({ id: nbaCards.id, userId: nbaCards.userId, orgId: nbaCards.orgId });
+      for (const r of autoResolved) {
+        try {
+          await this.recordNbaCardEvent({
+            cardId: r.id, orgId: r.orgId, userId: r.userId,
+            eventType: "acted", actorUserId: r.userId, reason: "auto_touchpoint", metadata: null,
+          });
+          await this.recordNbaCardEvent({
+            cardId: r.id, orgId: r.orgId, userId: r.userId,
+            eventType: "resolved", actorUserId: r.userId, reason: "auto_touchpoint", metadata: null,
+          });
+        } catch (err) { console.error("[nba-events] auto-resolve event failed", err); }
+      }
     }
   }
 
@@ -3833,6 +3915,8 @@ export class DatabaseStorage implements IStorage {
   async getNbaRulePerformance(orgId: string, daysBack = 30): Promise<Array<{
     ruleType: string; firedCount: number; shownCount: number; actionedCount: number;
     dismissedCount: number; avgHoursToAction: number | null; outcomeLinkCount: number;
+    classifiedCount: number; workedCount: number; partialCount: number; noResponseCount: number;
+    outcomeRate: number; dollarMoved: number;
   }>> {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - daysBack);
@@ -3869,17 +3953,380 @@ export class DatabaseStorage implements IStorage {
       if (card.status === "dismissed") e.dismissedCount++;
       if (card.outcomeLinkedAt) e.outcomeLinkCount++;
     }
-    return Array.from(map.values()).map(e => ({
-      ruleType: e.ruleType,
-      firedCount: e.firedCount,
-      shownCount: e.shownCount,
-      actionedCount: e.actionedCount,
-      dismissedCount: e.dismissedCount,
-      avgHoursToAction: e.hoursToAction.length > 0
-        ? e.hoursToAction.reduce((a, b) => a + b, 0) / e.hoursToAction.length
-        : null,
-      outcomeLinkCount: e.outcomeLinkCount,
+    // Per-rule classified outcomes (Task #374) — joined from nba_card_outcomes
+    const outcomeRows = await db.select()
+      .from(nbaCardOutcomes)
+      .where(
+        and(
+          eq(nbaCardOutcomes.orgId, orgId),
+          sql`${nbaCardOutcomes.classifiedAt} >= ${cutoffStr}`,
+        )
+      );
+    const outcomeMap = new Map<string, { worked: number; partial: number; noResp: number; dollars: number; total: number }>();
+    for (const o of outcomeRows) {
+      const cur = outcomeMap.get(o.ruleType) ?? { worked: 0, partial: 0, noResp: 0, dollars: 0, total: 0 };
+      cur.total++;
+      if (o.outcome === "worked") cur.worked++;
+      else if (o.outcome === "partial") cur.partial++;
+      else if (o.outcome === "no_response") cur.noResp++;
+      cur.dollars += Number(o.dollarImpact ?? 0);
+      outcomeMap.set(o.ruleType, cur);
+      if (!map.has(o.ruleType)) {
+        map.set(o.ruleType, {
+          ruleType: o.ruleType, firedCount: 0, shownCount: 0, actionedCount: 0,
+          dismissedCount: 0, hoursToAction: [], outcomeLinkCount: 0,
+        });
+      }
+    }
+    return Array.from(map.values()).map(e => {
+      const o = outcomeMap.get(e.ruleType) ?? { worked: 0, partial: 0, noResp: 0, dollars: 0, total: 0 };
+      return {
+        ruleType: e.ruleType,
+        firedCount: e.firedCount,
+        shownCount: e.shownCount,
+        actionedCount: e.actionedCount,
+        dismissedCount: e.dismissedCount,
+        avgHoursToAction: e.hoursToAction.length > 0
+          ? e.hoursToAction.reduce((a, b) => a + b, 0) / e.hoursToAction.length
+          : null,
+        outcomeLinkCount: e.outcomeLinkCount,
+        classifiedCount: o.total,
+        workedCount: o.worked,
+        partialCount: o.partial,
+        noResponseCount: o.noResp,
+        outcomeRate: o.total > 0 ? (o.worked + o.partial * 0.5) / o.total : 0,
+        dollarMoved: o.dollars,
+      };
+    });
+  }
+
+  // ── NBA Lifecycle Events + Outcomes (Task #374) ────────────────────────────
+
+  async recordNbaCardEvent(event: InsertNbaCardEvent): Promise<NbaCardEvent> {
+    const [row] = await db.insert(nbaCardEvents).values(event).returning();
+    return row;
+  }
+
+  async markNbaCardViewed(cardId: string, userId: string, orgId: string): Promise<NbaCard | undefined> {
+    // Conditional update: only set first_viewed_at when it is still NULL so we
+    // don't overwrite the original timestamp (or emit duplicate "viewed" events)
+    // under concurrent requests.
+    const now = new Date().toISOString();
+    const [updated] = await db.update(nbaCards)
+      .set({ firstViewedAt: now })
+      .where(and(
+        eq(nbaCards.id, cardId),
+        eq(nbaCards.userId, userId),
+        sql`${nbaCards.firstViewedAt} IS NULL`,
+      ))
+      .returning();
+    if (updated) {
+      await this.recordNbaCardEvent({
+        cardId, orgId, userId, eventType: "viewed", actorUserId: userId,
+      });
+      return updated;
+    }
+    // Either the card was already viewed, doesn't exist, or isn't this user's.
+    const [existing] = await db.select().from(nbaCards).where(eq(nbaCards.id, cardId)).limit(1);
+    if (!existing || existing.userId !== userId) return undefined;
+    return existing;
+  }
+
+  async getNbaCardEvents(cardId: string): Promise<NbaCardEvent[]> {
+    return db.select().from(nbaCardEvents)
+      .where(eq(nbaCardEvents.cardId, cardId))
+      .orderBy(nbaCardEvents.createdAt);
+  }
+
+  async upsertNbaCardOutcome(data: InsertNbaCardOutcome): Promise<NbaCardOutcome> {
+    const existing = await db.select().from(nbaCardOutcomes)
+      .where(eq(nbaCardOutcomes.cardId, data.cardId))
+      .limit(1);
+    if (existing[0]) {
+      const [row] = await db.update(nbaCardOutcomes)
+        .set({ ...data, classifiedAt: new Date() })
+        .where(eq(nbaCardOutcomes.cardId, data.cardId))
+        .returning();
+      return row;
+    }
+    const [row] = await db.insert(nbaCardOutcomes).values(data).returning();
+    return row;
+  }
+
+  /**
+   * Find resolved cards that have not been classified yet AND whose
+   * attribution window has elapsed. Used by the outcome classifier.
+   */
+  async getResolvedNbaCardsAwaitingClassification(orgId: string): Promise<NbaCard[]> {
+    // Use Drizzle table select so we get camelCase NbaCard rows that the
+    // outcome classifier can consume directly (raw SQL would return snake_case).
+    const rows = await db.select()
+      .from(nbaCards)
+      .where(
+        and(
+          eq(nbaCards.orgId, orgId),
+          sql`${nbaCards.status} IN ('actioned','dismissed','expired','snoozed','alternate')`,
+          sql`${nbaCards.resolvedAt} IS NOT NULL`,
+          sql`NOT EXISTS (SELECT 1 FROM ${nbaCardOutcomes} WHERE ${nbaCardOutcomes.cardId} = ${nbaCards.id})`,
+        )
+      )
+      .orderBy(nbaCards.resolvedAt)
+      .limit(500);
+    return rows;
+  }
+
+  /**
+   * Per-rep monthly NBA impact summary used by "Your NBA impact".
+   */
+  async getNbaImpactForUser(userId: string, orgId: string, daysBack = 30): Promise<{
+    daysBack: number;
+    fired: number;
+    viewed: number;
+    actioned: number;
+    dismissed: number;
+    snoozed: number;
+    expired: number;
+    conversionRate: number;
+    outcomesWorked: number;
+    outcomesNoResponse: number;
+    dollarMoved: number;
+    byRule: Array<{
+      ruleType: string;
+      fired: number;
+      actioned: number;
+      conversionRate: number;
+      worked: number;
+      dollarMoved: number;
+    }>;
+  }> {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - daysBack);
+    const cutoffStr = cutoff.toISOString();
+    const cards = await db.select().from(nbaCards).where(
+      and(eq(nbaCards.userId, userId), eq(nbaCards.orgId, orgId)),
+    );
+    const filtered = cards.filter(c => c.createdAt >= cutoffStr);
+
+    const outcomes = await db.select().from(nbaCardOutcomes)
+      .where(and(eq(nbaCardOutcomes.userId, userId), eq(nbaCardOutcomes.orgId, orgId)));
+    const outcomeByCard = new Map(outcomes.map(o => [o.cardId, o]));
+
+    let fired = 0, viewed = 0, actioned = 0, dismissed = 0, snoozed = 0, expired = 0;
+    let worked = 0, noResponse = 0, dollarMoved = 0;
+    const ruleMap = new Map<string, { ruleType: string; fired: number; actioned: number; worked: number; dollarMoved: number }>();
+
+    for (const c of filtered) {
+      fired++;
+      if (c.firstViewedAt) viewed++;
+      if (c.status === "actioned") actioned++;
+      if (c.status === "dismissed") dismissed++;
+      if (c.status === "snoozed") snoozed++;
+      if (c.status === "expired") expired++;
+      if (!ruleMap.has(c.ruleType)) {
+        ruleMap.set(c.ruleType, { ruleType: c.ruleType, fired: 0, actioned: 0, worked: 0, dollarMoved: 0 });
+      }
+      const rb = ruleMap.get(c.ruleType)!;
+      rb.fired++;
+      if (c.status === "actioned") rb.actioned++;
+      const o = outcomeByCard.get(c.id);
+      if (o) {
+        if (o.outcome === "worked") { worked++; rb.worked++; }
+        if (o.outcome === "no_response") noResponse++;
+        if (o.dollarImpact) {
+          const v = Number(o.dollarImpact);
+          if (!Number.isNaN(v)) {
+            dollarMoved += v;
+            rb.dollarMoved += v;
+          }
+        }
+      }
+    }
+
+    return {
+      daysBack,
+      fired, viewed, actioned, dismissed, snoozed, expired,
+      conversionRate: fired > 0 ? actioned / fired : 0,
+      outcomesWorked: worked,
+      outcomesNoResponse: noResponse,
+      dollarMoved,
+      // Top-converting card types: rank by conversion rate (actioned / fired),
+      // with fired count as the tiebreaker so a single 100%-actioned outlier
+      // doesn't outrank a high-volume rule with a strong rate.
+      byRule: Array.from(ruleMap.values()).map(r => ({
+        ...r,
+        conversionRate: r.fired > 0 ? r.actioned / r.fired : 0,
+      })).sort((a, b) => (b.conversionRate - a.conversionRate) || (b.fired - a.fired)),
+    };
+  }
+
+  /**
+   * Team rollup for NAM / Director: per-AM open counts, untouched-3+-days,
+   * dismiss-reason histogram, top high-$ unworked accounts, conversion rate,
+   * and estimated $ moved.
+   */
+  async getNbaTeamRollup(amUserIds: string[], orgId: string, daysBack = 30): Promise<{
+    daysBack: number;
+    perAm: Array<{
+      userId: string;
+      userName: string;
+      open: number;
+      untouched3d: number;
+      fired: number;
+      actioned: number;
+      dismissed: number;
+      conversionRate: number;
+      worked: number;
+      dollarMoved: number;
+      dismissReasons: Array<{ reason: string; count: number }>;
+    }>;
+    dismissReasons: Array<{ reason: string; count: number }>;
+    topUnworked: Array<{
+      cardId: string;
+      userId: string;
+      userName: string;
+      companyId: string | null;
+      companyName: string | null;
+      atStakeAmount: number;
+      ruleType: string;
+      ageDays: number;
+    }>;
+    totals: { open: number; untouched3d: number; conversionRate: number; dollarMoved: number; worked: number; fired: number };
+  }> {
+    if (amUserIds.length === 0) {
+      return { daysBack, perAm: [], dismissReasons: [], topUnworked: [], totals: { open: 0, untouched3d: 0, conversionRate: 0, dollarMoved: 0, worked: 0, fired: 0 } };
+    }
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - daysBack);
+    const cutoffStr = cutoff.toISOString();
+
+    const cards = await db.select().from(nbaCards)
+      .where(and(eq(nbaCards.orgId, orgId), inArray(nbaCards.userId, amUserIds)));
+
+    const outcomes = await db.select().from(nbaCardOutcomes)
+      .where(and(eq(nbaCardOutcomes.orgId, orgId), inArray(nbaCardOutcomes.userId, amUserIds)));
+    const outcomeByCard = new Map(outcomes.map(o => [o.cardId, o]));
+
+    const userRows = await db.select({ id: users.id, name: users.name }).from(users)
+      .where(inArray(users.id, amUserIds));
+    const userName = new Map(userRows.map(u => [u.id, u.name]));
+
+    // Companies for unworked summary
+    const companyIds = Array.from(new Set(cards.map(c => c.companyId).filter(Boolean) as string[]));
+    const companyRows = companyIds.length
+      ? await db.select({ id: companies.id, name: companies.name }).from(companies).where(inArray(companies.id, companyIds))
+      : [];
+    const companyName = new Map(companyRows.map(c => [c.id, c.name]));
+
+    const today = new Date();
+    const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
+    const perAmMap = new Map<string, ReturnType<typeof initAm>>();
+    function initAm(userId: string) {
+      return {
+        userId, userName: userName.get(userId) ?? userId,
+        open: 0, untouched3d: 0, fired: 0, actioned: 0, dismissed: 0, worked: 0, dollarMoved: 0, conversionRate: 0,
+        dismissReasons: [] as Array<{ reason: string; count: number }>,
+        _dismissReasonMap: new Map<string, number>() as Map<string, number>,
+      };
+    }
+    for (const uid of amUserIds) perAmMap.set(uid, initAm(uid));
+
+    const dismissReasonCounts = new Map<string, number>();
+    const unworked: Array<{ card: NbaCard; ageDays: number }> = [];
+
+    for (const c of cards) {
+      const am = perAmMap.get(c.userId)!;
+      if (c.status === "visible") {
+        am.open++;
+        const created = new Date(c.createdAt).getTime();
+        const ageMs = today.getTime() - created;
+        if (!c.firstViewedAt && ageMs > threeDaysMs) am.untouched3d++;
+        // "Unworked" = open + at-stake regardless of whether viewed; the rep
+        // may have viewed but not acted, which still counts as unworked from
+        // the manager's coaching standpoint.
+        const atStake = c.atStakeAmount ? Number(c.atStakeAmount) : 0;
+        if (atStake > 0) {
+          unworked.push({ card: c, ageDays: Math.floor(ageMs / (24 * 60 * 60 * 1000)) });
+        }
+      }
+      if (c.createdAt >= cutoffStr) {
+        am.fired++;
+        if (c.status === "actioned") am.actioned++;
+        if (c.status === "dismissed") {
+          am.dismissed++;
+          const r = c.dismissReason ?? "(unspecified)";
+          dismissReasonCounts.set(r, (dismissReasonCounts.get(r) ?? 0) + 1);
+          am._dismissReasonMap.set(r, (am._dismissReasonMap.get(r) ?? 0) + 1);
+        }
+        const o = outcomeByCard.get(c.id);
+        if (o) {
+          if (o.outcome === "worked") am.worked++;
+          if (o.dollarImpact) {
+            const v = Number(o.dollarImpact);
+            if (!Number.isNaN(v)) am.dollarMoved += v;
+          }
+        }
+      }
+    }
+    for (const am of Array.from(perAmMap.values())) {
+      am.conversionRate = am.fired > 0 ? am.actioned / am.fired : 0;
+      am.dismissReasons = Array.from(am._dismissReasonMap.entries())
+        .map(([reason, count]) => ({ reason, count }))
+        .sort((a, b) => b.count - a.count);
+    }
+
+    unworked.sort((a, b) => Number(b.card.atStakeAmount ?? 0) - Number(a.card.atStakeAmount ?? 0));
+    const topUnworked = unworked.slice(0, 10).map(({ card, ageDays }) => ({
+      cardId: card.id,
+      userId: card.userId,
+      userName: userName.get(card.userId) ?? card.userId,
+      companyId: card.companyId ?? null,
+      companyName: card.companyId ? (companyName.get(card.companyId) ?? null) : null,
+      atStakeAmount: Number(card.atStakeAmount ?? 0),
+      ruleType: card.ruleType,
+      ageDays,
     }));
+
+    const dismissReasons = Array.from(dismissReasonCounts.entries())
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count);
+
+    const perAmList = Array.from(perAmMap.values())
+      .map(({ _dismissReasonMap, ...rest }) => rest)
+      .sort((a, b) => b.open - a.open);
+    const totals = perAmList.reduce(
+      (acc, am) => ({
+        open: acc.open + am.open,
+        untouched3d: acc.untouched3d + am.untouched3d,
+        fired: acc.fired + am.fired,
+        worked: acc.worked + am.worked,
+        dollarMoved: acc.dollarMoved + am.dollarMoved,
+        conversionRate: 0,
+      }),
+      { open: 0, untouched3d: 0, fired: 0, worked: 0, dollarMoved: 0, conversionRate: 0 },
+    );
+    const totalActioned = perAmList.reduce((s, a) => s + a.actioned, 0);
+    totals.conversionRate = totals.fired > 0 ? totalActioned / totals.fired : 0;
+
+    return { daysBack, perAm: perAmList, dismissReasons, topUnworked, totals };
+  }
+
+  /**
+   * Read-only drill-in: visible NBA cards for any AM in the manager's scope.
+   */
+  async getNbaCardsForUserReadonly(userId: string, orgId: string): Promise<NbaCard[]> {
+    const today = new Date().toISOString().split("T")[0];
+    const rows = await db.select().from(nbaCards)
+      .where(and(
+        eq(nbaCards.orgId, orgId),
+        eq(nbaCards.userId, userId),
+        eq(nbaCards.status, "visible"),
+      ))
+      .orderBy(
+        sql`CASE ${nbaCards.outcomeType} WHEN 'protect' THEN 1 WHEN 'execute' THEN 2 WHEN 'grow' THEN 3 WHEN 'deepen' THEN 4 ELSE 5 END`,
+        desc(nbaCards.urgencyScore),
+        desc(nbaCards.createdAt),
+      );
+    return rows.filter(r => !r.snoozeUntil || r.snoozeUntil <= today);
   }
 
   // ── Market Signal NBA methods ─────────────────────────────────────────────────

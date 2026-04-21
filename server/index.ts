@@ -15,6 +15,7 @@ import { initOneOnOneReminderScheduler } from "./oneOnOneReminderScheduler";
 import { initHealthAlertScheduler } from "./healthAlertScheduler";
 import { initCallVolumeDropScheduler } from "./callVolumeDropScheduler";
 import { initPlayOutcomeWindowScheduler } from "./playOutcomeWindowScheduler";
+import { initNbaOutcomeClassifier } from "./nbaOutcomeClassifier";
 import { initValueIQTodayScheduler } from "./valueiqTodayScheduler";
 import { initPtoReturnScheduler } from "./ptoReturnScheduler";
 import { initWeeklyGoalRecapScheduler } from "./weeklyGoalRecapScheduler";
@@ -300,6 +301,7 @@ async function initStripe() {
       initHealthAlertScheduler();
       initCallVolumeDropScheduler();
       initPlayOutcomeWindowScheduler();
+      initNbaOutcomeClassifier();
       initValueIQTodayScheduler().catch((e) => console.error("[valueiq-today] init error:", e));
       initPtoReturnScheduler();
       initWeeklyGoalRecapScheduler();

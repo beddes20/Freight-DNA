@@ -1161,10 +1161,62 @@ export const nbaCards = pgTable("nba_cards", {
   primaryLaneId: varchar("primary_lane_id").references(() => recurringLanes.id, { onDelete: "set null" }),
   createdAt: text("created_at").notNull(),
   resolvedAt: text("resolved_at"),
+  // Task #374 — first time the card was rendered for the rep
+  firstViewedAt: text("first_viewed_at"),
 });
 export const insertNbaCardSchema = createInsertSchema(nbaCards).omit({ id: true });
 export type InsertNbaCard = z.infer<typeof insertNbaCardSchema>;
 export type NbaCard = typeof nbaCards.$inferSelect;
+
+// ── NBA Lifecycle Events (Task #374) ─────────────────────────────────────────
+// Append-only audit log for every NBA card transition: fired → viewed →
+// acted/dismissed/snoozed → resolved → outcome_classified.
+export const nbaCardEvents = pgTable("nba_card_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  cardId: varchar("card_id").notNull().references(() => nbaCards.id, { onDelete: "cascade" }),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  eventType: text("event_type").notNull(), // fired | viewed | acted | dismissed | snoozed | resolved | outcome_classified
+  reason: text("reason"),
+  actorUserId: varchar("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  cardIdx: index("nba_card_events_card_idx").on(t.cardId),
+  orgTypeIdx: index("nba_card_events_org_type_idx").on(t.orgId, t.eventType),
+}));
+export const insertNbaCardEventSchema = createInsertSchema(nbaCardEvents).omit({ id: true, createdAt: true });
+export type InsertNbaCardEvent = z.infer<typeof insertNbaCardEventSchema>;
+export type NbaCardEvent = typeof nbaCardEvents.$inferSelect;
+
+// ── NBA Outcome Classification (Task #374) ───────────────────────────────────
+// One row per resolved card after the attribution window closes. Captures
+// whether the NBA actually "worked" and the estimated $ impact.
+export const nbaCardOutcomes = pgTable("nba_card_outcomes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  cardId: varchar("card_id").notNull().references(() => nbaCards.id, { onDelete: "cascade" }),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  ruleType: text("rule_type").notNull(),
+  // worked | no_response | partial | unknown
+  outcome: text("outcome").notNull(),
+  // Free-text human-readable explanation: "Meaningful touch logged within 7d"
+  basis: text("basis"),
+  // Estimated $ impact (uses atStakeAmount from the card unless overridden by classifier)
+  dollarImpact: decimal("dollar_impact", { precision: 14, scale: 2 }),
+  // The resolved-action that triggered the window: actioned | dismissed | snoozed | expired
+  fromAction: text("from_action"),
+  attributionWindowDays: integer("attribution_window_days"),
+  classifiedAt: timestamp("classified_at").defaultNow().notNull(),
+  signals: jsonb("signals").$type<Record<string, unknown>>(),
+}, (t) => ({
+  cardUnique: uniqueIndex("nba_card_outcomes_card_unique").on(t.cardId),
+  orgUserIdx: index("nba_card_outcomes_org_user_idx").on(t.orgId, t.userId),
+  ruleIdx: index("nba_card_outcomes_rule_idx").on(t.orgId, t.ruleType),
+}));
+export const insertNbaCardOutcomeSchema = createInsertSchema(nbaCardOutcomes).omit({ id: true, classifiedAt: true });
+export type InsertNbaCardOutcome = z.infer<typeof insertNbaCardOutcomeSchema>;
+export type NbaCardOutcome = typeof nbaCardOutcomes.$inferSelect;
 
 // ─── Missed Inbound Calls (Task #317) ────────────────────────────────────────
 /**
