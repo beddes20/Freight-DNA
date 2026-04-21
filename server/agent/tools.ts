@@ -465,7 +465,9 @@ export const TOOLS: AgentTool[] = [
       // Role-gated even though the capability is read.opportunity — import
       // audit data is operational metadata that only admins/directors should
       // see (it can include file names, error stack snippets, etc.).
-      const isAdminOrDirector = ["admin", "director", "sales_director"].includes(ctx.rep.role);
+      // Strict admin/director only — operational metadata (file paths, error
+      // snippets) shouldn't fan out to wider manager roles.
+      const isAdminOrDirector = ["admin", "director"].includes(ctx.rep.role);
       if (!isAdminOrDirector) {
         return { kind: "data", text: "Only an admin or director can view freight import status." };
       }
