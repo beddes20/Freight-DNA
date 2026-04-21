@@ -20,9 +20,19 @@ import type { Express } from "express";
 import { storage, db } from "../storage";
 import { getCurrentUser } from "../auth";
 import { normalizeLaneLocation, normalizeEquipmentType } from "@shared/laneFormatters";
-import { and, desc, eq } from "drizzle-orm";
-import { plays, playRuns } from "@shared/schema";
+import { and, desc, eq, or, inArray, gte, isNull } from "drizzle-orm";
+import { plays, playRuns, freightOpportunities } from "@shared/schema";
 import { evaluatePlayTriggersForOrg } from "./playbook";
+import { performAvailableFreightImport, listAvailableFreightImports, availableFreightSettingKey } from "../availableFreightImporter";
+import { z } from "zod";
+
+const APPROVER_ROLES = new Set([
+  "admin",
+  "director",
+  "sales_director",
+  "national_account_manager",
+  "logistics_manager",
+]);
 
 /**
  * SQL expression that applies the same normalization as normalizeLaneLocation() to a column.
@@ -428,9 +438,89 @@ export function registerMyProcurementRoutes(app: Express) {
         console.error("[my-procurement] triggered plays warning:", pbErr);
       }
 
+      // ── Available Freight bucket (task #354) ──────────────────────────────
+      // Today's open freight opportunities owned by — or delegated to — this
+      // rep, surfaced in the new "Available Freight" tab. "Today's open loads"
+      // is defined as: status in (new, ready_to_send) AND the pickup window
+      // hasn't already closed (pickupWindowEnd >= today, or null when the
+      // spreadsheet didn't supply one).
+      // pickupWindowEnd is a text column storing ISO date strings (YYYY-MM-DD),
+      // so we compare against today's date as a string for correct lexical
+      // ordering.
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const freightOppRows = await db.select({
+        id: freightOpportunities.id,
+        companyId: freightOpportunities.companyId,
+        origin: freightOpportunities.origin,
+        originState: freightOpportunities.originState,
+        destination: freightOpportunities.destination,
+        destinationState: freightOpportunities.destinationState,
+        equipmentType: freightOpportunities.equipmentType,
+        pickupWindowStart: freightOpportunities.pickupWindowStart,
+        pickupWindowEnd: freightOpportunities.pickupWindowEnd,
+        loadCount: freightOpportunities.loadCount,
+        status: freightOpportunities.status,
+        urgencyScore: freightOpportunities.urgencyScore,
+        ownerUserId: freightOpportunities.ownerUserId,
+        delegatedToUserId: freightOpportunities.delegatedToUserId,
+        approvedAt: freightOpportunities.approvedAt,
+        approvedById: freightOpportunities.approvedById,
+        templateOverrideSubject: freightOpportunities.templateOverrideSubject,
+        templateOverrideBody: freightOpportunities.templateOverrideBody,
+        sourceFileName: freightOpportunities.sourceFileName,
+        generatedAt: freightOpportunities.generatedAt,
+      })
+        .from(freightOpportunities)
+        .where(and(
+          eq(freightOpportunities.orgId, user.organizationId),
+          inArray(freightOpportunities.status, ["new", "ready_to_send"]),
+          or(
+            isNull(freightOpportunities.pickupWindowEnd),
+            gte(freightOpportunities.pickupWindowEnd, todayIso),
+          ),
+          or(
+            eq(freightOpportunities.ownerUserId, user.id),
+            eq(freightOpportunities.delegatedToUserId, user.id),
+          ),
+        ))
+        .orderBy(desc(freightOpportunities.urgencyScore), desc(freightOpportunities.generatedAt))
+        .limit(200);
+
+      const companyIds = Array.from(new Set(freightOppRows.map(r => r.companyId)));
+      const companyMap = new Map<string, string>();
+      if (companyIds.length > 0) {
+        const cos = await storage.getCompaniesByIds(companyIds, user.organizationId);
+        for (const c of cos) companyMap.set(c.id, c.name);
+      }
+
+      const availableFreight = freightOppRows.map(r => ({
+        id: r.id,
+        companyId: r.companyId,
+        companyName: companyMap.get(r.companyId) ?? null,
+        origin: r.origin,
+        originState: r.originState,
+        destination: r.destination,
+        destinationState: r.destinationState,
+        equipmentType: r.equipmentType,
+        pickupWindowStart: r.pickupWindowStart,
+        pickupWindowEnd: r.pickupWindowEnd,
+        loadCount: r.loadCount,
+        status: r.status,
+        urgencyScore: r.urgencyScore,
+        ownerUserId: r.ownerUserId,
+        delegatedToUserId: r.delegatedToUserId,
+        approvedAt: r.approvedAt instanceof Date ? r.approvedAt.toISOString() : (r.approvedAt as string | null),
+        approvedById: r.approvedById,
+        hasTemplateOverride: !!(r.templateOverrideSubject || r.templateOverrideBody),
+        sourceFileName: r.sourceFileName,
+        isDelegatedToMe: r.delegatedToUserId === user.id,
+        needsApproval: !r.approvedAt && r.status === "ready_to_send",
+      }));
+
       return res.json({
         lwqLanes,
         awardTasks,
+        availableFreight,
         triggeredPlays,
         viewing,
         pagination: {
@@ -472,10 +562,286 @@ export function registerMyProcurementRoutes(app: Express) {
     }
   });
 
+  // ── Available Freight tab actions (task #354) ─────────────────────────────
+
   /**
-   * POST /api/my-procurement/award-task/:taskId/close
-   * Closes an award procurement task — removes it from My Procurement.
+   * POST /api/my-procurement/freight-opp/:id/delegate
+   * Owner (or manager) re-assigns the opportunity to another rep. Pass
+   * `{ delegatedToUserId: null }` to clear the delegation.
    */
+  const delegateSchema = z.object({
+    delegatedToUserId: z.string().min(1).nullable(),
+  });
+  app.post("/api/my-procurement/freight-opp/:id/delegate", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const opp = await storage.getFreightOpportunity(user.organizationId, String(req.params.id));
+      if (!opp) return res.status(404).json({ error: "Opportunity not found" });
+
+      const isManager = APPROVER_ROLES.has(user.role);
+      const isOwner = opp.ownerUserId === user.id;
+      const isCurrentDelegate = opp.delegatedToUserId === user.id;
+      if (!isManager && !isOwner && !isCurrentDelegate) {
+        return res.status(403).json({ error: "Only the owner, current delegate, or a manager can delegate" });
+      }
+
+      const parsed = delegateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid delegate payload" });
+
+      let target: { id: string; name: string | null } | null = null;
+      if (parsed.data.delegatedToUserId) {
+        const t = await storage.getUser(parsed.data.delegatedToUserId);
+        if (!t || t.organizationId !== user.organizationId) {
+          return res.status(404).json({ error: "Target user not found in this org" });
+        }
+        target = { id: t.id, name: t.name ?? t.email ?? null };
+      }
+
+      const updated = await storage.updateFreightOpportunity(user.organizationId, opp.id, {
+        delegatedToUserId: target?.id ?? null,
+      });
+      await storage.appendFreightOpportunityAudit({
+        opportunityId: opp.id,
+        eventType: "status_changed",
+        actorUserId: user.id,
+        payload: {
+          kind: "delegation",
+          from: opp.delegatedToUserId,
+          to: target?.id ?? null,
+          targetName: target?.name ?? null,
+        },
+      });
+      return res.json({ opportunity: updated });
+    } catch (err) {
+      console.error("[my-procurement/freight-opp/delegate]", err);
+      return res.status(500).json({ error: "Failed to delegate opportunity" });
+    }
+  });
+
+  /**
+   * POST /api/my-procurement/freight-opp/:id/approve
+   * Manager-only. Stamps approvedAt + approvedById, unblocking the existing
+   * /api/freight-opportunities/:id/send flow. Pass `{ approve: false }` to
+   * revoke a prior approval (only allowed if no carriers have been sent).
+   */
+  const approveSchema = z.object({
+    approve: z.boolean().default(true),
+    note: z.string().max(2000).optional(),
+  });
+  app.post("/api/my-procurement/freight-opp/:id/approve", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!APPROVER_ROLES.has(user.role)) {
+        return res.status(403).json({ error: "Only managers can approve freight opportunities" });
+      }
+      const opp = await storage.getFreightOpportunity(user.organizationId, String(req.params.id));
+      if (!opp) return res.status(404).json({ error: "Opportunity not found" });
+
+      const parsed = approveSchema.safeParse(req.body ?? {});
+      if (!parsed.success) return res.status(400).json({ error: "Invalid approve payload" });
+      const approving = parsed.data.approve;
+
+      if (!approving) {
+        const carriers = await storage.listFreightOpportunityCarriers(opp.id);
+        if (carriers.some(c => c.sentAt)) {
+          return res.status(400).json({ error: "Cannot revoke approval after a carrier has been sent" });
+        }
+      }
+
+      const updated = await storage.updateFreightOpportunity(user.organizationId, opp.id, {
+        approvedAt: approving ? new Date() : null,
+        approvedById: approving ? user.id : null,
+      });
+      await storage.appendFreightOpportunityAudit({
+        opportunityId: opp.id,
+        eventType: "approved",
+        actorUserId: user.id,
+        payload: {
+          approved: approving,
+          note: parsed.data.note ?? null,
+        },
+      });
+      return res.json({ opportunity: updated });
+    } catch (err) {
+      console.error("[my-procurement/freight-opp/approve]", err);
+      return res.status(500).json({ error: "Failed to approve opportunity" });
+    }
+  });
+
+  /**
+   * PATCH /api/my-procurement/freight-opp/:id/template-override
+   * Per-opportunity template subject/body that overrides the org default at
+   * send time. Reps editing AFTER approval is allowed (the manager approved
+   * the freight, not the copy) but each edit is audited.
+   */
+  const overrideSchema = z.object({
+    subject: z.string().max(500).nullable().optional(),
+    body: z.string().max(20_000).nullable().optional(),
+  });
+  app.patch("/api/my-procurement/freight-opp/:id/template-override", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const opp = await storage.getFreightOpportunity(user.organizationId, String(req.params.id));
+      if (!opp) return res.status(404).json({ error: "Opportunity not found" });
+      const isManager = APPROVER_ROLES.has(user.role);
+      const isOwner = opp.ownerUserId === user.id;
+      const isDelegate = opp.delegatedToUserId === user.id;
+      if (!isManager && !isOwner && !isDelegate) {
+        return res.status(403).json({ error: "Only the owner, delegate, or a manager can edit the template" });
+      }
+      const parsed = overrideSchema.safeParse(req.body ?? {});
+      if (!parsed.success) return res.status(400).json({ error: "Invalid template override" });
+
+      const patch: Record<string, unknown> = {};
+      if (parsed.data.subject !== undefined) patch.templateOverrideSubject = parsed.data.subject;
+      if (parsed.data.body !== undefined) patch.templateOverrideBody = parsed.data.body;
+
+      const updated = await storage.updateFreightOpportunity(user.organizationId, opp.id, patch);
+      await storage.appendFreightOpportunityAudit({
+        opportunityId: opp.id,
+        eventType: "template_edited",
+        actorUserId: user.id,
+        payload: {
+          subjectChanged: parsed.data.subject !== undefined,
+          bodyChanged: parsed.data.body !== undefined,
+          subjectLen: (parsed.data.subject ?? "").length,
+          bodyLen: (parsed.data.body ?? "").length,
+        },
+      });
+      return res.json({ opportunity: updated });
+    } catch (err) {
+      console.error("[my-procurement/freight-opp/template-override]", err);
+      return res.status(500).json({ error: "Failed to update template override" });
+    }
+  });
+
+  /**
+   * POST /api/available-freight/import
+   * Triggers a fresh OneDrive pull. Available to admins, managers, AND any
+   * rep who owns or is delegated at least one Available Freight opportunity
+   * (lets reps refresh their own queue from the My Procurement tab).
+   */
+  app.post("/api/available-freight/import", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      // Any authenticated rep within the org can trigger a manual refresh —
+      // the importer itself is org-scoped and idempotent, and recovery from a
+      // failed scheduled run shouldn't require having a row already assigned.
+      const summary = await performAvailableFreightImport(user.organizationId, user.id, "manual");
+      return res.json({ ok: true, summary });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[available-freight/import]", msg);
+      return res.status(400).json({ error: msg });
+    }
+  });
+
+  /**
+   * GET /api/available-freight/imports
+   * Manager/admin only. Returns the most recent import-summary audit rows.
+   */
+  app.get("/api/available-freight/imports", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!APPROVER_ROLES.has(user.role)) {
+        return res.status(403).json({ error: "Manager access required" });
+      }
+      const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? "25"), 10) || 25));
+      const imports = await listAvailableFreightImports(user.organizationId, limit);
+      return res.json({ imports });
+    } catch (err) {
+      console.error("[available-freight/imports]", err);
+      return res.status(500).json({ error: "Failed to list imports" });
+    }
+  });
+
+  /**
+   * POST /api/my-procurement/freight-opp/bulk-approve
+   * Manager-only. Approves multiple opportunities in one shot — used by the
+   * "Awaiting my approval" queue in the My Procurement tab.
+   */
+  const bulkApproveSchema = z.object({
+    opportunityIds: z.array(z.string().min(1)).min(1).max(200),
+  });
+  app.post("/api/my-procurement/freight-opp/bulk-approve", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!APPROVER_ROLES.has(user.role)) {
+        return res.status(403).json({ error: "Only managers can approve freight opportunities" });
+      }
+      const parsed = bulkApproveSchema.safeParse(req.body ?? {});
+      if (!parsed.success) return res.status(400).json({ error: "Invalid payload" });
+
+      const now = new Date();
+      const approved: string[] = [];
+      const skipped: Array<{ id: string; reason: string }> = [];
+      for (const id of parsed.data.opportunityIds) {
+        const opp = await storage.getFreightOpportunity(user.organizationId, id);
+        if (!opp) { skipped.push({ id, reason: "not_found" }); continue; }
+        if (opp.approvedAt) { skipped.push({ id, reason: "already_approved" }); continue; }
+        if (opp.status !== "new" && opp.status !== "ready_to_send") {
+          skipped.push({ id, reason: `not_open_status:${opp.status}` });
+          continue;
+        }
+        await storage.updateFreightOpportunity(user.organizationId, opp.id, {
+          approvedAt: now,
+          approvedById: user.id,
+        });
+        await storage.appendFreightOpportunityAudit({
+          opportunityId: opp.id,
+          eventType: "approved",
+          actorUserId: user.id,
+          payload: { approved: true, kind: "bulk_approve" },
+        });
+        approved.push(opp.id);
+      }
+      return res.json({ approved, skipped });
+    } catch (err) {
+      console.error("[my-procurement/freight-opp/bulk-approve]", err);
+      return res.status(500).json({ error: "Bulk approval failed" });
+    }
+  });
+
+  /**
+   * GET / PUT /api/available-freight/onedrive-url
+   * Admin-only. Read or update the OneDrive path used by the importer.
+   */
+  app.get("/api/available-freight/onedrive-url", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+      const url = await storage.getSetting(availableFreightSettingKey(user.organizationId));
+      const last = await storage.getSetting(`available_freight_last_import:${user.organizationId}`);
+      let lastImport: unknown = null;
+      if (last) { try { lastImport = JSON.parse(last); } catch { lastImport = last; } }
+      return res.json({ url: url ?? null, lastImport });
+    } catch (err) {
+      console.error("[available-freight/onedrive-url GET]", err);
+      return res.status(500).json({ error: "Failed to read setting" });
+    }
+  });
+  app.put("/api/available-freight/onedrive-url", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+      const url = String((req.body ?? {}).url ?? "").trim();
+      if (!url) return res.status(400).json({ error: "url is required" });
+      await storage.setSetting(availableFreightSettingKey(user.organizationId), url);
+      return res.json({ ok: true, url });
+    } catch (err) {
+      console.error("[available-freight/onedrive-url PUT]", err);
+      return res.status(500).json({ error: "Failed to update setting" });
+    }
+  });
+
   app.post("/api/my-procurement/award-task/:taskId/close", async (req, res) => {
     try {
       const user = await getCurrentUser(req);

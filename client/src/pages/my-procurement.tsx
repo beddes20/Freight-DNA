@@ -20,6 +20,17 @@ import { formatLaneDisplay, normalizeEquipmentType } from "@shared/laneFormatter
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogFooter,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import {
   Truck,
   Building2,
@@ -37,6 +48,11 @@ import {
   Zap,
   AlertTriangle,
   CalendarClock,
+  Package,
+  Send,
+  UserCheck,
+  ShieldCheck,
+  Pencil,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -95,9 +111,34 @@ interface TriggeredPlay {
   signalType: string | null;
 }
 
+interface AvailableFreightOpp {
+  id: string;
+  companyId: string;
+  companyName: string | null;
+  origin: string;
+  originState: string | null;
+  destination: string;
+  destinationState: string | null;
+  equipmentType: string | null;
+  pickupWindowStart: string;
+  pickupWindowEnd: string;
+  loadCount: number;
+  status: string;
+  urgencyScore: number;
+  ownerUserId: string | null;
+  delegatedToUserId: string | null;
+  approvedAt: string | null;
+  approvedById: string | null;
+  hasTemplateOverride: boolean;
+  sourceFileName: string | null;
+  isDelegatedToMe: boolean;
+  needsApproval: boolean;
+}
+
 interface MyProcurementData {
   lwqLanes: LwqLane[];
   awardTasks: AwardTask[];
+  availableFreight?: AvailableFreightOpp[];
   triggeredPlays?: TriggeredPlay[];
   viewing?: { id: string; name: string; isOther: boolean } | null;
   pagination?: {
@@ -495,7 +536,7 @@ export default function MyProcurementPage() {
   const [, navigate] = useLocation();
   const search = useSearch();
   const { user: currentUser } = useAuth();
-  const [activeTab, setActiveTab] = useState<"all" | "lwq" | "award">("all");
+  const [activeTab, setActiveTab] = useState<"all" | "lwq" | "award" | "available-freight">("all");
 
   const canViewOthers = !!currentUser && VIEW_OTHERS_ROLES.has(currentUser.role);
   const viewingUserId = useMemo(() => {
@@ -589,7 +630,11 @@ export default function MyProcurementPage() {
 
   const lwqLanes = data?.lwqLanes ?? [];
   const awardTasks = data?.awardTasks ?? [];
-  const total = lwqLanes.length + awardTasks.length;
+  const availableFreight = data?.availableFreight ?? [];
+  const availableFreightPending = availableFreight.filter(
+    (o) => o.status === "ready_to_send" || o.status === "new",
+  ).length;
+  const total = lwqLanes.length + awardTasks.length + availableFreight.length;
   const inProgress = lwqLanes.filter((l) => l.carriersContactedCount > 0).length;
   const matchedCount = awardTasks.filter((t) => t.matchedLaneId).length;
 
@@ -806,6 +851,18 @@ export default function MyProcurementPage() {
                   </span>
                 )}
               </TabsTrigger>
+              <TabsTrigger value="available-freight" data-testid="tab-available-freight">
+                <Package className="w-3.5 h-3.5 mr-1.5" />
+                Available Freight ({availableFreight.length})
+                {availableFreightPending > 0 && (
+                  <span
+                    className="ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold bg-primary text-primary-foreground"
+                    data-testid="badge-available-freight-pending"
+                  >
+                    {availableFreightPending}
+                  </span>
+                )}
+              </TabsTrigger>
             </TabsList>
 
             {/* All tab */}
@@ -848,6 +905,17 @@ export default function MyProcurementPage() {
               )}
             </TabsContent>
 
+            {/* Available Freight tab */}
+            <TabsContent value="available-freight">
+              <AvailableFreightPanel
+                items={availableFreight}
+                isManager={!!currentUser && VIEW_OTHERS_ROLES.has(currentUser.role)}
+                currentUserId={currentUser?.id ?? null}
+                isViewingOther={isViewingOther}
+                queryKey={procurementQueryKey}
+              />
+            </TabsContent>
+
             {/* Award tab */}
             <TabsContent value="award">
               {awardTasks.length === 0 ? (
@@ -870,6 +938,447 @@ export default function MyProcurementPage() {
         )}
       </div>
     </div>
+  );
+}
+
+// ── Available Freight Panel + Card (task #354) ──────────────────────────────
+
+function AvailableFreightPanel({
+  items,
+  isManager,
+  currentUserId,
+  isViewingOther,
+  queryKey,
+}: {
+  items: AvailableFreightOpp[];
+  isManager: boolean;
+  currentUserId: string | null;
+  isViewingOther: boolean;
+  queryKey: readonly unknown[];
+}) {
+  const { toast } = useToast();
+  const [filter, setFilter] = useState<"all" | "awaiting-approval" | "approved">("all");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const refreshMutation = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/available-freight/import", {}).then((r) => r.json()),
+    onSuccess: (resp: { summary?: { inserted: number; updated: number; expired: number } }) => {
+      const s = resp.summary;
+      toast({
+        title: "Import complete",
+        description: s ? `${s.inserted} new, ${s.updated} updated, ${s.expired} expired` : undefined,
+      });
+      queryClient.invalidateQueries({ queryKey });
+    },
+    onError: (err: Error) => toast({ title: "Refresh failed", description: err.message, variant: "destructive" }),
+  });
+
+  const bulkApproveMutation = useMutation({
+    mutationFn: (ids: string[]) =>
+      apiRequest("POST", "/api/my-procurement/freight-opp/bulk-approve", {
+        opportunityIds: ids,
+      }).then((r) => r.json()),
+    onSuccess: (resp: { approved: string[] }) => {
+      toast({ title: `Approved ${resp.approved.length} opportunities` });
+      setSelected(new Set());
+      queryClient.invalidateQueries({ queryKey });
+    },
+    onError: (err: Error) => toast({ title: "Bulk approve failed", description: err.message, variant: "destructive" }),
+  });
+
+  const visible = useMemo(() => {
+    if (filter === "awaiting-approval") return items.filter((o) => !o.approvedAt);
+    if (filter === "approved") return items.filter((o) => !!o.approvedAt);
+    return items;
+  }, [items, filter]);
+
+  const awaitingCount = items.filter((o) => !o.approvedAt).length;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant={filter === "all" ? "default" : "outline"}
+          onClick={() => setFilter("all")}
+          data-testid="filter-af-all"
+        >
+          All ({items.length})
+        </Button>
+        {isManager && (
+          <Button
+            size="sm"
+            variant={filter === "awaiting-approval" ? "default" : "outline"}
+            onClick={() => setFilter("awaiting-approval")}
+            data-testid="filter-af-awaiting"
+          >
+            Awaiting my approval ({awaitingCount})
+          </Button>
+        )}
+        <Button
+          size="sm"
+          variant={filter === "approved" ? "default" : "outline"}
+          onClick={() => setFilter("approved")}
+          data-testid="filter-af-approved"
+        >
+          Approved
+        </Button>
+        <div className="ml-auto flex items-center gap-2">
+          {isManager && filter === "awaiting-approval" && selected.size > 0 && (
+            <Button
+              size="sm"
+              onClick={() => bulkApproveMutation.mutate(Array.from(selected))}
+              disabled={bulkApproveMutation.isPending}
+              data-testid="button-bulk-approve"
+            >
+              {bulkApproveMutation.isPending && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+              <ShieldCheck className="w-3.5 h-3.5 mr-1.5" />
+              Approve {selected.size} selected
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => refreshMutation.mutate()}
+            disabled={refreshMutation.isPending}
+            data-testid="button-refresh-import"
+          >
+            {refreshMutation.isPending ? (
+              <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+            )}
+            Refresh
+          </Button>
+        </div>
+      </div>
+
+      {visible.length === 0 ? (
+        <EmptyState
+          message={
+            filter === "awaiting-approval"
+              ? "Nothing awaiting your approval right now."
+              : "No available freight assigned to you. Imports run from the daily OneDrive spreadsheet."
+          }
+        />
+      ) : (
+        <div className="space-y-2">
+          {visible.map((opp) => (
+            <AvailableFreightCard
+              key={opp.id}
+              item={opp}
+              isManager={isManager}
+              currentUserId={currentUserId}
+              isViewingOther={isViewingOther}
+              showSelect={isManager && filter === "awaiting-approval"}
+              selected={selected.has(opp.id)}
+              onSelectChange={(checked) => {
+                setSelected((prev) => {
+                  const next = new Set(prev);
+                  if (checked) next.add(opp.id);
+                  else next.delete(opp.id);
+                  return next;
+                });
+              }}
+              queryKey={queryKey}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AvailableFreightCard({
+  item,
+  isManager,
+  currentUserId,
+  isViewingOther,
+  showSelect,
+  selected,
+  onSelectChange,
+  queryKey,
+}: {
+  item: AvailableFreightOpp;
+  isManager: boolean;
+  currentUserId: string | null;
+  isViewingOther: boolean;
+  showSelect?: boolean;
+  selected?: boolean;
+  onSelectChange?: (checked: boolean) => void;
+  queryKey: readonly unknown[];
+}) {
+  const { toast } = useToast();
+  const [, navigate] = useLocation();
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [delegateOpen, setDelegateOpen] = useState(false);
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [delegateUserId, setDelegateUserId] = useState<string>("");
+
+  // Managers can act on any opportunity in their org, including when viewing
+  // another rep. Reps can only act on their own (owner or current delegate).
+  const isOwnerOrDelegate =
+    item.ownerUserId === currentUserId || item.delegatedToUserId === currentUserId;
+  const canManagerAct = isManager;
+  const canRepAct = !isViewingOther && isOwnerOrDelegate;
+  const canActOnIt = canManagerAct || canRepAct;
+
+  const teamMembersQuery = useQuery<TeamMemberOption[]>({
+    queryKey: ["/api/team-members"],
+    enabled: delegateOpen,
+  });
+
+  const approveMutation = useMutation({
+    mutationFn: (approve: boolean) =>
+      apiRequest("POST", `/api/my-procurement/freight-opp/${item.id}/approve`, { approve }).then((r) => r.json()),
+    onSuccess: () => {
+      toast({ title: "Approval updated" });
+      queryClient.invalidateQueries({ queryKey });
+    },
+    onError: (err: Error) => toast({ title: "Approval failed", description: err.message, variant: "destructive" }),
+  });
+
+  const delegateMutation = useMutation({
+    mutationFn: (userId: string | null) =>
+      apiRequest("POST", `/api/my-procurement/freight-opp/${item.id}/delegate`, {
+        delegatedToUserId: userId,
+      }).then((r) => r.json()),
+    onSuccess: () => {
+      toast({ title: "Delegation updated" });
+      setDelegateOpen(false);
+      queryClient.invalidateQueries({ queryKey });
+    },
+    onError: (err: Error) => toast({ title: "Delegate failed", description: err.message, variant: "destructive" }),
+  });
+
+  const overrideMutation = useMutation({
+    mutationFn: () =>
+      apiRequest("PATCH", `/api/my-procurement/freight-opp/${item.id}/template-override`, {
+        subject: subject.trim() ? subject : null,
+        body: body.trim() ? body : null,
+      }).then((r) => r.json()),
+    onSuccess: () => {
+      toast({ title: "Template saved for this opportunity" });
+      setEditorOpen(false);
+      queryClient.invalidateQueries({ queryKey });
+    },
+    onError: (err: Error) => toast({ title: "Save failed", description: err.message, variant: "destructive" }),
+  });
+
+  const lane = `${item.origin}${item.originState ? ", " + item.originState : ""} → ${item.destination}${item.destinationState ? ", " + item.destinationState : ""}`;
+  const isApproved = !!item.approvedAt;
+
+  return (
+    <Card data-testid={`card-available-freight-${item.id}`} className="hover-elevate">
+      <div className="p-3 md:p-4 flex flex-col gap-2">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="min-w-0 flex items-start gap-2">
+            {showSelect && (
+              <input
+                type="checkbox"
+                className="mt-1.5"
+                checked={!!selected}
+                onChange={(e) => onSelectChange?.(e.target.checked)}
+                data-testid={`checkbox-select-${item.id}`}
+              />
+            )}
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Package className="w-4 h-4 text-primary shrink-0" />
+              <span className="font-medium" data-testid={`text-customer-${item.id}`}>
+                {item.companyName ?? "Unknown customer"}
+              </span>
+              {item.isDelegatedToMe && (
+                <Badge variant="secondary" className="text-[10px]">Delegated to you</Badge>
+              )}
+              {item.hasTemplateOverride && (
+                <Badge variant="outline" className="text-[10px]">Custom template</Badge>
+              )}
+              {isApproved ? (
+                <Badge className="text-[10px] bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
+                  <ShieldCheck className="w-3 h-3 mr-1" /> Approved
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="text-[10px] text-amber-700 border-amber-300">
+                  Awaiting approval
+                </Badge>
+              )}
+            </div>
+            <div className="text-sm text-muted-foreground mt-1" data-testid={`text-lane-${item.id}`}>
+              {lane}
+            </div>
+            <div className="text-xs text-muted-foreground mt-0.5 flex flex-wrap gap-x-3">
+              <span>{item.equipmentType ?? "Any equipment"}</span>
+              <span>
+                Pickup {item.pickupWindowStart}
+                {item.pickupWindowEnd !== item.pickupWindowStart ? ` – ${item.pickupWindowEnd}` : ""}
+              </span>
+              <span>{item.loadCount} load{item.loadCount === 1 ? "" : "s"}</span>
+              {item.sourceFileName && <span className="opacity-70">{item.sourceFileName}</span>}
+            </div>
+          </div>
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => navigate(`/available-freight/${item.id}`)}
+              data-testid={`button-open-${item.id}`}
+            >
+              <ExternalLink className="w-3.5 h-3.5 mr-1.5" /> Open
+            </Button>
+            {canActOnIt && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setSubject("");
+                  setBody("");
+                  setEditorOpen(true);
+                }}
+                data-testid={`button-edit-template-${item.id}`}
+              >
+                <Pencil className="w-3.5 h-3.5 mr-1.5" /> Template
+              </Button>
+            )}
+            {canActOnIt && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setDelegateOpen(true)}
+                data-testid={`button-delegate-${item.id}`}
+              >
+                <UserCheck className="w-3.5 h-3.5 mr-1.5" /> Delegate
+              </Button>
+            )}
+            {isManager && !isApproved && (
+              <Button
+                size="sm"
+                onClick={() => approveMutation.mutate(true)}
+                disabled={approveMutation.isPending}
+                data-testid={`button-approve-${item.id}`}
+              >
+                {approveMutation.isPending ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5 mr-1.5" />}
+                Approve
+              </Button>
+            )}
+            {isManager && isApproved && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => approveMutation.mutate(false)}
+                disabled={approveMutation.isPending}
+                data-testid={`button-revoke-${item.id}`}
+              >
+                Revoke
+              </Button>
+            )}
+            {canActOnIt && isApproved && (
+              <Button
+                size="sm"
+                onClick={() => navigate(`/available-freight/${item.id}?action=send`)}
+                data-testid={`button-send-${item.id}`}
+              >
+                <Send className="w-3.5 h-3.5 mr-1.5" /> Send
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {editorOpen && (
+        <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
+          <DialogContent data-testid={`dialog-edit-template-${item.id}`}>
+            <DialogHeader>
+              <DialogTitle>Customize template for this opportunity</DialogTitle>
+              <DialogDescription>
+                Leave a field blank to fall back to the org default. Each edit is audited.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-medium">Subject override</label>
+                <Input
+                  value={subject}
+                  onChange={(e) => setSubject(e.target.value)}
+                  placeholder="(use default subject)"
+                  data-testid={`input-subject-${item.id}`}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium">Body override</label>
+                <Textarea
+                  rows={8}
+                  value={body}
+                  onChange={(e) => setBody(e.target.value)}
+                  placeholder="(use default body)"
+                  data-testid={`input-body-${item.id}`}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditorOpen(false)}>Cancel</Button>
+              <Button
+                onClick={() => overrideMutation.mutate()}
+                disabled={overrideMutation.isPending}
+                data-testid={`button-save-template-${item.id}`}
+              >
+                {overrideMutation.isPending && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+                Save
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {delegateOpen && (
+        <Dialog open={delegateOpen} onOpenChange={setDelegateOpen}>
+          <DialogContent data-testid={`dialog-delegate-${item.id}`}>
+            <DialogHeader>
+              <DialogTitle>Delegate this opportunity</DialogTitle>
+              <DialogDescription>The selected rep will own follow-up and outreach.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <Select value={delegateUserId} onValueChange={setDelegateUserId}>
+                <SelectTrigger data-testid={`select-delegate-user-${item.id}`}>
+                  <SelectValue placeholder="Choose a teammate" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(teamMembersQuery.data ?? []).map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.name ?? m.email ?? m.id}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <DialogFooter>
+              {item.delegatedToUserId && (
+                <Button
+                  variant="outline"
+                  onClick={() => delegateMutation.mutate(null)}
+                  disabled={delegateMutation.isPending}
+                  data-testid={`button-clear-delegate-${item.id}`}
+                >
+                  Clear delegation
+                </Button>
+              )}
+              <Button variant="outline" onClick={() => setDelegateOpen(false)}>Cancel</Button>
+              <Button
+                onClick={() => delegateUserId && delegateMutation.mutate(delegateUserId)}
+                disabled={!delegateUserId || delegateMutation.isPending}
+                data-testid={`button-confirm-delegate-${item.id}`}
+              >
+                {delegateMutation.isPending && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+                Delegate
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </Card>
   );
 }
 

@@ -243,13 +243,19 @@ export async function sendOpportunityWave(
     throw new Error("Customer outreach is disabled in policy");
   }
 
-  // Approval gate: when the policy requires explicit approval, the rep clicking
-  // "Send" IS the approval. Audit it as such.
-  const requiresApproval = policy.approvalRequired;
+  // Approval gate (task #354): every opportunity sourced from the Available
+  // Freight import requires explicit manager approval before send, regardless
+  // of policy. Other (non-imported) opportunities still defer to
+  // `policy.approvalRequired`. The rep clicking Send is never treated as the
+  // approval — that decoupling is the entire point of the workflow.
+  const sourceKind = (opportunity.sourceRef as { kind?: string } | null | undefined)?.kind;
+  const isAvailableFreightImport = sourceKind === "available_freight_import";
+  const requiresApproval = isAvailableFreightImport || policy.approvalRequired;
   if (requiresApproval && opportunity.status !== "ready_to_send" && opportunity.status !== "sent" && opportunity.status !== "partially_covered") {
-    // Generation always lands rows at "ready_to_send". Anything else means we
-    // shouldn't be sending yet.
     throw new Error(`Opportunity is in status "${opportunity.status}" — cannot send`);
+  }
+  if (requiresApproval && !opportunity.approvedAt) {
+    throw new Error("Manager approval required before sending this opportunity");
   }
 
   const allCarriers = await storage.listFreightOpportunityCarriers(opportunityId);
