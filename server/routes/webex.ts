@@ -45,7 +45,8 @@ import {
   connectUserWebex,
   disconnectUserWebex,
 } from "../webexUserTokenService";
-import { insertWebexUserMappingSchema } from "@shared/schema";
+import { insertWebexUserMappingSchema, touchpoints } from "@shared/schema";
+import { and, eq, lte, inArray, sql } from "drizzle-orm";
 import OpenAI from "openai";
 import cron from "node-cron";
 import crypto from "crypto";
@@ -487,6 +488,80 @@ Respond with valid JSON only (no markdown):
   return { touchpoints: createdTouchpoints, nbaCards: createdNbaCards };
 }
 
+// ── Reusable 90-day history backfill helper (Task #316) ─────────────────────
+// Chunks syncCallsForOrg into 48h windows walking backwards to seed trendlines
+// with historical CDR data. Callable from both the admin endpoint and the
+// OAuth callback auto-trigger path.
+async function runWebexHistoryBackfill(
+  orgId: string,
+  daysBack: number,
+): Promise<{ daysBack: number; synced: number; missedCallCards: number; chunksAttempted: number; chunksFailed: number }> {
+  const hoursBack = daysBack * 24;
+  const now = Date.now();
+  const chunkHours = 48;
+  let syncedCount = 0;
+  let missedCount = 0;
+  let chunksAttempted = 0;
+  let chunksFailed = 0;
+  log(`Backfill-history starting org=${orgId} days=${daysBack}`);
+  for (let offset = 0; offset < hoursBack; offset += chunkHours) {
+    chunksAttempted++;
+    const chunkEndMs = now - offset * 3600_000;
+    const chunkSize = Math.min(chunkHours, hoursBack - offset);
+    try {
+      const result = await syncCallsForOrg(orgId, chunkSize, chunkEndMs);
+      syncedCount += result.touchpoints.length;
+      missedCount += result.nbaCards.length;
+    } catch (chunkErr) {
+      chunksFailed++;
+      log(`Backfill chunk failed (${new Date(chunkEndMs).toISOString()}): ${chunkErr instanceof Error ? chunkErr.message : String(chunkErr)}`);
+    }
+  }
+  log(`Backfill-history complete org=${orgId} synced=${syncedCount} missed=${missedCount} chunks=${chunksAttempted} failed=${chunksFailed}`);
+  return { daysBack, synced: syncedCount, missedCallCards: missedCount, chunksAttempted, chunksFailed };
+}
+
+// Fire-and-forget one-time seed after a fresh org-level Webex authorization.
+// Idempotent: skips if any Webex touchpoint older than 3 days already exists
+// for the org (assume a prior backfill already populated history).
+const webexBackfillInFlight = new Set<string>();
+async function maybeAutoBackfillOnConnect(orgId: string): Promise<void> {
+  if (webexBackfillInFlight.has(orgId)) return;
+  webexBackfillInFlight.add(orgId);
+  try {
+    const orgCompanies = await storage.getCompanies(orgId);
+    const companyIds = orgCompanies.map(c => c.id);
+    if (companyIds.length === 0) {
+      log(`Auto-backfill skipped for org=${orgId} — no companies yet`);
+      return;
+    }
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    // Only skip if Webex-derived call touchpoints already exist (notes contain
+    // the `[Webex CDR:` marker). Pre-existing manually logged calls must not
+    // short-circuit the first-time auto-seed on connect.
+    const existing = await db
+      .select({ id: touchpoints.id })
+      .from(touchpoints)
+      .where(and(
+        inArray(touchpoints.companyId, companyIds),
+        eq(touchpoints.type, "call"),
+        lte(touchpoints.date, threeDaysAgo),
+        sql`${touchpoints.notes} LIKE '%[Webex CDR:%'`,
+      ))
+      .limit(1);
+    if (existing.length > 0) {
+      log(`Auto-backfill skipped for org=${orgId} — historical Webex CDR touchpoints already present`);
+      return;
+    }
+    log(`Auto-backfill triggered for org=${orgId} (90d seed on fresh Webex connect)`);
+    await runWebexHistoryBackfill(orgId, 90);
+  } catch (err) {
+    log(`Auto-backfill error org=${orgId}: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    webexBackfillInFlight.delete(orgId);
+  }
+}
+
 export function registerWebexRoutes(app: Express) {
 
   async function loadStoredRefreshToken() {
@@ -670,6 +745,8 @@ export function registerWebexRoutes(app: Express) {
         }
         await connectUserWebex(u.organizationId, u.id, code, info.redirectUri);
         log(`Per-user OAuth complete for user ${u.id}`);
+        // Auto-seed 90d history trendlines for this org (idempotent, async)
+        void maybeAutoBackfillOnConnect(u.organizationId);
         return res.send(`
           <html><body style="font-family:sans-serif;text-align:center;padding:60px">
             <h2>Your Webex account is connected!</h2>
@@ -685,6 +762,11 @@ export function registerWebexRoutes(app: Express) {
       await resetWebexReauthReminderState();
 
       log(`OAuth complete — org tokens stored (redirect_uri=${info.redirectUri})`);
+      // Auto-seed 90d history trendlines for the admin's org (idempotent, async)
+      const sessionUser = await getCurrentUser(req);
+      if (sessionUser?.organizationId) {
+        void maybeAutoBackfillOnConnect(sessionUser.organizationId);
+      }
       res.send(`
         <html><body style="font-family:sans-serif;text-align:center;padding:60px">
           <h2>Webex Connected Successfully!</h2>
@@ -887,6 +969,37 @@ export function registerWebexRoutes(app: Express) {
     } catch (err) {
       log(`Sync error: ${err instanceof Error ? err.message : String(err)}`);
       res.status(500).json({ error: "Failed to sync Webex calls" });
+    }
+  });
+
+  // ── 90-day history backfill (Task #316) ──────────────────────────────────
+  // Chunked call-history pull extending well past the 48h CDR visibility cap
+  // so trendlines can be seeded the first time the analytics scope is enabled.
+  app.post("/api/webex/backfill-history", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (user.role !== "admin" && user.role !== "director") {
+        return res.status(403).json({ error: "Admin or director only" });
+      }
+      if (!webexCredentialsConfigured()) {
+        return res.status(400).json({ error: "Webex credentials not configured" });
+      }
+      if (!hasWebexTokens()) {
+        return res.status(400).json({ error: "Webex not authorized. Visit /api/webex/authorize to connect." });
+      }
+      if (webexNeedsReauth()) {
+        return res.status(400).json({ error: "Webex needs re-authorization before a backfill can run." });
+      }
+      const daysBackRaw = Number(req.body?.daysBack);
+      const daysBack = Number.isFinite(daysBackRaw) && daysBackRaw > 0
+        ? Math.min(365, Math.floor(daysBackRaw))
+        : 90;
+      const result = await runWebexHistoryBackfill(user.organizationId, daysBack);
+      res.json(result);
+    } catch (err) {
+      log(`backfill-history error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to backfill history" });
     }
   });
 

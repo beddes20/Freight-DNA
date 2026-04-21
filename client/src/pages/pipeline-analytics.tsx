@@ -13,6 +13,7 @@ import {
   PROSPECT_LOST_REASON_LABELS,
   type ProspectStage,
 } from "@shared/schema";
+import { CallPaceCard } from "@/components/call-pace-card";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -371,6 +372,9 @@ export default function PipelineAnalyticsPage() {
           )}
         </Card>
       </div>
+
+      {/* ── Call Pace (Webex CDR trendlines per shipper) ── */}
+      <CallPaceCard />
 
       {/* ── Rep Leaderboard ── */}
       {data.repStats.length > 0 && (

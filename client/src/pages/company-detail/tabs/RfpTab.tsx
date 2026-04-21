@@ -22,6 +22,7 @@ import { AwardDialog } from "@/components/award-dialog";
 import { ConvertToAwardDialog } from "@/components/convert-to-award-dialog";
 import { ResearchLaneDialog } from "@/components/research-lane-dialog";
 import { VotriBadge } from "@/components/sonar-votri-badge";
+import { LaneCallRollupPicker } from "@/components/lane-call-rollup";
 import { X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -999,6 +1000,28 @@ export function RfpTab({
             </CardContent>
           </Card>
         );
+      })()}
+
+      {/* Lane Call Rollup — Webex CDR activity for any lane on this account */}
+      {researchTasks && (() => {
+        const hasLoc = (c: string, s: string) => !!((c && c.trim() && c.trim().toUpperCase() !== "N/A") || (s && s.trim() && s.trim().toUpperCase() !== "N/A"));
+        const lanes = researchTasks
+          .filter(t => hasLoc(t.origin, t.originState) && hasLoc(t.destination, t.destinationState))
+          .sort((a, b) => b.volume - a.volume)
+          .map(t => {
+            const originPart = t.origin || t.originState || "";
+            const destPart = t.destination || t.destinationState || "";
+            return { laneStr: `${originPart} → ${destPart}`, volume: t.volume };
+          });
+        // Deduplicate while preserving highest-volume first
+        const seen = new Set<string>();
+        const uniqueLanes = lanes.filter(l => {
+          if (seen.has(l.laneStr)) return false;
+          seen.add(l.laneStr);
+          return true;
+        });
+        if (uniqueLanes.length === 0) return null;
+        return <LaneCallRollupPicker lanes={uniqueLanes} />;
       })()}
 
       {/* Contact Details */}
