@@ -22,6 +22,7 @@ import {
   carrierScorecardFact,
   carrierRecommendation,
   carriers as carriersTbl,
+  carrierContacts as carrierContactsTbl,
   loadFact,
 } from "@shared/schema";
 import {
@@ -88,10 +89,130 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
         return res.status(404).json({ error: "Carrier not in scorecard yet", carrier: carrierMeta });
       }
       const all = splits.find(s => s.equipmentType === "ALL") ?? splits[0];
+
+      // ── Per-carrier deep dive payload ────────────────────────────────────
+      // moveStatus filter (comma list of: realized | active | available).
+      // An explicit empty selection returns an empty load list — the UI
+      // contract is "what you see in the chips is what gets queried", so we
+      // do NOT silently expand an empty selection to all buckets. Omitting
+      // the param entirely defaults to all three.
+      const validBuckets = new Set(["realized", "active", "available"]);
+      const rawMs = req.query.moveStatus;
+      const buckets = rawMs === undefined
+        ? ["realized", "active", "available"]
+        : String(rawMs).split(",").map(s => s.trim().toLowerCase()).filter(s => validBuckets.has(s));
+
+      const loadRows = buckets.length === 0
+        ? []
+        : await db.select().from(loadFact)
+            .where(and(
+              eq(loadFact.orgId, orgId),
+              eq(loadFact.carrierName, carrierName),
+              inArray(loadFact.bucket, buckets),
+            ))
+            .orderBy(desc(loadFact.pickupDate))
+            .limit(500);
+
+      const recentLoads = loadRows.slice(0, 25).map(l => ({
+        id: l.id,
+        orderId: l.orderId,
+        bucket: l.bucket,
+        moveStatus: l.moveStatus,
+        customerName: l.customerName,
+        equipmentType: l.equipmentType,
+        originCity: l.originCity, originState: l.originState,
+        destinationCity: l.destinationCity, destinationState: l.destinationState,
+        pickupDate: l.pickupDate, deliveryDate: l.deliveryDate,
+        revenue: l.revenue, margin: l.margin, marginPct: l.marginPct,
+        totalMiles: l.totalMiles,
+      }));
+
+      // Lane mix (top lanes by load count within the bucket filter)
+      const laneMap = new Map<string, { lane: string; loads: number; revenue: number; margin: number }>();
+      for (const l of loadRows) {
+        const o = `${l.originCity ?? "?"}, ${l.originState ?? "?"}`;
+        const d = `${l.destinationCity ?? "?"}, ${l.destinationState ?? "?"}`;
+        const lane = `${o} → ${d}`;
+        const cur = laneMap.get(lane) ?? { lane, loads: 0, revenue: 0, margin: 0 };
+        cur.loads += 1;
+        cur.revenue += Number(l.revenue ?? 0);
+        cur.margin += Number(l.margin ?? 0);
+        laneMap.set(lane, cur);
+      }
+      const laneMix = Array.from(laneMap.values())
+        .sort((a, b) => b.loads - a.loads)
+        .slice(0, 8);
+
+      // Trend (monthly buckets from realized loads only — margin% & on-time%)
+      const trendRows = await db.execute<{
+        month: string; loads: string; revenue: string; margin: string;
+        on_time_loads: string; rated_loads: string;
+      }>(sql`
+        SELECT
+          ${loadFact.month} AS month,
+          COUNT(*)::text AS loads,
+          COALESCE(SUM(${loadFact.revenue}),0)::text AS revenue,
+          COALESCE(SUM(${loadFact.margin}),0)::text AS margin,
+          SUM(CASE
+            WHEN ${loadFact.arrivedAtDelivery} IS NOT NULL
+             AND ${loadFact.deliveryApptEnd} IS NOT NULL
+             AND ${loadFact.arrivedAtDelivery}::timestamp <= ${loadFact.deliveryApptEnd}::timestamp
+            THEN 1 ELSE 0 END)::text AS on_time_loads,
+          SUM(CASE
+            WHEN ${loadFact.arrivedAtDelivery} IS NOT NULL
+             AND ${loadFact.deliveryApptEnd} IS NOT NULL
+            THEN 1 ELSE 0 END)::text AS rated_loads
+        FROM ${loadFact}
+        WHERE ${loadFact.orgId} = ${orgId}
+          AND ${loadFact.carrierName} = ${carrierName}
+          AND ${loadFact.bucket} = 'realized'
+          AND ${loadFact.month} IS NOT NULL
+        GROUP BY ${loadFact.month}
+        ORDER BY ${loadFact.month} ASC
+      `);
+      const trend = trendRows.rows.slice(-12).map(r => {
+        const revenue = Number(r.revenue);
+        const margin = Number(r.margin);
+        const onTime = Number(r.on_time_loads);
+        const rated = Number(r.rated_loads);
+        return {
+          month: r.month,
+          loads: Number(r.loads),
+          revenue, margin,
+          marginPct: revenue > 0 ? (margin / revenue) * 100 : null,
+          onTimePct: rated > 0 ? (onTime / rated) * 100 : null,
+        };
+      });
+
+      // Contacts (only when carrier resolves to a rolodex row)
+      const contacts = carrierMeta?.id
+        ? await db.select().from(carrierContactsTbl)
+            .where(and(
+              eq(carrierContactsTbl.carrierId, carrierMeta.id),
+              eq(carrierContactsTbl.isActive, true),
+            ))
+            .orderBy(desc(carrierContactsTbl.isPrimary), carrierContactsTbl.name)
+        : [];
+
+      // Active recommendations across this carrier's open loads (top 8).
+      const recs = await db.select().from(carrierRecommendation)
+        .where(and(
+          eq(carrierRecommendation.orgId, orgId),
+          eq(carrierRecommendation.carrierName, carrierName),
+        ))
+        .orderBy(desc(carrierRecommendation.totalScore))
+        .limit(8);
+
       return res.json({
         carrier: carrierMeta,
         scorecard: all,
         equipmentSplits: splits,
+        moveStatus: buckets,
+        recentLoads,
+        laneMix,
+        trend,
+        contacts,
+        recommendations: recs,
       });
     } catch (err) {
       console.error("[carrier-intel/carriers/:carrierId]", err);

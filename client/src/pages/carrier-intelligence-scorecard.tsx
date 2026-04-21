@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Trophy, Search, Download, BookmarkPlus, RefreshCw, Truck, AlertTriangle } from "lucide-react";
+import { Trophy, Search, Download, BookmarkPlus, RefreshCw, Truck, AlertTriangle, Phone, Mail, MessageSquare } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,10 +10,12 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { MoveStatusFilter, type MoveStatus, sumByMoveStatus } from "@/components/move-status-filter";
+import { LineChart, Line, ResponsiveContainer, Tooltip as ReTooltip, XAxis, YAxis } from "recharts";
 import {
   useCarrierIntelPrefs, useSaveCarrierIntelPrefs,
   colorForMarginPct, colorForOnTimePct,
   fmtCurrency, fmtNum, fmtPct, fmtRpm, fmtDate, downloadCsv,
+  type CarrierIntelThresholds,
 } from "@/lib/carrier-intelligence";
 import { useToast } from "@/hooks/use-toast";
 
@@ -39,10 +41,34 @@ interface ScorecardRow {
   daysSinceLastLoad: number | null;
   lastLoadDate: string | null;
 }
+interface CarrierContact {
+  id: string; name: string; role: string; email: string | null; phone: string | null;
+  extension: string | null; preferredMethod: string | null; isPrimary: boolean;
+}
+interface RecentLoad {
+  id: string; orderId: string; bucket: string; moveStatus: string | null;
+  customerName: string | null; equipmentType: string | null;
+  originCity: string | null; originState: string | null;
+  destinationCity: string | null; destinationState: string | null;
+  pickupDate: string | null; deliveryDate: string | null;
+  revenue: string | null; margin: string | null; marginPct: string | null;
+  totalMiles: string | null;
+}
+interface LaneMixRow { lane: string; loads: number; revenue: number; margin: number }
+interface TrendPoint {
+  month: string; loads: number; revenue: number; margin: number;
+  marginPct: number | null; onTimePct: number | null;
+}
 interface CarrierDetailResp {
-  carrier: { id?: string; name?: string; status?: string };
-  scorecard: ScorecardRow[];
-  recommendations?: Array<{ id: string; loadFactId: string; rank: number; totalScore: number; reason: string | null }>;
+  carrier: { id: string | null; name: string; status: string | null; tags: string[] };
+  scorecard: ScorecardRow;
+  equipmentSplits: ScorecardRow[];
+  moveStatus: MoveStatus[];
+  recentLoads: RecentLoad[];
+  laneMix: LaneMixRow[];
+  trend: TrendPoint[];
+  contacts: CarrierContact[];
+  recommendations: Array<{ id: string; loadFactId: string; rank: number; totalScore: number; reason: string | null }>;
 }
 
 const TIER_BADGE: Record<string, string> = {
@@ -65,6 +91,7 @@ export default function CarrierIntelligenceScorecardPage() {
   const [minLoads, setMinLoads] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [drawerCarrier, setDrawerCarrier] = useState<string | null>(null);
+  const [drawerMoveStatus, setDrawerMoveStatus] = useState<MoveStatus[]>(["realized", "active"]);
   const [savedViewName, setSavedViewName] = useState("");
 
   // Initialize controls from prefs once
@@ -75,15 +102,20 @@ export default function CarrierIntelligenceScorecardPage() {
     setMinLoads(userPrefs.scorecard.minLoads ?? 1);
   }
 
-  const { data, isLoading, refetch, isFetching } = useQuery<{ scorecards: ScorecardRow[] }>({
+  const { data, isLoading, refetch, isFetching } = useQuery<{ rows?: ScorecardRow[]; scorecards?: ScorecardRow[] }>({
     queryKey: ["/api/carrier-intelligence/scorecard"],
+    select: (d) => ({ scorecards: d.rows ?? d.scorecards ?? [] }),
   });
 
+  const drawerMsKey = drawerMoveStatus.slice().sort().join(",");
   const detailQ = useQuery<CarrierDetailResp>({
-    queryKey: ["/api/carrier-intelligence/carriers", drawerCarrier],
+    queryKey: ["/api/carrier-intelligence/carriers", drawerCarrier, drawerMsKey],
     enabled: !!drawerCarrier,
     queryFn: async () => {
-      const res = await fetch(`/api/carrier-intelligence/carriers/${encodeURIComponent(drawerCarrier!)}`, { credentials: "include" });
+      const res = await fetch(
+        `/api/carrier-intelligence/carriers/${encodeURIComponent(drawerCarrier!)}?moveStatus=${encodeURIComponent(drawerMsKey)}`,
+        { credentials: "include" },
+      );
       if (!res.ok) throw new Error("Failed to load carrier detail");
       return res.json();
     },
@@ -318,7 +350,10 @@ export default function CarrierIntelligenceScorecardPage() {
                       <TableRow
                         key={r.id}
                         className="cursor-pointer hover-elevate"
-                        onClick={() => setDrawerCarrier(r.carrierName)}
+                        onClick={() => {
+                          setDrawerMoveStatus(moveStatus ?? ["realized", "active"]);
+                          setDrawerCarrier(r.carrierName);
+                        }}
                         data-testid={`row-scorecard-${r.id}`}
                       >
                         <TableCell className="font-medium flex items-center gap-2">
@@ -356,40 +391,318 @@ export default function CarrierIntelligenceScorecardPage() {
 
       {/* Carrier detail drawer */}
       <Sheet open={!!drawerCarrier} onOpenChange={(o) => !o && setDrawerCarrier(null)}>
-        <SheetContent className="w-full sm:max-w-xl overflow-y-auto" data-testid="drawer-carrier-detail">
-          <SheetHeader>
-            <SheetTitle data-testid="text-drawer-carrier">{drawerCarrier}</SheetTitle>
-            <SheetDescription>Equipment splits, recent activity, and current open recommendations.</SheetDescription>
-          </SheetHeader>
-          {detailQ.isLoading && <div className="py-6"><Skeleton className="h-32 w-full" /></div>}
-          {detailQ.data && (
-            <div className="mt-4 space-y-4">
-              <div className="grid grid-cols-3 gap-2">
-                {detailQ.data.scorecard.map((r) => (
-                  <Card key={r.id} className="p-3" data-testid={`card-equip-split-${r.equipmentType}`}>
-                    <div className="text-xs text-muted-foreground">{r.equipmentType}</div>
-                    <div className="text-lg font-semibold">{r.performanceScore}</div>
-                    <div className="text-xs">{r.loads} loads · {fmtPct(Number(r.marginPct))}</div>
-                  </Card>
-                ))}
-              </div>
-              {detailQ.data.recommendations && detailQ.data.recommendations.length > 0 && (
-                <Card>
-                  <CardHeader className="py-3"><CardTitle className="text-sm">Active recommendations</CardTitle></CardHeader>
-                  <CardContent className="space-y-2 text-sm">
-                    {detailQ.data.recommendations.slice(0, 8).map((rec) => (
-                      <div key={rec.id} className="flex justify-between border-b last:border-0 pb-2" data-testid={`row-rec-${rec.id}`}>
-                        <span className="truncate">{rec.reason ?? `Rank ${rec.rank}`}</span>
-                        <span className="text-muted-foreground tabular-nums ml-2">Score {rec.totalScore}</span>
-                      </div>
-                    ))}
-                  </CardContent>
-                </Card>
+        <SheetContent
+          side="right"
+          className="w-full sm:max-w-2xl overflow-y-auto p-0"
+          data-testid="drawer-carrier-detail"
+        >
+          <CarrierDetailPanel
+            carrierName={drawerCarrier}
+            data={detailQ.data}
+            isLoading={detailQ.isLoading}
+            error={detailQ.error as Error | null}
+            moveStatus={drawerMoveStatus}
+            onChangeMoveStatus={setDrawerMoveStatus}
+            thresholds={thresholds}
+          />
+        </SheetContent>
+      </Sheet>
+    </div>
+  );
+}
+
+interface CarrierDetailPanelProps {
+  carrierName: string | null;
+  data: CarrierDetailResp | undefined;
+  isLoading: boolean;
+  error: Error | null;
+  moveStatus: MoveStatus[];
+  onChangeMoveStatus: (next: MoveStatus[]) => void;
+  thresholds?: CarrierIntelThresholds;
+}
+
+function CarrierDetailPanel({
+  carrierName, data, isLoading, error, moveStatus, onChangeMoveStatus, thresholds,
+}: CarrierDetailPanelProps) {
+  const primary = data?.contacts.find((c) => c.isPrimary) ?? data?.contacts[0];
+  const tier = data?.scorecard?.tier ?? "new";
+  const tierClass = TIER_BADGE[tier] ?? TIER_BADGE.new;
+
+  return (
+    <div className="flex flex-col h-full">
+      <SheetHeader className="px-5 pt-5 pb-3 border-b">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <SheetTitle className="flex items-center gap-2 truncate" data-testid="text-drawer-carrier">
+              <Truck className="h-5 w-5 text-muted-foreground shrink-0" />
+              <span className="truncate">{carrierName}</span>
+            </SheetTitle>
+            <SheetDescription className="mt-1">
+              Per-carrier deep dive: lane mix, recent loads, performance trend.
+            </SheetDescription>
+          </div>
+          {data && (
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Badge variant="outline" className={tierClass} data-testid="badge-drawer-tier">{tier.toUpperCase()}</Badge>
+              <Badge variant="secondary" data-testid="badge-drawer-score">Score {data.scorecard.performanceScore}</Badge>
+              {data.carrier.status === "do_not_use" && (
+                <Badge variant="outline" className="border-red-500/50 text-red-600 dark:text-red-400">
+                  <AlertTriangle className="h-3 w-3 mr-1" /> DNU
+                </Badge>
               )}
             </div>
           )}
-        </SheetContent>
-      </Sheet>
+        </div>
+      </SheetHeader>
+
+      <div className="px-5 pt-4 space-y-4">
+        {/* Quick actions */}
+        {primary ? (
+          <Card data-testid="card-primary-contact">
+            <CardContent className="py-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-xs uppercase tracking-wide text-muted-foreground">Primary contact</div>
+                <div className="font-medium truncate" data-testid="text-primary-contact-name">
+                  {primary.name}
+                  <span className="text-muted-foreground ml-2 text-xs">{primary.role}</span>
+                </div>
+                <div className="text-xs text-muted-foreground truncate">
+                  {primary.phone ?? "—"}{primary.extension ? ` x${primary.extension}` : ""}
+                  {primary.email ? ` · ${primary.email}` : ""}
+                </div>
+              </div>
+              <div className="flex gap-1.5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!primary.phone}
+                  asChild={!!primary.phone}
+                  data-testid="button-call-primary"
+                >
+                  {primary.phone ? <a href={`tel:${primary.phone}`}><Phone className="h-3.5 w-3.5 mr-1" /> Call</a> : <span><Phone className="h-3.5 w-3.5 mr-1" /> Call</span>}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!primary.phone}
+                  asChild={!!primary.phone}
+                  data-testid="button-text-primary"
+                >
+                  {primary.phone ? <a href={`sms:${primary.phone}`}><MessageSquare className="h-3.5 w-3.5 mr-1" /> Text</a> : <span><MessageSquare className="h-3.5 w-3.5 mr-1" /> Text</span>}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!primary.email}
+                  asChild={!!primary.email}
+                  data-testid="button-email-primary"
+                >
+                  {primary.email ? <a href={`mailto:${primary.email}`}><Mail className="h-3.5 w-3.5 mr-1" /> Email</a> : <span><Mail className="h-3.5 w-3.5 mr-1" /> Email</span>}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ) : data && data.carrier.id ? (
+          <div className="text-xs text-muted-foreground" data-testid="text-no-contacts">
+            No active contacts on file for this carrier.
+          </div>
+        ) : data ? (
+          <div className="text-xs text-muted-foreground" data-testid="text-not-in-rolodex">
+            This carrier is not yet in your rolodex — add it to track contacts here.
+          </div>
+        ) : null}
+
+        {/* Move status filter (drawer-scoped, mirrors parent) */}
+        <MoveStatusFilter
+          value={moveStatus}
+          onChange={onChangeMoveStatus}
+          testIdPrefix="chip-drawer-move-status"
+        />
+      </div>
+
+      <div className="px-5 py-4 space-y-5">
+        {isLoading && (
+          <div className="space-y-3" data-testid="loading-drawer">
+            <Skeleton className="h-24 w-full" />
+            <Skeleton className="h-32 w-full" />
+            <Skeleton className="h-40 w-full" />
+          </div>
+        )}
+        {error && (
+          <div className="text-sm text-red-600 dark:text-red-400" data-testid="text-drawer-error">
+            {error.message}
+          </div>
+        )}
+
+        {data && (
+          <>
+            {/* Headline KPIs */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <MiniStat label="Loads" value={fmtNum(data.scorecard.loads)} testId="stat-drawer-loads" />
+              <MiniStat label="Active" value={fmtNum(data.scorecard.activeLoads)} testId="stat-drawer-active" />
+              <MiniStat
+                label="Margin %"
+                value={fmtPct(Number(data.scorecard.marginPct))}
+                valueClass={thresholds ? colorForMarginPct(Number(data.scorecard.marginPct), thresholds) : undefined}
+                testId="stat-drawer-margin-pct"
+              />
+              <MiniStat
+                label="On-time %"
+                value={data.scorecard.onTimePct == null ? "—" : fmtPct(Number(data.scorecard.onTimePct))}
+                valueClass={thresholds ? colorForOnTimePct(data.scorecard.onTimePct == null ? null : Number(data.scorecard.onTimePct), thresholds) : undefined}
+                testId="stat-drawer-on-time"
+              />
+            </div>
+
+            {/* Equipment splits */}
+            {data.equipmentSplits.length > 1 && (
+              <Card>
+                <CardHeader className="py-3">
+                  <CardTitle className="text-sm">Equipment splits</CardTitle>
+                </CardHeader>
+                <CardContent className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {data.equipmentSplits.filter(s => s.equipmentType !== "ALL").map((r) => (
+                    <div key={r.id} className="rounded-md border p-2.5" data-testid={`card-equip-split-${r.equipmentType}`}>
+                      <div className="text-xs text-muted-foreground">{r.equipmentType}</div>
+                      <div className="text-base font-semibold tabular-nums">{r.performanceScore}</div>
+                      <div className="text-xs text-muted-foreground">{r.loads} loads · {fmtPct(Number(r.marginPct))}</div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Trend chart */}
+            {data.trend.length > 0 && (
+              <Card>
+                <CardHeader className="py-3">
+                  <CardTitle className="text-sm">Margin % & on-time % (last {data.trend.length} mo)</CardTitle>
+                </CardHeader>
+                <CardContent className="h-44 pl-1 pr-3" data-testid="chart-drawer-trend">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={data.trend} margin={{ top: 5, right: 8, bottom: 0, left: -16 }}>
+                      <XAxis dataKey="month" tick={{ fontSize: 11 }} stroke="currentColor" className="text-muted-foreground" />
+                      <YAxis tick={{ fontSize: 11 }} stroke="currentColor" className="text-muted-foreground" domain={[0, 100]} />
+                      <ReTooltip
+                        contentStyle={{ fontSize: 12 }}
+                        formatter={(v: number, name) => [v == null ? "—" : `${v.toFixed(1)}%`, name]}
+                      />
+                      <Line type="monotone" dataKey="marginPct" name="Margin %" stroke="#10b981" strokeWidth={2} dot={false} />
+                      <Line type="monotone" dataKey="onTimePct" name="On-time %" stroke="#0ea5e9" strokeWidth={2} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Lane mix */}
+            {data.laneMix.length > 0 && (
+              <Card>
+                <CardHeader className="py-3">
+                  <CardTitle className="text-sm">Top lanes</CardTitle>
+                  <CardDescription>Within selected move status buckets.</CardDescription>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table data-testid="table-drawer-lane-mix">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Lane</TableHead>
+                        <TableHead className="text-right">Loads</TableHead>
+                        <TableHead className="text-right">Revenue</TableHead>
+                        <TableHead className="text-right">Margin</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {data.laneMix.map((l, i) => (
+                        <TableRow key={`${l.lane}-${i}`} data-testid={`row-lane-${i}`}>
+                          <TableCell className="text-sm truncate max-w-[260px]">{l.lane}</TableCell>
+                          <TableCell className="text-right tabular-nums">{fmtNum(l.loads)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{fmtCurrency(l.revenue)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{fmtCurrency(l.margin)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Recent loads */}
+            <Card>
+              <CardHeader className="py-3">
+                <CardTitle className="text-sm">Recent loads</CardTitle>
+                <CardDescription>
+                  Latest {data.recentLoads.length} loads in selected buckets ({moveStatus.join(", ") || "none"}).
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="p-0">
+                {data.recentLoads.length === 0 ? (
+                  <div className="px-4 py-6 text-center text-muted-foreground text-sm" data-testid="text-no-recent-loads">
+                    No loads match the selected move status.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table data-testid="table-drawer-recent-loads">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Order</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Lane</TableHead>
+                          <TableHead>Pickup</TableHead>
+                          <TableHead className="text-right">Revenue</TableHead>
+                          <TableHead className="text-right">Margin %</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {data.recentLoads.map((l) => (
+                          <TableRow key={l.id} data-testid={`row-load-${l.id}`}>
+                            <TableCell className="font-mono text-xs">{l.orderId}</TableCell>
+                            <TableCell>
+                              <Badge variant="outline" className="text-[10px] uppercase tracking-wide">{l.bucket}</Badge>
+                            </TableCell>
+                            <TableCell className="text-xs whitespace-nowrap">
+                              {(l.originCity ?? "?")}, {l.originState ?? "?"} → {(l.destinationCity ?? "?")}, {l.destinationState ?? "?"}
+                            </TableCell>
+                            <TableCell className="text-xs whitespace-nowrap">{fmtDate(l.pickupDate)}</TableCell>
+                            <TableCell className="text-right tabular-nums">{l.revenue == null ? "—" : fmtCurrency(Number(l.revenue))}</TableCell>
+                            <TableCell className={`text-right tabular-nums ${thresholds && l.marginPct != null ? colorForMarginPct(Number(l.marginPct) * 100, thresholds) : ""}`}>
+                              {l.marginPct == null ? "—" : fmtPct(Number(l.marginPct) * 100)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Active recommendations */}
+            {data.recommendations.length > 0 && (
+              <Card>
+                <CardHeader className="py-3"><CardTitle className="text-sm">Active recommendations</CardTitle></CardHeader>
+                <CardContent className="space-y-2 text-sm">
+                  {data.recommendations.slice(0, 8).map((rec) => (
+                    <div key={rec.id} className="flex justify-between border-b last:border-0 pb-2" data-testid={`row-rec-${rec.id}`}>
+                      <span className="truncate">{rec.reason ?? `Rank ${rec.rank}`}</span>
+                      <span className="text-muted-foreground tabular-nums ml-2">Score {rec.totalScore}</span>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MiniStat({ label, value, valueClass, testId }: { label: string; value: string; valueClass?: string; testId: string }) {
+  return (
+    <div className="rounded-md border p-2.5">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className={`text-base font-semibold tabular-nums ${valueClass ?? ""}`} data-testid={testId}>{value}</div>
     </div>
   );
 }
