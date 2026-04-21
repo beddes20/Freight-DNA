@@ -3450,3 +3450,33 @@ export const insertFreightOpportunityAuditSchema = createInsertSchema(freightOpp
 export type InsertFreightOpportunityAudit = z.infer<typeof insertFreightOpportunityAuditSchema>;
 export type FreightOpportunityAudit = typeof freightOpportunityAudit.$inferSelect;
 
+// ─── Manager Coaching Mode (Task #301) ──────────────────────────────────────
+// Manager-authored coaching notes tied to a specific Coaching Card item
+// (account at risk / play-not-run / flagged call / response-time outlier /
+// promotion-readiness). Surfaced to the rep in their next ValueIQ Today
+// thread once `deliveredAt` is set by the seeder.
+
+export const coachingNotes = pgTable(
+  "coaching_notes",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    managerId: varchar("manager_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    repId: varchar("rep_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    subjectKind: text("subject_kind").notNull(), // account_risk | play_not_run | flagged_call | response_outlier | promotion_ready | general
+    subjectId: text("subject_id"),                // companyId | playId | touchpointId | null
+    subjectLabel: text("subject_label"),          // human-friendly label captured at write time
+    body: text("body").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    deliveredAt: timestamp("delivered_at"),       // set when surfaced in the rep's Today thread
+  },
+  (table) => [
+    index("coaching_notes_rep_idx").on(table.repId, table.createdAt),
+    index("coaching_notes_manager_idx").on(table.managerId, table.createdAt),
+  ],
+);
+export const insertCoachingNoteSchema = createInsertSchema(coachingNotes).omit({
+  id: true, createdAt: true, deliveredAt: true,
+});
+export type InsertCoachingNote = z.infer<typeof insertCoachingNoteSchema>;
+export type CoachingNote = typeof coachingNotes.$inferSelect;

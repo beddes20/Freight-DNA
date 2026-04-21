@@ -1,6 +1,21 @@
 import type { Express } from "express";
-import { storage } from "../storage";
+import { and, desc, eq, gte } from "drizzle-orm";
+import { storage, db } from "../storage";
 import { getCurrentUser, requireAuth } from "../auth";
+import {
+  buildCoachingCards,
+  buildCoachingCardForRep,
+  mondayOf,
+  addDays,
+} from "../coachingAggregator";
+import {
+  coachingNotes,
+  insertCoachingNoteSchema,
+  users as usersTable,
+  type CoachingNote,
+} from "@shared/schema";
+
+const MANAGER_ROLES = new Set(["admin", "director", "sales_director", "national_account_manager"]);
 
 export function registerCoachingRoutes(app: Express) {
   // ── 1-on-1 Sessions ────────────────────────────────────────────────────────
@@ -542,6 +557,149 @@ export function registerCoachingRoutes(app: Express) {
     } catch (error) {
       console.error("[1on1/team-sessions]", error);
       res.status(500).json({ error: "Failed to get team sessions" });
+    }
+  });
+
+  // ── Manager Coaching Mode (Task #301) ─────────────────────────────────────
+
+  app.get("/api/coaching/cards", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!MANAGER_ROLES.has(user.role)) {
+        return res.status(403).json({ error: "Manager or admin role required" });
+      }
+      const weekStart = typeof req.query.weekStart === "string"
+        ? req.query.weekStart
+        : mondayOf(new Date());
+      const cards = await buildCoachingCards(user.id, user.organizationId, weekStart);
+      res.json({ weekStart, weekEnd: addDays(weekStart, 6), cards });
+    } catch (err) {
+      console.error("[coaching/cards]", err);
+      res.status(500).json({ error: "Failed to load coaching cards" });
+    }
+  });
+
+  app.get("/api/coaching/cards/:repId", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!MANAGER_ROLES.has(user.role)) {
+        return res.status(403).json({ error: "Manager or admin role required" });
+      }
+      const repId = req.params.repId as string;
+      // Permit: admin/director always; NAM/sales_director if rep is in their team chain
+      if (user.role !== "admin" && user.role !== "director") {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        if (!teamIds.includes(repId)) {
+          return res.status(403).json({ error: "Rep is not in your team" });
+        }
+      }
+      const weekStart = typeof req.query.weekStart === "string"
+        ? req.query.weekStart
+        : mondayOf(new Date());
+      const card = await buildCoachingCardForRep(repId, user.organizationId, weekStart);
+      if (!card) return res.status(404).json({ error: "Rep not found" });
+      // Include any existing coaching notes for this rep in the current week
+      const weekStartDt = new Date(weekStart + "T00:00:00Z");
+      const notes = await db
+        .select()
+        .from(coachingNotes)
+        .where(and(
+          eq(coachingNotes.repId, repId),
+          eq(coachingNotes.orgId, user.organizationId),
+          gte(coachingNotes.createdAt, weekStartDt),
+        ))
+        .orderBy(desc(coachingNotes.createdAt));
+      res.json({ card, notes });
+    } catch (err) {
+      console.error("[coaching/cards/:repId]", err);
+      res.status(500).json({ error: "Failed to load rep coaching card" });
+    }
+  });
+
+  app.post("/api/coaching/notes", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!MANAGER_ROLES.has(user.role)) {
+        return res.status(403).json({ error: "Manager or admin role required" });
+      }
+      const parsed = insertCoachingNoteSchema.safeParse({
+        ...req.body,
+        managerId: user.id,
+        orgId: user.organizationId,
+      });
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid note", details: parsed.error.flatten() });
+      }
+      // Validate rep is in manager's team (admin/director bypass)
+      if (user.role !== "admin" && user.role !== "director") {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        if (!teamIds.includes(parsed.data.repId)) {
+          return res.status(403).json({ error: "Rep is not in your team" });
+        }
+      }
+      const [row] = await db.insert(coachingNotes).values(parsed.data).returning();
+      res.status(201).json(row);
+    } catch (err) {
+      console.error("[coaching/notes POST]", err);
+      res.status(500).json({ error: "Failed to create coaching note" });
+    }
+  });
+
+  app.get("/api/coaching/notes", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { repId } = req.query as { repId?: string };
+      if (!repId) return res.status(400).json({ error: "repId required" });
+      // Rep may read their own notes; managers/admins may read team notes
+      const isSelf = user.id === repId;
+      if (!isSelf) {
+        if (!MANAGER_ROLES.has(user.role)) {
+          return res.status(403).json({ error: "Access denied" });
+        }
+        if (user.role !== "admin" && user.role !== "director") {
+          const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+          if (!teamIds.includes(repId)) {
+            return res.status(403).json({ error: "Rep is not in your team" });
+          }
+        }
+      }
+      const rows: CoachingNote[] = await db
+        .select()
+        .from(coachingNotes)
+        .where(and(
+          eq(coachingNotes.repId, repId),
+          eq(coachingNotes.orgId, user.organizationId),
+        ))
+        .orderBy(desc(coachingNotes.createdAt))
+        .limit(100);
+      res.json(rows);
+    } catch (err) {
+      console.error("[coaching/notes GET]", err);
+      res.status(500).json({ error: "Failed to load coaching notes" });
+    }
+  });
+
+  app.delete("/api/coaching/notes/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const noteId = req.params.id as string;
+      const [existing] = await db.select().from(coachingNotes).where(
+        and(eq(coachingNotes.id, noteId), eq(coachingNotes.orgId, user.organizationId))
+      );
+      if (!existing) return res.status(404).json({ error: "Note not found" });
+      const isOwner = existing.managerId === user.id;
+      const isAdmin = user.role === "admin" || user.role === "director";
+      if (!isOwner && !isAdmin) return res.status(403).json({ error: "Access denied" });
+      await db.delete(coachingNotes).where(eq(coachingNotes.id, noteId));
+      res.status(204).send();
+    } catch (err) {
+      console.error("[coaching/notes DELETE]", err);
+      res.status(500).json({ error: "Failed to delete coaching note" });
     }
   });
 }

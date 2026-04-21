@@ -15,6 +15,8 @@ import {
   recurringLanes,
   laneCarrierInterest,
   nbaCards as nbaCardsTable,
+  coachingNotes as coachingNotesTable,
+  users as usersTable,
   type User,
 } from "@shared/schema";
 
@@ -175,6 +177,46 @@ export async function buildTodaySeed(user: User, now: Date = new Date(), timeZon
     console.warn("[today-seed] NBA cards lookup failed:", err);
   }
 
+  // ── Section 0 (prepended): Coaching notes from the rep's manager
+  //
+  // Surfaces any undelivered coaching notes authored since the last Today
+  // seed. Once rendered, notes are stamped with `deliveredAt` so they only
+  // appear in one Today thread — the next morning after the note was left.
+  let coachingMarkdown = "";
+  try {
+    const undelivered = await db
+      .select()
+      .from(coachingNotesTable)
+      .where(and(
+        eq(coachingNotesTable.repId, user.id),
+        eq(coachingNotesTable.orgId, user.organizationId),
+        isNull(coachingNotesTable.deliveredAt),
+      ))
+      .orderBy(desc(coachingNotesTable.createdAt))
+      .limit(10);
+    if (undelivered.length > 0) {
+      const managerIds = Array.from(new Set(undelivered.map(n => n.managerId)));
+      const managerRows = await db
+        .select()
+        .from(usersTable)
+        .where(inArray(usersTable.id, managerIds));
+      const managerName = new Map(managerRows.map(m => [m.id, m.name || m.username] as const));
+      const lines = undelivered.map(n => {
+        const who = managerName.get(n.managerId) || "Your manager";
+        const subject = n.subjectLabel ? ` on **${n.subjectLabel}**` : "";
+        return `- **${who}**${subject}: ${n.body}`;
+      });
+      coachingMarkdown = ["", "### 🧭 Coaching notes from your manager", lines.join("\n")].join("\n");
+      // Mark delivered so they don't repeat tomorrow.
+      await db
+        .update(coachingNotesTable)
+        .set({ deliveredAt: new Date() })
+        .where(inArray(coachingNotesTable.id, undelivered.map(n => n.id)));
+    }
+  } catch (err) {
+    console.warn("[today-seed] coaching notes lookup failed:", err);
+  }
+
   const sections = [
     section("Overdue touchpoints (top 5)", overdueLines, "All accounts are warm — nice."),
     section("Quote SLAs at risk", slaLines, "No RFP deadlines flagged in the next 48 hours."),
@@ -185,11 +227,12 @@ export async function buildTodaySeed(user: User, now: Date = new Date(), timeZon
   const greeting = `Good morning${user.name ? `, ${user.name.split(" ")[0]}` : ""} — here's what to focus on for **${date}**.`;
   const markdown = [
     greeting,
+    coachingMarkdown,
     "",
     ...sections,
     "",
     "Ask me to dig into any of these, draft outreach, or pull up the underlying data.",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 
   return { date, title, markdown };
 }

@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { useParams, useSearch, useLocation } from "wouter";
+import { Link, useParams, useSearch, useLocation } from "wouter";
+import { useAuth } from "@/hooks/use-auth";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -402,6 +403,8 @@ export default function TeamPerformanceDetailPage() {
   const search = useSearch();
   const [, navigate] = useLocation();
   const period = (new URLSearchParams(search).get("period") ?? "current") as PeriodOption;
+  const { user } = useAuth();
+  const canCoach = !!user && ["admin", "director", "national_account_manager", "sales_director"].includes(user.role);
 
   const config = metric ? METRIC_CONFIGS[metric] : null;
 
@@ -472,12 +475,21 @@ export default function TeamPerformanceDetailPage() {
             <p className="text-sm text-muted-foreground">{periodLabel}</p>
           </div>
         </div>
-        {!isLoading && (
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">Total</span>
-            <span className={`text-2xl font-bold ${config.color}`} data-testid="text-total-count">{rows.length}</span>
-          </div>
-        )}
+        <div className="flex items-center gap-3">
+          {canCoach && (
+            <Link href="/coaching">
+              <Button variant="outline" size="sm" data-testid="button-view-in-coaching">
+                View in Coaching
+              </Button>
+            </Link>
+          )}
+          {!isLoading && (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Total</span>
+              <span className={`text-2xl font-bold ${config.color}`} data-testid="text-total-count">{rows.length}</span>
+            </div>
+          )}
+        </div>
       </div>
 
       {isLoading ? (

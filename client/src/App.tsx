@@ -70,6 +70,7 @@ import ContactSuggestionsPage from "@/pages/contact-suggestions";
 import EmailIntelligencePage from "@/pages/email-intelligence";
 import ProvenTacticsPage from "@/pages/proven-tactics";
 import PlaybookPage from "@/pages/playbook";
+import CoachingPage from "@/pages/coaching";
 import PlaybookAnalyticsPage from "@/pages/playbook-analytics";
 import AIIntelligencePage from "@/pages/ai-intelligence";
 import ValueIQPage from "@/pages/valueiq";
@@ -199,6 +200,7 @@ function Router() {
       <Route path="/email-intelligence" component={EmailIntelligencePage} />
       <Route path="/proven-tactics" component={ProvenTacticsPage} />
       <Route path="/playbook" component={PlaybookPage} />
+      <Route path="/coaching" component={CoachingPage} />
       <Route path="/playbook/analytics" component={PlaybookAnalyticsPage} />
       <Route path="/valueiq" component={ValueIQPage} />
       <Route path="/ai-intelligence">{() => { window.location.replace("/valueiq?tab=insights"); return null; }}</Route>

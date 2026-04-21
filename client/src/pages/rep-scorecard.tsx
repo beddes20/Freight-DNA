@@ -212,7 +212,17 @@ function RepPortlet({ title, reps, currentUserId }: PortletProps) {
                       </div>
                     </td>
                     <td className="py-3 pl-3 text-right">
-                      <span className="text-sm font-semibold">{rep.relationshipsMoved}</span>
+                      <div className="flex items-center justify-end gap-2">
+                        <span className="text-sm font-semibold">{rep.relationshipsMoved}</span>
+                        <a
+                          href={`/coaching?rep=${rep.userId}`}
+                          className="text-[11px] text-primary hover:underline"
+                          data-testid={`link-coaching-${rep.userId}`}
+                          title="Open Coaching Card"
+                        >
+                          Coach →
+                        </a>
+                      </div>
                     </td>
                   </tr>
                 );

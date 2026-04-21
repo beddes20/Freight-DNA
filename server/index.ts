@@ -15,6 +15,7 @@ import { initValueIQTodayScheduler } from "./valueiqTodayScheduler";
 import { initPtoReturnScheduler } from "./ptoReturnScheduler";
 import { initWeeklyGoalRecapScheduler } from "./weeklyGoalRecapScheduler";
 import { initWeeklyAccountReviewScheduler } from "./weeklyAccountReviewScheduler";
+import { initCoachingDigestScheduler } from "./coachingDigestScheduler";
 import { initLmCheckinScheduler } from "./lmCheckinScheduler";
 import { initNbaPhase1Scheduler } from "./nbaPhase1Scheduler";
 import { initMarketSignalScheduler } from "./marketSignalScheduler";
@@ -294,6 +295,7 @@ async function initStripe() {
       initPtoReturnScheduler();
       initWeeklyGoalRecapScheduler();
       initWeeklyAccountReviewScheduler();
+      initCoachingDigestScheduler();
       initLmCheckinScheduler();
 
       setTimeout(() => {
