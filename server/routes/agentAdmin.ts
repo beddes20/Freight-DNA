@@ -516,6 +516,9 @@ export function registerAgentAdminRoutes(app: Express) {
     defaultModel: z.string().min(1).max(100).optional(),
     autoApprovePersonalMemory: z.boolean().optional(),
     allowExternalOutreach: z.boolean().optional(),
+    valueiqLandingEnabled: z.boolean().optional(),
+    valueiqTodaySeedEnabled: z.boolean().optional(),
+    valueiqTodayTimezone: z.string().min(1).max(64).optional(),
     notes: z.string().max(2000).nullable().optional(),
   });
   app.put("/api/agent/admin/org-settings", requireAuth, async (req: Request, res: Response) => {

@@ -1,6 +1,10 @@
 import { WebexMyConnection } from "@/components/webex-my-connection";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 interface CurrentUser {
   id: string;
@@ -8,10 +12,22 @@ interface CurrentUser {
   username: string;
   role: string;
   organizationId: string;
+  valueiqLandingDisabled?: boolean;
 }
 
 export default function ProfilePage() {
+  const { toast } = useToast();
   const { data: user } = useQuery<CurrentUser>({ queryKey: ["/api/auth/me"] });
+
+  const togglePref = useMutation({
+    mutationFn: async (valueiqLandingDisabled: boolean) =>
+      apiRequest("PATCH", "/api/profile/preferences", { valueiqLandingDisabled }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      toast({ title: "Preference updated" });
+    },
+    onError: () => toast({ title: "Couldn't update preference", variant: "destructive" }),
+  });
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6" data-testid="page-profile">
@@ -30,6 +46,31 @@ export default function ProfilePage() {
             <p className="text-xs text-muted-foreground" data-testid="text-profile-role">Role: {user.role}</p>
           </CardContent>
         </Card>
+      )}
+
+      {user && (
+        <section className="space-y-2">
+          <h2 className="text-lg font-medium">Workspace</h2>
+          <Card>
+            <CardContent className="p-4 flex items-center justify-between gap-4">
+              <div>
+                <Label htmlFor="toggle-valueiq-landing" className="text-sm font-medium">
+                  Land on ValueIQ after sign-in
+                </Label>
+                <p className="text-xs text-muted-foreground mt-1">
+                  When on, you'll see your ValueIQ Threads workspace first instead of the dashboard.
+                </p>
+              </div>
+              <Switch
+                id="toggle-valueiq-landing"
+                data-testid="switch-valueiq-landing"
+                checked={!user.valueiqLandingDisabled}
+                onCheckedChange={(checked) => togglePref.mutate(!checked)}
+                disabled={togglePref.isPending}
+              />
+            </CardContent>
+          </Card>
+        </section>
       )}
 
       <section className="space-y-2">

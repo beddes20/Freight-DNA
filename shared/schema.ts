@@ -194,6 +194,7 @@ export const users = pgTable("users", {
   createdAt: text("created_at"),
   emailSignature: text("email_signature"),
   clerkUserId: text("clerk_user_id").unique(),
+  valueiqLandingDisabled: boolean("valueiq_landing_disabled").notNull().default(false),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({
@@ -2804,6 +2805,9 @@ export const agentOrgSettings = pgTable(
     defaultModel: text("default_model").notNull().default("gpt-4o-mini"),
     autoApprovePersonalMemory: boolean("auto_approve_personal_memory").notNull().default(true),
     allowExternalOutreach: boolean("allow_external_outreach").notNull().default(false),
+    valueiqLandingEnabled: boolean("valueiq_landing_enabled").notNull().default(true),
+    valueiqTodaySeedEnabled: boolean("valueiq_today_seed_enabled").notNull().default(true),
+    valueiqTodayTimezone: text("valueiq_today_timezone").notNull().default("America/Chicago"),
     notes: text("notes"),
     updatedBy: varchar("updated_by"),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -2995,6 +2999,7 @@ export const threads = pgTable(
     title: text("title").notNull().default("New thread"),
     defaultAgentId: varchar("default_agent_id"),
     surface: text("surface").notNull().default("valueiq"),
+    seedKind: text("seed_kind"),
     pinned: boolean("pinned").notNull().default(false),
     archivedAt: timestamp("archived_at"),
     lastMessageAt: timestamp("last_message_at"),

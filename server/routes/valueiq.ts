@@ -39,10 +39,12 @@ import {
   type Thread,
 } from "@shared/schema";
 import type { AgentContext } from "../agent/tools";
-import type { InsertTask, InsertTouchpoint, User } from "@shared/schema";
+import type { InsertTask, InsertTouchpoint, InsertUser, User } from "@shared/schema";
 import { runAgentTurn } from "../agent/core";
 import { ensureDefaultAgent } from "../agent/persona";
 import { addLibraryItem, listLibraryItems, deleteLibraryItem } from "../agent/libraryIndexer";
+import { agentOrgSettings } from "@shared/schema";
+import { seedTodayForUser } from "../valueiqTodayScheduler";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -509,6 +511,64 @@ export function registerValueIQRoutes(app: Express) {
       parsedText,
     }).returning();
     res.json({ id: row.id, fileName: row.fileName, parsed: !!parsedText });
+  });
+
+  // ─── Per-user preferences (just ValueIQ landing for now) ──────────────────
+  const prefSchema = z.object({
+    valueiqLandingDisabled: z.boolean().optional(),
+  });
+  app.patch("/api/profile/preferences", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const patch: Partial<InsertUser> = prefSchema.parse(req.body ?? {});
+      const updated = await storage.updateUser(user.id, user.organizationId, patch);
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      const { password: _p, ...safe }: User & { password?: string | null } = updated;
+      res.json(safe);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message ?? "Invalid preferences" });
+    }
+  });
+
+  // ─── Today thread (daily seed) ────────────────────────────────────────────
+  // GET — return the rep's today thread id (creates it on demand if the org
+  // has the seed enabled). Useful for landing-page deep-link flows.
+  app.get("/api/valueiq/today", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const [settings] = await db.select().from(agentOrgSettings)
+        .where(eq(agentOrgSettings.organizationId, user.organizationId)).limit(1);
+      if (settings && settings.valueiqTodaySeedEnabled === false) {
+        return res.json({ enabled: false, threadId: null });
+      }
+      const tz = settings?.valueiqTodayTimezone || "America/Chicago";
+      const r = await seedTodayForUser(user, { timeZone: tz });
+      res.json({ enabled: true, threadId: r.threadId, created: r.created, title: r.title, date: r.date, timeZone: tz });
+    } catch (err: any) {
+      console.error("[valueiq] today get:", err);
+      res.status(500).json({ error: err.message ?? "Failed" });
+    }
+  });
+
+  // POST refresh — overwrite the seed message in place with a fresh briefing.
+  app.post("/api/valueiq/today/refresh", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const [settings] = await db.select().from(agentOrgSettings)
+        .where(eq(agentOrgSettings.organizationId, user.organizationId)).limit(1);
+      if (settings && settings.valueiqTodaySeedEnabled === false) {
+        return res.status(403).json({ error: "Today briefings are disabled for your organization." });
+      }
+      const tz = settings?.valueiqTodayTimezone || "America/Chicago";
+      const r = await seedTodayForUser(user, { overwrite: true, timeZone: tz });
+      res.json({ threadId: r.threadId, title: r.title, date: r.date, timeZone: tz });
+    } catch (err: any) {
+      console.error("[valueiq] today refresh:", err);
+      res.status(500).json({ error: err.message ?? "Failed" });
+    }
   });
 
   // ─── Library ──────────────────────────────────────────────────────────────

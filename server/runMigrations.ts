@@ -2987,4 +2987,26 @@ export async function runMigrations() {
   } finally {
     clientContactMobile.release();
   }
+
+  // Task #298 — ValueIQ as the rep's daily start screen.
+  // Adds the per-user opt-out flag, three org-level controls (landing on/off,
+  // morning seed on/off, morning seed timezone), and a discriminator on
+  // threads so the seeder can locate the day's "Today" thread idempotently.
+  const clientValueIQToday = await pool.connect();
+  try {
+    await clientValueIQToday.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS valueiq_landing_disabled BOOLEAN NOT NULL DEFAULT false`);
+    await clientValueIQToday.query(`ALTER TABLE agent_org_settings ADD COLUMN IF NOT EXISTS valueiq_landing_enabled BOOLEAN NOT NULL DEFAULT true`);
+    await clientValueIQToday.query(`ALTER TABLE agent_org_settings ADD COLUMN IF NOT EXISTS valueiq_today_seed_enabled BOOLEAN NOT NULL DEFAULT true`);
+    await clientValueIQToday.query(`ALTER TABLE agent_org_settings ADD COLUMN IF NOT EXISTS valueiq_today_timezone TEXT NOT NULL DEFAULT 'America/Chicago'`);
+    await clientValueIQToday.query(`ALTER TABLE threads ADD COLUMN IF NOT EXISTS seed_kind TEXT`);
+    await clientValueIQToday.query(`CREATE INDEX IF NOT EXISTS threads_user_seed_kind_idx ON threads (user_id, seed_kind)`);
+    // Strict idempotency: at most one Today thread per (user, seed kind, date-in-title).
+    // Prevents duplicate seeds if scheduler + manual GET race in production.
+    await clientValueIQToday.query(`CREATE UNIQUE INDEX IF NOT EXISTS threads_user_seed_kind_title_uidx ON threads (user_id, seed_kind, title) WHERE seed_kind IS NOT NULL`);
+    console.log("[migrations] ValueIQ Today columns + threads.seed_kind ensured (Task #298)");
+  } catch (err) {
+    console.error("[migrations] ValueIQ Today migration error:", err);
+  } finally {
+    clientValueIQToday.release();
+  }
 }

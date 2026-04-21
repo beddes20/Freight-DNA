@@ -14,6 +14,31 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import AIIntelligencePage from "@/pages/ai-intelligence";
 
+// Lightweight inline renderer that linkifies markdown-style [text](href) and
+// bare URLs. Keeps line breaks via whitespace-pre-wrap on the parent and adds
+// nothing else fancy — enough for clickable deep-links in seeded briefings.
+function MessageContent({ content }: { content: string }) {
+  const nodes: (string | { href: string; label: string })[] = [];
+  const re = /\[([^\]]+)\]\((https?:\/\/[^)]+|\/[^)]+)\)|((?:https?:\/\/)[^\s)]+)/g;
+  let last = 0; let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    if (m.index > last) nodes.push(content.slice(last, m.index));
+    if (m[1] && m[2]) nodes.push({ href: m[2], label: m[1] });
+    else if (m[3]) nodes.push({ href: m[3], label: m[3] });
+    last = re.lastIndex;
+  }
+  if (last < content.length) nodes.push(content.slice(last));
+  return (
+    <div className="whitespace-pre-wrap text-sm">
+      {nodes.map((n, i) => typeof n === "string" ? <span key={i}>{n}</span> : (
+        <a key={i} href={n.href} className="underline text-primary hover:opacity-80"
+          target={n.href.startsWith("http") ? "_blank" : undefined}
+          rel={n.href.startsWith("http") ? "noopener noreferrer" : undefined}>{n.label}</a>
+      ))}
+    </div>
+  );
+}
+
 interface AgentRow { id: string; slug: string; name: string; description: string | null; isDefault: boolean; }
 interface ProjectRow { id: string; name: string; pinnedContext: string | null; }
 interface ThreadRow { id: string; title: string; pinned: boolean; archivedAt: string | null; lastMessageAt: string | null; createdAt: string; defaultAgentId: string | null; projectId: string | null; }
@@ -335,6 +360,23 @@ function ThreadView({ thread, agents, onPin, onArchive }: { thread: ThreadRow; a
     mutationFn: (id: string) => apiRequest("POST", `/api/valueiq/messages/${id}/save`, { target: "library" }),
     onSuccess: () => toast({ title: "Saved to Library" }),
   });
+  const refreshToday = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/valueiq/today/refresh"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/valueiq/threads", thread.id, "messages"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/valueiq/threads"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/valueiq/today"] });
+      toast({ title: "Today briefing refreshed" });
+    },
+    onError: () => toast({ title: "Couldn't refresh briefing", variant: "destructive" }),
+  });
+  // Server is the source of truth for today's title (computed in the org's
+  // configured timezone). The current-day thread is the only one refreshable.
+  const { data: todayMeta } = useQuery<{ enabled: boolean; threadId: string | null; title?: string }>({
+    queryKey: ["/api/valueiq/today"],
+    staleTime: 60_000,
+  });
+  const isTodayThread = !!todayMeta?.title && thread.title === todayMeta.title;
 
   return (
     <>
@@ -346,6 +388,12 @@ function ThreadView({ thread, agents, onPin, onArchive }: { thread: ThreadRow; a
             {agents.map(a => <SelectItem key={a.id} value={a.id}>{a.name}{a.isDefault ? " (default)" : ""}</SelectItem>)}
           </SelectContent>
         </Select>
+        {isTodayThread && (
+          <Button size="sm" variant="outline" onClick={() => refreshToday.mutate()}
+            disabled={refreshToday.isPending} data-testid="button-refresh-today">
+            <Sparkles className="h-3.5 w-3.5 mr-1.5" />Refresh Today
+          </Button>
+        )}
         <Button size="icon" variant="ghost" onClick={onPin} title={thread.pinned ? "Unpin" : "Pin"} data-testid="button-pin-thread">
           <Pin className={`h-4 w-4 ${thread.pinned ? "text-amber-500 fill-amber-500" : ""}`} />
         </Button>
@@ -357,7 +405,7 @@ function ThreadView({ thread, agents, onPin, onArchive }: { thread: ThreadRow; a
           <div key={m.id} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
             <div className={`max-w-[80%] rounded-lg px-3 py-2 ${m.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
               {m.role !== "user" && m.agentName && <div className="text-xs font-semibold mb-1 opacity-80">{m.agentName}</div>}
-              <div className="whitespace-pre-wrap text-sm">{m.content}</div>
+              <MessageContent content={m.content} />
               {m.role === "assistant" && (
                 <div className="flex items-center gap-1 mt-2 opacity-70 hover:opacity-100">
                   <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => rateMsg.mutate({ id: m.id, rating: m.rating === 1 ? 0 : 1 })} data-testid={`button-rate-up-${m.id}`}>

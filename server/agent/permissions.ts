@@ -144,13 +144,19 @@ export async function canInvoke(rep: User, capability: Capability): Promise<Deci
  * Module-level access check. Combines the org-wide kill switch with the
  * per-user `module.access` capability. Use this BEFORE invoking the agent.
  */
-export async function hasModuleAccess(rep: User): Promise<{ allowed: boolean; reason?: string }> {
+export async function hasModuleAccess(rep: User): Promise<{ allowed: boolean; reason?: string; orgLandingEnabled?: boolean; orgTodaySeedEnabled?: boolean }> {
+  let orgLandingEnabled = true;
+  let orgTodaySeedEnabled = true;
   // 1. Org kill switch
   try {
     const { agentOrgSettings } = await import("@shared/schema");
     const [orgRow] = await db.select().from(agentOrgSettings).where(eq(agentOrgSettings.organizationId, rep.organizationId)).limit(1);
-    if (orgRow && !orgRow.moduleEnabled) {
-      return { allowed: false, reason: "AI Agent module is disabled for your organization." };
+    if (orgRow) {
+      if (!orgRow.moduleEnabled) {
+        return { allowed: false, reason: "AI Agent module is disabled for your organization.", orgLandingEnabled: false, orgTodaySeedEnabled: false };
+      }
+      orgLandingEnabled = orgRow.valueiqLandingEnabled !== false;
+      orgTodaySeedEnabled = orgRow.valueiqTodaySeedEnabled !== false;
     }
   } catch {
     // table may not exist yet — proceed
@@ -158,9 +164,9 @@ export async function hasModuleAccess(rep: User): Promise<{ allowed: boolean; re
   // 2. Per-user override
   const decision = await canInvoke(rep, "module.access");
   if (!decision.allowed) {
-    return { allowed: false, reason: "An admin has not granted you access to the AI Agent module." };
+    return { allowed: false, reason: "An admin has not granted you access to the AI Agent module.", orgLandingEnabled, orgTodaySeedEnabled };
   }
-  return { allowed: true };
+  return { allowed: true, orgLandingEnabled, orgTodaySeedEnabled };
 }
 
 export async function listCapabilitiesForUser(userId: string): Promise<Array<{ capability: string; effect: Effect; note: string | null }>> {

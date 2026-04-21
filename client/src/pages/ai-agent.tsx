@@ -28,7 +28,7 @@ interface CapRow { capability: string; defaultEffect: Effect; effect: Effect; ha
 interface Fact { id: string; fact: string; pinned: boolean; source: string; createdAt: string }
 interface Memory { id: string; kind: string; content: string; importance: number; relatedCompanyId: string | null; createdAt: string }
 interface ModuleAccessUser { id: string; name: string; email: string; role: string; defaultEffect: Effect; effect: Effect; enabled: boolean; hasOverride: boolean; updatedAt: string | null }
-interface OrgSettings { id: string; moduleEnabled: boolean; defaultAccessForNewUsers: string; defaultModel: string; autoApprovePersonalMemory: boolean; allowExternalOutreach: boolean; notes: string | null; updatedAt: string }
+interface OrgSettings { id: string; moduleEnabled: boolean; defaultAccessForNewUsers: string; defaultModel: string; autoApprovePersonalMemory: boolean; allowExternalOutreach: boolean; valueiqLandingEnabled: boolean; valueiqTodaySeedEnabled: boolean; valueiqTodayTimezone: string; notes: string | null; updatedAt: string }
 interface SimpleUser { id: string; name: string; role: string }
 interface ActivityRow {
   id: string; userId: string; userName: string; channel: string; direction: string;
@@ -657,6 +657,51 @@ function OrgDefaultsPanel() {
             </div>
             <Switch checked={merged.allowExternalOutreach}
               onCheckedChange={(v) => set("allowExternalOutreach", v)} data-testid="switch-external-outreach" />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>ValueIQ daily start screen</CardTitle>
+          <CardDescription>Make ValueIQ Threads the rep's first stop after sign-in and seed a "Today" briefing each morning.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <Label>Use ValueIQ as the rep landing screen</Label>
+              <p className="text-xs text-muted-foreground">Reps land on /valueiq?tab=threads after sign-in. Each rep can opt out from their Profile.</p>
+            </div>
+            <Switch checked={merged.valueiqLandingEnabled ?? true}
+              onCheckedChange={(v) => set("valueiqLandingEnabled", v)} data-testid="switch-valueiq-landing-enabled" />
+          </div>
+
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <Label>Send the Today briefing each morning</Label>
+              <p className="text-xs text-muted-foreground">Auto-creates a pinned "Today" thread per rep with overdue touchpoints, quote SLAs, hot lanes, and top NBA cards.</p>
+            </div>
+            <Switch checked={merged.valueiqTodaySeedEnabled ?? true}
+              onCheckedChange={(v) => set("valueiqTodaySeedEnabled", v)} data-testid="switch-valueiq-today-seed-enabled" />
+          </div>
+
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <Label>Morning seed timezone</Label>
+              <p className="text-xs text-muted-foreground">The "6am local" timezone used to schedule the Today briefing for this org.</p>
+            </div>
+            <Select value={merged.valueiqTodayTimezone ?? "America/Chicago"}
+              onValueChange={(v) => set("valueiqTodayTimezone", v)}>
+              <SelectTrigger className="w-64" data-testid="select-valueiq-today-tz"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="America/Los_Angeles">Pacific (Los Angeles)</SelectItem>
+                <SelectItem value="America/Denver">Mountain (Denver)</SelectItem>
+                <SelectItem value="America/Phoenix">Mountain — no DST (Phoenix)</SelectItem>
+                <SelectItem value="America/Chicago">Central (Chicago)</SelectItem>
+                <SelectItem value="America/New_York">Eastern (New York)</SelectItem>
+                <SelectItem value="UTC">UTC</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </CardContent>
       </Card>
