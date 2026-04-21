@@ -18,3 +18,9 @@ id = "eJ5Z1SwM305gu8zA1xuS4"
 uri = "file://FreightDNA_Platform_Reference.md"
 type = "text"
 title = "FreightDNA Platform Reference Guide"
+
+[[outputs]]
+id = "xeUi4oEVrvsHe7eklHnlL"
+uri = "file://exports/ReplitDailyUpload.xlsx"
+type = "table"
+title = "ReplitDailyUpload.xlsx (Available Freight = 412 uncovered loads)"

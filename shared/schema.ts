@@ -3396,10 +3396,22 @@ export const freightOpportunities = pgTable("freight_opportunities", {
   expiresAt: timestamp("expires_at"),
   createdById: varchar("created_by_id").references(() => users.id, { onDelete: "set null" }),
   notes: text("notes"),
+  // Task #307 follow-on — daily-upload owned freight ("Available Freight" tab)
+  ownerUserId: varchar("owner_user_id").references(() => users.id, { onDelete: "set null" }),
+  delegatedToUserId: varchar("delegated_to_user_id").references(() => users.id, { onDelete: "set null" }),
+  senderMailbox: text("sender_mailbox"),
+  templateOverrideSubject: text("template_override_subject"),
+  templateOverrideBody: text("template_override_body"),
+  cadenceConfig: jsonb("cadence_config"),
+  approvedAt: timestamp("approved_at"),
+  approvedById: varchar("approved_by_id").references(() => users.id, { onDelete: "set null" }),
+  sourceFileName: text("source_file_name"),
 }, (t) => ({
   orgStatusUrgencyIdx: index("freight_opps_org_status_urgency_idx").on(t.orgId, t.status, t.urgencyScore),
   companyPickupIdx: index("freight_opps_company_pickup_idx").on(t.companyId, t.pickupWindowStart),
   recurringLaneIdx: index("freight_opps_recurring_lane_idx").on(t.recurringLaneId),
+  ownerIdx: index("freight_opps_owner_idx").on(t.ownerUserId),
+  delegatedIdx: index("freight_opps_delegated_idx").on(t.delegatedToUserId),
 }));
 export const insertFreightOpportunitySchema = createInsertSchema(freightOpportunities)
   .omit({ id: true, generatedAt: true })
