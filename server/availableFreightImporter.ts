@@ -197,8 +197,21 @@ interface ParsedLoad {
   loadCount: number;
   notes: string | null;
   ownerEmail: string | null;
+  /** TMS order number from column A — canonical identity across days. */
+  orderId: string;
   stableKey: string;
   rawRow: Record<string, unknown>;
+}
+
+/**
+ * A row whose Brokerage status indicates it has moved out of the AVL queue
+ * (AVL → TRANSIT, POD, DEL, etc). We use these to (a) close out the prior AVL
+ * opportunity for the same Order#, and (b) selectively feed proven completed
+ * runs into load_fact for carrier ranking history.
+ */
+interface ParsedNonAvlRow {
+  orderId: string;
+  brokerageStatus: string;
 }
 
 /**
@@ -220,6 +233,13 @@ interface ParsedHistoricalRun {
   pickupDate: string;
   deliveryDate: string;
   loadCount: number;
+  /** TMS Order#. Used as load_fact.orderId so daily re-imports collapse onto
+   * the same row (same Order = same physical load). */
+  orderId: string;
+  /** Carrier cost from "Total pay" column. Null if absent or zero. */
+  carrierCost: number | null;
+  /** Brokerage status (TRANSIT, POD, DEL) — used by load_fact moveStatus. */
+  brokerageStatus: string;
   rowKey: string;
   rawRow: Record<string, unknown>;
 }
@@ -287,109 +307,183 @@ export function cleanCustomerLabel(raw: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * TMS equipment-code → human label. Add new codes here as the operations team
+ * surfaces them. Unknown codes are returned as-is so we never lose info.
+ */
+const EQUIPMENT_CODE_MAP: Record<string, string> = {
+  FT: "Flatbed w/ Tarps",
+  PO: "Power Only",
+};
+function mapEquipmentCode(code: string | null | undefined): string | null {
+  if (!code) return null;
+  const k = code.trim().toUpperCase();
+  if (!k) return null;
+  return EQUIPMENT_CODE_MAP[k] ?? code.trim();
+}
+
+/**
+ * Parses TMS pickup/delivery datetimes. Daily-upload format is
+ * "MM/DD/YYYY HHMM" (e.g. "04/27/2026 0700"). Time portion is dropped — we
+ * only persist the calendar day. Falls back to the loose ISO parser for any
+ * other shape so we don't blow up if TMS export changes incidentally.
+ */
+function parsePickupDateTime(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\b/);
+  if (m) {
+    const mm = m[1].padStart(2, "0");
+    const dd = m[2].padStart(2, "0");
+    return `${m[3]}-${mm}-${dd}`;
+  }
+  return parseDateLoose(value);
+}
+
+/**
+ * "42000.0 LB" → 42000. Returns null if the cell is empty or unparseable.
+ * Currently informational only; not persisted, but future-proofs the parser
+ * if we want to expose weight on opportunities.
+ */
+function parseWeightLbs(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  const m = s.match(/([\d.]+)/);
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** "brock.b" / "BRIANNAC" → normalized lookup key. */
+function normalizeOpsHandle(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/** Brokerage statuses considered proven completed/in-flight runs to feed
+ * load_fact for carrier ranking history. Decision: POD + DEL + TRANSIT. */
+const HISTORICAL_STATUSES = new Set(["POD", "DEL", "TRANSIT"]);
+
+/** Map TMS brokerage status to load_fact.moveStatus. */
+function mapMoveStatus(brokerageStatus: string): string {
+  switch (brokerageStatus.toUpperCase()) {
+    case "DEL":
+    case "POD":
+      return "delivered";
+    case "TRANSIT":
+      return "in_transit";
+    default:
+      return "delivered";
+  }
+}
+
 function parseSheetToLoads(
   rows: Array<Record<string, unknown>>,
-  diagnostics: { skippedWithCarrier: number; historicalRuns: ParsedHistoricalRun[] },
+  diagnostics: {
+    skippedWithCarrier: number;
+    historicalRuns: ParsedHistoricalRun[];
+    nonAvlRows: ParsedNonAvlRow[];
+  },
 ): ParsedLoad[] {
   const out: ParsedLoad[] = [];
+  // New TMS daily-upload format (Apr 2026). Headers are the canonical names
+  // produced by the third tab "Available Freight":
+  //   A Order   B Brokerage status   C Move status   D Origin city
+  //   E Origin state   F Dest city   G Dest state   H Equip type
+  //   L Early P/U dt   R Customer   T Total pay   X Carrier name
+  //   Z Ops user
+  //
+  // Routing rules:
+  //   • Brokerage status = "AVL" → ParsedLoad (becomes a freight_opportunity)
+  //   • Brokerage status ∈ {POD, DEL, TRANSIT} → ParsedHistoricalRun
+  //     (feeds load_fact for carrier ranking history)
+  //   • Anything else → diagnostics.nonAvlRows (used to auto-close prior AVL
+  //     opportunities for the same Order#) — but no other persistence.
+  //
+  // Planning comment (col N) is intentionally ignored per product decision.
   for (const row of rows) {
-    const customerNameRaw = pick(row, "Customer", "Customer Name", "Shipper", "Account", "Bill To", "BillTo");
-    const customerName = cleanCustomerLabel(customerNameRaw);
-    const originRaw = pick(row, "Origin", "Pickup", "Pickup City", "From", "Origin City");
-    const destinationRaw = pick(row, "Destination", "Drop", "Delivery City", "To", "Dest", "Destination City");
+    const orderId = pick(row, "Order", "Order #", "Order Number");
+    const brokerageStatus = pick(row, "Brokerage status", "Brokerage Status").toUpperCase();
+    if (!orderId || !brokerageStatus) continue;
 
-    // Detect carrier-assigned rows: these are NOT available freight, but they
-    // ARE valuable as historical lane runs to feed the carrier ranking system.
-    const carrierAssigned = pick(row, "Carrier", "Carrier Name", "Assigned Carrier", "Trucking Co", "MC", "SCAC");
-    if (carrierAssigned && carrierAssigned.trim().length > 0) {
-      diagnostics.skippedWithCarrier++;
-      if (customerName && originRaw && destinationRaw) {
-        const originStateOnlyH = pick(row, "Origin State", "Pickup State");
-        const destStateOnlyH = pick(row, "Destination State", "Delivery State", "Dest State");
-        const oH = splitCityState(originRaw);
-        const dH = splitCityState(destinationRaw);
-        const pickupParsed = parseDateLoose(pick(row, "Pickup Date", "Pickup Start", "Pickup", "Start Date", "Date"));
-        const deliveryParsed = parseDateLoose(pick(row, "Pickup End", "End Date", "Delivery Date", "Drop Date"));
-        // Use parsed dates when present; otherwise null (so the DB stores
-        // null) AND use a STABLE sentinel "unknown" in the rowKey hash so
-        // re-importing the same row tomorrow does not mint a new orderId.
-        const equipmentH = pick(row, "Equipment", "Equipment Type", "Trailer", "Trailer Type") || null;
-        const loadCountH = Math.max(1, parseInt(pick(row, "Loads", "Load Count", "Qty", "Quantity"), 10) || 1);
-        const rowKey = buildStableKey([
-          customerName, carrierAssigned,
-          oH.city, oH.state || originStateOnlyH || null,
-          dH.city, dH.state || destStateOnlyH || null,
-          equipmentH,
-          pickupParsed ?? "unknown_pickup",
-          deliveryParsed ?? "unknown_delivery",
-        ]);
-        diagnostics.historicalRuns.push({
-          customerName,
-          carrierName: carrierAssigned.trim(),
-          origin: oH.city,
-          originState: oH.state || originStateOnlyH || null,
-          destination: dH.city,
-          destinationState: dH.state || destStateOnlyH || null,
-          equipmentType: equipmentH,
-          pickupDate: pickupParsed ?? "",
-          deliveryDate: deliveryParsed ?? "",
-          loadCount: loadCountH,
-          rowKey,
-          rawRow: row,
-        });
-      }
+    const customerName = cleanCustomerLabel(pick(row, "Customer"));
+    const originCity = pick(row, "Origin city", "Origin City");
+    const originStateRaw = pick(row, "Origin state", "Origin State");
+    const destCity = pick(row, "Dest city", "Destination city", "Destination City", "Dest City");
+    const destStateRaw = pick(row, "Dest state", "Destination state", "Destination State", "Dest State");
+    const equipmentCode = pick(row, "Equip type", "Equipment", "Equipment Type", "Trailer Type");
+    const equipmentType = mapEquipmentCode(equipmentCode);
+    const carrierName = pick(row, "Carrier name", "Carrier Name").trim();
+    const opsUser = pick(row, "Ops user", "Ops User", "Owner", "Rep");
+    const ownerEmail = opsUser ? normalizeOpsHandle(opsUser) : null;
+    const pickupDate = parsePickupDateTime(pick(row, "Early P/U dt", "Pickup Date", "Pickup"));
+    const deliveryDate = parsePickupDateTime(pick(row, "Early del dt", "Delivery Date"));
+    const stops = parseInt(pick(row, "Stops"), 10);
+    const loadCount = 1; // every TMS row = a single load
+
+    // Carrier pay (col T "Total pay") — captured for historical runs only;
+    // ignored for AVL because it's always 0 there.
+    const totalPayRaw = pick(row, "Total pay", "Total Pay");
+    const totalPayNum = totalPayRaw ? parseFloat(totalPayRaw) : NaN;
+    const carrierCost = Number.isFinite(totalPayNum) && totalPayNum > 0 ? totalPayNum : null;
+
+    if (brokerageStatus === "AVL") {
+      if (!customerName || !originCity || !destCity) continue;
+      const start = pickupDate ?? new Date().toISOString().slice(0, 10);
+      // Available Freight rows are always a single pickup day. Even if
+      // delivery date is later, we collapse the persisted window to one day.
+      const end = start;
+      // Stable identity = the TMS Order#. Same Order# in tomorrow's file
+      // collapses onto the same opportunity (no duplicates) and any drift in
+      // city/equipment/date is treated as an in-place edit.
+      const stableKey = buildStableKey([orderId]);
+      out.push({
+        customerName,
+        origin: originCity,
+        originState: originStateRaw ? originStateRaw.toUpperCase() : null,
+        destination: destCity,
+        destinationState: destStateRaw ? destStateRaw.toUpperCase() : null,
+        equipmentType,
+        pickupWindowStart: start,
+        pickupWindowEnd: end,
+        loadCount: Number.isFinite(stops) ? Math.max(1, stops + 1) : loadCount,
+        notes: null, // planning comment intentionally excluded
+        ownerEmail,
+        orderId,
+        stableKey,
+        rawRow: row,
+      });
       continue;
     }
-    if (!customerName || !originRaw || !destinationRaw) continue;
 
-    const originStateOnly = pick(row, "Origin State", "Pickup State");
-    const destStateOnly = pick(row, "Destination State", "Delivery State", "Dest State");
+    // Non-AVL row — record so we can auto-close any prior AVL opportunity for
+    // the same Order#.
+    diagnostics.nonAvlRows.push({ orderId, brokerageStatus });
 
-    const o = splitCityState(originRaw);
-    const d = splitCityState(destinationRaw);
-
-    const pickupStartRaw = pick(row, "Pickup Date", "Pickup Start", "Pickup", "Start Date", "Date");
-    const pickupEndRaw = pick(row, "Pickup End", "End Date", "Delivery Date", "Drop Date");
-    const start = parseDateLoose(pickupStartRaw) ?? new Date().toISOString().slice(0, 10);
-    // Available Freight rows are always a single pickup day. Even when the
-    // spreadsheet has a "Pickup End" / "Delivery Date" cell that's later than
-    // the pickup, we collapse the persisted window to a single canonical day
-    // (start == end) so downstream UI never has to render a misleading
-    // start→end range. The raw end value (when present) is unused at write
-    // time but kept available via rawRow if a future report needs it.
-    void pickupEndRaw;
-    const end = start;
-
-    const equipment = pick(row, "Equipment", "Equipment Type", "Trailer", "Trailer Type") || null;
-    const ownerEmail = pick(row, "Owner", "Rep", "Rep Email", "Owner Email", "Assigned To") || null;
-    const loadCountRaw = pick(row, "Loads", "Load Count", "Qty", "Quantity");
-    const loadCount = Math.max(1, parseInt(loadCountRaw, 10) || 1);
-    const notes = pick(row, "Notes", "Comments", "Remarks") || null;
-
-    const stableKey = buildStableKey([
-      customerName,
-      o.city, o.state || originStateOnly || null,
-      d.city, d.state || destStateOnly || null,
-      equipment,
-      start,
-      end,
-    ]);
-
-    out.push({
-      customerName,
-      origin: o.city,
-      originState: o.state || originStateOnly || null,
-      destination: d.city,
-      destinationState: d.state || destStateOnly || null,
-      equipmentType: equipment,
-      pickupWindowStart: start,
-      pickupWindowEnd: end,
-      loadCount,
-      notes,
-      ownerEmail: ownerEmail ? ownerEmail.toLowerCase() : null,
-      stableKey,
-      rawRow: row,
-    });
+    if (HISTORICAL_STATUSES.has(brokerageStatus)) {
+      diagnostics.skippedWithCarrier++;
+      if (!customerName || !originCity || !destCity || !carrierName) continue;
+      // rowKey collapses re-imports of the same Order# onto a single load_fact row.
+      const rowKey = buildStableKey([orderId]);
+      diagnostics.historicalRuns.push({
+        customerName,
+        carrierName,
+        origin: originCity,
+        originState: originStateRaw ? originStateRaw.toUpperCase() : null,
+        destination: destCity,
+        destinationState: destStateRaw ? destStateRaw.toUpperCase() : null,
+        equipmentType,
+        pickupDate: pickupDate ?? "",
+        deliveryDate: deliveryDate ?? "",
+        loadCount,
+        orderId,
+        carrierCost,
+        brokerageStatus,
+        rowKey,
+        rawRow: row,
+      });
+    }
   }
   return out;
 }
@@ -561,9 +655,14 @@ export async function runImportFromWorkbook(
   const sheetPick = chooseDataSheetWithName(workbook);
   const rawRows = sheetPick.rows;
   const detectedHeaders = rawRows.length > 0 ? Object.keys(rawRows[0]) : [];
-  const parseDiagnostics: { skippedWithCarrier: number; historicalRuns: ParsedHistoricalRun[] } = {
+  const parseDiagnostics: {
+    skippedWithCarrier: number;
+    historicalRuns: ParsedHistoricalRun[];
+    nonAvlRows: ParsedNonAvlRow[];
+  } = {
     skippedWithCarrier: 0,
     historicalRuns: [],
+    nonAvlRows: [],
   };
   const loads = parseSheetToLoads(rawRows, parseDiagnostics);
   console.log(
@@ -949,7 +1048,8 @@ export async function runImportFromWorkbook(
       try {
         await upsertLoadFact({
           orgId,
-          orderId: `available_freight_history:${h.rowKey}`,
+          // Canonical TMS order# — daily re-imports collapse onto same row.
+          orderId: `available_freight_history:${h.orderId}`,
           companyId: company.id,
           customerName: company.name,
           carrierName: h.carrierName,
@@ -962,10 +1062,12 @@ export async function runImportFromWorkbook(
           pickupDate: h.pickupDate || null,
           deliveryDate: h.deliveryDate || null,
           month: h.pickupDate ? h.pickupDate.slice(0, 7) : null,
-          moveStatus: "delivered",
+          moveStatus: mapMoveStatus(h.brokerageStatus),
           bucket: "realized",
           revenue: null,
-          cost: null,
+          // Carrier pay from "Total pay" column (rep needs to see what we
+          // previously paid this carrier on this lane). decimal column → string.
+          cost: h.carrierCost === null ? null : h.carrierCost.toFixed(2),
           margin: null,
           loadCount: h.loadCount,
           rawRow: h.rawRow as Record<string, unknown>,
@@ -1042,6 +1144,36 @@ export async function runImportFromWorkbook(
       payload: { kind: "available_freight_vanished", fileName, stableKey: key },
     });
     expired++;
+  }
+
+  // AVL → non-AVL transition close. When today's file shows the same Order#
+  // with status TRANSIT/POD/DEL/etc, auto-close the prior AVL opportunity as
+  // `covered` and stop ranking carriers for it. This is what prevents stale
+  // "available" rows from lingering after dispatch covers the load.
+  // (Order# becomes the stableKey for AVL rows — see parseSheetToLoads — so a
+  // direct byKey lookup is sufficient.)
+  let autoCovered = 0;
+  for (const nonAvl of parseDiagnostics.nonAvlRows) {
+    const key = buildStableKey([nonAvl.orderId]);
+    const opp = byKey.get(key);
+    if (!opp) continue;
+    if (opp.status === "expired" || opp.status === "cancelled" || opp.status === "covered") continue;
+    await storage.updateFreightOpportunity(orgId, opp.id, { status: "covered" });
+    await storage.appendFreightOpportunityAudit({
+      opportunityId: opp.id,
+      eventType: "expired",
+      actorUserId,
+      payload: {
+        kind: "available_freight_status_change",
+        fileName,
+        orderId: nonAvl.orderId,
+        newBrokerageStatus: nonAvl.brokerageStatus,
+      },
+    });
+    autoCovered++;
+  }
+  if (autoCovered > 0) {
+    console.log(`[available-freight] auto-covered=${autoCovered} (AVL→non-AVL transitions)`);
   }
 
   const summary: AvailableFreightImportSummary = {

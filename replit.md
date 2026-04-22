@@ -50,6 +50,18 @@ Core features include:
 ### System Design Choices
 Key database tables support core functionalities, including pre-computed lane data (`lane_summary_cache`), email-derived contact suggestions (`account_contact_suggestions`), defined corridor patterns (`geographic_lane_patterns`), contact-to-corridor mapping (`account_contact_lane_pattern_responsibilities`), email conversation management (`email_conversation_threads`), AI-inferred geography ownership (`contact_geography_suggestions`), proven tactical responses (`proven_tactics`), AI draft feedback (`draft_feedback`), email correction records (`sent_email_corrections`), and numerous tables for the AI Intelligence Hub features (e.g., `meeting_prep_briefs`, `contact_sentiment_tracking`, `monitored_mailboxes`).
 
+### Available Freight Importer (TMS Daily Upload Format)
+Sheet "Available Freight" is now the canonical source. Key rules:
+- Only rows with `Brokerage status = "AVL"` become `freight_opportunities`.
+- Rows with status in `{POD, DEL, TRANSIT}` feed `load_fact` as `realized` runs (`sourceKind = available_freight_history`), with carrier cost captured from `Total pay` so the carrier ranker has lane-level pay history.
+- Rows with any other status (HOLD, RCA, ACCESS., etc.) are ignored except that they auto-close any prior AVL opportunity for the same Order# (status → `covered`, with audit event).
+- TMS Order# (col A) is the canonical opportunity identity (`stableKey = hash(orderId)`); daily re-imports collapse onto the same row. The legacy ±2-day window-slip soft-merge remains as a fallback when Order# is missing.
+- "Ops user" (col Z) maps to the assigned owner via username/email index (`buildUserEmailIndex`).
+- Equipment codes are mapped to human labels via `EQUIPMENT_CODE_MAP` (FT → "Flatbed w/ Tarps", PO → "Power Only" today; expand as ops surfaces new codes).
+- Pickup datetimes are parsed as `MM/DD/YYYY HHMM`; the time portion is dropped to `YYYY-MM-DD`.
+- Planning-comment column is intentionally not parsed (no drop-trailer detection from text).
+- Revenue/margin are not displayed in the UI but carrier pay (`load_fact.cost`) is tracked per realized run.
+
 ### Deployment Recovery Recipe (When Provision Stage Fails on a Unique Index)
 If a future deploy fails at Provision with `Failed to run database migration statement: CREATE UNIQUE INDEX ...`, it means production data has duplicate rows that violate a unique index declared in `shared/schema.ts`. The 2-minute fix:
 
