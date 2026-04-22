@@ -1308,8 +1308,6 @@ export default function AdminUsers() {
 
   return (
     <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
-      {currentUser?.role === "admin" && <WebexConnectionStatus />}
-      {currentUser?.role === "admin" && <WebexUserMappingPanel />}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-admin-title">
@@ -1476,6 +1474,9 @@ export default function AdminUsers() {
           })}
         </div>
       )}
+
+      {currentUser?.role === "admin" && <WebexConnectionStatus />}
+      {currentUser?.role === "admin" && <WebexUserMappingPanel />}
 
       {currentUser?.role === "admin" && <CareerProgressionSection />}
 
