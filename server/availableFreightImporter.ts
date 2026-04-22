@@ -405,7 +405,7 @@ export async function performAvailableFreightImport(
   }
 }
 
-async function runImportFromWorkbook(
+export async function runImportFromWorkbook(
   workbook: XLSX.WorkBook,
   fileName: string,
   orgId: string,

@@ -4,6 +4,7 @@ import XLSX from "xlsx";
 import { storage } from "../storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds } from "../auth";
 import { runRecurringLaneEngineForOrg } from "../recurringLaneCapacityEngine";
+import { runImportFromWorkbook as runAvailableFreightImportFromWorkbook } from "../availableFreightImporter";
 import {
   resolveColumns,
   getRepFromRow,
@@ -650,6 +651,27 @@ export function registerFinancialRoutes(app: Express): void {
         }).catch(err => {
           console.error(`[lane-engine] auto-run error for org=${orgId}:`, err);
         });
+      }
+
+      // Auto-run available freight importer on the same workbook (fire-and-forget).
+      // The same Excel file the user uploads to Financials also contains an
+      // "Available Freight" sheet — feeding it here populates freight_opportunities
+      // (Available Freight Outreach page) and load_fact (Carrier Intel Available
+      // Loads tab) without requiring a separate upload step. Best-effort: if the
+      // workbook has no matching sheet, parseSheetToLoads returns 0 loads and
+      // the importer no-ops cleanly.
+      if (orgId) {
+        runAvailableFreightImportFromWorkbook(workbook, req.file.originalname, orgId, user.id, "manual")
+          .then(summary => {
+            console.log(
+              `[available-freight] auto-import after financial upload for org=${orgId}: ` +
+              `${summary.inserted} inserted, ${summary.updated} updated, ${summary.expired} expired, ` +
+              `${summary.unmatchedCompanies} unmatched companies`,
+            );
+          })
+          .catch(err => {
+            console.error(`[available-freight] auto-import error for org=${orgId}:`, err);
+          });
       }
     } catch (error) {
       console.error("Error uploading financials:", error);
