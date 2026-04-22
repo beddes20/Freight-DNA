@@ -15,7 +15,7 @@
  *   /ai/adapters        → Adapter status / dry-run vs live
  *   /ai/admin           → Legacy AiAgentPortal (personas, plays, permissions, activity)
  */
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link, useLocation, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -300,7 +300,103 @@ function AdaptersTab() {
           )}
         </CardContent>
       </Card>
+      <ZoomInfoConnectionTest />
     </div>
+  );
+}
+
+interface ZoomInfoTestResult {
+  ok: boolean;
+  reason?: string;
+  missing?: string[];
+  httpStatus?: number;
+  httpStatusText?: string;
+  elapsedMs?: number;
+  clientIdTail?: string;
+  secretTail?: string;
+  errorCode?: string | null;
+  errorDescription?: string | null;
+  rawBody?: string;
+  parsed?: unknown;
+  endpoint?: string;
+  sentContentType?: string;
+  grantType?: string;
+  error?: string;
+}
+
+function ZoomInfoConnectionTest() {
+  const { toast } = useToast();
+  const [result, setResult] = useState<ZoomInfoTestResult | null>(null);
+  const test = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/zoominfo/test-auth", {}).then(r => r.json()),
+    onSuccess: (data: ZoomInfoTestResult) => {
+      setResult(data);
+      if (data.ok) toast({ title: "ZoomInfo auth succeeded" });
+      else toast({ title: "ZoomInfo auth failed", description: data.errorCode ?? data.reason ?? `HTTP ${data.httpStatus ?? "?"}`, variant: "destructive" });
+    },
+    onError: (e: unknown) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResult({ ok: false, reason: "request_error", error: msg });
+      toast({ title: "Test failed", description: msg, variant: "destructive" });
+    },
+  });
+
+  return (
+    <Card data-testid="card-zoominfo-test">
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2"><Plug className="h-4 w-4" /> ZoomInfo connection test</CardTitle>
+        <CardDescription>
+          Sends a real <code>client_credentials</code> request to <code>https://api.zoominfo.com/oauth/token</code> and shows the full response.
+          Use this after rotating your Client Secret to confirm the new value works. The secret itself is never returned — only its last 4 characters.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <Button
+          onClick={() => test.mutate()}
+          disabled={test.isPending}
+          data-testid="button-zoominfo-test"
+        >
+          {test.isPending ? "Testing…" : "Test ZoomInfo connection"}
+        </Button>
+        {result && (
+          <div className="rounded-md border bg-muted/40 p-3 text-xs space-y-2" data-testid="text-zoominfo-test-result">
+            <div className="flex items-center gap-2">
+              <Badge variant={result.ok ? "default" : "destructive"}>
+                {result.ok ? "OK" : (result.reason ?? "FAILED")}
+              </Badge>
+              {result.httpStatus !== undefined && (
+                <span className="text-muted-foreground">HTTP {result.httpStatus} {result.httpStatusText ?? ""}</span>
+              )}
+              {result.elapsedMs !== undefined && (
+                <span className="text-muted-foreground">{result.elapsedMs} ms</span>
+              )}
+            </div>
+            {(result.clientIdTail || result.secretTail) && (
+              <div className="text-muted-foreground">
+                client_id …{result.clientIdTail} / secret …{result.secretTail}
+              </div>
+            )}
+            {result.errorCode && (
+              <div>
+                <span className="font-medium">error: </span>
+                <code>{result.errorCode}</code>
+                {result.errorDescription && <span> — {result.errorDescription}</span>}
+              </div>
+            )}
+            {result.missing && result.missing.length > 0 && (
+              <div>Missing env vars: {result.missing.join(", ")}</div>
+            )}
+            {result.rawBody && (
+              <details>
+                <summary className="cursor-pointer text-muted-foreground">Full response body</summary>
+                <pre className="mt-2 whitespace-pre-wrap break-all bg-background border rounded p-2 max-h-64 overflow-auto">{result.rawBody}</pre>
+              </details>
+            )}
+            {result.error && <div className="text-destructive">{result.error}</div>}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

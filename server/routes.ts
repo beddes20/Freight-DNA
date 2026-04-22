@@ -7382,12 +7382,10 @@ Respond with valid JSON only:
     if (!companyName?.trim()) return res.status(400).json({ error: "companyName is required" });
 
     const ziConfigured = !!(
-      process.env.ZOOMINFO_USERNAME &&
-      process.env.ZOOMINFO_PASSWORD &&
-      process.env.ZOOMINFO_CLIENT_ID
+      process.env.ZOOMINFO_CLIENT_ID && process.env.ZOOMINFO_CLIENT_SECRET
     );
     if (!ziConfigured) {
-      return res.status(503).json({ error: "ZoomInfo integration not configured. ZOOMINFO_USERNAME, ZOOMINFO_PASSWORD, and ZOOMINFO_CLIENT_ID are required." });
+      return res.status(503).json({ error: "ZoomInfo integration not configured. ZOOMINFO_CLIENT_ID and ZOOMINFO_CLIENT_SECRET are required." });
     }
 
     try {
@@ -7404,15 +7402,87 @@ Respond with valid JSON only:
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Not authenticated" });
     const configured = !!(
-      process.env.ZOOMINFO_USERNAME &&
-      process.env.ZOOMINFO_PASSWORD &&
-      process.env.ZOOMINFO_CLIENT_ID
+      process.env.ZOOMINFO_CLIENT_ID && process.env.ZOOMINFO_CLIENT_SECRET
     );
-    const missing = [];
-    if (!process.env.ZOOMINFO_USERNAME) missing.push("ZOOMINFO_USERNAME");
-    if (!process.env.ZOOMINFO_PASSWORD) missing.push("ZOOMINFO_PASSWORD");
+    const missing: string[] = [];
     if (!process.env.ZOOMINFO_CLIENT_ID) missing.push("ZOOMINFO_CLIENT_ID");
+    if (!process.env.ZOOMINFO_CLIENT_SECRET) missing.push("ZOOMINFO_CLIENT_SECRET");
     res.json({ configured, missing });
+  });
+
+  // Live auth probe — performs a real OAuth client_credentials POST against
+  // ZoomInfo and returns the full raw response so the user can paste the
+  // exact error back to ZoomInfo support if it's still failing after they
+  // regenerate a secret. Admin-only, never returns the secret itself.
+  app.post("/api/zoominfo/test-auth", requireAuth, async (req, res) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Not authenticated" });
+    if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+
+    const clientId = process.env.ZOOMINFO_CLIENT_ID;
+    const clientSecret = process.env.ZOOMINFO_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      const missing: string[] = [];
+      if (!clientId) missing.push("ZOOMINFO_CLIENT_ID");
+      if (!clientSecret) missing.push("ZOOMINFO_CLIENT_SECRET");
+      return res.json({
+        ok: false,
+        reason: "missing_credentials",
+        missing,
+      });
+    }
+
+    const startedAt = Date.now();
+    try {
+      const form = new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: clientId,
+        client_secret: clientSecret,
+      });
+      const resp = await fetch("https://api.zoominfo.com/oauth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: form.toString(),
+      });
+      const elapsedMs = Date.now() - startedAt;
+      const rawBody = await resp.text();
+      // Try to parse as JSON for nicer display, but always include the raw text.
+      let parsed: unknown = null;
+      try { parsed = JSON.parse(rawBody); } catch { /* not JSON */ }
+      const errorCode = (parsed && typeof parsed === "object" && parsed !== null
+        && "error" in parsed && typeof (parsed as Record<string, unknown>).error === "string")
+        ? (parsed as Record<string, string>).error : null;
+      const errorDescription = (parsed && typeof parsed === "object" && parsed !== null
+        && "error_description" in parsed
+        && typeof (parsed as Record<string, unknown>).error_description === "string")
+        ? (parsed as Record<string, string>).error_description : null;
+      // Surface the LAST 4 chars of the secret only so the admin can verify
+      // they're testing the secret they just rotated to. Never the full value.
+      const secretTail = clientSecret.slice(-4);
+      return res.json({
+        ok: resp.ok,
+        httpStatus: resp.status,
+        httpStatusText: resp.statusText,
+        elapsedMs,
+        clientIdTail: clientId.slice(-6),
+        secretTail,
+        errorCode,
+        errorDescription,
+        rawBody: rawBody.slice(0, 4000),
+        parsed: parsed && typeof parsed === "object" && !("access_token" in (parsed as object))
+          ? parsed : (resp.ok ? { received_token: true } : parsed),
+        endpoint: "https://api.zoominfo.com/oauth/token",
+        sentContentType: "application/x-www-form-urlencoded",
+        grantType: "client_credentials",
+      });
+    } catch (e) {
+      return res.json({
+        ok: false,
+        reason: "network_error",
+        error: e instanceof Error ? e.message : String(e),
+        elapsedMs: Date.now() - startedAt,
+      });
+    }
   });
 
   // ── Lane Attribution Endpoints ───────────────────────────────────────────
