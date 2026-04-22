@@ -298,7 +298,10 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
   log(`Carrier inbound logged: from=${fromEmail} confidence=${carrierMatch.confidence} laneId=${laneId ?? "none"} msgId=${providerMessageId}`);
 
   if (accountMatch) {
-    await storage.insertEmailMessage({
+    // Use upsert (ON CONFLICT DO NOTHING on org_id, provider_message_id)
+    // so retried Graph webhook deliveries can never create duplicate
+    // email_messages rows.
+    const { created } = await storage.upsertInboundEmailMessage({
       orgId,
       providerMessageId,
       threadId: conversationId,
@@ -315,7 +318,9 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
       linkedNbaId: null,
       linkedOutreachLogId: null,
     });
-    log(`Customer inbound email_message created: from=${fromEmail} contact=${accountMatch.contactName} company=${accountMatch.companyId} msgId=${providerMessageId}`);
+    if (created) {
+      log(`Customer inbound email_message created: from=${fromEmail} contact=${accountMatch.contactName} company=${accountMatch.companyId} msgId=${providerMessageId}`);
+    }
   }
 
   // Task #302 — Play outcome auto-tagging. Runs even when account didn't
