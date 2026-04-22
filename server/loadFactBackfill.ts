@@ -128,7 +128,7 @@ export async function backfillFromFinancialUploads(orgId: string, actorUserId: s
 
 // ── Freight opportunities (Available Freight imports) ──────────────────────
 
-function freightOpportunityToInsert(opp: FreightOpportunity, companyName: string | null): InsertLoadFact {
+export function freightOpportunityToInsert(opp: FreightOpportunity, companyName: string | null): InsertLoadFact {
   // Each freight_opportunity is a not-yet-realized load. We preserve it as
   // an "available" load_fact with a synthetic order_id derived from its UUID
   // (deterministic across runs).

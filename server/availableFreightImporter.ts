@@ -21,6 +21,8 @@ import crypto from "crypto";
 import { sql } from "drizzle-orm";
 import { storage, db } from "./storage";
 import { getGraphAccessToken, azureCredentialsConfigured } from "./graphService";
+import { upsertLoadFact } from "./carrierIntelligenceService";
+import { freightOpportunityToInsert } from "./loadFactBackfill";
 import type {
   FreightOpportunity,
   InsertFreightOpportunity,
@@ -681,6 +683,14 @@ async function runImportFromWorkbook(
         }
       }
       updated++;
+      // Mirror to load_fact so the Carrier Intelligence "Available Loads"
+      // tab sees the latest pickup window / status. Best-effort: failures
+      // are logged but never abort the importer.
+      try {
+        await upsertLoadFact(freightOpportunityToInsert(existingOpp, company.name ?? null));
+      } catch (e) {
+        console.warn(`[available-freight] load_fact mirror (update) failed for opp ${existingOpp.id}: ${e instanceof Error ? e.message : String(e)}`);
+      }
       continue;
     }
 
@@ -724,6 +734,16 @@ async function runImportFromWorkbook(
         ownerEmail: load.ownerEmail,
       },
     });
+    // Mirror to load_fact so the new row immediately appears in the
+    // Carrier Intelligence "Available Loads" tab without waiting for a
+    // manual backfill. Best-effort: failures are logged but never abort
+    // the importer (we never want a load_fact issue to corrupt the
+    // primary freight_opportunities import).
+    try {
+      await upsertLoadFact(freightOpportunityToInsert(created, company.name ?? null));
+    } catch (e) {
+      console.warn(`[available-freight] load_fact mirror (insert) failed for opp ${created.id}: ${e instanceof Error ? e.message : String(e)}`);
+    }
     inserted++;
   }
 
