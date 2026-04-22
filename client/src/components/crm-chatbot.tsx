@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Bot, X, Send, Plus, Trash2, ChevronLeft, MessageSquare, Loader2, Lightbulb, CheckCircle2, Globe, Users, Bug, Wrench, Sparkles, ClipboardList, ExternalLink, Phone, Mail, MessageSquareText, MapPin, Check, AlertTriangle, Star, PanelRight, Maximize2, Minimize2, ThumbsUp, ThumbsDown } from "lucide-react";
+import { Bot, X, Send, Plus, Trash2, ChevronLeft, MessageSquare, Loader2, Lightbulb, CheckCircle2, Globe, Users, Bug, Wrench, Sparkles, ClipboardList, ExternalLink, PanelRight, Maximize2, Minimize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -12,258 +12,11 @@ import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { useChatPageContext } from "@/hooks/use-chat-page-context";
 import { getSuggestedPrompts } from "./dna-copilot/prompts";
-import { AnswerCardMeta, type AnswerMeta } from "./dna-copilot/answer-card";
-import { DraftEmailCard, OpenQueueCard } from "./dna-copilot/extra-action-cards";
+import { type AnswerMeta } from "./dna-copilot/answer-card";
+import { MessageList } from "./dna-copilot/message-list";
+import { EmptyState } from "./dna-copilot/empty-state";
+import { MODE_STORAGE_KEY, type ChatMessage, type Conversation, type CopilotMode, type NudgesResponse, type ReportType } from "./dna-copilot/types";
 
-type CopilotMode = "docked" | "side" | "workspace";
-const MODE_STORAGE_KEY = "dna-copilot-mode";
-
-type ReportType = "bug" | "improvement" | "feature";
-
-interface Conversation {
-  id: number;
-  title: string;
-  createdAt: string;
-}
-
-interface ChatMessage {
-  id: number;
-  conversationId: number;
-  role: "user" | "assistant";
-  content: string;
-  createdAt: string;
-  action?: {
-    tool: string;
-    args: Record<string, string>;
-    confirmed?: boolean;
-    failed?: boolean;
-  };
-  meta?: AnswerMeta;
-  confidence?: number;
-  route?: string;
-  mode?: "quick" | "analytical";
-  modeLabel?: string;
-  isError?: boolean;
-  feedback?: "up" | "down" | null;
-}
-
-interface NudgesResponse {
-  alerts: string[];
-  suggestions: string[];
-}
-
-function MarkdownText({ content }: { content: string }) {
-  const lines = content.split("\n");
-  return (
-    <div className="text-sm leading-relaxed space-y-1">
-      {lines.map((line, i) => {
-        if (line.startsWith("- ") || line.startsWith("• ")) {
-          return (
-            <div key={i} className="flex gap-2">
-              <span className="shrink-0 mt-0.5">•</span>
-              <span>{line.replace(/^[-•]\s/, "")}</span>
-            </div>
-          );
-        }
-        if (line.startsWith("**") && line.endsWith("**")) {
-          return <p key={i} className="font-semibold">{line.replace(/\*\*/g, "")}</p>;
-        }
-        if (line === "") return <div key={i} className="h-1" />;
-        return <p key={i}>{line}</p>;
-      })}
-    </div>
-  );
-}
-
-function TouchpointTypeIcon({ type }: { type: string }) {
-  if (type === "call") return <Phone className="h-4 w-4 text-blue-500" />;
-  if (type === "email") return <Mail className="h-4 w-4 text-purple-500" />;
-  if (type === "text") return <MessageSquareText className="h-4 w-4 text-green-500" />;
-  if (type === "site_visit") return <MapPin className="h-4 w-4 text-orange-500" />;
-  return <Phone className="h-4 w-4 text-blue-500" />;
-}
-
-function ActionCard({
-  action,
-  onConfirm,
-  onDismiss,
-}: {
-  action: NonNullable<ChatMessage["action"]>;
-  onConfirm: (editedArgs: Record<string, string>) => void;
-  onDismiss: () => void;
-}) {
-  const [editedArgs, setEditedArgs] = useState<Record<string, string>>({ ...action.args });
-  const set = (key: string, val: string) => setEditedArgs(prev => ({ ...prev, [key]: val }));
-
-  if (action.tool === "draft_email") {
-    return <DraftEmailCard args={action.args} confirmed={action.confirmed} failed={action.failed} onConfirm={onConfirm} onDismiss={onDismiss} />;
-  }
-  if (action.tool === "open_filtered_queue") {
-    return <OpenQueueCard args={action.args} confirmed={action.confirmed} failed={action.failed} onConfirm={onConfirm} onDismiss={onDismiss} />;
-  }
-
-  if (action.confirmed) {
-    const labels: Record<string, string> = {
-      log_touchpoint: "Touchpoint logged!",
-      create_task: "Task created!",
-      complete_task: "Task marked complete!",
-      mark_meaningful: "Marked as meaningful!",
-      approve_freight_opportunity: "Freight opportunity approved!",
-    };
-    return (
-      <div className="mt-2 flex items-center gap-2 text-xs text-green-600 dark:text-green-400">
-        <Check className="h-3.5 w-3.5" />
-        {labels[action.tool] ?? "Done!"}
-      </div>
-    );
-  }
-  if (action.failed) {
-    return (
-      <div className="mt-2 flex items-center gap-2 text-xs text-red-500">
-        <AlertTriangle className="h-3.5 w-3.5" />
-        Action failed. Try again from the main app.
-      </div>
-    );
-  }
-
-  const fieldCls = "w-full mt-0.5 text-xs rounded border bg-background px-2 py-1 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-indigo-400";
-
-  if (action.tool === "log_touchpoint") {
-    return (
-      <div className="mt-2 border border-blue-200 dark:border-blue-800 rounded-xl bg-blue-50 dark:bg-blue-950/30 p-3 space-y-2">
-        <div className="flex items-center gap-1.5 text-xs font-semibold text-blue-700 dark:text-blue-300">
-          <TouchpointTypeIcon type={editedArgs.type} />
-          Log Touchpoint
-        </div>
-        <div className="space-y-1.5">
-          <div>
-            <label className="text-xs text-muted-foreground">Type</label>
-            <select value={editedArgs.type || "call"} onChange={e => set("type", e.target.value)} className={fieldCls}>
-              <option value="call">Call</option>
-              <option value="email">Email</option>
-              <option value="text">Text</option>
-              <option value="site_visit">Site Visit</option>
-            </select>
-          </div>
-          <div>
-            <label className="text-xs text-muted-foreground">Account</label>
-            <input type="text" value={editedArgs.company_name || ""} onChange={e => set("company_name", e.target.value)} placeholder="Company name" className={fieldCls} />
-          </div>
-          <div>
-            <label className="text-xs text-muted-foreground">Contact (optional)</label>
-            <input type="text" value={editedArgs.contact_name || ""} onChange={e => set("contact_name", e.target.value)} placeholder="Contact name" className={fieldCls} />
-          </div>
-          <div>
-            <label className="text-xs text-muted-foreground">Note</label>
-            <textarea value={editedArgs.note || ""} onChange={e => set("note", e.target.value)} placeholder="Add a note..." rows={2} className={`${fieldCls} resize-none`} />
-          </div>
-        </div>
-        <div className="flex gap-2 pt-1">
-          <Button size="sm" className="h-7 text-xs bg-blue-600 hover:bg-blue-700 text-white flex-1" onClick={() => onConfirm(editedArgs)} data-testid="action-confirm-touchpoint">
-            <Check className="h-3.5 w-3.5 mr-1" /> Log it
-          </Button>
-          <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={onDismiss} data-testid="action-dismiss">Dismiss</Button>
-        </div>
-      </div>
-    );
-  }
-
-  if (action.tool === "create_task") {
-    return (
-      <div className="mt-2 border border-amber-200 dark:border-amber-800 rounded-xl bg-amber-50 dark:bg-amber-950/30 p-3 space-y-2">
-        <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
-          <ClipboardList className="h-4 w-4" />
-          Create Task
-        </div>
-        <div className="space-y-1.5">
-          <div>
-            <label className="text-xs text-muted-foreground">Task</label>
-            <input type="text" value={editedArgs.title || ""} onChange={e => set("title", e.target.value)} placeholder="Task title" className={fieldCls} />
-          </div>
-          <div>
-            <label className="text-xs text-muted-foreground">Due date (optional)</label>
-            <input type="date" value={editedArgs.due_date || ""} onChange={e => set("due_date", e.target.value)} className={fieldCls} />
-          </div>
-        </div>
-        <div className="flex gap-2 pt-1">
-          <Button size="sm" className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white flex-1" onClick={() => onConfirm(editedArgs)} data-testid="action-confirm-task">
-            <Check className="h-3.5 w-3.5 mr-1" /> Create it
-          </Button>
-          <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={onDismiss} data-testid="action-dismiss">Dismiss</Button>
-        </div>
-      </div>
-    );
-  }
-
-  if (action.tool === "complete_task") {
-    return (
-      <div className="mt-2 border border-green-200 dark:border-green-800 rounded-xl bg-green-50 dark:bg-green-950/30 p-3 space-y-2">
-        <div className="flex items-center gap-1.5 text-xs font-semibold text-green-700 dark:text-green-300">
-          <CheckCircle2 className="h-4 w-4" />
-          Complete Task
-        </div>
-        <p className="text-xs font-medium text-foreground">{editedArgs.task_title}</p>
-        {editedArgs.due_date && (
-          <p className="text-xs text-muted-foreground">Due: {new Date(editedArgs.due_date + "T12:00:00").toLocaleDateString()}</p>
-        )}
-        <div className="flex gap-2 pt-1">
-          <Button size="sm" className="h-7 text-xs bg-green-600 hover:bg-green-700 text-white flex-1" onClick={() => onConfirm(editedArgs)} data-testid="action-confirm-complete-task">
-            <Check className="h-3.5 w-3.5 mr-1" /> Mark complete
-          </Button>
-          <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={onDismiss} data-testid="action-dismiss">Dismiss</Button>
-        </div>
-      </div>
-    );
-  }
-
-  if (action.tool === "approve_freight_opportunity") {
-    return (
-      <div className="mt-2 border border-emerald-200 dark:border-emerald-800 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 p-3 space-y-2">
-        <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-300">
-          <CheckCircle2 className="h-4 w-4" />
-          Approve Freight Opportunity
-        </div>
-        <div className="text-xs space-y-0.5">
-          <p><span className="text-muted-foreground">Account:</span> <span className="font-medium">{editedArgs.company_name}</span></p>
-          <p><span className="text-muted-foreground">Lane:</span> {editedArgs.origin} → {editedArgs.destination}</p>
-          {editedArgs.pickup && <p><span className="text-muted-foreground">Pickup:</span> {editedArgs.pickup}</p>}
-        </div>
-        <div className="flex gap-2 pt-1">
-          <Button size="sm" className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white flex-1" onClick={() => onConfirm(editedArgs)} data-testid="action-confirm-approve-freight">
-            <Check className="h-3.5 w-3.5 mr-1" /> Approve
-          </Button>
-          <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={onDismiss} data-testid="action-dismiss">Dismiss</Button>
-        </div>
-      </div>
-    );
-  }
-
-  if (action.tool === "mark_meaningful") {
-    const typeLabel = { call: "Call", email: "Email", text: "Text", site_visit: "Site Visit" }[editedArgs.type] ?? editedArgs.type;
-    return (
-      <div className="mt-2 border border-amber-200 dark:border-amber-800 rounded-xl bg-amber-50 dark:bg-amber-950/30 p-3 space-y-2">
-        <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
-          <Star className="h-4 w-4" />
-          Mark Meaningful
-        </div>
-        <div className="text-xs space-y-0.5">
-          <p><span className="text-muted-foreground">Account:</span> <span className="font-medium">{editedArgs.company_name}</span></p>
-          {editedArgs.type && <p><span className="text-muted-foreground">Type:</span> {typeLabel}</p>}
-          {editedArgs.date && <p><span className="text-muted-foreground">Date:</span> {editedArgs.date}</p>}
-          {editedArgs.note && <p className="text-muted-foreground italic">"{editedArgs.note.slice(0, 80)}{editedArgs.note.length > 80 ? "..." : ""}"</p>}
-        </div>
-        <div className="flex gap-2 pt-1">
-          <Button size="sm" className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white flex-1" onClick={() => onConfirm(editedArgs)} data-testid="action-confirm-meaningful">
-            <Star className="h-3.5 w-3.5 mr-1" /> Mark meaningful
-          </Button>
-          <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={onDismiss} data-testid="action-dismiss">Dismiss</Button>
-        </div>
-      </div>
-    );
-  }
-
-  return null;
-}
 
 export function CrmChatbot() {
   const { user } = useAuth();
@@ -442,12 +195,17 @@ export function CrmChatbot() {
   };
 
   const submitFeedback = async (msgId: number, rating: "up" | "down", comment?: string) => {
+    let finalComment = comment ?? null;
+    if (rating === "down" && finalComment == null && typeof window !== "undefined") {
+      const reply = window.prompt("Why was this not helpful? (optional)") ?? "";
+      finalComment = reply.trim() ? reply.trim().slice(0, 2000) : null;
+    }
     try {
       await apiRequest("POST", "/api/agent/feedback", {
         conversationRef: activeConvoId ? String(activeConvoId) : null,
         messageId: typeof msgId === "number" && msgId > 0 && msgId < 1e12 ? msgId : null,
         rating,
-        comment: comment ?? null,
+        comment: finalComment,
       });
       setLocalMessages(prev => prev.map(m => m.id === msgId ? { ...m, feedback: rating } : m));
     } catch { /* non-fatal */ }
@@ -694,7 +452,6 @@ export function CrmChatbot() {
   };
 
   const allMessages = localMessages;
-  const isEmpty = allMessages.length === 0 && !streamingContent;
 
   return (
     <>
@@ -1045,208 +802,37 @@ export function CrmChatbot() {
 
           {/* Messages */}
           <ScrollArea className="flex-1" ref={scrollRef as any}>
-            <div className="p-4 space-y-4">
-              {isEmpty && (
-                <div className="space-y-4">
-                  {/* Greeting */}
-                  <div className="flex gap-3">
-                    <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
-                      <Bot className="h-4 w-4 text-primary" />
-                    </div>
-                    <div className="bg-muted rounded-2xl rounded-tl-sm px-3.5 py-2.5 max-w-[290px]">
-                      <p className="text-sm font-medium">
-                        Hey{user?.name ? ` ${user.name.split(" ")[0]}` : ""}! I'm DNA Guru.
-                      </p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {pageContext?.entityName
-                          ? `I see you're on ${pageContext.entityName}. Ask me anything about it.`
-                          : isAdminOrDirector
-                            ? "I can see all reps, accounts, and teams."
-                            : "I have live access to your CRM data — ask me anything."}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Personalized alerts */}
-                  {nudges?.alerts && nudges.alerts.length > 0 && (
-                    <div className="ml-10 space-y-1.5">
-                      {nudges.alerts.map((alert, i) => (
-                        <div key={i} className="text-xs px-3 py-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-100 dark:border-amber-900/40 text-amber-800 dark:text-amber-300" data-testid={`guru-alert-${i}`}>
-                          {alert}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Suggested prompts */}
-                  <div className="space-y-1.5">
-                    <p className="text-xs text-muted-foreground px-1">Try asking:</p>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {SUGGESTIONS.map((s) => (
-                        <button
-                          key={s}
-                          onClick={() => sendMessage(s)}
-                          className="text-left text-xs px-2.5 py-2 rounded-xl border border-border hover:border-primary/40 hover:bg-primary/5 transition-colors text-muted-foreground hover:text-foreground leading-snug"
-                          data-testid="guru-suggestion-chip"
-                        >
-                          {s}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Action hint */}
-                  <p className="text-xs text-muted-foreground px-1 italic">
-                    💡 Say "log a call with [contact]" or "create a task" and I'll do it for you.
-                  </p>
-                </div>
-              )}
-
-              {allMessages.map((msg) => (
-                <div key={msg.id} className={cn("flex gap-3", msg.role === "user" && "flex-row-reverse")}>
-                  {msg.role === "assistant" && (
-                    <div className={cn("h-7 w-7 rounded-full flex items-center justify-center shrink-0 mt-0.5",
-                      msg.isError ? "bg-red-100 dark:bg-red-950/40" : "bg-primary/10"
-                    )}>
-                      {msg.isError ? <AlertTriangle className="h-4 w-4 text-red-600" /> : <Bot className="h-4 w-4 text-primary" />}
-                    </div>
-                  )}
-                  <div className={cn(
-                    "rounded-2xl px-3.5 py-2.5",
-                    mode === "docked" ? "max-w-[290px]" : "max-w-[80%]",
-                    msg.role === "user"
-                      ? "bg-primary text-primary-foreground rounded-tr-sm"
-                      : msg.isError
-                        ? "bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 rounded-tl-sm"
-                        : "bg-muted rounded-tl-sm"
-                  )}>
-                    {msg.role === "assistant"
-                      ? (
-                        <>
-                          {msg.isError ? (
-                            <div className="space-y-2">
-                              <p className="text-sm font-medium text-red-700 dark:text-red-300">Something went wrong</p>
-                              <p className="text-xs text-red-600 dark:text-red-400">{msg.content}</p>
-                              <div className="flex items-center gap-1.5">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-6 text-[11px] border-red-300 dark:border-red-800"
-                                  onClick={() => reportError(msg.id, msg.content)}
-                                  disabled={msg.feedback === "down"}
-                                  data-testid={`button-report-error-${msg.id}`}
-                                >
-                                  {msg.feedback === "down" ? "Reported" : "Report this"}
-                                </Button>
-                              </div>
-                            </div>
-                          ) : (
-                            <MarkdownText content={msg.content} />
-                          )}
-                          {msg.action && (
-                            <ActionCard
-                              action={msg.action}
-                              onConfirm={(editedArgs) => confirmAction(msg.id, { ...msg.action!, args: editedArgs })}
-                              onDismiss={() => dismissAction(msg.id)}
-                            />
-                          )}
-                          {msg.meta && (
-                            <AnswerCardMeta
-                              meta={msg.meta}
-                              onFollowUp={(t) => sendMessage(t)}
-                              onSource={(href) => navigate(href)}
-                            />
-                          )}
-                          {!msg.isError && msg.role === "assistant" && msg.content && (
-                            <div className="flex items-center gap-1.5 mt-2 pt-1.5 border-t border-border/40">
-                              {msg.mode && (
-                                <span
-                                  className={cn(
-                                    "inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border",
-                                    msg.mode === "quick"
-                                      ? "border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30"
-                                      : "border-violet-300 dark:border-violet-700 text-violet-700 dark:text-violet-400 bg-violet-50 dark:bg-violet-950/30",
-                                  )}
-                                  data-testid={`badge-mode-${msg.id}`}
-                                  title={msg.mode === "quick" ? "Routed to fast model (gpt-4o-mini)" : "Routed to reasoning model (gpt-4o)"}
-                                >
-                                  {msg.modeLabel ?? (msg.mode === "quick" ? "Quick answer" : "Full analysis")}
-                                </span>
-                              )}
-                              {typeof msg.confidence === "number" && msg.confidence < 0.5 && (
-                                <span className="inline-flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-400 mr-auto" data-testid={`badge-low-confidence-${msg.id}`}>
-                                  <AlertTriangle className="h-3 w-3" /> Low confidence — try rephrasing
-                                </span>
-                              )}
-                              {(typeof msg.confidence !== "number" || msg.confidence >= 0.5) && <span className="mr-auto" />}
-                              <button
-                                title="Helpful"
-                                onClick={() => submitFeedback(msg.id, "up")}
-                                className={cn("p-1 rounded hover:bg-background", msg.feedback === "up" && "text-green-600")}
-                                data-testid={`button-thumbs-up-${msg.id}`}
-                              >
-                                <ThumbsUp className="h-3 w-3" />
-                              </button>
-                              <button
-                                title="Not helpful"
-                                onClick={() => submitFeedback(msg.id, "down")}
-                                className={cn("p-1 rounded hover:bg-background", msg.feedback === "down" && "text-red-600")}
-                                data-testid={`button-thumbs-down-${msg.id}`}
-                              >
-                                <ThumbsDown className="h-3 w-3" />
-                              </button>
-                            </div>
-                          )}
-                        </>
-                      )
-                      : <p className="text-sm">{msg.content}</p>
-                    }
-                  </div>
-                </div>
-              ))}
-
-              {/* Streaming response */}
-              {streamingContent && (
-                <div className="flex gap-3">
-                  <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
-                    <Bot className="h-4 w-4 text-primary" />
-                  </div>
-                  <div className={cn("bg-muted rounded-2xl rounded-tl-sm px-3.5 py-2.5", mode === "docked" ? "max-w-[290px]" : "max-w-[80%]")}>
-                    <MarkdownText content={streamingContent} />
-                    {streamingMeta && (
-                      <AnswerCardMeta
-                        meta={streamingMeta}
-                        onFollowUp={(t) => sendMessage(t)}
-                        onSource={(href) => navigate(href)}
-                      />
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Progressive tool-call loading */}
-              {isStreaming && !streamingContent && (
-                <div className="flex gap-3">
-                  <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                    <Bot className="h-4 w-4 text-primary" />
-                  </div>
-                  <div className="bg-muted rounded-2xl rounded-tl-sm px-3.5 py-3 flex items-center gap-2 min-w-[120px]">
-                    {progressLine ? (
-                      <>
-                        <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
-                        <span className="text-xs text-muted-foreground" data-testid="copilot-progress">{progressLine}</span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:0ms]" />
-                        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:150ms]" />
-                        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:300ms]" />
-                      </>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
+            {allMessages.length === 0 && !isStreaming && !streamingContent && (
+              <div className="p-4">
+                <EmptyState
+                  userName={user?.name}
+                  isAdminOrDirector={isAdminOrDirector}
+                  pageContext={pageContext}
+                  alerts={nudges?.alerts ?? []}
+                  suggestions={SUGGESTIONS}
+                  onPick={(s) => sendMessage(s)}
+                />
+              </div>
+            )}
+            {(allMessages.length > 0 || isStreaming || streamingContent) && (
+              <MessageList
+                messages={allMessages}
+                mode={mode}
+                isStreaming={isStreaming}
+                streamingContent={streamingContent}
+                streamingMeta={streamingMeta}
+                progressLine={progressLine}
+                onConfirmAction={(msgId, editedArgs) => {
+                  const target = allMessages.find((m) => m.id === msgId);
+                  if (target?.action) confirmAction(msgId, { ...target.action, args: editedArgs });
+                }}
+                onDismissAction={dismissAction}
+                onFollowUp={(t) => sendMessage(t)}
+                onSource={(href) => navigate(href)}
+                onFeedback={submitFeedback}
+                onReportError={reportError}
+              />
+            )}
           </ScrollArea>
 
           {/* Scope toggle for NAM / AM */}
