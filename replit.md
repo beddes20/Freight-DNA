@@ -50,6 +50,33 @@ Core features include:
 ### System Design Choices
 Key database tables support core functionalities, including pre-computed lane data (`lane_summary_cache`), email-derived contact suggestions (`account_contact_suggestions`), defined corridor patterns (`geographic_lane_patterns`), contact-to-corridor mapping (`account_contact_lane_pattern_responsibilities`), email conversation management (`email_conversation_threads`), AI-inferred geography ownership (`contact_geography_suggestions`), proven tactical responses (`proven_tactics`), AI draft feedback (`draft_feedback`), email correction records (`sent_email_corrections`), and numerous tables for the AI Intelligence Hub features (e.g., `meeting_prep_briefs`, `contact_sentiment_tracking`, `monitored_mailboxes`).
 
+### Deployment Recovery Recipe (When Provision Stage Fails on a Unique Index)
+If a future deploy fails at Provision with `Failed to run database migration statement: CREATE UNIQUE INDEX ...`, it means production data has duplicate rows that violate a unique index declared in `shared/schema.ts`. The 2-minute fix:
+
+1. Open Database tab → switch to **Production Database** → toggle Enable Editing ON.
+2. Run a single `DO $$ ... $$` block that LOCKs the table, DELETEs duplicates, and CREATEs the unique index atomically. Template:
+   ```sql
+   DO $$
+   BEGIN
+     LOCK TABLE <table> IN EXCLUSIVE MODE;
+     DELETE FROM <table> t USING (
+       SELECT id FROM (
+         SELECT id, ROW_NUMBER() OVER (
+           PARTITION BY <unique_cols> ORDER BY created_at ASC, id ASC
+         ) AS rn FROM <table> WHERE <unique_cols_not_null>
+       ) ranked WHERE ranked.rn > 1
+     ) d WHERE t.id = d.id;
+     CREATE UNIQUE INDEX IF NOT EXISTS <index_name>
+       ON <table>(<unique_cols>) WHERE <not_null_clause>;
+   END $$;
+   ```
+3. Verify: `SELECT indexname FROM pg_indexes WHERE indexname = '<index_name>';`
+4. Cancel stuck deployment → hard refresh → click Republish. Drizzle-kit sees the index already exists and skips it.
+
+Why a `DO $$` block: Replit's SQL editor only runs the first statement of a multi-statement script unless you highlight all of it. A `DO` block is a single statement so the LOCK + DELETE + CREATE all run atomically as one operation.
+
+To prevent this proactively for any new unique-indexed table, ensure the corresponding insert path uses `ON CONFLICT DO NOTHING` (e.g. `upsertInboundEmailMessage` pattern in `server/storage.ts`).
+
 ### Performance Optimizations
 - **Dashboard query optimization**: `getColdContacts` and `getMeaningfulOverdueContacts` use SQL LATERAL joins with LIMIT 20 instead of loading all contacts/touchpoints into memory. Reduced response time from 28-34s to <500ms.
 - **Dashboard caching**: All four slow dashboard endpoints (`cold-contacts`, `meaningful-overdue`, `margin-metrics`, `relationship-summary`) use 10-15 minute server-side cache (via `server/cache.ts`).
