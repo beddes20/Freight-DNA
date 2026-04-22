@@ -1798,28 +1798,43 @@ export async function runMigrations() {
       `SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_email_messages_provider_msg_id' LIMIT 1`,
     );
     if (idxCheck.rowCount === 0) {
-      await clientEmailIntel.query(`
-        DELETE FROM email_messages em
-        USING (
-          SELECT id FROM (
-            SELECT id,
-                   ROW_NUMBER() OVER (
-                     PARTITION BY org_id, provider_message_id
-                     ORDER BY created_at ASC, id ASC
-                   ) AS rn
-            FROM email_messages
+      // Wrap dedup + index creation in a transaction with an EXCLUSIVE table
+      // lock. Without the lock, a concurrent inbound webhook insert between
+      // the DELETE and CREATE UNIQUE INDEX statements would re-introduce a
+      // duplicate and cause the index creation to fail (race condition that
+      // has blocked deploys repeatedly). EXCLUSIVE allows reads but blocks
+      // INSERT/UPDATE/DELETE until COMMIT, guaranteeing the index sees a
+      // dedup'd snapshot. Lock auto-releases on COMMIT or ROLLBACK.
+      try {
+        await clientEmailIntel.query("BEGIN");
+        await clientEmailIntel.query("LOCK TABLE email_messages IN EXCLUSIVE MODE");
+        await clientEmailIntel.query(`
+          DELETE FROM email_messages em
+          USING (
+            SELECT id FROM (
+              SELECT id,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY org_id, provider_message_id
+                       ORDER BY created_at ASC, id ASC
+                     ) AS rn
+              FROM email_messages
+              WHERE provider_message_id IS NOT NULL
+            ) ranked
+            WHERE ranked.rn > 1
+          ) dups
+          WHERE em.id = dups.id
+        `);
+        await clientEmailIntel.query(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_email_messages_provider_msg_id
+            ON email_messages(org_id, provider_message_id)
             WHERE provider_message_id IS NOT NULL
-          ) ranked
-          WHERE ranked.rn > 1
-        ) dups
-        WHERE em.id = dups.id
-      `);
-      await clientEmailIntel.query(`
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_email_messages_provider_msg_id
-          ON email_messages(org_id, provider_message_id)
-          WHERE provider_message_id IS NOT NULL
-      `);
-      console.log("[migrations] email_messages dedup + unique index created");
+        `);
+        await clientEmailIntel.query("COMMIT");
+        console.log("[migrations] email_messages dedup + unique index created (locked)");
+      } catch (err) {
+        await clientEmailIntel.query("ROLLBACK").catch(() => {});
+        throw err;
+      }
     }
     // Add linked entity columns to email_signals (Task #191)
     await clientEmailIntel.query(`
