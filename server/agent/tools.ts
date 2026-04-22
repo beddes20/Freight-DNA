@@ -258,21 +258,30 @@ export const TOOLS: AgentTool[] = [
       // filter, not an auth signal, and a non-manager could otherwise post
       // {scope:"everyone"} to the chat API to escalate. The channel layer
       // (server/chatbot.ts) also clamps scope, but defense in depth applies.
-      const isManager = ["admin", "director", "sales_director"].includes(ctx.rep.role);
+      const MANAGER_ROLES = ["admin", "director", "sales_director", "national_account_manager", "logistics_manager"];
+      const isManager = MANAGER_ROLES.includes(ctx.rep.role);
       if (!isManager) {
-        return { kind: "data", text: "This rollup is only available to managers (admin / director / sales director). Ask about your own activity instead." };
+        return { kind: "data", text: "This rollup is only available to managers. Ask about your own activity instead." };
       }
       const today = new Date().toISOString().slice(0, 10);
       const start = (args?.date_start && /^\d{4}-\d{2}-\d{2}$/.test(String(args.date_start))) ? String(args.date_start) : today;
       const end = (args?.date_end && /^\d{4}-\d{2}-\d{2}$/.test(String(args.date_end))) ? String(args.date_end) : start;
       const includeZero = args?.include_zero !== false;
 
+      // Admin sees the entire org; every other manager sees their own
+      // managerId subtree only (transitive direct reports, includes self).
+      let visibleIds: Set<string> | null = null;
+      if (ctx.rep.role !== "admin") {
+        const subtree = await storage.getTeamMemberIds(ctx.rep.id, ctx.organizationId);
+        visibleIds = new Set(subtree);
+      }
+
       const repRows = await db.select({ id: users.id, name: users.name, username: users.username, role: users.role })
         .from(users)
         .where(eq(users.organizationId, ctx.organizationId));
-      const salesRoles = new Set(["account_manager", "national_account_manager", "sales", "sales_director", "director", "admin"]);
-      const reps = repRows.filter((r) => salesRoles.has(r.role));
-      if (!reps.length) return { kind: "data", text: "No reps found in this organization." };
+      const salesRoles = new Set(["account_manager", "national_account_manager", "sales", "sales_director", "director", "admin", "logistics_manager"]);
+      const reps = repRows.filter((r) => salesRoles.has(r.role) && (visibleIds === null || visibleIds.has(r.id)));
+      if (!reps.length) return { kind: "data", text: "No reps in your team yet." };
 
       const counts = await db.select({
         loggedById: touchpoints.loggedById,
@@ -318,20 +327,29 @@ export const TOOLS: AgentTool[] = [
     },
     async execute(ctx, args) {
       // SECURITY: gate on role only. See team_touchpoint_tally for rationale.
-      const isManager = ["admin", "director", "sales_director"].includes(ctx.rep.role);
+      const MANAGER_ROLES = ["admin", "director", "sales_director", "national_account_manager", "logistics_manager"];
+      const isManager = MANAGER_ROLES.includes(ctx.rep.role);
       if (!isManager) {
-        return { kind: "data", text: "This rollup is only available to managers (admin / director / sales director)." };
+        return { kind: "data", text: "This rollup is only available to managers." };
       }
       const today = new Date().toISOString().slice(0, 10);
       const start = (args?.date_start && /^\d{4}-\d{2}-\d{2}$/.test(String(args.date_start))) ? String(args.date_start) : today;
       const end = (args?.date_end && /^\d{4}-\d{2}-\d{2}$/.test(String(args.date_end))) ? String(args.date_end) : start;
 
+      // Admin sees the entire org; every other manager sees their own
+      // managerId subtree only.
+      let visibleIds: Set<string> | null = null;
+      if (ctx.rep.role !== "admin") {
+        const subtree = await storage.getTeamMemberIds(ctx.rep.id, ctx.organizationId);
+        visibleIds = new Set(subtree);
+      }
+
       const repRows = await db.select({ id: users.id, name: users.name, username: users.username, role: users.role })
         .from(users)
         .where(eq(users.organizationId, ctx.organizationId));
       const salesRoles = new Set(["account_manager", "national_account_manager", "sales", "sales_director"]);
-      const reps = repRows.filter((r) => salesRoles.has(r.role));
-      if (!reps.length) return { kind: "data", text: "No sales reps found in this organization." };
+      const reps = repRows.filter((r) => salesRoles.has(r.role) && (visibleIds === null || visibleIds.has(r.id)));
+      if (!reps.length) return { kind: "data", text: "No sales reps in your team yet." };
 
       const active = await db.select({ loggedById: touchpoints.loggedById })
         .from(touchpoints)

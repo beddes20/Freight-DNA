@@ -605,17 +605,13 @@ export function registerChatbotRoutes(app: Express): void {
       // reps_missing_touchpoints, …) historically also accepted scope==="everyone"
       // as a manager equivalence — so a sales rep posting `{scope:"everyone"}`
       // would have bypassed the gate. Clamp here at the channel boundary:
-      //   - admin / director  → always "everyone" (preserves prior behaviour)
-      //   - sales_director    → may opt in via scope=everyone
-      //   - everyone else     → forced to "my_team", regardless of body
-      let effectiveScope: "my_team" | "everyone";
-      if (user.role === "admin" || user.role === "director") {
-        effectiveScope = "everyone";
-      } else if (user.role === "sales_director" && scope === "everyone") {
-        effectiveScope = "everyone";
-      } else {
-        effectiveScope = "my_team";
-      }
+      //   - admin only  → "everyone" (full org)
+      //   - everyone else (incl. director / sales_director / NAM / logistics_manager
+      //     and individual contributors) → "my_team"
+      // Manager-tier users still see their own subtree because the manager
+      // tools resolve their team via storage.getTeamMemberIds at execute time.
+      const effectiveScope: "my_team" | "everyone" =
+        user.role === "admin" ? "everyone" : "my_team";
 
       // ─── DNA Logistics Bot agent core (Task #282 Phase 1) ──────────────
       res.setHeader("Content-Type", "text/event-stream");
