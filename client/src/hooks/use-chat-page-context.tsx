@@ -29,10 +29,19 @@ function parseRoute(loc: string): ParsedRoute {
   const m = (re: RegExp) => loc.match(re);
   let r;
   r = m(/^\/companies\/([^/?#]+)/);          if (r) return { entityType: "company",  entityId: r[1] };
-  r = m(/^\/carrier-hub\/([^/?#]+)/);         if (r) return { entityType: "carrier",  entityId: r[1] };
-  r = m(/^\/available-freight\/([^/?#]+)/);   if (r) return { entityType: "lane",     entityId: r[1] };
+  // Carriers: support both the canonical /carriers/:id and the legacy
+  // /carrier-hub/:id route the app currently uses.
+  r = m(/^\/(?:carriers|carrier-hub)\/([^/?#]+)/);   if (r) return { entityType: "carrier", entityId: r[1] };
+  // Lanes: support both /lanes/:id and the actual /available-freight/:id
+  // detail route. Skip /lanes/work-queue (no entity id).
+  r = m(/^\/lanes\/(?!work-queue)([^/?#]+)/);        if (r) return { entityType: "lane", entityId: r[1] };
+  r = m(/^\/available-freight\/([^/?#]+)/);          if (r) return { entityType: "lane", entityId: r[1] };
+  // RFPs: canonical /rfps/:id plus the existing /rfp-awards/:id and
+  // /rfp-lane-search/:id patterns.
+  r = m(/^\/rfps\/([^/?#]+)/);                       if (r) return { entityType: "rfp", entityId: r[1] };
   r = m(/^\/rfp-(?:awards|lane-search)\/([^/?#]+)/); if (r) return { entityType: "rfp", entityId: r[1] };
   r = m(/^\/prospects\/([^/?#]+)/);           if (r) return { entityType: "prospect", entityId: r[1] };
+  r = m(/^\/contacts\/([^/?#]+)/);            if (r) return { entityType: "contact",  entityId: r[1] };
   // Tasks page (no specific id)
   if (/^\/tasks(?:[/?#]|$)/.test(loc)) return { entityType: "task", entityId: null };
   return { entityType: null, entityId: null };

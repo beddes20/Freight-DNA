@@ -41,6 +41,8 @@ interface ChatMessage {
   meta?: AnswerMeta;
   confidence?: number;
   route?: string;
+  mode?: "quick" | "analytical";
+  modeLabel?: string;
   isError?: boolean;
   feedback?: "up" | "down" | null;
 }
@@ -586,6 +588,8 @@ export function CrmChatbot() {
       let detectedMeta: AnswerMeta | null = null;
       let detectedConfidence: number | undefined;
       let detectedRoute: string | undefined;
+      let detectedMode: "quick" | "analytical" | undefined;
+      let detectedModeLabel: string | undefined;
       let detectedMessageId: number | undefined;
       let detectedError: string | undefined;
 
@@ -618,6 +622,10 @@ export function CrmChatbot() {
               detectedConfidence = evt.confidence;
               if (typeof evt.route === "string") detectedRoute = evt.route;
             }
+            if (evt.mode === "quick" || evt.mode === "analytical") {
+              detectedMode = evt.mode;
+              if (typeof evt.modeLabel === "string") detectedModeLabel = evt.modeLabel;
+            }
             if (typeof evt.messageId === "number") {
               detectedMessageId = evt.messageId;
             }
@@ -648,6 +656,8 @@ export function CrmChatbot() {
                   meta: detectedMeta || undefined,
                   confidence: detectedConfidence,
                   route: detectedRoute,
+                  mode: detectedMode,
+                  modeLabel: detectedModeLabel,
                 };
                 setLocalMessages((prev) => [...prev, assistantMsg]);
               }
@@ -1149,6 +1159,20 @@ export function CrmChatbot() {
                           )}
                           {!msg.isError && msg.role === "assistant" && msg.content && (
                             <div className="flex items-center gap-1.5 mt-2 pt-1.5 border-t border-border/40">
+                              {msg.mode && (
+                                <span
+                                  className={cn(
+                                    "inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border",
+                                    msg.mode === "quick"
+                                      ? "border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30"
+                                      : "border-violet-300 dark:border-violet-700 text-violet-700 dark:text-violet-400 bg-violet-50 dark:bg-violet-950/30",
+                                  )}
+                                  data-testid={`badge-mode-${msg.id}`}
+                                  title={msg.mode === "quick" ? "Routed to fast model (gpt-4o-mini)" : "Routed to reasoning model (gpt-4o)"}
+                                >
+                                  {msg.modeLabel ?? (msg.mode === "quick" ? "Quick answer" : "Full analysis")}
+                                </span>
+                              )}
                               {typeof msg.confidence === "number" && msg.confidence < 0.5 && (
                                 <span className="inline-flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-400 mr-auto" data-testid={`badge-low-confidence-${msg.id}`}>
                                   <AlertTriangle className="h-3 w-3" /> Low confidence — try rephrasing

@@ -20,6 +20,8 @@ import { listFacts, searchMemories } from "./memory";
 import { logActivity } from "./activity";
 import { buildSystemPrompt, ensureDefaultAgent, getAgentRuntime } from "./persona";
 import { retrieveContext, formatHitsForPrompt, type RetrievalHit } from "./retrieval";
+import { rememberEntity } from "./sessionMemo";
+import type { DepthMode } from "./classifier";
 
 export interface AnswerMeta {
   sources?: Array<{
@@ -45,6 +47,7 @@ export type AgentEvent =
   | { meta: AnswerMeta }
   | { error: string }
   | { confidence: number; route: string }
+  | { mode: DepthMode; modeLabel: string }
   | { done: true };
 
 const HEDGE_PATTERNS = [
@@ -96,6 +99,8 @@ export interface RunAgentTurnArgs {
   projectId?: string | null;
   /** Optional pre-built page context block (from the smart router). */
   pageContextBlock?: string | null;
+  /** Pre-classified depth mode. Defaults to "analytical". */
+  mode?: DepthMode;
 }
 
 const MAX_TOOL_ITERATIONS = 6;
@@ -155,7 +160,7 @@ async function buildContextEnvelope(
   return { envelope: lines.join("\n"), degraded, hits };
 }
 
-export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: agentIdArg, projectId, pageContextBlock }: RunAgentTurnArgs): Promise<{ assistantText: string; hadError: boolean; surfacedAction: boolean; agentId: string; meta: AnswerMeta; confidence: number; route: string }> {
+export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: agentIdArg, projectId, pageContextBlock, mode }: RunAgentTurnArgs): Promise<{ assistantText: string; hadError: boolean; surfacedAction: boolean; agentId: string; meta: AnswerMeta; confidence: number; route: string; mode: DepthMode }> {
   let hadError = false;
   let surfacedAction = false;
   let toolsRun = 0;
@@ -192,7 +197,15 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
 
   let assistantText = "";
   let iterations = 0;
-  let model: string = runtime?.model || AGENT_MODELS.reasoning;
+  const depthMode: DepthMode = mode ?? "analytical";
+  // Quick turns run on the fast model start-to-finish. Analytical turns honour
+  // the persisted runtime.model (defaults to the reasoning model).
+  let model: string = depthMode === "quick"
+    ? AGENT_MODELS.fast
+    : (runtime?.model || AGENT_MODELS.reasoning);
+  try {
+    emit({ mode: depthMode, modeLabel: depthMode === "quick" ? "Quick answer" : "Full analysis" });
+  } catch {}
 
   void logActivity({
     organizationId: ctx.organizationId,
@@ -222,7 +235,7 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
       console.error("[agent.core] OpenAI call failed:", err);
       hadError = true;
       emit({ error: "AI service temporarily unavailable. Please try again." });
-      return { assistantText, hadError, surfacedAction, agentId, meta: { confidence: "low" } };
+      return { assistantText, hadError, surfacedAction, agentId, meta: { confidence: "low" }, confidence: 0.1, route: "error", mode: depthMode };
     }
 
     let textThisTurn = "";
@@ -334,15 +347,44 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
               relatedCompanyId: result.kind === "data" ? result.relatedCompanyId ?? null : null,
             });
 
+            // Seed sessionMemo with any typed entity hints the tool returned.
+            // This covers carrier/lane/RFP/prospect/contact follow-ups so the
+            // next turn's "this", "it", "the first one" resolves silently.
+            // `related` is an optional field on every ToolOutput variant.
+            const relatedHints = result.related;
+            if (relatedHints && relatedHints.length) {
+              try {
+                for (const h of relatedHints) {
+                  if (!h?.type || !h?.id || !h?.name) continue;
+                  rememberEntity(ctx.conversationRef, {
+                    type: h.type,
+                    id: String(h.id),
+                    name: String(h.name).slice(0, 80),
+                  });
+                }
+              } catch {}
+            }
+
             if (result.kind === "data") {
               toolResultText = result.text;
               if (result.relatedCompanyId) {
+                const label = extractCompanyLabel(result.text) || tc.name;
                 sources!.push({
                   kind: "company",
                   id: result.relatedCompanyId,
-                  label: extractCompanyLabel(result.text) || tc.name,
+                  label,
                   href: `/companies/${result.relatedCompanyId}`,
                 });
+                // Seed the per-conversation memo so "summarize it" / "open it"
+                // resolve without re-asking, even when the LLM (not the
+                // router) was the one that surfaced this entity.
+                try {
+                  rememberEntity(ctx.conversationRef, {
+                    type: "company",
+                    id: result.relatedCompanyId,
+                    name: label.replace(/^=+\s*|\s*=+$/g, "").trim().slice(0, 80),
+                  });
+                } catch {}
               }
             } else if (result.kind === "navigate") {
               if (result.preface) { emit({ content: result.preface }); assistantText += result.preface; }
@@ -425,7 +467,7 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
   };
   if (meta.sources?.length || meta.followUps?.length) emit({ meta });
 
-  return { assistantText, hadError, surfacedAction, agentId, meta, confidence, route };
+  return { assistantText, hadError, surfacedAction, agentId, meta, confidence, route, mode: depthMode };
 }
 
 // ---------------------------------------------------------------------------

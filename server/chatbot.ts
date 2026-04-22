@@ -805,6 +805,8 @@ export function registerChatbotRoutes(app: Express): void {
       const { runAgentTurn } = await import("./agent/core");
       const { hasModuleAccess } = await import("./agent/permissions");
       const { tryRoute, buildPageContextBlock } = await import("./agent/router");
+      const { classifyDepthSmart } = await import("./agent/classifier");
+      const { resolveReference } = await import("./agent/sessionMemo");
       const access = await hasModuleAccess(user);
       if (!access.allowed) {
         res.write(`data: ${JSON.stringify({ content: access.reason || "AI Agent module is not available." })}\n\n`);
@@ -840,11 +842,26 @@ export function registerChatbotRoutes(app: Express): void {
         surfacedAction = !!routed.surfacedAction;
       } else {
         // 2. Page-aware context block (also seeds the per-conversation memo).
-        const pageContextBlock = await buildPageContextBlock(
+        let pageContextBlock = await buildPageContextBlock(
           req.session.organizationId!,
           conversationRef,
           pageContext,
         );
+
+        // 2b. If the rep used a pronoun ("it", "that account", "the first one")
+        //     and we have a memo hit, surface the resolution to the model so it
+        //     doesn't have to guess. Memo entries are scoped per convoRef.
+        const resolved = resolveReference(conversationRef, content.trim());
+        if (resolved) {
+          const hint = `Reference resolution: when the rep just said something like "it" / "that ${resolved.type}" / an ordinal, they almost certainly mean the ${resolved.type} **${resolved.name}** (id ${resolved.id}). Act on that without re-asking.`;
+          pageContextBlock = pageContextBlock ? `${pageContextBlock}\n${hint}` : hint;
+        }
+
+        // 3. Pre-classify depth so a quick lookup never spins up gpt-4o.
+        //    Heuristic-first; only falls back to a tiny gpt-4o-mini call for
+        //    truly ambiguous prompts. Bounded by a 600ms timeout so a slow
+        //    OpenAI response never blocks the user-visible turn start.
+        const mode = await classifyDepthSmart(content.trim());
 
         const result = await runAgentTurn({
           ctx: {
@@ -858,6 +875,7 @@ export function registerChatbotRoutes(app: Express): void {
           userMessage: content.trim(),
           emit,
           pageContextBlock,
+          mode,
         });
         assistantText = result.assistantText;
         hadError = result.hadError;

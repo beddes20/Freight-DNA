@@ -40,10 +40,28 @@ export interface AgentContext {
   scope: "my_team" | "everyone";
 }
 
+/**
+ * Optional structured hint a tool can attach to its result so the agent's
+ * conversation memo knows which CRM entity the answer was *about*. The next
+ * turn can then resolve "this", "it", "the first one" against this list
+ * without a re-ask. Keep types in sync with EntityType in sessionMemo.ts.
+ */
+export interface RelatedEntityHint {
+  type: "company" | "contact" | "carrier" | "lane" | "rfp" | "prospect" | "task";
+  id: string;
+  name: string;
+}
+
 export type ToolOutput =
-  | { kind: "data"; text: string; relatedCompanyId?: string | null }
-  | { kind: "action"; tool: string; args: Record<string, unknown>; preface?: string }
-  | { kind: "navigate"; path: string; preface?: string };
+  | {
+      kind: "data";
+      text: string;
+      relatedCompanyId?: string | null;
+      /** Any number of typed entity hints; written to sessionMemo by core.ts. */
+      related?: RelatedEntityHint[];
+    }
+  | { kind: "action"; tool: string; args: Record<string, unknown>; preface?: string; related?: RelatedEntityHint[] }
+  | { kind: "navigate"; path: string; preface?: string; related?: RelatedEntityHint[] };
 
 export interface AgentTool {
   name: string;
@@ -218,6 +236,7 @@ export const TOOLS: AgentTool[] = [
           const overdue = t.dueDate && t.dueDate < today ? " ⚠ overdue" : "";
           return `• ${t.title}${t.dueDate ? ` (due ${t.dueDate})` : ""}${overdue}`;
         }).join("\n"),
+        related: rows.map((t) => ({ type: "task" as const, id: String(t.id), name: t.title })),
       };
     },
   },
@@ -236,9 +255,18 @@ export const TOOLS: AgentTool[] = [
         .orderBy(desc(touchpoints.date))
         .limit(limit);
       if (!rows.length) return { kind: "data", text: "No recent touchpoints." };
+      const seen = new Set<string>();
+      const related: RelatedEntityHint[] = [];
+      for (const r of rows) {
+        if (r.c && !seen.has(r.c.id)) {
+          seen.add(r.c.id);
+          related.push({ type: "company", id: r.c.id, name: r.c.name });
+        }
+      }
       return {
         kind: "data",
         text: rows.map((r) => `• ${r.tp.date} ${r.tp.type} @ ${r.c?.name ?? "?"}${r.tp.notes ? `: ${r.tp.notes.slice(0, 80)}` : ""}`).join("\n"),
+        related,
       };
     },
   },
@@ -480,7 +508,12 @@ export const TOOLS: AgentTool[] = [
         const approved = r.approvedAt ? "✓ approved" : "needs approval";
         return `${i + 1}. ${nameMap.get(r.companyId) ?? r.companyId} — ${o} → ${d} (${r.equipmentType ?? "?"}, ${r.loadCount}L, pickup ${r.pickupWindowStart}, status=${r.status}, ${approved}, urgency=${r.urgencyScore})`;
       });
-      return { kind: "data", text: lines.join("\n") };
+      const related: RelatedEntityHint[] = rows.map((r) => ({
+        type: "lane",
+        id: r.id,
+        name: `${r.origin}${r.originState ? `, ${r.originState}` : ""} → ${r.destination}${r.destinationState ? `, ${r.destinationState}` : ""}`,
+      }));
+      return { kind: "data", text: lines.join("\n"), related };
     },
   },
   {

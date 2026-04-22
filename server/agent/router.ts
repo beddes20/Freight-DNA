@@ -12,8 +12,8 @@
  *                                                 caller should not invoke the LLM
  */
 import { eq } from "drizzle-orm";
-import { db } from "../storage";
-import { companies, tasks, type User } from "@shared/schema";
+import { db, storage } from "../storage";
+import { companies, tasks, carriers, recurringLanes, freightOpportunities, prospects, rfps, type User } from "@shared/schema";
 import { canInvoke } from "./permissions";
 import { rememberEntity, resolveReference, type EntityType } from "./sessionMemo";
 import type { AgentEvent, Emit } from "./core";
@@ -257,13 +257,109 @@ export async function buildPageContextBlock(
   conversationRef: string | null,
   pageContext: PageContext | null | undefined,
 ): Promise<string | null> {
-  if (!pageContext || !pageContext.entityType || !pageContext.entityId) return null;
-  let label = pageContext.entityName ?? "";
-  if (pageContext.entityType === "company" && !label) {
-    const [c] = await db.select().from(companies).where(eq(companies.id, pageContext.entityId)).limit(1);
-    if (c && c.organizationId === organizationId) label = c.name;
+  if (!pageContext || !pageContext.entityType) return null;
+  // The "task" page is the rep's task list — there's no per-row entity id, but
+  // we still want to give the model the hint that they're on /tasks.
+  if (pageContext.entityType === "task" && !pageContext.entityId) {
+    const route = pageContext.route ? ` (${pageContext.route})` : "";
+    return `Current page: the rep is on their **task list**${route}. When they say "this", "these", or refer to "the first/second one", they probably mean a row from that list. Consider calling list_open_tasks before answering.`;
   }
-  if (!label) label = pageContext.entityId;
+  if (!pageContext.entityId) return null;
+
+  // SECURITY: Re-load the entity through the storage layer with the rep's
+  // org/scope filter. The page-context payload from the client is untrusted,
+  // so we never trust the supplied name/id alone.
+  let label: string | null = null;
+  let extra: string | null = null;
+  try {
+    switch (pageContext.entityType) {
+      case "company": {
+        const [c] = await db.select().from(companies)
+          .where(eq(companies.id, pageContext.entityId)).limit(1);
+        if (c && c.organizationId === organizationId) {
+          label = c.name;
+          if (c.industry) extra = `industry ${c.industry}`;
+        }
+        break;
+      }
+      case "carrier": {
+        const c = await storage.getCarrier(pageContext.entityId);
+        if (c && c.orgId === organizationId) {
+          label = c.name;
+          const bits = [c.mcDot && `MC/DOT ${c.mcDot}`, c.statesServed?.length && `${c.statesServed.length} states`].filter(Boolean) as string[];
+          if (bits.length) extra = bits.join(", ");
+        }
+        break;
+      }
+      case "lane": {
+        // available-freight URLs key off freightOpportunities.id; recurring
+        // lane pages also use the recurring_lanes id. Try both.
+        const fo = await storage.getFreightOpportunity(organizationId, pageContext.entityId).catch(() => undefined);
+        if (fo) {
+          label = `${fo.origin}${fo.originState ? `, ${fo.originState}` : ""} → ${fo.destination}${fo.destinationState ? `, ${fo.destinationState}` : ""}`;
+          if (fo.equipmentType) extra = `${fo.equipmentType}, ${fo.loadCount}L`;
+        } else {
+          const rl = await storage.getRecurringLane(pageContext.entityId).catch(() => undefined);
+          if (rl && rl.orgId === organizationId) {
+            label = `${rl.origin}${rl.originState ? `, ${rl.originState}` : ""} → ${rl.destination}${rl.destinationState ? `, ${rl.destinationState}` : ""}`;
+            extra = rl.companyName ?? null;
+          }
+        }
+        break;
+      }
+      case "rfp": {
+        const r = await storage.getRfpInOrg?.(pageContext.entityId, organizationId).catch(() => undefined);
+        if (r) {
+          label = r.title;
+          if (r.dueDate) extra = `due ${r.dueDate}`;
+        } else {
+          // Fallback: validate via inner join on companies.organizationId.
+          const [row] = await db
+            .select({ r: rfps, oid: companies.organizationId })
+            .from(rfps)
+            .innerJoin(companies, eq(rfps.companyId, companies.id))
+            .where(eq(rfps.id, pageContext.entityId))
+            .limit(1);
+          if (row && row.oid === organizationId) {
+            label = row.r.title;
+            if (row.r.dueDate) extra = `due ${row.r.dueDate}`;
+          }
+        }
+        break;
+      }
+      case "contact": {
+        const c = await storage.getContact(pageContext.entityId);
+        if (c) {
+          // Contacts are scoped through their parent company. Verify the
+          // company belongs to this org before surfacing the name.
+          const [co] = await db.select().from(companies)
+            .where(eq(companies.id, c.companyId)).limit(1);
+          if (co && co.organizationId === organizationId) {
+            label = c.name;
+            extra = [c.title, co.name].filter(Boolean).join(" @ ");
+          }
+        }
+        break;
+      }
+      case "prospect": {
+        const idNum = Number(pageContext.entityId);
+        if (Number.isFinite(idNum)) {
+          const p = await storage.getProspect(idNum).catch(() => undefined);
+          if (p && p.organizationId === organizationId) {
+            label = p.name;
+            extra = `stage ${p.stage}`;
+          }
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  } catch (err) {
+    console.warn("[agent.router] page pre-load failed:", err);
+  }
+
+  if (!label) return null;
 
   rememberEntity(conversationRef, {
     type: pageContext.entityType,
@@ -272,5 +368,6 @@ export async function buildPageContextBlock(
   });
 
   const route = pageContext.route ? ` (${pageContext.route})` : "";
-  return `Current page: the rep is viewing the ${pageContext.entityType} **${label}**${route}. When the rep says "this", "it", "this account/carrier/lane", they almost certainly mean ${label}. Resolve those references silently and act on them.`;
+  const detail = extra ? ` — ${extra}` : "";
+  return `Current page: the rep is viewing the ${pageContext.entityType} **${label}**${detail}${route}. When the rep says "this", "it", "this account/carrier/lane/RFP/prospect", they almost certainly mean ${label}. Resolve those references silently and act on them.`;
 }
