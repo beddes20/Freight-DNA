@@ -4,7 +4,7 @@
  * envelope. Falls back gracefully when fields are missing.
  */
 import { useState } from "react";
-import { ExternalLink, ShieldCheck, Eye, ChevronDown, ChevronRight, Clock, AlertTriangle } from "lucide-react";
+import { ExternalLink, ShieldCheck, Eye, ChevronDown, ChevronRight, Clock, AlertTriangle, HelpCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface AnswerMeta {
@@ -151,6 +151,20 @@ export function AnswerCardMeta({
               })}
             </ul>
           )}
+        </div>
+      )}
+
+      {confidence === "low" && (
+        <div
+          className="rounded-md border border-amber-200 dark:border-amber-900/40 bg-amber-50/60 dark:bg-amber-950/20 px-2.5 py-1.5 text-[11px] text-amber-800 dark:text-amber-200 flex items-start gap-1.5"
+          data-testid="answer-low-confidence-fallback"
+        >
+          <HelpCircle className="h-3 w-3 mt-0.5 shrink-0" />
+          <span>
+            I'm not fully sure about this answer. {followUps.length > 0
+              ? "Pick a clarifying question below or rephrase your request to help me narrow in."
+              : "Try rephrasing or adding the company name, lane, or time window."}
+          </span>
         </div>
       )}
 

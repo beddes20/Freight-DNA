@@ -352,6 +352,10 @@ export interface IStorage {
 
   /** Auth-only lookup by PK — trusted IDs only (session, FK chains). No org filter. */
   getUser(id: string): Promise<User | undefined>;
+  /** Phase 5 (Task #425) — strict org-scoped lookup for analytics. Returns
+   * undefined if the user is in a different organization. Use this for any
+   * cross-user analytics endpoint to prevent IDOR-style data leaks. */
+  getUserInOrg(id: string, organizationId: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   getUserByClerkId(clerkUserId: string): Promise<User | undefined>;
   createPasswordResetToken(userId: string, token: string, expiresAt: string): Promise<void>;
@@ -1255,6 +1259,12 @@ export class DatabaseStorage implements IStorage {
 
   async getUser(id: string): Promise<User | undefined> {
     const [user] = await db.select().from(users).where(eq(users.id, id));
+    return user;
+  }
+
+  async getUserInOrg(id: string, organizationId: string): Promise<User | undefined> {
+    const [user] = await db.select().from(users)
+      .where(and(eq(users.id, id), eq(users.organizationId, organizationId)));
     return user;
   }
 

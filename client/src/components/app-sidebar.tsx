@@ -529,7 +529,7 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
-                {user?.role === "admin" && (
+                {["admin", "director", "sales_director"].includes(user?.role ?? "") && (
                   <SidebarMenuItem>
                     <SidebarMenuButton asChild isActive={location === "/admin/copilot-analytics"}>
                       <Link href="/admin/copilot-analytics" data-testid="link-copilot-analytics">

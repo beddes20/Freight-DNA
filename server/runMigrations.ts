@@ -3745,4 +3745,52 @@ export async function runMigrations() {
   } finally {
     client374.release();
   }
+
+  // Phase 5 (Task #425) — copilot_actions idempotency: at most one row per
+  // (organization, turn/messageId, tool). Backfill-deduplicates first so the
+  // unique index can be applied safely on existing rows.
+  const client425 = await pool.connect();
+  try {
+    await client425.query(`
+      CREATE TABLE IF NOT EXISTS copilot_actions (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        confirmed_by_user_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        conversation_ref text,
+        message_id integer,
+        tool text NOT NULL,
+        args jsonb,
+        result text NOT NULL DEFAULT 'success',
+        error_message text,
+        related_company_id varchar,
+        related_contact_id varchar,
+        completed_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await client425.query(`CREATE INDEX IF NOT EXISTS copilot_actions_org_idx ON copilot_actions(organization_id, completed_at)`);
+    await client425.query(`CREATE INDEX IF NOT EXISTS copilot_actions_user_idx ON copilot_actions(confirmed_by_user_id, completed_at)`);
+    await client425.query(`CREATE INDEX IF NOT EXISTS copilot_actions_company_idx ON copilot_actions(related_company_id, completed_at)`);
+    await client425.query(`CREATE INDEX IF NOT EXISTS copilot_actions_tool_idx ON copilot_actions(tool)`);
+    {
+      await client425.query(`
+        DELETE FROM copilot_actions a
+        USING copilot_actions b
+        WHERE a.id < b.id
+          AND a.organization_id = b.organization_id
+          AND a.message_id IS NOT NULL
+          AND a.message_id = b.message_id
+          AND a.tool = b.tool
+      `);
+      await client425.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS copilot_actions_turn_tool_unique
+        ON copilot_actions (organization_id, message_id, tool)
+        WHERE message_id IS NOT NULL
+      `);
+      console.log("[migrations] copilot_actions (turnId, tool) unique index ensured (Task #425)");
+    }
+  } catch (err) {
+    console.error("[migrations] Task #425 idempotency index error:", err);
+  } finally {
+    client425.release();
+  }
 }

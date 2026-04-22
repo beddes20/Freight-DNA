@@ -2963,6 +2963,15 @@ export const copilotActions = pgTable(
     index("copilot_actions_user_idx").on(t.confirmedByUserId, t.completedAt),
     index("copilot_actions_company_idx").on(t.relatedCompanyId, t.completedAt),
     index("copilot_actions_tool_idx").on(t.tool),
+    // Phase 5: idempotency contract — at most one audit row per (org, turn, tool).
+    // `messageId` is the assistant turn id; we treat it as the turnId for dedupe.
+    // PARTIAL unique index (only when message_id is set) — must match the
+    // migration in server/runMigrations.ts AND the onConflictDoNothing target
+    // in server/routes/agentAnalytics.ts so conflict inference is deterministic
+    // across environments.
+    uniqueIndex("copilot_actions_turn_tool_unique")
+      .on(t.organizationId, t.messageId, t.tool)
+      .where(sql`message_id IS NOT NULL`),
   ],
 );
 export const insertCopilotActionSchema = createInsertSchema(copilotActions).omit({ id: true, completedAt: true });

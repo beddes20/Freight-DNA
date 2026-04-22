@@ -47,6 +47,7 @@ import { CompanyDialog } from "@/components/company-dialog";
 import { ContactDialog } from "@/components/contact-dialog";
 import { OrgChart } from "@/components/org-chart";
 import { ContactList } from "@/components/contact-list";
+import { CopilotActionsCard } from "@/components/dna-copilot/copilot-actions-card";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -878,6 +879,7 @@ export default function CompanyDetail() {
 
         {/* ── Activity tab: Tasks, Callouts, Touch Log ── */}
         <TabsContent value="activity" className="space-y-4 mt-2">
+          <CopilotActionsCard scope="company" id={companyId} limit={10} />
           <ActivityTab
             touchLogEntries={touchLogEntries}
             companyTasks={companyTasks}

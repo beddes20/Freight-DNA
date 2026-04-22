@@ -65,9 +65,26 @@ export function MessageList({
             {msg.role === "assistant" ? (
               <>
                 {msg.isError ? (
+                  // Phase 5 — friendly error card. We deliberately do NOT
+                  // render `msg.content` here because upstream errors can
+                  // contain stack frames, tokens, or other tenant data.
+                  // The raw content is forwarded ONLY through the sanitized
+                  // `Report this` pipeline (server/routes/agentAnalytics.ts
+                  // → sanitizeReportText). End users see a fixed copy plus a
+                  // short error code so support can correlate.
                   <div className="space-y-2">
                     <p className="text-sm font-medium text-red-700 dark:text-red-300">Something went wrong</p>
-                    <p className="text-xs text-red-600 dark:text-red-400">{msg.content}</p>
+                    <p className="text-xs text-red-600 dark:text-red-400">
+                      The copilot couldn't finish that turn. Try again, or use{" "}
+                      <span className="font-medium">Report this</span> to send
+                      the details to your admin.
+                    </p>
+                    <p
+                      className="text-[10px] font-mono text-red-500/80 dark:text-red-400/70"
+                      data-testid={`text-error-code-${msg.id}`}
+                    >
+                      ref: {String(msg.id).slice(0, 8)}
+                    </p>
                     <div className="flex items-center gap-1.5">
                       <Button
                         size="sm"

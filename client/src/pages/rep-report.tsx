@@ -40,6 +40,7 @@ function nextLevelRole(role: string): { fromRole: string; toRole: string; label:
 }
 
 import { matchRepName, fmtMoney } from "@/lib/rep-utils";
+import { CopilotActionsCard } from "@/components/dna-copilot/copilot-actions-card";
 
 interface AccountSummaryRow {
   customerName: string;
@@ -992,6 +993,13 @@ export default function RepReportPage() {
                 </div>
               )}
             </section>
+
+            {/* Recent DNA copilot actions for this rep */}
+            {targetId && (
+              <section className="mb-4">
+                <CopilotActionsCard scope="user" id={targetId} limit={10} />
+              </section>
+            )}
 
             {/* Account activity */}
             {topAccounts.length > 0 && (

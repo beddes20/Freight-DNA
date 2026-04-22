@@ -5,10 +5,20 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, AlertTriangle, ShieldAlert, ThumbsDown, ThumbsUp, Activity, Wrench, Clock } from "lucide-react";
+import { Loader2, AlertTriangle, ShieldAlert, ThumbsDown, ThumbsUp, Activity, Wrench, Clock, X } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 type Overview = {
   windowDays: number;
+  totals?: { turns: number; inbound: number; actionsConfirmed: number };
+  rates?: {
+    unansweredRate: number;
+    lowConfidenceRate: number;
+    thumbsDownRate: number;
+    thumbsUpRate: number;
+    successRate: number;
+  };
   topQuestions: Array<{ question: string; count: number }>;
   toolMix: Array<{ tool: string; outcome: string; count: number }>;
   latency: { p50: number | null; p95: number | null; avg: number | null; count: number };
@@ -16,6 +26,9 @@ type Overview = {
   feedback: { up: number; down: number };
   weekly: Array<{ week: string; turns: number; failed: number; avgConfidence: number | null }>;
 };
+
+const fmtPct = (n: number | undefined | null) =>
+  n == null || Number.isNaN(n) ? "—" : `${(n * 100).toFixed(1)}%`;
 
 type NeedsAttentionRow = {
   id: string;
@@ -56,8 +69,12 @@ function fmtDate(iso: string) {
 export default function AdminCopilotAnalyticsPage() {
   const { user } = useAuth();
   const [days, setDays] = useState(30);
+  const [naOutcomeFilter, setNaOutcomeFilter] = useState<string>("all");
+  const [naFeedbackFilter, setNaFeedbackFilter] = useState<string>("all");
+  const [naUserFilter, setNaUserFilter] = useState<string>("all");
+  const [drawerTurnId, setDrawerTurnId] = useState<string | null>(null);
 
-  const isAdmin = user?.role === "admin";
+  const canView = user && ["admin", "director", "sales_director"].includes(user.role);
 
   if (!user) {
     return (
@@ -66,14 +83,14 @@ export default function AdminCopilotAnalyticsPage() {
       </div>
     );
   }
-  if (!isAdmin) {
+  if (!canView) {
     return (
       <div className="p-8">
         <Card>
           <CardContent className="p-8 text-center space-y-2">
             <ShieldAlert className="h-10 w-10 text-amber-500 mx-auto" />
-            <p className="font-semibold">Admins only</p>
-            <p className="text-sm text-muted-foreground">Copilot analytics are restricted to admin users.</p>
+            <p className="font-semibold">Restricted</p>
+            <p className="text-sm text-muted-foreground">Copilot analytics are available to admins, directors, and sales directors.</p>
           </CardContent>
         </Card>
       </div>
@@ -175,6 +192,43 @@ export default function AdminCopilotAnalyticsPage() {
                 </Card>
               </div>
 
+              {/* Phase 5 KPI rates — required by the parent brief: success,
+                  unanswered/abandoned, low-confidence, thumbs-down. */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <Card data-testid="kpi-success-rate">
+                  <CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground">Success rate</p>
+                    <p className="text-2xl font-semibold text-emerald-700 dark:text-emerald-400" data-testid="text-success-rate">
+                      {fmtPct(ov.rates?.successRate)}
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card data-testid="kpi-unanswered-rate">
+                  <CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground">Unanswered / abandoned</p>
+                    <p className="text-2xl font-semibold text-amber-700 dark:text-amber-400" data-testid="text-unanswered-rate">
+                      {fmtPct(ov.rates?.unansweredRate)}
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card data-testid="kpi-low-confidence-rate">
+                  <CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground">Low-confidence rate</p>
+                    <p className="text-2xl font-semibold text-amber-700 dark:text-amber-400" data-testid="text-low-confidence-rate">
+                      {fmtPct(ov.rates?.lowConfidenceRate)}
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card data-testid="kpi-thumbs-ratio">
+                  <CardContent className="p-4">
+                    <p className="text-xs text-muted-foreground">Thumbs ratio (down)</p>
+                    <p className="text-2xl font-semibold text-rose-700 dark:text-rose-400" data-testid="text-thumbs-down-rate">
+                      {fmtPct(ov.rates?.thumbsDownRate)}
+                    </p>
+                  </CardContent>
+                </Card>
+              </div>
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Card>
                   <CardHeader><CardTitle className="text-sm">Top Questions</CardTitle></CardHeader>
@@ -247,36 +301,94 @@ export default function AdminCopilotAnalyticsPage() {
         <TabsContent value="needs-attention" className="space-y-2 mt-4">
           {needs.isLoading ? (
             <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div>
-          ) : (needs.data?.length ?? 0) === 0 ? (
-            <Card><CardContent className="p-8 text-center text-sm text-muted-foreground">Nothing to review — every recent turn is clean.</CardContent></Card>
-          ) : (
-            <div className="space-y-2">
-              {needs.data!.map((row) => (
-                <Card key={row.id} data-testid={`row-needs-${row.id}`}>
-                  <CardContent className="p-3 space-y-1.5">
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
-                        <span>{row.userName}</span>
-                        <span>·</span>
-                        <span className="font-mono">{fmtDate(row.createdAt)}</span>
-                        {row.conversationRef ? (<><span>·</span><span className="font-mono">conv #{row.conversationRef}</span></>) : null}
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <Badge variant="outline" className="text-[10px]">{row.outcome}</Badge>
-                        {row.feedbackRating === "down" ? <Badge variant="destructive" className="text-[10px]"><ThumbsDown className="h-3 w-3 mr-1" /> down</Badge> : null}
-                        {row.confidence != null ? <Badge variant="secondary" className="text-[10px]">conf {(Number(row.confidence) * 100).toFixed(0)}%</Badge> : null}
-                        {row.route ? <Badge variant="secondary" className="text-[10px]">{row.route}</Badge> : null}
-                      </div>
-                    </div>
-                    {row.summary ? <p className="text-sm">{row.summary}</p> : null}
-                    {row.errorMessage ? <p className="text-xs text-red-600 dark:text-red-400">{row.errorMessage}</p> : null}
-                    {row.feedbackComment ? <p className="text-xs italic text-muted-foreground">“{row.feedbackComment}”</p> : null}
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
+          ) : (() => {
+            const all = needs.data ?? [];
+            const outcomes = Array.from(new Set(all.map((r) => r.outcome))).sort();
+            const userOptions = Array.from(new Map(all.map((r) => [r.userId, r.userName])).entries());
+            const filtered = all.filter((r) => {
+              if (naOutcomeFilter !== "all" && r.outcome !== naOutcomeFilter) return false;
+              if (naFeedbackFilter === "down" && r.feedbackRating !== "down") return false;
+              if (naFeedbackFilter === "no_feedback" && r.feedbackRating) return false;
+              if (naUserFilter !== "all" && r.userId !== naUserFilter) return false;
+              return true;
+            });
+            return (
+              <>
+                <div className="flex items-end gap-2 flex-wrap">
+                  <div className="space-y-1">
+                    <label className="text-[11px] uppercase text-muted-foreground">Outcome</label>
+                    <Select value={naOutcomeFilter} onValueChange={setNaOutcomeFilter}>
+                      <SelectTrigger className="w-[160px]" data-testid="filter-outcome"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All outcomes</SelectItem>
+                        {outcomes.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] uppercase text-muted-foreground">Feedback</label>
+                    <Select value={naFeedbackFilter} onValueChange={setNaFeedbackFilter}>
+                      <SelectTrigger className="w-[160px]" data-testid="filter-feedback"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All feedback</SelectItem>
+                        <SelectItem value="down">Thumbs-down only</SelectItem>
+                        <SelectItem value="no_feedback">No feedback</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[11px] uppercase text-muted-foreground">User</label>
+                    <Select value={naUserFilter} onValueChange={setNaUserFilter}>
+                      <SelectTrigger className="w-[200px]" data-testid="filter-user"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All users</SelectItem>
+                        {userOptions.map(([id, name]) => <SelectItem key={id} value={id}>{name}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <span className="text-xs text-muted-foreground ml-auto" data-testid="text-filter-count">
+                    Showing {filtered.length} of {all.length}
+                  </span>
+                </div>
+
+                {filtered.length === 0 ? (
+                  <Card><CardContent className="p-8 text-center text-sm text-muted-foreground">Nothing matches these filters.</CardContent></Card>
+                ) : (
+                  <div className="space-y-2">
+                    {filtered.map((row) => (
+                      <Card
+                        key={row.id}
+                        data-testid={`row-needs-${row.id}`}
+                        className="cursor-pointer hover:bg-muted/40 transition-colors"
+                        onClick={() => setDrawerTurnId(row.id)}
+                      >
+                        <CardContent className="p-3 space-y-1.5">
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+                              <span>{row.userName}</span>
+                              <span>·</span>
+                              <span className="font-mono">{fmtDate(row.createdAt)}</span>
+                              {row.conversationRef ? (<><span>·</span><span className="font-mono">conv #{row.conversationRef}</span></>) : null}
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <Badge variant="outline" className="text-[10px]">{row.outcome}</Badge>
+                              {row.feedbackRating === "down" ? <Badge variant="destructive" className="text-[10px]"><ThumbsDown className="h-3 w-3 mr-1" /> down</Badge> : null}
+                              {row.confidence != null ? <Badge variant="secondary" className="text-[10px]">conf {(Number(row.confidence) * 100).toFixed(0)}%</Badge> : null}
+                              {row.route ? <Badge variant="secondary" className="text-[10px]">{row.route}</Badge> : null}
+                            </div>
+                          </div>
+                          {row.summary ? <p className="text-sm">{row.summary}</p> : null}
+                          {row.errorMessage ? <p className="text-xs text-red-600 dark:text-red-400">{row.errorMessage}</p> : null}
+                          {row.feedbackComment ? <p className="text-xs italic text-muted-foreground">“{row.feedbackComment}”</p> : null}
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </TabsContent>
 
         <TabsContent value="actions" className="space-y-2 mt-4">
@@ -316,6 +428,179 @@ export default function AdminCopilotAnalyticsPage() {
           )}
         </TabsContent>
       </Tabs>
+
+      <TurnDetailDrawer turnId={drawerTurnId} onClose={() => setDrawerTurnId(null)} />
     </div>
+  );
+}
+
+type TurnDetail = {
+  id: string;
+  userId: string;
+  userName: string;
+  conversationRef: string | null;
+  messageId: number | null;
+  question: string | null;
+  summary: string | null;
+  outcome: string;
+  confidence: string | null;
+  route: string | null;
+  feedbackRating: string | null;
+  feedbackComment: string | null;
+  latencyMs: number | null;
+  errorMessage: string | null;
+  createdAt: string;
+  toolsUsed: string[] | null;
+  toolCalls?: Array<{
+    id: string;
+    tool: string | null;
+    capability: string | null;
+    outcome: string;
+    errorMessage: string | null;
+    inputJson: unknown;
+    outputJson: unknown;
+    latencyMs: number | null;
+    createdAt: string;
+  }>;
+  assistantOutput?: unknown;
+  envelopeSummary?: unknown;
+  actions: Array<{ id: string; tool: string; result: string; args: any; errorMessage: string | null; completedAt: string }>;
+};
+
+function formatJson(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  try { return JSON.stringify(v, null, 2); } catch { return String(v); }
+}
+
+function TurnDetailDrawer({ turnId, onClose }: { turnId: string | null; onClose: () => void }) {
+  const q = useQuery<TurnDetail>({
+    queryKey: ["/api/agent/analytics/turns", turnId],
+    queryFn: () => fetch(`/api/agent/analytics/turns/${turnId}`, { credentials: "include" }).then((r) => r.json()),
+    enabled: !!turnId,
+  });
+  const open = !!turnId;
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" data-testid="drawer-turn-detail">
+        <DialogHeader>
+          <DialogTitle className="flex items-center justify-between gap-2">
+            <span>Turn detail</span>
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose} data-testid="button-close-drawer"><X className="h-4 w-4" /></Button>
+          </DialogTitle>
+        </DialogHeader>
+        {q.isLoading || !q.data ? (
+          <div className="p-6 flex justify-center"><Loader2 className="h-5 w-5 animate-spin" /></div>
+        ) : (
+          <div className="space-y-3 text-sm">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>{q.data.userName}</span><span>·</span>
+              <span className="font-mono">{fmtDate(q.data.createdAt)}</span>
+              {q.data.conversationRef ? <><span>·</span><span className="font-mono">conv #{q.data.conversationRef}</span></> : null}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <Badge variant="outline">{q.data.outcome}</Badge>
+              {q.data.confidence != null ? <Badge variant="secondary">conf {(Number(q.data.confidence) * 100).toFixed(0)}%</Badge> : null}
+              {q.data.route ? <Badge variant="secondary">{q.data.route}</Badge> : null}
+              {q.data.latencyMs != null ? <Badge variant="secondary">{Math.round(q.data.latencyMs)}ms</Badge> : null}
+              {q.data.feedbackRating === "down" ? <Badge variant="destructive"><ThumbsDown className="h-3 w-3 mr-1" /> down</Badge> : null}
+            </div>
+            {q.data.question ? (
+              <div>
+                <p className="text-[11px] uppercase text-muted-foreground">Question</p>
+                <p data-testid="text-turn-question">{q.data.question}</p>
+              </div>
+            ) : null}
+            {q.data.summary ? (
+              <div>
+                <p className="text-[11px] uppercase text-muted-foreground">Summary</p>
+                <p>{q.data.summary}</p>
+              </div>
+            ) : null}
+            {q.data.errorMessage ? (
+              <div>
+                <p className="text-[11px] uppercase text-muted-foreground">Error</p>
+                <p className="text-xs text-red-600 dark:text-red-400 font-mono whitespace-pre-wrap">{q.data.errorMessage}</p>
+              </div>
+            ) : null}
+            {q.data.feedbackComment ? (
+              <div>
+                <p className="text-[11px] uppercase text-muted-foreground">Feedback</p>
+                <p className="italic">“{q.data.feedbackComment}”</p>
+              </div>
+            ) : null}
+            {q.data.assistantOutput ? (
+              <div>
+                <p className="text-[11px] uppercase text-muted-foreground">Assistant output</p>
+                <pre
+                  className="text-[11px] font-mono bg-muted/50 rounded p-2 max-h-48 overflow-auto whitespace-pre-wrap break-words"
+                  data-testid="text-turn-assistant-output"
+                >{formatJson(q.data.assistantOutput)}</pre>
+              </div>
+            ) : null}
+            {q.data.envelopeSummary ? (
+              <div>
+                <p className="text-[11px] uppercase text-muted-foreground">Prompt envelope</p>
+                <pre
+                  className="text-[11px] font-mono bg-muted/50 rounded p-2 max-h-40 overflow-auto whitespace-pre-wrap break-words"
+                  data-testid="text-turn-envelope"
+                >{formatJson(q.data.envelopeSummary)}</pre>
+              </div>
+            ) : null}
+            {q.data.toolCalls?.length ? (
+              <div>
+                <p className="text-[11px] uppercase text-muted-foreground">Tool calls</p>
+                <div className="space-y-2 mt-1">
+                  {q.data.toolCalls.map((tc) => (
+                    <div key={tc.id} className="rounded border p-2 text-[11px]" data-testid={`tool-call-${tc.id}`}>
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="outline" className="font-mono">{tc.tool ?? "?"}</Badge>
+                        <Badge variant={tc.outcome === "ok" ? "secondary" : "destructive"}>{tc.outcome}</Badge>
+                        {tc.latencyMs != null ? <span className="text-muted-foreground">{Math.round(tc.latencyMs)}ms</span> : null}
+                      </div>
+                      {tc.errorMessage ? <p className="text-red-600 dark:text-red-400 mt-1 font-mono">{tc.errorMessage}</p> : null}
+                      {tc.inputJson ? (
+                        <details className="mt-1"><summary className="cursor-pointer text-muted-foreground">input</summary>
+                          <pre className="bg-muted/40 rounded p-1.5 mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words">{formatJson(tc.inputJson)}</pre>
+                        </details>
+                      ) : null}
+                      {tc.outputJson ? (
+                        <details className="mt-1"><summary className="cursor-pointer text-muted-foreground">output</summary>
+                          <pre className="bg-muted/40 rounded p-1.5 mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words">{formatJson(tc.outputJson)}</pre>
+                        </details>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : q.data.toolsUsed?.length ? (
+              <div>
+                <p className="text-[11px] uppercase text-muted-foreground">Tools used</p>
+                <div className="flex flex-wrap gap-1">
+                  {q.data.toolsUsed.map((t, i) => <Badge key={i} variant="outline" className="font-mono text-[11px]">{t}</Badge>)}
+                </div>
+              </div>
+            ) : null}
+            {q.data.actions?.length ? (
+              <div>
+                <p className="text-[11px] uppercase text-muted-foreground mb-1">Confirmed actions ({q.data.actions.length})</p>
+                <div className="space-y-1.5">
+                  {q.data.actions.map((a) => (
+                    <div key={a.id} className="border border-border/60 rounded p-2" data-testid={`drawer-action-${a.id}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-xs">{a.tool}</span>
+                        <Badge variant={a.result === "success" ? "secondary" : a.result === "dismissed" ? "outline" : "destructive"} className="text-[10px]">{a.result}</Badge>
+                      </div>
+                      {a.args ? <p className="font-mono text-[11px] text-muted-foreground mt-1 break-all">{JSON.stringify(a.args)}</p> : null}
+                      {a.errorMessage ? <p className="text-[11px] text-red-600 dark:text-red-400 mt-1">{a.errorMessage}</p> : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
