@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { Truck, Search, Download, BookmarkPlus, RefreshCw, ChevronRight, MapPin, Clock } from "lucide-react";
+import { queryClient } from "@/lib/queryClient";
+import { Truck, Search, Download, BookmarkPlus, RefreshCw, ChevronRight, MapPin, Clock, Upload } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,6 +49,43 @@ export default function CarrierIntelligenceAvailableLoadsPage() {
   const [search, setSearch] = useState("");
   const [savedViewName, setSavedViewName] = useState("");
   const [initialized, setInitialized] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+
+  async function handleUploadFile(file: File) {
+    setIsUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/freight-opportunities/upload", {
+        method: "POST",
+        body: fd,
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `${res.status}` }));
+        throw new Error(err.error || `Upload failed (${res.status})`);
+      }
+      const summary = await res.json();
+      toast({
+        title: "Available freight imported",
+        description: `${summary.inserted ?? 0} new, ${summary.updated ?? 0} updated, ${summary.expired ?? 0} expired${
+          summary.unmatchedCompanies ? `, ${summary.unmatchedCompanies} unmatched companies` : ""
+        }`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/carrier-intelligence/available-loads"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities"] });
+    } catch (e) {
+      toast({
+        title: "Upload failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
 
   if (userPrefs && !initialized) {
     setEquipment(userPrefs.availableLoads.equipment ?? "ALL");
@@ -151,6 +189,27 @@ export default function CarrierIntelligenceAvailableLoadsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            data-testid="input-upload-available-loads"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleUploadFile(f);
+            }}
+          />
+          <Button
+            variant="default"
+            size="sm"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isUploading}
+            data-testid="button-upload-available-loads"
+          >
+            <Upload className={`h-4 w-4 mr-1 ${isUploading ? "animate-pulse" : ""}`} />
+            {isUploading ? "Uploading…" : "Upload Excel"}
+          </Button>
           <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching} data-testid="button-refresh">
             <RefreshCw className={`h-4 w-4 mr-1 ${isFetching ? "animate-spin" : ""}`} /> Refresh
           </Button>
