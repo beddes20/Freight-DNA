@@ -200,6 +200,26 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
+// ─── Boot-readiness gate ─────────────────────────────────────────────────────
+// Replit Autoscale's promote stage runs an HTTP health check shortly after the
+// container starts. Our boot sequence (runMigrations + persona backfill +
+// route registration + Stripe init) can exceed that window on a large prod
+// database, causing promote to fail with no app logs.
+//
+// Fix: bind httpServer.listen() *immediately* (further down) and have this
+// middleware respond 503 for every request until the rest of the boot
+// completes and flips `isReady = true`. /healthz returns 200 unconditionally
+// so the platform health check passes even mid-boot.
+let isReady = false;
+app.get("/healthz", (_req, res) => {
+  res.status(200).type("text/plain").send(isReady ? "ok" : "starting");
+});
+app.use((req, res, next) => {
+  if (isReady) return next();
+  // Allow the readiness probe through; everything else gets a 503 until boot completes.
+  res.status(503).type("text/plain").send("Server starting…");
+});
+
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
@@ -268,6 +288,20 @@ async function initStripe() {
 }
 
 (async () => {
+  // Bind the port FIRST so Replit Autoscale's promote health check passes
+  // immediately. The readiness gate (declared above) holds requests at 503
+  // until the rest of boot completes and we set `isReady = true`.
+  const port = parseInt(process.env.PORT || "5000", 10);
+  await new Promise<void>((resolve) => {
+    httpServer.listen(
+      { port, host: "0.0.0.0", reusePort: true },
+      () => {
+        log(`listening on port ${port} (boot in progress)`);
+        resolve();
+      },
+    );
+  });
+
   await runMigrations();
   await storage.deleteEmptyFinancialUploads();
 
@@ -321,39 +355,29 @@ async function initStripe() {
     await setupVite(httpServer, app);
   }
 
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || "5000", 10);
-  httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`serving on port ${port}`);
+  // Boot complete — flip the readiness gate so real handlers serve traffic.
+  isReady = true;
+  log(`ready — serving on port ${port}`);
 
-      if (IS_DEV) {
-        const startMirror = () => {
-          const mirrorServer = createServer(app);
-          mirrorServer.listen({ port: MIRROR_PORT, host: "0.0.0.0" }, () => {
-            log(`mirror serving on port ${MIRROR_PORT} (public URL)`);
-          });
-          mirrorServer.on("error", (err: NodeJS.ErrnoException) => {
-            if (err.code === "EADDRINUSE") log(`mirror port ${MIRROR_PORT} in use — skipping`);
-            else console.error("[mirror]", err);
-          });
-        };
-        if (earlyClaimBound && earlyClaimServer) {
-          earlyClaimServer.close(startMirror);
-        } else {
-          startMirror();
-        }
-      }
-      initMonthlyGoalScheduler();
-      initMonthlyDataRefreshScheduler();
+  if (IS_DEV) {
+    const startMirror = () => {
+      const mirrorServer = createServer(app);
+      mirrorServer.listen({ port: MIRROR_PORT, host: "0.0.0.0" }, () => {
+        log(`mirror serving on port ${MIRROR_PORT} (public URL)`);
+      });
+      mirrorServer.on("error", (err: NodeJS.ErrnoException) => {
+        if (err.code === "EADDRINUSE") log(`mirror port ${MIRROR_PORT} in use — skipping`);
+        else console.error("[mirror]", err);
+      });
+    };
+    if (earlyClaimBound && earlyClaimServer) {
+      earlyClaimServer.close(startMirror);
+    } else {
+      startMirror();
+    }
+  }
+  initMonthlyGoalScheduler();
+  initMonthlyDataRefreshScheduler();
       initAvailableFreightImportScheduler();
       initLoadFactScheduler();
       initRfpDeadlineScheduler();
@@ -450,6 +474,4 @@ async function initStripe() {
           log(`[lane-cache] Warm-up aborted: ${err instanceof Error ? err.message : String(err)}`, "startup");
         }
       }, 20_000); // 20s: after HF cache and DB pool are fully settled
-    },
-  );
 })();
