@@ -226,13 +226,13 @@ function useSidebarTooltipOverrides() {
   return map;
 }
 
-function resolveDescription(key: string, fallback: string, overrides: Record<string, string>): string {
-  const o = overrides[key];
+function resolveDescription(key: string, fallback: string, overrides?: Record<string, string>): string {
+  const o = overrides?.[key];
   if (typeof o === "string" && o.trim().length > 0) return o;
   return fallback;
 }
 
-function NavLink({ item, isActive, badge, badgeColor, overrides }: { item: NavItem; isActive: boolean; badge?: number; badgeColor?: "red" | "green"; overrides: Record<string, string> }) {
+function NavLink({ item, isActive, badge, badgeColor, overrides }: { item: NavItem; isActive: boolean; badge?: number; badgeColor?: "red" | "green"; overrides?: Record<string, string> }) {
   const Icon = item.icon;
   const description = resolveDescription(item.title, item.description, overrides);
   return (
@@ -482,7 +482,7 @@ export function AppSidebar() {
           return (
             <CollapsibleGroup label="Carrier Intelligence">
               {visible.map(item => (
-                <NavLink key={item.title} item={item} isActive={isActive(item.url)} />
+                <NavLink key={item.title} item={item} isActive={isActive(item.url)} overrides={tooltipOverrides} />
               ))}
             </CollapsibleGroup>
           );

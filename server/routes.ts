@@ -6820,6 +6820,8 @@ Respond with valid JSON only:
         sentiment: req.body.sentiment || null,
         isMeaningful: req.body.isMeaningful === true || req.body.isMeaningful === "true" ? true : false,
         loggedById: user.id,
+        // Carry through playLabel for outcome classifier parity with /touch-logs.
+        playLabel: typeof req.body.playLabel === "string" ? req.body.playLabel || null : null,
         createdAt: now.toISOString(),
       });
       const aiInsights = await analyzeTouchpointNote(notes || "", contact?.name, company.name).catch(() => null);

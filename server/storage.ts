@@ -1105,7 +1105,7 @@ export interface IStorage {
     limit?: number;
     offset?: number;
   }): Promise<FreightOpportunity[]>;
-  updateFreightOpportunity(orgId: string, id: string, fields: Partial<FreightOpportunity>): Promise<FreightOpportunity | undefined>;
+  updateFreightOpportunity(orgId: string, id: string, fields: Partial<FreightOpportunity>, opts?: { allowCoveredTransition?: boolean }): Promise<FreightOpportunity | undefined>;
 
   insertFreightOpportunityCarriers(rows: InsertFreightOpportunityCarrier[]): Promise<FreightOpportunityCarrier[]>;
   listFreightOpportunityCarriers(opportunityId: string): Promise<FreightOpportunityCarrier[]>;
@@ -7716,7 +7716,22 @@ export class DatabaseStorage implements IStorage {
     return base;
   }
 
-  async updateFreightOpportunity(orgId: string, id: string, fields: Partial<FreightOpportunity>): Promise<FreightOpportunity | undefined> {
+  async updateFreightOpportunity(
+    orgId: string,
+    id: string,
+    fields: Partial<FreightOpportunity>,
+    opts: { allowCoveredTransition?: boolean } = {},
+  ): Promise<FreightOpportunity | undefined> {
+    // Guard: marking a freight opportunity as `covered` MUST flow through the
+    // canonical /api/freight-opportunities/:oppId/cover endpoint so the
+    // load_fact emit, audit row, and SLA-clock clearing all happen atomically.
+    // Any caller bypassing that path leaves load_fact / scorecards stale.
+    if (fields.status === "covered" && !opts.allowCoveredTransition) {
+      throw new Error(
+        "[updateFreightOpportunity] status='covered' must go through the canonical /cover endpoint (load_fact emit + audit). " +
+        "Pass { allowCoveredTransition: true } only from that endpoint.",
+      );
+    }
     const [row] = await db.update(freightOpportunities)
       .set(fields)
       .where(and(eq(freightOpportunities.orgId, orgId), eq(freightOpportunities.id, id)))

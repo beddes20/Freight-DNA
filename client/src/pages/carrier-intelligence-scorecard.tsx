@@ -102,10 +102,10 @@ export default function CarrierIntelligenceScorecardPage() {
     setMinLoads(userPrefs.scorecard.minLoads ?? 1);
   }
 
-  const { data, isLoading, refetch, isFetching } = useQuery<{ rows?: ScorecardRow[]; scorecards?: ScorecardRow[] }>({
+  const { data, isLoading, refetch, isFetching } = useQuery<{ rows: ScorecardRow[] }>({
     queryKey: ["/api/carrier-intelligence/scorecard"],
-    select: (d) => ({ scorecards: d.rows ?? d.scorecards ?? [] }),
   });
+  const scorecards = data?.rows ?? [];
 
   const drawerMsKey = drawerMoveStatus.slice().sort().join(",");
   const detailQ = useQuery<CarrierDetailResp>({
@@ -123,12 +123,12 @@ export default function CarrierIntelligenceScorecardPage() {
 
   const equipmentOptions = useMemo(() => {
     const set = new Set<string>(["ALL"]);
-    (data?.scorecards ?? []).forEach((r) => set.add(r.equipmentType ?? "UNKNOWN"));
+    scorecards.forEach((r) => set.add(r.equipmentType ?? "UNKNOWN"));
     return Array.from(set);
-  }, [data]);
+  }, [scorecards]);
 
   const filtered = useMemo(() => {
-    const rows = data?.scorecards ?? [];
+    const rows = scorecards;
     const q = search.trim().toLowerCase();
     const ms = moveStatus ?? ["realized", "active"];
     return rows

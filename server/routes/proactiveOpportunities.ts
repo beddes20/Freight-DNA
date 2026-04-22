@@ -451,12 +451,20 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       const margin = revenue - cost;
       const marginPct = revenue > 0 ? margin / revenue : 0;
 
-      const updated = await storage.updateFreightOpportunity(org, opp.id, {
-        status: "covered",
-        // Clear any pending SLA clock — covered freight no longer needs
-        // approval reminders.
-        awaitingApprovalSince: null,
-      });
+      const updated = await storage.updateFreightOpportunity(
+        org,
+        opp.id,
+        {
+          status: "covered",
+          // Clear any pending SLA clock — covered freight no longer needs
+          // approval reminders.
+          awaitingApprovalSince: null,
+        },
+        // Canonical opt-in: this is the one and only path allowed to flip an
+        // opportunity to `covered`. The downstream load_fact emit + audit
+        // happen below in this same handler.
+        { allowCoveredTransition: true },
+      );
       await storage.appendFreightOpportunityAudit({
         opportunityId: opp.id,
         eventType: "status_changed",
