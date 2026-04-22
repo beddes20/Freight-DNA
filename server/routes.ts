@@ -9571,77 +9571,43 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
         activeCards = activeCards.filter(c => c.ruleType !== "recurring_lane_capacity");
       }
 
-      // Task #372 — enrich every card with primary contact + primary lane display info
-      const allContactIds = [
-        ...new Set(activeCards.map(c => c.primaryContactId).filter((v): v is string => !!v)),
-      ];
-      const allLaneIds = [
-        ...new Set([
-          ...activeCards.map(c => c.primaryLaneId).filter((v): v is string => !!v),
-          ...activeCards.map(c => c.linkedLaneId).filter((v): v is string => !!v),
-        ]),
-      ];
+      // Task #372 — enrich every card with primary contact + primary lane
+      // display info. This block previously inlined ~75 lines of context
+      // building + per-card mapping. It is now delegated to the canonical
+      // projectNbaCard helper so this endpoint and /api/nba/company/:id/card
+      // emit the same wire shape (was a real drift bug source).
+      const { contactIds, laneIds } = collectProjectionIds(activeCards);
       const [contactRows, laneRows] = await Promise.all([
-        Promise.all(
-          allContactIds.map(id =>
-            storage.getContact ? storage.getContact(id).catch(() => null) : Promise.resolve(null),
-          ),
-        ),
-        Promise.all(allLaneIds.map(id => storage.getRecurringLane(id).catch(() => null))),
+        Promise.all(contactIds.map(id => storage.getContact(id).catch(() => null))),
+        Promise.all(laneIds.map(id => storage.getRecurringLane(id).catch(() => null))),
       ]);
-      const contactMap = new Map<string, Contact>(
-        contactRows
-          .filter((c): c is Contact => !!c)
-          .map(c => [c.id, c]),
+      const contacts = new Map<string, Contact>(
+        contactRows.filter((c): c is Contact => !!c).map(c => [c.id, c]),
       );
-      const laneInfoMap = new Map<string, RecurringLane>(
-        laneRows
-          .filter((l): l is RecurringLane => !!l)
-          .map(l => [l.id, l]),
+      const lanes = new Map<string, RecurringLane>(
+        laneRows.filter((l): l is RecurringLane => !!l).map(l => [l.id, l]),
       );
-      activeCards = activeCards.map(c => {
-        const pc = c.primaryContactId ? contactMap.get(c.primaryContactId) : null;
-        const pl = c.primaryLaneId
-          ? laneInfoMap.get(c.primaryLaneId)
-          : (c.linkedLaneId ? laneInfoMap.get(c.linkedLaneId) : null);
-        return {
-          ...c,
-          primaryContactName: pc?.name ?? null,
-          primaryContactRelationshipBase: pc?.relationshipBase ?? null,
-          primaryLaneLabel: pl
-            ? `${pl.origin}${pl.originState ? ", " + pl.originState : ""} → ${pl.destination}${pl.destinationState ? ", " + pl.destinationState : ""}`
-            : null,
-        };
-      });
-
-      // Annotate lane-capacity cards with owner/overseer names for admin/director chip display
-      const laneCards = activeCards.filter(c => c.ruleType === "recurring_lane_capacity" && c.linkedLaneId);
-      if (laneCards.length > 0) {
-        const laneIds = [...new Set(laneCards.map(c => c.linkedLaneId!))];
-        const lanes = await Promise.all(laneIds.map(id => storage.getRecurringLane(id)));
-        const laneMap = new Map(lanes.filter(Boolean).map(l => [l!.id, l!]));
-
-        // Collect unique user IDs for a single batch lookup
-        const userIds = new Set<string>();
-        lanes.forEach(l => { if (l?.ownerUserId) userIds.add(l.ownerUserId); if (l?.overseerUserId) userIds.add(l.overseerUserId); });
-        const userList = await Promise.all([...userIds].map(id => storage.getUser(id)));
-        const userMap = new Map(userList.filter(Boolean).map(u => [u!.id, u!]));
-
-        activeCards = activeCards.map(c => {
-          if (c.ruleType !== "recurring_lane_capacity" || !c.linkedLaneId) return c;
-          const lane = laneMap.get(c.linkedLaneId);
-          if (!lane) return c;
-          const ownerUser = lane.ownerUserId ? userMap.get(lane.ownerUserId) : undefined;
-          const overseerUser = lane.overseerUserId ? userMap.get(lane.overseerUserId) : undefined;
-          return {
-            ...c,
-            laneOwnerName: ownerUser ? (ownerUser.name?.trim() || ownerUser.username) : null,
-            laneOverseerName: overseerUser ? (overseerUser.name?.trim() || overseerUser.username) : null,
-          };
-        });
+      // Owner/overseer enrichment is gated to recurring_lane_capacity
+      // cards inside projectNbaCard. We still need to fetch the relevant
+      // users up front so the projector has them in context — collect IDs
+      // from any lanes that those cards reference via linkedLaneId.
+      const userIds = new Set<string>();
+      for (const c of activeCards) {
+        if (c.ruleType !== "recurring_lane_capacity" || !c.linkedLaneId) continue;
+        const lane = lanes.get(c.linkedLaneId);
+        if (!lane) continue;
+        if (lane.ownerUserId) userIds.add(lane.ownerUserId);
+        if (lane.overseerUserId) userIds.add(lane.overseerUserId);
       }
+      const userRows = await Promise.all([...userIds].map(id => storage.getUser(id)));
+      const userMap = new Map<string, User>(
+        userRows.filter((u): u is User => !!u).map(u => [u.id, u]),
+      );
 
-      res.json(activeCards);
+      const projected = activeCards.map(c =>
+        projectNbaCard(c, { contacts, lanes, users: userMap }),
+      );
+      res.json(projected);
     } catch (err: any) {
       console.error("[nba/cards GET]", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch NBA cards" });
