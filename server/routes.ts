@@ -7068,14 +7068,14 @@ Respond with valid JSON only:
       // LM can see their own checks; managers (anyone in chain above) can also see
       // Admins and directors (who oversee all org LMs) also get read access
       const isSelf = user.id === lmUserId;
-      const isAdmin = user.role === "admin";
+      const userIsAdmin = isAdmin(user);
       const isDirectorRole = user.role === "director" || user.role === "sales_director";
       let isManagerOf = false;
-      if (!isSelf && !isAdmin && !isDirectorRole) {
+      if (!isSelf && !userIsAdmin && !isDirectorRole) {
         const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
         isManagerOf = teamIds.includes(lmUserId);
       }
-      if (!isSelf && !isManagerOf && !isAdmin && !isDirectorRole) {
+      if (!isSelf && !isManagerOf && !userIsAdmin && !isDirectorRole) {
         return res.status(403).json({ error: "Forbidden" });
       }
 
@@ -7104,8 +7104,8 @@ Respond with valid JSON only:
 
       // Only the LM's direct manager or admin can write
       const isDirectManager = lmUser.managerId === user.id;
-      const isAdmin = user.role === "admin";
-      if (!isDirectManager && !isAdmin) {
+      const userIsAdmin = isAdmin(user);
+      if (!isDirectManager && !userIsAdmin) {
         return res.status(403).json({ error: "Only the LM's direct manager can submit daily check-ins" });
       }
 
@@ -7897,12 +7897,12 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const isAdmin = user.role === "admin";
+      const userIsAdmin = isAdmin(user);
       const isDirector = ["director", "national_account_manager"].includes(user.role ?? "");
 
       // Get visible company IDs based on role
       let visibleCompanyIds: string[] = [];
-      if (isAdmin) {
+      if (userIsAdmin) {
         const allCompanies = await storage.getCompanies(user.organizationId);
         visibleCompanyIds = allCompanies.map(c => c.id);
       } else if (isDirector) {
@@ -8103,11 +8103,11 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const isAdmin = user.role === "admin";
+      const userIsAdmin = isAdmin(user);
       const isDirector = ["director", "national_account_manager"].includes(user.role ?? "");
 
       let visibleCompanyIds: string[] = [];
-      if (isAdmin) {
+      if (userIsAdmin) {
         const all = await storage.getCompanies(user.organizationId);
         visibleCompanyIds = all.map(c => c.id);
       } else if (isDirector) {
@@ -8214,11 +8214,11 @@ Respond with valid JSON only:
       const relSumCached = cacheGet(relSumCacheKey);
       if (relSumCached) return res.json(relSumCached);
 
-      const isAdmin = user.role === "admin";
+      const userIsAdmin = isAdmin(user);
       const isDirector = ["director", "national_account_manager"].includes(user.role ?? "");
 
       let visibleCompanyIds: string[] = [];
-      if (isAdmin) {
+      if (userIsAdmin) {
         const all = await storage.getCompanies(user.organizationId);
         visibleCompanyIds = all.map(c => c.id);
       } else if (isDirector) {
