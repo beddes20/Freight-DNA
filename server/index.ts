@@ -417,6 +417,12 @@ async function initStripe() {
         });
         initDeltaSyncScheduler();
         initWebexSyncScheduler();
+        // Task #435: periodic self-heal sweep that pulls missing rep
+        // replies from Microsoft Graph SentItems for any conversation
+        // thread stuck in "Waiting on us".
+        import("./services/conversationReplyCaptureService")
+          .then(({ initReplyCaptureSelfHealScheduler }) => initReplyCaptureSelfHealScheduler())
+          .catch(err => console.error("[reply-capture] scheduler init error:", err));
       }, 4000);
       // Pre-warm the financial uploads cache so the first carrier-suggestions
       // request doesn't trigger a cold full-table JSONB scan in production.

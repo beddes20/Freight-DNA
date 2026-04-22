@@ -483,6 +483,10 @@ async function processUserMailboxEmail(params: {
     linkedNbaId: null,
     linkedOutreachLogId: null,
     processedForSignalsAt: null,
+    // Task #435: persist provider sentDateTime so timeline ordering /
+    // display reflects when the message was actually sent (matters for
+    // self-heal recoveries that may run hours after the fact).
+    providerSentAt: receivedAt,
   });
 
   if (!created) {
@@ -639,8 +643,11 @@ async function processUserMailboxEmail(params: {
     }
   }
 
+  // Task #435: track outbound capture so the SentItems health classifier
+  // counts ANY successful capture path (webhook OR delta OR self-heal).
   await storage.updateMonitoredMailbox(monitoredMailbox.id, {
     lastSyncAt: new Date(),
+    ...(direction === "outbound" && created ? { lastOutboundCapturedAt: new Date() } : {}),
   });
 }
 
@@ -676,6 +683,15 @@ export async function processGraphNotifications(body: unknown): Promise<void> {
       if (monitoredMb) {
         orgId = monitoredMb.orgId;
         resolvedVia = "subscriptionId";
+        // Task #435: track SentItems webhook delivery so admins can see in
+        // the monitored-mailboxes screen whether the SentItems sub is
+        // actually firing for each rep — the most common silent failure
+        // mode for "rep replied but it didn't show up".
+        if (monitoredMb.sentItemsSubscriptionId === notification.subscriptionId) {
+          await storage.updateMonitoredMailbox(monitoredMb.id, {
+            lastSentItemsNotificationAt: new Date(),
+          }).catch(() => {});
+        }
       }
     }
 

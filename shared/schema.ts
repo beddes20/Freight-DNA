@@ -1836,6 +1836,11 @@ export const emailMessages = pgTable("email_messages", {
   linkedNbaId: varchar("linked_nba_id").references(() => nbaCards.id, { onDelete: "set null" }),
   linkedOutreachLogId: varchar("linked_outreach_log_id").references(() => carrierOutreachLogs.id, { onDelete: "set null" }),
   processedForSignalsAt: timestamp("processed_for_signals_at"),
+  // Task #435: provider-supplied send time (e.g. Graph sentDateTime).
+  // Used as the canonical timeline timestamp so messages recovered hours
+  // after the fact (via self-heal sweep) still display in the correct
+  // chronological position rather than at ingestion time.
+  providerSentAt: timestamp("provider_sent_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 export const insertEmailMessageSchema = createInsertSchema(emailMessages).omit({ id: true, createdAt: true });
@@ -2673,6 +2678,13 @@ export const monitoredMailboxes = pgTable(
     sentDeltaSyncToken: text("sent_delta_sync_token"),
     syncStatus: text("sync_status").notNull().default("pending"),
     syncError: text("sync_error"),
+    // Task #435: SentItems coverage health surfacing.
+    // lastSentItemsNotificationAt — last time the SentItems webhook actually
+    //   delivered a change notification we accepted for this mailbox.
+    // lastOutboundCapturedAt — last time we persisted an outbound message
+    //   from this mailbox via ANY path (webhook, delta, self-heal).
+    lastSentItemsNotificationAt: timestamp("last_sent_items_notification_at"),
+    lastOutboundCapturedAt: timestamp("last_outbound_captured_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -2689,6 +2701,50 @@ export const insertMonitoredMailboxSchema = createInsertSchema(monitoredMailboxe
 });
 export type InsertMonitoredMailbox = z.infer<typeof insertMonitoredMailboxSchema>;
 export type MonitoredMailbox = typeof monitoredMailboxes.$inferSelect;
+
+// ─── Conversation Thread Capture Audits (Task #435) ──────────────────────────
+// Records every reply-capture self-heal pass (scheduled or on-demand) for a
+// conversation thread, including the resolved root-cause label and the Graph
+// message IDs newly persisted. Surfaced to the rep / manager via the
+// "Reply capture audit" affordance on the thread side panel.
+export const conversationThreadCaptureAudits = pgTable(
+  "conversation_thread_capture_audits",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    // Outlook conversationId (matches email_messages.thread_id /
+    // email_conversation_threads.thread_id). Not FK'd because thread rows
+    // can be archived/deleted independently of audit history.
+    threadId: text("thread_id").notNull(),
+    // Owner mailbox at the time of the run (may be null if no monitored
+    // mailbox was resolvable — useful as evidence that owner has no mailbox
+    // enabled).
+    mailboxId: varchar("mailbox_id").references(() => monitoredMailboxes.id, { onDelete: "set null" }),
+    triggeredBy: text("triggered_by").notNull(), // 'scheduled' | 'manual' | 'webhook_repair'
+    triggeredByUserId: varchar("triggered_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    messagesFoundUpstream: integer("messages_found_upstream").notNull().default(0),
+    messagesPersisted: integer("messages_persisted").notNull().default(0),
+    // Resolved root-cause label for the previous gap (when something was
+    // recovered) OR the no-op reason. Examples:
+    //   nothing_missing | webhook_never_fired | webhook_dropped |
+    //   delta_stale | mailbox_disabled | mailbox_missing |
+    //   subscription_expired | sentitems_subscription_missing | error
+    rootCauseLabel: text("root_cause_label").notNull().default("nothing_missing"),
+    // Free-form details: { persistedProviderMessageIds, error, sub state snapshot, ... }
+    details: jsonb("details").default({}),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("conversation_thread_capture_audits_org_thread_idx").on(table.orgId, table.threadId, table.createdAt),
+  ],
+);
+
+export const insertConversationThreadCaptureAuditSchema = createInsertSchema(conversationThreadCaptureAudits).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertConversationThreadCaptureAudit = z.infer<typeof insertConversationThreadCaptureAuditSchema>;
+export type ConversationThreadCaptureAudit = typeof conversationThreadCaptureAudits.$inferSelect;
 
 export const webexUserMappings = pgTable(
   "webex_user_mappings",

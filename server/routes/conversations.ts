@@ -33,6 +33,13 @@ import {
   backfillMissingConversationThreads,
   materializeConversationThreadIfMissing,
 } from "../services/conversationThreadBackfillService";
+import {
+  selfHealConversationThread,
+  selfHealStuckThreads,
+  getThreadCaptureAuditHistory,
+  listThreadStoredProviderMessageIds,
+  getMailboxSentItemsHealth,
+} from "../services/conversationReplyCaptureService";
 
 export function registerConversationsRoutes(app: Express): void {
 
@@ -470,7 +477,10 @@ export function registerConversationsRoutes(app: Express): void {
             eq(emailMessages.orgId, user.organizationId),
           )
         )
-        .orderBy(asc(emailMessages.createdAt));
+        // Task #435: order by provider sent time so self-heal recoveries
+        // (which can land minutes/hours after the true send time) display
+        // in the correct chronological position.
+        .orderBy(asc(sql`COALESCE(${emailMessages.providerSentAt}, ${emailMessages.createdAt})`));
 
       res.json({ messages });
     } catch (err) {
@@ -638,6 +648,142 @@ export function registerConversationsRoutes(app: Express): void {
       } catch (err) {
         console.error("[conversations] POST /admin/conversations/backfill-missing-threads error:", err);
         res.status(500).json({ error: "Failed to run backfill" });
+      }
+    },
+  );
+
+  // ── Reply Capture Audit endpoints (Task #435) ────────────────────────────
+  // GET .../capture-audit — recent audit history + current SentItems health
+  // POST .../recheck       — on-demand self-heal pass for a single thread
+  // POST .../self-heal-sweep — admin-only org-wide sweep
+  // Helper: only the thread owner OR a manager (admin / director /
+  // sales_director / direct manager of the owner) may view or trigger
+  // capture audits — Task #435 access-control requirement.
+  const canManageThread = async (
+    requester: { id: string; role: string; organizationId: string },
+    thread: { ownerUserId: string | null; orgId: string },
+  ): Promise<boolean> => {
+    if (thread.orgId !== requester.organizationId) return false;
+    if (["admin", "director", "sales_director", "logistics_manager"].includes(requester.role)) return true;
+    if (thread.ownerUserId && thread.ownerUserId === requester.id) return true;
+    if (thread.ownerUserId) {
+      const owner = await storage.getUser(thread.ownerUserId);
+      if (owner && (owner as { managerId?: string | null }).managerId === requester.id) return true;
+    }
+    return false;
+  };
+
+  app.get(
+    "/api/internal/conversations/:id/capture-audit",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const threadIdParam = req.params.id;
+
+        // :id is an Outlook conversationId (used by other GET endpoints
+        // such as /messages). Verify the thread is org-scoped.
+        const thread = await storage.getEmailConversationThreadByThreadId(user.organizationId, threadIdParam);
+        if (!thread) return res.status(404).json({ error: "Thread not found" });
+        if (!(await canManageThread(user, thread))) {
+          return res.status(403).json({ error: "Only the thread owner or a manager can view the capture audit" });
+        }
+
+        const [history, storedMessageIds] = await Promise.all([
+          getThreadCaptureAuditHistory(user.organizationId, threadIdParam, 5),
+          listThreadStoredProviderMessageIds(user.organizationId, threadIdParam),
+        ]);
+
+        let mailboxHealth = null as ReturnType<typeof getMailboxSentItemsHealth> | null;
+        if (thread.ownerUserId) {
+          const ownerMailboxes = await db.select().from(monitoredMailboxes)
+            .where(and(
+              eq(monitoredMailboxes.orgId, user.organizationId),
+              eq(monitoredMailboxes.userId, thread.ownerUserId),
+            ));
+          if (ownerMailboxes[0]) mailboxHealth = getMailboxSentItemsHealth(ownerMailboxes[0]);
+        }
+
+        res.json({
+          ok: true,
+          threadId: threadIdParam,
+          ownerUserId: thread.ownerUserId,
+          waitingState: thread.waitingState,
+          mailboxHealth,
+          storedMessageCount: storedMessageIds.length,
+          // Surface as string[] of provider message IDs only — the UI
+          // shows them verbatim so reps can correlate against Outlook.
+          storedMessages: storedMessageIds.map(r => r.providerMessageId),
+          history,
+        });
+      } catch (err) {
+        console.error("[conversations] GET /capture-audit error:", err);
+        res.status(500).json({ error: "Failed to load capture audit" });
+      }
+    },
+  );
+
+  app.post(
+    "/api/internal/conversations/:id/recheck",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const threadIdParam = req.params.id;
+
+        const thread = await storage.getEmailConversationThreadByThreadId(user.organizationId, threadIdParam);
+        if (!thread) return res.status(404).json({ error: "Thread not found" });
+        if (!(await canManageThread(user, thread))) {
+          return res.status(403).json({ error: "Only the thread owner or a manager can trigger a recheck" });
+        }
+
+        const result = await selfHealConversationThread({
+          orgId: user.organizationId,
+          threadId: threadIdParam,
+          triggeredBy: "manual",
+          triggeredByUserId: user.id,
+        });
+
+        res.json({
+          ok: true,
+          recovered: result.audit.messagesPersisted,
+          rootCause: result.audit.rootCauseLabel,
+          messagesFoundUpstream: result.audit.messagesFoundUpstream,
+          mailboxHealth: result.mailboxHealth,
+          audit: result.audit,
+        });
+      } catch (err) {
+        console.error("[conversations] POST /recheck error:", err);
+        res.status(500).json({ error: err instanceof Error ? err.message : "Recheck failed" });
+      }
+    },
+  );
+
+  app.post(
+    "/api/internal/admin/conversations/self-heal-sweep",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        if (!["admin", "director", "sales_director"].includes(user.role)) {
+          return res.status(403).json({ error: "Admin access required" });
+        }
+        const scopeAllOrgs = req.body?.allOrgs === true && user.role === "admin";
+        const minStuckMs = typeof req.body?.minStuckMinutes === "number"
+          ? Math.max(0, req.body.minStuckMinutes) * 60 * 1000
+          : undefined;
+        const result = await selfHealStuckThreads({
+          orgId: scopeAllOrgs ? undefined : user.organizationId,
+          triggeredBy: "manual",
+          minStuckMs,
+        });
+        res.json({ ok: true, scope: scopeAllOrgs ? "all_orgs" : "current_org", ...result });
+      } catch (err) {
+        console.error("[conversations] POST /admin/self-heal-sweep error:", err);
+        res.status(500).json({ error: "Self-heal sweep failed" });
       }
     },
   );

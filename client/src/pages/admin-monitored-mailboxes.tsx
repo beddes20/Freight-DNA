@@ -12,7 +12,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { Loader2, Plus, Trash2, MailCheck, RefreshCw, AlertCircle, CheckCircle2, Clock, XCircle, Inbox } from "lucide-react";
+import { Loader2, Plus, Trash2, MailCheck, RefreshCw, AlertCircle, CheckCircle2, Clock, XCircle, Inbox, ShieldAlert, ShieldCheck, Wand2 } from "lucide-react";
+
+interface SentItemsHealthSnapshot {
+  sentItemsHealth: "active" | "expired" | "missing" | "stale" | "unknown";
+  reason: string;
+  lastSentItemsNotificationAt: string | null;
+  lastOutboundCapturedAt: string | null;
+}
 
 interface MonitoredMailbox {
   id: string;
@@ -28,6 +35,10 @@ interface MonitoredMailbox {
   createdAt: string;
   updatedAt: string;
   userName: string;
+  // Task #435 — SentItems coverage health classifier output, computed
+  // server-side. Surfaces silently-broken webhook delivery so admins
+  // can act before reps complain about missing replies.
+  sentItemsHealth?: SentItemsHealthSnapshot;
 }
 
 interface OrgUser {
@@ -35,6 +46,60 @@ interface OrgUser {
   name: string;
   role: string;
   username: string;
+}
+
+// ─── SentItems coverage health badge (Task #435) ────────────────────────────
+function SentItemsHealthBadge({ health, mailboxId }: { health: SentItemsHealthSnapshot; mailboxId: string }) {
+  const h = health.sentItemsHealth;
+  if (h === "active") {
+    return (
+      <Badge variant="outline" className="text-emerald-700 border-emerald-300 dark:text-emerald-300 dark:border-emerald-800" title={health.reason} data-testid={`badge-sentitems-${mailboxId}`}>
+        <ShieldCheck className="h-3 w-3 mr-1" />SentItems OK
+      </Badge>
+    );
+  }
+  const variants: Record<string, string> = {
+    expired: "bg-red-50 text-red-700 border-red-300 dark:bg-red-950/40 dark:text-red-300",
+    missing: "bg-red-50 text-red-700 border-red-300 dark:bg-red-950/40 dark:text-red-300",
+    stale: "bg-amber-50 text-amber-700 border-amber-300 dark:bg-amber-950/40 dark:text-amber-300",
+    unknown: "bg-muted text-muted-foreground",
+  };
+  return (
+    <Badge variant="outline" className={variants[h] ?? variants.unknown} title={health.reason} data-testid={`badge-sentitems-${mailboxId}`}>
+      <ShieldAlert className="h-3 w-3 mr-1" />SentItems {h}
+    </Badge>
+  );
+}
+
+// ─── Org-wide self-heal sweep trigger (Task #435) ───────────────────────────
+function SelfHealSweepButton() {
+  const { toast } = useToast();
+  const sweep = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/internal/admin/conversations/self-heal-sweep", { minStuckMinutes: 0 });
+      return res.json() as Promise<{ scanned: number; threadsRecovered: number; healed: number; errors: number }>;
+    },
+    onSuccess: (r) => {
+      toast({
+        title: "Reply capture sweep complete",
+        description: `Scanned ${r.scanned}, recovered messages on ${r.threadsRecovered} thread(s), errors: ${r.errors}`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/admin/monitored-mailboxes"] });
+    },
+    onError: () => toast({ title: "Sweep failed", variant: "destructive" }),
+  });
+  return (
+    <Button
+      variant="outline"
+      onClick={() => sweep.mutate()}
+      disabled={sweep.isPending}
+      data-testid="button-self-heal-sweep"
+      title="Pull missing rep replies from Outlook SentItems for every stuck thread"
+    >
+      {sweep.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Wand2 className="h-4 w-4 mr-2" />}
+      Run reply sweep
+    </Button>
+  );
 }
 
 function SyncStatusBadge({ status, error }: { status: string; error: string | null }) {
@@ -161,7 +226,9 @@ export default function AdminMonitoredMailboxesPage() {
           </p>
         </div>
 
-        <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+        <div className="flex items-center gap-2">
+          <SelfHealSweepButton />
+          <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
           <DialogTrigger asChild>
             <Button data-testid="button-add-mailbox">
               <Plus className="h-4 w-4 mr-2" />
@@ -224,7 +291,8 @@ export default function AdminMonitoredMailboxesPage() {
               </Button>
             </DialogFooter>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
 
       {mailboxesQuery.isLoading ? (
@@ -255,7 +323,13 @@ export default function AdminMonitoredMailboxesPage() {
                         </p>
                       </div>
                       <SyncStatusBadge status={mb.syncStatus} error={mb.syncError} />
+                      {mb.sentItemsHealth && <SentItemsHealthBadge health={mb.sentItemsHealth} mailboxId={mb.id} />}
                     </div>
+                    {mb.sentItemsHealth && mb.sentItemsHealth.sentItemsHealth !== "active" && (
+                      <p className="text-xs text-amber-600 mt-1" data-testid={`text-sentitems-reason-${mb.id}`}>
+                        SentItems: {mb.sentItemsHealth.reason}
+                      </p>
+                    )}
                     {mb.lastSyncAt && (
                       <p className="text-xs text-muted-foreground mt-1" data-testid={`text-mailbox-last-sync-${mb.id}`}>
                         Last synced: {new Date(mb.lastSyncAt).toLocaleString()}

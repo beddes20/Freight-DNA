@@ -3808,4 +3808,43 @@ export async function runMigrations() {
   } finally {
     client425.release();
   }
+
+  // ── Task #435: Self-heal missing rep replies in Conversations ─────────────
+  // 1. Add SentItems coverage timestamps onto monitored_mailboxes so we can
+  //    flag stale / missing webhook delivery.
+  // 2. Create conversation_thread_capture_audits table for per-thread
+  //    self-heal history surfaced to reps and managers.
+  const client435 = await pool.connect();
+  try {
+    await client435.query(`ALTER TABLE monitored_mailboxes ADD COLUMN IF NOT EXISTS last_sent_items_notification_at TIMESTAMP`);
+    await client435.query(`ALTER TABLE monitored_mailboxes ADD COLUMN IF NOT EXISTS last_outbound_captured_at TIMESTAMP`);
+    await client435.query(`
+      CREATE TABLE IF NOT EXISTS conversation_thread_capture_audits (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        thread_id TEXT NOT NULL,
+        mailbox_id VARCHAR REFERENCES monitored_mailboxes(id) ON DELETE SET NULL,
+        triggered_by TEXT NOT NULL,
+        triggered_by_user_id VARCHAR REFERENCES users(id) ON DELETE SET NULL,
+        messages_found_upstream INTEGER NOT NULL DEFAULT 0,
+        messages_persisted INTEGER NOT NULL DEFAULT 0,
+        root_cause_label TEXT NOT NULL DEFAULT 'nothing_missing',
+        details JSONB DEFAULT '{}',
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client435.query(`
+      CREATE INDEX IF NOT EXISTS conversation_thread_capture_audits_org_thread_idx
+        ON conversation_thread_capture_audits (org_id, thread_id, created_at DESC)
+    `);
+    await client435.query(`ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS provider_sent_at TIMESTAMP`);
+    // Backfill existing rows so the timeline doesn't suddenly become null:
+    // for already-ingested messages we treat created_at as the send time.
+    await client435.query(`UPDATE email_messages SET provider_sent_at = created_at WHERE provider_sent_at IS NULL`);
+    console.log("[migrations] Task #435 reply-capture audit + SentItems health columns + provider_sent_at ensured");
+  } catch (err) {
+    console.error("[migrations] Task #435 migration error:", err);
+  } finally {
+    client435.release();
+  }
 }

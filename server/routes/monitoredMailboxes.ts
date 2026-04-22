@@ -44,9 +44,13 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
         if (u) userMap.set(id, u.name);
       }));
 
+      // Task #435: include SentItems coverage health so admins can spot
+      // mailboxes whose webhook silently stopped delivering rep replies.
+      const { getMailboxSentItemsHealth } = await import("../services/conversationReplyCaptureService");
       const enriched = mailboxes.map(m => ({
         ...m,
         userName: userMap.get(m.userId) ?? "Unknown",
+        sentItemsHealth: getMailboxSentItemsHealth(m),
       }));
 
       res.json({ mailboxes: enriched });
