@@ -6320,6 +6320,12 @@ Respond with valid JSON only:
       if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
         return res.status(403).json({ error: "Access denied" });
       }
+      // Cross-tenant guard on optional companyId — if a passoff item references
+      // a company, that company must belong to the caller's org.
+      if (req.body.companyId) {
+        const owning = await storage.getCompanyInOrg(req.body.companyId, currentUser.organizationId);
+        if (!owning) return res.status(404).json({ error: "Company not found" });
+      }
       const item = await storage.createPtoPassoffItem({
         passoffId: (req.params.id as string),
         companyId: req.body.companyId || null,
@@ -6347,6 +6353,13 @@ Respond with valid JSON only:
       const isOwner = passoff.createdById === currentUser.id;
       const isAdmin = currentUser.role === "admin";
       if (!isOwner && !isCovering && !isAdmin) return res.status(403).json({ error: "Access denied" });
+      // Cross-record guard: itemId must actually belong to this passoff —
+      // otherwise a user authorized on passoff A could mutate items owned
+      // by passoff B (different rep, possibly different org) by guessing
+      // an itemId.
+      const items = await storage.getPtoPassoffItems(req.params.id as string);
+      const targetItem = items.find(i => i.id === (req.params.itemId as string));
+      if (!targetItem) return res.status(404).json({ error: "Item not found" });
       // Covering user can update acknowledged + coveringNotes; owner/admin can update all
       const allowedFields = isOwner || isAdmin
         ? req.body
@@ -6388,6 +6401,12 @@ Respond with valid JSON only:
       if (!passoff) return res.status(404).json({ error: "Not found" });
       if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
         return res.status(403).json({ error: "Access denied" });
+      }
+      // Cross-record guard: itemId must belong to this passoff. Same
+      // rationale as the PATCH handler above.
+      const items = await storage.getPtoPassoffItems(req.params.id as string);
+      if (!items.some(i => i.id === (req.params.itemId as string))) {
+        return res.status(404).json({ error: "Item not found" });
       }
       await storage.deletePtoPassoffItem((req.params.itemId as string));
       res.json({ success: true });
@@ -6811,14 +6830,24 @@ Respond with valid JSON only:
       const notes: string | null = req.body.notes || null;
       const contactId = req.body.contactId || null;
       const contact = contactId ? await storage.getContact(contactId) : null;
-      const tp = await storage.createTouchpoint({
+      // Cross-tenant guard: a contactId provided in the body MUST belong to
+      // the same company we just verified the user can access. Without this
+      // a user could attach this touchpoint (and trigger downstream growth
+      // recompute / NBA cache invalidation) to a contact from another org.
+      if (contactId) {
+        if (!contact) return res.status(404).json({ error: "Contact not found" });
+        if (contact.companyId !== (req.params.id as string)) {
+          return res.status(400).json({ error: "Contact does not belong to this company" });
+        }
+      }
+      const tp = await storage.createTouchpointWithDefaults({
         contactId,
-        companyId: (req.params.id as string),
+        companyId: req.params.id as string,
         type: req.body.type || "call",
-        date: req.body.date || now.toISOString().split("T")[0],
+        date: req.body.date || undefined,
         notes,
         sentiment: req.body.sentiment || null,
-        isMeaningful: req.body.isMeaningful === true || req.body.isMeaningful === "true" ? true : false,
+        isMeaningful: req.body.isMeaningful === true || req.body.isMeaningful === "true",
         loggedById: user.id,
         // Carry through playLabel for outcome classifier parity with /touch-logs.
         playLabel: typeof req.body.playLabel === "string" ? req.body.playLabel || null : null,
@@ -6865,14 +6894,25 @@ Respond with valid JSON only:
       const now = new Date();
       const cleanNotes: string | null = typeof notes === "string" ? notes.slice(0, 2000) || null : null;
       const contact = contactId ? await storage.getContact(contactId) : null;
-      const tp = await storage.createTouchpoint({
+      // Cross-tenant guard: contactId, if supplied, MUST belong to the same
+      // company we just verified the user can access. Without this, a user
+      // could attach this touchpoint (and trigger downstream growth-score
+      // recompute, AI follow-up task creation, NBA invalidation) to a contact
+      // owned by another company / org. Same class of fix as the
+      // /api/companies/:id/touchpoints route.
+      if (contactId) {
+        if (!contact) return res.status(404).json({ error: "Contact not found" });
+        if (contact.companyId !== companyId) {
+          return res.status(400).json({ error: "Contact does not belong to this company" });
+        }
+      }
+      const tp = await storage.createTouchpointWithDefaults({
         contactId: contactId || null,
         companyId,
         type: type || "call",
-        date: now.toISOString().split("T")[0],
         notes: cleanNotes,
         sentiment: sentiment || null,
-        isMeaningful: isMeaningful === true || isMeaningful === "true" ? true : false,
+        isMeaningful: isMeaningful === true || isMeaningful === "true",
         loggedById: user.id,
         playLabel: typeof playLabel === "string" ? playLabel || null : null,
         createdAt: now.toISOString(),
@@ -9341,6 +9381,20 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const orgId = req.session.organizationId!;
+      // Cross-tenant guard on optional companyId / contactId. The commitment
+      // record is rep-owned, but it carries references to a company/contact
+      // and surfaces them in dashboards — those references must belong to
+      // the same org.
+      if (req.body.companyId) {
+        const owningCompany = await storage.getCompanyInOrg(req.body.companyId, orgId);
+        if (!owningCompany) return res.status(404).json({ error: "Company not found" });
+      }
+      if (req.body.contactId) {
+        const owningContact = await storage.getContact(req.body.contactId);
+        if (!owningContact) return res.status(404).json({ error: "Contact not found" });
+        const owningCompany = await storage.getCompanyInOrg(owningContact.companyId, orgId);
+        if (!owningCompany) return res.status(404).json({ error: "Contact not found" });
+      }
       const thisWeek = getWeekStart();
       const dueDate = getWeekEnd(thisWeek);
       const payload = {

@@ -2434,6 +2434,45 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  /**
+   * Canonical helper for creating a touchpoint from a route handler.
+   * Fills in safe defaults (sentiment=null, isMeaningful=false,
+   * playLabel=null, createdAt=now, date=today) so callers can't drift the
+   * shape (e.g. omitting `date` causes a NOT NULL crash, omitting
+   * `playLabel` breaks AI play attribution).
+   *
+   * Callers MUST still validate org ownership of companyId/contactId BEFORE
+   * calling this — this helper is shape-only, not authorization.
+   */
+  async createTouchpointWithDefaults(
+    input: {
+      companyId: string;
+      loggedById: string;
+      contactId?: string | null;
+      type?: string;
+      notes?: string | null;
+      sentiment?: string | null;
+      isMeaningful?: boolean;
+      playLabel?: string | null;
+      date?: string;
+      createdAt?: string;
+    },
+  ): Promise<Touchpoint> {
+    const now = new Date();
+    return this.createTouchpoint({
+      contactId: input.contactId ?? null,
+      companyId: input.companyId,
+      type: input.type ?? "call",
+      date: input.date ?? now.toISOString().split("T")[0],
+      notes: input.notes ?? null,
+      sentiment: input.sentiment ?? null,
+      isMeaningful: input.isMeaningful ?? false,
+      loggedById: input.loggedById,
+      playLabel: input.playLabel ?? null,
+      createdAt: input.createdAt ?? now.toISOString(),
+    });
+  }
+
   async updateTouchpoint(id: string, data: { isMeaningful?: boolean; notes?: string }): Promise<Touchpoint> {
     const [updated] = await db.update(touchpoints).set(data).where(eq(touchpoints.id, id)).returning();
     return updated;
