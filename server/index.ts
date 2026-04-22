@@ -1,5 +1,6 @@
 import express, { type Request, Response, NextFunction } from "express";
 import compression from "compression";
+import { execSync } from "child_process";
 import { registerRoutes } from "./routes";
 import { setupAuth } from "./auth";
 import { serveStatic } from "./static";
@@ -44,6 +45,62 @@ const httpServer = createServer(app);
 
 const MIRROR_PORT = 23636;
 const IS_DEV = process.env.NODE_ENV !== "production";
+
+/**
+ * Pre-flight: kill any stale process holding the port we want to bind.
+ * Workflow restarts occasionally leave the prior `tsx server/index.ts` process
+ * holding port 5000, which causes the new process to fail with EADDRINUSE
+ * (reusePort doesn't help when the original holder didn't set it). Dev-only.
+ */
+function killStalePortHolders(port: number): void {
+  if (!IS_DEV) return;
+  try {
+    const out = execSync(`lsof -ti :${port} 2>/dev/null || true`, { encoding: "utf8" });
+    const pids = out
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .filter((pid) => Number(pid) !== process.pid);
+    for (const pid of pids) {
+      // Only target our own dev server processes — never kill an unrelated
+      // tool that happens to be bound to the same port (postgres, debugger…).
+      let cmdline = "";
+      try {
+        cmdline = execSync(`ps -p ${pid} -o args= 2>/dev/null || true`, { encoding: "utf8" }).trim();
+      } catch {
+        /* ps may fail under odd permissions */
+      }
+      const looksLikeOurServer =
+        cmdline.includes("server/index.ts") ||
+        cmdline.includes("tsx ") ||
+        cmdline.includes("node");
+      if (!looksLikeOurServer) {
+        console.warn(`[startup] port ${port} held by foreign pid=${pid} (${cmdline}) — refusing to kill`);
+        continue;
+      }
+      try {
+        // Polite shutdown first, then SIGKILL only if it didn't release the port.
+        execSync(`kill -15 ${pid} 2>/dev/null || true`);
+        execSync("sleep 0.3");
+        const stillThere = execSync(`kill -0 ${pid} 2>/dev/null && echo y || echo n`, { encoding: "utf8" }).trim();
+        if (stillThere === "y") {
+          execSync(`kill -9 ${pid}`);
+        }
+        console.log(`[startup] cleared stale port ${port} holder pid=${pid}`);
+      } catch {
+        /* may have exited already */
+      }
+    }
+    if (pids.length > 0) {
+      // Brief wait so the OS releases the port before we try to bind.
+      execSync("sleep 0.3");
+    }
+  } catch {
+    // lsof not available — best-effort only.
+  }
+}
+
+killStalePortHolders(parseInt(process.env.PORT || "5000", 10));
 let earlyClaimBound = false;
 let earlyClaimServer: ReturnType<typeof createServer> | null = null;
 if (IS_DEV) {

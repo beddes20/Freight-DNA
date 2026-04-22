@@ -146,6 +146,11 @@ interface WorkQueue {
   inProgress: LaneItem[];
   scopeLabel?: string;
   customers?: string[];  // distinct customer names from all visible lanes (for filter dropdown)
+  meta?: {
+    // "cache" = served from lane_summary_cache (fast).
+    // "full"  = cold-start fallback to live aggregation (slow). Show banner.
+    source: "cache" | "full";
+  };
   pagination?: {
     limit: number;
     nextCursors: {
@@ -1957,6 +1962,19 @@ export default function LaneWorkQueuePage() {
               >
                 <Eye className="w-3 h-3" />
                 Showing: {queue.scopeLabel}
+              </span>
+            )}
+            {/* Cold-start banner — lane_summary_cache hasn't warmed yet,
+                so this request fell back to the slower live aggregation path.
+                The cache fills automatically ~20s after server boot. */}
+            {queue?.meta?.source === "full" && (
+              <span
+                className="inline-flex items-center gap-1.5 mt-1 ml-2 text-[11px] text-amber-400 border border-amber-500/40 rounded-full px-2 py-0.5 bg-amber-500/10"
+                data-testid="banner-cache-warming"
+                title="Lane cache is still warming after restart. The next refresh will be much faster."
+              >
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Warming up — next load will be faster
               </span>
             )}
           </div>

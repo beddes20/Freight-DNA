@@ -863,6 +863,13 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         inProgress: ipPaged.items,
         scopeLabel,
         customers,
+        meta: {
+          // "cache" = served from lane_summary_cache (fast path)
+          // "full"  = cold-start fallback to live aggregation; client should
+          //           show a "warming up" banner so reps know the next load
+          //           will be faster.
+          source,
+        },
         pagination: {
           limit,
           nextCursors: {

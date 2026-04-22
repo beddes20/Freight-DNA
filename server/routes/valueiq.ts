@@ -469,6 +469,14 @@ export function registerValueIQRoutes(app: Express) {
       });
       return res.json({ id });
     }
+    // Cross-tenant guard: if a companyId is supplied, it MUST belong to the
+    // caller's organization. Without this check a user could attach a saved
+    // task or touchpoint to another org's company by guessing its id (IDOR).
+    if (body.companyId) {
+      const owningCompany = await storage.getCompanyInOrg(body.companyId, user.organizationId);
+      if (!owningCompany) return res.status(404).json({ error: "Company not found" });
+    }
+
     if (body.target === "task") {
       const taskInput: InsertTask = {
         organizationId: user.organizationId,
@@ -483,12 +491,18 @@ export function registerValueIQRoutes(app: Express) {
       return res.json({ id: t.id });
     }
     if (body.target === "touchpoint" && body.companyId) {
+      const now = new Date();
       const tpInput: InsertTouchpoint = {
-        organizationId: user.organizationId,
+        contactId: null,
         companyId: body.companyId,
-        userId: user.id,
         type: "note",
+        date: now.toISOString().split("T")[0],
         notes: msg.content.slice(0, 4000),
+        sentiment: null,
+        isMeaningful: false,
+        loggedById: user.id,
+        playLabel: null,
+        createdAt: now.toISOString(),
       };
       const t = await storage.createTouchpoint(tpInput);
       return res.json({ id: t.id });
