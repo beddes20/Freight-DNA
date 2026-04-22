@@ -74,6 +74,31 @@ export function canReassignAccounts(u: RoleBearer | null | undefined): boolean {
   return isManagerial(u) || u?.role === "sales";
 }
 
+/** Can edit OTHER users' profiles (not their own — anyone can edit themselves).
+ *  Used by PATCH /api/users/:id when the target is not the current user.
+ *  Admin/director get unrestricted edit; the seller-side roles (NAM, sales,
+ *  sales_director) are gated to their own team in a follow-up check at the
+ *  call site. */
+export function canEditOtherUsers(u: RoleBearer | null | undefined): boolean {
+  if (!u?.role) return false;
+  return (
+    u.role === "admin" ||
+    u.role === "director" ||
+    u.role === "national_account_manager" ||
+    u.role === "sales" ||
+    u.role === "sales_director"
+  );
+}
+
+/** Admin OR director, but specifically NOT sales_director. Used by the
+ *  internal_post attachment gate where sales_director is intentionally
+ *  excluded from the company-wide announcement surface. The exclusion is
+ *  deliberate — do not "fix" by widening to isLeadership. */
+export function isAdminOrDirector(u: RoleBearer | null | undefined): boolean {
+  if (!u?.role) return false;
+  return u.role === "admin" || u.role === "director";
+}
+
 /** Allowed to access AI Center admin surfaces (personas, plays, fleet). */
 export function canAccessAiCenter(u: RoleBearer | null | undefined): boolean {
   if (!u?.role) return false;

@@ -43,7 +43,7 @@ import XLSX from "xlsx";
 import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
-import { isAdmin, isLeadership } from "./lib/roles";
+import { isAdmin, isLeadership, canEditOtherUsers, isAdminOrDirector } from "./lib/roles";
 import { projectNbaCard, collectProjectionIds } from "./lib/nbaCardProjection";
 import { geocodeCity, haversineDistance } from "./geocoding";
 import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable, emailMessages, emailSignals, onboardingMilestoneToggleSchema, type OnboardingMilestones, upsertSidebarTooltipSchema, type Contact, type RecurringLane } from "@shared/schema";
@@ -1003,10 +1003,9 @@ RULES FOR YOUR RESPONSES:
       // Any authenticated user can update their own profile (name, email signature, etc.)
       // Editing another user requires manager-level access
       if (!isSelf) {
-        const canEditOthers = currentUser.role === "admin" || currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales" || currentUser.role === "sales_director";
-        if (!canEditOthers) return res.status(403).json({ error: "Cannot edit other users" });
+        if (!canEditOtherUsers(currentUser)) return res.status(403).json({ error: "Cannot edit other users" });
         // Managers can only edit their own team members (not arbitrary users)
-        if (currentUser.role !== "admin") {
+        if (!isAdmin(currentUser)) {
           const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
           if (!teamIds.includes((req.params.id as string))) {
             return res.status(403).json({ error: "Cannot edit this user" });
@@ -6087,7 +6086,7 @@ Respond with valid JSON only:
         return canAccessCompany(user as any, entityId);
       }
       if (entityType === "internal_post") {
-        return user.role === "admin" || user.role === "director";
+        return isAdminOrDirector(user);
       }
       return false;
     } catch {
