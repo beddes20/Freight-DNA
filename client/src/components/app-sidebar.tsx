@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, BrainCircuit, Lightbulb, Brain, MailCheck, ChevronDown, Sparkles, Activity, Compass, type LucideIcon } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, BrainCircuit, Lightbulb, Brain, MailCheck, ChevronDown, Sparkles, Activity, Compass, GitMerge, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -525,6 +525,16 @@ export function AppSidebar() {
                       <Link href="/admin/available-freight/imports" data-testid="link-admin-freight-imports">
                         <Truck className="h-4 w-4" />
                         <span>Freight Import Health</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {(user?.role === "admin" || user?.role === "director") && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location.startsWith("/admin/carrier-intelligence")} tooltip={navTooltip("Carrier Intelligence Admin", "Backfill load_fact, parity reports, and import audits.")}>
+                      <Link href="/admin/carrier-intelligence" data-testid="link-admin-carrier-intelligence">
+                        <GitMerge className="h-4 w-4" />
+                        <span>Carrier Intel Admin</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
