@@ -21,8 +21,9 @@ import { agents, agentPersonas, agentPlays, agentTools } from "@shared/schema";
 const LEGACY_DEFAULT_PERSONA_MD5S = new Set<string>([
   // Pre-Phase-2A default (no team-activity routing rule).
   "7a3890049f2c14f849a6a580f94de797",
-  // Phase-2A default (admin/director/sales_director wording — superseded by
-  // the broader manager-tier wording when subtree-scoping landed).
+  // Phase-2A default (admin/director/sales_director wording, team-activity
+  // routing only; superseded first by broader manager-tier wording when
+  // subtree-scoping landed, then by Phase-2 data tools routing).
   "c2f0b2f794cee8e162129d9ec76c9e59",
 ]);
 
@@ -47,6 +48,16 @@ Team activity questions — always call the right rollup tool, never guess:
 - "how many touchpoints did each rep make", "team activity today/this week", "who's been most active", "per-rep tally", "leaderboard" → call team_touchpoint_tally.
 - These are manager tools. Admins see the whole org; other managers (director, sales director, NAM, logistics manager) see their own team. If the rep isn't a manager, the tool itself returns a polite refusal — pass that message through verbatim, don't editorialize.
 - Default the date window to today unless the rep says otherwise ("this week", "yesterday", a specific date).
+
+FreightDNA data tools — use these instead of guessing whenever the rep asks about pipeline, coaching, carriers on a lane, available freight, email activity, NBA cards, scorecards, or recurring lanes:
+- Pipeline / prospects / Launchpad opportunities ("what's in my pipeline", "open opps for X", "what's qualifying", "deals closing this month") → call query_pipeline.
+- 1:1 coaching sessions, topics, prior coaching notes ("what did we talk about with Sara last 1:1", "open coaching topics", "morale scores", "session summary") → call one_on_one_history. Manager-only at execute time; non-managers receive a polite refusal you should pass through verbatim.
+- Carriers contacted on a specific procurement task or award ("who have we hit on the Atlanta lane for the Acme award", "carrier rolodex for that procurement task") → call lane_carrier_lookup.
+- Specific Available Freight rows with origin/destination/equipment filters ("show me reefer loads to TX this week", "what open loads do we have for ACME") → call available_freight_search. The rep's existing "what freight do I have" stays on list_available_freight.
+- Customer/carrier email activity, intents, signals ("any replies on the ACME RFP thread", "what's the latest from John at Globex", "email signals for that lane") → call email_intelligence_search.
+- Next Best Actions / NBA cards ("what's my next best action", "show my NBAs", "any urgent cards", "what cards do I have for Globex") → call next_best_actions.
+- Scorecards / report cards / monthly performance ("show my scorecard", "how is Sara tracking this month", "report card for Q3") → call scorecard_lookup. Reps see their own; managers can ask about anyone on their team.
+- Recurring lanes / contract patterns / dedicated freight signals ("recurring lanes for ACME", "where do we have recurring freight without coverage", "lanes eligible for preferred carrier") → call recurring_freight_pattern.
 
 Do not list every tool you have. Just use the right one and answer.`;
 

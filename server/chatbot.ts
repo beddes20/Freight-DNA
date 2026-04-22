@@ -11,6 +11,9 @@ import { eq, and, desc, gte, inArray, sql } from "drizzle-orm";
 import {
   companies, contacts, touchpoints, rfps, goals, tasks, users,
   chatConversations, chatMessages, appSuggestions, notifications,
+  prospects, crmOpportunities, oneOnOneSessions, oneOnOneTopics,
+  laneCarriers, freightOpportunities, emailMessages, emailSignals,
+  nbaCards, recurringLanes, reportCardSnapshots,
 } from "@shared/schema";
 import { storage } from "./storage";
 import { resolveColumns } from "./colResolver";
@@ -252,6 +255,161 @@ export async function runCarrierLaneSearch(
   }
 }
 
+// ─── Phase 2 — Data & Tools Expansion (Task #422) ────────────────────────────
+// Adds envelope sections for pipeline (prospects + opps), 1:1 coaching,
+// lane carriers (procurement rolodex), available freight, email signals,
+// NBA cards, scorecards, recurring freight lanes, and account lifecycle.
+// Pulled in for BOTH "my team" and "everyone" scopes; the team variant
+// scopes by visible companies/users while everyone scopes by organization.
+async function buildPhase2Sections(
+  orgId: string,
+  opts: { scope: "team" | "everyone"; companyIds: string[]; userIds: string[]; selfUserId: string },
+): Promise<string> {
+  const { scope, companyIds, userIds, selfUserId } = opts;
+  const safeIds = userIds.length ? userIds : [selfUserId];
+  let out = "";
+
+  try {
+    // — Pipeline (prospects + opportunities) —
+    const orgProspects = await db.select().from(prospects)
+      .where(scope === "everyone"
+        ? eq(prospects.organizationId, orgId)
+        : and(eq(prospects.organizationId, orgId), inArray(prospects.ownerId, safeIds)))
+      .orderBy(desc(prospects.updatedAt))
+      .limit(50);
+    out += `\n=== PIPELINE — Prospects (${orgProspects.length}) ===\n`;
+    orgProspects.slice(0, 25).forEach(p => {
+      out += `- ${p.name} | stage ${p.stage} | status ${p.accountStatus ?? "?"}${p.followUpDate ? ` | follow-up ${p.followUpDate}` : ""}\n`;
+    });
+    if (orgProspects.length > 25) out += `  ...and ${orgProspects.length - 25} more prospects\n`;
+
+    const prospectIds = orgProspects.map(p => p.id);
+    if (prospectIds.length) {
+      const opps = await db.select().from(crmOpportunities)
+        .where(and(eq(crmOpportunities.organizationId, orgId), inArray(crmOpportunities.prospectId, prospectIds)))
+        .limit(80);
+      out += `\n=== PIPELINE — Opportunities (${opps.length}) ===\n`;
+      opps.slice(0, 30).forEach(o => {
+        const p = orgProspects.find(pp => pp.id === o.prospectId);
+        out += `- ${o.name} @ ${p?.name ?? "?"} | ${o.stage}${o.amount ? ` | $${Number(o.amount).toLocaleString()}` : ""}${o.outcome ? ` | ${o.outcome}` : ""}\n`;
+      });
+      if (opps.length > 30) out += `  ...and ${opps.length - 30} more opportunities\n`;
+    }
+
+    // — Account lifecycle stage rollup —
+    if (orgProspects.length) {
+      const byStage = new Map<string, number>();
+      orgProspects.forEach(p => byStage.set(p.stage, (byStage.get(p.stage) ?? 0) + 1));
+      out += `\n=== LIFECYCLE STAGE ROLLUP ===\n`;
+      Array.from(byStage.entries()).forEach(([s, n]) => { out += `- ${s}: ${n}\n`; });
+    }
+
+    // — 1:1 coaching sessions (manager visibility within scope) —
+    // Use storage helper which scopes by org + subordinate set safely.
+    const sessionRows = await storage.getSessionsForSubordinates(safeIds, orgId).catch(() => []);
+    const activeSessions = sessionRows.filter(s => s.session.status === "active");
+    if (activeSessions.length) {
+      out += `\n=== 1:1 ACTIVE SESSIONS (${activeSessions.length}) ===\n`;
+      activeSessions.slice(0, 8).forEach(r => {
+        const morale = r.session.moraleScore != null ? ` | morale ${r.session.moraleScore}/10` : "";
+        out += `- ${r.amUser.name} ↔ ${r.namUser.name}${morale} | ${r.topics.length} topics${r.session.meetingDate ? ` | next ${r.session.meetingDate}` : ""}\n`;
+      });
+    }
+
+    // — Lane carriers / procurement rolodex —
+    const lcCount = await db.select({ n: sql<number>`count(*)::int` }).from(laneCarriers)
+      .innerJoin(tasks, eq(tasks.id, laneCarriers.taskId))
+      .where(eq(tasks.orgId, orgId));
+    const lcN = lcCount[0]?.n ?? 0;
+    if (lcN > 0) {
+      out += `\n=== LANE CARRIERS — Procurement Rolodex ===\n- ${lcN} carrier rows logged across procurement tasks (use lane_carrier_lookup tool for detail)\n`;
+    }
+
+    // — Available freight (today + forward) —
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const freight = await db.select().from(freightOpportunities)
+      .where(and(eq(freightOpportunities.orgId, orgId), sql`(${freightOpportunities.pickupWindowEnd} IS NULL OR ${freightOpportunities.pickupWindowEnd} >= ${todayIso})`))
+      .orderBy(desc(freightOpportunities.urgencyScore))
+      .limit(30);
+    if (freight.length) {
+      out += `\n=== AVAILABLE FREIGHT (${freight.length}) ===\n`;
+      freight.slice(0, 15).forEach(f => {
+        out += `- ${f.origin}${f.originState ? `,${f.originState}` : ""} → ${f.destination}${f.destinationState ? `,${f.destinationState}` : ""} (${f.equipmentType ?? "?"}, ${f.loadCount}L, urgency ${f.urgencyScore})\n`;
+      });
+      if (freight.length > 15) out += `  ...and ${freight.length - 15} more loads\n`;
+    }
+
+    // — Email signals (last 14 days) —
+    const since14 = new Date(Date.now() - 14 * 86400000);
+    const sigs = await db.select({
+      intent: emailSignals.intentType,
+      sub: emailSignals.intentSubtype,
+      conf: emailSignals.confidence,
+      created: emailSignals.createdAt,
+      subject: emailMessages.subject,
+    }).from(emailSignals)
+      .innerJoin(emailMessages, eq(emailMessages.id, emailSignals.messageId))
+      .where(and(eq(emailMessages.orgId, orgId), gte(emailSignals.createdAt, since14)))
+      .orderBy(desc(emailSignals.createdAt))
+      .limit(30);
+    if (sigs.length) {
+      out += `\n=== EMAIL SIGNALS — last 14d (${sigs.length}) ===\n`;
+      sigs.slice(0, 15).forEach(s => {
+        const date = s.created instanceof Date ? s.created.toISOString().slice(0, 10) : String(s.created).slice(0, 10);
+        out += `- [${date}] ${s.intent}${s.sub ? `/${s.sub}` : ""} (conf ${s.conf}) — "${(s.subject ?? "").slice(0, 60)}"\n`;
+      });
+    }
+
+    // — NBA cards (top urgency) —
+    const cards = await db.select().from(nbaCards)
+      .where(scope === "everyone"
+        ? eq(nbaCards.orgId, orgId)
+        : and(eq(nbaCards.orgId, orgId), inArray(nbaCards.userId, safeIds)))
+      .orderBy(desc(nbaCards.urgencyScore))
+      .limit(20);
+    if (cards.length) {
+      out += `\n=== NBA CARDS — Top ${Math.min(cards.length, 12)} ===\n`;
+      cards.slice(0, 12).forEach(c => {
+        out += `- [${c.urgencyScore} ${c.ruleType}] ${c.companyName ?? "—"} → ${c.suggestedAction.slice(0, 100)}\n`;
+      });
+    }
+
+    // — Recurring freight lanes —
+    const rec = await storage.getRecurringLanes(orgId).catch(() => []);
+    if (rec.length) {
+      const filtered = scope === "everyone" ? rec : rec.filter(l => companyIds.length === 0 || (l.companyId != null && companyIds.includes(l.companyId)));
+      out += `\n=== RECURRING FREIGHT LANES (${filtered.length}) ===\n`;
+      filtered.slice(0, 12).forEach(l => {
+        const cadence = l.avgLoadsPerWeek ? `${Number(l.avgLoadsPerWeek).toFixed(1)}/wk` : "?";
+        const cov = l.hasPreferredCarrierProgram ? "covered" : "no preferred carrier";
+        out += `- ${l.companyName ?? "?"} ${l.origin} → ${l.destination} (${l.equipmentType ?? "?"}) | ${cadence} | score ${l.laneScore ?? "?"} | ${cov}\n`;
+      });
+    }
+
+    // — Scorecards (latest snapshot per teammate) —
+    if (safeIds.length) {
+      const snaps = await db.select().from(reportCardSnapshots)
+        .where(inArray(reportCardSnapshots.userId, safeIds))
+        .orderBy(desc(reportCardSnapshots.snapshotDate))
+        .limit(30);
+      if (snaps.length) {
+        const latest = new Map<string, typeof snaps[number]>();
+        for (const s of snaps) if (!latest.has(s.userId)) latest.set(s.userId, s);
+        out += `\n=== SCORECARDS — latest per rep (${latest.size}) ===\n`;
+        const userRows = await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, Array.from(latest.keys())));
+        const nameMap = new Map(userRows.map(u => [u.id, u.name]));
+        Array.from(latest.values()).forEach(s => {
+          out += `- ${nameMap.get(s.userId) ?? s.userId}: ${s.periodLabel} (${s.periodType}, saved ${s.snapshotDate})\n`;
+        });
+      }
+    }
+  } catch (err) {
+    console.error("buildPhase2Sections error:", err);
+    out += "\n(Phase-2 envelope sections temporarily unavailable.)\n";
+  }
+  return out;
+}
+
 async function buildEveryoneContext(requestingUserId: string): Promise<string> {
   try {
     const today = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
@@ -335,6 +493,17 @@ async function buildEveryoneContext(requestingUserId: string): Promise<string> {
       const pct = tgt > 0 ? Math.round((cur / tgt) * 100) : 0;
       ctx += `- ${am?.name || "?"} | ${g.metric}${g.customLabel ? ` (${g.customLabel})` : ""}: ${cur}/${tgt} (${pct}%) | Set by: ${nam?.name || "?"}\n`;
     });
+
+    // Phase 2 — Data & Tools Expansion (Task #422)
+    const requestingUser = allUsers.find(u => u.id === requestingUserId);
+    if (requestingUser?.organizationId) {
+      ctx += await buildPhase2Sections(requestingUser.organizationId, {
+        scope: "everyone",
+        companyIds: allCompanies.map(c => c.id),
+        userIds: allUsers.map(u => u.id),
+        selfUserId: requestingUserId,
+      });
+    }
 
     return ctx;
   } catch (err) {
@@ -436,6 +605,21 @@ async function buildMyTeamContext(userId: string, userRole: string): Promise<str
       const pct = tgt > 0 ? Math.round((cur / tgt) * 100) : 0;
       ctx += `- ${g.metric}${g.customLabel ? ` (${g.customLabel})` : ""}: ${cur}/${tgt} (${pct}%)\n`;
     });
+
+    // Phase 2 — Data & Tools Expansion (Task #422)
+    const selfRow = await db.select({ orgId: users.organizationId }).from(users).where(eq(users.id, userId)).limit(1);
+    const orgId = selfRow[0]?.orgId;
+    if (orgId) {
+      const subRows = await db.select({ id: users.id }).from(users)
+        .where(and(eq(users.organizationId, orgId), eq(users.managerId, userId)));
+      const teamUserIds = Array.from(new Set([userId, ...subRows.map(s => s.id)]));
+      ctx += await buildPhase2Sections(orgId, {
+        scope: "team",
+        companyIds: visibleCompanies.map(c => c.id),
+        userIds: teamUserIds,
+        selfUserId: userId,
+      });
+    }
 
     return ctx;
   } catch (err) {

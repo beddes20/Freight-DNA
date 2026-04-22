@@ -139,6 +139,105 @@ async function fetchProvenTacticRows(orgId: string): Promise<SourceRow[]> {
     }));
 }
 
+async function fetchEmailBodyRows(orgId: string): Promise<SourceRow[]> {
+  // Rolling 30-day window of customer email bodies. We index inbound mail
+  // linked to a customer account so the agent can recall recent thread
+  // content during retrieval.
+  const since = new Date(Date.now() - 30 * 86400000).toISOString();
+  const rows = await db.execute<{
+    id: string; subject: string | null; body: string | null;
+    from_email: string | null; created_at: Date;
+    linked_account_id: string | null;
+  }>(sql`
+    SELECT id, subject, body, from_email, created_at::timestamp AS created_at, linked_account_id
+    FROM email_messages
+    WHERE org_id = ${orgId}
+      AND linked_account_id IS NOT NULL
+      AND body IS NOT NULL
+      AND created_at >= ${since}::timestamp
+    ORDER BY created_at DESC LIMIT 1500
+  `).catch(() => ({ rows: [] as any[] }));
+  return rows.rows
+    .filter((e) => (e.body ?? "").trim().length > 0)
+    .map((e) => ({
+      sourceKind: "email_body",
+      sourceId: e.id,
+      text: `Email (${new Date(e.created_at).toISOString().slice(0, 10)}, from ${e.from_email ?? "?"}): ${e.subject ?? "(no subject)"}\n${(e.body ?? "").slice(0, 2400)}`,
+      metadata: { companyId: e.linked_account_id },
+    }));
+}
+
+async function fetchNbaCardRows(orgId: string): Promise<SourceRow[]> {
+  // Active/recent NBA card narratives — the why/suggested-action pairing is
+  // the most retrieval-worthy "what should I do" surface in the system.
+  const since = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
+  const rows = await db.execute<{
+    id: string; rule_type: string; company_id: string | null; company_name: string | null;
+    why_this_now: string; suggested_action: string; expected_outcome: string;
+    urgency_score: number; status: string; created_at: string;
+  }>(sql`
+    SELECT id, rule_type, company_id, company_name, why_this_now, suggested_action,
+           expected_outcome, urgency_score, status, created_at
+    FROM nba_cards
+    WHERE org_id = ${orgId}
+      AND created_at >= ${since}
+    ORDER BY urgency_score DESC, created_at DESC LIMIT 800
+  `).catch(() => ({ rows: [] as any[] }));
+  return rows.rows.map((c) => ({
+    sourceKind: "nba_card",
+    sourceId: c.id,
+    text: `NBA card [${c.rule_type}, urgency ${c.urgency_score}, status ${c.status}] ${c.company_name ?? ""}\nWhy: ${c.why_this_now}\nSuggested: ${c.suggested_action}\nExpected: ${c.expected_outcome}`,
+    metadata: { companyId: c.company_id, ruleType: c.rule_type },
+  }));
+}
+
+async function fetchPipelineNoteRows(orgId: string): Promise<SourceRow[]> {
+  // Pipeline notes: prospect-level narrative + per-opportunity notes. Both
+  // tables are scoped to organization_id so the join is just a filter.
+  const prospectRows = await db.execute<{
+    id: number; name: string; stage: string;
+    notes: string | null; next_steps: string | null;
+    pain_points: string | null; opportunity_notes: string | null;
+    intel_brief: string | null;
+  }>(sql`
+    SELECT id, name, stage, notes, next_steps, pain_points, opportunity_notes, intel_brief
+    FROM prospects WHERE organization_id = ${orgId}
+    ORDER BY updated_at DESC LIMIT 1500
+  `).catch(() => ({ rows: [] as any[] }));
+  const fromProspects: SourceRow[] = prospectRows.rows
+    .map((p) => {
+      const parts = [
+        `Prospect ${p.name} — stage ${p.stage}`,
+        p.notes ? `Notes: ${p.notes}` : "",
+        p.next_steps ? `Next steps: ${p.next_steps}` : "",
+        p.pain_points ? `Pain points: ${p.pain_points}` : "",
+        p.opportunity_notes ? `Opportunity: ${p.opportunity_notes}` : "",
+        p.intel_brief ? `Intel: ${p.intel_brief}` : "",
+      ].filter(Boolean);
+      return parts.length > 1
+        ? { sourceKind: "pipeline_note", sourceId: `prospect-${p.id}`, text: parts.join("\n").slice(0, 4000) }
+        : null;
+    })
+    .filter((r): r is SourceRow => r !== null);
+
+  const oppRows = await db.execute<{
+    id: number; name: string; stage: string; notes: string | null;
+    lost_reason: string | null; outcome: string | null; company_id: string | null;
+  }>(sql`
+    SELECT id, name, stage, notes, lost_reason, outcome, company_id
+    FROM crm_opportunities WHERE organization_id = ${orgId}
+      AND (notes IS NOT NULL OR lost_reason IS NOT NULL)
+    ORDER BY updated_at DESC LIMIT 1500
+  `).catch(() => ({ rows: [] as any[] }));
+  const fromOpps: SourceRow[] = oppRows.rows.map((o) => ({
+    sourceKind: "pipeline_note",
+    sourceId: `opportunity-${o.id}`,
+    text: `Opportunity ${o.name} — stage ${o.stage}${o.outcome ? ` (${o.outcome})` : ""}\n${o.notes ?? ""}${o.lost_reason ? `\nLost reason: ${o.lost_reason}` : ""}`.slice(0, 4000),
+    metadata: { companyId: o.company_id },
+  }));
+  return [...fromProspects, ...fromOpps];
+}
+
 async function fetchMarketSignalRows(orgId: string): Promise<SourceRow[]> {
   const rows = await db.execute<{ id: string; signal_type: string | null; explanation: string | null; created_at: Date }>(sql`
     SELECT id, signal_type, explanation, created_at::timestamp AS created_at FROM market_signals
@@ -161,6 +260,10 @@ const FETCHERS: Array<(orgId: string) => Promise<SourceRow[]>> = [
   fetchPlayRows,
   fetchProvenTacticRows,
   fetchMarketSignalRows,
+  // Phase 2 — Data & Tools Expansion (Task #422)
+  fetchEmailBodyRows,
+  fetchNbaCardRows,
+  fetchPipelineNoteRows,
 ];
 
 async function upsertChunk(orgId: string, row: SourceRow): Promise<boolean> {

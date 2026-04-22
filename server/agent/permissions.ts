@@ -22,6 +22,11 @@ export type Capability =
   | "read.financial"
   | "read.memory"
   | "read.nba"
+  // Phase 2 — Data & Tools Expansion (Task #422)
+  | "read.pipeline"
+  | "read.coaching"
+  | "read.scorecard"
+  | "read.email"
   // Navigation
   | "navigate.crm"
   // Writes inside the CRM — default HITL for everyone
@@ -49,6 +54,7 @@ const ALL_READS: Capability[] = [
   "read.account", "read.contact", "read.touchpoint", "read.task", "read.rfp",
   "read.award", "read.opportunity", "read.lane", "read.carrier", "read.market",
   "read.financial", "read.memory", "read.nba",
+  "read.pipeline", "read.coaching", "read.scorecard", "read.email",
 ];
 
 const ALL_HITL_WRITES: Capability[] = [
@@ -97,15 +103,19 @@ const ADMIN_DEFAULTS = (() => {
  * override these. Anything not listed for a role inherits from its base
  * (account_manager-style HITL writes).
  */
+function withCoachingDenied(d: Record<Capability, Effect>): Record<Capability, Effect> {
+  return { ...d, "read.coaching": "deny" };
+}
+
 export const ROLE_DEFAULTS: Record<UserRole, Record<Capability, Effect>> = {
   admin: ADMIN_DEFAULTS,
   director: ADMIN_DEFAULTS,
   sales_director: buildDefaults(),
   national_account_manager: buildDefaults(),
-  account_manager: buildDefaults(),
-  sales: buildDefaults(),
+  account_manager: withCoachingDenied(buildDefaults()),
+  sales: withCoachingDenied(buildDefaults()),
   logistics_manager: buildDefaults(),
-  logistics_coordinator: READ_ONLY_DEFAULTS,
+  logistics_coordinator: withCoachingDenied(READ_ONLY_DEFAULTS),
 };
 
 export function defaultEffectFor(role: UserRole, capability: Capability): Effect {

@@ -14,6 +14,9 @@ import { storage } from "../storage";
 import {
   companies, contacts, tasks, touchpoints, users, freightOpportunities, type User,
   loadFact, carrierRecommendation, carrierScorecardFact,
+  prospects, crmOpportunities, oneOnOneSessions, oneOnOneTopics, oneOnOneTopicReplies,
+  laneCarriers, awards, nbaCards, emailMessages, emailSignals, recurringLanes,
+  reportCardSnapshots,
 } from "@shared/schema";
 import { getBlendedRate } from "../pricingBlendService";
 import { recommendCarriersForLoad } from "../carrierRecommendationEngine";
@@ -902,6 +905,376 @@ export const TOOLS: AgentTool[] = [
         }),
       ];
       return { kind: "data", text: lines.join("\n") };
+    },
+  },
+
+  // ─── Phase 2 — Data & Tools Expansion (Task #422) ────────────────────────
+  {
+    name: "query_pipeline",
+    capability: "read.pipeline",
+    description: "Launchpad pipeline query: prospects + linked CRM opportunities scoped to the rep's org. Use for 'what's in my pipeline', 'open opps for X', 'qualifying deals', 'pipeline this month', 'prospects assigned to Sara'. Manager-in-everyone-scope sees the org-wide pipeline; otherwise the rep sees their own owned prospects.",
+    parameters: {
+      type: "object",
+      properties: {
+        company_name: { type: "string", description: "Filter to prospects/opportunities matching this name (partial match)." },
+        stage: { type: "string", description: "Filter to a single Launchpad stage (e.g. 'qualification', 'proposal')." },
+        owner: { type: "string", enum: ["mine", "team"], description: "'mine' = rep's own prospects; 'team' = the rep's org. Default 'mine' (or 'team' for managers in everyone scope)." },
+        limit: { type: "number", description: "Max prospects to list (default 10, max 25)." },
+      },
+    },
+    async execute(ctx, args) {
+      const lim = Math.min(25, Math.max(1, Number(args.limit || 10)));
+      const isManager = ["admin", "director", "national_account_manager", "sales_director"].includes(ctx.rep.role);
+      const teamScope = (args.owner ? args.owner === "team" : isManager && ctx.scope === "everyone");
+      const conds = [eq(prospects.organizationId, ctx.organizationId)];
+      if (!teamScope) conds.push(eq(prospects.ownerId, ctx.rep.id));
+      if (args.stage) conds.push(eq(prospects.stage, String(args.stage)));
+      if (args.company_name) conds.push(ilike(prospects.name, `%${String(args.company_name)}%`));
+      const rows = await db.select().from(prospects)
+        .where(and(...conds))
+        .orderBy(desc(prospects.updatedAt))
+        .limit(lim);
+      if (rows.length === 0) {
+        return { kind: "data", text: teamScope
+          ? "No prospects match those filters in this org's pipeline."
+          : "No prospects in your pipeline match those filters." };
+      }
+      const ids = rows.map(r => r.id);
+      const opps = ids.length
+        ? await db.select().from(crmOpportunities)
+            .where(and(eq(crmOpportunities.organizationId, ctx.organizationId), inArray(crmOpportunities.prospectId, ids)))
+        : [];
+      const oppsByProspect = new Map<number, typeof opps>();
+      for (const o of opps) {
+        if (o.prospectId == null) continue;
+        const arr = oppsByProspect.get(o.prospectId) ?? [];
+        arr.push(o);
+        oppsByProspect.set(o.prospectId, arr);
+      }
+      const ownerIds = Array.from(new Set(rows.map(r => r.ownerId)));
+      const ownerRows = ownerIds.length
+        ? await db.select({ id: users.id, name: users.name, username: users.username }).from(users).where(inArray(users.id, ownerIds))
+        : [];
+      const ownerMap = new Map(ownerRows.map(u => [u.id, u.name || u.username]));
+      const lines = rows.map((p, i) => {
+        const list = oppsByProspect.get(p.id) ?? [];
+        const oppLine = list.length
+          ? `\n   Opps: ${list.slice(0, 4).map(o => `${o.name} [${o.stage}${o.amount ? `, $${Number(o.amount).toLocaleString()}` : ""}${o.probability != null ? `, ${o.probability}%` : ""}${o.outcome ? `, ${o.outcome}` : ""}]`).join("; ")}${list.length > 4 ? ` (+${list.length - 4} more)` : ""}`
+          : "";
+        const owner = ownerMap.get(p.ownerId) ?? p.ownerId;
+        const next = p.followUpDate ? ` · follow-up ${p.followUpDate}` : "";
+        return `${i + 1}. ${p.name} — stage ${p.stage} · status ${p.accountStatus ?? "?"} · owner ${owner}${next}${oppLine}`;
+      });
+      return { kind: "data", text: `Pipeline (${rows.length}${teamScope ? ", team" : ", yours"}):\n${lines.join("\n")}` };
+    },
+  },
+  {
+    name: "one_on_one_history",
+    capability: "read.coaching",
+    description: "Coaching history: returns recent 1:1 sessions, topics, replies, morale scores, session summaries for the rep's direct reports. Manager-only — non-managers receive a polite refusal. Use for 'what did we cover with Sara last 1:1', 'open coaching topics on my team', 'morale trend', 'last session summary'.",
+    parameters: {
+      type: "object",
+      properties: {
+        rep_name: { type: "string", description: "Filter to a single subordinate by name (partial match)." },
+        active_only: { type: "boolean", description: "Only show currently active sessions. Default true." },
+        limit: { type: "number", description: "Max sessions to return (default 5, max 15)." },
+      },
+    },
+    async execute(ctx, args) {
+      const isManager = ["admin", "director", "sales_director", "national_account_manager", "logistics_manager"].includes(ctx.rep.role);
+      if (!isManager) {
+        return { kind: "data", text: "1:1 coaching history is only available to managers." };
+      }
+      const lim = Math.min(15, Math.max(1, Number(args.limit || 5)));
+      const activeOnly = args.active_only !== false;
+      const subs = await db.select({ id: users.id, name: users.name, username: users.username, role: users.role })
+        .from(users)
+        .where(and(eq(users.organizationId, ctx.organizationId), eq(users.managerId, ctx.rep.id)));
+      let targetSubs = subs;
+      if (args.rep_name) {
+        const q = String(args.rep_name).toLowerCase();
+        targetSubs = subs.filter(s => (s.name || s.username || "").toLowerCase().includes(q));
+        if (!targetSubs.length) return { kind: "data", text: `No direct report on your team matches "${args.rep_name}".` };
+      }
+      if (!targetSubs.length) return { kind: "data", text: "You don't have any direct reports yet — no 1:1 sessions to show." };
+      const subIds = targetSubs.map(s => s.id);
+      const sessions = await storage.getSessionsForSubordinates(subIds, ctx.organizationId);
+      const filtered = (activeOnly ? sessions.filter(s => s.session.status === "active") : sessions).slice(0, lim);
+      if (!filtered.length) return { kind: "data", text: activeOnly ? "No active 1:1 sessions on your team." : "No 1:1 history found for your team." };
+      const lines = filtered.map((s, i) => {
+        const morale = s.session.moraleScore != null ? ` · morale ${s.session.moraleScore}/10` : "";
+        const meeting = s.session.meetingDate ? ` · next ${s.session.meetingDate}` : "";
+        const topicLines = s.topics.slice(0, 4).map(t => {
+          const replies = t.replies.length ? ` (${t.replies.length} repl${t.replies.length === 1 ? "y" : "ies"})` : "";
+          return `   - [${t.status}${t.tag ? `, ${t.tag}` : ""}] ${t.text.slice(0, 140)}${t.text.length > 140 ? "…" : ""}${replies}`;
+        });
+        const moreTopics = s.topics.length > 4 ? `\n   …(+${s.topics.length - 4} more topics)` : "";
+        const summary = s.session.sessionSummary ? `\n   Summary: ${s.session.sessionSummary.slice(0, 280)}${s.session.sessionSummary.length > 280 ? "…" : ""}` : "";
+        return `${i + 1}. ${s.amUser.name} ↔ ${s.namUser.name} — ${s.session.status}${morale}${meeting}${summary}${topicLines.length ? "\n" + topicLines.join("\n") : ""}${moreTopics}`;
+      });
+      return { kind: "data", text: `1:1 sessions (${filtered.length}):\n${lines.join("\n\n")}` };
+    },
+  },
+  {
+    name: "lane_carrier_lookup",
+    capability: "read.lane",
+    description: "Procurement Rolodex: list carriers contacted on a procurement task or award (lane_carriers rows). Use for 'who have we hit on the Atlanta–Dallas lane for the ACME award', 'carrier rolodex for that task', 'who replied/committed/declined on this procurement'. Provide either an award title (with company) or a task title.",
+    parameters: {
+      type: "object",
+      properties: {
+        company_name: { type: "string", description: "Company that owns the award (used to disambiguate)." },
+        award_title: { type: "string", description: "Award title (partial match)." },
+        task_title: { type: "string", description: "Task title (partial match) if no award is known." },
+        status: { type: "string", description: "Filter by carrier status: contacted | emailed | replied | committed | declined." },
+        limit: { type: "number", description: "Max rows (default 15, max 50)." },
+      },
+    },
+    async execute(ctx, args) {
+      const lim = Math.min(50, Math.max(1, Number(args.limit || 15)));
+      let carriers: Array<typeof laneCarriers.$inferSelect> = [];
+      let header = "";
+      if (args.award_title) {
+        const company = args.company_name ? await findCompanyByName(ctx.organizationId, String(args.company_name)) : null;
+        const candidates = company
+          ? await db.select().from(awards).where(and(eq(awards.companyId, company.id), ilike(awards.title, `%${String(args.award_title)}%`))).limit(5)
+          : await db.select().from(awards).where(ilike(awards.title, `%${String(args.award_title)}%`)).limit(5);
+        const orgAwardIds: string[] = [];
+        for (const a of candidates) {
+          const co = await storage.getCompany(a.companyId);
+          if (co?.organizationId === ctx.organizationId) orgAwardIds.push(a.id);
+        }
+        if (!orgAwardIds.length) return { kind: "data", text: `No award matched "${args.award_title}"${args.company_name ? ` at ${args.company_name}` : ""}.` };
+        for (const aid of orgAwardIds) carriers = carriers.concat(await storage.getLaneCarriersByAward(aid));
+        header = `Carriers on award "${args.award_title}"${args.company_name ? ` at ${args.company_name}` : ""}`;
+      } else if (args.task_title) {
+        const q = String(args.task_title).toLowerCase();
+        const t = await db.select().from(tasks)
+          .where(and(eq(tasks.orgId, ctx.organizationId), ilike(tasks.title, `%${q}%`)))
+          .limit(5);
+        if (!t.length) return { kind: "data", text: `No procurement task matched "${args.task_title}".` };
+        for (const row of t) carriers = carriers.concat(await storage.getLaneCarriersByTask(row.id));
+        header = `Carriers on task "${args.task_title}"`;
+      } else {
+        return { kind: "data", text: "Provide an award_title (and optionally company_name) or a task_title." };
+      }
+      if (args.status) carriers = carriers.filter(c => c.status === String(args.status));
+      if (!carriers.length) return { kind: "data", text: `${header}: no carriers logged yet.` };
+      const lines = carriers.slice(0, lim).map((c, i) => {
+        const cap = c.capacityPerWeek != null ? ` · ${c.capacityPerWeek}/wk` : "";
+        const rate = c.rate ? ` · ${c.rate}` : "";
+        const contact = c.contactName ? ` · ${c.contactName}${c.email ? ` <${c.email}>` : ""}${c.phone ? ` ${c.phone}` : ""}` : "";
+        return `${i + 1}. ${c.carrierName}${c.mcNumber ? ` (MC ${c.mcNumber})` : ""} — ${c.status}${cap}${rate}${contact}`;
+      });
+      const more = carriers.length > lim ? `\n…(+${carriers.length - lim} more)` : "";
+      return { kind: "data", text: `${header} (${carriers.length}):\n${lines.join("\n")}${more}` };
+    },
+  },
+  {
+    name: "available_freight_search",
+    capability: "read.opportunity",
+    description: "Search Available Freight rows by origin/destination/equipment/customer (today and forward). Use for 'show me reefer loads to TX this week', 'open van loads for ACME', 'what loads do we have out of Atlanta'. The rep's broader 'what freight do I have' query stays on list_available_freight.",
+    parameters: {
+      type: "object",
+      properties: {
+        company_name: { type: "string" },
+        origin: { type: "string", description: "Origin city or state (substring match on origin/originState)." },
+        destination: { type: "string", description: "Destination city or state (substring match)." },
+        equipment_type: { type: "string", description: "VAN | REEFER | FLATBED | etc." },
+        limit: { type: "number", description: "Max rows (default 10, max 25)." },
+      },
+    },
+    async execute(ctx, args) {
+      const lim = Math.min(25, Math.max(1, Number(args.limit || 10)));
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const conds = [
+        eq(freightOpportunities.orgId, ctx.organizationId),
+        sql`(${freightOpportunities.pickupWindowEnd} IS NULL OR ${freightOpportunities.pickupWindowEnd} >= ${todayIso})`,
+      ];
+      if (args.equipment_type) conds.push(eq(freightOpportunities.equipmentType, String(args.equipment_type).toUpperCase()));
+      if (args.company_name) {
+        const co = await findCompanyByName(ctx.organizationId, String(args.company_name));
+        if (!co) return { kind: "data", text: `No company matched "${args.company_name}".` };
+        conds.push(eq(freightOpportunities.companyId, co.id));
+      }
+      if (args.origin) {
+        const q = `%${String(args.origin)}%`;
+        conds.push(sql`(${freightOpportunities.origin} ILIKE ${q} OR ${freightOpportunities.originState} ILIKE ${q})`);
+      }
+      if (args.destination) {
+        const q = `%${String(args.destination)}%`;
+        conds.push(sql`(${freightOpportunities.destination} ILIKE ${q} OR ${freightOpportunities.destinationState} ILIKE ${q})`);
+      }
+      const rows = await db.select().from(freightOpportunities).where(and(...conds))
+        .orderBy(desc(freightOpportunities.urgencyScore), desc(freightOpportunities.generatedAt))
+        .limit(lim);
+      if (!rows.length) return { kind: "data", text: "No Available Freight matched those filters." };
+      const cos = await storage.getCompaniesByIds(Array.from(new Set(rows.map(r => r.companyId))), ctx.organizationId);
+      const nameMap = new Map(cos.map(c => [c.id, c.name]));
+      const lines = rows.map((r, i) => {
+        const o = `${r.origin}${r.originState ? `, ${r.originState}` : ""}`;
+        const d = `${r.destination}${r.destinationState ? `, ${r.destinationState}` : ""}`;
+        return `${i + 1}. ${nameMap.get(r.companyId) ?? r.companyId} — ${o} → ${d} (${r.equipmentType ?? "?"}, ${r.loadCount}L, pickup ${r.pickupWindowStart}, status=${r.status}, urgency=${r.urgencyScore})`;
+      });
+      return { kind: "data", text: lines.join("\n") };
+    },
+  },
+  {
+    name: "email_intelligence_search",
+    capability: "read.email",
+    description: "Search recent customer/carrier email signals (intent classifications) by intent or by linked account/carrier/lane. Use for 'any replies on the ACME RFP thread', 'latest carrier interest signals on lane X', 'pricing requests this week'. Restricted to messages in the rep's org.",
+    parameters: {
+      type: "object",
+      properties: {
+        company_name: { type: "string", description: "Restrict to signals linked to this account." },
+        intent: { type: "string", description: "Filter by intent_type (e.g. 'pricing_request', 'commitment', 'decline')." },
+        days: { type: "number", description: "Look back N days (default 14, max 60)." },
+        limit: { type: "number", description: "Max signals (default 12, max 30)." },
+      },
+    },
+    async execute(ctx, args) {
+      const lim = Math.min(30, Math.max(1, Number(args.limit || 12)));
+      const days = Math.min(60, Math.max(1, Number(args.days || 14)));
+      const since = new Date(Date.now() - days * 86400000);
+      const conds = [
+        eq(emailMessages.orgId, ctx.organizationId),
+        gte(emailSignals.createdAt, since),
+      ];
+      if (args.intent) conds.push(eq(emailSignals.intentType, String(args.intent)));
+      let companyId: string | null = null;
+      if (args.company_name) {
+        const co = await findCompanyByName(ctx.organizationId, String(args.company_name));
+        if (!co) return { kind: "data", text: `No company matched "${args.company_name}".` };
+        companyId = co.id;
+        conds.push(eq(emailSignals.linkedAccountId, co.id));
+      }
+      const rows = await db.select({
+        id: emailSignals.id,
+        intentType: emailSignals.intentType,
+        intentSubtype: emailSignals.intentSubtype,
+        actorType: emailSignals.actorType,
+        confidence: emailSignals.confidence,
+        createdAt: emailSignals.createdAt,
+        subject: emailMessages.subject,
+        fromEmail: emailMessages.fromEmail,
+        direction: emailMessages.direction,
+        linkedAccountId: emailSignals.linkedAccountId,
+      }).from(emailSignals)
+        .innerJoin(emailMessages, eq(emailMessages.id, emailSignals.messageId))
+        .where(and(...conds))
+        .orderBy(desc(emailSignals.createdAt))
+        .limit(lim);
+      if (!rows.length) return { kind: "data", text: `No email signals in the last ${days} days${companyId ? " for that account" : ""}${args.intent ? ` with intent ${args.intent}` : ""}.` };
+      const lines = rows.map((r, i) => {
+        const date = r.createdAt instanceof Date ? r.createdAt.toISOString().slice(0, 10) : String(r.createdAt).slice(0, 10);
+        const sub = r.intentSubtype ? `/${r.intentSubtype}` : "";
+        return `${i + 1}. [${date}] ${r.intentType}${sub} (${r.actorType}, conf ${r.confidence}) — ${r.direction} "${(r.subject ?? "(no subject)").slice(0, 80)}" from ${r.fromEmail ?? "?"}`;
+      });
+      return { kind: "data", text: lines.join("\n") };
+    },
+  },
+  {
+    name: "next_best_actions",
+    capability: "read.nba",
+    description: "Return Next Best Action cards for the rep (or for the org when a manager is in everyone scope). Use for 'what's my next best action', 'show urgent NBAs', 'NBA cards for Globex', 'top 5 cards by urgency'.",
+    parameters: {
+      type: "object",
+      properties: {
+        company_name: { type: "string", description: "Filter to cards linked to a specific company." },
+        rule_type: { type: "string", description: "Filter to a single rule_type." },
+        limit: { type: "number", description: "Max cards (default 5, max 20)." },
+      },
+    },
+    async execute(ctx, args) {
+      const lim = Math.min(20, Math.max(1, Number(args.limit || 5)));
+      const isManager = ["admin", "director", "national_account_manager", "sales_director", "logistics_manager"].includes(ctx.rep.role);
+      const teamScope = isManager && ctx.scope === "everyone";
+      let cards: Array<typeof nbaCards.$inferSelect> = teamScope
+        ? await storage.getVisibleNbaCardsForOrg(ctx.organizationId, lim * 4)
+        : await storage.getVisibleNbaCards(ctx.rep.id, lim * 4);
+      if (args.rule_type) cards = cards.filter(c => c.ruleType === String(args.rule_type));
+      if (args.company_name) {
+        const q = String(args.company_name).toLowerCase();
+        cards = cards.filter(c => (c.companyName || "").toLowerCase().includes(q));
+      }
+      cards = cards.slice(0, lim);
+      if (!cards.length) return { kind: "data", text: "No NBA cards match those filters." };
+      const lines = cards.map((c, i) => {
+        const stake = c.atStakeAmount ? ` · $${Number(c.atStakeAmount).toLocaleString()} at stake` : "";
+        return `${i + 1}. [${c.urgencyScore} ${c.ruleType}] ${c.companyName ?? "—"} → ${c.suggestedAction}\n   Why: ${c.whyThisNow}${stake}`;
+      });
+      return { kind: "data", text: `${teamScope ? "Org" : "Your"} top NBAs (${cards.length}):\n${lines.join("\n")}` };
+    },
+  },
+  {
+    name: "scorecard_lookup",
+    capability: "read.scorecard",
+    description: "Return the most recent saved report card snapshots for a rep. Reps can ask about themselves; managers can ask about anyone on their team or anyone in the org (when in everyone scope). Use for 'show my scorecard', 'last month's report card', 'how is Sara tracking'.",
+    parameters: {
+      type: "object",
+      properties: {
+        rep_name: { type: "string", description: "Look up someone other than the asking rep (manager-only)." },
+        limit: { type: "number", description: "Max snapshots (default 3, max 10)." },
+      },
+    },
+    async execute(ctx, args) {
+      const lim = Math.min(10, Math.max(1, Number(args.limit || 3)));
+      const isManager = ["admin", "director", "sales_director", "national_account_manager"].includes(ctx.rep.role);
+      let targetUserId = ctx.rep.id;
+      let targetName = ctx.rep.name || ctx.rep.username || "you";
+      if (args.rep_name) {
+        if (!isManager) return { kind: "data", text: "Only managers can pull another rep's scorecard. I can show you yours instead." };
+        const q = String(args.rep_name).toLowerCase();
+        const orgUsers = await db.select({ id: users.id, name: users.name, username: users.username })
+          .from(users).where(eq(users.organizationId, ctx.organizationId));
+        const match = orgUsers.find(u => (u.name || u.username || "").toLowerCase().includes(q));
+        if (!match) return { kind: "data", text: `No teammate matched "${args.rep_name}".` };
+        targetUserId = match.id;
+        targetName = match.name || match.username || match.id;
+      }
+      const snaps = await storage.getReportCardSnapshots(targetUserId);
+      if (!snaps.length) return { kind: "data", text: `No saved report card snapshots for ${targetName} yet.` };
+      const lines = snaps.slice(0, lim).map((s, i) => {
+        const payload = s.payload as Record<string, unknown> | null;
+        const summary = payload && typeof payload === "object"
+          ? Object.entries(payload).slice(0, 6).map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v).slice(0, 60) : String(v)}`).join(" · ")
+          : "(empty payload)";
+        return `${i + 1}. [${s.periodLabel}, ${s.periodType}, saved ${s.snapshotDate}] ${summary}`;
+      });
+      return { kind: "data", text: `Scorecards for ${targetName}:\n${lines.join("\n")}` };
+    },
+  },
+  {
+    name: "recurring_freight_pattern",
+    capability: "read.lane",
+    description: "Return the org's recurring freight lanes (companies + origin/destination/equipment + cadence + ownership + lane score). Use for 'recurring lanes for ACME', 'top recurring lanes by score', 'where do we have recurring freight without preferred carrier coverage'.",
+    parameters: {
+      type: "object",
+      properties: {
+        company_name: { type: "string", description: "Filter to a single company." },
+        without_coverage: { type: "boolean", description: "Only show lanes without a preferred-carrier program. Default false." },
+        eligible_only: { type: "boolean", description: "Only show lanes flagged as eligible. Default false." },
+        limit: { type: "number", description: "Max lanes (default 10, max 30)." },
+      },
+    },
+    async execute(ctx, args) {
+      const lim = Math.min(30, Math.max(1, Number(args.limit || 10)));
+      let lanes = await storage.getRecurringLanes(ctx.organizationId);
+      if (args.company_name) {
+        const q = String(args.company_name).toLowerCase();
+        lanes = lanes.filter(l => (l.companyName || "").toLowerCase().includes(q));
+      }
+      if (args.without_coverage) lanes = lanes.filter(l => !l.hasPreferredCarrierProgram);
+      if (args.eligible_only) lanes = lanes.filter(l => l.isEligible);
+      lanes = lanes.slice(0, lim);
+      if (!lanes.length) return { kind: "data", text: "No recurring lanes match those filters." };
+      const lines = lanes.map((l, i) => {
+        const equip = l.equipmentType ? ` (${l.equipmentType})` : "";
+        const cadence = l.avgLoadsPerWeek ? `${Number(l.avgLoadsPerWeek).toFixed(1)}/wk` : "?";
+        const wk = l.weeksActive ? `, ${l.weeksActive}wk active` : "";
+        const cov = l.hasPreferredCarrierProgram ? "covered" : "no preferred carrier";
+        return `${i + 1}. ${l.companyName ?? "?"} — ${l.origin}${l.originState ? `,${l.originState}` : ""} → ${l.destination}${l.destinationState ? `,${l.destinationState}` : ""}${equip} · ${cadence}${wk} · score ${l.laneScore ?? "?"} · ${cov}${l.isEligible ? " · eligible" : ""}`;
+      });
+      return { kind: "data", text: `Recurring lanes (${lanes.length}):\n${lines.join("\n")}` };
     },
   },
 ];
