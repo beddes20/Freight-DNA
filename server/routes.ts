@@ -44,6 +44,7 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { isAdmin, isLeadership } from "./lib/roles";
+import { projectNbaCard, collectProjectionIds } from "./lib/nbaCardProjection";
 import { geocodeCity, haversineDistance } from "./geocoding";
 import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable, emailMessages, emailSignals, onboardingMilestoneToggleSchema, type OnboardingMilestones, upsertSidebarTooltipSchema, type Contact, type RecurringLane } from "@shared/schema";
 import { normalizeLaneLocation, normalizeEquipmentType } from "@shared/laneFormatters";
@@ -2448,15 +2449,32 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.patch("/api/rfps/:id", requireAuth, async (req, res) => {
     try {
-      const existing = await storage.getRfp((req.params.id as string));
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      // Org-scoped lookup — cross-org IDs hit the 404 branch instead of
+      // silently returning a foreign tenant's RFP.
+      const existing = await storage.getRfpInOrg(req.params.id as string, currentUser.organizationId);
       if (!existing) {
         return res.status(404).json({ error: "RFP not found" });
+      }
+      // Even within the same org, enforce per-company visibility (matches
+      // the read paths in /api/rfps and /api/research-tasks).
+      if (!(await canAccessCompany(currentUser, existing.companyId))) {
+        return res.status(403).json({ error: "Access denied" });
       }
       const parsed = insertRfpSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.message });
       }
-      const rfp = await storage.updateRfp((req.params.id as string), parsed.data);
+      // SECURITY: pin companyId server-side. The insert schema accepts a
+      // companyId from the client, but allowing PATCH to reassign would
+      // let a caller authorized on company A move the record to company
+      // B (potentially in a foreign org or one they don't have visibility
+      // on). Reparenting an RFP is not an existing product flow — if it
+      // becomes one, build a dedicated /reassign endpoint that validates
+      // the target.
+      const safeData = { ...parsed.data, companyId: existing.companyId };
+      const rfp = await storage.updateRfp((req.params.id as string), safeData);
       res.json(rfp);
     } catch (error) {
       console.error("Error updating RFP:", error);
@@ -2466,9 +2484,14 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.patch("/api/rfps/:id/lanes/:laneIndex/status", requireAuth, async (req, res) => {
     try {
-      const rfp = await storage.getRfp((req.params.id as string));
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const rfp = await storage.getRfpInOrg(req.params.id as string, currentUser.organizationId);
       if (!rfp) {
         return res.status(404).json({ error: "RFP not found" });
+      }
+      if (!(await canAccessCompany(currentUser, rfp.companyId))) {
+        return res.status(403).json({ error: "Access denied" });
       }
 
       const laneIndex = parseInt((req.params.laneIndex as string));
@@ -2882,15 +2905,22 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.patch("/api/awards/:id", requireAuth, async (req, res) => {
     try {
-      const existing = await storage.getAward((req.params.id as string));
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getAwardInOrg(req.params.id as string, currentUser.organizationId);
       if (!existing) {
         return res.status(404).json({ error: "Award not found" });
+      }
+      if (!(await canAccessCompany(currentUser, existing.companyId))) {
+        return res.status(403).json({ error: "Access denied" });
       }
       const parsed = insertAwardSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.message });
       }
-      const award = await storage.updateAward((req.params.id as string), parsed.data);
+      // SECURITY: pin companyId server-side — see RFP PATCH for rationale.
+      const safeData = { ...parsed.data, companyId: existing.companyId };
+      const award = await storage.updateAward((req.params.id as string), safeData);
       res.json(award);
     } catch (error) {
       console.error("Error updating award:", error);
@@ -2900,7 +2930,19 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.delete("/api/awards/:id", requireAuth, async (req, res) => {
     try {
-      const deleted = await storage.deleteAward((req.params.id as string));
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      // Previously this route had ZERO auth check beyond requireAuth — any
+      // authenticated user could delete any award by guessing IDs. Lock it
+      // down with the standard org+visibility gate before mutating.
+      const existing = await storage.getAwardInOrg(req.params.id as string, currentUser.organizationId);
+      if (!existing) {
+        return res.status(404).json({ error: "Award not found" });
+      }
+      if (!(await canAccessCompany(currentUser, existing.companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const deleted = await storage.deleteAward(req.params.id as string);
       if (!deleted) {
         return res.status(404).json({ error: "Award not found" });
       }
@@ -5903,7 +5945,7 @@ Respond with valid JSON only:
       const allOrgTps = allTodayTps.filter(t => t.date === todayStr && t.loggedById && orgUserIds.has(t.loggedById) && orgCompanyIds.has(t.companyId));
 
       let visibleUserIds: Set<string>;
-      if (user.role === "admin" || user.role === "director" || user.role === "sales_director") {
+      if (isLeadership(user)) {
         visibleUserIds = orgUserIds;
       } else if (user.role === "national_account_manager" || user.role === "sales") {
         const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
@@ -5959,7 +6001,7 @@ Respond with valid JSON only:
       const orgUserIds = new Set(allUsers.map(u => u.id));
       const thisWeek = thisWeekAll.filter(t => t.loggedById && orgUserIds.has(t.loggedById));
 
-      const teamIds: string[] | null = (user.role === "admin" || user.role === "director" || user.role === "sales_director")
+      const teamIds: string[] | null = isLeadership(user)
         ? null
         : await storage.getTeamMemberIds(user.id, user.organizationId);
 
@@ -9462,8 +9504,39 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      // Enforce company-visibility — cards for foreign-org companies were
+      // previously returned to anyone authenticated who guessed the ID.
+      if (!(await canAccessCompany(currentUser, req.params.companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const card = await storage.getNbaCardForCompany(req.params.companyId);
-      res.json(card ?? null);
+      if (!card) return res.json(null);
+
+      // Project to the canonical wire shape so this endpoint matches the
+      // bulk /api/nba/cards response. Build a minimal ProjectionContext
+      // with just the single card's related rows.
+      const { contactIds, laneIds } = collectProjectionIds([card]);
+      const [contactRows, laneRows] = await Promise.all([
+        Promise.all(contactIds.map(id => storage.getContact(id).catch(() => null))),
+        Promise.all(laneIds.map(id => storage.getRecurringLane(id).catch(() => null))),
+      ]);
+      const contacts = new Map<string, Contact>(
+        contactRows.filter((c): c is Contact => !!c).map(c => [c.id, c]),
+      );
+      const lanes = new Map<string, RecurringLane>(
+        laneRows.filter((l): l is RecurringLane => !!l).map(l => [l.id, l]),
+      );
+      const userIds = new Set<string>();
+      for (const lane of lanes.values()) {
+        if (lane.ownerUserId) userIds.add(lane.ownerUserId);
+        if (lane.overseerUserId) userIds.add(lane.overseerUserId);
+      }
+      const userRows = await Promise.all([...userIds].map(id => storage.getUser(id)));
+      const userMap = new Map<string, User>(
+        userRows.filter((u): u is User => !!u).map(u => [u.id, u]),
+      );
+
+      res.json(projectNbaCard(card, { contacts, lanes, users: userMap }));
     } catch (err: any) {
       console.error("[nba/company/card GET]", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch company NBA card" });

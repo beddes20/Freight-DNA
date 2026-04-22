@@ -400,13 +400,22 @@ export interface IStorage {
   deleteLaneAttribution(id: string): Promise<boolean>;
   
   getRfps(): Promise<Rfp[]>;
+  /** @deprecated Cross-tenant unsafe. Use getRfpInOrg(id, orgId) for any
+   *  caller that derives orgId from the session — this returns rows
+   *  regardless of organization and was the source of an IDOR fix-pack. */
   getRfp(id: string): Promise<Rfp | undefined>;
+  /** Org-scoped RFP fetch. Joins through companies.organizationId since
+   *  rfps has no orgId column directly. Returns undefined for cross-org IDs. */
+  getRfpInOrg(id: string, orgId: string): Promise<Rfp | undefined>;
   createRfp(rfp: InsertRfp): Promise<Rfp>;
   updateRfp(id: string, rfp: InsertRfp): Promise<Rfp | undefined>;
   deleteRfp(id: string): Promise<boolean>;
 
   getAwards(): Promise<Award[]>;
+  /** @deprecated Cross-tenant unsafe. Use getAwardInOrg(id, orgId). */
   getAward(id: string): Promise<Award | undefined>;
+  /** Org-scoped award fetch via companies.organizationId join. */
+  getAwardInOrg(id: string, orgId: string): Promise<Award | undefined>;
   createAward(award: InsertAward): Promise<Award>;
   updateAward(id: string, award: InsertAward): Promise<Award | undefined>;
   deleteAward(id: string): Promise<boolean>;
@@ -1470,6 +1479,17 @@ export class DatabaseStorage implements IStorage {
     return rfp;
   }
 
+  async getRfpInOrg(id: string, orgId: string): Promise<Rfp | undefined> {
+    // RFPs reference companies; companies.organizationId is the tenant
+    // boundary. Inner-join enforces it; cross-org IDs return undefined.
+    const [row] = await db
+      .select({ r: rfps })
+      .from(rfps)
+      .innerJoin(companies, eq(companies.id, rfps.companyId))
+      .where(and(eq(rfps.id, id), eq(companies.organizationId, orgId)));
+    return row?.r;
+  }
+
   async createRfp(rfp: InsertRfp): Promise<Rfp> {
     const [created] = await db.insert(rfps).values(rfp).returning();
     return created;
@@ -1496,6 +1516,16 @@ export class DatabaseStorage implements IStorage {
   async getAward(id: string): Promise<Award | undefined> {
     const [award] = await db.select().from(awards).where(eq(awards.id, id));
     return award;
+  }
+
+  async getAwardInOrg(id: string, orgId: string): Promise<Award | undefined> {
+    // Same pattern as getRfpInOrg — enforce tenant via companies join.
+    const [row] = await db
+      .select({ a: awards })
+      .from(awards)
+      .innerJoin(companies, eq(companies.id, awards.companyId))
+      .where(and(eq(awards.id, id), eq(companies.organizationId, orgId)));
+    return row?.a;
   }
 
   async createAward(award: InsertAward): Promise<Award> {
