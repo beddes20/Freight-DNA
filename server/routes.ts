@@ -722,7 +722,7 @@ RULES FOR YOUR RESPONSES:
 
       const allUsers = await storage.getUsers(req.session.organizationId!);
       const safeUsers = allUsers.map(({ password, ...u }) => u);
-      if (currentUser.role === "admin") return res.json(safeUsers);
+      if (isAdmin(currentUser)) return res.json(safeUsers);
 
       const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
       if (withManagers) {
@@ -1019,7 +1019,7 @@ RULES FOR YOUR RESPONSES:
       if (req.body.email !== undefined) data.email = req.body.email || null;
       if (req.body.password) data.password = await bcrypt.hash(req.body.password, 10);
       if (req.body.emailSignature !== undefined) data.emailSignature = req.body.emailSignature?.trim() || null;
-      if (currentUser.role === "admin") {
+      if (isAdmin(currentUser)) {
         if (req.body.role !== undefined) {
           if (!userRoles.includes(req.body.role)) {
             return res.status(400).json({ error: "Invalid role" });
@@ -1180,7 +1180,7 @@ RULES FOR YOUR RESPONSES:
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const allUsers = await storage.getUsers(req.session.organizationId!);
       const safeUsers = allUsers.map(({ password, ...u }) => u);
-      if (currentUser.role === "admin") {
+      if (isAdmin(currentUser)) {
         return res.json(safeUsers);
       }
       if (currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales" || currentUser.role === "sales_director") {
@@ -1189,7 +1189,7 @@ RULES FOR YOUR RESPONSES:
         // Always include manager (they can post replies to this user's sessions)
         if (currentUser.managerId) visibleIds.add(currentUser.managerId);
         // Always include admins (they can see and post to any session)
-        safeUsers.filter(u => u.role === "admin").forEach(u => visibleIds.add(u.id));
+        safeUsers.filter(u => isAdmin(u)).forEach(u => visibleIds.add(u.id));
         return res.json(safeUsers.filter(u => visibleIds.has(u.id)));
       }
       const visibleIds = new Set<string>([currentUser.id]);
@@ -1250,7 +1250,7 @@ RULES FOR YOUR RESPONSES:
         return res.status(400).json({ error: parsed.error.message });
       }
       const data = { ...parsed.data, organizationId: req.session.organizationId! };
-      if (currentUser.role === "admin") {
+      if (isAdmin(currentUser)) {
         // admin can assign to anyone — leave assignedTo as-is
       } else if (currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales" || currentUser.role === "sales_director") {
         if (data.assignedTo) {
@@ -3585,7 +3585,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   });
 
   async function canAccessPairing(user: { id: string; role: string; managerId: string | null }, namId: string, amId: string): Promise<boolean> {
-    if (user.role === "admin") return true;
+    if (isAdmin(user)) return true;
     if (user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") {
       return user.id === amId && user.managerId === namId;
     }
@@ -3619,9 +3619,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const amLikeRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
       if (amLikeRoles.includes(user.role)) {
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
-      } else if (user.role === "admin") {
+      } else if (isAdmin(user)) {
         // All manager-report pairs in the entire org (admin→direct + all below)
-        const allReports = allUsers.filter(u => u.managerId && u.role !== "admin");
+        const allReports = allUsers.filter(u => u.managerId && !isAdmin(u));
         for (const report of allReports) {
           pairs.push({ namId: report.managerId!, amId: report.id });
         }
@@ -3656,9 +3656,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const amLikeRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
       if (amLikeRoles.includes(user.role)) {
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
-      } else if (user.role === "admin") {
+      } else if (isAdmin(user)) {
         // All manager-report pairs in the entire org (admin→direct + all below)
-        const allReports = allUsers.filter(u => u.managerId && u.role !== "admin");
+        const allReports = allUsers.filter(u => u.managerId && !isAdmin(u));
         for (const report of allReports) {
           pairs.push({ namId: report.managerId!, amId: report.id });
         }
@@ -3717,9 +3717,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const amLikeRoles2 = ["account_manager", "logistics_manager", "logistics_coordinator"];
       if (amLikeRoles2.includes(user.role)) {
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
-      } else if (user.role === "admin") {
+      } else if (isAdmin(user)) {
         // All manager-report pairs in the entire org (admin→direct + all below)
-        const allReports = allUsers.filter(u => u.managerId && u.role !== "admin");
+        const allReports = allUsers.filter(u => u.managerId && !isAdmin(u));
         for (const report of allReports) {
           pairs.push({ namId: report.managerId!, amId: report.id });
         }
@@ -3792,7 +3792,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         return res.json(result);
       }
 
-      if (currentUser.role === "admin") {
+      if (isAdmin(currentUser)) {
         const result: { namId: string; amId: string; namName: string; amName: string; section: string; groupLabel?: string }[] = [];
         const directReports = safeUsers.filter(u => u.managerId === currentUser.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director"));
         // Admin→Director/NAM direct pairings first
@@ -4168,7 +4168,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const amEquivRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
       if (amEquivRoles.includes(user.role)) return res.status(403).json({ error: "Access denied" });
       let teamIds: string[];
-      if (user.role === "admin") {
+      if (isAdmin(user)) {
         const allUsers = await storage.getUsers(req.session.organizationId!);
         teamIds = allUsers.filter(u => u.role === "account_manager" || u.role === "national_account_manager" || u.role === "logistics_manager" || u.role === "logistics_coordinator" || u.role === "director" || u.role === "sales_director" || u.role === "sales").map(u => u.id);
       } else {
@@ -4269,7 +4269,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       }
 
       let teamIds: string[];
-      if (user.role === "admin") {
+      if (isAdmin(user)) {
         const allUsers = await storage.getUsers(req.session.organizationId!);
         teamIds = allUsers.filter(u => ["account_manager","national_account_manager","logistics_manager","logistics_coordinator","director","sales_director","sales"].includes(u.role)).map(u => u.id);
       } else {
