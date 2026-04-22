@@ -1790,31 +1790,37 @@ export async function runMigrations() {
       ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS provider_message_id text
     `);
     // Deduplicate any pre-existing rows that would violate the unique
-    // index below. This can happen on databases that pre-date the
-    // idempotency work (Task #190 rev) where the same provider message
-    // got inserted multiple times. Keep the oldest row per
-    // (org_id, provider_message_id) and remove the rest.
-    await clientEmailIntel.query(`
-      DELETE FROM email_messages em
-      USING (
-        SELECT id FROM (
-          SELECT id,
-                 ROW_NUMBER() OVER (
-                   PARTITION BY org_id, provider_message_id
-                   ORDER BY created_at ASC, id ASC
-                 ) AS rn
-          FROM email_messages
+    // index below — but ONLY when the index doesn't yet exist. The
+    // window-function scan is expensive on large tables; once the
+    // unique index is in place, duplicates are impossible and we can
+    // skip this on every subsequent boot.
+    const idxCheck = await clientEmailIntel.query(
+      `SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'idx_email_messages_provider_msg_id' LIMIT 1`,
+    );
+    if (idxCheck.rowCount === 0) {
+      await clientEmailIntel.query(`
+        DELETE FROM email_messages em
+        USING (
+          SELECT id FROM (
+            SELECT id,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY org_id, provider_message_id
+                     ORDER BY created_at ASC, id ASC
+                   ) AS rn
+            FROM email_messages
+            WHERE provider_message_id IS NOT NULL
+          ) ranked
+          WHERE ranked.rn > 1
+        ) dups
+        WHERE em.id = dups.id
+      `);
+      await clientEmailIntel.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_email_messages_provider_msg_id
+          ON email_messages(org_id, provider_message_id)
           WHERE provider_message_id IS NOT NULL
-        ) ranked
-        WHERE ranked.rn > 1
-      ) dups
-      WHERE em.id = dups.id
-    `);
-    await clientEmailIntel.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_email_messages_provider_msg_id
-        ON email_messages(org_id, provider_message_id)
-        WHERE provider_message_id IS NOT NULL
-    `);
+      `);
+      console.log("[migrations] email_messages dedup + unique index created");
+    }
     // Add linked entity columns to email_signals (Task #191)
     await clientEmailIntel.query(`
       ALTER TABLE email_signals ADD COLUMN IF NOT EXISTS linked_account_id varchar REFERENCES companies(id) ON DELETE SET NULL
