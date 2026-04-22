@@ -23,6 +23,7 @@ import { storage, db } from "./storage";
 import { getGraphAccessToken, azureCredentialsConfigured } from "./graphService";
 import { upsertLoadFact } from "./carrierIntelligenceService";
 import { freightOpportunityToInsert } from "./loadFactBackfill";
+import { ensureShortlistRanked } from "./proactiveOpportunityService";
 import type {
   FreightOpportunity,
   InsertFreightOpportunity,
@@ -350,7 +351,14 @@ function parseSheetToLoads(
     const pickupStartRaw = pick(row, "Pickup Date", "Pickup Start", "Pickup", "Start Date", "Date");
     const pickupEndRaw = pick(row, "Pickup End", "End Date", "Delivery Date", "Drop Date");
     const start = parseDateLoose(pickupStartRaw) ?? new Date().toISOString().slice(0, 10);
-    const end = parseDateLoose(pickupEndRaw) ?? start;
+    // Available Freight rows are always a single pickup day. Even when the
+    // spreadsheet has a "Pickup End" / "Delivery Date" cell that's later than
+    // the pickup, we collapse the persisted window to a single canonical day
+    // (start == end) so downstream UI never has to render a misleading
+    // start→end range. The raw end value (when present) is unused at write
+    // time but kept available via rawRow if a future report needs it.
+    void pickupEndRaw;
+    const end = start;
 
     const equipment = pick(row, "Equipment", "Equipment Type", "Trailer", "Trailer Type") || null;
     const ownerEmail = pick(row, "Owner", "Rep", "Rep Email", "Owner Email", "Assigned To") || null;
@@ -976,6 +984,49 @@ export async function runImportFromWorkbook(
   unmatchedCompanies += historicalUnmatchedCompanies;
   console.log(
     `[available-freight] historical_runs imported=${historicalImported} unmatched_companies=${historicalUnmatchedCompanies}`,
+  );
+
+  // ── Shortlist backfill ───────────────────────────────────────────────────
+  // The importer creates freight_opportunities directly (no
+  // generateOpportunitiesForCompany), so newly-imported rows arrive with no
+  // freight_opportunity_carriers persisted and the detail view shows an empty
+  // Ranked Carriers panel. Run ensureShortlistRanked across every still-open
+  // opp from this feed (existing AND new) so reps see a populated shortlist
+  // immediately after the next daily import — without having to click into
+  // each row first.
+  let shortlistsBackfilled = 0;
+  let shortlistsAlreadyPresent = 0;
+  let shortlistFailures = 0;
+  // Re-fetch the full open set so we include rows just inserted in this pass.
+  const openOpps = (await storage.listFreightOpportunities(orgId, {
+    status: ["new", "ready_to_send"],
+    limit: 2000,
+    offset: 0,
+  })).filter(o => (o.sourceRef as { kind?: string } | null)?.kind === "available_freight_import");
+  const SHORTLIST_CONCURRENCY = 4;
+  let backfillCursor = 0;
+  async function backfillWorker(): Promise<void> {
+    while (true) {
+      const i = backfillCursor++;
+      if (i >= openOpps.length) return;
+      const opp = openOpps[i];
+      try {
+        const r = await ensureShortlistRanked(storage, opp);
+        if (r.ranked) shortlistsBackfilled++;
+        else shortlistsAlreadyPresent++;
+      } catch (e) {
+        shortlistFailures++;
+        console.warn(
+          `[available-freight] shortlist backfill failed for opp ${opp.id}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: SHORTLIST_CONCURRENCY }, () => backfillWorker()));
+  console.log(
+    `[available-freight] shortlist_backfill ranked=${shortlistsBackfilled} ` +
+    `already_present=${shortlistsAlreadyPresent} failures=${shortlistFailures} ` +
+    `total_open=${openOpps.length}`,
   );
 
   // Mark vanished rows as expired.

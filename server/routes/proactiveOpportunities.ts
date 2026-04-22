@@ -16,7 +16,7 @@ import { requireAuth, getCurrentUser } from "../auth";
 import { storage } from "../storage";
 import { z } from "zod";
 import { runImportFromWorkbook as runAvailableFreightImportFromWorkbook } from "../availableFreightImporter";
-import { loadEffectivePolicy } from "../proactiveOpportunityService";
+import { loadEffectivePolicy, ensureShortlistRanked } from "../proactiveOpportunityService";
 import {
   buildOpportunityDraft,
   cancelPendingWaves,
@@ -136,6 +136,14 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       const org = orgId(req);
       const opp = await storage.getFreightOpportunity(org, String(req.params.id));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
+      // Backfill: rows imported via the Available Freight workbook never went
+      // through generateOpportunitiesForCompany, so they may have no carrier
+      // shortlist persisted. Lazily rank-on-first-view so the panel populates.
+      try {
+        await ensureShortlistRanked(storage, opp);
+      } catch (e) {
+        console.warn(`[freight-opps] ensureShortlistRanked failed for ${opp.id}:`, e);
+      }
       const [carriers, audit] = await Promise.all([
         storage.listFreightOpportunityCarriers(opp.id),
         storage.listFreightOpportunityAudit(opp.id),

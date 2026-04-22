@@ -305,11 +305,24 @@ export async function rankCarriersForOpportunity(
   policy: CompanyOutreachPolicy,
   opts: { repAddedCarrierIds?: Set<string> } = {},
 ): Promise<RankedShortlistRow[]> {
+  // Look up the company name so the underlying ranker can credit carriers
+  // that have hauled for this same shipper before (customer-history bonus).
+  // Without this, the synthetic lane carries no shipper identity and the
+  // customer-history boost is never applied — a major contributor to the
+  // empty-shortlist class of bug.
+  let lookupCompanyName: string | null = null;
+  try {
+    const company = await storage.getCompany(opportunity.companyId);
+    lookupCompanyName = company?.name ?? null;
+  } catch {
+    // Best-effort — proceed without the customer-history boost.
+  }
+
   const syntheticLane: RecurringLane = {
     id: opportunity.recurringLaneId ?? `synthetic-${opportunity.id}`,
     orgId: opportunity.orgId,
     companyId: opportunity.companyId,
-    companyName: null,
+    companyName: lookupCompanyName,
     origin: opportunity.origin,
     originState: opportunity.originState,
     destination: opportunity.destination,
@@ -586,6 +599,67 @@ export async function generateOpportunitiesForCompany(
   }
 
   return results;
+}
+
+/**
+ * Ensure a freight opportunity has a persisted ranked-carrier shortlist.
+ *
+ * The Available Freight importer creates `freight_opportunities` rows directly
+ * (bypassing `generateOpportunitiesForCompany`), which means newly-imported
+ * rows arrive with NO `freight_opportunity_carriers` rows attached — the
+ * detail page's "Ranked carriers" panel then shows empty.
+ *
+ * This helper plugs that gap: if the opportunity has no carrier rows yet, run
+ * the rank pipeline now, persist the resulting shortlist (including excluded
+ * rows, for audit), and refresh the confidence flag. Idempotent: calling it
+ * again is a cheap no-op once any rows exist.
+ *
+ * Returns the persisted carrier rows (existing or newly-created).
+ */
+export async function ensureShortlistRanked(
+  storage: IStorage,
+  opportunity: FreightOpportunity,
+): Promise<{ ranked: boolean; carriers: FreightOpportunityCarrier[] }> {
+  const existing = await storage.listFreightOpportunityCarriers(opportunity.id);
+  if (existing.length > 0) return { ranked: false, carriers: existing };
+
+  const policy = await loadEffectivePolicy(storage, opportunity.orgId, opportunity.companyId);
+  const shortlist = await rankCarriersForOpportunity(storage, opportunity, policy);
+  if (shortlist.length === 0) return { ranked: false, carriers: [] };
+
+  const carrierRows: InsertFreightOpportunityCarrier[] = shortlist.map(row => ({
+    opportunityId: opportunity.id,
+    carrierId: row.carrier.id,
+    rank: row.rank,
+    bucket: row.bucket,
+    fitScore: row.ranked.fitScore ?? 0,
+    historyMatch: row.ranked.historyMatch ?? "none",
+    explanation: row.ranked.fitReason ?? null,
+    explanationStructured: row.ranked.carrierFitExplanation ?? null,
+    responsivenessSnapshot: {
+      suppressionReasons: row.ranked.suppressionReasons ?? [],
+      loadsOnLane: row.ranked.loadsOnLane,
+      priorOutcomeBoost: row.ranked.priorOutcomeBoost,
+    },
+    excludedReason: row.excludedReason,
+    outreachLogId: null,
+    lastResponseId: null,
+  }));
+
+  const persisted = await storage.insertFreightOpportunityCarriers(carrierRows);
+  const confidenceFlag = deriveConfidenceFlag(shortlist);
+  try {
+    await storage.updateFreightOpportunity(opportunity.orgId, opportunity.id, { confidenceFlag });
+  } catch {
+    // Confidence flag is advisory — non-fatal if the update races with another writer.
+  }
+  await storage.appendFreightOpportunityAudit({
+    opportunityId: opportunity.id,
+    eventType: "generated",
+    actorUserId: null,
+    payload: { kind: "lazy_shortlist_rank", shortlistSize: persisted.length, confidenceFlag },
+  });
+  return { ranked: true, carriers: persisted };
 }
 
 function addDaysIso(base: Date, days: number): string {

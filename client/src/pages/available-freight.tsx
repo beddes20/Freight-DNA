@@ -81,15 +81,25 @@ function ModeBadge({ mode }: { mode: string }) {
   );
 }
 
-function fmtWindow(start: string | null | undefined, end: string | null | undefined) {
+function fmtWindow(start: string | null | undefined, _end?: string | null) {
+  // Available Freight rows always represent a single pickup day; ignore the
+  // back-compat pickupWindowEnd field for display so reps never see a range.
   if (!start) return "—";
   const s = new Date(start);
-  const e = end ? new Date(end) : null;
+  if (isNaN(s.getTime())) return "—";
   const dOpts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
-  const sStr = s.toLocaleDateString(undefined, dOpts);
-  if (!e || isNaN(e.getTime())) return sStr;
-  const eStr = e.toLocaleDateString(undefined, dOpts);
-  return sStr === eStr ? sStr : `${sStr} → ${eStr}`;
+  return s.toLocaleDateString(undefined, dOpts);
+}
+
+function fmtLane(
+  origin: string,
+  originState: string | null | undefined,
+  destination: string,
+  destinationState: string | null | undefined,
+) {
+  const o = originState ? `${origin}, ${originState.toUpperCase()}` : origin;
+  const d = destinationState ? `${destination}, ${destinationState.toUpperCase()}` : destination;
+  return `${o} → ${d}`;
 }
 
 function leadTimeDays(start: string): number {
@@ -402,7 +412,7 @@ export default function AvailableFreightPage() {
                           )}
                         </TableCell>
                         <TableCell className="whitespace-nowrap">
-                          <span data-testid={`text-lane-${opp.id}`}>{opp.origin} → {opp.destination}</span>
+                          <span data-testid={`text-lane-${opp.id}`}>{fmtLane(opp.origin, opp.originState, opp.destination, opp.destinationState)}</span>
                           {opp.equipmentType && (
                             <span className="ml-2 text-xs text-muted-foreground">{opp.equipmentType}</span>
                           )}

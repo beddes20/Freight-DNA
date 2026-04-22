@@ -106,11 +106,27 @@ const EXCLUDED_LABELS: Record<FreightOpportunityExcludedReason, string> = {
   customer_carrier_blocked: "Customer-blocked",
 };
 
-function fmtWindow(start: string, end: string) {
+function fmtWindow(start: string, _end?: string | null) {
+  // Available Freight rows always represent a single pickup day. The
+  // pickupWindowEnd field exists for back-compat with the older lane_building
+  // mode but is intentionally ignored for display — show only the canonical
+  // pickup day so reps don't see misleading date ranges.
+  if (!start) return "—";
   const s = new Date(start);
-  const e = new Date(end);
+  if (isNaN(s.getTime())) return "—";
   const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric" };
-  return `${s.toLocaleDateString(undefined, opts)} → ${e.toLocaleDateString(undefined, opts)}`;
+  return s.toLocaleDateString(undefined, opts);
+}
+
+function fmtLane(
+  origin: string,
+  originState: string | null | undefined,
+  destination: string,
+  destinationState: string | null | undefined,
+) {
+  const o = originState ? `${origin}, ${originState.toUpperCase()}` : origin;
+  const d = destinationState ? `${destination}, ${destinationState.toUpperCase()}` : destination;
+  return `${o} → ${d}`;
 }
 
 function ExplanationChips({ row }: { row: FreightOpportunityCarrier }) {
@@ -813,7 +829,7 @@ export default function AvailableFreightDetailPage() {
               <div>
                 <div className="text-xs text-muted-foreground">Lane</div>
                 <div className="font-medium" data-testid="text-detail-lane">
-                  {opp.origin} → {opp.destination}
+                  {fmtLane(opp.origin, opp.originState, opp.destination, opp.destinationState)}
                 </div>
                 {opp.equipmentType && (
                   <div className="text-xs text-muted-foreground mt-0.5">{opp.equipmentType}</div>
@@ -904,8 +920,31 @@ export default function AvailableFreightDetailPage() {
         </CardHeader>
         <CardContent className="p-0">
           {totalCount === 0 ? (
-            <div className="py-12 text-center text-sm text-muted-foreground" data-testid="state-empty-carriers">
-              No carriers were ranked for this opportunity.
+            <div className="py-12 text-center text-sm text-muted-foreground space-y-2" data-testid="state-empty-carriers">
+              <p className="font-medium">No carriers were ranked for this opportunity.</p>
+              <p className="text-xs">
+                No catalog carrier had history, region, or equipment signal strong enough to score
+                above the exploratory floor for this lane. Try widening the catalog or importing
+                more historical loads on this corridor.
+              </p>
+            </div>
+          ) : carriers.every(c => c.excludedReason) ? (
+            <div className="py-12 px-6 text-center text-sm text-muted-foreground space-y-3" data-testid="state-all-excluded-carriers">
+              <p className="font-medium">All {totalCount} ranked carriers were excluded by guardrails.</p>
+              <div className="text-xs flex flex-wrap gap-2 justify-center">
+                {Array.from(
+                  carriers.reduce((m, c) => {
+                    const r = c.excludedReason as FreightOpportunityExcludedReason | null;
+                    if (!r) return m;
+                    m.set(r, (m.get(r) ?? 0) + 1);
+                    return m;
+                  }, new Map<FreightOpportunityExcludedReason, number>()).entries(),
+                ).map(([reason, count]) => (
+                  <Badge key={reason} variant="outline" data-testid={`badge-exclusion-${reason}`}>
+                    {EXCLUDED_LABELS[reason] ?? reason}: {count}
+                  </Badge>
+                ))}
+              </div>
             </div>
           ) : Array.from(grouped.values()).every(rows => rows.length === 0) ? (
             <div className="py-12 text-center text-sm text-muted-foreground" data-testid="state-empty-carriers-filter">
