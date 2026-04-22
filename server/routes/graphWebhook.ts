@@ -453,18 +453,13 @@ async function processUserMailboxEmail(params: {
     return;
   }
 
-  // Skip the "is this account assigned to this rep?" gate when:
-  //   (a) we already have an active thread for this conversation (continuity),
-  //   OR
-  //   (b) this is the rep's own outbound reply (they explicitly sent it from
-  //       their own monitored mailbox — always record it).
-  if (!existingThreadExists && direction !== "outbound" && accountMatch) {
-    const company = await storage.getCompany(accountMatch.companyId);
-    if (company && company.assignedTo && company.assignedTo !== monitoredMailbox.userId) {
-      log(`[user-mailbox] Skipping email — account ${accountMatch.companyId} is assigned to ${company.assignedTo}, not ${monitoredMailbox.userId}`);
-      return;
-    }
-  }
+  // NOTE: we used to drop the message here when the matched account was
+  // assigned to a different rep than the one whose mailbox received the
+  // email. That silently lost real customer correspondence whenever a
+  // rep was on a thread for an account they didn't formally own. The
+  // conversations tab is org-scoped, so persist the message and let
+  // `determineInitialOwner` (downstream) assign the thread to the
+  // correct rep — typically the assignedTo on the company.
 
   const { message, created } = await storage.upsertInboundEmailMessage({
     orgId,

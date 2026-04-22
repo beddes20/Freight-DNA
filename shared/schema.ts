@@ -2670,6 +2670,7 @@ export const monitoredMailboxes = pgTable(
     subscriptionExpiresAt: timestamp("subscription_expires_at"),
     lastSyncAt: timestamp("last_sync_at"),
     deltaSyncToken: text("delta_sync_token"),
+    sentDeltaSyncToken: text("sent_delta_sync_token"),
     syncStatus: text("sync_status").notNull().default("pending"),
     syncError: text("sync_error"),
     createdAt: timestamp("created_at").defaultNow().notNull(),

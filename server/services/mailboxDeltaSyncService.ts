@@ -22,10 +22,12 @@ interface DeltaMessage {
   conversationId?: string;
   from?: { emailAddress?: { address?: string; name?: string } };
   toRecipients?: Array<{ emailAddress?: { address?: string } }>;
+  ccRecipients?: Array<{ emailAddress?: { address?: string } }>;
   subject?: string;
   bodyPreview?: string;
   body?: { content?: string; contentType?: string };
   receivedDateTime?: string;
+  sentDateTime?: string;
   internetMessageId?: string;
 }
 
@@ -38,17 +40,24 @@ interface DeltaResponse {
 async function fetchDeltaMessages(
   mailboxEmail: string,
   deltaToken: string | null,
+  folder: "inbox" | "sentitems" = "inbox",
 ): Promise<{ messages: DeltaMessage[]; newDeltaToken: string | null }> {
   const token = await getGraphAccessToken();
   const messages: DeltaMessage[] = [];
   let newDeltaToken: string | null = null;
+
+  // Sent Items uses sentDateTime as the filter field; Inbox uses receivedDateTime.
+  const dateField = folder === "sentitems" ? "sentDateTime" : "receivedDateTime";
+  const selectFields = folder === "sentitems"
+    ? "id,conversationId,from,toRecipients,ccRecipients,subject,bodyPreview,body,sentDateTime,internetMessageId"
+    : "id,conversationId,from,toRecipients,ccRecipients,subject,bodyPreview,body,receivedDateTime,internetMessageId";
 
   let url: string;
   if (deltaToken) {
     url = deltaToken;
   } else {
     const lookback = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailboxEmail)}/mailFolders/inbox/messages/delta?$select=id,conversationId,from,toRecipients,subject,bodyPreview,body,receivedDateTime,internetMessageId&$filter=receivedDateTime ge ${lookback}`;
+    url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailboxEmail)}/mailFolders/${folder}/messages/delta?$select=${selectFields}&$filter=${dateField} ge ${lookback}`;
   }
 
   let pageCount = 0;
@@ -63,10 +72,10 @@ async function fetchDeltaMessages(
     if (!res.ok) {
       const errText = await res.text();
       if (res.status === 410 && deltaToken) {
-        log(`Delta token expired for ${mailboxEmail} — resetting`);
-        return fetchDeltaMessages(mailboxEmail, null);
+        log(`Delta token expired for ${mailboxEmail}/${folder} — resetting`);
+        return fetchDeltaMessages(mailboxEmail, null, folder);
       }
-      throw new Error(`Graph delta query failed (${res.status}): ${errText.slice(0, 200)}`);
+      throw new Error(`Graph delta query failed (${res.status}, ${folder}): ${errText.slice(0, 200)}`);
     }
 
     const data = await res.json() as DeltaResponse;
@@ -93,66 +102,86 @@ export async function syncMailboxDelta(mailboxId: string): Promise<{ processed: 
 
   let processed = 0;
   let errors = 0;
+  let inboxToken: string | null = mailbox.deltaSyncToken;
+  let sentToken: string | null = mailbox.sentDeltaSyncToken;
 
-  try {
-    const { messages, newDeltaToken } = await fetchDeltaMessages(
-      mailbox.email,
-      mailbox.deltaSyncToken,
-    );
+  // Run both folders. A failure in one must not corrupt the other folder's
+  // delta token — we persist whichever token(s) we successfully advanced.
+  for (const folder of ["inbox", "sentitems"] as const) {
+    const currentToken = folder === "inbox" ? inboxToken : sentToken;
+    try {
+      const { messages, newDeltaToken } = await fetchDeltaMessages(
+        mailbox.email,
+        currentToken,
+        folder,
+      );
 
-    log(`Delta sync for ${mailbox.email}: ${messages.length} message(s) fetched`);
-
-    const { processUserMailboxEmailForDelta } = await import("../routes/graphWebhook");
-    const { matchInboundSenderToAccount } = await import("../routes/graphWebhook");
-
-    for (const msg of messages) {
-      try {
-        const fromEmail = msg.from?.emailAddress?.address ?? "";
-        const fromName = msg.from?.emailAddress?.name ?? "";
-        const toEmail = msg.toRecipients?.[0]?.emailAddress?.address ?? "";
-        const subject = msg.subject ?? "";
-        const bodyPreview = msg.bodyPreview?.slice(0, 255) ?? "";
-        const bodyFull = msg.body?.content ?? bodyPreview;
-        const conversationId = msg.conversationId ?? null;
-        const providerMessageId = msg.id;
-        const receivedAt = msg.receivedDateTime ? new Date(msg.receivedDateTime) : new Date();
-
-        await processUserMailboxEmailForDelta({
-          orgId: mailbox.orgId,
-          monitoredMailbox: { id: mailbox.id, userId: mailbox.userId, email: mailbox.email },
-          fromEmail,
-          fromName,
-          toEmail,
-          subject,
-          bodyPreview,
-          bodyFull: bodyFull.slice(0, 5000),
-          conversationId,
-          providerMessageId,
-          receivedAt,
-          mailboxEmail: mailbox.email,
-        });
-        processed++;
-      } catch (msgErr) {
-        errors++;
-        log(`Delta sync message error: ${msgErr instanceof Error ? msgErr.message : String(msgErr)}`);
+      if (messages.length > 0) {
+        log(`Delta sync for ${mailbox.email}/${folder}: ${messages.length} message(s) fetched`);
       }
-    }
 
-    await storage.updateMonitoredMailbox(mailbox.id, {
-      deltaSyncToken: newDeltaToken,
-      lastSyncAt: new Date(),
-      syncStatus: errors > 0 ? "partial" : "active",
-      syncError: errors > 0 ? `${errors} message(s) failed` : null,
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log(`Delta sync error for ${mailbox.email}: ${msg}`);
-    await storage.updateMonitoredMailbox(mailbox.id, {
-      syncStatus: "error",
-      syncError: msg.slice(0, 200),
-    });
-    errors++;
+      const { processUserMailboxEmailForDelta } = await import("../routes/graphWebhook");
+
+      for (const msg of messages) {
+        try {
+          const fromEmail = msg.from?.emailAddress?.address ?? "";
+          const fromName = msg.from?.emailAddress?.name ?? "";
+          const allToRecipients = (msg.toRecipients ?? [])
+            .map(r => r.emailAddress?.address)
+            .filter((a): a is string => !!a);
+          const allCcRecipients = (msg.ccRecipients ?? [])
+            .map(r => r.emailAddress?.address)
+            .filter((a): a is string => !!a);
+          const toEmail = allToRecipients[0] ?? "";
+          const subject = msg.subject ?? "";
+          const bodyPreview = msg.bodyPreview?.slice(0, 255) ?? "";
+          const bodyFull = msg.body?.content ?? bodyPreview;
+          const conversationId = msg.conversationId ?? null;
+          const providerMessageId = msg.id;
+          const receivedAt = msg.sentDateTime
+            ? new Date(msg.sentDateTime)
+            : msg.receivedDateTime
+              ? new Date(msg.receivedDateTime)
+              : new Date();
+
+          await processUserMailboxEmailForDelta({
+            orgId: mailbox.orgId,
+            monitoredMailbox: { id: mailbox.id, userId: mailbox.userId, email: mailbox.email },
+            fromEmail,
+            fromName,
+            toEmail,
+            allToRecipients: [...allToRecipients, ...allCcRecipients],
+            subject,
+            bodyPreview,
+            bodyFull: bodyFull.slice(0, 5000),
+            conversationId,
+            providerMessageId,
+            receivedAt,
+            mailboxEmail: mailbox.email,
+          });
+          processed++;
+        } catch (msgErr) {
+          errors++;
+          log(`Delta sync message error (${folder}): ${msgErr instanceof Error ? msgErr.message : String(msgErr)}`);
+        }
+      }
+
+      if (folder === "inbox") inboxToken = newDeltaToken;
+      else sentToken = newDeltaToken;
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      log(`Delta sync error for ${mailbox.email}/${folder}: ${m}`);
+      errors++;
+    }
   }
+
+  await storage.updateMonitoredMailbox(mailbox.id, {
+    deltaSyncToken: inboxToken,
+    sentDeltaSyncToken: sentToken,
+    lastSyncAt: new Date(),
+    syncStatus: errors > 0 ? "partial" : "active",
+    syncError: errors > 0 ? `${errors} message(s) failed` : null,
+  });
 
   return { processed, errors };
 }

@@ -2583,6 +2583,7 @@ export async function runMigrations() {
     await clientMmb.query(`CREATE UNIQUE INDEX IF NOT EXISTS monitored_mailboxes_org_email_idx ON monitored_mailboxes(org_id, email)`);
     await clientMmb.query(`CREATE INDEX IF NOT EXISTS monitored_mailboxes_org_enabled_idx ON monitored_mailboxes(org_id, enabled)`);
     await clientMmb.query(`ALTER TABLE monitored_mailboxes ADD COLUMN IF NOT EXISTS sent_items_subscription_id TEXT`);
+    await clientMmb.query(`ALTER TABLE monitored_mailboxes ADD COLUMN IF NOT EXISTS sent_delta_sync_token TEXT`);
     console.log("[migrations] monitored_mailboxes table ensured (Task #230)");
   } catch (err) {
     console.error("[migrations] monitored_mailboxes error:", err);
