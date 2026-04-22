@@ -10,9 +10,12 @@
  */
 
 import type { Express } from "express";
-import { requireAuth } from "../auth";
+import multer from "multer";
+import XLSX from "xlsx";
+import { requireAuth, getCurrentUser } from "../auth";
 import { storage } from "../storage";
 import { z } from "zod";
+import { runImportFromWorkbook as runAvailableFreightImportFromWorkbook } from "../availableFreightImporter";
 import { loadEffectivePolicy } from "../proactiveOpportunityService";
 import {
   buildOpportunityDraft,
@@ -59,7 +62,36 @@ const policyPatchSchema = z.object({
   specialNotes: z.string().nullable().optional(),
 });
 
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+
 export function registerProactiveOpportunityRoutes(app: Express) {
+  // ── UPLOAD ────────────────────────────────────────────────────────────────
+  // Direct file-upload entry to the Available Freight importer. Lets users
+  // populate freight_opportunities (and load_fact mirror) without OneDrive.
+  app.post("/api/freight-opportunities/upload", requireAuth, upload.single("file"), async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const org = orgId(req);
+      if (!org) return res.status(400).json({ error: "No organization" });
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+      const workbook = XLSX.read(req.file.buffer, { type: "buffer", cellDates: true });
+      const summary = await runAvailableFreightImportFromWorkbook(
+        workbook,
+        req.file.originalname,
+        org,
+        user.id,
+        "manual",
+      );
+      res.json(summary);
+    } catch (err) {
+      console.error("[freight-opps] upload error:", err);
+      const message = err instanceof Error ? err.message : "Failed to import available freight";
+      res.status(500).json({ error: message });
+    }
+  });
+
   // ── LIST ──────────────────────────────────────────────────────────────────
   app.get("/api/freight-opportunities", requireAuth, async (req, res) => {
     try {

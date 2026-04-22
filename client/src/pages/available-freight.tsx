@@ -1,6 +1,8 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
+import { useToast } from "@/hooks/use-toast";
+import { queryClient } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,7 +16,7 @@ import {
 } from "@/components/ui/table";
 import {
   Truck, AlertCircle, ChevronRight, RefreshCw, Search, Inbox,
-  ArrowUpRight,
+  ArrowUpRight, Upload,
 } from "lucide-react";
 import type {
   Company,
@@ -103,6 +105,43 @@ export default function AvailableFreightPage() {
   const [statusFilter, setStatusFilter] = useState<string>("active");
   const [leadTimeFilter, setLeadTimeFilter] = useState<string>("any");
   const [search, setSearch] = useState("");
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const { toast } = useToast();
+
+  async function handleUploadFile(file: File) {
+    setIsUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/freight-opportunities/upload", {
+        method: "POST",
+        body: fd,
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `${res.status}` }));
+        throw new Error(err.error || `Upload failed (${res.status})`);
+      }
+      const summary = await res.json();
+      toast({
+        title: "Available freight imported",
+        description: `${summary.inserted ?? 0} new, ${summary.updated ?? 0} updated, ${summary.expired ?? 0} expired${
+          summary.unmatchedCompanies ? `, ${summary.unmatchedCompanies} unmatched companies` : ""
+        }`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities"] });
+    } catch (e) {
+      toast({
+        title: "Upload failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
 
   const statusParam =
     statusFilter === "active"
@@ -178,16 +217,39 @@ export default function AvailableFreightPage() {
             sending happens in a later phase.
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => refetch()}
-          disabled={isFetching}
-          data-testid="button-refresh-opportunities"
-        >
-          <RefreshCw className={`h-4 w-4 mr-2 ${isFetching ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            data-testid="input-upload-available-freight"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleUploadFile(f);
+            }}
+          />
+          <Button
+            variant="default"
+            size="sm"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isUploading}
+            data-testid="button-upload-available-freight"
+          >
+            <Upload className={`h-4 w-4 mr-2 ${isUploading ? "animate-pulse" : ""}`} />
+            {isUploading ? "Uploading…" : "Upload Excel"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            data-testid="button-refresh-opportunities"
+          >
+            <RefreshCw className={`h-4 w-4 mr-2 ${isFetching ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <Card>
