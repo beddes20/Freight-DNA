@@ -17,6 +17,53 @@ import {
   tasks,
   type Play,
 } from "@shared/schema";
+import {
+  PLAYBOOK_IMPORT_FIELDS,
+  buildPlaybookImportPreview,
+  validateRow,
+  type ParsedPlayRow,
+} from "../lib/playbookImport";
+import * as XLSX from "xlsx";
+import multer from "multer";
+
+const playbookUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+});
+
+/**
+ * Parse a raw .xlsx or .csv buffer into header-keyed string rows.
+ * Header normalization: trims whitespace and drops empty header columns.
+ * Exposed for route handlers and tests.
+ */
+export function parsePlaybookSpreadsheet(buffer: Buffer | ArrayBuffer): {
+  headers: string[];
+  rows: Array<Record<string, string>>;
+} {
+  const wb = XLSX.read(buffer, { type: "buffer" });
+  const sheetName = wb.SheetNames[0];
+  if (!sheetName) return { headers: [], rows: [] };
+  const ws = wb.Sheets[sheetName];
+  const aoa: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false }) as unknown[][];
+  if (!aoa || aoa.length < 1) return { headers: [], rows: [] };
+  const headerCells = (aoa[0] ?? []).map((h) => String(h ?? "").trim());
+  const headers: string[] = [];
+  const colIdxs: number[] = [];
+  headerCells.forEach((h, i) => { if (h) { headers.push(h); colIdxs.push(i); } });
+  const rows: Array<Record<string, string>> = [];
+  for (let r = 1; r < aoa.length; r++) {
+    const row = aoa[r] ?? [];
+    const hasAny = row.some((c) => c != null && String(c).trim() !== "");
+    if (!hasAny) continue;
+    const obj: Record<string, string> = {};
+    headers.forEach((h, i) => {
+      const v = row[colIdxs[i]];
+      obj[h] = v == null ? "" : String(v).trim();
+    });
+    rows.push(obj);
+  }
+  return { headers, rows };
+}
 
 const AUTHOR_ROLES = new Set(["admin", "director", "national_account_manager", "sales_director", "logistics_manager"]);
 const isAuthor = (role: string | null | undefined) => AUTHOR_ROLES.has(String(role));
@@ -227,6 +274,213 @@ export async function evaluatePlayTriggersForOrg(orgId: string): Promise<{ creat
 }
 
 export function registerPlaybookRoutes(app: Express): void {
+  // ── Import: download .xlsx template ──────────────────────────────────────
+  app.get("/api/playbook/import/template", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAuthor(user.role)) return res.status(403).json({ error: "Manager/Admin only" });
+
+      const headers = PLAYBOOK_IMPORT_FIELDS.map(f => f.label.replace(" *", ""));
+      const example = [
+        "Re-engage stalled quote",
+        "Re-open conversation when a quote has gone quiet for 3+ days.",
+        "customer",
+        "email",
+        "quote_no_response",
+        "1) Open the original quote\n2) Send a friendly nudge\n3) Offer a 15-min call",
+        "Hi {{contactName}}, checking in on the quote we sent for {{laneOrigin}} → {{laneDest}}. Anything we can adjust?",
+        "Reply within 96h",
+        "96",
+      ];
+      const ws = XLSX.utils.aoa_to_sheet([headers, example]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Plays");
+      const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="playbook-import-template.xlsx"`);
+      res.send(buffer);
+    } catch (err: any) {
+      console.error("[playbook] template error:", err);
+      res.status(500).json({ error: "Failed to build template" });
+    }
+  });
+
+  // ── Import: server-side parse of uploaded .xlsx/.csv ─────────────────────
+  // Accepts a multipart upload, normalizes headers, and returns the parsed
+  // header list + raw rows so the client can drive its mapping UI without
+  // having to also implement spreadsheet parsing in the browser.
+  app.post(
+    "/api/playbook/import/parse",
+    requireAuth,
+    playbookUpload.single("file"),
+    async (req, res) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        if (!isAuthor(user.role)) return res.status(403).json({ error: "Manager/Admin only" });
+        const file = (req as unknown as { file?: { buffer: Buffer; originalname?: string } }).file;
+        if (!file?.buffer) return res.status(400).json({ error: "Missing file" });
+        const parsed = parsePlaybookSpreadsheet(file.buffer);
+        if (parsed.headers.length === 0) return res.status(400).json({ error: "No header row detected" });
+        if (parsed.rows.length === 0) return res.status(400).json({ error: "No data rows detected" });
+        res.json({ headers: parsed.headers, rows: parsed.rows });
+      } catch (err: any) {
+        console.error("[playbook] parse error:", err);
+        res.status(500).json({ error: "Failed to parse file" });
+      }
+    },
+  );
+
+  // ── Import: preview parsed rows w/ validation + dup detection ────────────
+  const previewSchema = z.object({
+    rows: z.array(z.record(z.any())).max(2000),
+  });
+  app.post("/api/playbook/import/preview", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAuthor(user.role)) return res.status(403).json({ error: "Manager/Admin only" });
+      const { rows } = previewSchema.parse(req.body);
+
+      const existing = await db.select({ name: plays.name, status: plays.status })
+        .from(plays)
+        .where(and(eq(plays.orgId, user.organizationId)));
+      const existingNames = existing.filter(p => p.status !== "archived").map(p => p.name);
+
+      const stringRows = rows.map(r => {
+        const out: Record<string, string> = {};
+        for (const [k, v] of Object.entries(r)) out[k] = v == null ? "" : String(v);
+        return out;
+      });
+      const preview = buildPlaybookImportPreview(stringRows, existingNames);
+      res.json({ preview });
+    } catch (err: any) {
+      if (err?.issues) return res.status(400).json({ error: err.issues });
+      console.error("[playbook] import preview error:", err);
+      res.status(500).json({ error: "Failed to preview import" });
+    }
+  });
+
+  // ── Import: bulk-create plays as drafts ──────────────────────────────────
+  const importSchema = z.object({
+    rows: z.array(z.record(z.any())).max(2000),
+    overwriteDuplicates: z.boolean().optional().default(false),
+  });
+  app.post("/api/playbook/import", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!isAuthor(user.role)) return res.status(403).json({ error: "Manager/Admin only" });
+      const { rows, overwriteDuplicates } = importSchema.parse(req.body);
+
+      const existing = await db.select().from(plays)
+        .where(eq(plays.orgId, user.organizationId));
+      const existingByName = new Map<string, typeof existing[number]>();
+      for (const p of existing) {
+        if (p.status !== "archived") existingByName.set(p.name.toLowerCase(), p);
+      }
+
+      let created = 0;
+      let updated = 0;
+      let skipped = 0;
+      const errors: Array<{ row: number; error: string }> = [];
+      const seenInBatch = new Set<string>();
+
+      for (let i = 0; i < rows.length; i++) {
+        const raw = rows[i];
+        const stringRow: Record<string, string> = {};
+        for (const [k, v] of Object.entries(raw)) stringRow[k] = v == null ? "" : String(v);
+
+        const { parsed, errors: rowErrors } = validateRow(stringRow);
+        if (!parsed) {
+          errors.push({ row: i + 1, error: rowErrors.join("; ") });
+          skipped++;
+          continue;
+        }
+        const key = parsed.name.toLowerCase();
+        if (seenInBatch.has(key)) {
+          skipped++;
+          errors.push({ row: i + 1, error: "Duplicate name within file" });
+          continue;
+        }
+        const existingMatch = existingByName.get(key);
+        if (existingMatch && !overwriteDuplicates) {
+          skipped++;
+          continue;
+        }
+        seenInBatch.add(key);
+
+        try {
+          if (existingMatch && overwriteDuplicates) {
+            // Overwrite as a NEW DRAFT VERSION of the existing play
+            // (mirrors the PATCH flow when a published play is edited):
+            // bump current_version, flip status back to draft, replace
+            // play fields, and append a new play_versions snapshot.
+            const newVersion = existingMatch.currentVersion + 1;
+            const [updatedPlay] = await db.update(plays).set({
+              name: parsed.name,
+              description: parsed.description,
+              audience: parsed.audience,
+              channel: parsed.channel,
+              triggerType: parsed.triggerType,
+              recommendedSteps: parsed.recommendedSteps,
+              templateBody: parsed.templateBody,
+              successMetric: parsed.successMetric,
+              outcomeWindowHours: parsed.outcomeWindowHours,
+              status: "draft",
+              currentVersion: newVersion,
+              updatedAt: new Date(),
+            }).where(eq(plays.id, existingMatch.id)).returning();
+            await db.insert(playVersions).values({
+              playId: updatedPlay.id,
+              version: newVersion,
+              snapshot: snapshotOf(updatedPlay),
+              publishedAt: null,
+              createdBy: user.id,
+            });
+            updated++;
+          } else {
+            const [createdPlay] = await db.insert(plays).values({
+              orgId: user.organizationId,
+              name: parsed.name,
+              description: parsed.description,
+              audience: parsed.audience,
+              channel: parsed.channel,
+              triggerType: parsed.triggerType,
+              triggerConfig: {},
+              signalType: null,
+              recommendedSteps: parsed.recommendedSteps,
+              templateBody: parsed.templateBody,
+              successMetric: parsed.successMetric,
+              outcomeWindowHours: parsed.outcomeWindowHours,
+              status: "draft",
+              createdBy: user.id,
+            }).returning();
+            await db.insert(playVersions).values({
+              playId: createdPlay.id,
+              version: 1,
+              snapshot: snapshotOf(createdPlay),
+              publishedAt: null,
+              createdBy: user.id,
+            });
+            created++;
+          }
+        } catch (e: any) {
+          console.error("[playbook] import insert error row", i + 1, e);
+          errors.push({ row: i + 1, error: String(e?.message ?? e) });
+          skipped++;
+        }
+      }
+
+      res.json({ created, updated, skipped, errors });
+    } catch (err: any) {
+      if (err?.issues) return res.status(400).json({ error: err.issues });
+      console.error("[playbook] import error:", err);
+      res.status(500).json({ error: "Failed to import" });
+    }
+  });
+
   // ── List plays ────────────────────────────────────────────────────────────
   app.get("/api/playbook/plays", requireAuth, async (req: Request, res: Response) => {
     try {

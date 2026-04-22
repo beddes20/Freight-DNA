@@ -13,7 +13,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { ClipboardList, BarChart3, Plus, Send, CheckCircle2, XCircle, Clock, Sparkles, Pencil, Archive, Upload, History, Info, AlertTriangle } from "lucide-react";
+import { ClipboardList, BarChart3, Plus, Send, CheckCircle2, XCircle, Clock, Sparkles, Pencil, Archive, Upload, History, Info, AlertTriangle, FileUp, Eye } from "lucide-react";
+import { ImportPlaybookDialog } from "./playbook/components/ImportPlaybookDialog";
 
 interface Play {
   id: string;
@@ -142,6 +143,8 @@ export default function PlaybookPage() {
   const [channelFilter, setChannelFilter] = useState<string>("all");
   const [audienceFilter, setAudienceFilter] = useState<string>("all");
   const [versionsForPlay, setVersionsForPlay] = useState<Play | null>(null);
+  const [detailPlay, setDetailPlay] = useState<Play | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const [selectedRun, setSelectedRun] = useState<PlayRunRow | null>(null);
   const [outcomeNotes, setOutcomeNotes] = useState("");
 
@@ -320,6 +323,11 @@ export default function PlaybookPage() {
             </Link>
           )}
           {canAuthor && (
+            <Button size="sm" variant="outline" onClick={() => setImportOpen(true)} data-testid="button-import-playbook">
+              <FileUp className="h-4 w-4 mr-2" /> Import from Excel
+            </Button>
+          )}
+          {canAuthor && (
             <Button size="sm" onClick={() => openEditor()} data-testid="button-new-play">
               <Plus className="h-4 w-4 mr-2" /> New play
             </Button>
@@ -417,7 +425,14 @@ export default function PlaybookPage() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium" data-testid={`text-play-name-${p.id}`}>{p.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => setDetailPlay(p)}
+                          className="font-medium hover:underline text-left"
+                          data-testid={`text-play-name-${p.id}`}
+                        >
+                          {p.name}
+                        </button>
                         {statusBadge(p.status)}
                         <Badge variant="outline" className="text-xs">v{p.currentVersion}</Badge>
                         <Badge variant="outline" className="text-xs">{p.audience}</Badge>
@@ -438,6 +453,9 @@ export default function PlaybookPage() {
                           <Send className="h-4 w-4 mr-2" /> Run
                         </Button>
                       )}
+                      <Button size="sm" variant="ghost" onClick={() => setDetailPlay(p)} data-testid={`button-view-${p.id}`}>
+                        <Eye className="h-4 w-4 mr-1" /> View
+                      </Button>
                       {canAuthor && (
                         <div className="flex gap-2">
                           <Button size="sm" variant="ghost" onClick={() => openEditor(p)} data-testid={`button-edit-${p.id}`}>
@@ -682,6 +700,16 @@ export default function PlaybookPage() {
       {/* Version history dialog */}
       <VersionHistoryDialog play={versionsForPlay} onOpenChange={(open) => { if (!open) setVersionsForPlay(null); }} />
 
+      {/* Play detail / run view */}
+      <PlayDetailDialog
+        play={detailPlay}
+        onOpenChange={(open) => { if (!open) setDetailPlay(null); }}
+        onRun={(id) => { runMutation.mutate({ playId: id }); setDetailPlay(null); }}
+      />
+
+      {/* Import from Excel */}
+      <ImportPlaybookDialog open={importOpen} onClose={() => setImportOpen(false)} />
+
       {/* Outcome notes dialog */}
       <Dialog open={!!selectedRun} onOpenChange={(open) => { if (!open) setSelectedRun(null); }}>
         <DialogContent data-testid="dialog-outcome-notes">
@@ -709,6 +737,90 @@ export default function PlaybookPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function PlayDetailDialog({
+  play,
+  onOpenChange,
+  onRun,
+}: {
+  play: Play | null;
+  onOpenChange: (open: boolean) => void;
+  onRun: (id: string) => void;
+}) {
+  if (!play) {
+    return (
+      <Dialog open={false} onOpenChange={onOpenChange}>
+        <DialogContent />
+      </Dialog>
+    );
+  }
+  const steps = play.recommendedSteps ?? [];
+  return (
+    <Dialog open={!!play} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="dialog-play-detail">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 flex-wrap">
+            <span data-testid="text-detail-name">{play.name}</span>
+            {statusBadge(play.status)}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 text-sm">
+          {play.description && (
+            <section data-testid="section-purpose">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Purpose</div>
+              <p>{play.description}</p>
+            </section>
+          )}
+          <section className="grid grid-cols-3 gap-3">
+            <div data-testid="section-audience">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Audience</div>
+              <Badge variant="outline" className="text-xs capitalize">{play.audience}</Badge>
+            </div>
+            <div data-testid="section-channel">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Channel</div>
+              <Badge variant="outline" className="text-xs capitalize">{play.channel.replace("_", " ")}</Badge>
+            </div>
+            <div data-testid="section-trigger">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Trigger</div>
+              <Badge variant="outline" className="text-xs">{TRIGGER_LABELS[play.triggerType] ?? play.triggerType}</Badge>
+            </div>
+          </section>
+          {steps.length > 0 && (
+            <section data-testid="section-steps">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Recommended steps</div>
+              <ol className="list-decimal list-inside space-y-1">
+                {steps.map((s, i) => <li key={i} data-testid={`detail-step-${i}`}>{s}</li>)}
+              </ol>
+            </section>
+          )}
+          {play.templateBody && (
+            <section data-testid="section-template">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">
+                {play.channel === "email" ? "Email template" : "Talk-track"}
+              </div>
+              <pre className="whitespace-pre-wrap font-sans text-sm bg-muted/40 border rounded-md p-3" data-testid="text-detail-template">{play.templateBody}</pre>
+            </section>
+          )}
+          {play.successMetric && (
+            <section data-testid="section-metric">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1">Success metric</div>
+              <p>{play.successMetric}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Outcome window: {play.outcomeWindowHours}h</p>
+            </section>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="button-detail-close">Close</Button>
+          {play.status === "published" && (
+            <Button onClick={() => onRun(play.id)} data-testid="button-detail-run">
+              <Send className="h-4 w-4 mr-2" /> Run play
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
