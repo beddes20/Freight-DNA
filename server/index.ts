@@ -285,8 +285,12 @@ async function initStripe() {
   // Backfill DNA agent + base persona for every existing org so the loader
   // never has to seed lazily on the first user turn (Task #290).
   try {
-    const { backfillDefaultAgentsForAllOrgs } = await import("./agent/persona");
+    const { backfillDefaultAgentsForAllOrgs, migrateLegacyDefaultPersonas } = await import("./agent/persona");
     await backfillDefaultAgentsForAllOrgs();
+    // Phase 2A: supersede legacy stock persona bodies so live orgs pick up
+    // built-in routing improvements (e.g. team-activity tool guidance)
+    // without operator action. Customised persona bodies are left alone.
+    await migrateLegacyDefaultPersonas();
   } catch (err) {
     console.error("[startup] DNA agent backfill failed:", err);
   }

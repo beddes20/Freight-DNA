@@ -243,7 +243,7 @@ export const TOOLS: AgentTool[] = [
     name: "team_touchpoint_tally",
     capability: "read.touchpoint",
     description:
-      "Manager-only: per-rep touchpoint count for a date window. Use for questions like 'how many touchpoints has each rep made today/this week', 'who's been most active', 'team activity rollup'. Defaults to today. Only available to admin/director/sales_director or when the viewer is in 'everyone' scope.",
+      "Per-rep touchpoint count for a date window. Always call this for ANY question about team-wide activity totals, leaderboards, who's been most active, per-rep tallies, or 'how many touchpoints did each rep make' — never estimate from memory. Defaults to today. Manager-only at execute time; if the viewer is not a manager, the tool returns a polite refusal you should pass through verbatim.",
     parameters: {
       type: "object",
       properties: {
@@ -253,7 +253,12 @@ export const TOOLS: AgentTool[] = [
       },
     },
     async execute(ctx, args) {
-      const isManager = ["admin", "director", "sales_director"].includes(ctx.rep.role) || ctx.scope === "everyone";
+      // SECURITY: gate purely on the rep's role. Do NOT honour
+      // ctx.scope === "everyone" as a manager equivalence — scope is a UI
+      // filter, not an auth signal, and a non-manager could otherwise post
+      // {scope:"everyone"} to the chat API to escalate. The channel layer
+      // (server/chatbot.ts) also clamps scope, but defense in depth applies.
+      const isManager = ["admin", "director", "sales_director"].includes(ctx.rep.role);
       if (!isManager) {
         return { kind: "data", text: "This rollup is only available to managers (admin / director / sales director). Ask about your own activity instead." };
       }
@@ -303,7 +308,7 @@ export const TOOLS: AgentTool[] = [
     name: "reps_missing_touchpoints",
     capability: "read.touchpoint",
     description:
-      "Manager-only: list sales reps who have logged ZERO touchpoints in a date window. Use for 'who hasn't logged a touchpoint today', 'which reps are dark this week', 'who needs a nudge'. Defaults to today.",
+      "List sales reps who have logged ZERO touchpoints in a date window. Always call this for ANY question about who's behind on activity, who's dark/quiet, who hasn't logged today/this week, or who needs a nudge — never guess. Defaults to today. Manager-only at execute time; non-managers receive a polite refusal you should pass through verbatim.",
     parameters: {
       type: "object",
       properties: {
@@ -312,7 +317,8 @@ export const TOOLS: AgentTool[] = [
       },
     },
     async execute(ctx, args) {
-      const isManager = ["admin", "director", "sales_director"].includes(ctx.rep.role) || ctx.scope === "everyone";
+      // SECURITY: gate on role only. See team_touchpoint_tally for rationale.
+      const isManager = ["admin", "director", "sales_director"].includes(ctx.rep.role);
       if (!isManager) {
         return { kind: "data", text: "This rollup is only available to managers (admin / director / sales director)." };
       }

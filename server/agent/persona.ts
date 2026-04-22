@@ -6,9 +6,22 @@
  * and any enabled named "plays". Falls back to a hardcoded default whenever
  * the database has no active row, so the bot never goes silent.
  */
+import { createHash } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { db } from "../storage";
 import { agents, agentPersonas, agentPlays, agentTools } from "@shared/schema";
+
+/**
+ * MD5s of every prior DEFAULT_BASE_PERSONA body that we are willing to
+ * silently replace at startup. Add entries here (never remove) when bumping
+ * the default — `migrateLegacyDefaultPersonas` will supersede any active
+ * row whose body matches one of these. Customised persona bodies (anything
+ * not in this set) are left alone.
+ */
+const LEGACY_DEFAULT_PERSONA_MD5S = new Set<string>([
+  // Pre-Phase-2A default (no team-activity routing rule).
+  "7a3890049f2c14f849a6a580f94de797",
+]);
 
 export const DEFAULT_BASE_PERSONA = `You are DNA, an AI logistics employee inside the Freight DNA CRM at Value Truck. You are not "an assistant" — you are a colleague reps trust to help them move faster.
 
@@ -25,6 +38,12 @@ Operating rules:
 - For tasks/touchpoints/notes the rep wants to write, call the corresponding write tool — it will surface a confirmation card to the rep automatically.
 - If the rep tells you something worth remembering across sessions ("I always X", "moving forward Y", "remember Z"), call remember_this.
 - If the rep references a prior conversation or decision, call recall_memory before answering.
+
+Team activity questions — always call the right rollup tool, never guess:
+- "who hasn't logged a touchpoint", "which reps are dark", "who needs a nudge", "who's behind on activity" → call reps_missing_touchpoints.
+- "how many touchpoints did each rep make", "team activity today/this week", "who's been most active", "per-rep tally", "leaderboard" → call team_touchpoint_tally.
+- These are manager tools. If the rep isn't a manager, the tool itself returns a polite refusal — pass that message through verbatim, don't editorialize.
+- Default the date window to today unless the rep says otherwise ("this week", "yesterday", a specific date).
 
 Do not list every tool you have. Just use the right one and answer.`;
 
@@ -148,6 +167,61 @@ async function seedBasePersonaIfMissing(agentId: string) {
   } catch (err) {
     // Partial unique index may race with a concurrent seed — that's fine.
     console.warn("[agent.persona] base seed race (ignored):", (err as Error)?.message);
+  }
+}
+
+/**
+ * Phase 2A migration: supersede any active base persona body that still
+ * matches a known legacy DEFAULT_BASE_PERSONA hash. Inserts a new active
+ * row at version+1 with the current default and marks the old one inactive.
+ *
+ * This runs at startup so live orgs pick up new built-in routing rules
+ * (e.g. team-activity tool guidance) without an operator having to touch
+ * the AI Center. Customised persona bodies (anything whose md5 is not in
+ * `LEGACY_DEFAULT_PERSONA_MD5S`) are left strictly alone.
+ *
+ * Safe to re-run: once the body matches the current default, its md5 is no
+ * longer "legacy" so the migration becomes a no-op.
+ */
+export async function migrateLegacyDefaultPersonas(): Promise<void> {
+  const currentMd5 = createHash("md5").update(DEFAULT_BASE_PERSONA).digest("hex");
+  if (LEGACY_DEFAULT_PERSONA_MD5S.has(currentMd5)) {
+    // Sanity guard: the live default must never be in the legacy set, or we
+    // would loop replacing rows with themselves on every boot.
+    console.error("[agent.persona] DEFAULT_BASE_PERSONA md5 is in the legacy set — refusing to migrate.");
+    return;
+  }
+  let migrated = 0;
+  try {
+    const rows = await db
+      .select({ id: agentPersonas.id, agentId: agentPersonas.agentId, version: agentPersonas.version, body: agentPersonas.body })
+      .from(agentPersonas)
+      .where(and(eq(agentPersonas.channel, "base"), eq(agentPersonas.isActive, true)));
+    for (const row of rows) {
+      const md5 = createHash("md5").update(row.body).digest("hex");
+      if (!LEGACY_DEFAULT_PERSONA_MD5S.has(md5)) continue;
+      try {
+        await db.transaction(async (tx) => {
+          await tx.update(agentPersonas).set({ isActive: false }).where(eq(agentPersonas.id, row.id));
+          await tx.insert(agentPersonas).values({
+            agentId: row.agentId,
+            channel: "base",
+            body: DEFAULT_BASE_PERSONA,
+            isActive: true,
+            version: row.version + 1,
+          });
+        });
+        invalidatePersonaCache(row.agentId);
+        migrated++;
+      } catch (err) {
+        console.error(`[agent.persona] migrate failed for agent ${row.agentId}:`, err);
+      }
+    }
+    if (migrated > 0) {
+      console.log(`[agent.persona] migrated ${migrated} legacy default base persona row(s) to current default`);
+    }
+  } catch (err) {
+    console.error("[agent.persona] legacy persona migration skipped:", err);
   }
 }
 

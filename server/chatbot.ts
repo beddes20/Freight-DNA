@@ -600,7 +600,22 @@ export function registerChatbotRoutes(app: Express): void {
         .orderBy(chatMessages.id)
         .limit(30);
 
-      const effectiveScope = (user.role === "admin" || user.role === "director") ? "everyone" : scope;
+      // SECURITY: client-supplied `scope` must NEVER let a non-manager pull
+      // org-wide rollups. Several manager-only tools (team_touchpoint_tally,
+      // reps_missing_touchpoints, …) historically also accepted scope==="everyone"
+      // as a manager equivalence — so a sales rep posting `{scope:"everyone"}`
+      // would have bypassed the gate. Clamp here at the channel boundary:
+      //   - admin / director  → always "everyone" (preserves prior behaviour)
+      //   - sales_director    → may opt in via scope=everyone
+      //   - everyone else     → forced to "my_team", regardless of body
+      let effectiveScope: "my_team" | "everyone";
+      if (user.role === "admin" || user.role === "director") {
+        effectiveScope = "everyone";
+      } else if (user.role === "sales_director" && scope === "everyone") {
+        effectiveScope = "everyone";
+      } else {
+        effectiveScope = "my_team";
+      }
 
       // ─── DNA Logistics Bot agent core (Task #282 Phase 1) ──────────────
       res.setHeader("Content-Type", "text/event-stream");
