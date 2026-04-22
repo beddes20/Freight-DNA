@@ -520,7 +520,26 @@ export interface IStorage {
   getTouchpointsByCompany(companyId: string): Promise<Touchpoint[]>;
   getTouchpointsByUser(userId: string, since: string): Promise<Touchpoint[]>;
   getTouchpointsByOrg(organizationId: string): Promise<Touchpoint[]>;
+  /**
+   * @deprecated Prefer `createTouchpointWithDefaults` for new routes — it
+   * fills safe defaults for sentiment/isMeaningful/playLabel/date/createdAt
+   * so callers can't drift the shape (the historical source of touchpoint
+   * NULL-date crashes and missing playLabel attribution). Direct calls are
+   * still allowed for back-fills and migrations.
+   */
   createTouchpoint(tp: InsertTouchpoint): Promise<Touchpoint>;
+  createTouchpointWithDefaults(input: {
+    companyId: string;
+    loggedById: string;
+    contactId?: string | null;
+    type?: string;
+    notes?: string | null;
+    sentiment?: string | null;
+    isMeaningful?: boolean;
+    playLabel?: string | null;
+    date?: string;
+    createdAt?: string;
+  }): Promise<Touchpoint>;
   updateTouchpoint(id: string, data: { isMeaningful?: boolean; notes?: string }): Promise<Touchpoint>;
   /** Re-attribute all touchpoints for a contact to a new company (used when a contact moves). */
   updateTouchpointCompanyByContact(contactId: string, newCompanyId: string): Promise<number>;
@@ -558,8 +577,24 @@ export interface IStorage {
   getVendorRoutedByCompany(companyId: string): Promise<VendorRouted[]>;
   toggleVendorRouted(companyId: string, rowKey: string): Promise<{ active: boolean }>;
 
+  /**
+   * @deprecated Use `getPtoPassoffsByOrg` for org-scoped queries (admin views)
+   * or pass an explicit `createdById`/`coveringUserId` for user-scoped views.
+   * The `{all:true}` mode here returns passoffs from every org and was the
+   * source of cross-org data leakage for admins.
+   */
   getPtoPassoffs(filter: { createdById?: string; coveringUserId?: string; all?: boolean }): Promise<PtoPassoff[]>;
+  /** Org-scoped passoff list. Use this from any admin/leadership route. */
+  getPtoPassoffsByOrg(orgId: string, filter?: { createdById?: string; coveringUserId?: string }): Promise<PtoPassoff[]>;
+  /**
+   * @deprecated Use `getPtoPassoffInOrg(id, orgId)`. The un-scoped version
+   * lets a caller load any passoff if they know its UUID, regardless of
+   * which org owns it.
+   */
   getPtoPassoff(id: string): Promise<PtoPassoff | undefined>;
+  /** Org-scoped single-passoff fetch. Returns undefined if the passoff
+   *  exists but is owned by a user outside `orgId`. */
+  getPtoPassoffInOrg(id: string, orgId: string): Promise<PtoPassoff | undefined>;
   createPtoPassoff(data: InsertPtoPassoff & { createdAt: string }): Promise<PtoPassoff>;
   updatePtoPassoff(id: string, data: Partial<InsertPtoPassoff>): Promise<PtoPassoff | undefined>;
   deletePtoPassoff(id: string): Promise<boolean>;
@@ -2999,6 +3034,39 @@ export class DatabaseStorage implements IStorage {
   async getPtoPassoff(id: string): Promise<PtoPassoff | undefined> {
     const [passoff] = await db.select().from(ptoPassoffs).where(eq(ptoPassoffs.id, id));
     return passoff;
+  }
+
+  async getPtoPassoffInOrg(id: string, orgId: string): Promise<PtoPassoff | undefined> {
+    // PTO passoffs don't carry organizationId directly — they link to it
+    // via users.organizationId on createdById. Inner-join enforces the org
+    // boundary; cross-org IDs return undefined.
+    const [row] = await db
+      .select({ p: ptoPassoffs })
+      .from(ptoPassoffs)
+      .innerJoin(users, eq(users.id, ptoPassoffs.createdById))
+      .where(and(eq(ptoPassoffs.id, id), eq(users.organizationId, orgId)));
+    return row?.p;
+  }
+
+  async getPtoPassoffsByOrg(
+    orgId: string,
+    filter?: { createdById?: string; coveringUserId?: string },
+  ): Promise<PtoPassoff[]> {
+    const conds = [eq(users.organizationId, orgId)];
+    if (filter?.createdById && filter?.coveringUserId) {
+      conds.push(or(eq(ptoPassoffs.createdById, filter.createdById), eq(ptoPassoffs.coveringUserId, filter.coveringUserId))!);
+    } else if (filter?.createdById) {
+      conds.push(eq(ptoPassoffs.createdById, filter.createdById));
+    } else if (filter?.coveringUserId) {
+      conds.push(eq(ptoPassoffs.coveringUserId, filter.coveringUserId));
+    }
+    const rows = await db
+      .select({ p: ptoPassoffs })
+      .from(ptoPassoffs)
+      .innerJoin(users, eq(users.id, ptoPassoffs.createdById))
+      .where(and(...conds))
+      .orderBy(desc(ptoPassoffs.createdAt));
+    return rows.map(r => r.p);
   }
 
   async createPtoPassoff(data: InsertPtoPassoff & { createdAt: string }): Promise<PtoPassoff> {

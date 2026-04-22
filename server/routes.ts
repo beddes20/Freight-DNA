@@ -43,6 +43,7 @@ import XLSX from "xlsx";
 import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
+import { isAdmin, isLeadership } from "./lib/roles";
 import { geocodeCity, haversineDistance } from "./geocoding";
 import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable, emailMessages, emailSignals, onboardingMilestoneToggleSchema, type OnboardingMilestones, upsertSidebarTooltipSchema, type Contact, type RecurringLane } from "@shared/schema";
 import { normalizeLaneLocation, normalizeEquipmentType } from "@shared/laneFormatters";
@@ -6197,10 +6198,14 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const isAdminOrDirector = currentUser.role === "admin" || currentUser.role === "director" || currentUser.role === "sales_director";
-      const passoffs = isAdminOrDirector
-        ? await storage.getPtoPassoffs({ all: true })
-        : await storage.getPtoPassoffs({ createdById: currentUser.id, coveringUserId: currentUser.id });
+      // Org-scoped fetch — admins/directors/sales_directors see every passoff
+      // in THEIR org (not all orgs as the prior `{all:true}` query did).
+      const passoffs = isLeadership(currentUser)
+        ? await storage.getPtoPassoffsByOrg(req.session.organizationId!)
+        : await storage.getPtoPassoffsByOrg(req.session.organizationId!, {
+            createdById: currentUser.id,
+            coveringUserId: currentUser.id,
+          });
       const allItems = await Promise.all(passoffs.map(p => storage.getPtoPassoffItems(p.id)));
       // Collect all unique companyIds across all items to batch-fetch names
       const allCompanyIds = [...new Set(allItems.flat().map(i => i.companyId).filter(Boolean) as string[])];
@@ -6256,9 +6261,9 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoff((req.params.id as string));
+      const passoff = await storage.getPtoPassoffInOrg(req.params.id as string, currentUser.organizationId);
       if (!passoff) return res.status(404).json({ error: "Not found" });
-      if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
+      if (passoff.createdById !== currentUser.id && !isAdmin(currentUser)) {
         return res.status(403).json({ error: "Access denied" });
       }
       const updated = await storage.updatePtoPassoff((req.params.id as string), req.body);
@@ -6299,9 +6304,9 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoff((req.params.id as string));
+      const passoff = await storage.getPtoPassoffInOrg(req.params.id as string, currentUser.organizationId);
       if (!passoff) return res.status(404).json({ error: "Not found" });
-      if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
+      if (passoff.createdById !== currentUser.id && !isAdmin(currentUser)) {
         return res.status(403).json({ error: "Access denied" });
       }
       await storage.deletePtoPassoff((req.params.id as string));
@@ -6315,9 +6320,9 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoff((req.params.id as string));
+      const passoff = await storage.getPtoPassoffInOrg(req.params.id as string, currentUser.organizationId);
       if (!passoff) return res.status(404).json({ error: "Not found" });
-      if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
+      if (passoff.createdById !== currentUser.id && !isAdmin(currentUser)) {
         return res.status(403).json({ error: "Access denied" });
       }
       // Cross-tenant guard on optional companyId — if a passoff item references
@@ -6347,12 +6352,12 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoff((req.params.id as string));
+      const passoff = await storage.getPtoPassoffInOrg(req.params.id as string, currentUser.organizationId);
       if (!passoff) return res.status(404).json({ error: "Not found" });
       const isCovering = passoff.coveringUserId === currentUser.id;
       const isOwner = passoff.createdById === currentUser.id;
-      const isAdmin = currentUser.role === "admin";
-      if (!isOwner && !isCovering && !isAdmin) return res.status(403).json({ error: "Access denied" });
+      const isCallerAdmin = isAdmin(currentUser);
+      if (!isOwner && !isCovering && !isCallerAdmin) return res.status(403).json({ error: "Access denied" });
       // Cross-record guard: itemId must actually belong to this passoff —
       // otherwise a user authorized on passoff A could mutate items owned
       // by passoff B (different rep, possibly different org) by guessing
@@ -6361,7 +6366,7 @@ Respond with valid JSON only:
       const targetItem = items.find(i => i.id === (req.params.itemId as string));
       if (!targetItem) return res.status(404).json({ error: "Item not found" });
       // Covering user can update acknowledged + coveringNotes; owner/admin can update all
-      const allowedFields = isOwner || isAdmin
+      const allowedFields = isOwner || isCallerAdmin
         ? req.body
         : { acknowledged: req.body.acknowledged, coveringNotes: req.body.coveringNotes };
       const updated = await storage.updatePtoPassoffItem((req.params.itemId as string), allowedFields);
@@ -6397,9 +6402,9 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoff((req.params.id as string));
+      const passoff = await storage.getPtoPassoffInOrg(req.params.id as string, currentUser.organizationId);
       if (!passoff) return res.status(404).json({ error: "Not found" });
-      if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
+      if (passoff.createdById !== currentUser.id && !isAdmin(currentUser)) {
         return res.status(403).json({ error: "Access denied" });
       }
       // Cross-record guard: itemId must belong to this passoff. Same
@@ -6420,12 +6425,13 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoff((req.params.id as string));
+      const passoff = await storage.getPtoPassoffInOrg(req.params.id as string, currentUser.organizationId);
       if (!passoff) return res.status(404).json({ error: "Not found" });
       const isCovering = passoff.coveringUserId === currentUser.id;
       const isOwner = passoff.createdById === currentUser.id;
-      const isAdmin = currentUser.role === "admin" || currentUser.role === "director";
-      if (!isCovering && !isOwner && !isAdmin) return res.status(403).json({ error: "Access denied" });
+      // NOTE: includes director — historically broader than the mutating routes.
+      const isLeader = isAdmin(currentUser) || currentUser.role === "director";
+      if (!isCovering && !isOwner && !isLeader) return res.status(403).json({ error: "Access denied" });
       const allTasks = await storage.getTasks();
       const openTasks = allTasks.filter(t =>
         t.assignedTo === passoff.createdById && t.status !== "completed"
