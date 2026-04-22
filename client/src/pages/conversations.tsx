@@ -821,8 +821,11 @@ export default function ConversationsPage() {
       if (filterPriority !== "all") p.set("responsePriority", filterPriority);
       if (filterOverdue) p.set("overdue", "true");
     }
+    // Apply rep filter on every tab except "mine" (hard-pinned to current user)
+    // and "unowned" (filter is mutually exclusive with that tab's definition).
     if (
-      (activeTab === "all" || activeTab === "high_priority" || activeTab === "archived") &&
+      activeTab !== "mine" &&
+      activeTab !== "unowned" &&
       filterRep !== "all"
     ) {
       if (filterRep === "unassigned") {
@@ -1022,7 +1025,7 @@ export default function ConversationsPage() {
 
         {activeTab !== "mine" && (
           <div className="mb-4 flex flex-col md:flex-row md:items-center gap-2 md:gap-3" data-testid="rep-filter-container">
-            {(activeTab === "all" || activeTab === "high_priority" || activeTab === "archived") && (
+            {activeTab !== "unowned" && (
               <RepFilterCombobox
                 value={filterRep}
                 onChange={setFilterRep}
