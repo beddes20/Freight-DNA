@@ -171,6 +171,15 @@ export interface AvailableFreightImportSummary {
   expired: number;
   unmatchedCompanies: number;
   warnings: string[];
+  // Diagnostics: surfaced to the UI so users can debug column/name mismatches
+  // without having to grep server logs.
+  diagnostics?: {
+    sheetName?: string;
+    headers?: string[];
+    skippedWithCarrier?: number;
+    sampleUnmatchedCustomers?: string[];
+    parsedRowCount?: number;
+  };
 }
 
 interface ParsedLoad {
@@ -229,10 +238,21 @@ function buildStableKey(parts: Array<string | null>): string {
   return crypto.createHash("sha1").update(base).digest("hex").slice(0, 24);
 }
 
-function parseSheetToLoads(rows: Array<Record<string, unknown>>): ParsedLoad[] {
+function parseSheetToLoads(
+  rows: Array<Record<string, unknown>>,
+  diagnostics?: { skippedWithCarrier: number },
+): ParsedLoad[] {
   const out: ParsedLoad[] = [];
   for (const row of rows) {
-    const customerName = pick(row, "Customer", "Customer Name", "Shipper", "Account");
+    // SKIP rows that already have a carrier assigned (Column F in the user's
+    // sheet — typically "Carrier" / "Carrier Name" / "Assigned Carrier").
+    // Only loads WITHOUT an assigned carrier are "available".
+    const carrierAssigned = pick(row, "Carrier", "Carrier Name", "Assigned Carrier", "Trucking Co", "MC", "SCAC");
+    if (carrierAssigned && carrierAssigned.trim().length > 0) {
+      if (diagnostics) diagnostics.skippedWithCarrier++;
+      continue;
+    }
+    const customerName = pick(row, "Customer", "Customer Name", "Shipper", "Account", "Bill To", "BillTo");
     const originRaw = pick(row, "Origin", "Pickup", "Pickup City", "From", "Origin City");
     const destinationRaw = pick(row, "Destination", "Drop", "Delivery City", "To", "Dest", "Destination City");
     if (!customerName || !originRaw || !destinationRaw) continue;
@@ -333,6 +353,10 @@ async function fetchWorkbookFromOneDrive(filePath: string): Promise<{ workbook: 
 }
 
 function chooseDataSheet(workbook: XLSX.WorkBook): Array<Record<string, unknown>> {
+  return chooseDataSheetWithName(workbook).rows;
+}
+
+function chooseDataSheetWithName(workbook: XLSX.WorkBook): { sheetName: string; rows: Array<Record<string, unknown>> } {
   // Prefer a sheet literally named "Available Freight"; otherwise pick the
   // sheet with the most non-empty rows (after the header).
   const preferred = workbook.SheetNames.find(
@@ -343,18 +367,48 @@ function chooseDataSheet(workbook: XLSX.WorkBook): Array<Record<string, unknown>
     const bestRows = XLSX.utils.sheet_to_json(workbook.Sheets[best], { defval: "" });
     return rows.length > bestRows.length ? name : best;
   }, workbook.SheetNames[0]);
-  return XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" }) as Array<Record<string, unknown>>;
+  const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: "" }) as Array<Record<string, unknown>>;
+  return { sheetName, rows };
 }
 
 // ── Company match ───────────────────────────────────────────────────────────
 
-function buildCompanyIndex(companies: Company[]): Map<string, Company> {
-  const idx = new Map<string, Company>();
+// Normalize a company name for fuzzy matching: lowercase, strip punctuation,
+// collapse whitespace, and drop common corporate suffixes (Inc/LLC/Corp/Co/etc).
+// "Acme Logistics, Inc." → "acme logistics"
+function normalizeCompanyName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[.,'"`’()\/\\&]/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\b(incorporated|inc|llc|l\.l\.c|ltd|limited|corp|corporation|company|co|holdings|group|usa|us|the)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+interface CompanyIndex {
+  exact: Map<string, Company>;
+  normalized: Map<string, Company>;
+}
+
+function buildCompanyIndex(companies: Company[]): CompanyIndex {
+  const exact = new Map<string, Company>();
+  const normalized = new Map<string, Company>();
   for (const c of companies) {
     if (!c.name) continue;
-    idx.set(c.name.trim().toLowerCase(), c);
+    exact.set(c.name.trim().toLowerCase(), c);
+    const norm = normalizeCompanyName(c.name);
+    if (norm && !normalized.has(norm)) normalized.set(norm, c);
   }
-  return idx;
+  return { exact, normalized };
+}
+
+function lookupCompany(idx: CompanyIndex, customerName: string): Company | undefined {
+  const exact = idx.exact.get(customerName.trim().toLowerCase());
+  if (exact) return exact;
+  const norm = normalizeCompanyName(customerName);
+  if (!norm) return undefined;
+  return idx.normalized.get(norm);
 }
 
 function buildUserEmailIndex(users: User[]): Map<string, User> {
@@ -412,13 +466,23 @@ export async function runImportFromWorkbook(
   actorUserId: string | null,
   triggeredBy: "manual" | "scheduled",
 ): Promise<AvailableFreightImportSummary> {
-  const rawRows = chooseDataSheet(workbook);
-  const loads = parseSheetToLoads(rawRows);
+  const sheetPick = chooseDataSheetWithName(workbook);
+  const rawRows = sheetPick.rows;
+  const detectedHeaders = rawRows.length > 0 ? Object.keys(rawRows[0]) : [];
+  const parseDiagnostics = { skippedWithCarrier: 0 };
+  const loads = parseSheetToLoads(rawRows, parseDiagnostics);
+  console.log(
+    `[available-freight] sheet="${sheetPick.sheetName}" raw_rows=${rawRows.length} ` +
+    `parsed_loads=${loads.length} skipped_with_carrier=${parseDiagnostics.skippedWithCarrier} ` +
+    `headers=${JSON.stringify(detectedHeaders)}`,
+  );
 
   const companies = await storage.getCompanies(orgId);
   const companyIdx = buildCompanyIndex(companies);
   const users = await storage.getUsers(orgId);
   const userIdx = buildUserEmailIndex(users);
+  const sampleUnmatched: string[] = [];
+  const seenUnmatched = new Set<string>();
 
   // Pull all current available-freight opportunities tagged with this filename
   // so we can detect rows that vanished from the latest spreadsheet.
@@ -504,10 +568,15 @@ export async function runImportFromWorkbook(
     // stableKey in this pass (rare but seen with copy-paste rows), skip.
     if (seenKeys.has(load.stableKey)) continue;
     seenKeys.add(load.stableKey);
-    const company = companyIdx.get(load.customerName.trim().toLowerCase());
+    const company = lookupCompany(companyIdx, load.customerName);
     if (!company) {
       unmatchedCompanies++;
       warnings.push(`Unmatched customer in spreadsheet: "${load.customerName}"`);
+      const key = load.customerName.trim().toLowerCase();
+      if (!seenUnmatched.has(key)) {
+        seenUnmatched.add(key);
+        if (sampleUnmatched.length < 10) sampleUnmatched.push(load.customerName);
+      }
       continue;
     }
     const owner = load.ownerEmail ? userIdx.get(load.ownerEmail) ?? null : null;
@@ -770,6 +839,13 @@ export async function runImportFromWorkbook(
     expired,
     unmatchedCompanies,
     warnings: warnings.slice(0, 50),
+    diagnostics: {
+      sheetName: sheetPick.sheetName,
+      headers: detectedHeaders,
+      skippedWithCarrier: parseDiagnostics.skippedWithCarrier,
+      sampleUnmatchedCustomers: sampleUnmatched,
+      parsedRowCount: rawRows.length,
+    },
   };
 
   await storage.setSetting(

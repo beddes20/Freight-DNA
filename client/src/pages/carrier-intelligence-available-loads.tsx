@@ -67,11 +67,20 @@ export default function CarrierIntelligenceAvailableLoadsPage() {
         throw new Error(err.error || `Upload failed (${res.status})`);
       }
       const summary = await res.json();
+      const d = summary.diagnostics ?? {};
+      const lines = [
+        `${summary.inserted ?? 0} new, ${summary.updated ?? 0} updated, ${summary.expired ?? 0} expired`,
+      ];
+      if (d.skippedWithCarrier) lines.push(`Skipped ${d.skippedWithCarrier} rows that already had a carrier assigned.`);
+      if (summary.unmatchedCompanies) lines.push(`${summary.unmatchedCompanies} unmatched companies.`);
+      if (d.sampleUnmatchedCustomers?.length) {
+        lines.push(`Examples: ${d.sampleUnmatchedCustomers.slice(0, 5).join(", ")}`);
+      }
+      if (d.sheetName) lines.push(`Sheet: "${d.sheetName}"`);
       toast({
         title: "Available freight imported",
-        description: `${summary.inserted ?? 0} new, ${summary.updated ?? 0} updated, ${summary.expired ?? 0} expired${
-          summary.unmatchedCompanies ? `, ${summary.unmatchedCompanies} unmatched companies` : ""
-        }`,
+        description: lines.join(" • "),
+        duration: 12000,
       });
       queryClient.invalidateQueries({ queryKey: ["/api/carrier-intelligence/available-loads"] });
       queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities"] });
