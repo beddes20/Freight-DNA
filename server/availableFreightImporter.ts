@@ -179,6 +179,8 @@ export interface AvailableFreightImportSummary {
     skippedWithCarrier?: number;
     sampleUnmatchedCustomers?: string[];
     parsedRowCount?: number;
+    historicalRunsImported?: number;
+    historicalRunsTotal?: number;
   };
 }
 
@@ -195,6 +197,29 @@ interface ParsedLoad {
   notes: string | null;
   ownerEmail: string | null;
   stableKey: string;
+  rawRow: Record<string, unknown>;
+}
+
+/**
+ * A row from the spreadsheet that already has a carrier assigned. These are
+ * NOT "available" loads (we won't insert them into freight_opportunities) but
+ * they ARE valuable as lane history — they tell us "Carrier X ran Phoenix→
+ * San Diego for this customer last week", which is exactly what the carrier
+ * ranking service uses to put proven carriers at the top of the shortlist on
+ * the next available load. We persist these to load_fact as `realized`.
+ */
+interface ParsedHistoricalRun {
+  customerName: string;
+  carrierName: string;
+  origin: string;
+  originState: string | null;
+  destination: string;
+  destinationState: string | null;
+  equipmentType: string | null;
+  pickupDate: string;
+  deliveryDate: string;
+  loadCount: number;
+  rowKey: string;
   rawRow: Record<string, unknown>;
 }
 
@@ -238,23 +263,82 @@ function buildStableKey(parts: Array<string | null>): string {
   return crypto.createHash("sha1").update(base).digest("hex").slice(0, 24);
 }
 
+/**
+ * Strip the leading customer-code prefix and trailing logistics noise from a
+ * customer name pulled out of the spreadsheet. Examples:
+ *   "VERTFOFL - Vertiv Mexico"            → "Vertiv Mexico"
+ *   "CTSIMIGA - CTSI C/o Rheem WH 1827"   → "CTSI"
+ *   "FOODCHIL - Food In Transit"          → "Food In Transit"
+ *   "MOTTNOMI - MOTTS C/O RYDER FREIGHT BILL PROCESSING" → "MOTTS"
+ * The cleaned label is what we feed into company-name matching; the original
+ * is preserved on the row for diagnostics.
+ */
+export function cleanCustomerLabel(raw: string): string {
+  let s = raw.trim();
+  // Strip leading 4+ char alnum code followed by " - "
+  s = s.replace(/^[A-Z0-9]{4,}\s*[-–—]\s*/, "");
+  // Strip everything from "C/o" / "C/O" onward (warehouse/3PL handler)
+  s = s.replace(/\s+c\s*\/\s*o\b.*$/i, "");
+  // Strip warehouse codes like "WH 1827"
+  s = s.replace(/\s+wh\s*#?\s*\d+\b.*$/i, "");
+  // Strip noisy back-office tails
+  s = s.replace(/\s+(freight\s+bill(\s+processing)?|bill\s+processing|attn[:\s].*)$/i, "");
+  return s.replace(/\s+/g, " ").trim();
+}
+
 function parseSheetToLoads(
   rows: Array<Record<string, unknown>>,
-  diagnostics?: { skippedWithCarrier: number },
+  diagnostics: { skippedWithCarrier: number; historicalRuns: ParsedHistoricalRun[] },
 ): ParsedLoad[] {
   const out: ParsedLoad[] = [];
   for (const row of rows) {
-    // SKIP rows that already have a carrier assigned (Column F in the user's
-    // sheet — typically "Carrier" / "Carrier Name" / "Assigned Carrier").
-    // Only loads WITHOUT an assigned carrier are "available".
-    const carrierAssigned = pick(row, "Carrier", "Carrier Name", "Assigned Carrier", "Trucking Co", "MC", "SCAC");
-    if (carrierAssigned && carrierAssigned.trim().length > 0) {
-      if (diagnostics) diagnostics.skippedWithCarrier++;
-      continue;
-    }
-    const customerName = pick(row, "Customer", "Customer Name", "Shipper", "Account", "Bill To", "BillTo");
+    const customerNameRaw = pick(row, "Customer", "Customer Name", "Shipper", "Account", "Bill To", "BillTo");
+    const customerName = cleanCustomerLabel(customerNameRaw);
     const originRaw = pick(row, "Origin", "Pickup", "Pickup City", "From", "Origin City");
     const destinationRaw = pick(row, "Destination", "Drop", "Delivery City", "To", "Dest", "Destination City");
+
+    // Detect carrier-assigned rows: these are NOT available freight, but they
+    // ARE valuable as historical lane runs to feed the carrier ranking system.
+    const carrierAssigned = pick(row, "Carrier", "Carrier Name", "Assigned Carrier", "Trucking Co", "MC", "SCAC");
+    if (carrierAssigned && carrierAssigned.trim().length > 0) {
+      diagnostics.skippedWithCarrier++;
+      if (customerName && originRaw && destinationRaw) {
+        const originStateOnlyH = pick(row, "Origin State", "Pickup State");
+        const destStateOnlyH = pick(row, "Destination State", "Delivery State", "Dest State");
+        const oH = splitCityState(originRaw);
+        const dH = splitCityState(destinationRaw);
+        const pickupParsed = parseDateLoose(pick(row, "Pickup Date", "Pickup Start", "Pickup", "Start Date", "Date"));
+        const deliveryParsed = parseDateLoose(pick(row, "Pickup End", "End Date", "Delivery Date", "Drop Date"));
+        // Use parsed dates when present; otherwise null (so the DB stores
+        // null) AND use a STABLE sentinel "unknown" in the rowKey hash so
+        // re-importing the same row tomorrow does not mint a new orderId.
+        const equipmentH = pick(row, "Equipment", "Equipment Type", "Trailer", "Trailer Type") || null;
+        const loadCountH = Math.max(1, parseInt(pick(row, "Loads", "Load Count", "Qty", "Quantity"), 10) || 1);
+        const rowKey = buildStableKey([
+          customerName, carrierAssigned,
+          oH.city, oH.state || originStateOnlyH || null,
+          dH.city, dH.state || destStateOnlyH || null,
+          equipmentH,
+          pickupParsed ?? "unknown_pickup",
+          deliveryParsed ?? "unknown_delivery",
+        ]);
+        diagnostics.historicalRuns.push({
+          customerName,
+          carrierName: carrierAssigned.trim(),
+          origin: oH.city,
+          originState: oH.state || originStateOnlyH || null,
+          destination: dH.city,
+          destinationState: dH.state || destStateOnlyH || null,
+          equipmentType: equipmentH,
+          pickupDate: pickupParsed ?? "",
+          deliveryDate: deliveryParsed ?? "",
+          loadCount: loadCountH,
+          rowKey,
+          rawRow: row,
+        });
+      }
+      continue;
+    }
     if (!customerName || !originRaw || !destinationRaw) continue;
 
     const originStateOnly = pick(row, "Origin State", "Pickup State");
@@ -469,11 +553,15 @@ export async function runImportFromWorkbook(
   const sheetPick = chooseDataSheetWithName(workbook);
   const rawRows = sheetPick.rows;
   const detectedHeaders = rawRows.length > 0 ? Object.keys(rawRows[0]) : [];
-  const parseDiagnostics = { skippedWithCarrier: 0 };
+  const parseDiagnostics: { skippedWithCarrier: number; historicalRuns: ParsedHistoricalRun[] } = {
+    skippedWithCarrier: 0,
+    historicalRuns: [],
+  };
   const loads = parseSheetToLoads(rawRows, parseDiagnostics);
   console.log(
     `[available-freight] sheet="${sheetPick.sheetName}" raw_rows=${rawRows.length} ` +
     `parsed_loads=${loads.length} skipped_with_carrier=${parseDiagnostics.skippedWithCarrier} ` +
+    `historical_runs=${parseDiagnostics.historicalRuns.length} ` +
     `headers=${JSON.stringify(detectedHeaders)}`,
   );
 
@@ -816,6 +904,80 @@ export async function runImportFromWorkbook(
     inserted++;
   }
 
+  // ── Historical runs (carrier-assigned rows) → load_fact ──────────────────
+  // Each carrier-assigned row in the spreadsheet represents a real lane move
+  // we (or another broker on the customer's behalf) ran. Persisting them as
+  // `realized` load_fact rows lets the carrier ranking service see "Carrier X
+  // moved Phoenix→San Diego for this customer last week" and float that
+  // carrier to the top of the shortlist on the next available load.
+  let historicalImported = 0;
+  let historicalUnmatchedCompanies = 0;
+  // Pre-resolve companies and collect upsert payloads, separating unmatched
+  // rows so we don't pay round-trip cost for them.
+  const matchedHistorical: Array<{ h: ParsedHistoricalRun; company: Company }> = [];
+  for (const h of parseDiagnostics.historicalRuns) {
+    const company = lookupCompany(companyIdx, h.customerName);
+    if (!company) {
+      historicalUnmatchedCompanies++;
+      const key = h.customerName.trim().toLowerCase();
+      if (!seenUnmatched.has(key)) {
+        seenUnmatched.add(key);
+        if (sampleUnmatched.length < 10) sampleUnmatched.push(h.customerName);
+      }
+      continue;
+    }
+    matchedHistorical.push({ h, company });
+  }
+  // Bounded-concurrency upsert: 5 in flight is enough to cut wall time
+  // significantly without saturating the connection pool that the rest of
+  // the request workload also relies on.
+  const HISTORICAL_CONCURRENCY = 5;
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    while (true) {
+      const i = cursor++;
+      if (i >= matchedHistorical.length) return;
+      const { h, company } = matchedHistorical[i];
+      try {
+        await upsertLoadFact({
+          orgId,
+          orderId: `available_freight_history:${h.rowKey}`,
+          companyId: company.id,
+          customerName: company.name,
+          carrierName: h.carrierName,
+          carrierPayeeCode: null,
+          originCity: h.origin,
+          originState: h.originState,
+          destinationCity: h.destination,
+          destinationState: h.destinationState,
+          equipmentType: h.equipmentType,
+          pickupDate: h.pickupDate || null,
+          deliveryDate: h.deliveryDate || null,
+          month: h.pickupDate ? h.pickupDate.slice(0, 7) : null,
+          moveStatus: "delivered",
+          bucket: "realized",
+          revenue: null,
+          cost: null,
+          margin: null,
+          loadCount: h.loadCount,
+          rawRow: h.rawRow as Record<string, unknown>,
+          sourceFileName: fileName,
+          sourceKind: "available_freight_history",
+        });
+        historicalImported++;
+      } catch (e) {
+        console.warn(
+          `[available-freight] historical-run upsert failed for ${h.customerName} ${h.origin}→${h.destination} carrier=${h.carrierName}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: HISTORICAL_CONCURRENCY }, () => worker()));
+  unmatchedCompanies += historicalUnmatchedCompanies;
+  console.log(
+    `[available-freight] historical_runs imported=${historicalImported} unmatched_companies=${historicalUnmatchedCompanies}`,
+  );
+
   // Mark vanished rows as expired.
   let expired = 0;
   for (const [key, opp] of byKey) {
@@ -845,6 +1007,8 @@ export async function runImportFromWorkbook(
       skippedWithCarrier: parseDiagnostics.skippedWithCarrier,
       sampleUnmatchedCustomers: sampleUnmatched,
       parsedRowCount: rawRows.length,
+      historicalRunsImported: historicalImported,
+      historicalRunsTotal: parseDiagnostics.historicalRuns.length,
     },
   };
 

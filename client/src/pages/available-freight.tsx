@@ -128,7 +128,11 @@ export default function AvailableFreightPage() {
       const lines = [
         `${summary.inserted ?? 0} new, ${summary.updated ?? 0} updated, ${summary.expired ?? 0} expired`,
       ];
-      if (d.skippedWithCarrier) lines.push(`Skipped ${d.skippedWithCarrier} rows that already had a carrier assigned.`);
+      if (d.historicalRunsImported || d.historicalRunsTotal) {
+        lines.push(`Recorded ${d.historicalRunsImported ?? 0} historical lane runs (of ${d.historicalRunsTotal ?? 0} carrier-assigned rows) so proven carriers float to the top of future shortlists.`);
+      } else if (d.skippedWithCarrier) {
+        lines.push(`Skipped ${d.skippedWithCarrier} rows that already had a carrier assigned.`);
+      }
       if (summary.unmatchedCompanies) lines.push(`${summary.unmatchedCompanies} unmatched companies.`);
       if (d.sampleUnmatchedCustomers?.length) {
         lines.push(`Examples: ${d.sampleUnmatchedCustomers.slice(0, 5).join(", ")}`);

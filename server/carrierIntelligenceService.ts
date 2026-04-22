@@ -341,7 +341,15 @@ export interface RealizedMetrics {
 }
 
 export async function getRealizedMetrics(orgId: string, filter: LoadFactMetricFilter = {}): Promise<RealizedMetrics> {
-  const where = and(applyMetricFilters(orgId, filter)!, eq(loadFact.bucket, "realized"));
+  // Exclude `available_freight_history` rows: those are synthetic carrier-
+  // assigned rows we ingest from the Available Freight spreadsheet to feed
+  // the carrier ranking system. They have NULL revenue/cost/margin and would
+  // inflate executedLoads if counted toward financial KPIs.
+  const where = and(
+    applyMetricFilters(orgId, filter)!,
+    eq(loadFact.bucket, "realized"),
+    sql`${loadFact.sourceKind} <> 'available_freight_history'`,
+  );
   const rows = await db.select({
     n: sql<string>`COUNT(*)`,
     rev: sql<string>`COALESCE(SUM(revenue), 0)`,

@@ -84,6 +84,7 @@ export async function recomputeCarrierScorecards(orgId: string): Promise<number>
       AND carrier_name IS NOT NULL
       AND carrier_name <> ''
       AND (pickup_date IS NULL OR pickup_date >= ${cutoff})
+      AND COALESCE(source_kind, '') <> 'available_freight_history'
     GROUP BY carrier_name, equipment_type
   `);
 
