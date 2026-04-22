@@ -1789,6 +1789,27 @@ export async function runMigrations() {
     await clientEmailIntel.query(`
       ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS provider_message_id text
     `);
+    // Deduplicate any pre-existing rows that would violate the unique
+    // index below. This can happen on databases that pre-date the
+    // idempotency work (Task #190 rev) where the same provider message
+    // got inserted multiple times. Keep the oldest row per
+    // (org_id, provider_message_id) and remove the rest.
+    await clientEmailIntel.query(`
+      DELETE FROM email_messages em
+      USING (
+        SELECT id FROM (
+          SELECT id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY org_id, provider_message_id
+                   ORDER BY created_at ASC, id ASC
+                 ) AS rn
+          FROM email_messages
+          WHERE provider_message_id IS NOT NULL
+        ) ranked
+        WHERE ranked.rn > 1
+      ) dups
+      WHERE em.id = dups.id
+    `);
     await clientEmailIntel.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_email_messages_provider_msg_id
         ON email_messages(org_id, provider_message_id)
