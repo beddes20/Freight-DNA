@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { Loader2, Plus, Trash2, MailCheck, RefreshCw, AlertCircle, CheckCircle2, Clock, XCircle, Inbox, ShieldAlert, ShieldCheck, Wand2 } from "lucide-react";
+import { Loader2, Plus, Trash2, MailCheck, RefreshCw, AlertCircle, CheckCircle2, Clock, XCircle, Inbox, ShieldAlert, ShieldCheck, Wand2, ChevronDown, ChevronRight, X, Ban } from "lucide-react";
 
 interface SentItemsHealthSnapshot {
   sentItemsHealth: "active" | "expired" | "missing" | "stale" | "unknown";
@@ -99,6 +99,155 @@ function SelfHealSweepButton() {
       {sweep.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Wand2 className="h-4 w-4 mr-2" />}
       Run reply sweep
     </Button>
+  );
+}
+
+// ─── Mailbox sync failures (Task #438) ──────────────────────────────────────
+interface MailboxSyncFailure {
+  id: string;
+  mailboxId: string;
+  folder: string;
+  providerMessageId: string;
+  errorCategory: string;
+  errorMessage: string;
+  attemptCount: number;
+  status: "pending" | "resolved" | "dismissed" | "give_up";
+  firstSeenAt: string;
+  lastAttemptAt: string;
+  nextAttemptAt: string | null;
+}
+
+const FAILURE_CATEGORY_LABELS: Record<string, string> = {
+  graph_fetch: "Graph fetch",
+  parse: "Parse",
+  db_constraint: "DB constraint",
+  oversize: "Oversize",
+  unknown: "Unknown",
+};
+
+function MailboxFailuresSection({ mailboxId }: { mailboxId: string }) {
+  const { toast } = useToast();
+  const [open, setOpen] = useState(true);
+  const failuresQuery = useQuery<{ failures: MailboxSyncFailure[] }>({
+    queryKey: ["/api/internal/admin/monitored-mailboxes", mailboxId, "failures"],
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: async (failureId: string) => {
+      const res = await apiRequest("POST", `/api/internal/admin/monitored-mailboxes/${mailboxId}/failures/${failureId}/retry`);
+      return res.json() as Promise<{ ok: boolean; resolved: boolean; error?: string }>;
+    },
+    onSuccess: (r) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/admin/monitored-mailboxes", mailboxId, "failures"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/admin/monitored-mailboxes"] });
+      toast({
+        title: r.resolved ? "Message recovered" : "Retry failed",
+        description: r.resolved ? "The message ingested successfully." : (r.error ?? "Will retry again later."),
+        variant: r.resolved ? "default" : "destructive",
+      });
+    },
+    onError: (err: Error) => toast({ title: "Retry error", description: err.message, variant: "destructive" }),
+  });
+
+  const dismissMutation = useMutation({
+    mutationFn: async (failureId: string) => {
+      const res = await apiRequest("POST", `/api/internal/admin/monitored-mailboxes/${mailboxId}/failures/${failureId}/dismiss`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/admin/monitored-mailboxes", mailboxId, "failures"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/admin/monitored-mailboxes"] });
+      toast({ title: "Failure dismissed" });
+    },
+    onError: (err: Error) => toast({ title: "Dismiss error", description: err.message, variant: "destructive" }),
+  });
+
+  const failures = failuresQuery.data?.failures ?? [];
+  if (failuresQuery.isLoading) {
+    return (
+      <div className="mt-3 pt-3 border-t flex items-center gap-2 text-sm text-muted-foreground" data-testid={`failures-loading-${mailboxId}`}>
+        <Loader2 className="h-3 w-3 animate-spin" /> Loading failed messages…
+      </div>
+    );
+  }
+  if (failures.length === 0) return null;
+
+  return (
+    <div className="mt-3 pt-3 border-t" data-testid={`failures-section-${mailboxId}`}>
+      <button
+        type="button"
+        className="flex items-center gap-1 text-sm font-medium hover:underline"
+        onClick={() => setOpen(o => !o)}
+        data-testid={`button-toggle-failures-${mailboxId}`}
+      >
+        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        Failed messages ({failures.length})
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          {failures.map(f => {
+            const isGiveUp = f.status === "give_up";
+            return (
+              <div
+                key={f.id}
+                className={`rounded-md border p-3 text-sm ${isGiveUp ? "bg-red-50 border-red-300 dark:bg-red-950/30 dark:border-red-900" : "bg-amber-50 border-amber-200 dark:bg-amber-950/20 dark:border-amber-900"}`}
+                data-testid={`failure-row-${f.id}`}
+              >
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Badge variant="outline" className="text-xs" data-testid={`badge-failure-category-${f.id}`}>
+                      {FAILURE_CATEGORY_LABELS[f.errorCategory] ?? f.errorCategory}
+                    </Badge>
+                    <Badge variant="outline" className="text-xs">{f.folder}</Badge>
+                    {isGiveUp && (
+                      <Badge variant="destructive" className="text-xs" data-testid={`badge-failure-giveup-${f.id}`}>
+                        <Ban className="h-3 w-3 mr-1" />Gave up
+                      </Badge>
+                    )}
+                    <span className="text-xs text-muted-foreground" data-testid={`text-failure-attempts-${f.id}`}>
+                      {f.attemptCount} attempt{f.attemptCount === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={retryMutation.isPending}
+                      onClick={() => retryMutation.mutate(f.id)}
+                      data-testid={`button-retry-failure-${f.id}`}
+                    >
+                      {retryMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                      Retry now
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={dismissMutation.isPending}
+                      onClick={() => dismissMutation.mutate(f.id)}
+                      data-testid={`button-dismiss-failure-${f.id}`}
+                    >
+                      <X className="h-3 w-3 mr-1" />Dismiss
+                    </Button>
+                  </div>
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground break-all" data-testid={`text-failure-message-id-${f.id}`}>
+                  Message ID: {f.providerMessageId}
+                </p>
+                <p className="mt-1 text-xs text-red-700 dark:text-red-300 break-words" data-testid={`text-failure-error-${f.id}`}>
+                  {f.errorMessage}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground" data-testid={`text-failure-last-attempt-${f.id}`}>
+                  Last attempt: {new Date(f.lastAttemptAt).toLocaleString()}
+                  {f.nextAttemptAt && !isGiveUp && (
+                    <> · Next retry: {new Date(f.nextAttemptAt).toLocaleString()}</>
+                  )}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -379,6 +528,9 @@ export default function AdminMonitoredMailboxesPage() {
                     </Button>
                   </div>
                 </div>
+                {(mb.syncStatus === "partial" || mb.syncStatus === "error") && (
+                  <MailboxFailuresSection mailboxId={mb.id} />
+                )}
               </CardContent>
             </Card>
           ))}

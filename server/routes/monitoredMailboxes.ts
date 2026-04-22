@@ -16,7 +16,7 @@ import { z } from "zod";
 import { storage } from "../storage";
 import { requireAuth, getCurrentUser } from "../auth";
 import { registerMailboxSubscription, removeMailboxSubscription } from "../graphSubscriptionService";
-import { syncMailboxDelta } from "../services/mailboxDeltaSyncService";
+import { syncMailboxDelta, retryMailboxSyncFailure } from "../services/mailboxDeltaSyncService";
 
 function requireAdmin(req: Request, res: Response, next: () => void) {
   getCurrentUser(req).then(user => {
@@ -193,6 +193,92 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
     } catch (err) {
       console.error("[monitoredMailboxes] POST /sync error:", err);
       res.status(500).json({ error: "Failed to trigger sync" });
+    }
+  });
+
+  // ── Task #438 — Per-message sync failure diagnostics + self-heal ──────────
+
+  const failureListParams = z.object({ id: z.string().min(1) });
+  const failureActionParams = z.object({ id: z.string().min(1), failureId: z.string().min(1) });
+
+  app.get("/api/internal/admin/monitored-mailboxes/:id/failures", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const parsedParams = failureListParams.safeParse(req.params);
+      if (!parsedParams.success) return res.status(400).json({ error: "Invalid params", details: parsedParams.error.flatten() });
+
+      const mailbox = await storage.getMonitoredMailbox(parsedParams.data.id);
+      if (!mailbox || mailbox.orgId !== user.organizationId) {
+        return res.status(404).json({ error: "Monitored mailbox not found" });
+      }
+
+      const failures = await storage.getUnresolvedMailboxSyncFailures(mailbox.id);
+      res.json({ failures });
+    } catch (err) {
+      console.error("[monitoredMailboxes] GET /failures error:", err);
+      res.status(500).json({ error: "Failed to fetch sync failures" });
+    }
+  });
+
+  app.post("/api/internal/admin/monitored-mailboxes/:id/failures/:failureId/retry", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const parsedParams = failureActionParams.safeParse(req.params);
+      if (!parsedParams.success) return res.status(400).json({ error: "Invalid params", details: parsedParams.error.flatten() });
+
+      const mailbox = await storage.getMonitoredMailbox(parsedParams.data.id);
+      if (!mailbox || mailbox.orgId !== user.organizationId) {
+        return res.status(404).json({ error: "Monitored mailbox not found" });
+      }
+
+      const failure = await storage.getMailboxSyncFailure(parsedParams.data.failureId);
+      if (!failure || failure.mailboxId !== mailbox.id || failure.orgId !== user.organizationId) {
+        return res.status(404).json({ error: "Sync failure not found" });
+      }
+
+      const result = await retryMailboxSyncFailure(failure.id);
+      res.json(result);
+    } catch (err) {
+      console.error("[monitoredMailboxes] POST /failures/retry error:", err);
+      res.status(500).json({ error: "Failed to retry sync failure" });
+    }
+  });
+
+  app.post("/api/internal/admin/monitored-mailboxes/:id/failures/:failureId/dismiss", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const parsedParams = failureActionParams.safeParse(req.params);
+      if (!parsedParams.success) return res.status(400).json({ error: "Invalid params", details: parsedParams.error.flatten() });
+
+      const mailbox = await storage.getMonitoredMailbox(parsedParams.data.id);
+      if (!mailbox || mailbox.orgId !== user.organizationId) {
+        return res.status(404).json({ error: "Monitored mailbox not found" });
+      }
+
+      const failure = await storage.getMailboxSyncFailure(parsedParams.data.failureId);
+      if (!failure || failure.mailboxId !== mailbox.id || failure.orgId !== user.organizationId) {
+        return res.status(404).json({ error: "Sync failure not found" });
+      }
+
+      const dismissed = await storage.markMailboxSyncFailureDismissed(failure.id, user.organizationId);
+
+      // Recompute mailbox status now that an unresolved failure is gone.
+      const unresolved = await storage.countUnresolvedMailboxSyncFailures(mailbox.id);
+      await storage.updateMonitoredMailbox(mailbox.id, {
+        syncStatus: unresolved > 0 ? "partial" : "active",
+        syncError: unresolved > 0 ? `${unresolved} message(s) failed` : null,
+      });
+
+      res.json({ ok: true, failure: dismissed });
+    } catch (err) {
+      console.error("[monitoredMailboxes] POST /failures/dismiss error:", err);
+      res.status(500).json({ error: "Failed to dismiss sync failure" });
     }
   });
 }

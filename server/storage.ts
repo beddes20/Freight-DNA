@@ -189,6 +189,9 @@ import {
   monitoredMailboxes,
   type MonitoredMailbox,
   type InsertMonitoredMailbox,
+  mailboxSyncFailures,
+  type MailboxSyncFailure,
+  type InsertMailboxSyncFailure,
   webexUserMappings,
   type WebexUserMapping,
   type InsertWebexUserMapping,
@@ -1111,6 +1114,26 @@ export interface IStorage {
   deleteMonitoredMailbox(id: string): Promise<boolean>;
   getUserByEmailAddress(email: string, orgId: string): Promise<User | undefined>;
   getMonitoredMailboxBySubscriptionId(subscriptionId: string): Promise<MonitoredMailbox | undefined>;
+
+  // Mailbox sync failures (Task #438) — per-message failure tracking.
+  upsertMailboxSyncFailure(data: {
+    orgId: string;
+    mailboxId: string;
+    folder: string;
+    providerMessageId: string;
+    errorCategory: string;
+    errorMessage: string;
+    nextAttemptAt: Date | null;
+  }): Promise<MailboxSyncFailure>;
+  markMailboxSyncFailureResolved(mailboxId: string, folder: string, providerMessageId: string): Promise<void>;
+  markMailboxSyncFailureResolvedById(id: string): Promise<MailboxSyncFailure | undefined>;
+  markMailboxSyncFailureDismissed(id: string, orgId: string): Promise<MailboxSyncFailure | undefined>;
+  markMailboxSyncFailureGiveUp(id: string): Promise<void>;
+  getMailboxSyncFailure(id: string): Promise<MailboxSyncFailure | undefined>;
+  getUnresolvedMailboxSyncFailures(mailboxId: string): Promise<MailboxSyncFailure[]>;
+  countUnresolvedMailboxSyncFailures(mailboxId: string): Promise<number>;
+  getDueMailboxSyncFailures(now: Date): Promise<MailboxSyncFailure[]>;
+  getDueMailboxSyncFailuresForMailbox(mailboxId: string, now: Date): Promise<MailboxSyncFailure[]>;
 
   // Webex user mappings (Task #258)
   getWebexUserMappings(orgId: string): Promise<WebexUserMapping[]>;
@@ -7523,6 +7546,129 @@ export class DatabaseStorage implements IStorage {
       ))
       .limit(1);
     return row;
+  }
+
+  // ── Mailbox sync failures (Task #438) ───────────────────────────────────────
+
+  async upsertMailboxSyncFailure(data: {
+    orgId: string;
+    mailboxId: string;
+    folder: string;
+    providerMessageId: string;
+    errorCategory: string;
+    errorMessage: string;
+    nextAttemptAt: Date | null;
+  }): Promise<MailboxSyncFailure> {
+    const now = new Date();
+    const truncatedMsg = data.errorMessage.slice(0, 1000);
+    const [row] = await db
+      .insert(mailboxSyncFailures)
+      .values({
+        orgId: data.orgId,
+        mailboxId: data.mailboxId,
+        folder: data.folder,
+        providerMessageId: data.providerMessageId,
+        errorCategory: data.errorCategory,
+        errorMessage: truncatedMsg,
+        attemptCount: 1,
+        status: "pending",
+        firstSeenAt: now,
+        lastAttemptAt: now,
+        nextAttemptAt: data.nextAttemptAt,
+      })
+      .onConflictDoUpdate({
+        target: [mailboxSyncFailures.mailboxId, mailboxSyncFailures.folder, mailboxSyncFailures.providerMessageId],
+        set: {
+          errorCategory: data.errorCategory,
+          errorMessage: truncatedMsg,
+          attemptCount: sql`${mailboxSyncFailures.attemptCount} + 1`,
+          lastAttemptAt: now,
+          nextAttemptAt: data.nextAttemptAt,
+          status: sql`CASE WHEN ${mailboxSyncFailures.status} = 'dismissed' THEN 'dismissed' ELSE 'pending' END`,
+          updatedAt: now,
+        },
+      })
+      .returning();
+    return row;
+  }
+
+  async markMailboxSyncFailureResolved(mailboxId: string, folder: string, providerMessageId: string): Promise<void> {
+    await db
+      .update(mailboxSyncFailures)
+      .set({ status: "resolved", resolvedAt: new Date(), nextAttemptAt: null, updatedAt: new Date() })
+      .where(and(
+        eq(mailboxSyncFailures.mailboxId, mailboxId),
+        eq(mailboxSyncFailures.folder, folder),
+        eq(mailboxSyncFailures.providerMessageId, providerMessageId),
+        inArray(mailboxSyncFailures.status, ["pending", "give_up"]),
+      ));
+  }
+
+  async markMailboxSyncFailureResolvedById(id: string): Promise<MailboxSyncFailure | undefined> {
+    const [row] = await db
+      .update(mailboxSyncFailures)
+      .set({ status: "resolved", resolvedAt: new Date(), nextAttemptAt: null, updatedAt: new Date() })
+      .where(eq(mailboxSyncFailures.id, id))
+      .returning();
+    return row;
+  }
+
+  async markMailboxSyncFailureDismissed(id: string, orgId: string): Promise<MailboxSyncFailure | undefined> {
+    const [row] = await db
+      .update(mailboxSyncFailures)
+      .set({ status: "dismissed", nextAttemptAt: null, updatedAt: new Date() })
+      .where(and(eq(mailboxSyncFailures.id, id), eq(mailboxSyncFailures.orgId, orgId)))
+      .returning();
+    return row;
+  }
+
+  async markMailboxSyncFailureGiveUp(id: string): Promise<void> {
+    await db
+      .update(mailboxSyncFailures)
+      .set({ status: "give_up", nextAttemptAt: null, updatedAt: new Date() })
+      .where(eq(mailboxSyncFailures.id, id));
+  }
+
+  async getMailboxSyncFailure(id: string): Promise<MailboxSyncFailure | undefined> {
+    const [row] = await db.select().from(mailboxSyncFailures).where(eq(mailboxSyncFailures.id, id)).limit(1);
+    return row;
+  }
+
+  async getUnresolvedMailboxSyncFailures(mailboxId: string): Promise<MailboxSyncFailure[]> {
+    return db.select().from(mailboxSyncFailures)
+      .where(and(
+        eq(mailboxSyncFailures.mailboxId, mailboxId),
+        inArray(mailboxSyncFailures.status, ["pending", "give_up"]),
+      ))
+      .orderBy(desc(mailboxSyncFailures.lastAttemptAt));
+  }
+
+  async countUnresolvedMailboxSyncFailures(mailboxId: string): Promise<number> {
+    const rows = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(mailboxSyncFailures)
+      .where(and(
+        eq(mailboxSyncFailures.mailboxId, mailboxId),
+        inArray(mailboxSyncFailures.status, ["pending", "give_up"]),
+      ));
+    return rows[0]?.c ?? 0;
+  }
+
+  async getDueMailboxSyncFailures(now: Date): Promise<MailboxSyncFailure[]> {
+    return db.select().from(mailboxSyncFailures)
+      .where(and(
+        eq(mailboxSyncFailures.status, "pending"),
+        lte(mailboxSyncFailures.nextAttemptAt, now),
+      ));
+  }
+
+  async getDueMailboxSyncFailuresForMailbox(mailboxId: string, now: Date): Promise<MailboxSyncFailure[]> {
+    return db.select().from(mailboxSyncFailures)
+      .where(and(
+        eq(mailboxSyncFailures.mailboxId, mailboxId),
+        eq(mailboxSyncFailures.status, "pending"),
+        lte(mailboxSyncFailures.nextAttemptAt, now),
+      ));
   }
 
   // ── Webex user mappings (Task #258) ─────────────────────────────────────────

@@ -2702,6 +2702,44 @@ export const insertMonitoredMailboxSchema = createInsertSchema(monitoredMailboxe
 export type InsertMonitoredMailbox = z.infer<typeof insertMonitoredMailboxSchema>;
 export type MonitoredMailbox = typeof monitoredMailboxes.$inferSelect;
 
+// ── Mailbox Sync Failures (Task #438) ───────────────────────────────────────
+// Per-message failure tracking for delta-sync ingestion. Lets the admin UI
+// show *which* message failed, why, and how many attempts have been made,
+// and powers an automatic retry/self-heal loop with backoff.
+export const mailboxSyncFailures = pgTable(
+  "mailbox_sync_failures",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    mailboxId: varchar("mailbox_id").notNull().references(() => monitoredMailboxes.id, { onDelete: "cascade" }),
+    folder: text("folder").notNull(), // "inbox" | "sentitems"
+    providerMessageId: text("provider_message_id").notNull(),
+    errorCategory: text("error_category").notNull(), // graph_fetch | parse | db_constraint | oversize | unknown
+    errorMessage: text("error_message").notNull(),
+    attemptCount: integer("attempt_count").notNull().default(1),
+    status: text("status").notNull().default("pending"), // pending | resolved | dismissed | give_up
+    firstSeenAt: timestamp("first_seen_at").defaultNow().notNull(),
+    lastAttemptAt: timestamp("last_attempt_at").defaultNow().notNull(),
+    nextAttemptAt: timestamp("next_attempt_at"),
+    resolvedAt: timestamp("resolved_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("mailbox_sync_failures_unique_idx").on(table.mailboxId, table.folder, table.providerMessageId),
+    index("mailbox_sync_failures_mailbox_status_idx").on(table.mailboxId, table.status),
+    index("mailbox_sync_failures_due_idx").on(table.status, table.nextAttemptAt),
+  ],
+);
+
+export const insertMailboxSyncFailureSchema = createInsertSchema(mailboxSyncFailures).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertMailboxSyncFailure = z.infer<typeof insertMailboxSyncFailureSchema>;
+export type MailboxSyncFailure = typeof mailboxSyncFailures.$inferSelect;
+
 // ─── Conversation Thread Capture Audits (Task #435) ──────────────────────────
 // Records every reply-capture self-heal pass (scheduled or on-demand) for a
 // conversation thread, including the resolved root-cause label and the Graph
