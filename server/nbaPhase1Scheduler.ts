@@ -510,7 +510,10 @@ export function initNbaPhase1Scheduler(): void {
   cron.schedule("0 3 * * *", runNbaPhase1ForAllOrgs, { timezone: "America/Chicago" });
   log("NBA Phase 1 nightly scheduler registered (3:00 AM CT)");
 
-  // Intraday VOTRI alerts — every 2 hours
-  cron.schedule("0 */2 * * *", runIntradayVotriAlerts, { timezone: "America/Chicago" });
-  log("Intraday VOTRI alert scheduler registered (every 2 hours)");
+  // VOTRI alerts — Task #465 collapses this from every-2-hours to once daily
+  // at 5:00 AM CT (after sonarDailyRefreshScheduler at 4:30 AM has populated
+  // the daily snapshot). Lane-level rate calls remain real-time on user
+  // request, bounded by hard timeouts in sonarClient.
+  cron.schedule("0 5 * * *", runIntradayVotriAlerts, { timezone: "America/Chicago" });
+  log("Daily VOTRI alert scheduler registered (5:00 AM CT)");
 }

@@ -19,8 +19,11 @@ import {
   buildVotriQualifier,
   getSonarCircuitBreakerStatus,
   getLaneMarketRate,
+  probeSonarHealth,
+  runDailySonarRefresh,
   type LaneVotri,
 } from "../sonarClient";
+import { getLaneTimeoutStats } from "../sonarAlertNotifier";
 import { tracLaneDirectionSignal } from "../tracAlertEngine";
 
 /** Normalize string for name-matching (same logic as NBA engine) */
@@ -374,6 +377,46 @@ export function registerSonarRoutes(app: Express): void {
     } catch (err: any) {
       console.error("[sonar] lane-signals error:", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch lane signal" });
+    }
+  });
+
+  // ── GET /api/sonar/health ────────────────────────────────────────────────
+  // Diagnostic endpoint for Task #465. Reports auth mode, daily-pull status,
+  // circuit-breaker state, freshness of the national snapshot, and a live
+  // ATL→DAL probe (timed under the hard lane-call budget).
+  app.get("/api/sonar/health", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const origin = (req.query.origin as string | undefined)?.trim() || "Atlanta";
+      const destination = (req.query.destination as string | undefined)?.trim() || "Dallas";
+      const report = await probeSonarHealth({ laneOrigin: origin, laneDestination: destination });
+      const now = Date.now();
+      const lastSuccessMs = report.daily.lastSuccessAt ? Date.parse(report.daily.lastSuccessAt) : 0;
+      const dailyAgeHours = lastSuccessMs ? (now - lastSuccessMs) / 3_600_000 : null;
+      const status =
+        !report.national.ok && !report.laneProbe.ok ? "down" :
+        report.national.isStale || report.laneProbe.isStale || (dailyAgeHours !== null && dailyAgeHours > 26) ? "degraded" :
+        "ok";
+      const laneTimeouts = getLaneTimeoutStats();
+      res.json({ status, dailyAgeHours, laneTimeouts, ...report });
+    } catch (err: any) {
+      console.error("[sonar] health error:", err?.message ?? err);
+      res.status(500).json({ status: "down", error: err?.message ?? "probe failed" });
+    }
+  });
+
+  // ── POST /api/sonar/health/refresh (admin) ────────────────────────────────
+  // Manually trigger the daily refresh for testing / on-demand recovery.
+  app.post("/api/sonar/health/refresh", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "admin only" });
+      }
+      const status = await runDailySonarRefresh();
+      res.json({ ok: true, status });
+    } catch (err: any) {
+      console.error("[sonar] manual refresh error:", err?.message ?? err);
+      res.status(500).json({ error: err?.message ?? "refresh failed" });
     }
   });
 }

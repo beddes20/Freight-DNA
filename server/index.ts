@@ -25,6 +25,7 @@ import { initCoachingDigestScheduler } from "./coachingDigestScheduler";
 import { initMissedInboundRecapScheduler } from "./missedInboundRecapScheduler";
 import { initLmCheckinScheduler } from "./lmCheckinScheduler";
 import { initNbaPhase1Scheduler } from "./nbaPhase1Scheduler";
+import { initSonarDailyRefreshScheduler } from "./sonarDailyRefreshScheduler";
 import { initMarketSignalScheduler } from "./marketSignalScheduler";
 import { initMomentumDropScheduler } from "./momentumDropScheduler";
 import { initConversationArchiveScheduler } from "./conversationArchiveScheduler";
@@ -398,6 +399,7 @@ async function initStripe() {
 
       setTimeout(() => {
         initNbaPhase1Scheduler();
+        initSonarDailyRefreshScheduler();
         initMarketSignalScheduler();
         initMomentumDropScheduler();
         initConversationArchiveScheduler();

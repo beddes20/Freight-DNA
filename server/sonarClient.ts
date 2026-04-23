@@ -121,11 +121,23 @@ export interface LaneMarketRate {
 
 const SONAR_BASE = "https://api.freightwaves.com";
 const TOKEN_BUFFER_MS = 5 * 60 * 1000;
-const VOTRI_TTL   = 6 * 60 * 60 * 1000;
-const OTRI_TTL    = 6 * 60 * 60 * 1000;
-const NTI_TTL     = 2 * 60 * 60 * 1000;
+// National + per-market metrics are refreshed by a single daily scheduler
+// (sonarDailyRefreshScheduler). TTLs are slightly over 24h so that consumers
+// always read from the cached snapshot for the rest of the day and never
+// trigger their own live pull.
+const VOTRI_TTL   = 6 * 60 * 60 * 1000;     // lane-level — still on-demand
+const OTRI_TTL    = 25 * 60 * 60 * 1000;    // market — once-daily refresh
+const NTI_TTL     = 25 * 60 * 60 * 1000;    // national — once-daily refresh
 const EIA_TTL     = 24 * 60 * 60 * 1000;
 const TRAC_MARKET_RATE_TTL = 6 * 60 * 60 * 1000;
+// Hard ceiling for any user-triggered live lane call. The budget must be
+// safely larger than (max rate-limit queue wait) + (per-fetch timeout) so
+// that healthy calls which simply waited their turn in the queue do NOT
+// self-timeout. With SONAR_RATE_LIMIT_INTERVAL_MS=12s and a 12s per-fetch
+// AbortSignal, the worst-case healthy round-trip is ~24s; we use 25s so
+// genuine upstream hangs still abort but legitimate queued traffic
+// completes.
+const LIVE_LANE_TIMEOUT_MS = 25_000;
 
 const SONAR_RATE_LIMIT_INTERVAL_MS = 12_000;
 let lastSonarCallAt = 0;
@@ -192,6 +204,11 @@ let eiaDieselCache: EiaDieselResult | null = null;
 // ── In-memory state ───────────────────────────────────────────────────────────
 
 let cachedToken: SonarToken | null = null;
+// Set when the FREIGHTWAVES_TOKEN bearer is rejected with a 401 so that
+// getSonarToken() falls through to SONAR_USERNAME/SONAR_PASSWORD on the next
+// call. Reset on process restart only.
+let directTokenInvalid = false;
+let fallbackAuthAnnounced = false;
 let nationalCache: CacheEntry<NationalMarketSummary> | null = null;
 const otriCache  = new Map<string, CacheEntry<MarketOtri>>();
 const votriCache = new Map<string, CacheEntry<LaneVotri>>();
@@ -256,16 +273,22 @@ async function doWarmMemoryCacheFromDb(): Promise<void> {
 
 // ── Auth mode health-check (logged once on first use) ─────────────────────────
 
-let _authModeLogged = false;
+let _lastLoggedAuthMode: string | null = null;
 function logAuthMode() {
-  if (_authModeLogged) return;
-  _authModeLogged = true;
   const directToken = process.env.FREIGHTWAVES_TOKEN;
-  if (directToken) {
-    log(`Auth mode: FREIGHTWAVES_TOKEN (direct bearer token, ${directToken.length} chars) — username/password auth skipped`);
+  const hasCreds = !!(process.env.SONAR_USERNAME && process.env.SONAR_PASSWORD);
+  const mode =
+    directToken && !directTokenInvalid ? `bearer:${directToken.length}` :
+    hasCreds ? "username_password" :
+    "none";
+  if (mode === _lastLoggedAuthMode) return;
+  _lastLoggedAuthMode = mode;
+  if (mode.startsWith("bearer:")) {
+    log(`Auth mode: FREIGHTWAVES_TOKEN (direct bearer token, ${directToken!.length} chars)${hasCreds ? " — username/password fallback configured" : " — no fallback credentials"}`);
+  } else if (mode === "username_password") {
+    log("Auth mode: username/password (SONAR_USERNAME + SONAR_PASSWORD)");
   } else {
-    const hasCredentials = !!(process.env.SONAR_USERNAME && process.env.SONAR_PASSWORD);
-    log(`Auth mode: ${hasCredentials ? "username/password (SONAR_USERNAME + SONAR_PASSWORD)" : "no credentials configured — all Sonar calls will return fallback data"}`);
+    log("Auth mode: no credentials configured — all Sonar calls will return fallback data");
   }
 }
 
@@ -289,19 +312,80 @@ function log(msg: string) {
   console.log(`${t} [sonar] ${msg}`);
 }
 
+// ── Hard-deadline helper for user-triggered live lane calls ───────────────────
+
+async function withDeadline<T>(p: Promise<T>, ms: number, label: string, onTimeout: () => T): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  let timedOut = false;
+  const timeout = new Promise<T>((resolve) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      log(`⏱ ${label} exceeded ${ms}ms budget — returning cached/unavailable`);
+      // Lazy-import the notifier to avoid any circular-deps surprises
+      import("./sonarAlertNotifier")
+        .then((m) => m.recordLaneTimeout(label))
+        .catch(() => {});
+      resolve(onTimeout());
+    }, ms);
+  });
+  try {
+    const result = await Promise.race([p, timeout]);
+    if (!timedOut && timer) clearTimeout(timer);
+    return result;
+  } catch (err) {
+    if (timer) clearTimeout(timer);
+    throw err;
+  }
+}
+
+// ── Daily refresh status (for /api/sonar/health and alerting) ─────────────────
+
+export interface SonarDailyPullStatus {
+  lastRunAt: string | null;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+  nationalOk: boolean;
+  marketsAttempted: number;
+  marketsOk: number;
+}
+
+let dailyPullStatus: SonarDailyPullStatus = {
+  lastRunAt: null,
+  lastSuccessAt: null,
+  lastError: null,
+  nationalOk: false,
+  marketsAttempted: 0,
+  marketsOk: 0,
+};
+
+export function getSonarDailyPullStatus(): SonarDailyPullStatus {
+  return { ...dailyPullStatus };
+}
+
 // ── Authentication ────────────────────────────────────────────────────────────
 
 async function getSonarToken(): Promise<string | null> {
   logAuthMode();
 
-  // Prefer direct bearer token when present — no auth call needed
+  // Prefer direct bearer token unless it's been rejected this run.
+  // If FREIGHTWAVES_TOKEN was rejected with a 401, `directTokenInvalid` is
+  // set in rawSonarGet and we fall through to username/password auth here.
   const directToken = process.env.FREIGHTWAVES_TOKEN;
-  if (directToken) return directToken;
+  if (directToken && !directTokenInvalid) return directToken;
 
   // Fall back to username/password auth flow
   const username = process.env.SONAR_USERNAME;
   const password = process.env.SONAR_PASSWORD;
-  if (!username || !password) return null;
+  if (!username || !password) {
+    if (directToken && directTokenInvalid) {
+      log("Bearer token rejected and SONAR_USERNAME/SONAR_PASSWORD not configured — cannot fall back");
+    }
+    return null;
+  }
+  if (directToken && directTokenInvalid && !fallbackAuthAnnounced) {
+    fallbackAuthAnnounced = true;
+    log("⚠ Switching from rejected FREIGHTWAVES_TOKEN to SONAR_USERNAME/SONAR_PASSWORD fallback auth");
+  }
 
   if (cachedToken && Date.now() < cachedToken.expiresAt - TOKEN_BUFFER_MS) {
     return cachedToken.token;
@@ -381,9 +465,16 @@ async function rawSonarGet(path: string): Promise<any | null> {
     }
 
     if (resp.status === 401) {
-      cachedToken = null;
+      // If we were using the direct bearer token (FREIGHTWAVES_TOKEN), mark
+      // it invalid so getSonarToken() falls through to username/password.
+      if (process.env.FREIGHTWAVES_TOKEN && !directTokenInvalid && token === process.env.FREIGHTWAVES_TOKEN) {
+        directTokenInvalid = true;
+        log("Bearer token rejected (HTTP 401) — will retry with SONAR_USERNAME/SONAR_PASSWORD fallback");
+      } else {
+        cachedToken = null;
+      }
       const newToken = await getSonarToken();
-      if (!newToken) return null;
+      if (!newToken || newToken === token) return null;
       const resp2 = await fetch(`${SONAR_BASE}${path}`, {
         headers: { Authorization: `Bearer ${newToken}` },
         signal: AbortSignal.timeout(12_000),
@@ -648,7 +739,15 @@ export async function getNationalMarketSummary(): Promise<NationalMarketSummary>
   const vcrpm = extractValue(vcrpmData);
 
   if (nti === null && otri === null) {
-    log("National market data unavailable — returning null fields (no fake data)");
+    log("National market data unavailable — caching null snapshot to avoid re-pulling until next daily refresh");
+    // Cache the failed/empty pull so consumers reuse a single daily snapshot
+    // instead of re-hitting Sonar on every request. We use a shorter TTL than
+    // a successful pull (1h) so spontaneous recovery is possible without
+    // waiting a full day, while still preventing per-request hammering.
+    // The daily refresh job (runDailySonarRefresh) clears nationalCache
+    // before its run, so a successful pull can replace this entry early.
+    const FAILED_PULL_TTL = 60 * 60 * 1000;
+    nationalCache = { value: fallback, fetchedAt: Date.now(), ttlMs: FAILED_PULL_TTL };
     return fallback;
   }
 
@@ -836,6 +935,20 @@ export async function getLaneVotriHistory(
     .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 }
 
+function buildStaleLaneVotri(origin: string, destination: string, qualifier: string, prior: LaneVotri | null): LaneVotri {
+  return {
+    origin,
+    destination,
+    qualifier,
+    votri: prior?.votri ?? null,
+    votriWoW: prior?.votriWoW ?? null,
+    signal: prior?.signal ?? null,
+    timestamp: new Date().toISOString(),
+    isStale: true,
+    lastSuccessfulPull: prior?.lastSuccessfulPull ?? null,
+  };
+}
+
 export async function getLaneVotri(origin: string, destination: string): Promise<LaneVotri> {
   await warmMemoryCacheFromDb();
 
@@ -843,6 +956,15 @@ export async function getLaneVotri(origin: string, destination: string): Promise
   const cached = votriCache.get(qualifier);
   if (cached && isFresh(cached)) return cached.value;
 
+  return withDeadline(
+    fetchLaneVotriLive(origin, destination, qualifier, cached?.value ?? null),
+    LIVE_LANE_TIMEOUT_MS,
+    `getLaneVotri(${qualifier})`,
+    () => buildStaleLaneVotri(origin, destination, qualifier, cached?.value ?? null),
+  );
+}
+
+async function fetchLaneVotriLive(origin: string, destination: string, qualifier: string, prior: LaneVotri | null): Promise<LaneVotri> {
   const todayL = new Date().toISOString().slice(0, 10);
   const weekAgoL = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
   const data = await sonarGet(`/data/VOTRI/${qualifier}/${weekAgoL}/${todayL}`);
@@ -864,7 +986,7 @@ export async function getLaneVotri(origin: string, destination: string): Promise
     signal: rawVotri !== null ? votriSignal(rawVotri) : null,
     timestamp: new Date().toISOString(),
     isStale,
-    lastSuccessfulPull: rawVotri !== null ? new Date().toISOString() : (cached?.value.lastSuccessfulPull ?? null),
+    lastSuccessfulPull: rawVotri !== null ? new Date().toISOString() : (prior?.lastSuccessfulPull ?? null),
   };
 
   votriCache.set(qualifier, { value: entry, fetchedAt: Date.now(), ttlMs: VOTRI_TTL });
@@ -969,12 +1091,36 @@ export async function getAvgVotriWoW(
 
 const laneMarketRateCache = new Map<string, CacheEntry<LaneMarketRate>>();
 
+function buildStaleLaneMarketRate(origin: string, destination: string, prior: LaneMarketRate | null): LaneMarketRate {
+  return {
+    origin,
+    destination,
+    marketRatePerMile: prior?.marketRatePerMile ?? null,
+    forecastDirection: prior?.forecastDirection ?? "STABLE",
+    forecastWeeklyRates: prior?.forecastWeeklyRates ?? [],
+    confidence: "low",
+    source: prior?.source ?? "national_fallback",
+    timestamp: new Date().toISOString(),
+    isStale: true,
+    lastSuccessfulPull: prior?.lastSuccessfulPull ?? null,
+  };
+}
+
 export async function getLaneMarketRate(origin: string, destination: string): Promise<LaneMarketRate> {
   const qualifier = buildVotriQualifier(origin, destination);
   const cacheKey = `lmr:${qualifier}`;
   const cached = laneMarketRateCache.get(cacheKey);
   if (cached && isFresh(cached)) return cached.value;
 
+  return withDeadline(
+    fetchLaneMarketRateLive(origin, destination, qualifier, cacheKey),
+    LIVE_LANE_TIMEOUT_MS,
+    `getLaneMarketRate(${qualifier})`,
+    () => buildStaleLaneMarketRate(origin, destination, cached?.value ?? null),
+  );
+}
+
+async function fetchLaneMarketRateLive(origin: string, destination: string, qualifier: string, cacheKey: string): Promise<LaneMarketRate> {
   const origCode = cityToMarketCode(origin);
   const destCode = cityToMarketCode(destination);
 
@@ -1103,4 +1249,121 @@ export async function getLaneMarketRatesBatch(
     }),
   );
   return results;
+}
+
+// ── Daily refresh entry point ────────────────────────────────────────────────
+//
+// Called once per day by sonarDailyRefreshScheduler. Force-refreshes the
+// national snapshot and a list of top markets, then returns a status object.
+// All consumers (daily digest, market-pulse endpoint, intel dashboard, copilot
+// national-rates tool) will read from the cached snapshot for the rest of the
+// day because OTRI/NTI in-memory + DB caches now have a 25h TTL.
+export async function runDailySonarRefresh(opts?: { markets?: string[] }): Promise<SonarDailyPullStatus> {
+  const startedAt = new Date().toISOString();
+  dailyPullStatus.lastRunAt = startedAt;
+  dailyPullStatus.lastError = null;
+
+  const defaultMarkets = [
+    "Atlanta", "Dallas", "Chicago", "Los Angeles", "Houston", "Memphis",
+    "Phoenix", "Kansas City", "Indianapolis", "Charlotte", "Nashville",
+    "Columbus", "Cincinnati", "Newark", "Jacksonville",
+  ];
+  const markets = opts?.markets && opts.markets.length > 0 ? opts.markets : defaultMarkets;
+
+  let nationalOk = false;
+  try {
+    // Force-bypass in-memory cache
+    nationalCache = null;
+    const nat = await getNationalMarketSummary();
+    nationalOk = nat.otri !== null || nat.ntiPerMove !== null || nat.ntiPerMile !== null;
+    log(`Daily refresh: national OK=${nationalOk} (OTRI=${nat.otri}, NTI=${nat.ntiPerMove}, $/mi=${nat.ntiPerMile})`);
+  } catch (err: any) {
+    dailyPullStatus.lastError = `national: ${err?.message ?? String(err)}`;
+    log(`Daily refresh national FAILED: ${dailyPullStatus.lastError}`);
+  }
+  dailyPullStatus.nationalOk = nationalOk;
+
+  // Force-refresh per-market OTRIs by clearing those cache entries first
+  for (const m of markets) {
+    otriCache.delete(m.toLowerCase());
+  }
+  let marketsOk = 0;
+  try {
+    const rows = await getMarketOtris(markets);
+    marketsOk = rows.filter((r) => r.otri !== null).length;
+    log(`Daily refresh: per-market OTRIs ${marketsOk}/${markets.length} live`);
+  } catch (err: any) {
+    dailyPullStatus.lastError = (dailyPullStatus.lastError ? dailyPullStatus.lastError + "; " : "") + `markets: ${err?.message ?? String(err)}`;
+    log(`Daily refresh markets FAILED: ${err?.message ?? err}`);
+  }
+
+  dailyPullStatus.marketsAttempted = markets.length;
+  dailyPullStatus.marketsOk = marketsOk;
+  if (nationalOk || marketsOk > 0) {
+    dailyPullStatus.lastSuccessAt = new Date().toISOString();
+  }
+  return getSonarDailyPullStatus();
+}
+
+// ── Health probe (used by /api/sonar/health) ─────────────────────────────────
+
+export interface SonarHealthReport {
+  authMode: "bearer_token" | "username_password" | "none";
+  circuitBreaker: ReturnType<typeof getSonarCircuitBreakerStatus>;
+  daily: SonarDailyPullStatus;
+  national: {
+    ok: boolean;
+    isStale: boolean;
+    fetchedAt: string | null;
+    lastSuccessfulPull: string | null;
+    sample: { otri: number | null; ntiPerMove: number | null; ntiPerMile: number | null };
+  };
+  laneProbe: {
+    qualifier: string;
+    ok: boolean;
+    isStale: boolean;
+    elapsedMs: number;
+    sample: { votri: number | null; tracRpm: number | null };
+  };
+}
+
+export async function probeSonarHealth(opts?: { laneOrigin?: string; laneDestination?: string }): Promise<SonarHealthReport> {
+  const directToken = process.env.FREIGHTWAVES_TOKEN;
+  const hasCreds = !!(process.env.SONAR_USERNAME && process.env.SONAR_PASSWORD);
+  // If the bearer token has been rejected this run we report the active
+  // fallback mode, not the configured one.
+  const authMode: SonarHealthReport["authMode"] =
+    directToken && !directTokenInvalid ? "bearer_token" :
+    hasCreds ? "username_password" :
+    "none";
+
+  const nat = await getNationalMarketSummary();
+  const laneOrigin = opts?.laneOrigin ?? "Atlanta";
+  const laneDestination = opts?.laneDestination ?? "Dallas";
+  const t0 = Date.now();
+  const [votri, lmr] = await Promise.all([
+    getLaneVotri(laneOrigin, laneDestination),
+    getLaneMarketRate(laneOrigin, laneDestination),
+  ]);
+  const elapsedMs = Date.now() - t0;
+
+  return {
+    authMode,
+    circuitBreaker: getSonarCircuitBreakerStatus(),
+    daily: getSonarDailyPullStatus(),
+    national: {
+      ok: nat.otri !== null || nat.ntiPerMove !== null || nat.ntiPerMile !== null,
+      isStale: nat.isStale,
+      fetchedAt: nat.timestamp,
+      lastSuccessfulPull: nat.lastSuccessfulPull,
+      sample: { otri: nat.otri, ntiPerMove: nat.ntiPerMove, ntiPerMile: nat.ntiPerMile },
+    },
+    laneProbe: {
+      qualifier: buildVotriQualifier(laneOrigin, laneDestination),
+      ok: votri.votri !== null || lmr.marketRatePerMile !== null,
+      isStale: votri.isStale && lmr.isStale,
+      elapsedMs,
+      sample: { votri: votri.votri, tracRpm: lmr.marketRatePerMile },
+    },
+  };
 }
