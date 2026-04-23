@@ -672,7 +672,7 @@ export function registerMyProcurementRoutes(app: Express) {
             es.created_at
           FROM email_signals es
           INNER JOIN email_messages em ON em.id = es.message_id
-          WHERE es.linked_account_id = ANY(${companyIds}::text[])
+          WHERE es.linked_account_id IN (${sql.join(companyIds.map(id => sql`${id}`), sql`, `)})
             AND em.org_id = ${user.organizationId}
             AND es.created_at > NOW() - INTERVAL '7 days'
           ORDER BY es.linked_account_id, es.created_at DESC
