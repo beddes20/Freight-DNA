@@ -123,7 +123,30 @@ const LOST_STATUSES: QuoteOutcomeStatus[] = ["lost_price", "lost_service", "lost
 function isWon(s: string): boolean { return s === "won" || s === "won_low_margin"; }
 function isLost(s: string): boolean { return s === "lost_price" || s === "lost_service" || s === "lost_timing" || s === "lost_incumbent"; }
 
+/**
+ * Demo seed gate (Task #470).
+ *
+ * The 140-row demo dataset is useful for local/staging walkthroughs but must
+ * never auto-populate a production org — real quote data should arrive via the
+ * inbound email parser (see `quoteEmailIngestion.ts`) and the TMS outcome
+ * sync (see `quoteTmsSync.ts`).
+ *
+ * The seed runs only when `QUOTE_DEMO_SEED_ENABLED=true`. An optional
+ * `QUOTE_DEMO_SEED_ORG_IDS` allow-list further restricts which orgs receive
+ * the demo data. Production deploys leave the flag unset, so calling
+ * `ensureQuoteSeed` is a no-op for live customers and the Customer Quotes UI
+ * starts from an empty state until real ingestion lands rows.
+ */
+export function isDemoSeedEnabled(orgId?: string): boolean {
+  if (process.env.QUOTE_DEMO_SEED_ENABLED !== "true") return false;
+  const allow = process.env.QUOTE_DEMO_SEED_ORG_IDS;
+  if (!allow || !orgId) return true;
+  const ids = allow.split(",").map(s => s.trim()).filter(Boolean);
+  return ids.length === 0 || ids.includes(orgId);
+}
+
 export async function ensureQuoteSeed(orgId: string): Promise<void> {
+  if (!isDemoSeedEnabled(orgId)) return;
   const existing = await db.select({ id: quoteCustomers.id }).from(quoteCustomers).where(eq(quoteCustomers.organizationId, orgId)).limit(1);
   if (existing.length > 0) return;
   await seedDemoData(orgId);

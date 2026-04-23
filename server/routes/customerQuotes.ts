@@ -6,6 +6,7 @@ import {
   listQuotes, listSavedViews, createSavedView, deleteSavedView, exportCsv,
   type QuoteFilters, type ListSortKey,
 } from "../services/customerQuotes";
+import { syncQuoteOutcomesFromTms } from "../services/quoteTmsSync";
 
 const filtersSchema = z.object({
   customerId: z.string().min(1).optional(),
@@ -142,6 +143,23 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     await deleteSavedView(user.organizationId, user.id, String(req.params.id));
     res.json({ ok: true });
+  });
+
+  app.post("/api/customer-quotes/sync-tms", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      // Restrict to admin/director — write path that mutates outcomes.
+      if (user.role !== "admin" && user.role !== "director") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const result = await syncQuoteOutcomesFromTms(user.organizationId);
+      res.json(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
+      console.error("[customer-quotes] tms sync error:", err);
+      res.status(500).json({ error: msg });
+    }
   });
 
   app.get("/api/customer-quotes/export.csv", requireAuth, async (req, res) => {

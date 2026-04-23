@@ -16,6 +16,7 @@ import type {
 } from "@shared/schema";
 import { applyMessageToThread } from "./services/conversationWaitingStateService";
 import { determineInitialOwner } from "./services/conversationOwnershipService";
+import { ingestQuoteFromEmail } from "./services/quoteEmailIngestion";
 
 // ─── Intent taxonomy ─────────────────────────────────────────────────────────
 
@@ -334,6 +335,29 @@ export async function processEmailMessage(messageId: string): Promise<{
 
   const saved = inserts.length > 0 ? await defaultStorage.insertEmailSignals(inserts) : [];
   await defaultStorage.markEmailMessageProcessed(msg.id);
+
+  // Task #470: when an inbound email is classified as a customer pricing /
+  // quote request, mirror it into the customer_quotes pipeline so the
+  // dashboard reflects the live ask. Best-effort — never fail signal
+  // processing because of a downstream ingestion error.
+  if (msg.direction === "inbound" && result.actorType === "customer") {
+    // Use the *original* extracted signals (not the deduped subset). The
+    // dedup pass is meant to suppress repeat *signal rows* on a thread, but
+    // every inbound quote email still needs its own quote_opportunity row —
+    // otherwise a second pricing_request on the same thread would silently
+    // skip ingestion. Idempotency on the quote side is enforced by
+    // (org, source=email, providerMessageId) inside `ingestQuoteFromEmail`.
+    const quoteSignal = result.signals.find(
+      s => s.intentType === "pricing_request" || s.intentType === "new_opportunity",
+    );
+    if (quoteSignal) {
+      try {
+        await ingestQuoteFromEmail(msg, { extractedData: quoteSignal.extractedData ?? null });
+      } catch (err) {
+        console.error(`[emailIntelligence] quote ingestion failed for ${msg.id}:`, err);
+      }
+    }
+  }
 
   return { message: msg, signals: saved, skipped: result.signals.length === 0 };
 }
