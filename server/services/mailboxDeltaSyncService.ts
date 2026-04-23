@@ -112,8 +112,11 @@ async function fetchDeltaMessages(
   const messages: DeltaMessage[] = [];
   let newDeltaToken: string | null = null;
 
-  // Sent Items uses sentDateTime as the filter field; Inbox uses receivedDateTime.
-  const dateField = folder === "sentitems" ? "sentDateTime" : "receivedDateTime";
+  // Microsoft Graph's Messages delta endpoint only supports a single $filter
+  // shape: `receivedDateTime ge <iso>`. This applies to both Inbox and
+  // SentItems — passing `sentDateTime ge ...` gives a 400 ErrorInvalidUrlQuery.
+  // (Sent messages also have a receivedDateTime stamped by the server, so this
+  // filter still works for the SentItems folder.)
   const selectFields = folder === "sentitems"
     ? "id,conversationId,from,toRecipients,ccRecipients,subject,bodyPreview,body,sentDateTime,internetMessageId"
     : "id,conversationId,from,toRecipients,ccRecipients,subject,bodyPreview,body,receivedDateTime,internetMessageId";
@@ -123,7 +126,7 @@ async function fetchDeltaMessages(
     url = deltaToken;
   } else {
     const lookback = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailboxEmail)}/mailFolders/${folder}/messages/delta?$select=${selectFields}&$filter=${dateField} ge ${lookback}`;
+    url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailboxEmail)}/mailFolders/${folder}/messages/delta?$select=${selectFields}&$filter=receivedDateTime ge ${lookback}`;
   }
 
   let pageCount = 0;
@@ -330,8 +333,14 @@ export async function syncMailboxDelta(mailboxId: string): Promise<{ processed: 
         }
       }
 
-      if (folder === "inbox") inboxToken = newDeltaToken;
-      else sentToken = newDeltaToken;
+      // Only advance the persisted delta token when Graph actually returned
+      // a new @odata.deltaLink. If we hit MAX_PAGES (huge backlog) or only
+      // got @odata.nextLink, keep the prior token so the next cycle resumes
+      // from where we were instead of re-fetching the 24h lookback window.
+      if (newDeltaToken) {
+        if (folder === "inbox") inboxToken = newDeltaToken;
+        else sentToken = newDeltaToken;
+      }
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);
       log(`Delta sync error for ${mailbox.email}/${folder}: ${m}`);
