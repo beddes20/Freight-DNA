@@ -64,6 +64,8 @@ export async function buildTodaySeed(user: User, now: Date = new Date(), timeZon
 
   // ── Section 1: Overdue touchpoints (top 5 cold accounts)
   const overdueLines: string[] = [];
+  let overdueOk = true;
+  try {
   if (myCompanyIds.length > 0) {
     const recentTps = await db
       .select({
@@ -92,9 +94,15 @@ export async function buildTodaySeed(user: User, now: Date = new Date(), timeZon
       overdueLines.push(`- [${c.name}](/companies/${c.id}) — last touch ${ago}`);
     }
   }
+  } catch (err) {
+    console.warn("[today-seed] overdue lookup failed:", err);
+    overdueOk = false;
+  }
 
   // ── Section 2: Quote SLAs at risk (open RFPs due ≤ 2 days for my accounts)
   const slaLines: string[] = [];
+  let slaOk = true;
+  try {
   if (myCompanyIds.length > 0) {
     const todayStr = date;
     const horizon = new Date(now); horizon.setDate(horizon.getDate() + 2);
@@ -120,9 +128,14 @@ export async function buildTodaySeed(user: User, now: Date = new Date(), timeZon
       slaLines.push(`- [${r.title}](/companies/${r.companyId}) — ${c?.name ?? "Account"} • due ${due}${overdue}`);
     }
   }
+  } catch (err) {
+    console.warn("[today-seed] SLA lookup failed:", err);
+    slaOk = false;
+  }
 
   // ── Section 3: Hot lanes (TRAC) — recurring lanes with hot carrier replies
   const hotLaneLines: string[] = [];
+  let hotLaneOk = true;
   try {
     const myLanes = await db
       .select()
@@ -158,10 +171,12 @@ export async function buildTodaySeed(user: User, now: Date = new Date(), timeZon
     }
   } catch (err) {
     console.warn("[today-seed] hot lanes lookup failed:", err);
+    hotLaneOk = false;
   }
 
   // ── Section 4: Top NBA cards (top 3 by urgency, only actionable)
   const nbaLines: string[] = [];
+  let nbaOk = true;
   try {
     const allCards = await storage.getNbaCardsByUserId(user.id);
     const open = allCards
@@ -175,6 +190,7 @@ export async function buildTodaySeed(user: User, now: Date = new Date(), timeZon
     }
   } catch (err) {
     console.warn("[today-seed] NBA cards lookup failed:", err);
+    nbaOk = false;
   }
 
   // ── Section 0 (prepended): Coaching notes from the rep's manager
@@ -218,10 +234,10 @@ export async function buildTodaySeed(user: User, now: Date = new Date(), timeZon
   }
 
   const sections = [
-    section("Overdue touchpoints (top 5)", overdueLines, "All accounts are warm — nice."),
-    section("Quote SLAs at risk", slaLines, "No RFP deadlines flagged in the next 48 hours."),
-    section("Hot lanes (TRAC)", hotLaneLines, "No hot lanes with carrier interest right now."),
-    section("Top NBA cards", nbaLines, "No fresh next-best-action cards waiting."),
+    section("Overdue touchpoints (top 5)", overdueLines, "All accounts are warm — nice.", overdueOk),
+    section("Quote SLAs at risk", slaLines, "No RFP deadlines flagged in the next 48 hours.", slaOk),
+    section("Hot lanes (TRAC)", hotLaneLines, "No hot lanes with carrier interest right now.", hotLaneOk),
+    section("Top NBA cards", nbaLines, "No fresh next-best-action cards waiting.", nbaOk),
   ];
 
   const greeting = `Good morning${user.name ? `, ${user.name.split(" ")[0]}` : ""} — here's what to focus on for **${date}**.`;
@@ -237,10 +253,19 @@ export async function buildTodaySeed(user: User, now: Date = new Date(), timeZon
   return { date, title, markdown };
 }
 
-function section(heading: string, lines: string[], emptyMsg: string): string {
-  return [
-    "",
-    `### ${heading}`,
-    lines.length > 0 ? lines.join("\n") : `_${emptyMsg}_`,
-  ].join("\n");
+export function section(heading: string, lines: string[], emptyMsg: string, ok: boolean = true): string {
+  // Three states the rep deserves to be able to tell apart:
+  //   1. Data       → render the bullets.
+  //   2. Empty-good → "_${emptyMsg}_" (a positive, "nothing to do" signal).
+  //   3. Source down → an explicit "data unavailable" notice — never silently
+  //                    pretend everything is calm when our query just failed.
+  let body: string;
+  if (lines.length > 0) {
+    body = lines.join("\n");
+  } else if (!ok) {
+    body = "_⚠️ Source unavailable right now — try again shortly._";
+  } else {
+    body = `_${emptyMsg}_`;
+  }
+  return ["", `### ${heading}`, body].join("\n");
 }

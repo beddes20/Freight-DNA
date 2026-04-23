@@ -30,6 +30,13 @@ export interface RetrievalHit {
 export interface RetrievalResult {
   hits: RetrievalHit[];
   degraded: boolean;
+  /** Per-source breakdown so the UI can name *which* layer failed. */
+  health?: {
+    embedder: "ok" | "down";
+    orgCorpus: "ok" | "down";
+    library: "ok" | "down";
+    project: "ok" | "down" | "n/a";
+  };
 }
 
 export interface RetrievalArgs {
@@ -44,87 +51,102 @@ const DEFAULT_PER_BUCKET = 6;
 
 export async function retrieveContext(args: RetrievalArgs): Promise<RetrievalResult> {
   const limit = Math.min(Math.max(args.perBucket ?? DEFAULT_PER_BUCKET, 1), 12);
-  const vec = await embed(args.query);
+
+  // Skip embedding entirely for trivially small queries — saves a round trip
+  // (and lets the rest of the envelope arrive sooner).
+  const trimmed = args.query.trim();
+  if (trimmed.length < 3) {
+    return {
+      hits: [],
+      degraded: false,
+      health: { embedder: "ok", orgCorpus: "ok", library: "ok", project: args.projectId ? "ok" : "n/a" },
+    };
+  }
+
+  const vec = await embed(trimmed);
 
   if (!vec) {
-    return { hits: [], degraded: true };
+    return {
+      hits: [],
+      degraded: true,
+      health: { embedder: "down", orgCorpus: "down", library: "down", project: args.projectId ? "down" : "n/a" },
+    };
   }
   const literal = `[${vec.join(",")}]`;
 
-  const hits: RetrievalHit[] = [];
-  let degraded = false;
-
-  // Org corpus
-  try {
-    const rows = await db.execute<{
-      source_kind: string; source_id: string; text: string;
-      metadata: Record<string, unknown> | null; similarity: number;
-      updated_at: string | Date | null;
-    }>(sql`
-      SELECT source_kind, source_id, text, metadata, updated_at,
-             1 - (embedding <=> ${literal}::vector) AS similarity
-      FROM org_corpus_chunks
-      WHERE organization_id = ${args.organizationId} AND embedding IS NOT NULL
-      ORDER BY embedding <=> ${literal}::vector
-      LIMIT ${limit}
-    `);
-    for (const r of rows.rows) {
-      hits.push({
-        bucket: "org",
+  // Run org corpus, personal library, and project pin lookups concurrently —
+  // a slow library scan must not block org-corpus results, and vice versa.
+  const orgPromise = (async () => {
+    try {
+      const rows = await db.execute<{
+        source_kind: string; source_id: string; text: string;
+        metadata: Record<string, unknown> | null; similarity: number;
+        updated_at: string | Date | null;
+      }>(sql`
+        SELECT source_kind, source_id, text, metadata, updated_at,
+               1 - (embedding <=> ${literal}::vector) AS similarity
+        FROM org_corpus_chunks
+        WHERE organization_id = ${args.organizationId} AND embedding IS NOT NULL
+        ORDER BY embedding <=> ${literal}::vector
+        LIMIT ${limit}
+      `);
+      const hs: RetrievalHit[] = rows.rows.map((r) => ({
+        bucket: "org" as const,
         sourceKind: r.source_kind,
         sourceId: r.source_id,
         text: r.text,
         similarity: typeof r.similarity === "number" ? r.similarity : null,
         metadata: r.metadata,
         updatedAt: r.updated_at ? new Date(r.updated_at).toISOString() : null,
-      });
+      }));
+      return { ok: true, hits: hs };
+    } catch (err) {
+      console.warn("[retrieval] org corpus search failed:", err);
+      return { ok: false, hits: [] as RetrievalHit[] };
     }
-  } catch (err) {
-    console.warn("[retrieval] org corpus search failed:", err);
-    degraded = true;
-  }
+  })();
 
-  // Personal Library
-  try {
-    const rows = await db.execute<{
-      id: string; kind: string; title: string; body: string | null;
-      metadata: Record<string, unknown> | null; similarity: number;
-      created_at: string | Date | null;
-    }>(sql`
-      SELECT id, kind, title, body, metadata, created_at,
-             1 - (embedding <=> ${literal}::vector) AS similarity
-      FROM library_items
-      WHERE user_id = ${args.userId} AND embedding IS NOT NULL
-      ORDER BY embedding <=> ${literal}::vector
-      LIMIT ${limit}
-    `);
-    for (const r of rows.rows) {
-      const text = r.body ? `${r.title}\n${r.body}` : r.title;
-      hits.push({
-        bucket: "library",
+  const libPromise = (async () => {
+    try {
+      const rows = await db.execute<{
+        id: string; kind: string; title: string; body: string | null;
+        metadata: Record<string, unknown> | null; similarity: number;
+        created_at: string | Date | null;
+      }>(sql`
+        SELECT id, kind, title, body, metadata, created_at,
+               1 - (embedding <=> ${literal}::vector) AS similarity
+        FROM library_items
+        WHERE user_id = ${args.userId} AND embedding IS NOT NULL
+        ORDER BY embedding <=> ${literal}::vector
+        LIMIT ${limit}
+      `);
+      const hs: RetrievalHit[] = rows.rows.map((r) => ({
+        bucket: "library" as const,
         sourceKind: r.kind,
         sourceId: r.id,
-        text,
+        text: r.body ? `${r.title}\n${r.body}` : r.title,
         similarity: typeof r.similarity === "number" ? r.similarity : null,
         metadata: r.metadata,
         updatedAt: r.created_at ? new Date(r.created_at).toISOString() : null,
         title: r.title,
-      });
+      }));
+      return { ok: true, hits: hs };
+    } catch (err) {
+      console.warn("[retrieval] library search failed:", err);
+      return { ok: false, hits: [] as RetrievalHit[] };
     }
-  } catch (err) {
-    console.warn("[retrieval] library search failed:", err);
-    degraded = true;
-  }
+  })();
 
-  // Project pinned context (single blob, no embedding required)
-  if (args.projectId) {
+  const projPromise = (async () => {
+    if (!args.projectId) return { ok: true, hits: [] as RetrievalHit[], skipped: true };
     try {
       const rows = await db.execute<{ id: string; name: string; pinned_context: string | null; updated_at: string | Date | null }>(sql`
         SELECT id, name, pinned_context, updated_at FROM thread_projects WHERE id = ${args.projectId} AND user_id = ${args.userId} LIMIT 1
       `);
       const row = rows.rows[0];
+      const hs: RetrievalHit[] = [];
       if (row?.pinned_context && row.pinned_context.trim()) {
-        hits.push({
+        hs.push({
           bucket: "project",
           sourceKind: "project_pin",
           sourceId: row.id,
@@ -134,11 +156,22 @@ export async function retrieveContext(args: RetrievalArgs): Promise<RetrievalRes
           title: row.name,
         });
       }
+      return { ok: true, hits: hs, skipped: false };
     } catch (err) {
       console.warn("[retrieval] project pin lookup failed:", err);
-      degraded = true;
+      return { ok: false, hits: [] as RetrievalHit[], skipped: false };
     }
-  }
+  })();
+
+  const [orgRes, libRes, projRes] = await Promise.all([orgPromise, libPromise, projPromise]);
+  const hits: RetrievalHit[] = [...orgRes.hits, ...libRes.hits, ...projRes.hits];
+  const health: NonNullable<RetrievalResult["health"]> = {
+    embedder: "ok",
+    orgCorpus: orgRes.ok ? "ok" : "down",
+    library: libRes.ok ? "ok" : "down",
+    project: !args.projectId ? "n/a" : (projRes.ok ? "ok" : "down"),
+  };
+  const degraded = !orgRes.ok || !libRes.ok || (!!args.projectId && !projRes.ok);
 
   // De-dup: collapse by (bucket, sourceKind, sourceId), keeping the
   // highest-similarity hit. Then collapse near-identical text bodies across
@@ -156,7 +189,7 @@ export async function retrieveContext(args: RetrievalArgs): Promise<RetrievalRes
     if (!prev || (h.similarity ?? 0) > (prev.similarity ?? 0)) bySig.set(sig, h);
   }
   const deduped = Array.from(bySig.values()).sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
-  return { hits: deduped, degraded };
+  return { hits: deduped, degraded, health };
 }
 
 export function formatHitsForPrompt(hits: RetrievalHit[], maxChars = 4000): string {

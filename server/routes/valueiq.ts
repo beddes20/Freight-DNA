@@ -585,6 +585,105 @@ export function registerValueIQRoutes(app: Express) {
     }
   });
 
+  // ─── Health ───────────────────────────────────────────────────────────────
+  // Cheap, honest snapshot of the providers ValueIQ depends on. Used by the
+  // chat header to surface a banner when something is degraded so reps know
+  // *before* they ask why an answer is thin. Keep this fast (≤2s budget per
+  // probe) — it runs on page load and a tab refocus.
+  app.get("/api/valueiq/health", requireAuth, async (req: Request, res: Response) => {
+    const user = await getCurrentUser(req);
+    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const t0 = Date.now();
+    const { getFreightProviderLastSuccess } = await import("../agent/freightResearch");
+    const lastSuccess = getFreightProviderLastSuccess();
+
+    // ── DB + pgvector probe ──
+    const dbProbe = (async () => {
+      const start = Date.now();
+      try {
+        await db.execute(sql`SELECT 1`);
+        return { ok: true, ms: Date.now() - start, configured: true } as const;
+      } catch (err) {
+        return { ok: false, ms: Date.now() - start, configured: true, error: (err as Error).message } as const;
+      }
+    })();
+    const pgvectorProbe = (async () => {
+      const start = Date.now();
+      try {
+        // Confirms both that the extension is loaded AND that at least one
+        // ANN index exists — the speed promise of Task #472 only holds when
+        // both are true.
+        const ext = await db.execute(sql`SELECT 1 FROM pg_extension WHERE extname='vector'`);
+        const idx = await db.execute(sql`SELECT 1 FROM pg_indexes WHERE indexname IN ('library_items_embedding_hnsw_idx','library_items_embedding_ivfflat_idx','org_corpus_chunks_embedding_hnsw_idx','org_corpus_chunks_embedding_ivfflat_idx') LIMIT 1`);
+        const ok = ext.rows.length > 0 && idx.rows.length > 0;
+        return { ok, ms: Date.now() - start, configured: ext.rows.length > 0, indexed: idx.rows.length > 0 };
+      } catch (err) {
+        return { ok: false, ms: Date.now() - start, configured: false, error: (err as Error).message };
+      }
+    })();
+    // ── Embedder probe (one tiny embedding round-trip) ──
+    const embedderProbe = (async () => {
+      const start = Date.now();
+      const configured = !!process.env.OPENAI_API_KEY;
+      if (!configured) return { ok: false, ms: 0, configured: false, error: "OPENAI_API_KEY not set" };
+      try {
+        const { embed } = await import("../agent/memory");
+        const v = await embed("health probe");
+        const ok = Array.isArray(v) && v.length > 0;
+        return { ok, ms: Date.now() - start, configured: true, lastSuccessAt: ok ? new Date().toISOString() : undefined };
+      } catch (err) {
+        return { ok: false, ms: Date.now() - start, configured: true, error: (err as Error).message };
+      }
+    })();
+    // ── EIA probe (shares cache with the freight tool) ──
+    const eiaProbe = (async () => {
+      const start = Date.now();
+      try {
+        const { getEiaDieselPrice } = await import("../sonarClient");
+        const v = await getEiaDieselPrice();
+        return { ok: !!v, ms: Date.now() - start, configured: true, lastSuccessAt: lastSuccess.eia };
+      } catch (err) { return { ok: false, ms: Date.now() - start, configured: true, error: (err as Error).message, lastSuccessAt: lastSuccess.eia }; }
+    })();
+    const sonarProbe = (async () => {
+      try {
+        const { getSonarCircuitBreakerStatus } = await import("../sonarClient");
+        const cb = getSonarCircuitBreakerStatus();
+        return { ok: !cb.isOpen, configured: true, circuitBreaker: cb };
+      } catch (err) { return { ok: false, configured: false, error: (err as Error).message }; }
+    })();
+    const openaiConfigured = !!process.env.OPENAI_API_KEY;
+    const anthropicConfigured = !!process.env.ANTHROPIC_API_KEY;
+    const fmcsaConfigured = !!process.env.FMCSA_WEBKEY;
+    const websearchConfigured = !!process.env.PERPLEXITY_API_KEY;
+
+    const [database, pgvector, embedder, eia, sonar] = await Promise.all([dbProbe, pgvectorProbe, embedderProbe, eiaProbe, sonarProbe]);
+
+    const providers = {
+      database,
+      pgvector,
+      embedder,
+      openai:    { ok: openaiConfigured,    configured: openaiConfigured,    lastSuccessAt: lastSuccess.openai },
+      anthropic: { ok: anthropicConfigured, configured: anthropicConfigured, lastSuccessAt: lastSuccess.anthropic },
+      websearch: { ok: websearchConfigured, configured: websearchConfigured, provider: "perplexity", lastSuccessAt: lastSuccess.perplexity },
+      eia,
+      sonar,
+      fmcsa:     { ok: fmcsaConfigured,     configured: fmcsaConfigured,     lastSuccessAt: lastSuccess.fmcsa },
+    };
+    // Global "degraded" trips when something the chat *cannot route around*
+    // is broken: the DB, the embedder, or SONAR (since CRM lanes lean on it).
+    // Optional/advisory providers (FMCSA/EIA/Anthropic/Perplexity) drop into
+    // a per-row "down" state on the admin status strip without flipping the
+    // global banner — those are graceful-degradation paths in freightResearch.
+    const degraded = !database.ok || !embedder.ok || !sonar.ok;
+
+    res.json({
+      degraded,
+      providers,
+      ms: Date.now() - t0,
+      checkedAt: new Date().toISOString(),
+    });
+  });
+
   // ─── Library ──────────────────────────────────────────────────────────────
   app.get("/api/valueiq/library", requireAuth, async (req: Request, res: Response) => {
     const user = await getCurrentUser(req);

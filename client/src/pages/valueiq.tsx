@@ -150,6 +150,13 @@ function ThreadsPane() {
   const threadsQ = useQuery<ThreadRow[]>({ queryKey: ["/api/valueiq/threads"] });
   const projectsQ = useQuery<ProjectRow[]>({ queryKey: ["/api/valueiq/projects"] });
   const agentsQ = useQuery<AgentRow[]>({ queryKey: ["/api/valueiq/agents"] });
+  // Honest connector-health snapshot — re-checked when the tab regains focus.
+  // Refetches every 60s; never throws to the UI (see banner below).
+  const healthQ = useQuery<{ degraded: boolean; providers: Record<string, { ok: boolean; configured?: boolean; error?: string }> }>({
+    queryKey: ["/api/valueiq/health"],
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+  });
   const renameThread = useMutation({
     mutationFn: ({ id, title }: { id: string; title: string }) =>
       apiRequest("PATCH", `/api/valueiq/threads/${id}`, { title }),
@@ -190,8 +197,41 @@ function ThreadsPane() {
 
   const active = threadsQ.data?.find(t => t.id === activeId) ?? null;
 
+  // Prefetch the very first thread's messages alongside the threads list so
+  // the chat panel renders immediately on the next paint instead of waiting
+  // for a second sequential round-trip after threadsQ resolves.
+  useEffect(() => {
+    const first = threadsQ.data?.[0];
+    if (!first) return;
+    queryClient.prefetchQuery({
+      queryKey: ["/api/valueiq/threads", first.id, "messages"],
+      queryFn: () =>
+        fetch(`/api/valueiq/threads/${first.id}/messages`, { credentials: "include" }).then((r) => r.json()),
+    });
+  }, [threadsQ.data]);
+
+  // Build a human-readable degradation summary from the health snapshot.
+  const degradedProviders: string[] = [];
+  if (healthQ.data?.providers) {
+    for (const [name, info] of Object.entries(healthQ.data.providers)) {
+      if (!info.ok && info.configured !== false) degradedProviders.push(name);
+    }
+  }
+  const showHealthBanner = !!healthQ.data?.degraded || degradedProviders.length > 0;
+
   return (
     <div className="grid grid-cols-12 gap-4 h-[calc(100vh-200px)] min-h-[600px]">
+      {showHealthBanner && (
+        <div
+          className="col-span-12 -mb-2 px-3 py-2 text-xs rounded-md border border-amber-300 bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-700"
+          data-testid="banner-valueiq-health"
+        >
+          <span className="font-medium">Heads up:</span>{" "}
+          {degradedProviders.length > 0
+            ? `${degradedProviders.join(", ")} ${degradedProviders.length === 1 ? "is" : "are"} degraded — answers from those sources may be missing.`
+            : "Some providers are degraded right now — answers may be thin."}
+        </div>
+      )}
       <div className="col-span-3 border rounded-md flex flex-col min-h-0">
         <div className="p-2 border-b space-y-2">
           <Button size="sm" className="w-full" onClick={() => createThread.mutate()} disabled={createThread.isPending} data-testid="button-new-thread">

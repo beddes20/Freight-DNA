@@ -30,6 +30,7 @@ import {
   runCarrierLaneSearch, getCompanyDetails, getCachedRatePositioningContext,
 } from "../chatbot";
 import { saveMemory, searchMemories, listFacts } from "./memory";
+import { freightResearch } from "./freightResearch";
 import type { Capability } from "./permissions";
 
 export interface AgentContext {
@@ -1308,6 +1309,37 @@ export const TOOLS: AgentTool[] = [
         return `${i + 1}. ${l.companyName ?? "?"} — ${l.origin}${l.originState ? `,${l.originState}` : ""} → ${l.destination}${l.destinationState ? `,${l.destinationState}` : ""}${equip} · ${cadence}${wk} · score ${l.laneScore ?? "?"} · ${cov}${l.isEligible ? " · eligible" : ""}`;
       });
       return { kind: "data", text: `Recurring lanes (${lanes.length}):\n${lines.join("\n")}` };
+    },
+  },
+  {
+    name: "freight_research",
+    capability: "read.market",
+    description:
+      "Look up freight-domain facts the CRM can't answer on its own — DOT/MC carrier records (FMCSA SAFER), national diesel prices (EIA), or general freight-industry context. Returns a short answer plus citations. Use this BEFORE saying 'I don't know' on freight questions.",
+    parameters: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "The freight question to research, in natural language." },
+        intent: {
+          type: "string",
+          enum: ["carrier_lookup", "fuel", "general"],
+          description: "Optional intent hint. Leave blank to auto-classify.",
+        },
+      },
+      required: ["question"],
+    },
+    execute: async (_ctx, args) => {
+      const question = String(args.question || "").trim();
+      if (!question) return { kind: "data", text: "freight_research called without a question." };
+      const intentHint = args.intent && ["carrier_lookup", "fuel", "general"].includes(String(args.intent))
+        ? (String(args.intent) as "carrier_lookup" | "fuel" | "general")
+        : undefined;
+      const r = await freightResearch(question, intentHint);
+      const cites = r.citations.length
+        ? `\n\nCitations:\n${r.citations.map((c, i) => `${i + 1}. ${c.label}${c.href ? ` — ${c.href}` : ""}`).join("\n")}`
+        : "";
+      const tag = r.unknown ? " (no confident answer)" : "";
+      return { kind: "data", text: `[${r.intent}${tag}] ${r.answer}${cites}` };
     },
   },
 ];

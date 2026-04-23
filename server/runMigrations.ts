@@ -4016,4 +4016,44 @@ export async function runMigrations() {
   } finally {
     client468.release();
   }
+
+  // ── Task #472: pgvector ANN indexes for retrieval speed ───────────────────
+  // Without an ANN index every chat turn does an exact-distance scan of every
+  // embedding row in scope, which dominates wall-clock once the corpus grows.
+  // HNSW + cosine matches the distance operator we already use in retrieval.ts
+  // (`<=>` with `vector_cosine_ops`). CREATE INDEX IF NOT EXISTS makes this a
+  // no-op on subsequent boots and on environments where pgvector / HNSW isn't
+  // available the error is logged and skipped — chat will still work via the
+  // exact-scan path, just slower.
+  const client472 = await pool.connect();
+  try {
+    // Try HNSW first (better recall, but only available on pgvector ≥ 0.5).
+    // If HNSW isn't supported on this Postgres build, fall back to ivfflat
+    // (pgvector ≥ 0.4) so we still get an ANN index instead of an exact scan.
+    const tables: Array<{ table: string; idxBase: string }> = [
+      { table: "library_items",     idxBase: "library_items_embedding" },
+      { table: "org_corpus_chunks", idxBase: "org_corpus_chunks_embedding" },
+      { table: "agent_memories",    idxBase: "agent_memories_embedding" },
+    ];
+    for (const { table, idxBase } of tables) {
+      try {
+        await client472.query(
+          `CREATE INDEX IF NOT EXISTS ${idxBase}_hnsw_idx ON ${table} USING hnsw (embedding vector_cosine_ops)`
+        );
+        console.log(`[migrations] Task #472 HNSW index ensured on ${table}`);
+      } catch (hnswErr) {
+        console.warn(`[migrations] Task #472 HNSW unavailable on ${table} (${(hnswErr as Error).message}) — trying ivfflat fallback`);
+        try {
+          await client472.query(
+            `CREATE INDEX IF NOT EXISTS ${idxBase}_ivfflat_idx ON ${table} USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)`
+          );
+          console.log(`[migrations] Task #472 ivfflat fallback index ensured on ${table}`);
+        } catch (ivfErr) {
+          console.warn(`[migrations] Task #472 ivfflat fallback also failed on ${table}:`, (ivfErr as Error).message);
+        }
+      }
+    }
+  } finally {
+    client472.release();
+  }
 }

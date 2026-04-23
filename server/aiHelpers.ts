@@ -27,7 +27,7 @@ function getOpenAI(): OpenAI {
 }
 
 let _anthropic: Anthropic | null = null;
-function getAnthropic(): Anthropic {
+export function getAnthropic(): Anthropic {
   if (!_anthropic) {
     _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   }

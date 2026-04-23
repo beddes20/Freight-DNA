@@ -39,6 +39,13 @@ export interface AnswerMeta {
   confidence?: "high" | "medium" | "low";
 }
 
+export interface HealthSnapshot {
+  embedder: "ok" | "down";
+  orgCorpus: "ok" | "down";
+  library: "ok" | "down";
+  project: "ok" | "down" | "n/a";
+}
+
 export type AgentEvent =
   | { content: string }
   | { navigate: string }
@@ -48,6 +55,7 @@ export type AgentEvent =
   | { error: string }
   | { confidence: number; route: string }
   | { mode: DepthMode; modeLabel: string }
+  | { health: HealthSnapshot & { degraded: boolean } }
   | { done: true };
 
 const HEDGE_PATTERNS = [
@@ -109,7 +117,7 @@ async function buildContextEnvelope(
   ctx: AgentContext,
   userMessage: string,
   projectId?: string | null,
-): Promise<{ envelope: string; degraded: boolean; hits: RetrievalHit[] }> {
+): Promise<{ envelope: string; degraded: boolean; hits: RetrievalHit[]; health: NonNullable<Awaited<ReturnType<typeof retrieveContext>>["health"]> }> {
   const today = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
   const lines: string[] = [
     `Today is ${today}.`,
@@ -118,46 +126,44 @@ async function buildContextEnvelope(
     `Data scope: ${ctx.scope === "everyone" ? "entire organization" : "rep's team only"}`,
   ];
 
-  // Standing facts (always loaded)
-  try {
-    const facts = await listFacts(ctx.rep.id);
-    const pinned = facts.filter((f) => f.pinned).slice(0, 8);
-    if (pinned.length) {
-      lines.push("", "Standing facts about this rep:");
-      for (const f of pinned) lines.push(`• ${f.fact}`);
-    }
-  } catch {}
-
-  // Top-k memory recall, scoped to the user's question
-  try {
-    const hits = await searchMemories(ctx.rep.id, userMessage, 3);
-    if (hits.length) {
-      lines.push("", "Possibly relevant memories from prior sessions (use only if applicable):");
-      for (const h of hits) lines.push(`• ${h.content}`);
-    }
-  } catch {}
-
-  // ValueIQ retrieval — org corpus + personal Library + project pin.
-  let degraded = false;
-  let hits: RetrievalHit[] = [];
-  try {
-    const result = await retrieveContext({
-      organizationId: ctx.organizationId,
-      userId: ctx.rep.id,
-      query: userMessage,
-      projectId: projectId ?? null,
-      perBucket: 4,
-    });
-    degraded = result.degraded;
-    hits = result.hits;
-    const formatted = formatHitsForPrompt(result.hits, 3500);
-    if (formatted) lines.push(formatted);
-  } catch (err) {
+  // Run facts, memory search, and retrieval concurrently — none of them need
+  // each other's output, and the previous serial implementation cost ~1–3s of
+  // wall-clock per turn while waiting on embeddings + DB calls one after the
+  // other. Each branch handles its own failure so a single slow/broken one
+  // can never block the others.
+  const factsPromise = listFacts(ctx.rep.id).catch(() => [] as Awaited<ReturnType<typeof listFacts>>);
+  const memoryPromise = searchMemories(ctx.rep.id, userMessage, 3).catch(() => [] as Awaited<ReturnType<typeof searchMemories>>);
+  const retrievalPromise = retrieveContext({
+    organizationId: ctx.organizationId,
+    userId: ctx.rep.id,
+    query: userMessage,
+    projectId: projectId ?? null,
+    perBucket: 4,
+  }).catch((err) => {
     console.warn("[agent.core] retrieval failed:", err);
-    degraded = true;
-  }
+    return {
+      hits: [] as RetrievalHit[],
+      degraded: true,
+      health: { embedder: "down" as const, orgCorpus: "down" as const, library: "down" as const, project: (projectId ? "down" : "n/a") as "down" | "n/a" },
+    };
+  });
 
-  return { envelope: lines.join("\n"), degraded, hits };
+  const [facts, memHits, retrieval] = await Promise.all([factsPromise, memoryPromise, retrievalPromise]);
+
+  const pinned = facts.filter((f) => f.pinned).slice(0, 8);
+  if (pinned.length) {
+    lines.push("", "Standing facts about this rep:");
+    for (const f of pinned) lines.push(`• ${f.fact}`);
+  }
+  if (memHits.length) {
+    lines.push("", "Possibly relevant memories from prior sessions (use only if applicable):");
+    for (const h of memHits) lines.push(`• ${h.content}`);
+  }
+  const formatted = formatHitsForPrompt(retrieval.hits, 3500);
+  if (formatted) lines.push(formatted);
+
+  const health = retrieval.health ?? { embedder: "ok", orgCorpus: "ok", library: "ok", project: projectId ? "ok" : "n/a" };
+  return { envelope: lines.join("\n"), degraded: retrieval.degraded, hits: retrieval.hits, health };
 }
 
 export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: agentIdArg, projectId, pageContextBlock, mode }: RunAgentTurnArgs): Promise<{ assistantText: string; hadError: boolean; surfacedAction: boolean; agentId: string; meta: AnswerMeta; confidence: number; route: string; mode: DepthMode }> {
@@ -170,7 +176,8 @@ export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: a
   const sources: AnswerMeta["sources"] = [];
   const startedAt = Date.now();
   const client = getAgentOpenAI();
-  const { envelope: baseEnvelope, degraded, hits: retrievalHits } = await buildContextEnvelope(ctx, userMessage, projectId);
+  const { envelope: baseEnvelope, degraded, hits: retrievalHits, health } = await buildContextEnvelope(ctx, userMessage, projectId);
+  emit({ health: { ...health, degraded } });
   const envelope = pageContextBlock ? `${baseEnvelope}\n\n${pageContextBlock}` : baseEnvelope;
   const agentId = agentIdArg ?? (await ensureDefaultAgent(ctx.organizationId));
   const runtime = await getAgentRuntime(agentId);
