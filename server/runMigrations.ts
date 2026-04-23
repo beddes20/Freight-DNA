@@ -4017,6 +4017,42 @@ export async function runMigrations() {
     client468.release();
   }
 
+  // ── Task #508: Mailbox 30-day historical backfill state ────────────────────
+  // Per-mailbox backfill tracking row. Idempotent: re-runs are safe because
+  // ingestion is keyed on the unique (org_id, provider_message_id) index on
+  // email_messages — duplicates are silently skipped at insert time.
+  const client508 = await pool.connect();
+  try {
+    await client508.query(`
+      CREATE TABLE IF NOT EXISTS mailbox_historical_backfills (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        mailbox_id varchar NOT NULL REFERENCES monitored_mailboxes(id) ON DELETE CASCADE,
+        status text NOT NULL DEFAULT 'pending',
+        window_start timestamp NOT NULL,
+        window_end timestamp NOT NULL,
+        messages_fetched integer NOT NULL DEFAULT 0,
+        messages_ingested integer NOT NULL DEFAULT 0,
+        messages_duplicate integer NOT NULL DEFAULT 0,
+        errors_count integer NOT NULL DEFAULT 0,
+        last_error text,
+        triggered_by text NOT NULL DEFAULT 'auto',
+        triggered_by_user_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        started_at timestamp,
+        completed_at timestamp,
+        created_at timestamp NOT NULL DEFAULT NOW(),
+        updated_at timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client508.query(`CREATE INDEX IF NOT EXISTS mailbox_historical_backfills_mailbox_idx ON mailbox_historical_backfills (mailbox_id, created_at DESC)`);
+    await client508.query(`CREATE INDEX IF NOT EXISTS mailbox_historical_backfills_org_status_idx ON mailbox_historical_backfills (org_id, status)`);
+    console.log("[migrations] Task #508 mailbox_historical_backfills table ensured");
+  } catch (err) {
+    console.error("[migrations] Task #508 backfill table create error:", err);
+  } finally {
+    client508.release();
+  }
+
   // ── Task #472: pgvector ANN indexes for retrieval speed ───────────────────
   // Without an ANN index every chat turn does an exact-distance scan of every
   // embedding row in scope, which dominates wall-clock once the corpus grows.

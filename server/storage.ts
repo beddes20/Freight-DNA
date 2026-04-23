@@ -192,6 +192,9 @@ import {
   mailboxSyncFailures,
   type MailboxSyncFailure,
   type InsertMailboxSyncFailure,
+  mailboxHistoricalBackfills,
+  type MailboxHistoricalBackfill,
+  type InsertMailboxHistoricalBackfill,
   webexUserMappings,
   type WebexUserMapping,
   type InsertWebexUserMapping,
@@ -988,6 +991,7 @@ export interface IStorage {
    * When providerMessageId is absent falls back to plain insert.
    */
   upsertInboundEmailMessage(data: import('@shared/schema').InsertEmailMessage): Promise<{ message: import('@shared/schema').EmailMessage; created: boolean }>;
+  getEmailMessageByProviderId(orgId: string, providerMessageId: string): Promise<import('@shared/schema').EmailMessage | undefined>;
   updateEmailMessageLinks(id: string, links: {
     linkedAccountId?: string | null;
     linkedCarrierId?: string | null;
@@ -1155,6 +1159,13 @@ export interface IStorage {
   updateWebexUserMapping(id: string, orgId: string, data: Partial<InsertWebexUserMapping>): Promise<WebexUserMapping | undefined>;
   deleteWebexUserMapping(id: string, orgId: string): Promise<boolean>;
   getMonitoredMailboxByAnySubscriptionId(subscriptionId: string): Promise<MonitoredMailbox | undefined>;
+
+  // Task #508 — Mailbox 30-day historical backfill state.
+  createMailboxHistoricalBackfill(data: InsertMailboxHistoricalBackfill): Promise<MailboxHistoricalBackfill>;
+  updateMailboxHistoricalBackfill(id: string, data: Partial<InsertMailboxHistoricalBackfill>): Promise<MailboxHistoricalBackfill | undefined>;
+  getMailboxHistoricalBackfill(id: string): Promise<MailboxHistoricalBackfill | undefined>;
+  getLatestMailboxHistoricalBackfill(mailboxId: string): Promise<MailboxHistoricalBackfill | undefined>;
+  getMailboxHistoricalBackfillsForOrg(orgId: string): Promise<MailboxHistoricalBackfill[]>;
 
   // Per-user Webex OAuth tokens (Task #261)
   getWebexUserToken(userId: string): Promise<WebexUserToken | undefined>;
@@ -6512,6 +6523,16 @@ export class DatabaseStorage implements IStorage {
     return { message: existing, created: false };
   }
 
+  async getEmailMessageByProviderId(orgId: string, providerMessageId: string): Promise<EmailMessage | undefined> {
+    const [row] = await db.select().from(emailMessages)
+      .where(and(
+        eq(emailMessages.orgId, orgId),
+        eq(emailMessages.providerMessageId, providerMessageId),
+      ))
+      .limit(1);
+    return row;
+  }
+
   async updateEmailMessageLinks(id: string, links: {
     linkedAccountId?: string | null;
     linkedCarrierId?: string | null;
@@ -7806,6 +7827,43 @@ export class DatabaseStorage implements IStorage {
         eq(mailboxSyncFailures.status, "pending"),
         lte(mailboxSyncFailures.nextAttemptAt, now),
       ));
+  }
+
+  // ── Mailbox historical backfills (Task #508) ────────────────────────────────
+
+  async createMailboxHistoricalBackfill(data: InsertMailboxHistoricalBackfill): Promise<MailboxHistoricalBackfill> {
+    const [row] = await db.insert(mailboxHistoricalBackfills).values(data).returning();
+    return row;
+  }
+
+  async updateMailboxHistoricalBackfill(id: string, data: Partial<InsertMailboxHistoricalBackfill>): Promise<MailboxHistoricalBackfill | undefined> {
+    const [row] = await db
+      .update(mailboxHistoricalBackfills)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(mailboxHistoricalBackfills.id, id))
+      .returning();
+    return row;
+  }
+
+  async getMailboxHistoricalBackfill(id: string): Promise<MailboxHistoricalBackfill | undefined> {
+    const [row] = await db.select().from(mailboxHistoricalBackfills)
+      .where(eq(mailboxHistoricalBackfills.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async getLatestMailboxHistoricalBackfill(mailboxId: string): Promise<MailboxHistoricalBackfill | undefined> {
+    const [row] = await db.select().from(mailboxHistoricalBackfills)
+      .where(eq(mailboxHistoricalBackfills.mailboxId, mailboxId))
+      .orderBy(desc(mailboxHistoricalBackfills.createdAt))
+      .limit(1);
+    return row;
+  }
+
+  async getMailboxHistoricalBackfillsForOrg(orgId: string): Promise<MailboxHistoricalBackfill[]> {
+    return db.select().from(mailboxHistoricalBackfills)
+      .where(eq(mailboxHistoricalBackfills.orgId, orgId))
+      .orderBy(desc(mailboxHistoricalBackfills.createdAt));
   }
 
   // ── Webex user mappings (Task #258) ─────────────────────────────────────────

@@ -2751,6 +2751,48 @@ export const insertMailboxSyncFailureSchema = createInsertSchema(mailboxSyncFail
 export type InsertMailboxSyncFailure = z.infer<typeof insertMailboxSyncFailureSchema>;
 export type MailboxSyncFailure = typeof mailboxSyncFailures.$inferSelect;
 
+// ── Mailbox Historical Backfills (Task #508) ────────────────────────────────
+// Tracks the per-mailbox 30-day historical backfill that runs once when a
+// monitored mailbox is first added (and on demand from the admin UI). The
+// backfill paginates /users/{id}/messages with `receivedDateTime >= now-30d`
+// and streams each message through the existing delta-sync ingestion path,
+// so dedup is owned by the email_messages unique index on
+// (org_id, provider_message_id) — re-running is always safe.
+export const mailboxHistoricalBackfills = pgTable(
+  "mailbox_historical_backfills",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    mailboxId: varchar("mailbox_id").notNull().references(() => monitoredMailboxes.id, { onDelete: "cascade" }),
+    status: text("status").notNull().default("pending"), // pending | running | completed | failed
+    windowStart: timestamp("window_start").notNull(),
+    windowEnd: timestamp("window_end").notNull(),
+    messagesFetched: integer("messages_fetched").notNull().default(0),
+    messagesIngested: integer("messages_ingested").notNull().default(0),
+    messagesDuplicate: integer("messages_duplicate").notNull().default(0),
+    errorsCount: integer("errors_count").notNull().default(0),
+    lastError: text("last_error"),
+    triggeredBy: text("triggered_by").notNull().default("auto"), // auto | admin | admin_bulk
+    triggeredByUserId: varchar("triggered_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    startedAt: timestamp("started_at"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("mailbox_historical_backfills_mailbox_idx").on(table.mailboxId, table.createdAt),
+    index("mailbox_historical_backfills_org_status_idx").on(table.orgId, table.status),
+  ],
+);
+
+export const insertMailboxHistoricalBackfillSchema = createInsertSchema(mailboxHistoricalBackfills).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertMailboxHistoricalBackfill = z.infer<typeof insertMailboxHistoricalBackfillSchema>;
+export type MailboxHistoricalBackfill = typeof mailboxHistoricalBackfills.$inferSelect;
+
 // ─── Conversation Thread Capture Audits (Task #435) ──────────────────────────
 // Records every reply-capture self-heal pass (scheduled or on-demand) for a
 // conversation thread, including the resolved root-cause label and the Graph

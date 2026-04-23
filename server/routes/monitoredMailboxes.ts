@@ -17,6 +17,11 @@ import { storage } from "../storage";
 import { requireAuth, getCurrentUser } from "../auth";
 import { registerMailboxSubscription, removeMailboxSubscription } from "../graphSubscriptionService";
 import { syncMailboxDelta, retryMailboxSyncFailure } from "../services/mailboxDeltaSyncService";
+import {
+  runBackfillForMailbox,
+  runBackfillForAllEnabledMailboxes,
+  triggerBackfillInBackground,
+} from "../services/mailboxHistoricalBackfillService";
 
 function requireAdmin(req: Request, res: Response, next: () => void) {
   getCurrentUser(req).then(user => {
@@ -94,6 +99,11 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
         registerMailboxSubscription(mailbox.email, mailbox.id).catch(err => {
           console.error("[monitoredMailboxes] Subscription registration error:", err);
         });
+        // Task #508 — auto-trigger 30-day historical backfill on first
+        // monitored-mailbox insert. Runs in the background so the HTTP
+        // response returns immediately; idempotent if a completed backfill
+        // already exists.
+        triggerBackfillInBackground(mailbox.id, { triggeredBy: "auto" });
       }
 
       res.status(201).json({ mailbox });
@@ -169,11 +179,14 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       }
 
       // Fire subscription registration in the background (mirrors POST path).
+      // Task #508 — also auto-trigger the 30-day historical backfill so the
+      // newly-enrolled mailbox immediately starts pulling its history.
       for (const mailbox of created) {
         if (mailbox.enabled) {
           registerMailboxSubscription(mailbox.email, mailbox.id).catch(err => {
             console.error("[monitoredMailboxes] enroll-all subscription error:", err);
           });
+          triggerBackfillInBackground(mailbox.id, { triggeredBy: "auto" });
         }
       }
 
@@ -326,6 +339,80 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
     } catch (err) {
       console.error("[monitoredMailboxes] POST /failures/retry error:", err);
       res.status(500).json({ error: "Failed to retry sync failure" });
+    }
+  });
+
+  // ── Task #508 — 30-day historical backfill admin endpoints ────────────────
+
+  app.post("/api/internal/admin/monitored-mailboxes/:id/backfill", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const mailbox = await storage.getMonitoredMailbox(req.params.id);
+      if (!mailbox || mailbox.orgId !== user.organizationId) {
+        return res.status(404).json({ error: "Monitored mailbox not found" });
+      }
+      if (!mailbox.enabled) {
+        return res.status(400).json({ error: "Mailbox is disabled — enable it before backfilling" });
+      }
+      // Run synchronously so the admin gets back final counts. The window is
+      // capped (10k messages per folder) and per-mailbox runs are bounded.
+      const result = await runBackfillForMailbox(mailbox.id, {
+        triggeredBy: "admin",
+        triggeredByUserId: user.id,
+      });
+      res.json(result);
+    } catch (err) {
+      console.error("[monitoredMailboxes] POST /backfill error:", err);
+      res.status(500).json({ error: "Failed to run backfill" });
+    }
+  });
+
+  app.post("/api/internal/admin/monitored-mailboxes/backfill-all", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const result = await runBackfillForAllEnabledMailboxes(user.organizationId, {
+        triggeredBy: "admin_bulk",
+        triggeredByUserId: user.id,
+      });
+      res.json(result);
+    } catch (err) {
+      console.error("[monitoredMailboxes] POST /backfill-all error:", err);
+      res.status(500).json({ error: "Failed to run bulk backfill" });
+    }
+  });
+
+  app.get("/api/internal/admin/monitored-mailboxes/:id/backfill", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const mailbox = await storage.getMonitoredMailbox(req.params.id);
+      if (!mailbox || mailbox.orgId !== user.organizationId) {
+        return res.status(404).json({ error: "Monitored mailbox not found" });
+      }
+      const latest = await storage.getLatestMailboxHistoricalBackfill(mailbox.id);
+      res.json({ backfill: latest ?? null });
+    } catch (err) {
+      console.error("[monitoredMailboxes] GET /backfill error:", err);
+      res.status(500).json({ error: "Failed to fetch backfill status" });
+    }
+  });
+
+  app.get("/api/internal/admin/monitored-mailboxes/backfills", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const all = await storage.getMailboxHistoricalBackfillsForOrg(user.organizationId);
+      // Latest per mailbox.
+      const byMailbox = new Map<string, typeof all[number]>();
+      for (const r of all) {
+        if (!byMailbox.has(r.mailboxId)) byMailbox.set(r.mailboxId, r);
+      }
+      res.json({ backfills: Array.from(byMailbox.values()) });
+    } catch (err) {
+      console.error("[monitoredMailboxes] GET /backfills error:", err);
+      res.status(500).json({ error: "Failed to fetch backfills" });
     }
   });
 

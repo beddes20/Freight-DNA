@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { Loader2, Plus, Trash2, MailCheck, RefreshCw, AlertCircle, CheckCircle2, Clock, XCircle, Inbox, ShieldAlert, ShieldCheck, Wand2, ChevronDown, ChevronRight, X, Ban } from "lucide-react";
+import { Loader2, Plus, Trash2, MailCheck, RefreshCw, AlertCircle, CheckCircle2, Clock, XCircle, Inbox, ShieldAlert, ShieldCheck, Wand2, ChevronDown, ChevronRight, X, Ban, History } from "lucide-react";
 
 interface SentItemsHealthSnapshot {
   sentItemsHealth: "active" | "expired" | "missing" | "stale" | "unknown";
@@ -370,6 +370,64 @@ export default function AdminMonitoredMailboxesPage() {
     },
   });
 
+  // Task #508 — per-mailbox 30-day historical backfill.
+  const backfillMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/internal/admin/monitored-mailboxes/${id}/backfill`);
+      return res.json() as Promise<{ status: string; messagesIngested: number; messagesDuplicate: number; messagesFetched: number; errorsCount: number; lastError?: string | null }>;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/admin/monitored-mailboxes/backfills"] });
+      const failedNote = data.errorsCount > 0 ? `, ${data.errorsCount} error(s)` : "";
+      toast({
+        title: data.status === "failed" ? "Backfill failed" : "Backfill complete",
+        description: `${data.messagesIngested} new, ${data.messagesDuplicate} already in system${failedNote}.`,
+        variant: data.status === "failed" ? "destructive" : "default",
+      });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Backfill failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const backfillAllMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/internal/admin/monitored-mailboxes/backfill-all");
+      return res.json() as Promise<{ total: number; completed: number; failed: number; skipped: number }>;
+    },
+    onSuccess: (r) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/admin/monitored-mailboxes/backfills"] });
+      toast({
+        title: r.failed > 0 ? "Bulk backfill done with errors" : "Bulk backfill complete",
+        description: `${r.completed} completed, ${r.skipped} skipped, ${r.failed} failed (of ${r.total}).`,
+        variant: r.failed > 0 ? "destructive" : "default",
+      });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Bulk backfill failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const backfillsQuery = useQuery<{ backfills: Array<{
+    id: string;
+    mailboxId: string;
+    status: string;
+    windowStart: string;
+    windowEnd: string;
+    messagesFetched: number;
+    messagesIngested: number;
+    messagesDuplicate: number;
+    errorsCount: number;
+    lastError: string | null;
+    completedAt: string | null;
+    triggeredBy: string;
+  }>}>({
+    queryKey: ["/api/internal/admin/monitored-mailboxes/backfills"],
+    enabled: !!user,
+    refetchInterval: 15_000,
+  });
+  const backfillByMailbox = new Map((backfillsQuery.data?.backfills ?? []).map(b => [b.mailboxId, b]));
+
   const mailboxes = mailboxesQuery.data?.mailboxes ?? [];
   const orgUsers = (usersQuery.data ?? []).filter(u =>
     ["national_account_manager", "account_manager", "admin", "director", "sales_director"].includes(u.role)
@@ -398,6 +456,18 @@ export default function AdminMonitoredMailboxesPage() {
 
         <div className="flex items-center gap-2">
           <SelfHealSweepButton />
+          <Button
+            variant="outline"
+            onClick={() => backfillAllMutation.mutate()}
+            disabled={backfillAllMutation.isPending}
+            title="Pull last 30 days of mail history for every enabled mailbox"
+            data-testid="button-backfill-all"
+          >
+            {backfillAllMutation.isPending
+              ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              : <History className="h-4 w-4 mr-2" />}
+            Backfill last 30 days (all)
+          </Button>
           {(() => {
             const enrolledUserIds = new Set(mailboxes.map(m => m.userId));
             const enrolledEmails = new Set(mailboxes.map(m => m.email.toLowerCase()));
@@ -595,6 +665,21 @@ export default function AdminMonitoredMailboxesPage() {
                     </Button>
 
                     <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={!mb.enabled || backfillMutation.isPending}
+                      onClick={() => backfillMutation.mutate(mb.id)}
+                      title="Backfill the last 30 days of mail history"
+                      data-testid={`button-backfill-${mb.id}`}
+                    >
+                      {backfillMutation.isPending && backfillMutation.variables === mb.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <History className="h-4 w-4" />
+                      )}
+                    </Button>
+
+                    <Button
                       variant="ghost"
                       size="sm"
                       onClick={() => setDeleteTarget(mb)}
@@ -604,6 +689,42 @@ export default function AdminMonitoredMailboxesPage() {
                     </Button>
                   </div>
                 </div>
+                {(() => {
+                  const bf = backfillByMailbox.get(mb.id);
+                  if (!bf) return null;
+                  const colorByStatus: Record<string, string> = {
+                    pending: "text-muted-foreground",
+                    running: "text-blue-600 dark:text-blue-300",
+                    completed: "text-emerald-700 dark:text-emerald-300",
+                    failed: "text-red-600 dark:text-red-300",
+                  };
+                  return (
+                    <div className="mt-3 text-xs border-t pt-2" data-testid={`panel-backfill-${mb.id}`}>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="font-medium">30-day backfill:</span>
+                        <span className={colorByStatus[bf.status] ?? ""} data-testid={`text-backfill-status-${mb.id}`}>
+                          {bf.status}
+                        </span>
+                        <span className="text-muted-foreground">
+                          window {new Date(bf.windowStart).toLocaleDateString()} → {new Date(bf.windowEnd).toLocaleDateString()}
+                        </span>
+                        <span data-testid={`text-backfill-counts-${mb.id}`}>
+                          {bf.messagesIngested} new · {bf.messagesDuplicate} dup · {bf.messagesFetched} fetched
+                          {bf.errorsCount > 0 ? ` · ${bf.errorsCount} error${bf.errorsCount === 1 ? "" : "s"}` : ""}
+                        </span>
+                        {bf.completedAt && (
+                          <span className="text-muted-foreground">
+                            finished {new Date(bf.completedAt).toLocaleString()}
+                          </span>
+                        )}
+                        <span className="text-muted-foreground">via {bf.triggeredBy}</span>
+                      </div>
+                      {bf.lastError && (
+                        <p className="text-red-500 mt-1" data-testid={`text-backfill-error-${mb.id}`}>{bf.lastError}</p>
+                      )}
+                    </div>
+                  );
+                })()}
                 {(mb.syncStatus === "partial" || mb.syncStatus === "error") && (
                   <MailboxFailuresSection mailboxId={mb.id} />
                 )}
