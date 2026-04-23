@@ -179,10 +179,10 @@ export default function CarrierIntelligenceAvailableLoadsPage() {
       Customer: l.customerName ?? "",
       Origin: `${l.originCity ?? ""}, ${l.originState ?? ""}`,
       Destination: `${l.destinationCity ?? ""}, ${l.destinationState ?? ""}`,
-      Equipment: l.equipmentType ?? "",
+      Mode: l.equipmentType ?? "",
       Pickup: l.pickupDate ?? "",
       Miles: l.totalMiles ?? "",
-      AccountManager: l.accountManager ?? "",
+      OpsUser: l.accountManager ?? "",
       Urgency: l.topRecommendations[0]?.coverageUrgency ?? "",
       TopCarrier: l.topRecommendations[0]?.carrierName ?? "",
       SuggestedRpm: l.topRecommendations[0]?.targetBuyRpm ?? "",
@@ -251,13 +251,13 @@ export default function CarrierIntelligenceAvailableLoadsPage() {
               />
             </div>
             <Select value={equipment || "ALL"} onValueChange={setEquipment}>
-              <SelectTrigger data-testid="select-equipment"><SelectValue placeholder="Equipment" /></SelectTrigger>
-              <SelectContent>{equipmentOpts.map((e) => <SelectItem key={e} value={e}>{e}</SelectItem>)}</SelectContent>
+              <SelectTrigger data-testid="select-equipment"><SelectValue placeholder="Mode" /></SelectTrigger>
+              <SelectContent>{equipmentOpts.map((e) => <SelectItem key={e} value={e}>{e === "ALL" ? "All modes" : e}</SelectItem>)}</SelectContent>
             </Select>
             <Select value={accountManager || "all"} onValueChange={setAccountManager}>
-              <SelectTrigger data-testid="select-account-manager"><SelectValue placeholder="Account Manager" /></SelectTrigger>
+              <SelectTrigger data-testid="select-account-manager"><SelectValue placeholder="Ops user" /></SelectTrigger>
               <SelectContent>
-                {amOpts.map((a) => <SelectItem key={a} value={a}>{a === "all" ? "All AMs" : a}</SelectItem>)}
+                {amOpts.map((a) => <SelectItem key={a} value={a}>{a === "all" ? "All Ops users" : a}</SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={urgency || "all"} onValueChange={setUrgency}>
@@ -308,7 +308,7 @@ export default function CarrierIntelligenceAvailableLoadsPage() {
                     <TableHead>Lane</TableHead>
                     <TableHead>Customer</TableHead>
                     <TableHead>Pickup</TableHead>
-                    <TableHead>Equip</TableHead>
+                    <TableHead>Mode</TableHead>
                     <TableHead>Urgency</TableHead>
                     <TableHead>Suggested carriers</TableHead>
                     <TableHead className="text-right">Target $/mi</TableHead>

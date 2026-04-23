@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   ArrowLeft, AlertTriangle, ShieldAlert, Truck, MapPin, Calendar,
   Pin, PinOff, ArrowUp, ArrowDown, Search, Info, Send, Mail, MessageSquare,
-  DollarSign, TrendingUp,
+  DollarSign, TrendingUp, RefreshCw,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -590,6 +590,24 @@ export default function AvailableFreightDetailPage() {
     },
   });
 
+  const rerankMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/freight-opportunities/${id}/rerank`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities", id] });
+      toast({ title: "Re-ranked", description: "Carrier shortlist re-scored." });
+    },
+    onError: (err: any) => {
+      toast({
+        title: "Couldn't re-rank",
+        description: err?.message ?? "Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const opp = data?.opportunity;
   const carriers = data?.carriers ?? [];
 
@@ -920,13 +938,23 @@ export default function AvailableFreightDetailPage() {
         </CardHeader>
         <CardContent className="p-0">
           {totalCount === 0 ? (
-            <div className="py-12 text-center text-sm text-muted-foreground space-y-2" data-testid="state-empty-carriers">
+            <div className="py-12 text-center text-sm text-muted-foreground space-y-3" data-testid="state-empty-carriers">
               <p className="font-medium">No carriers were ranked for this opportunity.</p>
               <p className="text-xs">
                 No catalog carrier had history, region, or equipment signal strong enough to score
                 above the exploratory floor for this lane. Try widening the catalog or importing
                 more historical loads on this corridor.
               </p>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => rerankMutation.mutate()}
+                disabled={rerankMutation.isPending}
+                data-testid="button-rerank-carriers"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${rerankMutation.isPending ? "animate-spin" : ""}`} />
+                {rerankMutation.isPending ? "Re-ranking…" : "Try ranking again"}
+              </Button>
             </div>
           ) : carriers.every(c => c.excludedReason) ? (
             <div className="py-12 px-6 text-center text-sm text-muted-foreground space-y-3" data-testid="state-all-excluded-carriers">

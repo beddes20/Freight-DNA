@@ -308,12 +308,44 @@ export function cleanCustomerLabel(raw: string): string {
 }
 
 /**
- * TMS equipment-code → human label. Add new codes here as the operations team
- * surfaces them. Unknown codes are returned as-is so we never lose info.
+ * TMS equipment-code → canonical Mode label. Every common spreadsheet variant
+ * collapses to the same canonical string so the Mode column / filter / carrier
+ * ranker all key off one stable label per equipment family. Unknown codes fall
+ * back to the trimmed raw value so we never silently lose info.
+ *
+ * Canonical labels: Van, Reefer, Power Only, Flatbed, Flatbed w/ Tarps,
+ * Step Deck, Double Drop, Conestoga, LTL.
  */
 const EQUIPMENT_CODE_MAP: Record<string, string> = {
-  FT: "Flatbed w/ Tarps",
+  // Van family
+  V: "Van",
+  VAN: "Van",
+  DV: "Van",
+  FTL: "Van",
+  // Reefer family
+  R: "Reefer",
+  RF: "Reefer",
+  REF: "Reefer",
+  REEFER: "Reefer",
+  // Power Only
   PO: "Power Only",
+  // Flatbed family
+  F: "Flatbed",
+  FB: "Flatbed",
+  FV: "Flatbed",
+  FLAT: "Flatbed",
+  FLATBED: "Flatbed",
+  FT: "Flatbed w/ Tarps",
+  // Step Deck
+  SD: "Step Deck",
+  SB: "Step Deck",
+  // Double Drop
+  DD: "Double Drop",
+  // Conestoga
+  CN: "Conestoga",
+  CONESTOGA: "Conestoga",
+  // LTL
+  LTL: "LTL",
 };
 function mapEquipmentCode(code: string | null | undefined): string | null {
   if (!code) return null;
@@ -951,7 +983,7 @@ export async function runImportFromWorkbook(
       // tab sees the latest pickup window / status. Best-effort: failures
       // are logged but never abort the importer.
       try {
-        await upsertLoadFact(freightOpportunityToInsert(existingOpp, company.name ?? null));
+        await upsertLoadFact(freightOpportunityToInsert(existingOpp, company.name ?? null, load.ownerEmail ?? null));
       } catch (e) {
         console.warn(`[available-freight] load_fact mirror (update) failed for opp ${existingOpp.id}: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -1004,7 +1036,7 @@ export async function runImportFromWorkbook(
     // the importer (we never want a load_fact issue to corrupt the
     // primary freight_opportunities import).
     try {
-      await upsertLoadFact(freightOpportunityToInsert(created, company.name ?? null));
+      await upsertLoadFact(freightOpportunityToInsert(created, company.name ?? null, load.ownerEmail ?? null));
     } catch (e) {
       console.warn(`[available-freight] load_fact mirror (insert) failed for opp ${created.id}: ${e instanceof Error ? e.message : String(e)}`);
     }

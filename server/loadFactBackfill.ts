@@ -128,7 +128,11 @@ export async function backfillFromFinancialUploads(orgId: string, actorUserId: s
 
 // ── Freight opportunities (Available Freight imports) ──────────────────────
 
-export function freightOpportunityToInsert(opp: FreightOpportunity, companyName: string | null): InsertLoadFact {
+export function freightOpportunityToInsert(
+  opp: FreightOpportunity,
+  companyName: string | null,
+  accountManager: string | null = null,
+): InsertLoadFact {
   // Each freight_opportunity is a not-yet-realized load. We preserve it as
   // an "available" load_fact with a synthetic order_id derived from its UUID
   // (deterministic across runs).
@@ -144,6 +148,7 @@ export function freightOpportunityToInsert(opp: FreightOpportunity, companyName:
     originState: opp.originState ?? null,
     destinationCity: extractCity(opp.destination),
     destinationState: opp.destinationState ?? null,
+    accountManager,
     equipmentType: opp.equipmentType ?? null,
     pickupDate: opp.pickupWindowStart,
     deliveryDate: opp.pickupWindowEnd,
@@ -191,7 +196,21 @@ export async function backfillFromFreightOpportunities(orgId: string, actorUserI
     for (const opp of page) {
       scanned++;
       const company = companyById.get(opp.companyId);
-      const payload = freightOpportunityToInsert(opp, company?.name ?? null);
+      // Recover the original Ops user (col Z) from the importer audit so
+      // load_fact.account_manager parity matches the live importer path.
+      let opsUser: string | null = null;
+      try {
+        const auditRows = await storage.listFreightOpportunityAudit(opp.id);
+        for (const a of auditRows) {
+          if (a.eventType === "generated" && a.payload && typeof (a.payload as any).ownerEmail === "string") {
+            opsUser = (a.payload as any).ownerEmail;
+            break;
+          }
+        }
+      } catch {
+        // best-effort: account_manager remains null if audit lookup fails.
+      }
+      const payload = freightOpportunityToInsert(opp, company?.name ?? null, opsUser);
       buckets[payload.bucket as keyof typeof buckets]++;
       try {
         const out = await upsertLoadFact(payload, importBatchId);

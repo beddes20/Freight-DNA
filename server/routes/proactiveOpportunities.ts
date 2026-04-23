@@ -13,7 +13,9 @@ import type { Express } from "express";
 import multer from "multer";
 import XLSX from "xlsx";
 import { requireAuth, getCurrentUser } from "../auth";
-import { storage } from "../storage";
+import { storage, db } from "../storage";
+import { freightOpportunityCarriers } from "@shared/schema";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { runImportFromWorkbook as runAvailableFreightImportFromWorkbook } from "../availableFreightImporter";
 import { loadEffectivePolicy, ensureShortlistRanked } from "../proactiveOpportunityService";
@@ -162,6 +164,57 @@ export function registerProactiveOpportunityRoutes(app: Express) {
     } catch (err) {
       console.error("[freight-opps] detail error:", err);
       res.status(500).json({ error: "Failed to fetch freight opportunity" });
+    }
+  });
+
+  // ── FORCE RERANK ─────────────────────────────────────────────────────────
+  // Used by the detail page's "Try ranking again" button. Wipes the existing
+  // shortlist and re-runs scoring inside a transaction so a failed rerank
+  // never leaves the opportunity worse off than it started.
+  app.post("/api/freight-opportunities/:id/rerank", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const opp = await storage.getFreightOpportunity(org, String(req.params.id));
+      if (!opp) return res.status(404).json({ error: "Opportunity not found" });
+      // Snapshot-and-restore (rather than a DB transaction) because
+      // ensureShortlistRanked uses the global storage/db pool and would not
+      // see uncommitted deletes from a wrapping tx (PG MVCC) — making a tx
+      // wrapper a footgun. Snapshot in app memory, attempt rerank, and if it
+      // fails or comes back empty when we previously had real rows, restore
+      // the prior shortlist so we never leave the opp worse off.
+      const priorRows = await storage.listFreightOpportunityCarriers(opp.id);
+      const restorePayload = (): any[] => priorRows.map((r) => {
+        const { id: _id, createdAt: _ca, ...rest } = r as any;
+        return rest;
+      });
+      try {
+        await db.delete(freightOpportunityCarriers).where(eq(freightOpportunityCarriers.opportunityId, opp.id));
+        await ensureShortlistRanked(storage, opp);
+      } catch (e) {
+        console.warn(`[freight-opps] force rerank failed for ${opp.id}, restoring prior shortlist:`, e);
+        if (priorRows.length > 0) {
+          await storage.insertFreightOpportunityCarriers(restorePayload());
+        }
+        return res.status(500).json({ error: "Re-ranking failed; previous shortlist preserved." });
+      }
+      const carriers = await storage.listFreightOpportunityCarriers(opp.id);
+      // If rerank silently produced nothing but we did have a prior list,
+      // restore it rather than leaving the opp blank — the rep can still see
+      // who was previously suggested.
+      if (carriers.length === 0 && priorRows.length > 0) {
+        await storage.insertFreightOpportunityCarriers(restorePayload());
+        return res.status(409).json({ error: "Re-ranking returned no candidates; previous shortlist preserved." });
+      }
+      await storage.appendFreightOpportunityAudit({
+        opportunityId: opp.id,
+        eventType: "generated",
+        actorUserId: userId(req),
+        payload: { kind: "manual_force_rerank", shortlistSize: carriers.length },
+      });
+      res.json({ ranked: true, count: carriers.length });
+    } catch (err) {
+      console.error("[freight-opps] rerank error:", err);
+      res.status(500).json({ error: "Failed to re-rank shortlist" });
     }
   });
 
