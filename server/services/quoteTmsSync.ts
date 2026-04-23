@@ -30,6 +30,7 @@ import {
   quoteOutcomeReasons,
   type LoadFact, type QuoteOpportunity,
 } from "@shared/schema";
+import { logQuoteTouchpointFromEvent } from "./quoteTouchpoints";
 
 const ACTIVE_OUTCOMES = ["pending"] as const;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -176,7 +177,7 @@ export async function syncQuoteOutcomesFromTms(orgId: string): Promise<SyncResul
       await db.update(quoteOpportunities)
         .set({ outcomeStatus: "lost_timing", outcomeReasonId: reasonId })
         .where(eq(quoteOpportunities.id, opp.id));
-      await db.insert(quoteEvents).values({
+      const [lostEv] = await db.insert(quoteEvents).values({
         quoteId: opp.id,
         eventType: "tms_lost",
         occurredAt: new Date(),
@@ -187,6 +188,10 @@ export async function syncQuoteOutcomesFromTms(orgId: string): Promise<SyncResul
           moveStatus: decision.match.moveStatus,
           reason: "TMS load cancelled before coverage",
         },
+      }).returning();
+      await logQuoteTouchpointFromEvent({
+        orgId: opp.organizationId, oppId: opp.id, eventId: lostEv.id,
+        eventType: lostEv.eventType, occurredAt: lostEv.occurredAt,
       });
       result.lost++;
       continue;
@@ -203,7 +208,7 @@ export async function syncQuoteOutcomesFromTms(orgId: string): Promise<SyncResul
           quotedAmount: opp.quotedAmount ?? (decision.revenue > 0 ? String(decision.revenue) : null),
         })
         .where(eq(quoteOpportunities.id, opp.id));
-      await db.insert(quoteEvents).values({
+      const [wonEv] = await db.insert(quoteEvents).values({
         quoteId: opp.id,
         eventType: "tms_won",
         occurredAt: new Date(),
@@ -215,6 +220,10 @@ export async function syncQuoteOutcomesFromTms(orgId: string): Promise<SyncResul
           cost: m.cost,
           margin: m.margin,
         },
+      }).returning();
+      await logQuoteTouchpointFromEvent({
+        orgId: opp.organizationId, oppId: opp.id, eventId: wonEv.id,
+        eventType: wonEv.eventType, occurredAt: wonEv.occurredAt,
       });
       result.won++;
       continue;

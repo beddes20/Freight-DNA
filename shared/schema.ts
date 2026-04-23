@@ -451,7 +451,10 @@ export const touchpoints = pgTable("touchpoints", {
   loggedById: varchar("logged_by_id").notNull().references(() => users.id),
   playLabel: text("play_label"),
   createdAt: text("created_at").notNull(),
-});
+  externalId: text("external_id"),
+}, (t) => ({
+  externalIdUq: uniqueIndex("touchpoints_external_id_uq").on(t.externalId),
+}));
 
 export const insertTouchpointSchema = createInsertSchema(touchpoints).omit({ id: true });
 export type InsertTouchpoint = z.infer<typeof insertTouchpointSchema>;

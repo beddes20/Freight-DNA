@@ -1,5 +1,6 @@
 import { and, eq, asc, desc, sql, type SQL } from "drizzle-orm";
 import { db } from "../storage";
+import { logQuoteTouchpointFromEvent } from "./quoteTouchpoints";
 import {
   quoteCustomers, quoteReps, quoteCarriers, quoteLaneGroups, quoteOutcomeReasons,
   quoteOpportunities, quoteEvents, quoteSavedViews,
@@ -871,7 +872,7 @@ function toDate(v: string | null | undefined): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
-export async function createQuote(orgId: string, actor: string, input: CreateQuoteInput): Promise<QuoteOpportunity> {
+export async function createQuote(orgId: string, actor: string, input: CreateQuoteInput, actorUserId?: string | null): Promise<QuoteOpportunity> {
   // Verify the customer belongs to the org.
   const [cust] = await db.select().from(quoteCustomers)
     .where(and(eq(quoteCustomers.organizationId, orgId), eq(quoteCustomers.id, input.customerId))).limit(1);
@@ -920,11 +921,17 @@ export async function createQuote(orgId: string, actor: string, input: CreateQuo
   } else if (opp.outcomeStatus === "expired") {
     events.push({ quoteId: opp.id, eventType: "expired", occurredAt: new Date(), actor, payload: {} });
   }
-  await db.insert(quoteEvents).values(events);
+  const insertedEvents = await db.insert(quoteEvents).values(events).returning();
+  for (const ev of insertedEvents) {
+    await logQuoteTouchpointFromEvent({
+      orgId, oppId: opp.id, eventId: ev.id, eventType: ev.eventType,
+      occurredAt: ev.occurredAt, fallbackUserId: actorUserId ?? null,
+    });
+  }
   return opp;
 }
 
-export async function updateQuote(orgId: string, actor: string, id: string, patch: UpdateQuoteInput): Promise<QuoteOpportunity> {
+export async function updateQuote(orgId: string, actor: string, id: string, patch: UpdateQuoteInput, actorUserId?: string | null): Promise<QuoteOpportunity> {
   const [existing] = await db.select().from(quoteOpportunities)
     .where(and(eq(quoteOpportunities.organizationId, orgId), eq(quoteOpportunities.id, id))).limit(1);
   if (!existing) throw new Error("Quote not found");
@@ -981,7 +988,15 @@ export async function updateQuote(orgId: string, actor: string, id: string, patc
   if (changes.quotedAmount && !changes.outcomeStatus) {
     eventsToAdd.push({ quoteId: id, eventType: "revised", occurredAt: now, actor, payload: { quotedAmount: updated.quotedAmount } });
   }
-  if (eventsToAdd.length > 0) await db.insert(quoteEvents).values(eventsToAdd);
+  if (eventsToAdd.length > 0) {
+    const insertedEvents = await db.insert(quoteEvents).values(eventsToAdd).returning();
+    for (const ev of insertedEvents) {
+      await logQuoteTouchpointFromEvent({
+        orgId, oppId: id, eventId: ev.id, eventType: ev.eventType,
+        occurredAt: ev.occurredAt, fallbackUserId: actorUserId ?? null,
+      });
+    }
+  }
   return updated;
 }
 

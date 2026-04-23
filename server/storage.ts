@@ -543,6 +543,7 @@ export interface IStorage {
   getTouchpointsSince(since: string): Promise<Touchpoint[]>;
   getTouchpointsByContact(contactId: string): Promise<Touchpoint[]>;
   getTouchpointsByCompany(companyId: string): Promise<Touchpoint[]>;
+  getTouchpointByExternalId(externalId: string): Promise<Touchpoint | undefined>;
   getTouchpointsByUser(userId: string, since: string): Promise<Touchpoint[]>;
   getTouchpointsByOrg(organizationId: string): Promise<Touchpoint[]>;
   /**
@@ -2655,6 +2656,7 @@ export class DatabaseStorage implements IStorage {
       playLabel?: string | null;
       date?: string;
       createdAt?: string;
+      externalId?: string | null;
     },
   ): Promise<Touchpoint> {
     const now = new Date();
@@ -2669,7 +2671,13 @@ export class DatabaseStorage implements IStorage {
       loggedById: input.loggedById,
       playLabel: input.playLabel ?? null,
       createdAt: input.createdAt ?? now.toISOString(),
+      externalId: input.externalId ?? null,
     });
+  }
+
+  async getTouchpointByExternalId(externalId: string): Promise<Touchpoint | undefined> {
+    const [row] = await db.select().from(touchpoints).where(eq(touchpoints.externalId, externalId)).limit(1);
+    return row;
   }
 
   async updateTouchpoint(id: string, data: { isMeaningful?: boolean; notes?: string }): Promise<Touchpoint> {

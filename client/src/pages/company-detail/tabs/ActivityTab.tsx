@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import {
   PhoneCall, Mail, MessageSquare, Building2, ClipboardList, Activity,
   Megaphone, ChevronDown, Trash2, Plus, Calendar, CheckCircle2,
-  PlayCircle, Circle, Video,
+  PlayCircle, Circle, Video, FileText, Trophy, XCircle,
 } from "lucide-react";
 import type { Callout, CalloutReaction, Contact, Touchpoint, User } from "@shared/schema";
 import type { TouchLogEntry, TaskWithCount } from "../types";
@@ -472,13 +472,22 @@ export function ActivityTab({
 
       {/* ── Touch Log ─────────────────────────────────────────────── */}
       {(() => {
-        const TL_TYPE_ICONS: Record<string, typeof PhoneCall> = { call: PhoneCall, email: Mail, text: MessageSquare, site_visit: Building2 };
-        const TL_TYPE_LABELS: Record<string, string> = { call: "Call", email: "Email", text: "Text", site_visit: "Site Visit" };
+        const TL_TYPE_ICONS: Record<string, typeof PhoneCall> = {
+          call: PhoneCall, email: Mail, text: MessageSquare, site_visit: Building2,
+          quote_sent: FileText, quote_won: Trophy, quote_lost: XCircle,
+        };
+        const TL_TYPE_LABELS: Record<string, string> = {
+          call: "Call", email: "Email", text: "Text", site_visit: "Site Visit",
+          quote_sent: "Quote Sent", quote_won: "Quote Won", quote_lost: "Quote Lost",
+        };
         const TL_TYPE_COLORS: Record<string, string> = {
           call:       "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
           email:      "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
           text:       "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
           site_visit: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+          quote_sent: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300",
+          quote_won:  "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
+          quote_lost: "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300",
         };
         return (
           <Card data-testid="card-touch-log">

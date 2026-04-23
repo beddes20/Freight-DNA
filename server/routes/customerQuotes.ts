@@ -139,7 +139,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const data = createQuoteSchema.parse(req.body);
-      const opp = await createQuote(user.organizationId, actorName(user), data);
+      const opp = await createQuote(user.organizationId, actorName(user), data, user.id);
       const detail = await getQuoteDetail(user.organizationId, opp.id);
       res.status(201).json(detail);
     } catch (err) {
@@ -154,7 +154,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const data = updateQuoteSchema.parse(req.body);
-      const opp = await updateQuote(user.organizationId, actorName(user), String(req.params.id), data);
+      const opp = await updateQuote(user.organizationId, actorName(user), String(req.params.id), data, user.id);
       const detail = await getQuoteDetail(user.organizationId, opp.id);
       res.json(detail);
     } catch (err) {
