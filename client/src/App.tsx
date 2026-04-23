@@ -265,7 +265,7 @@ function Router() {
 const DEV_BYPASS = import.meta.env.DEV && import.meta.env.VITE_DEV_AUTH_BYPASS === "true";
 
 function AuthenticatedAppInner() {
-  const { user, isLoading } = useAuth();
+  const { user, unprovisioned, isLoading } = useAuth();
   const { signOut } = useClerk();
 
   const handleInactivityLogout = useCallback(async () => {
@@ -276,18 +276,52 @@ function AuthenticatedAppInner() {
     window.location.href = "/";
   }, [signOut]);
 
+  if (!isLoading && unprovisioned) {
+    return <UnprovisionedScreen email={unprovisioned.email} onSignOut={handleInactivityLogout} />;
+  }
+
   return <AuthenticatedAppContent user={user} isLoading={isLoading} handleInactivityLogout={handleInactivityLogout} />;
 }
 
 function AuthenticatedAppBypass() {
-  const { user, isLoading } = useAuth();
+  const { user, unprovisioned, isLoading } = useAuth();
 
   const handleInactivityLogout = useCallback(async () => {
     queryClient.clear();
     window.location.href = "/";
   }, []);
 
+  if (!isLoading && unprovisioned) {
+    return <UnprovisionedScreen email={unprovisioned.email} onSignOut={handleInactivityLogout} />;
+  }
+
   return <AuthenticatedAppContent user={user} isLoading={isLoading} handleInactivityLogout={handleInactivityLogout} />;
+}
+
+function UnprovisionedScreen({ email, onSignOut }: { email: string | null; onSignOut: () => void }) {
+  return (
+    <div
+      className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background px-4 text-center"
+      data-testid="screen-unprovisioned"
+    >
+      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-amber-500/15 text-amber-500">
+        <UserX className="h-6 w-6" />
+      </div>
+      <div className="max-w-md space-y-2">
+        <h1 className="text-2xl font-semibold" data-testid="text-unprovisioned-title">
+          Your account hasn't been provisioned yet
+        </h1>
+        <p className="text-muted-foreground" data-testid="text-unprovisioned-body">
+          You signed in successfully{email ? <> as <strong className="text-foreground">{email}</strong></> : null},
+          but no account has been set up for you in this workspace yet.
+          Please contact your administrator to finish provisioning your account.
+        </p>
+      </div>
+      <Button onClick={onSignOut} variant="outline" data-testid="button-unprovisioned-sign-out">
+        Sign out
+      </Button>
+    </div>
+  );
 }
 
 function AuthenticatedApp() {

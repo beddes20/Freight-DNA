@@ -365,6 +365,25 @@ export async function runMigrations() {
     );
     console.log("[migrations] ben.beddes admin role ensured");
 
+    // Task #461: Provision Gabe Broos so he can sign in via Clerk.
+    // Idempotent: only inserts if no row exists for this email. clerk_user_id
+    // is left null so the existing first-sign-in email-linking path attaches
+    // his Clerk identity automatically on his next login.
+    await client.query(`
+      INSERT INTO users (organization_id, username, name, role, manager_id, created_at)
+      SELECT
+        'da3ed822-8846-4435-bb13-3cc4bf26f71d',
+        'gabe.broos@valuetruck.com',
+        'Gabe Broos',
+        'logistics_manager',
+        '1ff95654-faf0-43ba-b98a-0b5522dd886e',
+        NOW()::text
+      WHERE NOT EXISTS (
+        SELECT 1 FROM users WHERE username = 'gabe.broos@valuetruck.com'
+      )
+    `);
+    console.log("[migrations] gabe.broos user provisioned");
+
     // Fix stale startDate on active 1:1 sessions that still carry old dates (before April 2026)
     await client.query(`
       UPDATE one_on_one_sessions

@@ -87,9 +87,21 @@ export function setupAuth(app: any) {
   app.get("/api/auth/me", async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-
       const { userId: clerkUserId } = getAuth(req);
+      if (!user) {
+        // Distinguish "signed into Clerk but no DB row" from "not signed in".
+        if (clerkUserId) {
+          let email: string | null = null;
+          try {
+            const clerkUser = await clerkClient.users.getUser(clerkUserId);
+            email = clerkUser.emailAddresses[0]?.emailAddress?.toLowerCase() ?? null;
+          } catch (err) {
+            console.error("[auth/me] Clerk user fetch failed:", err);
+          }
+          return res.status(200).json({ unprovisioned: true, email });
+        }
+        return res.status(401).json({ error: "Not authenticated" });
+      }
       const isImpersonating = clerkUserId ? impersonationMap.has(clerkUserId) : !!req.session?.impersonatingAdminId;
 
       let impersonatingAdminName: string | null = null;

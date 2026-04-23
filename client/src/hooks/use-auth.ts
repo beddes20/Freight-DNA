@@ -9,6 +9,17 @@ export type SafeUser = Omit<User, "password"> & {
   organizationSlug?: string;
 };
 
+export type UnprovisionedAccount = {
+  unprovisioned: true;
+  email: string | null;
+};
+
+type AuthMeResponse = SafeUser | UnprovisionedAccount | null;
+
+function isUnprovisioned(d: AuthMeResponse): d is UnprovisionedAccount {
+  return d !== null && typeof d === "object" && "unprovisioned" in d && d.unprovisioned === true;
+}
+
 const DEV_BYPASS = import.meta.env.DEV && import.meta.env.VITE_DEV_AUTH_BYPASS === "true";
 
 export function useAuth() {
@@ -19,7 +30,7 @@ export function useAuth() {
 }
 
 function useAuthBypass() {
-  const { data: user, isLoading } = useQuery<SafeUser | null>({
+  const { data, isLoading } = useQuery<AuthMeResponse>({
     queryKey: ["/api/auth/me"],
     queryFn: getQueryFn({ on401: "returnNull" }),
     staleTime: 5 * 60 * 1000,
@@ -36,8 +47,12 @@ function useAuthBypass() {
     },
   });
 
+  const unprovisioned = isUnprovisioned(data ?? null) ? (data as UnprovisionedAccount) : null;
+  const user = !unprovisioned ? ((data as SafeUser | null) ?? null) : null;
+
   return {
-    user: user ?? null,
+    user,
+    unprovisioned,
     isLoading,
     logout: logoutMutation,
   };
@@ -47,7 +62,7 @@ function useAuthClerk() {
   const { isLoaded: clerkLoaded, isSignedIn } = useUser();
   const { signOut } = useClerk();
 
-  const { data: user, isLoading: userLoading } = useQuery<SafeUser | null>({
+  const { data, isLoading: userLoading } = useQuery<AuthMeResponse>({
     queryKey: ["/api/auth/me"],
     queryFn: getQueryFn({ on401: "returnNull" }),
     enabled: clerkLoaded && isSignedIn === true,
@@ -68,8 +83,16 @@ function useAuthClerk() {
 
   const isLoading = !clerkLoaded || (!!isSignedIn && userLoading);
 
+  const unprovisioned = isSignedIn && isUnprovisioned(data ?? null)
+    ? (data as UnprovisionedAccount)
+    : null;
+  const user = isSignedIn && !unprovisioned
+    ? ((data as SafeUser | null) ?? null)
+    : null;
+
   return {
-    user: isSignedIn ? (user ?? null) : null,
+    user,
+    unprovisioned,
     isLoading,
     logout: logoutMutation,
   };
