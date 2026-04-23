@@ -282,9 +282,12 @@ export default function CustomerQuotesPage(): JSX.Element {
     const sp = new URLSearchParams(window.location.search);
     return sp.get("quoteId") ?? sp.get("quote");
   });
-  // Task #477 — pending win-outcome dialog state. Holds the quote id and the
-  // chosen "won" / "won_low_margin" status until the rep confirms.
-  const [winDialog, setWinDialog] = useState<{ id: string; status: string; reasonId: string | null } | null>(null);
+  // Task #477 — pending win-outcome dialog state. Holds the quote id, the
+  // chosen "won" / "won_low_margin" status, and the full pending patch (which
+  // may include unrelated edits coming from the QuoteEditForm) until the rep
+  // confirms. Task #501 — extended to accept the entire patch so the drawer's
+  // edit form can route through the same dialog.
+  const [winDialog, setWinDialog] = useState<{ id: string; status: string; patch: Record<string, unknown> } | null>(null);
   const [savedViewsOpen, setSavedViewsOpen] = useState(false);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [newViewName, setNewViewName] = useState("");
@@ -640,10 +643,11 @@ export default function CustomerQuotesPage(): JSX.Element {
                         // Task #477 — funnel "won" transitions through the
                         // win-outcome dialog so the rep can opt out of the
                         // automatic LWQ lane handoff.
+                        const patch = { outcomeStatus, outcomeReasonId: outcomeReasonId ?? null };
                         if (outcomeStatus === "won" || outcomeStatus === "won_low_margin") {
-                          setWinDialog({ id, status: outcomeStatus, reasonId: outcomeReasonId });
+                          setWinDialog({ id, status: outcomeStatus, patch });
                         } else {
-                          updateQuoteMutation.mutate({ id, patch: { outcomeStatus, outcomeReasonId: outcomeReasonId ?? null } });
+                          updateQuoteMutation.mutate({ id, patch });
                         }
                       }}
                       pendingId={updateQuoteMutation.isPending ? (updateQuoteMutation.variables as { id: string } | undefined)?.id : undefined}
@@ -796,11 +800,7 @@ export default function CustomerQuotesPage(): JSX.Element {
           if (!winDialog) return;
           updateQuoteMutation.mutate({
             id: winDialog.id,
-            patch: {
-              outcomeStatus: winDialog.status,
-              outcomeReasonId: winDialog.reasonId ?? null,
-              skipLwqHandoff,
-            },
+            patch: { ...winDialog.patch, skipLwqHandoff },
           });
           setWinDialog(null);
         }}
@@ -815,7 +815,17 @@ export default function CustomerQuotesPage(): JSX.Element {
         reps={data?.reps ?? []}
         carriers={data?.carriers ?? []}
         reasons={data?.reasons ?? []}
-        onSave={(id, patch) => updateQuoteMutation.mutate({ id, patch })}
+        onSave={(id, patch) => {
+          // Task #501 — when the QuoteEditForm is changing the outcome to
+          // won / won_low_margin, route through the same WinOutcomeDialog used
+          // by the inline picker so the rep can opt out of the LWQ handoff.
+          const status = patch.outcomeStatus as string | undefined;
+          if (status === "won" || status === "won_low_margin") {
+            setWinDialog({ id, status, patch });
+          } else {
+            updateQuoteMutation.mutate({ id, patch });
+          }
+        }}
         isSaving={updateQuoteMutation.isPending}
       />
 
@@ -1754,7 +1764,7 @@ function NewQuoteDialog({ open, onOpenChange, customers, reps, onSubmit, isSubmi
 // skipLwqHandoff=true to the PATCH endpoint so the server skips the
 // auto-handoff. The dialog is fully keyboard-driven and dismissible.
 function WinOutcomeDialog({ state, onCancel, onConfirm, isSaving }: {
-  state: { id: string; status: string; reasonId: string | null } | null;
+  state: { id: string; status: string; patch: Record<string, unknown> } | null;
   onCancel: () => void;
   onConfirm: (skipLwqHandoff: boolean) => void;
   isSaving: boolean;
