@@ -45,13 +45,15 @@ type NavItem = {
   badge?: number;
 };
 
+const CARRIER_INTEL_ROLES = ["admin", "director", "national_account_manager", "logistics_manager", "logistics_coordinator", "sales_director"];
+const CARRIER_INTEL_SETTINGS_ROLES = ["admin", "director"];
+
 const navItems: NavItem[] = [
   { title: "Dashboard",         url: "/",                 icon: LayoutGrid,    description: "Your home view with daily priorities and updates." },
-  { title: "Launchpad",         url: "/prospects",        icon: Crosshair,     description: "Find and qualify new prospects to pursue.", roles: PROSPECTS_ROLES },
-  { title: "Customers",         url: "/customers",        icon: Network,       description: "Browse customer accounts and account history.", roles: SALES_ROLES },
-  { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           description: "High-value opportunities ranked by potential impact.", roles: SALES_ROLES },
   { title: "1:1's",             url: "/one-on-one",       icon: MessagesSquare,description: "Manager check-ins and one-on-one notes." },
   { title: "Tasks",             url: "/tasks",            icon: ListTodo,      description: "Your personal to-do list and reminders." },
+  { title: "Goals",        url: "/goals",      icon: Target,        description: "Track personal and team sales goals." },
+  { title: "My Scorecard", url: "/report/me",  icon: FileBarChart2, description: "Your individual performance scorecard.", roles: ["account_manager", "sales", "logistics_manager", "logistics_coordinator"] },
   {
     title: "Team Performance",
     url: "/team-performance",
@@ -59,20 +61,54 @@ const navItems: NavItem[] = [
     description: "Team metrics, leaderboards, and performance trends.",
     roles: ["admin", "director", "national_account_manager", "sales", "sales_director"],
   },
-  { title: "Goals",        url: "/goals",      icon: Target,        description: "Track personal and team sales goals." },
-  { title: "My Scorecard", url: "/report/me",  icon: FileBarChart2, description: "Your individual performance scorecard.", roles: ["account_manager", "sales", "logistics_manager", "logistics_coordinator"] },
 ];
 
-const pipelineItems: NavItem[] = [
+const customerFacingItems: NavItem[] = [
+  { title: "Launchpad",         url: "/prospects",        icon: Crosshair,     description: "Find and qualify new prospects to pursue.", roles: PROSPECTS_ROLES },
+  { title: "Customers",         url: "/customers",        icon: Network,       description: "Browse customer accounts and account history.", roles: SALES_ROLES },
+  { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           description: "High-value opportunities ranked by potential impact.", roles: SALES_ROLES },
   { title: "RFP & Awards",    url: "/rfp-awards",      icon: Trophy,   description: "Active RFPs and awarded business tracking." },
   { title: "RFP Calendar",    url: "/rfp-calendar",    icon: Calendar, description: "Upcoming RFP deadlines and key dates." },
-  { title: "Rep Scorecard",   url: "/rep-scorecard",   icon: Medal,    description: "Compare reps and review performance metrics.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
+  {
+    title: "ValueIQ",
+    url: "/valueiq",
+    icon: Brain,
+    description: "Daily AI briefing on your top accounts.",
+    roles: ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"],
+  },
+  {
+    title: "Email Intelligence",
+    url: "/email-intelligence",
+    icon: BrainCircuit,
+    description: "AI insights pulled from your inbound emails.",
+    roles: ["admin", "director", "national_account_manager", "sales_director"],
+  },
+  {
+    title: "Contact Suggestions",
+    url: "/contact-suggestions",
+    icon: UserPlus,
+    description: "Suggested new contacts to add to accounts.",
+    roles: ["admin", "director", "sales_director", "national_account_manager", "account_manager", "logistics_manager"],
+  },
+  {
+    title: "Proven Tactics",
+    url: "/proven-tactics",
+    icon: Lightbulb,
+    description: "Reusable plays that have closed deals.",
+    roles: ["admin", "director", "national_account_manager", "logistics_manager", "account_manager"],
+  },
+  {
+    title: "Playbook",
+    url: "/playbook",
+    icon: ClipboardList,
+    description: "Step-by-step guides for common sales situations.",
+    roles: ["admin", "director", "national_account_manager", "sales_director", "logistics_manager", "account_manager", "sales"],
+  },
   { title: "Coaching",        url: "/coaching",        icon: Sparkles, description: "Coaching notes and rep development plans.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
-  { title: "Phone Usage",     url: "/phone-usage",     icon: Phone,    description: "Org-wide phone usage trends and rep activity.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
-  { title: "LM Check-In Log", url: "/lm-checkin-history", icon: History, description: "History of logistics manager check-ins.", roles: ["admin", "director", "national_account_manager", "account_manager", "sales_director"] },
+  { title: "Rep Scorecard",   url: "/rep-scorecard",   icon: Medal,    description: "Compare reps and review performance metrics.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
 ];
 
-const laneToolItems: NavItem[] = [
+const carrierFacingItems: NavItem[] = [
   { title: "Lane Intelligence",  url: "/research-tasks",  icon: ClipboardList, description: "Research lanes and gather pricing intelligence." },
   { title: "My Procurement",     url: "/my-procurement",  icon: Briefcase,     description: "Lanes you're actively procuring carriers for." },
   { title: "Lane Work Queue",    url: "/lanes/work-queue",icon: ListFilter,    description: "Lanes awaiting your reply or next action." },
@@ -93,47 +129,8 @@ const laneToolItems: NavItem[] = [
     description: "Inbound carrier and customer messages.",
     roles: ["admin", "director", "national_account_manager", "logistics_manager", "account_manager"],
   },
-  {
-    title: "Contact Suggestions",
-    url: "/contact-suggestions",
-    icon: UserPlus,
-    description: "Suggested new contacts to add to accounts.",
-    roles: ["admin", "director", "sales_director", "national_account_manager", "account_manager", "logistics_manager"],
-  },
-  {
-    title: "Email Intelligence",
-    url: "/email-intelligence",
-    icon: BrainCircuit,
-    description: "AI insights pulled from your inbound emails.",
-    roles: ["admin", "director", "national_account_manager", "sales_director"],
-  },
-  {
-    title: "Proven Tactics",
-    url: "/proven-tactics",
-    icon: Lightbulb,
-    description: "Reusable plays that have closed deals.",
-    roles: ["admin", "director", "national_account_manager", "logistics_manager", "account_manager"],
-  },
-  {
-    title: "Playbook",
-    url: "/playbook",
-    icon: ClipboardList,
-    description: "Step-by-step guides for common sales situations.",
-    roles: ["admin", "director", "national_account_manager", "sales_director", "logistics_manager", "account_manager", "sales"],
-  },
-  {
-    title: "ValueIQ",
-    url: "/valueiq",
-    icon: Brain,
-    description: "Daily AI briefing on your top accounts.",
-    roles: ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"],
-  },
-];
-
-const CARRIER_INTEL_ROLES = ["admin", "director", "national_account_manager", "logistics_manager", "logistics_coordinator", "sales_director"];
-const CARRIER_INTEL_SETTINGS_ROLES = ["admin", "director"];
-
-const carrierIntelItems: NavItem[] = [
+  { title: "Phone Usage",     url: "/phone-usage",     icon: Phone,    description: "Org-wide phone usage trends and rep activity.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
+  { title: "LM Check-In Log", url: "/lm-checkin-history", icon: History, description: "History of logistics manager check-ins.", roles: ["admin", "director", "national_account_manager", "account_manager", "sales_director"] },
   {
     title: "Carrier Scorecard", url: "/carrier-intelligence/scorecard", icon: Trophy,
     description: "Tiered carrier performance from realized loads, with active and available counts.",
@@ -438,22 +435,26 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* ── Pipeline (hidden for LM/LC roles) ── */}
-        {SALES_ROLES.includes(user?.role ?? "") && (
-          <CollapsibleGroup label="Pipeline">
-            {pipelineItems
-              .filter(item => !item.roles || (user?.role && item.roles.includes(user.role)))
-              .map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} overrides={tooltipOverrides} />)}
-          </CollapsibleGroup>
-        )}
-
-        {/* ── Lane Tools ── */}
+        {/* ── Customer-Facing ── */}
         {(() => {
-          const visibleLaneTools = laneToolItems.filter(item => !item.roles || (user?.role && item.roles.includes(user.role)));
-          if (visibleLaneTools.length === 0) return null;
+          const visible = customerFacingItems.filter(item => !item.roles || (user?.role && item.roles.includes(user.role)));
+          if (visible.length === 0) return null;
           return (
-            <CollapsibleGroup label="Lane Tools">
-              {visibleLaneTools.map(item => (
+            <CollapsibleGroup label="Customer-Facing">
+              {visible.map(item => (
+                <NavLink key={item.title} item={item} isActive={isActive(item.url)} overrides={tooltipOverrides} />
+              ))}
+            </CollapsibleGroup>
+          );
+        })()}
+
+        {/* ── Carrier-Facing ── */}
+        {(() => {
+          const visible = carrierFacingItems.filter(item => !item.roles || (user?.role && item.roles.includes(user.role)));
+          if (visible.length === 0) return null;
+          return (
+            <CollapsibleGroup label="Carrier-Facing">
+              {visible.map(item => (
                 <NavLink
                   key={item.title}
                   item={item}
@@ -470,19 +471,6 @@ export function AppSidebar() {
                   }
                   badgeColor={item.title === "Conversations" ? "red" : item.title === "Carrier Hub" ? "red" : "green"}
                 />
-              ))}
-            </CollapsibleGroup>
-          );
-        })()}
-
-        {/* ── Carrier Intelligence ── */}
-        {(() => {
-          const visible = carrierIntelItems.filter(item => !item.roles || (user?.role && item.roles.includes(user.role)));
-          if (visible.length === 0) return null;
-          return (
-            <CollapsibleGroup label="Carrier Intelligence">
-              {visible.map(item => (
-                <NavLink key={item.title} item={item} isActive={isActive(item.url)} overrides={tooltipOverrides} />
               ))}
             </CollapsibleGroup>
           );
