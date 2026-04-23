@@ -6,6 +6,7 @@ import {
   listQuotes, listSavedViews, createSavedView, deleteSavedView, exportCsv,
   createQuote, updateQuote,
   getPricingIntelligence,
+  searchSpotQuote, laneAutocomplete,
   type QuoteFilters, type ListSortKey,
 } from "../services/customerQuotes";
 import { syncQuoteOutcomesFromTms } from "../services/quoteTmsSync";
@@ -205,6 +206,51 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const msg = err instanceof Error ? err.message : "Internal error";
       console.error("[customer-quotes] pricing intel error:", err);
       res.status(500).json({ error: msg });
+    }
+  });
+
+  // Task #505 — Spot Quote Search
+  app.get("/api/customer-quotes/spot-search", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const schema = z.object({
+        pickupCity: z.string().min(1).max(80),
+        pickupState: z.string().min(1).max(8),
+        deliveryCity: z.string().min(1).max(80),
+        deliveryState: z.string().min(1).max(8),
+        equipment: z.string().max(40).optional(),
+        pickupDate: z.string().regex(/^\d{4}-\d{2}-\d{2}/).optional(),
+        customerId: z.string().min(1).optional(),
+      });
+      const parsed = schema.safeParse(req.query);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid query", issues: parsed.error.issues });
+      await ensureQuoteSeed(user.organizationId);
+      const result = await searchSpotQuote(user.organizationId, parsed.data);
+      res.json(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
+      console.error("[customer-quotes] spot search error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.get("/api/customer-quotes/lane-autocomplete", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const schema = z.object({
+        q: z.string().min(1).max(80),
+        kind: z.enum(["origin", "dest"]),
+      });
+      const parsed = schema.safeParse(req.query);
+      if (!parsed.success) return res.json([]);
+      await ensureQuoteSeed(user.organizationId);
+      const items = await laneAutocomplete(user.organizationId, parsed.data.q, parsed.data.kind);
+      res.json(items);
+    } catch (err) {
+      console.error("[customer-quotes] autocomplete error:", err);
+      res.status(500).json({ error: "Internal error" });
     }
   });
 

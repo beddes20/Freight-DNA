@@ -1618,3 +1618,421 @@ export async function exportCsv(orgId: string, filters: QuoteFilters): Promise<s
   enriched.sort((a, b) => b.requestDate.getTime() - a.requestDate.getTime());
   return quotesToCsv(enriched);
 }
+
+// ---------- Spot Quote Search (Task #505) ----------
+
+export type SpotSearchInput = {
+  pickupCity: string;
+  pickupState: string;
+  deliveryCity: string;
+  deliveryState: string;
+  equipment?: string | null;
+  pickupDate?: string | null;
+  customerId?: string | null;
+};
+
+export type SpotSearchKpis = {
+  exactCount: number;
+  similarCount: number;
+  customersOnLane: number;
+  winRate: number;
+  avgQuoted: number;
+  avgCarrierPaid: number;
+  avgMargin: number;
+  avgMarginPct: number;
+  lastQuotedDays: number | null;
+  pendingCount: number;
+};
+
+export type SpotCustomerStat = {
+  customerId: string;
+  customerName: string;
+  quotes: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  avgQuoted: number;
+  avgMargin: number;
+  lastQuotedDays: number | null;
+  topCarriers: { name: string; loads: number }[];
+};
+
+export type SpotOutcomeReason = { reason: string; status: string; count: number; pct: number };
+
+export type SpotCarrierHistory = {
+  carrierId: string | null;
+  name: string;
+  loads: number;
+  avgPaid: number;
+  lowPaid: number;
+  highPaid: number;
+  lastUsedDays: number | null;
+};
+
+export type SpotInternalVariance = {
+  rep: string;
+  count: number;
+  avgQuoted: number;
+  winRate: number;
+  avgMargin: number;
+};
+
+export type SpotAttractiveness = {
+  score: number;
+  label: AttractivenessItem["label"];
+  rationale: string;
+  totalQuotes: number;
+  decided: number;
+  winRate: number;
+  avgMargin: number;
+};
+
+export type SpotGuidance = {
+  suggestedLow: number | null;
+  suggestedHigh: number | null;
+  benchmark: number | null;
+  benchmarkSource: PricingIntelligence["benchmarkSource"];
+  confidence: PricingIntelligence["confidence"];
+  message: string;
+};
+
+export type SpotAlert = {
+  id: string;
+  severity: AlertSeverity;
+  title: string;
+  detail: string;
+};
+
+export type SpotSearchResult = {
+  query: SpotSearchInput;
+  resolvedCustomer: { id: string; name: string } | null;
+  kpis: SpotSearchKpis;
+  guidance: SpotGuidance;
+  exactMatches: EnrichedQuote[];
+  similarMatches: EnrichedQuote[];
+  customerPanel: SpotCustomerStat[];
+  outcomeBreakdown: SpotOutcomeReason[];
+  carrierHistory: SpotCarrierHistory[];
+  internalVariance: SpotInternalVariance[];
+  attractiveness: SpotAttractiveness;
+  alerts: SpotAlert[];
+};
+
+function avg(nums: number[]): number {
+  const v = nums.filter(n => isFinite(n));
+  if (!v.length) return 0;
+  return v.reduce((a, b) => a + b, 0) / v.length;
+}
+
+function daysSince(d: Date | null | undefined): number | null {
+  if (!d) return null;
+  const ms = Date.now() - d.getTime();
+  return Math.max(0, Math.floor(ms / (24 * 3600 * 1000)));
+}
+
+export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Promise<SpotSearchResult> {
+  const ctx = await loadContext(orgId);
+  const allOpps = await db.select().from(quoteOpportunities)
+    .where(eq(quoteOpportunities.organizationId, orgId))
+    .orderBy(desc(quoteOpportunities.requestDate));
+
+  const equipment = (input.equipment ?? "").trim();
+  const eqMatch = (r: QuoteOpportunity): boolean =>
+    !equipment || equipment === "Any" || ciEq(r.equipment, equipment);
+
+  const exact = allOpps.filter(r =>
+    ciEq(r.originCity, input.pickupCity) &&
+    ciEq(r.originState, input.pickupState) &&
+    ciEq(r.destCity, input.deliveryCity) &&
+    ciEq(r.destState, input.deliveryState) &&
+    eqMatch(r),
+  );
+  // Similar: same state pair, different city OR same-city pair w/o equipment match
+  const similar = allOpps.filter(r => {
+    if (exact.includes(r)) return false;
+    const sameStates =
+      ciEq(r.originState, input.pickupState) &&
+      ciEq(r.destState, input.deliveryState);
+    return sameStates;
+  });
+
+  const customerId = input.customerId ?? null;
+  const exactScoped = customerId ? exact.filter(r => r.customerId === customerId) : exact;
+  const similarScoped = customerId ? similar.filter(r => r.customerId === customerId) : similar;
+
+  const won = exactScoped.filter(r => isWon(r.outcomeStatus));
+  const lost = exactScoped.filter(r => isLost(r.outcomeStatus));
+  const decided = won.length + lost.length;
+  const wonWithCarrier = won.filter(r => num(r.carrierPaid) > 0);
+
+  const lastQuotedDays = exactScoped.length > 0 ? daysSince(exactScoped[0].requestDate) : null;
+
+  const kpis: SpotSearchKpis = {
+    exactCount: exactScoped.length,
+    similarCount: similarScoped.length,
+    customersOnLane: new Set(exact.map(r => r.customerId)).size,
+    winRate: decided > 0 ? (won.length / decided) * 100 : 0,
+    avgQuoted: avg(exactScoped.map(r => num(r.quotedAmount)).filter(v => v > 0)),
+    avgCarrierPaid: avg(wonWithCarrier.map(r => num(r.carrierPaid))),
+    avgMargin: avg(wonWithCarrier.map(r => num(r.quotedAmount) - num(r.carrierPaid))),
+    avgMarginPct: avg(wonWithCarrier.map(r => {
+      const q = num(r.quotedAmount); return q > 0 ? ((q - num(r.carrierPaid)) / q) * 100 : 0;
+    })),
+    lastQuotedDays,
+    pendingCount: exactScoped.filter(r => r.outcomeStatus === "pending").length,
+  };
+
+  // Guidance: if customer scoped, reuse pricing intelligence; else lane-wide.
+  let guidance: SpotGuidance;
+  if (customerId) {
+    const intel = await getPricingIntelligence(orgId, {
+      customerId,
+      originCity: input.pickupCity, originState: input.pickupState,
+      destCity: input.deliveryCity, destState: input.deliveryState,
+      equipment: equipment || undefined,
+    });
+    guidance = {
+      suggestedLow: intel.suggestion?.low ?? null,
+      suggestedHigh: intel.suggestion?.high ?? null,
+      benchmark: intel.sonarBenchmark,
+      benchmarkSource: intel.benchmarkSource,
+      confidence: intel.confidence,
+      message: intel.message,
+    };
+  } else {
+    // Lane-wide: derive band from won quote distribution.
+    const wonAmounts = won.map(r => num(r.quotedAmount)).filter(v => v > 0).sort((a, b) => a - b);
+    if (wonAmounts.length >= 4) {
+      const p25 = wonAmounts[Math.floor(wonAmounts.length * 0.25)];
+      const p75 = wonAmounts[Math.floor(wonAmounts.length * 0.75)];
+      guidance = {
+        suggestedLow: Math.round(p25),
+        suggestedHigh: Math.round(p75),
+        benchmark: null,
+        benchmarkSource: "none",
+        confidence: wonAmounts.length >= 12 ? "high" : "medium",
+        message: `Based on ${wonAmounts.length} won quotes on this lane (P25–P75 band).`,
+      };
+    } else {
+      guidance = {
+        suggestedLow: null,
+        suggestedHigh: null,
+        benchmark: null,
+        benchmarkSource: "none",
+        confidence: "insufficient_history",
+        message: wonAmounts.length === 0
+          ? "No prior won quotes on this exact lane — try selecting a customer for tailored guidance."
+          : `Only ${wonAmounts.length} won quote(s) on this lane — too few for a reliable range.`,
+      };
+    }
+  }
+
+  // Customer panel: per-customer breakdown on this lane (top 10 by quote count)
+  const byCust = new Map<string, QuoteOpportunity[]>();
+  for (const r of exact) {
+    const arr = byCust.get(r.customerId) ?? [];
+    arr.push(r); byCust.set(r.customerId, arr);
+  }
+  const customerPanel: SpotCustomerStat[] = Array.from(byCust.entries()).map(([cid, list]) => {
+    const c = ctx.customerMap.get(cid);
+    const w = list.filter(r => isWon(r.outcomeStatus));
+    const l = list.filter(r => isLost(r.outcomeStatus));
+    const dec = w.length + l.length;
+    const wwc = w.filter(r => num(r.carrierPaid) > 0);
+    const carriers = new Map<string, number>();
+    for (const r of list) {
+      if (!r.carrierId) continue;
+      const name = ctx.carrierMap.get(r.carrierId)?.name ?? "—";
+      carriers.set(name, (carriers.get(name) ?? 0) + 1);
+    }
+    return {
+      customerId: cid,
+      customerName: c?.name ?? "—",
+      quotes: list.length,
+      wins: w.length,
+      losses: l.length,
+      winRate: dec > 0 ? (w.length / dec) * 100 : 0,
+      avgQuoted: avg(list.map(r => num(r.quotedAmount)).filter(v => v > 0)),
+      avgMargin: avg(wwc.map(r => num(r.quotedAmount) - num(r.carrierPaid))),
+      lastQuotedDays: list.length > 0 ? daysSince(list[0].requestDate) : null,
+      topCarriers: Array.from(carriers.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([name, loads]) => ({ name, loads })),
+    };
+  }).sort((a, b) => b.quotes - a.quotes).slice(0, 10);
+
+  // Outcome breakdown for exact+scoped
+  const totalExact = exactScoped.length || 1;
+  const reasonCounts = new Map<string, { reason: string; status: string; count: number }>();
+  for (const r of exactScoped) {
+    const reason = r.outcomeReasonId
+      ? ctx.reasonMap.get(r.outcomeReasonId)?.label ?? r.outcomeStatus
+      : (r.outcomeStatus === "pending" ? "Pending" : r.outcomeStatus);
+    const key = `${r.outcomeStatus}|${reason}`;
+    const cur = reasonCounts.get(key) ?? { reason, status: r.outcomeStatus, count: 0 };
+    cur.count++;
+    reasonCounts.set(key, cur);
+  }
+  const outcomeBreakdown: SpotOutcomeReason[] = Array.from(reasonCounts.values())
+    .map(r => ({ ...r, pct: (r.count / totalExact) * 100 }))
+    .sort((a, b) => b.count - a.count);
+
+  // Carrier history for the lane (won quotes only)
+  const carrierMap = new Map<string, { paids: number[]; last: Date | null; cid: string | null }>();
+  for (const r of exact.filter(x => isWon(x.outcomeStatus) && num(x.carrierPaid) > 0)) {
+    const name = r.carrierId ? ctx.carrierMap.get(r.carrierId)?.name ?? "—" : "Direct/Unknown";
+    const cur = carrierMap.get(name) ?? { paids: [], last: null, cid: r.carrierId ?? null };
+    cur.paids.push(num(r.carrierPaid));
+    if (!cur.last || r.requestDate > cur.last) cur.last = r.requestDate;
+    carrierMap.set(name, cur);
+  }
+  const carrierHistory: SpotCarrierHistory[] = Array.from(carrierMap.entries())
+    .map(([name, v]) => ({
+      carrierId: v.cid,
+      name,
+      loads: v.paids.length,
+      avgPaid: avg(v.paids),
+      lowPaid: Math.min(...v.paids),
+      highPaid: Math.max(...v.paids),
+      lastUsedDays: daysSince(v.last),
+    }))
+    .sort((a, b) => b.loads - a.loads)
+    .slice(0, 8);
+
+  // Internal variance: per-rep avg quoted on this lane
+  const repMap = new Map<string, QuoteOpportunity[]>();
+  for (const r of exact) {
+    const name = r.repId ? ctx.repMap.get(r.repId)?.name ?? "—" : "Unassigned";
+    const arr = repMap.get(name) ?? []; arr.push(r); repMap.set(name, arr);
+  }
+  const internalVariance: SpotInternalVariance[] = Array.from(repMap.entries())
+    .map(([rep, list]) => {
+      const w = list.filter(r => isWon(r.outcomeStatus));
+      const l = list.filter(r => isLost(r.outcomeStatus));
+      const dec = w.length + l.length;
+      const wwc = w.filter(r => num(r.carrierPaid) > 0);
+      return {
+        rep,
+        count: list.length,
+        avgQuoted: avg(list.map(r => num(r.quotedAmount)).filter(v => v > 0)),
+        winRate: dec > 0 ? (w.length / dec) * 100 : 0,
+        avgMargin: avg(wwc.map(r => num(r.quotedAmount) - num(r.carrierPaid))),
+      };
+    })
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 6);
+
+  // Freight attractiveness
+  const decAll = exact.filter(r => isWon(r.outcomeStatus) || isLost(r.outcomeStatus));
+  const wAll = exact.filter(r => isWon(r.outcomeStatus));
+  const wr = decAll.length > 0 ? (wAll.length / decAll.length) * 100 : 0;
+  const wAllCarrier = wAll.filter(r => num(r.carrierPaid) > 0);
+  const am = avg(wAllCarrier.map(r => num(r.quotedAmount) - num(r.carrierPaid)));
+  let label: AttractivenessItem["label"];
+  let rationale: string;
+  if (wr >= 50 && am >= 250) { label = "Pursue Aggressively"; rationale = `${wr.toFixed(0)}% win rate · $${Math.round(am)} avg margin`; }
+  else if (wr >= 35 && am >= 150) { label = "Good Freight"; rationale = `${wr.toFixed(0)}% win rate · $${Math.round(am)} avg margin`; }
+  else if (wr >= 20) { label = "Selective"; rationale = `${wr.toFixed(0)}% win rate — quote selectively`; }
+  else { label = "Low Quality"; rationale = decAll.length === 0 ? "No decided history yet" : `${wr.toFixed(0)}% win rate — challenging lane`; }
+  const score = Math.min(100, Math.round(wr * 0.6 + Math.min(am / 5, 40)));
+  const attractiveness: SpotAttractiveness = {
+    score, label, rationale,
+    totalQuotes: exact.length,
+    decided: decAll.length,
+    winRate: wr,
+    avgMargin: am,
+  };
+
+  // Alerts: lost-streak on lane, expiring on lane, low margin, high variance
+  const alerts: SpotAlert[] = [];
+  // Lost streak (last 5 decided in chronological order)
+  const recentDecided = exactScoped
+    .filter(r => isWon(r.outcomeStatus) || isLost(r.outcomeStatus))
+    .slice(0, 5);
+  if (recentDecided.length >= 3 && recentDecided.every(r => isLost(r.outcomeStatus))) {
+    alerts.push({
+      id: "lane_lost_streak",
+      severity: "high",
+      title: `${recentDecided.length} consecutive losses on this lane`,
+      detail: "Recent quotes lost — review pricing or service positioning.",
+    });
+  }
+  const expiringSoon = exactScoped.filter(r => {
+    if (r.outcomeStatus !== "pending" || !r.validThrough) return false;
+    const ms = r.validThrough.getTime() - Date.now();
+    return ms >= 0 && ms <= 3 * 24 * 3600 * 1000;
+  });
+  if (expiringSoon.length > 0) {
+    alerts.push({
+      id: "lane_expiring",
+      severity: "medium",
+      title: `${expiringSoon.length} quote${expiringSoon.length === 1 ? "" : "s"} expiring soon`,
+      detail: "Pending quotes on this lane expire within 3 days.",
+    });
+  }
+  if (internalVariance.length >= 2) {
+    const amounts = internalVariance.filter(v => v.avgQuoted > 0).map(v => v.avgQuoted);
+    if (amounts.length >= 2) {
+      const lo = Math.min(...amounts), hi = Math.max(...amounts);
+      const spreadPct = lo > 0 ? ((hi - lo) / lo) * 100 : 0;
+      if (spreadPct >= 15) {
+        alerts.push({
+          id: "lane_internal_variance",
+          severity: "medium",
+          title: `Reps quoting this lane vary by ${spreadPct.toFixed(0)}%`,
+          detail: `Range $${Math.round(lo)}–$${Math.round(hi)} across reps — alignment needed.`,
+        });
+      }
+    }
+  }
+
+  const exactMatches = enrich(exactScoped.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
+  const similarMatches = enrich(similarScoped.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
+
+  return {
+    query: input,
+    resolvedCustomer: customerId
+      ? { id: customerId, name: ctx.customerMap.get(customerId)?.name ?? "—" }
+      : null,
+    kpis,
+    guidance,
+    exactMatches,
+    similarMatches,
+    customerPanel,
+    outcomeBreakdown,
+    carrierHistory,
+    internalVariance,
+    attractiveness,
+    alerts,
+  };
+}
+
+export type LaneAutocompleteItem = {
+  city: string;
+  state: string;
+  count: number;
+};
+
+export async function laneAutocomplete(
+  orgId: string, q: string, kind: "origin" | "dest",
+): Promise<LaneAutocompleteItem[]> {
+  const term = q.trim().toLowerCase();
+  if (term.length < 1) return [];
+  const all = await db.select().from(quoteOpportunities)
+    .where(eq(quoteOpportunities.organizationId, orgId));
+  const counts = new Map<string, LaneAutocompleteItem>();
+  for (const r of all) {
+    const city = kind === "origin" ? r.originCity : r.destCity;
+    const state = kind === "origin" ? r.originState : r.destState;
+    const blob = `${city}, ${state}`.toLowerCase();
+    if (!blob.includes(term)) continue;
+    const key = `${city}|${state}`;
+    const cur = counts.get(key) ?? { city, state, count: 0 };
+    cur.count++;
+    counts.set(key, cur);
+  }
+  return Array.from(counts.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+}

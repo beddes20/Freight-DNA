@@ -24,6 +24,7 @@ import {
 } from "recharts";
 import { useToast } from "@/hooks/use-toast";
 import { PricingIntelligencePanel } from "@/components/PricingIntelligencePanel";
+import { SpotQuoteSearch } from "@/components/SpotQuoteSearch";
 
 // ---------- Types (mirror server contract) ----------
 type Quote = {
@@ -554,6 +555,14 @@ export default function CustomerQuotesPage(): JSX.Element {
           </div>
         ) : (
           <>
+            {/* Task #505 — Sticky Spot Quote Search workflow (headline) */}
+            <SpotQuoteSearch
+              customers={data.customers.map(c => ({ id: c.id, name: c.name }))}
+              onApplyLaneFilter={(laneSearch) => updateFilter({ laneSearch })}
+              onPickQuote={(id) => setDrawerId(id)}
+              onPickCustomer={(id) => updateFilter({ customerId: id })}
+            />
+
             {/* KPI strip */}
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-11 gap-2" data-testid="kpi-strip">
               <KpiCard testId="kpi-total" label="Total" value={data.kpis.total.toString()} trend={data.kpis.trend.total} onClick={clearAll} />
