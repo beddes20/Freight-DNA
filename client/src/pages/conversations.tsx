@@ -1040,7 +1040,6 @@ export default function ConversationsPage() {
   const [filterPriority, setFilterPriority] = useState<string>("all");
   const [filterOverdue, setFilterOverdue] = useState(false);
   const [filterRep, setFilterRep] = useState<string>("all");
-  const [filterTeam, setFilterTeam] = useState<string>("all");
   const [selectedThread, setSelectedThread] = useState<ConversationThread | null>(null);
   const [allThreads, setAllThreads] = useState<ConversationThread[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -1102,6 +1101,9 @@ export default function ConversationsPage() {
     }
     // Apply rep filter on every tab except "mine" (hard-pinned to current user)
     // and "unowned" (filter is mutually exclusive with that tab's definition).
+    // For a selected rep, we send `team=<repId>` so the server expands the view
+    // to include everyone below that person in the org chart (managers see
+    // their reports' threads; ICs just see their own since they have no reports).
     if (
       activeTab !== "mine" &&
       activeTab !== "unowned" &&
@@ -1110,14 +1112,8 @@ export default function ConversationsPage() {
       if (filterRep === "unassigned") {
         p.set("unowned", "true");
       } else {
-        p.set("ownerUserId", filterRep);
+        p.set("team", filterRep);
       }
-    }
-    // Team filter is available on every tab except "mine" (which is hard-pinned
-    // to the current user). It composes with whatever owner/state filters the
-    // tab already applied above.
-    if (activeTab !== "mine" && filterTeam !== "all") {
-      p.set("team", filterTeam);
     }
     if (cursorParam) p.set("cursor", cursorParam);
     return p.toString();
@@ -1158,13 +1154,6 @@ export default function ConversationsPage() {
   const sortedReps = [...repsData].sort((a, b) =>
     (a.name || a.username || "").localeCompare(b.name || b.username || "")
   );
-
-  const teamLeads = sortedReps.filter(r =>
-    ["director", "sales_director", "national_account_manager", "sales"].includes(r.role)
-  );
-
-  const firstName = (full: string | undefined | null) =>
-    (full ?? "").trim().split(/\s+/)[0] || "Team";
 
   const { data: mineData } = useQuery<ThreadsResponse>({
     queryKey: ["/api/internal/conversations", "mine-count", user?.id],
@@ -1311,23 +1300,6 @@ export default function ConversationsPage() {
                 reps={sortedReps}
               />
             )}
-            <Select value={filterTeam} onValueChange={setFilterTeam}>
-              <SelectTrigger className="w-full md:w-56" data-testid="select-filter-team">
-                <SelectValue placeholder="Team" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All teams</SelectItem>
-                {teamLeads.map((lead) => (
-                  <SelectItem
-                    key={lead.id}
-                    value={lead.id}
-                    data-testid={`select-filter-team-option-${lead.id}`}
-                  >
-                    Team {firstName(lead.name || lead.username)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </div>
         )}
 
