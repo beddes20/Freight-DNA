@@ -222,6 +222,54 @@ const EXPLORATORY: Carrier[] = [
   },
 ];
 
+type Pool = {
+  id: string;
+  name: string;
+  mc: string;
+  region: string;
+  fitScore: number;
+  lastRate: number | null;
+  tag: "in_region" | "prior_quote" | "new_prospect" | "lactalis_history";
+};
+
+const POOL: Pool[] = [
+  { id: "p1",  name: "Ironwood Carriers",         mc: "MC 901223", region: "Rockford, IL",   fitScore: 68, lastRate: 2410, tag: "in_region" },
+  { id: "p2",  name: "Lakeshore Refrigerated",    mc: "MC 661004", region: "Milwaukee, WI",  fitScore: 66, lastRate: 2475, tag: "in_region" },
+  { id: "p3",  name: "Bluestem Logistics",        mc: "MC 770821", region: "Madison, WI",    fitScore: 65, lastRate: 2380, tag: "lactalis_history" },
+  { id: "p4",  name: "Driftwood Transport",       mc: "MC 559912", region: "Beloit, WI",     fitScore: 64, lastRate: null, tag: "in_region" },
+  { id: "p5",  name: "Northern Tier Cold",        mc: "MC 822117", region: "Eau Claire, WI", fitScore: 63, lastRate: 2520, tag: "prior_quote" },
+  { id: "p6",  name: "Maple Crest Reefer",        mc: "MC 318099", region: "Green Bay, WI",  fitScore: 61, lastRate: null, tag: "new_prospect" },
+  { id: "p7",  name: "Riverbend Freight",         mc: "MC 442019", region: "Davenport, IA",  fitScore: 60, lastRate: 2440, tag: "lactalis_history" },
+  { id: "p8",  name: "Copperline Logistics",      mc: "MC 720113", region: "Dubuque, IA",    fitScore: 60, lastRate: null, tag: "new_prospect" },
+  { id: "p9",  name: "Pinewood Reefer Co.",       mc: "MC 615008", region: "Wausau, WI",     fitScore: 59, lastRate: 2490, tag: "prior_quote" },
+  { id: "p10", name: "Silver Birch Trucking",     mc: "MC 833402", region: "Janesville, WI", fitScore: 58, lastRate: null, tag: "in_region" },
+  { id: "p11", name: "Cedar Valley Cold",         mc: "MC 119083", region: "Cedar Rapids, IA", fitScore: 58, lastRate: 2350, tag: "lactalis_history" },
+  { id: "p12", name: "Lakefront Carriers",        mc: "MC 442990", region: "Kenosha, WI",    fitScore: 57, lastRate: null, tag: "in_region" },
+  { id: "p13", name: "Granite State Reefer",      mc: "MC 902441", region: "Quincy, IL",     fitScore: 56, lastRate: 2460, tag: "prior_quote" },
+  { id: "p14", name: "Heartland Express LLC",     mc: "MC 199002", region: "Bloomington, IL", fitScore: 55, lastRate: null, tag: "new_prospect" },
+  { id: "p15", name: "Cold Country Freight",      mc: "MC 700128", region: "Rochester, MN",  fitScore: 55, lastRate: 2530, tag: "prior_quote" },
+  { id: "p16", name: "Frostline Logistics",       mc: "MC 882015", region: "Aurora, IL",     fitScore: 54, lastRate: null, tag: "new_prospect" },
+  { id: "p17", name: "TimberCreek Transport",     mc: "MC 540118", region: "Appleton, WI",   fitScore: 53, lastRate: 2400, tag: "lactalis_history" },
+  { id: "p18", name: "BlueRidge Cold Chain",      mc: "MC 660091", region: "Joliet, IL",     fitScore: 52, lastRate: null, tag: "in_region" },
+  { id: "p19", name: "Summit Reefer Group",       mc: "MC 220841", region: "Naperville, IL", fitScore: 52, lastRate: 2380, tag: "prior_quote" },
+  { id: "p20", name: "OakStream Trucking",        mc: "MC 718800", region: "Decatur, IL",    fitScore: 51, lastRate: null, tag: "new_prospect" },
+  { id: "p21", name: "Glacier Run Carriers",      mc: "MC 990013", region: "St. Paul, MN",   fitScore: 50, lastRate: 2510, tag: "prior_quote" },
+  { id: "p22", name: "Crystal Lake Freight",      mc: "MC 314009", region: "Crystal Lake, IL", fitScore: 50, lastRate: null, tag: "in_region" },
+  { id: "p23", name: "ColdSpring Lines",          mc: "MC 660442", region: "Sheboygan, WI",  fitScore: 49, lastRate: null, tag: "new_prospect" },
+  { id: "p24", name: "Northwind Refrigerated",    mc: "MC 199771", region: "Duluth, MN",     fitScore: 48, lastRate: 2580, tag: "prior_quote" },
+  { id: "p25", name: "Ironclad Cold Chain",       mc: "MC 552008", region: "Peoria, IL",     fitScore: 48, lastRate: null, tag: "lactalis_history" },
+  { id: "p26", name: "Whitewater Reefer",         mc: "MC 880113", region: "Whitewater, WI", fitScore: 47, lastRate: null, tag: "new_prospect" },
+  { id: "p27", name: "Cobblestone Logistics",     mc: "MC 460221", region: "Waukegan, IL",   fitScore: 46, lastRate: 2430, tag: "prior_quote" },
+  { id: "p28", name: "Aurora Reefer Lines",       mc: "MC 318877", region: "Schaumburg, IL", fitScore: 45, lastRate: null, tag: "new_prospect" },
+];
+
+const POOL_TAG_LABEL: Record<Pool["tag"], { label: string; cls: string }> = {
+  in_region:        { label: "In region",          cls: "bg-blue-100 text-blue-900 border-blue-200" },
+  prior_quote:      { label: "Prior quote",        cls: "bg-violet-100 text-violet-900 border-violet-200" },
+  new_prospect:     { label: "New prospect",       cls: "bg-zinc-100 text-zinc-700 border-zinc-200" },
+  lactalis_history: { label: "Lactalis history",   cls: "bg-amber-100 text-amber-900 border-amber-200" },
+};
+
 const EXCLUDED: Excluded[] = [
   { id: "e1", name: "FreshHaul Trucking", reason: "recent_contact" },
   { id: "e2", name: "Coldline Express", reason: "recent_contact" },
@@ -427,6 +475,173 @@ function BucketSection({
   );
 }
 
+function SuggestedPool({
+  selected,
+  onToggle,
+  onSelectAll,
+  onSelectTopN,
+  onClear,
+}: {
+  selected: Set<string>;
+  onToggle: (id: string) => void;
+  onSelectAll: (ids: string[]) => void;
+  onSelectTopN: (n: number) => void;
+  onClear: (ids: string[]) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  const [filter, setFilter] = useState<"all" | Pool["tag"]>("all");
+  const [search, setSearch] = useState("");
+
+  const filtered = POOL.filter((p) => {
+    if (filter !== "all" && p.tag !== filter) return false;
+    if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.region.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  const filteredIds = filtered.map((p) => p.id);
+  const selectedInFiltered = filteredIds.filter((id) => selected.has(id)).length;
+  const allFilteredSelected = filteredIds.length > 0 && selectedInFiltered === filteredIds.length;
+
+  const counts = {
+    all: POOL.length,
+    in_region: POOL.filter((p) => p.tag === "in_region").length,
+    prior_quote: POOL.filter((p) => p.tag === "prior_quote").length,
+    new_prospect: POOL.filter((p) => p.tag === "new_prospect").length,
+    lactalis_history: POOL.filter((p) => p.tag === "lactalis_history").length,
+  };
+
+  return (
+    <div className="border border-zinc-200 rounded-lg bg-white overflow-hidden">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-4 py-2.5 bg-zinc-50 hover:bg-zinc-100 border-b border-zinc-200"
+      >
+        <div className="flex items-center gap-2">
+          {open ? <ChevronDown className="h-4 w-4 text-zinc-500" /> : <ChevronRight className="h-4 w-4 text-zinc-500" />}
+          <span className="text-sm font-semibold text-zinc-900">Suggested carrier pool</span>
+          <span className="text-xs text-zinc-500">·</span>
+          <span className="text-xs text-zinc-600">{POOL.length} carriers beyond the ranked shortlist</span>
+          <span className="text-xs text-zinc-400 hidden md:inline">· bulk-select to send wide</span>
+        </div>
+        <span className="text-[11px] text-zinc-500">
+          {selected.size > 0 && [...selected].some((id) => POOL.some((p) => p.id === id))
+            ? `${[...selected].filter((id) => POOL.some((p) => p.id === id)).length} selected from pool`
+            : ""}
+        </span>
+      </button>
+
+      {open && (
+        <>
+          {/* Toolbar */}
+          <div className="px-4 py-2.5 border-b border-zinc-100 flex items-center gap-2 flex-wrap bg-white">
+            <div className="flex items-center gap-1">
+              {([
+                ["all", "All"],
+                ["in_region", "In region"],
+                ["prior_quote", "Prior quote"],
+                ["lactalis_history", "Lactalis history"],
+                ["new_prospect", "New prospects"],
+              ] as const).map(([k, label]) => (
+                <button
+                  key={k}
+                  onClick={() => setFilter(k)}
+                  className={`text-[11px] px-2 py-1 rounded border ${
+                    filter === k
+                      ? "bg-zinc-900 border-zinc-900 text-white"
+                      : "bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                  }`}
+                >
+                  {label} <span className="opacity-60">({counts[k]})</span>
+                </button>
+              ))}
+            </div>
+            <div className="relative ml-auto">
+              <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Filter pool"
+                className="pl-8 pr-3 py-1 border border-zinc-300 rounded text-xs w-44"
+              />
+            </div>
+            <button
+              onClick={() => onSelectTopN(20)}
+              className="text-[11px] px-2.5 py-1 rounded bg-amber-500 text-zinc-900 font-semibold hover:bg-amber-400 inline-flex items-center gap-1"
+            >
+              <Sparkles className="h-3 w-3" /> Add top 20 to wave
+            </button>
+            <button
+              onClick={() => (allFilteredSelected ? onClear(filteredIds) : onSelectAll(filteredIds))}
+              className="text-[11px] px-2.5 py-1 rounded border border-zinc-300 text-zinc-700 hover:bg-zinc-50"
+            >
+              {allFilteredSelected ? "Clear" : "Select all"} ({filtered.length})
+            </button>
+          </div>
+
+          {/* Header row */}
+          <div className="grid grid-cols-[28px_28px_1fr_140px_110px_90px_60px] items-center gap-2 px-4 py-1.5 text-[10px] uppercase tracking-wide text-zinc-500 font-semibold border-b border-zinc-100 bg-zinc-50/60">
+            <div />
+            <div />
+            <div>Carrier</div>
+            <div>Region</div>
+            <div>Tag</div>
+            <div>Last rate</div>
+            <div className="text-right">Fit</div>
+          </div>
+
+          {/* Rows */}
+          <div className="max-h-[420px] overflow-y-auto">
+            {filtered.map((p) => {
+              const sel = selected.has(p.id);
+              const tag = POOL_TAG_LABEL[p.tag];
+              return (
+                <div
+                  key={p.id}
+                  className={`grid grid-cols-[28px_28px_1fr_140px_110px_90px_60px] items-center gap-2 px-4 py-1.5 border-b border-zinc-100 last:border-b-0 text-sm hover:bg-zinc-50 ${
+                    sel ? "bg-amber-50/40" : ""
+                  }`}
+                >
+                  <GripVertical className="h-3.5 w-3.5 text-zinc-300 cursor-grab" />
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 rounded border-zinc-300 accent-amber-500"
+                    checked={sel}
+                    onChange={() => onToggle(p.id)}
+                  />
+                  <div className="min-w-0">
+                    <div className="font-medium text-zinc-900 truncate">{p.name}</div>
+                    <div className="text-[10px] text-zinc-500">{p.mc}</div>
+                  </div>
+                  <div className="text-[12px] text-zinc-700 truncate">{p.region}</div>
+                  <div>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${tag.cls}`}>{tag.label}</span>
+                  </div>
+                  <div className="text-[12px] text-zinc-700 font-mono">
+                    {p.lastRate ? `$${p.lastRate.toLocaleString()}` : <span className="text-zinc-400">—</span>}
+                  </div>
+                  <div className="text-right text-sm font-semibold text-zinc-900">{p.fitScore}</div>
+                </div>
+              );
+            })}
+            {filtered.length === 0 && (
+              <div className="px-4 py-6 text-center text-xs text-zinc-500">No carriers match your filter.</div>
+            )}
+          </div>
+
+          {/* Footer hint */}
+          <div className="px-4 py-2 border-t border-zinc-100 bg-zinc-50/60 text-[11px] text-zinc-600 flex items-center justify-between">
+            <span>
+              Pool ranks below the curated shortlist. Use this to cast a wider net (20–30 carriers) when capacity is tight or
+              when proven carriers haven't replied.
+            </span>
+            <span className="text-zinc-400">Daily-cap & guardrails still apply at send time.</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function Redesign() {
   const [selected, setSelected] = useState<Set<string>>(new Set(["c1", "c3"]));
   const [intelOpen, setIntelOpen] = useState(false);
@@ -441,6 +656,19 @@ export function Redesign() {
       return n;
     });
   };
+  const selectIds = (ids: string[]) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      ids.forEach((id) => n.add(id));
+      return n;
+    });
+  const clearIds = (ids: string[]) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      ids.forEach((id) => n.delete(id));
+      return n;
+    });
+  const selectTopN = (n: number) => selectIds(POOL.slice(0, n).map((p) => p.id));
 
   const allEligible = [...PROVEN, ...STRONG, ...EXPLORATORY];
   const totalSelected = selected.size;
@@ -591,6 +819,15 @@ export function Redesign() {
             carriers={EXPLORATORY}
             selected={selected}
             onToggle={toggle}
+          />
+
+          {/* ── SUGGESTED CARRIER POOL ─────────────────────────────────── */}
+          <SuggestedPool
+            selected={selected}
+            onToggle={toggle}
+            onSelectAll={selectIds}
+            onSelectTopN={selectTopN}
+            onClear={clearIds}
           />
         </div>
 
