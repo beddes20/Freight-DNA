@@ -17,6 +17,7 @@ import {
   Search, Download, RefreshCw, Bookmark, X, ArrowUp, ArrowDown,
   TrendingUp, TrendingDown, Minus, AlertTriangle, Hourglass, Trophy,
   Trash2, Plus, ChevronsUpDown, Check, ChevronLeft, ChevronRight,
+  Sun, Moon,
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip as RTooltip,
@@ -183,25 +184,25 @@ const STATUS_LABELS: Record<string, string> = {
   no_response: "No response", expired: "Expired",
 };
 const STATUS_COLORS: Record<string, string> = {
-  pending: "bg-amber-500/15 text-amber-300 border-amber-500/30",
-  won: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-  won_low_margin: "bg-yellow-500/15 text-yellow-300 border-yellow-500/30",
-  lost_price: "bg-red-500/15 text-red-300 border-red-500/30",
-  lost_service: "bg-red-500/15 text-red-300 border-red-500/30",
-  lost_timing: "bg-red-500/15 text-red-300 border-red-500/30",
-  lost_incumbent: "bg-red-500/15 text-red-300 border-red-500/30",
-  no_response: "bg-zinc-500/15 text-zinc-300 border-zinc-500/30",
-  expired: "bg-zinc-500/15 text-zinc-300 border-zinc-500/30",
+  pending: "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30",
+  won: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30",
+  won_low_margin: "bg-yellow-500/15 text-yellow-700 dark:text-yellow-300 border-yellow-500/30",
+  lost_price: "bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30",
+  lost_service: "bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30",
+  lost_timing: "bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30",
+  lost_incumbent: "bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30",
+  no_response: "bg-muted text-muted-foreground border-border",
+  expired: "bg-muted text-muted-foreground border-border",
 };
 const ALL_STATUSES = Object.keys(STATUS_LABELS);
 // Spec: 8-bucket outcome taxonomy — final outcomes only, excludes "pending" (an active state).
 const OUTCOME_BUCKETS = ["won", "won_low_margin", "lost_price", "lost_service", "lost_timing", "lost_incumbent", "no_response", "expired"];
 const EQUIPMENTS = ["Dry Van", "Reefer", "Flatbed"];
 const ATTRACT_COLORS: Record<AttractivenessLabel, string> = {
-  "Pursue Aggressively": "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-  "Good Freight": "bg-sky-500/15 text-sky-300 border-sky-500/30",
-  "Selective": "bg-amber-500/15 text-amber-300 border-amber-500/30",
-  "Low Quality": "bg-red-500/15 text-red-300 border-red-500/30",
+  "Pursue Aggressively": "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30",
+  "Good Freight": "bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/30",
+  "Selective": "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30",
+  "Low Quality": "bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30",
 };
 const PIE_COLORS = ["#10b981", "#84cc16", "#ef4444", "#f97316", "#f59e0b", "#a855f7", "#71717a", "#525252", "#facc15"];
 const PAGE_SIZE = 50;
@@ -240,14 +241,14 @@ function filtersFromUrl(search: string): Filters {
   return f;
 }
 function trendIcon(v: number): JSX.Element {
-  if (Math.abs(v) < 0.5) return <Minus className="h-3 w-3 text-zinc-500" />;
+  if (Math.abs(v) < 0.5) return <Minus className="h-3 w-3 text-muted-foreground" />;
   if (v > 0) return <TrendingUp className="h-3 w-3 text-emerald-400" />;
   return <TrendingDown className="h-3 w-3 text-red-400" />;
 }
 
 function StatusPill({ status }: { status: string }): JSX.Element {
   return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${STATUS_COLORS[status] ?? "bg-zinc-500/10 text-zinc-300 border-zinc-500/30"}`} data-testid={`status-pill-${status}`}>
+    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${STATUS_COLORS[status] ?? "bg-muted text-muted-foreground border-border"}`} data-testid={`status-pill-${status}`}>
       {STATUS_LABELS[status] ?? status}
     </span>
   );
@@ -259,21 +260,56 @@ function KpiCard({ label, value, sub, trend, onClick, testId }: {
   return (
     <button
       onClick={onClick}
-      className="group flex flex-col items-start gap-0.5 rounded p-2.5 bg-zinc-900 border border-zinc-800 hover:border-amber-500/40 hover:bg-zinc-900/80 transition text-left min-w-[120px]"
+      className="group flex flex-col items-start gap-0.5 rounded p-2.5 bg-card border border-border hover:border-amber-500/40 hover:bg-card/80 transition text-left min-w-[120px]"
       data-testid={testId}
     >
-      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-zinc-500">
+      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
         <span>{label}</span>
         {trend !== undefined && trendIcon(trend)}
       </div>
-      <div className="text-lg font-semibold text-zinc-100 tabular-nums">{value}</div>
-      {sub && <div className="text-[10px] text-zinc-500">{sub}</div>}
+      <div className="text-lg font-semibold text-foreground tabular-nums">{value}</div>
+      {sub && <div className="text-[10px] text-muted-foreground">{sub}</div>}
     </button>
   );
 }
 
+// ---------- Page-scoped theme toggle ----------
+// Defaults to "light" on first visit; restores the rep's last choice on
+// subsequent visits via localStorage. Toggling flips the global `dark` class
+// on <html> (matching tailwind's `darkMode: ["class"]` setup), and the
+// previous global state is restored when the page unmounts so other pages
+// aren't affected.
+const CQ_THEME_KEY = "cq-theme";
+function useCustomerQuotesTheme(): { theme: "light" | "dark"; toggle: () => void } {
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    if (typeof window === "undefined") return "light";
+    const saved = window.localStorage.getItem(CQ_THEME_KEY);
+    return saved === "dark" ? "dark" : "light";
+  });
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    const wasDark = root.classList.contains("dark");
+    if (theme === "dark") root.classList.add("dark");
+    else root.classList.remove("dark");
+    return () => {
+      if (wasDark) root.classList.add("dark");
+      else root.classList.remove("dark");
+    };
+  }, [theme]);
+  const toggle = (): void => {
+    setTheme(t => {
+      const next = t === "dark" ? "light" : "dark";
+      try { window.localStorage.setItem(CQ_THEME_KEY, next); } catch { /* ignore */ }
+      return next;
+    });
+  };
+  return { theme, toggle };
+}
+
 // ---------- Page ----------
 export default function CustomerQuotesPage(): JSX.Element {
+  const { theme, toggle: toggleTheme } = useCustomerQuotesTheme();
   const initialSearch = typeof window !== "undefined" ? window.location.search : "";
   const [filters, setFilters] = useState<Filters>(() => filtersFromUrl(initialSearch));
   const [drawerId, setDrawerId] = useState<string | null>(() => {
@@ -424,28 +460,38 @@ export default function CustomerQuotesPage(): JSX.Element {
   const totalPages = list ? Math.max(1, Math.ceil(list.total / PAGE_SIZE)) : 1;
 
   return (
-    <div className="flex flex-col h-full bg-zinc-950 text-zinc-100" style={{ fontFamily: "Inter, sans-serif" }}>
+    <div className="flex flex-col h-full bg-background text-foreground" style={{ fontFamily: "Inter, sans-serif" }}>
       {/* Header */}
-      <div className="px-6 py-4 border-b border-zinc-800 bg-zinc-950 shrink-0" data-testid="header-customer-quotes">
+      <div className="px-6 py-4 border-b border-border bg-background shrink-0" data-testid="header-customer-quotes">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight text-zinc-100">Customer Quotes</h1>
-            <p className="text-xs text-zinc-500 mt-0.5">Quote requests, outcomes, lane performance — drillable across customers, reps, and lanes.</p>
+            <h1 className="text-xl font-semibold tracking-tight text-foreground">Customer Quotes</h1>
+            <p className="text-xs text-muted-foreground mt-0.5">Quote requests, outcomes, lane performance — drillable across customers, reps, and lanes.</p>
           </div>
           <div className="flex items-center gap-2">
             <Button size="sm" onClick={() => setNewQuoteOpen(true)} className="bg-amber-500 hover:bg-amber-600 text-zinc-950" data-testid="button-new-quote">
               <Plus className="h-3.5 w-3.5 mr-1.5" /> New Quote
             </Button>
-            <Button size="sm" variant="outline" onClick={handleExport} className="border-zinc-700 hover:bg-zinc-800" data-testid="button-export-csv">
+            <Button size="sm" variant="outline" onClick={handleExport} className="border-border hover:bg-muted" data-testid="button-export-csv">
               <Download className="h-3.5 w-3.5 mr-1.5" /> Export CSV
             </Button>
-            <Button size="sm" variant="outline" onClick={() => setSavedViewsOpen(v => !v)} className="border-zinc-700 hover:bg-zinc-800" data-testid="button-saved-views">
+            <Button size="sm" variant="outline" onClick={() => setSavedViewsOpen(v => !v)} className="border-border hover:bg-muted" data-testid="button-saved-views">
               <Bookmark className="h-3.5 w-3.5 mr-1.5" /> Saved Views
             </Button>
-            <Button size="sm" onClick={() => setNewQuoteOpen(true)} className="bg-amber-500 hover:bg-amber-400 text-zinc-950" data-testid="button-new-quote">
-              <Plus className="h-3.5 w-3.5 mr-1.5" /> New Quote
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={toggleTheme}
+              className="border-border hover:bg-muted"
+              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              data-testid="button-toggle-theme"
+            >
+              {theme === "dark"
+                ? <><Sun className="h-3.5 w-3.5 mr-1.5" /> Light</>
+                : <><Moon className="h-3.5 w-3.5 mr-1.5" /> Dark</>}
             </Button>
-            <Button size="sm" variant="outline" onClick={() => { snapshotQuery.refetch(); listQuery.refetch(); }} disabled={snapshotQuery.isFetching || listQuery.isFetching} className="border-zinc-700 hover:bg-zinc-800" data-testid="button-refresh">
+            <Button size="sm" variant="outline" onClick={() => { snapshotQuery.refetch(); listQuery.refetch(); }} disabled={snapshotQuery.isFetching || listQuery.isFetching} className="border-border hover:bg-muted" data-testid="button-refresh">
               <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${snapshotQuery.isFetching || listQuery.isFetching ? "animate-spin" : ""}`} /> Refresh
             </Button>
           </div>
@@ -453,20 +499,20 @@ export default function CustomerQuotesPage(): JSX.Element {
       </div>
 
       {/* Sticky filter bar */}
-      <div className="sticky top-0 z-20 px-6 py-3 border-b border-zinc-800 bg-zinc-950/95 backdrop-blur shrink-0" data-testid="filter-bar">
+      <div className="sticky top-0 z-20 px-6 py-3 border-b border-border bg-background/95 backdrop-blur shrink-0" data-testid="filter-bar">
         <div className="flex flex-wrap items-end gap-2">
           <FilterBox label="Customer">
             <CustomerCombobox customers={data?.customers ?? []} value={filters.customerId} onChange={(v) => updateFilter({ customerId: v })} />
           </FilterBox>
           <FilterBox label="Start date">
-            <Input type="date" value={filters.startDate ?? ""} onChange={e => updateFilter({ startDate: e.target.value || undefined })} className="h-8 w-[140px] bg-zinc-900 border-zinc-700 text-xs" data-testid="input-start-date" />
+            <Input type="date" value={filters.startDate ?? ""} onChange={e => updateFilter({ startDate: e.target.value || undefined })} className="h-8 w-[140px] bg-card border-border text-xs" data-testid="input-start-date" />
           </FilterBox>
           <FilterBox label="End date">
-            <Input type="date" value={filters.endDate ?? ""} onChange={e => updateFilter({ endDate: e.target.value || undefined })} className="h-8 w-[140px] bg-zinc-900 border-zinc-700 text-xs" data-testid="input-end-date" />
+            <Input type="date" value={filters.endDate ?? ""} onChange={e => updateFilter({ endDate: e.target.value || undefined })} className="h-8 w-[140px] bg-card border-border text-xs" data-testid="input-end-date" />
           </FilterBox>
           <FilterBox label="Equipment">
             <Select value={filters.equipment ?? "_all"} onValueChange={v => updateFilter({ equipment: v === "_all" ? undefined : v })}>
-              <SelectTrigger className="h-8 w-[120px] bg-zinc-900 border-zinc-700 text-xs" data-testid="select-equipment"><SelectValue placeholder="All" /></SelectTrigger>
+              <SelectTrigger className="h-8 w-[120px] bg-card border-border text-xs" data-testid="select-equipment"><SelectValue placeholder="All" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="_all">All</SelectItem>
                 {EQUIPMENTS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
@@ -475,7 +521,7 @@ export default function CustomerQuotesPage(): JSX.Element {
           </FilterBox>
           <FilterBox label="Rep">
             <Select value={filters.repId ?? "_all"} onValueChange={v => updateFilter({ repId: v === "_all" ? undefined : v })}>
-              <SelectTrigger className="h-8 w-[140px] bg-zinc-900 border-zinc-700 text-xs" data-testid="select-rep"><SelectValue placeholder="All reps" /></SelectTrigger>
+              <SelectTrigger className="h-8 w-[140px] bg-card border-border text-xs" data-testid="select-rep"><SelectValue placeholder="All reps" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="_all">All reps</SelectItem>
                 {data?.reps.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
@@ -484,7 +530,7 @@ export default function CustomerQuotesPage(): JSX.Element {
           </FilterBox>
           <FilterBox label="Outcome">
             <Select value={filters.outcomeStatus ?? "_all"} onValueChange={v => updateFilter({ outcomeStatus: v === "_all" ? undefined : v })}>
-              <SelectTrigger className="h-8 w-[140px] bg-zinc-900 border-zinc-700 text-xs" data-testid="select-outcome"><SelectValue placeholder="All" /></SelectTrigger>
+              <SelectTrigger className="h-8 w-[140px] bg-card border-border text-xs" data-testid="select-outcome"><SelectValue placeholder="All" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="_all">All</SelectItem>
                 {ALL_STATUSES.map(s => <SelectItem key={s} value={s}>{STATUS_LABELS[s]}</SelectItem>)}
@@ -493,7 +539,7 @@ export default function CustomerQuotesPage(): JSX.Element {
           </FilterBox>
           <FilterBox label="Reason">
             <Select value={filters.outcomeReasonId ?? "_all"} onValueChange={v => updateFilter({ outcomeReasonId: v === "_all" ? undefined : v })}>
-              <SelectTrigger className="h-8 w-[160px] bg-zinc-900 border-zinc-700 text-xs" data-testid="select-reason"><SelectValue placeholder="All reasons" /></SelectTrigger>
+              <SelectTrigger className="h-8 w-[160px] bg-card border-border text-xs" data-testid="select-reason"><SelectValue placeholder="All reasons" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="_all">All reasons</SelectItem>
                 {data?.reasons.map(r => <SelectItem key={r.id} value={r.id}>{r.label}</SelectItem>)}
@@ -502,8 +548,8 @@ export default function CustomerQuotesPage(): JSX.Element {
           </FilterBox>
           <FilterBox label="Lane search">
             <div className="relative">
-              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-zinc-500" />
-              <Input value={filters.laneSearch ?? ""} onChange={e => updateFilter({ laneSearch: e.target.value || undefined })} placeholder="Origin/dest..." className="h-8 w-[180px] pl-7 bg-zinc-900 border-zinc-700 text-xs" data-testid="input-lane-search" />
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input value={filters.laneSearch ?? ""} onChange={e => updateFilter({ laneSearch: e.target.value || undefined })} placeholder="Origin/dest..." className="h-8 w-[180px] pl-7 bg-card border-border text-xs" data-testid="input-lane-search" />
             </div>
           </FilterBox>
           <FilterBox label="Won only">
@@ -514,7 +560,7 @@ export default function CustomerQuotesPage(): JSX.Element {
           </FilterBox>
           {hasFilters && (
             <>
-              <Button size="sm" variant="ghost" onClick={clearAll} className="h-8 text-xs text-zinc-400 hover:text-zinc-100" data-testid="button-clear-filters">Clear all</Button>
+              <Button size="sm" variant="ghost" onClick={clearAll} className="h-8 text-xs text-muted-foreground hover:text-foreground" data-testid="button-clear-filters">Clear all</Button>
               <Button size="sm" variant="ghost" onClick={() => setSaveDialogOpen(true)} className="h-8 text-xs text-amber-400 hover:text-amber-300" data-testid="button-save-view"><Plus className="h-3 w-3 mr-1" /> Save view</Button>
             </>
           )}
@@ -535,7 +581,7 @@ export default function CustomerQuotesPage(): JSX.Element {
               if (k === "expiringOnly") label = "Expiring <3d";
               return (
                 <button key={k} onClick={() => removeFilter(k as keyof Filters)}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-amber-500/15 text-amber-300 border border-amber-500/30 hover:bg-amber-500/25"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 hover:bg-amber-500/25"
                   data-testid={`chip-${k}`}>
                   {label}<X className="h-3 w-3" />
                 </button>
@@ -549,9 +595,9 @@ export default function CustomerQuotesPage(): JSX.Element {
       <div className="flex-1 overflow-auto px-6 py-4 space-y-4">
         {snapshotQuery.isLoading || !data ? (
           <div className="space-y-3">
-            <Skeleton className="h-20 w-full bg-zinc-900" />
-            <Skeleton className="h-64 w-full bg-zinc-900" />
-            <Skeleton className="h-96 w-full bg-zinc-900" />
+            <Skeleton className="h-20 w-full bg-card" />
+            <Skeleton className="h-64 w-full bg-card" />
+            <Skeleton className="h-96 w-full bg-card" />
           </div>
         ) : (
           <>
@@ -628,14 +674,14 @@ export default function CustomerQuotesPage(): JSX.Element {
                 />
 
                 {/* Quote opportunities table */}
-                <Card className="bg-zinc-900 border-zinc-800" data-testid="quote-table-card">
+                <Card className="bg-card border-border" data-testid="quote-table-card">
                   <CardHeader className="py-3 px-4 flex flex-row items-center justify-between">
-                    <CardTitle className="text-sm text-zinc-100">
-                      Quote Opportunities <span className="text-zinc-500 font-normal">({list?.total ?? 0})</span>
+                    <CardTitle className="text-sm text-foreground">
+                      Quote Opportunities <span className="text-muted-foreground font-normal">({list?.total ?? 0})</span>
                     </CardTitle>
                     <div className="flex items-center gap-2">
                       <Button size="sm" variant="ghost" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0} className="h-7 w-7 p-0" data-testid="button-page-prev"><ChevronLeft className="h-4 w-4" /></Button>
-                      <span className="text-xs text-zinc-400 tabular-nums">Page {page + 1} of {totalPages}</span>
+                      <span className="text-xs text-muted-foreground tabular-nums">Page {page + 1} of {totalPages}</span>
                       <Button size="sm" variant="ghost" onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1} className="h-7 w-7 p-0" data-testid="button-page-next"><ChevronRight className="h-4 w-4" /></Button>
                     </div>
                   </CardHeader>
@@ -667,14 +713,14 @@ export default function CustomerQuotesPage(): JSX.Element {
 
               {/* Right rail */}
               <div className="space-y-4">
-                <Card className="bg-zinc-900 border-zinc-800" data-testid="alerts-panel">
+                <Card className="bg-card border-border" data-testid="alerts-panel">
                   <CardHeader className="py-3 px-4">
-                    <CardTitle className="text-xs uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                    <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
                       <AlertTriangle className="h-3.5 w-3.5 text-amber-400" /> Operational Alerts
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="px-3 pb-3 space-y-2 max-h-[420px] overflow-y-auto">
-                    {data.alerts.length === 0 && <div className="text-xs text-zinc-500 px-1">All quiet — no urgent items.</div>}
+                    {data.alerts.length === 0 && <div className="text-xs text-muted-foreground px-1">All quiet — no urgent items.</div>}
                     {data.alerts.map(a => (
                       <button key={a.id} onClick={() => {
                         if (a.type === "pattern_shift" && a.data?.customerId) {
@@ -702,24 +748,24 @@ export default function CustomerQuotesPage(): JSX.Element {
                       }} className={`w-full text-left rounded p-2 border ${
                         a.severity === "high" ? "bg-red-500/10 border-red-500/30 hover:bg-red-500/20"
                         : a.severity === "medium" ? "bg-amber-500/10 border-amber-500/30 hover:bg-amber-500/20"
-                        : "bg-zinc-800/40 border-zinc-700 hover:bg-zinc-800"
+                        : "bg-muted/60 border-border hover:bg-muted"
                       }`} data-testid={`alert-${a.type}`}>
-                        <div className="text-[11px] font-semibold text-zinc-100">{a.title}</div>
-                        <div className="text-[10px] text-zinc-400 mt-0.5">{a.detail}</div>
+                        <div className="text-[11px] font-semibold text-foreground">{a.title}</div>
+                        <div className="text-[10px] text-muted-foreground mt-0.5">{a.detail}</div>
                       </button>
                     ))}
                   </CardContent>
                 </Card>
 
-                <Card className="bg-zinc-900 border-zinc-800" data-testid="stale-followups-panel">
+                <Card className="bg-card border-border" data-testid="stale-followups-panel">
                   <CardHeader className="py-3 px-4">
-                    <CardTitle className="text-xs uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                    <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
                       <Hourglass className="h-3.5 w-3.5 text-amber-400" /> Stale Follow-Ups
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="px-3 pb-3 space-y-1.5 max-h-[360px] overflow-y-auto">
                     {(!data.staleFollowUps || data.staleFollowUps.length === 0) && (
-                      <div className="text-xs text-zinc-500 px-1" data-testid="text-stale-empty">
+                      <div className="text-xs text-muted-foreground px-1" data-testid="text-stale-empty">
                         No quotes past their typical decision window.
                       </div>
                     )}
@@ -738,11 +784,11 @@ export default function CustomerQuotesPage(): JSX.Element {
                           data-testid={`stale-followup-${s.quoteId}`}
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <span className="text-[11px] font-semibold text-zinc-100 truncate">{s.customerName}</span>
-                            <span className="text-[10px] text-amber-300 shrink-0">{overdueLabel} late</span>
+                            <span className="text-[11px] font-semibold text-foreground truncate">{s.customerName}</span>
+                            <span className="text-[10px] text-amber-700 dark:text-amber-300 shrink-0">{overdueLabel} late</span>
                           </div>
-                          <div className="text-[10px] text-zinc-400 mt-0.5 truncate">{s.lane}</div>
-                          <div className="text-[10px] text-zinc-500 mt-0.5">
+                          <div className="text-[10px] text-muted-foreground mt-0.5 truncate">{s.lane}</div>
+                          <div className="text-[10px] text-muted-foreground mt-0.5">
                             {fmtMoney(s.quotedAmount)} · typical {typicalLabel}{s.repName ? ` · ${s.repName}` : ""}
                           </div>
                         </button>
@@ -751,13 +797,13 @@ export default function CustomerQuotesPage(): JSX.Element {
                   </CardContent>
                 </Card>
 
-                <Card className="bg-zinc-900 border-zinc-800" data-testid="current-slice-panel">
-                  <CardHeader className="py-3 px-4"><CardTitle className="text-xs uppercase tracking-wider text-zinc-400">Current Slice</CardTitle></CardHeader>
-                  <CardContent className="px-4 pb-3 text-xs text-zinc-300 space-y-1">
-                    <div><span className="text-zinc-500">Quotes:</span> {data.kpis.total}</div>
-                    <div><span className="text-zinc-500">Win rate:</span> {fmtPct(data.kpis.winRate)}</div>
-                    <div><span className="text-zinc-500">Avg margin:</span> {fmtMoney(data.kpis.avgMarginDollar)} ({fmtPct(data.kpis.avgMarginPct)})</div>
-                    <div><span className="text-zinc-500">Pending:</span> {data.kpis.pending}</div>
+                <Card className="bg-card border-border" data-testid="current-slice-panel">
+                  <CardHeader className="py-3 px-4"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Current Slice</CardTitle></CardHeader>
+                  <CardContent className="px-4 pb-3 text-xs text-foreground/90 space-y-1">
+                    <div><span className="text-muted-foreground">Quotes:</span> {data.kpis.total}</div>
+                    <div><span className="text-muted-foreground">Win rate:</span> {fmtPct(data.kpis.winRate)}</div>
+                    <div><span className="text-muted-foreground">Avg margin:</span> {fmtMoney(data.kpis.avgMarginDollar)} ({fmtPct(data.kpis.avgMarginPct)})</div>
+                    <div><span className="text-muted-foreground">Pending:</span> {data.kpis.pending}</div>
                   </CardContent>
                 </Card>
               </div>
@@ -768,20 +814,20 @@ export default function CustomerQuotesPage(): JSX.Element {
 
       {/* Saved Views drawer */}
       {savedViewsOpen && (
-        <div className="fixed top-[120px] right-6 z-30 w-[280px] rounded border border-zinc-700 bg-zinc-900 shadow-xl" data-testid="saved-views-panel">
-          <div className="flex items-center justify-between p-3 border-b border-zinc-800">
-            <span className="text-xs uppercase tracking-wider text-zinc-400">Saved Views</span>
-            <button onClick={() => setSavedViewsOpen(false)} className="text-zinc-500 hover:text-zinc-200"><X className="h-3.5 w-3.5" /></button>
+        <div className="fixed top-[120px] right-6 z-30 w-[280px] rounded border border-border bg-card shadow-xl" data-testid="saved-views-panel">
+          <div className="flex items-center justify-between p-3 border-b border-border">
+            <span className="text-xs uppercase tracking-wider text-muted-foreground">Saved Views</span>
+            <button onClick={() => setSavedViewsOpen(false)} className="text-muted-foreground hover:text-foreground"><X className="h-3.5 w-3.5" /></button>
           </div>
           <div className="p-2 max-h-[300px] overflow-y-auto">
-            {!savedViewsQuery.data?.length && <div className="text-xs text-zinc-500 px-2 py-3">No saved views yet. Save the current filters to make one.</div>}
+            {!savedViewsQuery.data?.length && <div className="text-xs text-muted-foreground px-2 py-3">No saved views yet. Save the current filters to make one.</div>}
             {savedViewsQuery.data?.map(v => (
               <div key={v.id} className="flex items-center gap-1 group">
                 <button onClick={() => { setFilters(v.filters); setSavedViewsOpen(false); }}
-                  className="flex-1 text-left px-2 py-1.5 rounded text-xs text-zinc-200 hover:bg-zinc-800"
+                  className="flex-1 text-left px-2 py-1.5 rounded text-xs text-foreground hover:bg-muted"
                   data-testid={`button-apply-view-${v.id}`}>{v.name}</button>
                 <button onClick={() => deleteViewMutation.mutate(v.id)}
-                  className="opacity-0 group-hover:opacity-100 p-1 text-zinc-500 hover:text-red-400"
+                  className="opacity-0 group-hover:opacity-100 p-1 text-muted-foreground hover:text-red-400"
                   data-testid={`button-delete-view-${v.id}`}><Trash2 className="h-3.5 w-3.5" /></button>
               </div>
             ))}
@@ -790,7 +836,7 @@ export default function CustomerQuotesPage(): JSX.Element {
       )}
 
       <Dialog open={saveDialogOpen} onOpenChange={setSaveDialogOpen}>
-        <DialogContent className="bg-zinc-900 border-zinc-700 text-zinc-100">
+        <DialogContent className="bg-card border-border text-foreground">
           <DialogHeader><DialogTitle>Save current view</DialogTitle></DialogHeader>
           <Label htmlFor="view-name" className="text-xs">Name</Label>
           <Input id="view-name" value={newViewName} onChange={e => setNewViewName(e.target.value)} placeholder="e.g. Aurora Foods — wins this month" data-testid="input-view-name" />
@@ -854,7 +900,7 @@ export default function CustomerQuotesPage(): JSX.Element {
 function FilterBox({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
   return (
     <div className="flex flex-col gap-0.5">
-      <span className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</span>
+      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
       {children}
     </div>
   );
@@ -870,18 +916,18 @@ function CustomerCombobox({ customers, value, onChange }: { customers: Customer[
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          className="h-8 w-[200px] justify-between bg-zinc-900 border-zinc-700 text-xs font-normal"
+          className="h-8 w-[200px] justify-between bg-card border-border text-xs font-normal"
           data-testid="combobox-customer"
         >
           <span className="truncate">{selected?.name ?? "All customers"}</span>
           <ChevronsUpDown className="ml-1 h-3.5 w-3.5 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[260px] p-0 bg-zinc-900 border-zinc-700">
-        <Command className="bg-zinc-900">
+      <PopoverContent className="w-[260px] p-0 bg-card border-border">
+        <Command className="bg-card">
           <CommandInput placeholder="Search customers..." className="h-9 text-xs" data-testid="combobox-customer-input" />
           <CommandList>
-            <CommandEmpty className="py-3 text-xs text-zinc-500 text-center">No customer found.</CommandEmpty>
+            <CommandEmpty className="py-3 text-xs text-muted-foreground text-center">No customer found.</CommandEmpty>
             <CommandGroup>
               <CommandItem value="_all" onSelect={() => { onChange(undefined); setOpen(false); }} data-testid="combobox-customer-item-all">
                 <Check className={`mr-2 h-3.5 w-3.5 ${!value ? "opacity-100" : "opacity-0"}`} /> All customers
@@ -890,7 +936,7 @@ function CustomerCombobox({ customers, value, onChange }: { customers: Customer[
                 <CommandItem key={c.id} value={c.name} onSelect={() => { onChange(c.id); setOpen(false); }} data-testid={`combobox-customer-item-${c.id}`}>
                   <Check className={`mr-2 h-3.5 w-3.5 ${value === c.id ? "opacity-100" : "opacity-0"}`} />
                   <span className="text-xs">{c.name}</span>
-                  {c.segment && <span className="ml-auto text-[10px] text-zinc-500">{c.segment}</span>}
+                  {c.segment && <span className="ml-auto text-[10px] text-muted-foreground">{c.segment}</span>}
                 </CommandItem>
               ))}
             </CommandGroup>
@@ -945,11 +991,11 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
       data-testid="quote-table-virtual"
     >
       <table className="w-full text-xs">
-        <thead className="sticky top-0 bg-zinc-900 z-10 border-b border-zinc-800">
-          <tr className="text-left text-zinc-400">
+        <thead className="sticky top-0 bg-card z-10 border-b border-border">
+          <tr className="text-left text-muted-foreground">
             {COLUMNS.map(col => (
               <th key={col.key} className={`px-2 py-2 font-medium text-[10px] uppercase tracking-wider ${col.align === "right" ? "text-right" : ""}`}>
-                <button onClick={() => onSort(col.key)} className="inline-flex items-center gap-0.5 hover:text-zinc-100" data-testid={`sort-${col.key}`}>
+                <button onClick={() => onSort(col.key)} className="inline-flex items-center gap-0.5 hover:text-foreground" data-testid={`sort-${col.key}`}>
                   {col.label}
                   {sortKey === col.key && (sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
                 </button>
@@ -959,7 +1005,7 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
         </thead>
         <tbody>
           {!isLoading && rows.length === 0 && (
-            <tr><td colSpan={COLUMNS.length} className="text-center py-8 text-zinc-500">No quote opportunities match these filters.</td></tr>
+            <tr><td colSpan={COLUMNS.length} className="text-center py-8 text-muted-foreground">No quote opportunities match these filters.</td></tr>
           )}
           {padTop > 0 && <tr style={{ height: padTop }} aria-hidden="true"><td colSpan={COLUMNS.length} /></tr>}
           {visible.map(q => {
@@ -969,16 +1015,16 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
             const marginPct = quoted > 0 && paid > 0 ? (margin / quoted) * 100 : null;
             return (
               <tr key={q.id} onClick={() => onRowClick(q.id)}
-                className="border-b border-zinc-800/50 hover:bg-zinc-800/40 cursor-pointer"
+                className="border-b border-border/50 hover:bg-muted/60 cursor-pointer"
                 style={{ height: ROW_HEIGHT }}
                 data-testid={`row-quote-${q.id}`}>
-                <td className="px-2 whitespace-nowrap text-zinc-300">{new Date(q.requestDate).toLocaleDateString()}</td>
-                <td className="px-2 whitespace-nowrap text-zinc-100 font-medium">{q.customerName}</td>
-                <td className="px-2 whitespace-nowrap text-zinc-300">{q.originCity}, {q.originState}</td>
-                <td className="px-2 whitespace-nowrap text-zinc-300">{q.destCity}, {q.destState}</td>
-                <td className="px-2 whitespace-nowrap text-zinc-400">{q.equipment}</td>
-                <td className="px-2 whitespace-nowrap text-right tabular-nums text-zinc-100">{fmtMoney(quoted)}</td>
-                <td className="px-2 whitespace-nowrap text-zinc-400">{q.validThrough ? new Date(q.validThrough).toLocaleDateString() : "—"}</td>
+                <td className="px-2 whitespace-nowrap text-foreground/90">{new Date(q.requestDate).toLocaleDateString()}</td>
+                <td className="px-2 whitespace-nowrap text-foreground font-medium">{q.customerName}</td>
+                <td className="px-2 whitespace-nowrap text-foreground/90">{q.originCity}, {q.originState}</td>
+                <td className="px-2 whitespace-nowrap text-foreground/90">{q.destCity}, {q.destState}</td>
+                <td className="px-2 whitespace-nowrap text-muted-foreground">{q.equipment}</td>
+                <td className="px-2 whitespace-nowrap text-right tabular-nums text-foreground">{fmtMoney(quoted)}</td>
+                <td className="px-2 whitespace-nowrap text-muted-foreground">{q.validThrough ? new Date(q.validThrough).toLocaleDateString() : "—"}</td>
                 <td className="px-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                   <InlineOutcome
                     quote={q}
@@ -987,14 +1033,14 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
                     pending={pendingId === q.id}
                   />
                 </td>
-                <td className="px-2 whitespace-nowrap text-zinc-400 max-w-[140px] truncate">{q.outcomeReasonLabel ?? "—"}</td>
-                <td className="px-2 whitespace-nowrap text-right tabular-nums text-zinc-300">{paid ? fmtMoney(paid) : "—"}</td>
-                <td className="px-2 whitespace-nowrap text-right tabular-nums text-zinc-100">{paid ? fmtMoney(margin) : "—"}</td>
-                <td className="px-2 whitespace-nowrap text-right tabular-nums text-zinc-300">{marginPct !== null ? fmtPct(marginPct) : "—"}</td>
-                <td className="px-2 whitespace-nowrap text-zinc-400">{q.repName}</td>
-                <td className="px-2 whitespace-nowrap text-right tabular-nums text-zinc-400">{num(q.responseTimeHours).toFixed(1)}h</td>
-                <td className="px-2 whitespace-nowrap text-zinc-500 uppercase text-[10px]">{q.source}</td>
-                <td className="px-2 whitespace-nowrap text-right tabular-nums text-zinc-300">{num(q.score).toFixed(0)}</td>
+                <td className="px-2 whitespace-nowrap text-muted-foreground max-w-[140px] truncate">{q.outcomeReasonLabel ?? "—"}</td>
+                <td className="px-2 whitespace-nowrap text-right tabular-nums text-foreground/90">{paid ? fmtMoney(paid) : "—"}</td>
+                <td className="px-2 whitespace-nowrap text-right tabular-nums text-foreground">{paid ? fmtMoney(margin) : "—"}</td>
+                <td className="px-2 whitespace-nowrap text-right tabular-nums text-foreground/90">{marginPct !== null ? fmtPct(marginPct) : "—"}</td>
+                <td className="px-2 whitespace-nowrap text-muted-foreground">{q.repName}</td>
+                <td className="px-2 whitespace-nowrap text-right tabular-nums text-muted-foreground">{num(q.responseTimeHours).toFixed(1)}h</td>
+                <td className="px-2 whitespace-nowrap text-muted-foreground uppercase text-[10px]">{q.source}</td>
+                <td className="px-2 whitespace-nowrap text-right tabular-nums text-foreground/90">{num(q.score).toFixed(0)}</td>
               </tr>
             );
           })}
@@ -1009,32 +1055,32 @@ function CustomerPerformancePanel({ cp }: { cp: CustomerPerformance }): JSX.Elem
   const total = cp.winCount + cp.lossCount;
   const winRate = total > 0 ? (cp.winCount / total) * 100 : 0;
   return (
-    <Card className="bg-zinc-900 border-zinc-800" data-testid="customer-performance-panel">
-      <CardHeader className="py-3 px-4"><CardTitle className="text-sm text-zinc-100">Customer Performance — {cp.customer.name}</CardTitle></CardHeader>
+    <Card className="bg-card border-border" data-testid="customer-performance-panel">
+      <CardHeader className="py-3 px-4"><CardTitle className="text-sm text-foreground">Customer Performance — {cp.customer.name}</CardTitle></CardHeader>
       <CardContent className="px-4 pb-4 grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Win/Loss</div>
-          <div className="text-2xl font-semibold text-zinc-100">{fmtPct(winRate)}</div>
-          <div className="text-xs text-zinc-400 mt-0.5">{cp.winCount} won · {cp.lossCount} lost</div>
-          <div className="mt-2 text-xs text-zinc-400">Avg quoted: <span className="text-zinc-100">{fmtMoney(cp.avgQuoted)}</span></div>
-          <div className="text-xs text-zinc-400">Avg carrier: <span className="text-zinc-100">{fmtMoney(cp.avgCarrierBuy)}</span></div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Win/Loss</div>
+          <div className="text-2xl font-semibold text-foreground">{fmtPct(winRate)}</div>
+          <div className="text-xs text-muted-foreground mt-0.5">{cp.winCount} won · {cp.lossCount} lost</div>
+          <div className="mt-2 text-xs text-muted-foreground">Avg quoted: <span className="text-foreground">{fmtMoney(cp.avgQuoted)}</span></div>
+          <div className="text-xs text-muted-foreground">Avg carrier: <span className="text-foreground">{fmtMoney(cp.avgCarrierBuy)}</span></div>
         </div>
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Top Lanes</div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Top Lanes</div>
           <ul className="space-y-1">
             {cp.topLanes.map(l => (
-              <li key={l.lane} className="text-xs text-zinc-300 flex justify-between"><span className="truncate pr-2">{l.lane}</span><span className="text-zinc-500">{l.total}</span></li>
+              <li key={l.lane} className="text-xs text-foreground/90 flex justify-between"><span className="truncate pr-2">{l.lane}</span><span className="text-muted-foreground">{l.total}</span></li>
             ))}
-            {!cp.topLanes.length && <li className="text-xs text-zinc-500">No lane data.</li>}
+            {!cp.topLanes.length && <li className="text-xs text-muted-foreground">No lane data.</li>}
           </ul>
         </div>
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Top Loss Reasons</div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Top Loss Reasons</div>
           <ul className="space-y-1">
             {cp.topLossReasons.map(r => (
-              <li key={r.reason} className="text-xs text-zinc-300 flex justify-between"><span className="truncate pr-2">{r.reason}</span><span className="text-zinc-500">{r.count}</span></li>
+              <li key={r.reason} className="text-xs text-foreground/90 flex justify-between"><span className="truncate pr-2">{r.reason}</span><span className="text-muted-foreground">{r.count}</span></li>
             ))}
-            {!cp.topLossReasons.length && <li className="text-xs text-zinc-500">No losses logged.</li>}
+            {!cp.topLossReasons.length && <li className="text-xs text-muted-foreground">No losses logged.</li>}
           </ul>
         </div>
       </CardContent>
@@ -1046,18 +1092,18 @@ function TaxonomyModule({ taxonomy, onPick }: { taxonomy: Record<string, number>
   const entries = OUTCOME_BUCKETS.map(s => ({ status: s, label: STATUS_LABELS[s], count: taxonomy[s] ?? 0 }));
   const total = entries.reduce((s, e) => s + e.count, 0);
   return (
-    <Card className="bg-zinc-900 border-zinc-800" data-testid="taxonomy-module">
-      <CardHeader className="py-3 px-4"><CardTitle className="text-sm text-zinc-100 flex items-center gap-1.5"><Trophy className="h-4 w-4 text-amber-400" /> Quote Outcome Taxonomy</CardTitle></CardHeader>
+    <Card className="bg-card border-border" data-testid="taxonomy-module">
+      <CardHeader className="py-3 px-4"><CardTitle className="text-sm text-foreground flex items-center gap-1.5"><Trophy className="h-4 w-4 text-amber-400" /> Quote Outcome Taxonomy</CardTitle></CardHeader>
       <CardContent className="px-4 pb-4 space-y-2">
         {entries.map((e, i) => {
           const pct = total > 0 ? (e.count / total) * 100 : 0;
           return (
             <button key={e.status} onClick={() => onPick(e.status)} className="w-full text-left group" data-testid={`taxonomy-${e.status}`}>
               <div className="flex items-center justify-between text-xs">
-                <span className="text-zinc-300 group-hover:text-zinc-100">{e.label}</span>
-                <span className="text-zinc-400 tabular-nums">{e.count} <span className="text-zinc-600">·</span> {fmtPct(pct)}</span>
+                <span className="text-foreground/90 group-hover:text-foreground">{e.label}</span>
+                <span className="text-muted-foreground tabular-nums">{e.count} <span className="text-muted-foreground/70">·</span> {fmtPct(pct)}</span>
               </div>
-              <div className="h-1.5 bg-zinc-800 rounded mt-0.5 overflow-hidden">
+              <div className="h-1.5 bg-muted rounded mt-0.5 overflow-hidden">
                 <div className="h-full" style={{ width: `${pct}%`, backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
               </div>
             </button>
@@ -1070,31 +1116,31 @@ function TaxonomyModule({ taxonomy, onPick }: { taxonomy: Record<string, number>
 
 function ValidityWindowModule({ vw, onPickQuote }: { vw: Snapshot["validityWindow"]; onPickQuote: (id: string) => void }): JSX.Element {
   return (
-    <Card className="bg-zinc-900 border-zinc-800" data-testid="validity-window-module">
-      <CardHeader className="py-3 px-4"><CardTitle className="text-sm text-zinc-100 flex items-center gap-1.5"><Hourglass className="h-4 w-4 text-amber-400" /> Quote Validity Window</CardTitle></CardHeader>
+    <Card className="bg-card border-border" data-testid="validity-window-module">
+      <CardHeader className="py-3 px-4"><CardTitle className="text-sm text-foreground flex items-center gap-1.5"><Hourglass className="h-4 w-4 text-amber-400" /> Quote Validity Window</CardTitle></CardHeader>
       <CardContent className="px-4 pb-4 space-y-3">
         <div className="grid grid-cols-3 gap-2 text-center">
-          <div className="rounded bg-zinc-800/60 p-2"><div className="text-lg font-semibold text-zinc-100">{vw.activeCount}</div><div className="text-[10px] text-zinc-500 uppercase">Active</div></div>
-          <div className="rounded bg-zinc-800/60 p-2"><div className="text-lg font-semibold text-zinc-100">{vw.expiredCount}</div><div className="text-[10px] text-zinc-500 uppercase">Expired</div></div>
-          <div className="rounded bg-zinc-800/60 p-2"><div className="text-lg font-semibold text-zinc-100">{vw.staleCount}</div><div className="text-[10px] text-zinc-500 uppercase">Stale</div></div>
+          <div className="rounded bg-muted p-2"><div className="text-lg font-semibold text-foreground">{vw.activeCount}</div><div className="text-[10px] text-muted-foreground uppercase">Active</div></div>
+          <div className="rounded bg-muted p-2"><div className="text-lg font-semibold text-foreground">{vw.expiredCount}</div><div className="text-[10px] text-muted-foreground uppercase">Expired</div></div>
+          <div className="rounded bg-muted p-2"><div className="text-lg font-semibold text-foreground">{vw.staleCount}</div><div className="text-[10px] text-muted-foreground uppercase">Stale</div></div>
         </div>
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Aging buckets</div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Aging buckets</div>
           <div className="flex gap-1 text-[11px]">
             {Object.entries(vw.agingBuckets).map(([k, v]) => (
-              <div key={k} className="flex-1 bg-zinc-800/60 rounded p-1.5 text-center"><div className="font-semibold text-zinc-100">{v}</div><div className="text-zinc-500">{k}</div></div>
+              <div key={k} className="flex-1 bg-muted rounded p-1.5 text-center"><div className="font-semibold text-foreground">{v}</div><div className="text-muted-foreground">{k}</div></div>
             ))}
           </div>
         </div>
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Expiring soon</div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Expiring soon</div>
           <ul className="space-y-1 max-h-[140px] overflow-y-auto">
-            {vw.expiringList.length === 0 && <li className="text-xs text-zinc-500">Nothing expiring imminently.</li>}
+            {vw.expiringList.length === 0 && <li className="text-xs text-muted-foreground">Nothing expiring imminently.</li>}
             {vw.expiringList.map(q => (
               <li key={q.id}>
-                <button onClick={() => onPickQuote(q.id)} className="w-full text-left text-xs px-2 py-1 rounded hover:bg-zinc-800 flex justify-between gap-2" data-testid={`expiring-${q.id}`}>
-                  <span className="truncate text-zinc-200">{q.lane}</span>
-                  <span className="text-zinc-500 whitespace-nowrap">{new Date(q.validThrough).toLocaleDateString()}</span>
+                <button onClick={() => onPickQuote(q.id)} className="w-full text-left text-xs px-2 py-1 rounded hover:bg-muted flex justify-between gap-2" data-testid={`expiring-${q.id}`}>
+                  <span className="truncate text-foreground">{q.lane}</span>
+                  <span className="text-muted-foreground whitespace-nowrap">{new Date(q.validThrough).toLocaleDateString()}</span>
                 </button>
               </li>
             ))}
@@ -1107,19 +1153,19 @@ function ValidityWindowModule({ vw, onPickQuote }: { vw: Snapshot["validityWindo
 
 function LaneVarianceModule({ items, onPickLane }: { items: LaneVarianceItem[]; onPickLane: (l: string) => void }): JSX.Element {
   return (
-    <Card className="bg-zinc-900 border-zinc-800" data-testid="lane-variance-module">
-      <CardHeader className="py-3 px-4"><CardTitle className="text-sm text-zinc-100">Lane Overlap / Internal Variance</CardTitle></CardHeader>
+    <Card className="bg-card border-border" data-testid="lane-variance-module">
+      <CardHeader className="py-3 px-4"><CardTitle className="text-sm text-foreground">Lane Overlap / Internal Variance</CardTitle></CardHeader>
       <CardContent className="px-4 pb-4 space-y-1 max-h-[260px] overflow-y-auto">
-        {items.length === 0 && <div className="text-xs text-zinc-500">No same-lane overlap among reps.</div>}
+        {items.length === 0 && <div className="text-xs text-muted-foreground">No same-lane overlap among reps.</div>}
         {items.map(v => (
-          <button key={v.lane} onClick={() => onPickLane(v.lane)} className="w-full text-left rounded p-2 hover:bg-zinc-800/60" data-testid={`variance-${v.lane}`}>
+          <button key={v.lane} onClick={() => onPickLane(v.lane)} className="w-full text-left rounded p-2 hover:bg-muted" data-testid={`variance-${v.lane}`}>
             <div className="flex justify-between items-center text-xs">
-              <span className="text-zinc-200 truncate pr-2">{v.lane}</span>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded border ${v.spreadPct > 18 ? "bg-red-500/15 text-red-300 border-red-500/30" : "bg-zinc-700/40 text-zinc-300 border-zinc-700"}`}>
+              <span className="text-foreground truncate pr-2">{v.lane}</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded border ${v.spreadPct > 18 ? "bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30" : "bg-muted text-foreground/90 border-border"}`}>
                 ${Math.round(v.spread).toLocaleString()} ({v.spreadPct.toFixed(0)}%)
               </span>
             </div>
-            <div className="text-[10px] text-zinc-500 mt-0.5 truncate">
+            <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
               {v.breakdown.map(b => `${b.rep}: ${fmtMoney(b.avg)}`).join(" · ")}
             </div>
           </button>
@@ -1131,19 +1177,19 @@ function LaneVarianceModule({ items, onPickLane }: { items: LaneVarianceItem[]; 
 
 function AttractivenessModule({ items }: { items: AttractivenessItem[] }): JSX.Element {
   return (
-    <Card className="bg-zinc-900 border-zinc-800" data-testid="attractiveness-module">
-      <CardHeader className="py-3 px-4"><CardTitle className="text-sm text-zinc-100">Should We Want This Freight?</CardTitle></CardHeader>
+    <Card className="bg-card border-border" data-testid="attractiveness-module">
+      <CardHeader className="py-3 px-4"><CardTitle className="text-sm text-foreground">Should We Want This Freight?</CardTitle></CardHeader>
       <CardContent className="px-4 pb-4 space-y-1 max-h-[260px] overflow-y-auto">
-        {items.length === 0 && <div className="text-xs text-zinc-500">Need more quotes per lane to score.</div>}
+        {items.length === 0 && <div className="text-xs text-muted-foreground">Need more quotes per lane to score.</div>}
         {items.slice(0, 12).map(item => (
-          <div key={item.customer + item.lane} className="rounded p-2 bg-zinc-800/30 flex items-start justify-between gap-2" data-testid={`attract-${item.customer}-${item.lane}`}>
+          <div key={item.customer + item.lane} className="rounded p-2 bg-muted/40 flex items-start justify-between gap-2" data-testid={`attract-${item.customer}-${item.lane}`}>
             <div className="min-w-0">
-              <div className="text-xs text-zinc-100 truncate">{item.customer}</div>
-              <div className="text-[10px] text-zinc-500 truncate">{item.lane}</div>
+              <div className="text-xs text-foreground truncate">{item.customer}</div>
+              <div className="text-[10px] text-muted-foreground truncate">{item.lane}</div>
             </div>
             <div className="text-right shrink-0">
               <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded border ${ATTRACT_COLORS[item.label]}`}>{item.label}</span>
-              <div className="text-[10px] text-zinc-500 mt-0.5">{fmtPct(item.winRate)} · {fmtMoney(item.avgMargin)}</div>
+              <div className="text-[10px] text-muted-foreground mt-0.5">{fmtPct(item.winRate)} · {fmtMoney(item.avgMargin)}</div>
             </div>
           </div>
         ))}
@@ -1194,14 +1240,14 @@ function ChartStrip({ charts, taxonomy, agingBuckets, onPickLane, onPickCustomer
   };
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      <Card className="bg-zinc-900 border-zinc-800">
-        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-zinc-400">Win/Loss Trend (30d)</CardTitle></CardHeader>
+      <Card className="bg-card border-border">
+        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Win/Loss Trend (30d)</CardTitle></CardHeader>
         <CardContent className="px-2 pb-2 h-[160px]">
           <ResponsiveContainer><LineChart data={charts.trend}>
-            <CartesianGrid stroke="#27272a" strokeDasharray="3 3" />
-            <XAxis dataKey="date" tick={{ fill: "#71717a", fontSize: 10 }} />
-            <YAxis tick={{ fill: "#71717a", fontSize: 10 }} />
-            <RTooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", fontSize: 11 }} />
+            <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" />
+            <XAxis dataKey="date" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} />
+            <YAxis tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} />
+            <RTooltip contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", color: "hsl(var(--popover-foreground))", fontSize: 11 }} />
             <Line
               dataKey="won" stroke="#10b981" strokeWidth={1.5}
               dot={{ r: 2, cursor: "pointer" }}
@@ -1221,86 +1267,86 @@ function ChartStrip({ charts, taxonomy, agingBuckets, onPickLane, onPickCustomer
           </LineChart></ResponsiveContainer>
         </CardContent>
       </Card>
-      <Card className="bg-zinc-900 border-zinc-800">
-        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-zinc-400">Quote Volume (30d)</CardTitle></CardHeader>
+      <Card className="bg-card border-border">
+        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Quote Volume (30d)</CardTitle></CardHeader>
         <CardContent className="px-2 pb-2 h-[160px]">
           <ResponsiveContainer><BarChart data={charts.trend} onClick={handleTrendClick("total")}>
-            <CartesianGrid stroke="#27272a" strokeDasharray="3 3" />
-            <XAxis dataKey="date" tick={{ fill: "#71717a", fontSize: 10 }} />
-            <YAxis tick={{ fill: "#71717a", fontSize: 10 }} />
-            <RTooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", fontSize: 11 }} />
+            <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" />
+            <XAxis dataKey="date" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} />
+            <YAxis tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} />
+            <RTooltip contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", color: "hsl(var(--popover-foreground))", fontSize: 11 }} />
             <Bar dataKey="total" fill="#facc15" cursor="pointer" />
           </BarChart></ResponsiveContainer>
         </CardContent>
       </Card>
-      <Card className="bg-zinc-900 border-zinc-800">
-        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-zinc-400">Win Rate by Customer</CardTitle></CardHeader>
+      <Card className="bg-card border-border">
+        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Win Rate by Customer</CardTitle></CardHeader>
         <CardContent className="px-2 pb-2 h-[160px]">
           <ResponsiveContainer><BarChart data={charts.winRateByCustomer} layout="vertical">
-            <CartesianGrid stroke="#27272a" strokeDasharray="3 3" />
-            <XAxis type="number" tick={{ fill: "#71717a", fontSize: 10 }} />
-            <YAxis type="category" dataKey="customer" tick={{ fill: "#a1a1aa", fontSize: 10 }} width={110} />
-            <RTooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", fontSize: 11 }} formatter={(v: number) => `${v.toFixed(1)}%`} />
+            <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" />
+            <XAxis type="number" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} />
+            <YAxis type="category" dataKey="customer" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} width={110} />
+            <RTooltip contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", color: "hsl(var(--popover-foreground))", fontSize: 11 }} formatter={(v: number) => `${v.toFixed(1)}%`} />
             <Bar dataKey="winRate" fill="#10b981" onClick={handleCustomerClick} cursor="pointer" />
           </BarChart></ResponsiveContainer>
         </CardContent>
       </Card>
-      <Card className="bg-zinc-900 border-zinc-800">
-        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-zinc-400">Avg Margin by Customer</CardTitle></CardHeader>
+      <Card className="bg-card border-border">
+        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Avg Margin by Customer</CardTitle></CardHeader>
         <CardContent className="px-2 pb-2 h-[160px]">
           <ResponsiveContainer><BarChart data={charts.marginByCustomer} layout="vertical">
-            <CartesianGrid stroke="#27272a" strokeDasharray="3 3" />
-            <XAxis type="number" tick={{ fill: "#71717a", fontSize: 10 }} />
-            <YAxis type="category" dataKey="customer" tick={{ fill: "#a1a1aa", fontSize: 10 }} width={110} />
-            <RTooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", fontSize: 11 }} formatter={(v: number) => fmtMoney(v)} />
+            <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" />
+            <XAxis type="number" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} />
+            <YAxis type="category" dataKey="customer" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} width={110} />
+            <RTooltip contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", color: "hsl(var(--popover-foreground))", fontSize: 11 }} formatter={(v: number) => fmtMoney(v)} />
             <Bar dataKey="avgMargin" fill="#facc15" onClick={handleCustomerClick} cursor="pointer" />
           </BarChart></ResponsiveContainer>
         </CardContent>
       </Card>
-      <Card className="bg-zinc-900 border-zinc-800">
-        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-zinc-400">Top Lanes</CardTitle></CardHeader>
+      <Card className="bg-card border-border">
+        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Top Lanes</CardTitle></CardHeader>
         <CardContent className="px-2 pb-2 h-[160px]">
           <ResponsiveContainer><BarChart data={charts.topLanes} layout="vertical">
-            <CartesianGrid stroke="#27272a" strokeDasharray="3 3" />
-            <XAxis type="number" tick={{ fill: "#71717a", fontSize: 10 }} />
-            <YAxis type="category" dataKey="lane" tick={{ fill: "#a1a1aa", fontSize: 9 }} width={150} />
-            <RTooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", fontSize: 11 }} />
+            <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" />
+            <XAxis type="number" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} />
+            <YAxis type="category" dataKey="lane" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 9 }} width={150} />
+            <RTooltip contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", color: "hsl(var(--popover-foreground))", fontSize: 11 }} />
             <Bar dataKey="total" fill="#3b82f6" onClick={handleLaneClick} cursor="pointer" />
           </BarChart></ResponsiveContainer>
         </CardContent>
       </Card>
-      <Card className="bg-zinc-900 border-zinc-800">
-        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-zinc-400">High-Volume / Low-Win Lanes</CardTitle></CardHeader>
+      <Card className="bg-card border-border">
+        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">High-Volume / Low-Win Lanes</CardTitle></CardHeader>
         <CardContent className="px-2 pb-2 h-[160px]">
           <ResponsiveContainer><BarChart data={charts.highVolLowWin} layout="vertical">
-            <CartesianGrid stroke="#27272a" strokeDasharray="3 3" />
-            <XAxis type="number" tick={{ fill: "#71717a", fontSize: 10 }} />
-            <YAxis type="category" dataKey="lane" tick={{ fill: "#a1a1aa", fontSize: 9 }} width={150} />
-            <RTooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", fontSize: 11 }} />
+            <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" />
+            <XAxis type="number" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} />
+            <YAxis type="category" dataKey="lane" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 9 }} width={150} />
+            <RTooltip contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", color: "hsl(var(--popover-foreground))", fontSize: 11 }} />
             <Bar dataKey="total" fill="#ef4444" onClick={handleLaneClick} cursor="pointer" />
           </BarChart></ResponsiveContainer>
         </CardContent>
       </Card>
-      <Card className="bg-zinc-900 border-zinc-800" data-testid="chart-outcome-distribution">
-        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-zinc-400">Outcome Distribution</CardTitle></CardHeader>
+      <Card className="bg-card border-border" data-testid="chart-outcome-distribution">
+        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Outcome Distribution</CardTitle></CardHeader>
         <CardContent className="px-2 pb-2 h-[160px]">
           <ResponsiveContainer><BarChart data={outcomeData}>
-            <CartesianGrid stroke="#27272a" strokeDasharray="3 3" />
-            <XAxis dataKey="bucket" tick={{ fill: "#71717a", fontSize: 9 }} angle={-30} textAnchor="end" height={50} />
-            <YAxis tick={{ fill: "#71717a", fontSize: 10 }} />
-            <RTooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", fontSize: 11 }} formatter={(v: number) => `${v} quotes`} />
+            <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" />
+            <XAxis dataKey="bucket" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 9 }} angle={-30} textAnchor="end" height={50} />
+            <YAxis tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} />
+            <RTooltip contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", color: "hsl(var(--popover-foreground))", fontSize: 11 }} formatter={(v: number) => `${v} quotes`} />
             <Bar dataKey="count" fill="#a855f7" onClick={handleOutcomeClick} cursor="pointer" />
           </BarChart></ResponsiveContainer>
         </CardContent>
       </Card>
-      <Card className="bg-zinc-900 border-zinc-800" data-testid="chart-quote-aging">
-        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-zinc-400">Quote Aging</CardTitle></CardHeader>
+      <Card className="bg-card border-border" data-testid="chart-quote-aging">
+        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Quote Aging</CardTitle></CardHeader>
         <CardContent className="px-2 pb-2 h-[160px]">
           <ResponsiveContainer><BarChart data={agingData}>
-            <CartesianGrid stroke="#27272a" strokeDasharray="3 3" />
-            <XAxis dataKey="bucket" tick={{ fill: "#a1a1aa", fontSize: 10 }} />
-            <YAxis tick={{ fill: "#71717a", fontSize: 10 }} />
-            <RTooltip contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", fontSize: 11 }} />
+            <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" />
+            <XAxis dataKey="bucket" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} />
+            <YAxis tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} />
+            <RTooltip contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", color: "hsl(var(--popover-foreground))", fontSize: 11 }} />
             <Bar dataKey="count" fill="#0ea5e9" cursor="pointer" onClick={handleAgingClick} />
           </BarChart></ResponsiveContainer>
         </CardContent>
@@ -1332,26 +1378,26 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
 
   return (
     <Sheet open={!!quoteId} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <SheetContent side="right" className="w-full sm:max-w-[520px] bg-zinc-950 border-l border-zinc-800 text-zinc-100 overflow-y-auto" data-testid="quote-detail-drawer">
+      <SheetContent side="right" className="w-full sm:max-w-[520px] bg-background border-l border-border text-foreground overflow-y-auto" data-testid="quote-detail-drawer">
         <SheetHeader className="flex-row items-center justify-between space-y-0">
-          <SheetTitle className="text-zinc-100">Quote Detail</SheetTitle>
+          <SheetTitle className="text-foreground">Quote Detail</SheetTitle>
           {!detailQuery.isLoading && data && !editMode && (
-            <Button size="sm" variant="outline" className="border-zinc-700 hover:bg-zinc-800 mr-8" onClick={() => { setEditMode(true); setDraft({}); }} data-testid="button-edit-quote">Edit</Button>
+            <Button size="sm" variant="outline" className="border-border hover:bg-muted mr-8" onClick={() => { setEditMode(true); setDraft({}); }} data-testid="button-edit-quote">Edit</Button>
           )}
         </SheetHeader>
         {detailQuery.isLoading || !data ? (
-          <div className="space-y-3 mt-4"><Skeleton className="h-32 bg-zinc-900" /><Skeleton className="h-32 bg-zinc-900" /></div>
+          <div className="space-y-3 mt-4"><Skeleton className="h-32 bg-card" /><Skeleton className="h-32 bg-card" /></div>
         ) : (
           <div className="mt-4 space-y-4 text-sm">
-            <div className="rounded bg-zinc-900 border border-zinc-800 p-3">
-              <div className="text-[10px] uppercase tracking-wider text-zinc-500">Lane</div>
-              <div className="text-base font-semibold text-zinc-100 mt-0.5">{data.opp.originCity}, {data.opp.originState} → {data.opp.destCity}, {data.opp.destState}</div>
-              <div className="text-xs text-zinc-400 mt-1">{data.opp.equipment} · Customer: {data.customer?.name ?? "—"} · Rep: {data.rep?.name ?? "—"}</div>
-              <div className="mt-2 flex items-center gap-2 flex-wrap"><StatusPill status={data.opp.outcomeStatus} /><span className="text-xs text-zinc-400">{data.reason?.label ?? ""}</span>
+            <div className="rounded bg-card border border-border p-3">
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Lane</div>
+              <div className="text-base font-semibold text-foreground mt-0.5">{data.opp.originCity}, {data.opp.originState} → {data.opp.destCity}, {data.opp.destState}</div>
+              <div className="text-xs text-muted-foreground mt-1">{data.opp.equipment} · Customer: {data.customer?.name ?? "—"} · Rep: {data.rep?.name ?? "—"}</div>
+              <div className="mt-2 flex items-center gap-2 flex-wrap"><StatusPill status={data.opp.outcomeStatus} /><span className="text-xs text-muted-foreground">{data.reason?.label ?? ""}</span>
                 {data.lwqLaneId && (
                   <a
                     href={`/lanes/work-queue?laneId=${data.lwqLaneId}`}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] uppercase tracking-wider border border-blue-700 text-blue-300 bg-blue-950/30 hover:bg-blue-950/60"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] uppercase tracking-wider border border-blue-500/40 text-blue-700 dark:text-blue-300 bg-blue-500/10 hover:bg-blue-500/20"
                     data-testid="badge-sourcing-in-lwq"
                     title="Open the Lane Work Queue lane created from this quote"
                   >
@@ -1382,13 +1428,13 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
               <Stat label="Response time" value={fmtHours(num(data.opp.responseTimeHours))} />
               <Stat label="Valid through" value={data.opp.validThrough ? new Date(data.opp.validThrough).toLocaleDateString() : "—"} />
             </div>
-            <div className="rounded bg-zinc-900 border border-zinc-800 p-3">
-              <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Source</div>
-              <div className="text-xs text-zinc-300">{data.opp.source.toUpperCase()} <span className="text-zinc-500 ml-2">{data.opp.sourceReference}</span></div>
-              <div className="text-xs text-zinc-400 mt-1">Carrier: {data.carrier?.name ?? "—"}</div>
+            <div className="rounded bg-card border border-border p-3">
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Source</div>
+              <div className="text-xs text-foreground/90">{data.opp.source.toUpperCase()} <span className="text-muted-foreground ml-2">{data.opp.sourceReference}</span></div>
+              <div className="text-xs text-muted-foreground mt-1">Carrier: {data.carrier?.name ?? "—"}</div>
             </div>
-            <div className="rounded bg-zinc-900 border border-zinc-800 p-3">
-              <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-2">Timeline & revisions</div>
+            <div className="rounded bg-card border border-border p-3">
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Timeline & revisions</div>
               <ol className="space-y-2">
                 {data.events.map(e => {
                   const amt = e.payload && typeof e.payload === "object" && "quotedAmount" in e.payload ? String((e.payload as Record<string, unknown>).quotedAmount) : null;
@@ -1396,9 +1442,9 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
                     <li key={e.id} className="flex items-start gap-2 text-xs">
                       <div className="w-1.5 h-1.5 rounded-full bg-amber-400 mt-1.5 shrink-0" />
                       <div className="flex-1">
-                        <div className="text-zinc-200 capitalize">{e.eventType.replace(/_/g, " ")} <span className="text-zinc-500 font-normal">· {e.actor ?? "system"}</span></div>
-                        <div className="text-zinc-500 text-[10px]">{new Date(e.occurredAt).toLocaleString()}</div>
-                        {amt && <div className="text-zinc-400 text-[10px]">Amount: {fmtMoney(amt)}</div>}
+                        <div className="text-foreground capitalize">{e.eventType.replace(/_/g, " ")} <span className="text-muted-foreground font-normal">· {e.actor ?? "system"}</span></div>
+                        <div className="text-muted-foreground text-[10px]">{new Date(e.occurredAt).toLocaleString()}</div>
+                        {amt && <div className="text-muted-foreground text-[10px]">Amount: {fmtMoney(amt)}</div>}
                       </div>
                     </li>
                   );
@@ -1406,9 +1452,9 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
               </ol>
             </div>
             {data.opp.notes && (
-              <div className="rounded bg-zinc-900 border border-zinc-800 p-3">
-                <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">Notes</div>
-                <div className="text-xs text-zinc-300 whitespace-pre-wrap">{data.opp.notes}</div>
+              <div className="rounded bg-card border border-border p-3">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Notes</div>
+                <div className="text-xs text-foreground/90 whitespace-pre-wrap">{data.opp.notes}</div>
               </div>
             )}
             {data.opp.outcomeStatus === "pending" && data.customer && (
@@ -1437,13 +1483,13 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
 function RelatedSection({ title, items, onPick, testId }: { title: string; items: Quote[]; onPick: (id: string) => void; testId: string }): JSX.Element | null {
   if (items.length === 0) return null;
   return (
-    <div className="rounded bg-zinc-900 border border-zinc-800 p-3" data-testid={testId}>
-      <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-2">{title} <span className="text-zinc-600">({items.length})</span></div>
+    <div className="rounded bg-card border border-border p-3" data-testid={testId}>
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">{title} <span className="text-muted-foreground/70">({items.length})</span></div>
       <ul className="space-y-1">
         {items.slice(0, 8).map(r => (
           <li key={r.id}>
-            <button onClick={() => onPick(r.id)} className="w-full text-left text-xs px-2 py-1 rounded hover:bg-zinc-800 flex items-center justify-between gap-2" data-testid={`${testId}-item-${r.id}`}>
-              <span className="text-zinc-200 truncate">
+            <button onClick={() => onPick(r.id)} className="w-full text-left text-xs px-2 py-1 rounded hover:bg-muted flex items-center justify-between gap-2" data-testid={`${testId}-item-${r.id}`}>
+              <span className="text-foreground truncate">
                 {new Date(r.requestDate).toLocaleDateString()} · {r.originCity}→{r.destCity} · {fmtMoney(r.quotedAmount)}
               </span>
               <StatusPill status={r.outcomeStatus} />
@@ -1457,9 +1503,9 @@ function RelatedSection({ title, items, onPick, testId }: { title: string; items
 
 function Stat({ label, value }: { label: string; value: string }): JSX.Element {
   return (
-    <div className="rounded bg-zinc-900 border border-zinc-800 p-3">
-      <div className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</div>
-      <div className="text-lg font-semibold text-zinc-100">{value}</div>
+    <div className="rounded bg-card border border-border p-3">
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="text-lg font-semibold text-foreground">{value}</div>
     </div>
   );
 }
@@ -1486,26 +1532,26 @@ function InlineOutcome({ quote, reasons, onChange, pending }: {
           <StatusPill status={quote.outcomeStatus} />
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-[220px] p-2 bg-zinc-900 border-zinc-700" align="start">
-        <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1.5 px-1">Set outcome</div>
+      <PopoverContent className="w-[220px] p-2 bg-card border-border" align="start">
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 px-1">Set outcome</div>
         <div className="space-y-0.5">
           {Object.keys(STATUS_LABELS).map(s => (
             <button key={s}
               onClick={() => { onChange(quote.id, s, null); setOpen(false); }}
-              className={`w-full text-left px-2 py-1 rounded text-xs hover:bg-zinc-800 ${s === quote.outcomeStatus ? "bg-zinc-800/60" : ""}`}
+              className={`w-full text-left px-2 py-1 rounded text-xs hover:bg-muted ${s === quote.outcomeStatus ? "bg-muted" : ""}`}
               data-testid={`inline-outcome-option-${quote.id}-${s}`}>
               <StatusPill status={s} />
             </button>
           ))}
         </div>
         {eligibleReasons.length > 0 && (
-          <div className="mt-2 pt-2 border-t border-zinc-800">
-            <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 px-1">Reason</div>
+          <div className="mt-2 pt-2 border-t border-border">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 px-1">Reason</div>
             <div className="space-y-0.5 max-h-[140px] overflow-y-auto">
               {eligibleReasons.map(r => (
                 <button key={r.id}
                   onClick={() => { onChange(quote.id, quote.outcomeStatus, r.id); setOpen(false); }}
-                  className={`w-full text-left px-2 py-1 rounded text-xs text-zinc-300 hover:bg-zinc-800 ${quote.outcomeReasonId === r.id ? "bg-zinc-800/60 text-zinc-100" : ""}`}
+                  className={`w-full text-left px-2 py-1 rounded text-xs text-foreground/90 hover:bg-muted ${quote.outcomeReasonId === r.id ? "bg-muted text-foreground" : ""}`}
                   data-testid={`inline-reason-option-${quote.id}-${r.id}`}>{r.label}</button>
               ))}
             </div>
@@ -1533,18 +1579,18 @@ function QuoteEditForm({ quote, customers, reps, carriers, reasons, draft, onCha
   const validThroughInput = validThroughDraft ? new Date(validThroughDraft).toISOString().slice(0, 10) : "";
 
   return (
-    <div className="rounded bg-zinc-900 border border-amber-500/30 p-3 space-y-3" data-testid="quote-edit-form">
+    <div className="rounded bg-card border border-amber-500/30 p-3 space-y-3" data-testid="quote-edit-form">
       <div className="text-[10px] uppercase tracking-wider text-amber-400">Edit quote</div>
       <div className="grid grid-cols-2 gap-2">
         <FormCol label="Customer">
           <Select value={get("customerId", quote.customerId)} onValueChange={(v) => set("customerId", v)}>
-            <SelectTrigger className="h-8 bg-zinc-950 border-zinc-700 text-xs" data-testid="edit-customer"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-8 bg-background border-border text-xs" data-testid="edit-customer"><SelectValue /></SelectTrigger>
             <SelectContent>{customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
           </Select>
         </FormCol>
         <FormCol label="Rep">
           <Select value={get("repId", quote.repId ?? "_none") as string} onValueChange={(v) => set("repId", v === "_none" ? null : v)}>
-            <SelectTrigger className="h-8 bg-zinc-950 border-zinc-700 text-xs" data-testid="edit-rep"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-8 bg-background border-border text-xs" data-testid="edit-rep"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="_none">— Unassigned —</SelectItem>
               {reps.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
@@ -1552,38 +1598,38 @@ function QuoteEditForm({ quote, customers, reps, carriers, reasons, draft, onCha
           </Select>
         </FormCol>
         <FormCol label="Origin city">
-          <Input className="h-8 bg-zinc-950 border-zinc-700 text-xs" value={get("originCity", quote.originCity)} onChange={(e) => set("originCity", e.target.value)} data-testid="edit-origin-city" />
+          <Input className="h-8 bg-background border-border text-xs" value={get("originCity", quote.originCity)} onChange={(e) => set("originCity", e.target.value)} data-testid="edit-origin-city" />
         </FormCol>
         <FormCol label="Origin ST">
-          <Input className="h-8 bg-zinc-950 border-zinc-700 text-xs" value={get("originState", quote.originState)} onChange={(e) => set("originState", e.target.value.toUpperCase())} maxLength={2} data-testid="edit-origin-state" />
+          <Input className="h-8 bg-background border-border text-xs" value={get("originState", quote.originState)} onChange={(e) => set("originState", e.target.value.toUpperCase())} maxLength={2} data-testid="edit-origin-state" />
         </FormCol>
         <FormCol label="Dest city">
-          <Input className="h-8 bg-zinc-950 border-zinc-700 text-xs" value={get("destCity", quote.destCity)} onChange={(e) => set("destCity", e.target.value)} data-testid="edit-dest-city" />
+          <Input className="h-8 bg-background border-border text-xs" value={get("destCity", quote.destCity)} onChange={(e) => set("destCity", e.target.value)} data-testid="edit-dest-city" />
         </FormCol>
         <FormCol label="Dest ST">
-          <Input className="h-8 bg-zinc-950 border-zinc-700 text-xs" value={get("destState", quote.destState)} onChange={(e) => set("destState", e.target.value.toUpperCase())} maxLength={2} data-testid="edit-dest-state" />
+          <Input className="h-8 bg-background border-border text-xs" value={get("destState", quote.destState)} onChange={(e) => set("destState", e.target.value.toUpperCase())} maxLength={2} data-testid="edit-dest-state" />
         </FormCol>
         <FormCol label="Equipment">
           <Select value={get("equipment", quote.equipment)} onValueChange={(v) => set("equipment", v)}>
-            <SelectTrigger className="h-8 bg-zinc-950 border-zinc-700 text-xs" data-testid="edit-equipment"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-8 bg-background border-border text-xs" data-testid="edit-equipment"><SelectValue /></SelectTrigger>
             <SelectContent>{EQUIPMENTS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}</SelectContent>
           </Select>
         </FormCol>
         <FormCol label="Source">
           <Select value={get("source", quote.source)} onValueChange={(v) => set("source", v)}>
-            <SelectTrigger className="h-8 bg-zinc-950 border-zinc-700 text-xs" data-testid="edit-source"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-8 bg-background border-border text-xs" data-testid="edit-source"><SelectValue /></SelectTrigger>
             <SelectContent>{SOURCES.map(s => <SelectItem key={s} value={s}>{s.toUpperCase()}</SelectItem>)}</SelectContent>
           </Select>
         </FormCol>
         <FormCol label="Quoted $">
-          <Input type="number" step="0.01" className="h-8 bg-zinc-950 border-zinc-700 text-xs" value={String(get("quotedAmount", quote.quotedAmount ?? ""))} onChange={(e) => set("quotedAmount", e.target.value)} data-testid="edit-quoted-amount" />
+          <Input type="number" step="0.01" className="h-8 bg-background border-border text-xs" value={String(get("quotedAmount", quote.quotedAmount ?? ""))} onChange={(e) => set("quotedAmount", e.target.value)} data-testid="edit-quoted-amount" />
         </FormCol>
         <FormCol label="Carrier paid $">
-          <Input type="number" step="0.01" className="h-8 bg-zinc-950 border-zinc-700 text-xs" value={String(get("carrierPaid", quote.carrierPaid ?? ""))} onChange={(e) => set("carrierPaid", e.target.value)} data-testid="edit-carrier-paid" />
+          <Input type="number" step="0.01" className="h-8 bg-background border-border text-xs" value={String(get("carrierPaid", quote.carrierPaid ?? ""))} onChange={(e) => set("carrierPaid", e.target.value)} data-testid="edit-carrier-paid" />
         </FormCol>
         <FormCol label="Carrier">
           <Select value={get("carrierId", quote.carrierId ?? "_none") as string} onValueChange={(v) => set("carrierId", v === "_none" ? null : v)}>
-            <SelectTrigger className="h-8 bg-zinc-950 border-zinc-700 text-xs" data-testid="edit-carrier"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-8 bg-background border-border text-xs" data-testid="edit-carrier"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="_none">— None —</SelectItem>
               {carriers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
@@ -1591,17 +1637,17 @@ function QuoteEditForm({ quote, customers, reps, carriers, reasons, draft, onCha
           </Select>
         </FormCol>
         <FormCol label="Valid through">
-          <Input type="date" className="h-8 bg-zinc-950 border-zinc-700 text-xs" value={validThroughInput} onChange={(e) => set("validThrough", e.target.value ? new Date(e.target.value).toISOString() : null)} data-testid="edit-valid-through" />
+          <Input type="date" className="h-8 bg-background border-border text-xs" value={validThroughInput} onChange={(e) => set("validThrough", e.target.value ? new Date(e.target.value).toISOString() : null)} data-testid="edit-valid-through" />
         </FormCol>
         <FormCol label="Outcome">
           <Select value={status as string} onValueChange={(v) => set("outcomeStatus", v)}>
-            <SelectTrigger className="h-8 bg-zinc-950 border-zinc-700 text-xs" data-testid="edit-outcome"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-8 bg-background border-border text-xs" data-testid="edit-outcome"><SelectValue /></SelectTrigger>
             <SelectContent>{Object.keys(STATUS_LABELS).map(s => <SelectItem key={s} value={s}>{STATUS_LABELS[s]}</SelectItem>)}</SelectContent>
           </Select>
         </FormCol>
         <FormCol label="Reason">
           <Select value={(get("outcomeReasonId", quote.outcomeReasonId ?? "_none") as string) || "_none"} onValueChange={(v) => set("outcomeReasonId", v === "_none" ? null : v)}>
-            <SelectTrigger className="h-8 bg-zinc-950 border-zinc-700 text-xs" data-testid="edit-reason"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-8 bg-background border-border text-xs" data-testid="edit-reason"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="_none">— None —</SelectItem>
               {eligibleReasons.map(r => <SelectItem key={r.id} value={r.id}>{r.label}</SelectItem>)}
@@ -1610,8 +1656,8 @@ function QuoteEditForm({ quote, customers, reps, carriers, reasons, draft, onCha
         </FormCol>
       </div>
       <div>
-        <Label className="text-[10px] uppercase tracking-wider text-zinc-500">Notes</Label>
-        <textarea className="w-full mt-0.5 rounded bg-zinc-950 border border-zinc-700 p-2 text-xs text-zinc-100 min-h-[60px]"
+        <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Notes</Label>
+        <textarea className="w-full mt-0.5 rounded bg-background border border-border p-2 text-xs text-foreground min-h-[60px]"
           value={String(get("notes", quote.notes ?? ""))} onChange={(e) => set("notes", e.target.value)} data-testid="edit-notes" />
       </div>
       <div className="flex justify-end gap-2">
@@ -1628,7 +1674,7 @@ function QuoteEditForm({ quote, customers, reps, carriers, reasons, draft, onCha
 function FormCol({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
   return (
     <div className="flex flex-col gap-0.5">
-      <Label className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</Label>
+      <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</Label>
       {children}
     </div>
   );
@@ -1681,18 +1727,18 @@ function NewQuoteDialog({ open, onOpenChange, customers, reps, onSubmit, isSubmi
   };
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-zinc-900 border-zinc-700 text-zinc-100 max-w-[640px]" data-testid="new-quote-dialog">
+      <DialogContent className="bg-card border-border text-foreground max-w-[640px]" data-testid="new-quote-dialog">
         <DialogHeader><DialogTitle>Log a new quote request</DialogTitle></DialogHeader>
         <div className="grid grid-cols-2 gap-3 mt-2">
           <FormCol label="Customer *">
             <Select value={form.customerId} onValueChange={(v) => upd("customerId", v)}>
-              <SelectTrigger className="h-9 bg-zinc-950 border-zinc-700" data-testid="new-customer"><SelectValue placeholder="Select customer" /></SelectTrigger>
+              <SelectTrigger className="h-9 bg-background border-border" data-testid="new-customer"><SelectValue placeholder="Select customer" /></SelectTrigger>
               <SelectContent>{customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
             </Select>
           </FormCol>
           <FormCol label="Rep">
             <Select value={form.repId} onValueChange={(v) => upd("repId", v)}>
-              <SelectTrigger className="h-9 bg-zinc-950 border-zinc-700" data-testid="new-rep"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-9 bg-background border-border" data-testid="new-rep"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="_none">— Unassigned —</SelectItem>
                 {reps.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
@@ -1700,42 +1746,42 @@ function NewQuoteDialog({ open, onOpenChange, customers, reps, onSubmit, isSubmi
             </Select>
           </FormCol>
           <FormCol label="Origin city *">
-            <Input className="h-9 bg-zinc-950 border-zinc-700" value={form.originCity} onChange={(e) => upd("originCity", e.target.value)} data-testid="new-origin-city" />
+            <Input className="h-9 bg-background border-border" value={form.originCity} onChange={(e) => upd("originCity", e.target.value)} data-testid="new-origin-city" />
           </FormCol>
           <FormCol label="Origin state *">
-            <Input className="h-9 bg-zinc-950 border-zinc-700" value={form.originState} onChange={(e) => upd("originState", e.target.value.toUpperCase())} maxLength={2} data-testid="new-origin-state" />
+            <Input className="h-9 bg-background border-border" value={form.originState} onChange={(e) => upd("originState", e.target.value.toUpperCase())} maxLength={2} data-testid="new-origin-state" />
           </FormCol>
           <FormCol label="Destination city *">
-            <Input className="h-9 bg-zinc-950 border-zinc-700" value={form.destCity} onChange={(e) => upd("destCity", e.target.value)} data-testid="new-dest-city" />
+            <Input className="h-9 bg-background border-border" value={form.destCity} onChange={(e) => upd("destCity", e.target.value)} data-testid="new-dest-city" />
           </FormCol>
           <FormCol label="Destination state *">
-            <Input className="h-9 bg-zinc-950 border-zinc-700" value={form.destState} onChange={(e) => upd("destState", e.target.value.toUpperCase())} maxLength={2} data-testid="new-dest-state" />
+            <Input className="h-9 bg-background border-border" value={form.destState} onChange={(e) => upd("destState", e.target.value.toUpperCase())} maxLength={2} data-testid="new-dest-state" />
           </FormCol>
           <FormCol label="Equipment">
             <Select value={form.equipment} onValueChange={(v) => upd("equipment", v)}>
-              <SelectTrigger className="h-9 bg-zinc-950 border-zinc-700" data-testid="new-equipment"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-9 bg-background border-border" data-testid="new-equipment"><SelectValue /></SelectTrigger>
               <SelectContent>{EQUIPMENTS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}</SelectContent>
             </Select>
           </FormCol>
           <FormCol label="Quoted amount $">
-            <Input type="number" step="0.01" className="h-9 bg-zinc-950 border-zinc-700" value={form.quotedAmount} onChange={(e) => upd("quotedAmount", e.target.value)} data-testid="new-quoted-amount" />
+            <Input type="number" step="0.01" className="h-9 bg-background border-border" value={form.quotedAmount} onChange={(e) => upd("quotedAmount", e.target.value)} data-testid="new-quoted-amount" />
           </FormCol>
           <FormCol label="Valid through">
-            <Input type="date" className="h-9 bg-zinc-950 border-zinc-700" value={form.validThrough} onChange={(e) => upd("validThrough", e.target.value)} data-testid="new-valid-through" />
+            <Input type="date" className="h-9 bg-background border-border" value={form.validThrough} onChange={(e) => upd("validThrough", e.target.value)} data-testid="new-valid-through" />
           </FormCol>
           <FormCol label="Source">
             <Select value={form.source} onValueChange={(v) => upd("source", v)}>
-              <SelectTrigger className="h-9 bg-zinc-950 border-zinc-700" data-testid="new-source"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-9 bg-background border-border" data-testid="new-source"><SelectValue /></SelectTrigger>
               <SelectContent>{SOURCES.map(s => <SelectItem key={s} value={s}>{s.toUpperCase()}</SelectItem>)}</SelectContent>
             </Select>
           </FormCol>
           <FormCol label="Source reference">
-            <Input className="h-9 bg-zinc-950 border-zinc-700" placeholder="e.g. EMAIL-1234" value={form.sourceReference} onChange={(e) => upd("sourceReference", e.target.value)} data-testid="new-source-ref" />
+            <Input className="h-9 bg-background border-border" placeholder="e.g. EMAIL-1234" value={form.sourceReference} onChange={(e) => upd("sourceReference", e.target.value)} data-testid="new-source-ref" />
           </FormCol>
         </div>
         <div>
-          <Label className="text-[10px] uppercase tracking-wider text-zinc-500">Notes</Label>
-          <textarea className="w-full mt-0.5 rounded bg-zinc-950 border border-zinc-700 p-2 text-xs text-zinc-100 min-h-[60px]"
+          <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Notes</Label>
+          <textarea className="w-full mt-0.5 rounded bg-background border border-border p-2 text-xs text-foreground min-h-[60px]"
             value={form.notes} onChange={(e) => upd("notes", e.target.value)} data-testid="new-notes" />
         </div>
         {form.customerId && form.originCity && form.originState && form.destCity && form.destState && form.equipment ? (
@@ -1751,7 +1797,7 @@ function NewQuoteDialog({ open, onOpenChange, customers, reps, onSubmit, isSubmi
             onUsePrice={(p) => upd("quotedAmount", String(Math.round(p)))}
           />
         ) : (
-          <div className="rounded border border-dashed border-zinc-800 p-3 text-xs text-zinc-500" data-testid="pricing-intel-prompt">
+          <div className="rounded border border-dashed border-border p-3 text-xs text-muted-foreground" data-testid="pricing-intel-prompt">
             Pick a customer and lane to see pricing intelligence and a suggested price.
           </div>
         )}
@@ -1783,13 +1829,13 @@ function WinOutcomeDialog({ state, onCancel, onConfirm, isSaving }: {
   const isLowMargin = state?.status === "won_low_margin";
   return (
     <Dialog open={!!state} onOpenChange={(o) => { if (!o) onCancel(); }}>
-      <DialogContent className="bg-zinc-900 border-zinc-700 text-zinc-100 sm:max-w-[440px]" data-testid="win-outcome-dialog">
+      <DialogContent className="bg-card border-border text-foreground sm:max-w-[440px]" data-testid="win-outcome-dialog">
         <DialogHeader>
           <DialogTitle>Mark quote as {isLowMargin ? "won (low margin)" : "won"}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-3 text-sm text-zinc-300">
+        <div className="space-y-3 text-sm text-foreground/90">
           <p>Confirm this quote was awarded. We can hand it off to the Lane Work Queue so a rep can start sourcing carriers.</p>
-          <label className="flex items-start gap-2 rounded border border-zinc-700 bg-zinc-950/60 p-3 cursor-pointer">
+          <label className="flex items-start gap-2 rounded border border-border bg-background/60 p-3 cursor-pointer">
             <Checkbox
               id="win-create-lwq"
               checked={createLane}
@@ -1797,8 +1843,8 @@ function WinOutcomeDialog({ state, onCancel, onConfirm, isSaving }: {
               data-testid="checkbox-create-lwq-lane"
             />
             <span className="flex-1">
-              <span className="block text-zinc-100 font-medium">Create LWQ lane</span>
-              <span className="block text-xs text-zinc-500 mt-0.5">Adds a Lane Work Queue lane for this origin → destination so procurement can begin outreach.</span>
+              <span className="block text-foreground font-medium">Create LWQ lane</span>
+              <span className="block text-xs text-muted-foreground mt-0.5">Adds a Lane Work Queue lane for this origin → destination so procurement can begin outreach.</span>
             </span>
           </label>
         </div>
