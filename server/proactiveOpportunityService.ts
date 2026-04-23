@@ -372,6 +372,7 @@ export async function rankCarriersForOpportunity(
     carriersContactedCount: 0,
     resolvedAt: null,
     isManual: false,
+    sourceQuoteId: null,
     dropTrailerShipper: false,
     dropTrailerReceiver: false,
     createdAt: opportunity.generatedAt,

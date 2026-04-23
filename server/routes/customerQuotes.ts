@@ -128,7 +128,11 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     requestDate: z.string().nullable().optional(),
   });
 
-  const updateQuoteSchema = createQuoteSchema.partial();
+  const updateQuoteSchema = createQuoteSchema.partial().extend({
+    // Task #477 — UI win-outcome dialog passes this when the rep unchecks
+    // "Create LWQ lane" before confirming the win.
+    skipLwqHandoff: z.boolean().optional(),
+  });
 
   function actorName(u: { name?: string | null; username?: string | null; id: string } | null): string {
     if (!u) return "system";

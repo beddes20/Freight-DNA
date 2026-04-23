@@ -4,11 +4,13 @@ import { logQuoteTouchpointFromEvent } from "./quoteTouchpoints";
 import {
   quoteCustomers, quoteReps, quoteCarriers, quoteLaneGroups, quoteOutcomeReasons,
   quoteOpportunities, quoteEvents, quoteSavedViews,
+  recurringLanes, companies,
   type QuoteOpportunity, type QuoteOutcomeStatus, type QuoteCustomer, type QuoteRep,
   type QuoteCarrier, type QuoteLaneGroup, type QuoteOutcomeReason, type QuoteSavedView,
 } from "@shared/schema";
 import { getStaleQuoteFollowUps } from "./staleQuoteFollowup";
 import { getActivePatternAlertsForOrg } from "./quotePatternShift";
+import { normalizeEquipmentType } from "@shared/laneFormatters";
 
 export type QuoteFilters = {
   customerId?: string;
@@ -746,6 +748,8 @@ export type QuoteDetail = {
   relatedSameLane: QuoteOpportunity[];
   relatedSameCustomer: QuoteOpportunity[];
   relatedSameLaneGroup: QuoteOpportunity[];
+  // Task #477 — populated when this quote auto-created a Lane Work Queue lane.
+  lwqLaneId: string | null;
 };
 
 export async function getQuoteDetail(orgId: string, quoteId: string): Promise<QuoteDetail | null> {
@@ -773,11 +777,13 @@ export async function getQuoteDetail(orgId: string, quoteId: string): Promise<Qu
       eq(quoteOpportunities.laneGroupId, opp.laneGroupId),
     )).orderBy(desc(quoteOpportunities.requestDate)).limit(20) : Promise.resolve([]),
   ]);
+  const lwqLane = await getLwqLaneForQuote(orgId, quoteId);
   return {
     opp, events, customer, rep, carrier, reason,
     relatedSameLane: sameLane.filter(r => r.id !== quoteId),
     relatedSameCustomer: sameCustomer.filter(r => r.id !== quoteId),
     relatedSameLaneGroup: sameLaneGroup.filter(r => r.id !== quoteId && r.originCity !== opp.originCity),
+    lwqLaneId: lwqLane?.laneId ?? null,
   };
 }
 
@@ -1200,7 +1206,75 @@ export type CreateQuoteInput = {
   requestDate?: string | null;
 };
 
-export type UpdateQuoteInput = Partial<CreateQuoteInput>;
+export type UpdateQuoteInput = Partial<CreateQuoteInput> & {
+  // Task #477 — UI may pass `skipLwqHandoff: true` from the win-outcome dialog
+  // to suppress automatic Lane Work Queue lane creation when marking won.
+  skipLwqHandoff?: boolean;
+};
+
+// Task #477 — Look up the LWQ lane (if any) auto-created for this quote.
+export async function getLwqLaneForQuote(orgId: string, quoteId: string): Promise<{ laneId: string } | null> {
+  const [row] = await db.select({ id: recurringLanes.id }).from(recurringLanes)
+    .where(and(eq(recurringLanes.orgId, orgId), eq(recurringLanes.sourceQuoteId, quoteId)))
+    .limit(1);
+  return row ? { laneId: row.id } : null;
+}
+
+// Task #477 — Idempotent: if a lane already exists for this quote, returns it.
+// Maps quote → recurring_lane: equipment normalized; companyId resolved by
+// case-insensitive name match against companies; ownerUserId from
+// quoteRep.userId when present. isManual=true so the eligibility engine does
+// not retract it. assignedAt is set to "now" so the lane shows up immediately
+// on the rep's procurement hub.
+async function createLwqLaneFromWonQuote(orgId: string, opp: QuoteOpportunity): Promise<string | null> {
+  try {
+    const existing = await getLwqLaneForQuote(orgId, opp.id);
+    if (existing) return existing.laneId;
+
+    const [cust] = await db.select().from(quoteCustomers)
+      .where(and(eq(quoteCustomers.organizationId, orgId), eq(quoteCustomers.id, opp.customerId))).limit(1);
+    const customerName = cust?.name ?? null;
+
+    let companyId: string | null = null;
+    if (customerName) {
+      const [matched] = await db.select({ id: companies.id }).from(companies)
+        .where(and(eq(companies.organizationId, orgId), sql`LOWER(${companies.name}) = LOWER(${customerName})`))
+        .limit(1);
+      if (matched) companyId = matched.id;
+    }
+
+    let ownerUserId: string | null = null;
+    if (opp.repId) {
+      const [r] = await db.select({ userId: quoteReps.userId }).from(quoteReps)
+        .where(eq(quoteReps.id, opp.repId)).limit(1);
+      ownerUserId = r?.userId ?? null;
+    }
+
+    const origin = `${opp.originCity}, ${opp.originState}`;
+    const destination = `${opp.destCity}, ${opp.destState}`;
+    const equipment = normalizeEquipmentType(opp.equipment);
+
+    const [lane] = await db.insert(recurringLanes).values({
+      orgId,
+      companyId,
+      companyName: customerName,
+      origin,
+      originState: opp.originState,
+      destination,
+      destinationState: opp.destState,
+      equipmentType: equipment,
+      ownerUserId,
+      isManual: true,
+      isEligible: true,
+      sourceQuoteId: opp.id,
+      assignedAt: new Date().toISOString(),
+    }).returning({ id: recurringLanes.id });
+    return lane?.id ?? null;
+  } catch (err) {
+    console.error("[customer-quotes] LWQ lane handoff failed:", err);
+    return null;
+  }
+}
 
 function toDecimalString(v: string | number | null | undefined): string | null {
   if (v === null || v === undefined || v === "") return null;
@@ -1271,6 +1345,24 @@ export async function createQuote(orgId: string, actor: string, input: CreateQuo
       occurredAt: ev.occurredAt, fallbackUserId: actorUserId ?? null,
     });
   }
+
+  // Task #477 — A quote can be created already in a "won" state (e.g. backfill
+  // from CSV). In that case, run the same LWQ handoff path used by updates.
+  if (isWon(opp.outcomeStatus)) {
+    const laneId = await createLwqLaneFromWonQuote(orgId, opp);
+    if (laneId) {
+      const [handoffEvent] = await db.insert(quoteEvents).values({
+        quoteId: opp.id, eventType: "lwq_handoff", occurredAt: new Date(), actor,
+        payload: { laneId },
+      }).returning();
+      if (handoffEvent) {
+        await logQuoteTouchpointFromEvent({
+          orgId, oppId: opp.id, eventId: handoffEvent.id, eventType: handoffEvent.eventType,
+          occurredAt: handoffEvent.occurredAt, fallbackUserId: actorUserId ?? null,
+        });
+      }
+    }
+  }
   return opp;
 }
 
@@ -1338,6 +1430,25 @@ export async function updateQuote(orgId: string, actor: string, id: string, patc
         orgId, oppId: id, eventId: ev.id, eventType: ev.eventType,
         occurredAt: ev.occurredAt, fallbackUserId: actorUserId ?? null,
       });
+    }
+  }
+
+  // Task #477 — On transition to a "won" status, hand off to LWQ unless the
+  // caller explicitly opted out. Idempotent: createLwqLaneFromWonQuote
+  // checks for an existing lane keyed on source_quote_id before inserting.
+  if (changes.outcomeStatus && isWon(updated.outcomeStatus) && !patch.skipLwqHandoff) {
+    const laneId = await createLwqLaneFromWonQuote(orgId, updated);
+    if (laneId) {
+      const [handoffEvent] = await db.insert(quoteEvents).values({
+        quoteId: id, eventType: "lwq_handoff", occurredAt: new Date(), actor,
+        payload: { laneId },
+      }).returning();
+      if (handoffEvent) {
+        await logQuoteTouchpointFromEvent({
+          orgId, oppId: id, eventId: handoffEvent.id, eventType: handoffEvent.eventType,
+          occurredAt: handoffEvent.occurredAt, fallbackUserId: actorUserId ?? null,
+        });
+      }
     }
   }
   return updated;

@@ -83,6 +83,9 @@ function buildPseudoLane(
     carriersContactedCount: 0,
     resolvedAt: null,
     isManual: false,
+    sourceQuoteId: null,
+    dropTrailerShipper: false,
+    dropTrailerReceiver: false,
     createdAt: new Date(),
     updatedAt: new Date(),
   };

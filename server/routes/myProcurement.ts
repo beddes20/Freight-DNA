@@ -151,6 +151,8 @@ export function registerMyProcurementRoutes(app: Express) {
         company_name: string | null;
         owner_user_id: string | null;
         carriers_contacted_count: number;
+        source_quote_id: string | null;
+        source_quote_customer: string | null;
         has_cache: boolean;
       }> } = { rows: [] };
       try {
@@ -168,8 +170,13 @@ export function registerMyProcurementRoutes(app: Express) {
            lsc.company_name,
            lsc.owner_user_id,
            COALESCE(lsc.carriers_contacted_count, 0) AS carriers_contacted_count,
+           rl.source_quote_id,
+           qc.name AS source_quote_customer,
            true AS has_cache
          FROM lane_summary_cache lsc
+         LEFT JOIN recurring_lanes rl ON rl.id = lsc.lane_id
+         LEFT JOIN quote_opportunities qo ON qo.id = rl.source_quote_id
+         LEFT JOIN quote_customers qc ON qc.id = qo.customer_id
          WHERE (
              lsc.owner_user_id = ANY($1::varchar[])
              OR lsc.company_id = ANY($3::varchar[])
@@ -200,6 +207,8 @@ export function registerMyProcurementRoutes(app: Express) {
         companyName: string | null;
         ownerUserId: string | null;
         carriersContactedCount: number;
+        sourceQuoteId: string | null;
+        sourceQuoteCustomer: string | null;
       }>;
 
       if (cacheRows.rows.length > 0) {
@@ -216,6 +225,8 @@ export function registerMyProcurementRoutes(app: Express) {
           companyName: r.company_name,
           ownerUserId: r.owner_user_id,
           carriersContactedCount: r.carriers_contacted_count,
+          sourceQuoteId: r.source_quote_id,
+          sourceQuoteCustomer: r.source_quote_customer,
         }));
       } else {
         // Fall back to recurring_lanes when cache is empty (first run)
@@ -233,6 +244,8 @@ export function registerMyProcurementRoutes(app: Express) {
           company_name: string | null;
           owner_user_id: string | null;
           carriers_contacted_count: number | null;
+          source_quote_id: string | null;
+          source_quote_customer: string | null;
         }>(
           `SELECT
              rl.id,
@@ -246,9 +259,13 @@ export function registerMyProcurementRoutes(app: Express) {
              rl.company_id,
              COALESCE(rl.company_name, c.name) AS company_name,
              rl.owner_user_id,
-             rl.carriers_contacted_count
+             rl.carriers_contacted_count,
+             rl.source_quote_id,
+             qc.name AS source_quote_customer
            FROM recurring_lanes rl
            LEFT JOIN companies c ON c.id = rl.company_id
+           LEFT JOIN quote_opportunities qo ON qo.id = rl.source_quote_id
+           LEFT JOIN quote_customers qc ON qc.id = qo.customer_id
            WHERE (
                rl.owner_user_id = ANY($1::varchar[])
                OR rl.company_id = ANY($3::varchar[])
@@ -271,6 +288,8 @@ export function registerMyProcurementRoutes(app: Express) {
           companyName: r.company_name,
           ownerUserId: r.owner_user_id,
           carriersContactedCount: r.carriers_contacted_count ?? 0,
+          sourceQuoteId: r.source_quote_id,
+          sourceQuoteCustomer: r.source_quote_customer,
         }));
         } catch (fbErr) {
           noteFailure("lwq.fallback", fbErr);

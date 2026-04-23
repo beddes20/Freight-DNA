@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -169,6 +170,8 @@ type QuoteDetail = {
   relatedSameLane: Quote[];
   relatedSameCustomer: Quote[];
   relatedSameLaneGroup: Quote[];
+  // Task #477 — set when this quote auto-created (or matched) a LWQ lane.
+  lwqLaneId: string | null;
 };
 
 // ---------- Constants ----------
@@ -273,9 +276,15 @@ export default function CustomerQuotesPage(): JSX.Element {
   const initialSearch = typeof window !== "undefined" ? window.location.search : "";
   const [filters, setFilters] = useState<Filters>(() => filtersFromUrl(initialSearch));
   const [drawerId, setDrawerId] = useState<string | null>(() => {
+    // Task #477 — support deep-linking from the LWQ "From won quote" badge
+    // (uses ?quoteId=) and from existing in-app links (uses ?quote=).
     if (typeof window === "undefined") return null;
-    return new URLSearchParams(window.location.search).get("quote");
+    const sp = new URLSearchParams(window.location.search);
+    return sp.get("quoteId") ?? sp.get("quote");
   });
+  // Task #477 — pending win-outcome dialog state. Holds the quote id and the
+  // chosen "won" / "won_low_margin" status until the rep confirms.
+  const [winDialog, setWinDialog] = useState<{ id: string; status: string; reasonId: string | null } | null>(null);
   const [savedViewsOpen, setSavedViewsOpen] = useState(false);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [newViewName, setNewViewName] = useState("");
@@ -627,9 +636,16 @@ export default function CustomerQuotesPage(): JSX.Element {
                       onRowClick={(id) => setDrawerId(id)}
                       isLoading={listQuery.isLoading}
                       reasons={data.reasons}
-                      onInlineOutcome={(id, outcomeStatus, outcomeReasonId) =>
-                        updateQuoteMutation.mutate({ id, patch: { outcomeStatus, outcomeReasonId: outcomeReasonId ?? null } })
-                      }
+                      onInlineOutcome={(id, outcomeStatus, outcomeReasonId) => {
+                        // Task #477 — funnel "won" transitions through the
+                        // win-outcome dialog so the rep can opt out of the
+                        // automatic LWQ lane handoff.
+                        if (outcomeStatus === "won" || outcomeStatus === "won_low_margin") {
+                          setWinDialog({ id, status: outcomeStatus, reasonId: outcomeReasonId });
+                        } else {
+                          updateQuoteMutation.mutate({ id, patch: { outcomeStatus, outcomeReasonId: outcomeReasonId ?? null } });
+                        }
+                      }}
                       pendingId={updateQuoteMutation.isPending ? (updateQuoteMutation.variables as { id: string } | undefined)?.id : undefined}
                     />
                   </CardContent>
@@ -772,6 +788,24 @@ export default function CustomerQuotesPage(): JSX.Element {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <WinOutcomeDialog
+        state={winDialog}
+        onCancel={() => setWinDialog(null)}
+        onConfirm={(skipLwqHandoff) => {
+          if (!winDialog) return;
+          updateQuoteMutation.mutate({
+            id: winDialog.id,
+            patch: {
+              outcomeStatus: winDialog.status,
+              outcomeReasonId: winDialog.reasonId ?? null,
+              skipLwqHandoff,
+            },
+          });
+          setWinDialog(null);
+        }}
+        isSaving={updateQuoteMutation.isPending}
+      />
 
       <QuoteDetailDrawer
         quoteId={drawerId}
@@ -1294,7 +1328,18 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
               <div className="text-[10px] uppercase tracking-wider text-zinc-500">Lane</div>
               <div className="text-base font-semibold text-zinc-100 mt-0.5">{data.opp.originCity}, {data.opp.originState} → {data.opp.destCity}, {data.opp.destState}</div>
               <div className="text-xs text-zinc-400 mt-1">{data.opp.equipment} · Customer: {data.customer?.name ?? "—"} · Rep: {data.rep?.name ?? "—"}</div>
-              <div className="mt-2 flex items-center gap-2"><StatusPill status={data.opp.outcomeStatus} /><span className="text-xs text-zinc-400">{data.reason?.label ?? ""}</span></div>
+              <div className="mt-2 flex items-center gap-2 flex-wrap"><StatusPill status={data.opp.outcomeStatus} /><span className="text-xs text-zinc-400">{data.reason?.label ?? ""}</span>
+                {data.lwqLaneId && (
+                  <a
+                    href={`/lanes/work-queue?laneId=${data.lwqLaneId}`}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] uppercase tracking-wider border border-blue-700 text-blue-300 bg-blue-950/30 hover:bg-blue-950/60"
+                    data-testid="badge-sourcing-in-lwq"
+                    title="Open the Lane Work Queue lane created from this quote"
+                  >
+                    Sourcing in LWQ
+                  </a>
+                )}
+              </div>
             </div>
             {editMode && (
               <QuoteEditForm
@@ -1696,6 +1741,57 @@ function NewQuoteDialog({ open, onOpenChange, customers, reps, onSubmit, isSubmi
           <Button onClick={submit} disabled={!valid || isSubmitting}
             className="bg-amber-500 hover:bg-amber-600 text-zinc-950" data-testid="button-new-save">
             {isSubmitting ? "Saving..." : "Log quote"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+
+// Task #477 — Confirmation dialog shown when a rep marks a quote "won". The
+// `Create LWQ lane` checkbox defaults to on; unchecking sends
+// skipLwqHandoff=true to the PATCH endpoint so the server skips the
+// auto-handoff. The dialog is fully keyboard-driven and dismissible.
+function WinOutcomeDialog({ state, onCancel, onConfirm, isSaving }: {
+  state: { id: string; status: string; reasonId: string | null } | null;
+  onCancel: () => void;
+  onConfirm: (skipLwqHandoff: boolean) => void;
+  isSaving: boolean;
+}): JSX.Element {
+  const [createLane, setCreateLane] = useState(true);
+  useEffect(() => { if (state) setCreateLane(true); }, [state]);
+  const isLowMargin = state?.status === "won_low_margin";
+  return (
+    <Dialog open={!!state} onOpenChange={(o) => { if (!o) onCancel(); }}>
+      <DialogContent className="bg-zinc-900 border-zinc-700 text-zinc-100 sm:max-w-[440px]" data-testid="win-outcome-dialog">
+        <DialogHeader>
+          <DialogTitle>Mark quote as {isLowMargin ? "won (low margin)" : "won"}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3 text-sm text-zinc-300">
+          <p>Confirm this quote was awarded. We can hand it off to the Lane Work Queue so a rep can start sourcing carriers.</p>
+          <label className="flex items-start gap-2 rounded border border-zinc-700 bg-zinc-950/60 p-3 cursor-pointer">
+            <Checkbox
+              id="win-create-lwq"
+              checked={createLane}
+              onCheckedChange={(v) => setCreateLane(v !== false)}
+              data-testid="checkbox-create-lwq-lane"
+            />
+            <span className="flex-1">
+              <span className="block text-zinc-100 font-medium">Create LWQ lane</span>
+              <span className="block text-xs text-zinc-500 mt-0.5">Adds a Lane Work Queue lane for this origin → destination so procurement can begin outreach.</span>
+            </span>
+          </label>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel} data-testid="button-win-cancel">Cancel</Button>
+          <Button
+            onClick={() => onConfirm(!createLane)}
+            disabled={isSaving}
+            className="bg-amber-500 hover:bg-amber-600 text-zinc-950"
+            data-testid="button-win-confirm"
+          >
+            {isSaving ? "Saving..." : "Confirm win"}
           </Button>
         </DialogFooter>
       </DialogContent>

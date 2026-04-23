@@ -1429,6 +1429,10 @@ export const recurringLanes = pgTable("recurring_lanes", {
   carriersContactedCount: integer("carriers_contacted_count").default(0),
   resolvedAt: text("resolved_at"),
   isManual: boolean("is_manual").default(false).notNull(),
+  // Task #477 — links a lane back to the customer quote that triggered its
+  // auto-creation when the quote was marked won. Used for idempotency
+  // (one lane per quote) and to surface the source quote on the LWQ card.
+  sourceQuoteId: varchar("source_quote_id"),
   dropTrailerShipper: boolean("drop_trailer_shipper").default(false).notNull(),
   dropTrailerReceiver: boolean("drop_trailer_receiver").default(false).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),

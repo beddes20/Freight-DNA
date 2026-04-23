@@ -84,6 +84,9 @@ interface LwqLane {
   assignedAt: string | null;
   carriersContactedCount: number;
   isManual: boolean;
+  // Task #477 — set when this lane was auto-created from a won customer quote.
+  sourceQuoteId?: string | null;
+  sourceQuoteCustomer?: string | null;
   replySummary?: LaneReplySummary;
 }
 
@@ -359,10 +362,24 @@ function LwqLaneCard({ item, onResolve, readOnly }: { item: LwqLane; onResolve: 
           <span className="font-semibold text-sm truncate" data-testid={`text-lane-${item.laneId}`}>
             {laneDisplay}
           </span>
-          {item.isManual && (
+          {item.isManual && !item.sourceQuoteId && (
             <Badge variant="outline" className="text-xs border-slate-600 text-slate-400">
               Manual
             </Badge>
+          )}
+          {item.sourceQuoteId && (
+            <Link
+              href={`/customer-quotes?quoteId=${item.sourceQuoteId}`}
+              data-testid={`badge-source-quote-${item.laneId}`}
+              title={item.sourceQuoteCustomer ? `From won quote · ${item.sourceQuoteCustomer}` : "From won quote"}
+            >
+              <Badge
+                variant="outline"
+                className="text-xs border-amber-700 text-amber-400 bg-amber-950/20 hover:bg-amber-950/40 cursor-pointer"
+              >
+                From won quote{item.sourceQuoteCustomer ? ` · ${item.sourceQuoteCustomer}` : ""}
+              </Badge>
+            </Link>
           )}
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
