@@ -78,7 +78,7 @@ type AlertSeverity = "high" | "medium" | "low";
 type Alert = {
   id: string; severity: AlertSeverity; type: string;
   title: string; detail: string;
-  data?: { lane?: string; customerId?: string; quoteId?: string };
+  data?: { lane?: string; customerId?: string; quoteId?: string; startDate?: string };
 };
 
 type StaleFollowUpItem = {
@@ -641,7 +641,16 @@ export default function CustomerQuotesPage(): JSX.Element {
                     {data.alerts.length === 0 && <div className="text-xs text-zinc-500 px-1">All quiet — no urgent items.</div>}
                     {data.alerts.map(a => (
                       <button key={a.id} onClick={() => {
-                        if (a.data?.quoteId) setDrawerId(a.data.quoteId);
+                        if (a.type === "pattern_shift" && a.data?.customerId) {
+                          updateFilter({
+                            customerId: a.data.customerId,
+                            startDate: a.data.startDate,
+                            endDate: undefined,
+                            wonOnly: undefined, lostOnly: undefined,
+                            activeOnly: undefined, expiringOnly: undefined,
+                          });
+                        }
+                        else if (a.data?.quoteId) setDrawerId(a.data.quoteId);
                         else if (a.data?.lane) updateFilter({ laneSearch: a.data.lane.replace(/ → /g, " ") });
                         else if (a.data?.customerId) updateFilter({ customerId: a.data.customerId });
                         else if (a.type === "expiring") updateFilter({ expiringOnly: true, activeOnly: undefined, wonOnly: undefined, lostOnly: undefined });

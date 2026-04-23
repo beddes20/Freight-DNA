@@ -4653,3 +4653,23 @@ export const quoteSavedViews = pgTable("quote_saved_views", {
 export const insertQuoteSavedViewSchema = createInsertSchema(quoteSavedViews).omit({ id: true, createdAt: true });
 export type InsertQuoteSavedView = z.infer<typeof insertQuoteSavedViewSchema>;
 export type QuoteSavedView = typeof quoteSavedViews.$inferSelect;
+
+export const quotePatternAlerts = pgTable("quote_pattern_alerts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  customerId: varchar("customer_id").notNull().references(() => quoteCustomers.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("active"), // active | resolved
+  summary: text("summary").notNull(),
+  axes: jsonb("axes").notNull().default({}),
+  detectedAt: timestamp("detected_at").defaultNow().notNull(),
+  lastShiftedAt: timestamp("last_shifted_at").defaultNow().notNull(),
+  normalizedSince: timestamp("normalized_since"),
+  resolvedAt: timestamp("resolved_at"),
+}, (t) => ({
+  orgIdx: index("quote_pattern_alerts_org_idx").on(t.organizationId),
+  custIdx: index("quote_pattern_alerts_customer_idx").on(t.customerId),
+  statusIdx: index("quote_pattern_alerts_status_idx").on(t.status),
+}));
+export const insertQuotePatternAlertSchema = createInsertSchema(quotePatternAlerts).omit({ id: true, detectedAt: true });
+export type InsertQuotePatternAlert = z.infer<typeof insertQuotePatternAlertSchema>;
+export type QuotePatternAlert = typeof quotePatternAlerts.$inferSelect;

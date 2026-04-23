@@ -23,6 +23,7 @@ import { getStaleQuoteFollowUps } from "./services/staleQuoteFollowup";
 import { db } from "./storage";
 import { users as usersTable } from "@shared/schema";
 import { and, eq } from "drizzle-orm";
+import { detectAndProcessPatternShifts } from "./services/quotePatternShift";
 import { generateConversationOwnershipNbas } from "./nextBestActionEngine";
 import { getAvgVotriWoW, getLaneVotrisBatch, getLaneVotrisBatchFresh, buildVotriQualifier } from "./sonarClient";
 import { tracLaneDirectionSignal } from "./tracAlertEngine";
@@ -424,6 +425,16 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
           }
         } catch (sonarErr: any) {
           log(`Org ${org.id}: Sonar VOTRI NBA warning (non-fatal): ${sonarErr?.message ?? sonarErr}`);
+        }
+
+        // ── Customer Quote Pattern-Shift Detection (Task #481) ───────────────
+        try {
+          const psr = await detectAndProcessPatternShifts(org.id);
+          if (psr.created || psr.resolved || psr.refreshed) {
+            log(`Org ${org.id}: quote pattern shifts — scanned=${psr.scanned} shifted=${psr.shifted} created=${psr.created} refreshed=${psr.refreshed} resolved=${psr.resolved} notified=${psr.notified}`);
+          }
+        } catch (qpsErr: any) {
+          log(`Org ${org.id}: quote pattern shift warning (non-fatal): ${qpsErr?.message ?? qpsErr}`);
         }
 
         log(`Org ${org.id}: ${totalGenerated} generated this pass, ${totalSkipped} skipped`);

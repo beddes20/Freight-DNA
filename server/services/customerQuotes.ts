@@ -7,6 +7,7 @@ import {
   type QuoteCarrier, type QuoteLaneGroup, type QuoteOutcomeReason, type QuoteSavedView,
 } from "@shared/schema";
 import { getStaleQuoteFollowUps } from "./staleQuoteFollowup";
+import { getActivePatternAlertsForOrg } from "./quotePatternShift";
 
 export type QuoteFilters = {
   customerId?: string;
@@ -37,7 +38,7 @@ export type Alert = {
   type: string;
   title: string;
   detail: string;
-  data?: { lane?: string; customerId?: string; quoteId?: string };
+  data?: { lane?: string; customerId?: string; quoteId?: string; startDate?: string };
 };
 
 export type StaleFollowUpItem = {
@@ -685,6 +686,28 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
       detail: `Top: ${top.customerName} — ${Math.round(top.hoursOverdue)}h past typical (${Math.round(top.pTypicalHours)}h).`,
       data: { quoteId: top.quoteId },
     });
+  }
+
+  // Pattern-shift alerts (Task #481) — surfaced from the persisted detector.
+  // Honor the customer filter so the panel stays scoped to the active slice.
+  try {
+    const patternAlerts = await getActivePatternAlertsForOrg(orgId);
+    const startDate = new Date(now.getTime() - 30 * dayMs).toISOString().slice(0, 10);
+    for (const pa of patternAlerts) {
+      if (filters.customerId && pa.customerId !== filters.customerId) continue;
+      const cust = ctx.customerMap.get(pa.customerId);
+      if (!cust) continue;
+      alerts.push({
+        id: `pattern-shift-${pa.id}`,
+        severity: "high",
+        type: "pattern_shift",
+        title: `Pattern shift — ${cust.name}`,
+        detail: pa.summary,
+        data: { customerId: pa.customerId, startDate },
+      });
+    }
+  } catch (err) {
+    console.error("[customer-quotes] pattern alert load error:", err);
   }
 
   return {

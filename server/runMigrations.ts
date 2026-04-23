@@ -3988,6 +3988,27 @@ export async function runMigrations() {
     `);
     await client468.query(`CREATE INDEX IF NOT EXISTS quote_saved_views_org_idx ON quote_saved_views (organization_id, created_at DESC)`);
 
+    // Task #481 — quote pattern-shift detector persistence.
+    await client468.query(`
+      CREATE TABLE IF NOT EXISTS quote_pattern_alerts (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        customer_id varchar NOT NULL REFERENCES quote_customers(id) ON DELETE CASCADE,
+        status text NOT NULL DEFAULT 'active',
+        summary text NOT NULL,
+        axes jsonb NOT NULL DEFAULT '{}'::jsonb,
+        detected_at timestamp NOT NULL DEFAULT NOW(),
+        last_shifted_at timestamp NOT NULL DEFAULT NOW(),
+        normalized_since timestamp,
+        resolved_at timestamp
+      )
+    `);
+    await client468.query(`CREATE INDEX IF NOT EXISTS quote_pattern_alerts_org_idx ON quote_pattern_alerts (organization_id)`);
+    await client468.query(`CREATE INDEX IF NOT EXISTS quote_pattern_alerts_customer_idx ON quote_pattern_alerts (customer_id)`);
+    await client468.query(`CREATE INDEX IF NOT EXISTS quote_pattern_alerts_status_idx ON quote_pattern_alerts (status)`);
+    // Hard guarantee: at most one active alert per (org, customer).
+    await client468.query(`CREATE UNIQUE INDEX IF NOT EXISTS quote_pattern_alerts_active_uq ON quote_pattern_alerts (organization_id, customer_id) WHERE status = 'active'`);
+
     console.log("[migrations] Task #468 customer quotes tables ensured");
   } catch (err) {
     console.error("[migrations] Task #468 customer quotes table create error:", err);
