@@ -854,7 +854,7 @@ export type PricingIntelligence = {
   totalConsidered: number;
   decidedSample: number;
   sonarBenchmark: number | null;
-  benchmarkSource: "stored_recent" | "stored_avg" | "none";
+  benchmarkSource: "stored_recent" | "stored_avg" | "similar_lanes" | "none";
   bins: PricingPriceBin[];
   history: PricingHistoryRow[];
   suggestion: PricingSuggestion | null;
@@ -1629,6 +1629,10 @@ export type SpotSearchInput = {
   equipment?: string | null;
   pickupDate?: string | null;
   customerId?: string | null;
+  // Advanced
+  lookbackDays?: number | null;
+  exactOnly?: boolean | null;
+  includeSimilar?: boolean | null;
 };
 
 export type SpotSearchKpis = {
@@ -1637,11 +1641,15 @@ export type SpotSearchKpis = {
   customersOnLane: number;
   winRate: number;
   avgQuoted: number;
+  avgWonQuoted: number;
   avgCarrierPaid: number;
   avgMargin: number;
   avgMarginPct: number;
   lastQuotedDays: number | null;
+  lastWonDays: number | null;
   pendingCount: number;
+  confidence: "high" | "medium" | "low" | "insufficient";
+  freshnessLabel: "fresh" | "recent" | "stale" | "none";
 };
 
 export type SpotCustomerStat = {
@@ -1732,13 +1740,29 @@ function daysSince(d: Date | null | undefined): number | null {
 
 export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Promise<SpotSearchResult> {
   const ctx = await loadContext(orgId);
-  const allOpps = await db.select().from(quoteOpportunities)
+  const baseOpps = await db.select().from(quoteOpportunities)
     .where(eq(quoteOpportunities.organizationId, orgId))
     .orderBy(desc(quoteOpportunities.requestDate));
 
+  // Lookback filter
+  const lookbackDays = input.lookbackDays && input.lookbackDays > 0 ? input.lookbackDays : null;
+  const cutoff = lookbackDays ? Date.now() - lookbackDays * 24 * 3600 * 1000 : null;
+  const allOpps = cutoff
+    ? baseOpps.filter(r => r.requestDate.getTime() >= cutoff)
+    : baseOpps;
+
   const equipment = (input.equipment ?? "").trim();
-  const eqMatch = (r: QuoteOpportunity): boolean =>
-    !equipment || equipment === "Any" || ciEq(r.equipment, equipment);
+  const STANDARD_EQ = ["van", "dry van", "reefer", "flatbed"];
+  const eqMatch = (r: QuoteOpportunity): boolean => {
+    if (!equipment || equipment === "Any") return true;
+    if (equipment.toLowerCase() === "other") {
+      return !STANDARD_EQ.includes((r.equipment ?? "").toLowerCase());
+    }
+    if (equipment.toLowerCase() === "van") {
+      return ["van", "dry van"].includes((r.equipment ?? "").toLowerCase());
+    }
+    return ciEq(r.equipment, equipment);
+  };
 
   const exact = allOpps.filter(r =>
     ciEq(r.originCity, input.pickupCity) &&
@@ -1747,14 +1771,18 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
     ciEq(r.destState, input.deliveryState) &&
     eqMatch(r),
   );
-  // Similar: same state pair, different city OR same-city pair w/o equipment match
-  const similar = allOpps.filter(r => {
-    if (exact.includes(r)) return false;
-    const sameStates =
-      ciEq(r.originState, input.pickupState) &&
-      ciEq(r.destState, input.deliveryState);
-    return sameStates;
-  });
+  // Similar: same state pair, different city; controlled by includeSimilar/exactOnly toggles
+  const includeSimilar = input.includeSimilar !== false && !input.exactOnly;
+  const similar = includeSimilar
+    ? allOpps.filter(r => {
+        if (exact.includes(r)) return false;
+        return (
+          ciEq(r.originState, input.pickupState) &&
+          ciEq(r.destState, input.deliveryState) &&
+          eqMatch(r)
+        );
+      })
+    : [];
 
   const customerId = input.customerId ?? null;
   const exactScoped = customerId ? exact.filter(r => r.customerId === customerId) : exact;
@@ -1767,19 +1795,39 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
 
   const lastQuotedDays = exactScoped.length > 0 ? daysSince(exactScoped[0].requestDate) : null;
 
+  const lastWonDays = won.length > 0
+    ? daysSince(won.reduce((a, b) => (a.requestDate > b.requestDate ? a : b)).requestDate)
+    : null;
+
+  let confidence: SpotSearchKpis["confidence"];
+  if (exactScoped.length >= 12 && (lastQuotedDays ?? 999) <= 60) confidence = "high";
+  else if (exactScoped.length >= 5) confidence = "medium";
+  else if (exactScoped.length >= 1) confidence = "low";
+  else confidence = "insufficient";
+
+  let freshnessLabel: SpotSearchKpis["freshnessLabel"];
+  if (lastQuotedDays === null) freshnessLabel = "none";
+  else if (lastQuotedDays <= 14) freshnessLabel = "fresh";
+  else if (lastQuotedDays <= 60) freshnessLabel = "recent";
+  else freshnessLabel = "stale";
+
   const kpis: SpotSearchKpis = {
     exactCount: exactScoped.length,
     similarCount: similarScoped.length,
     customersOnLane: new Set(exact.map(r => r.customerId)).size,
     winRate: decided > 0 ? (won.length / decided) * 100 : 0,
     avgQuoted: avg(exactScoped.map(r => num(r.quotedAmount)).filter(v => v > 0)),
+    avgWonQuoted: avg(won.map(r => num(r.quotedAmount)).filter(v => v > 0)),
     avgCarrierPaid: avg(wonWithCarrier.map(r => num(r.carrierPaid))),
     avgMargin: avg(wonWithCarrier.map(r => num(r.quotedAmount) - num(r.carrierPaid))),
     avgMarginPct: avg(wonWithCarrier.map(r => {
       const q = num(r.quotedAmount); return q > 0 ? ((q - num(r.carrierPaid)) / q) * 100 : 0;
     })),
     lastQuotedDays,
+    lastWonDays,
     pendingCount: exactScoped.filter(r => r.outcomeStatus === "pending").length,
+    confidence,
+    freshnessLabel,
   };
 
   // Guidance: if customer scoped, reuse pricing intelligence; else lane-wide.
@@ -1814,16 +1862,32 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
         message: `Based on ${wonAmounts.length} won quotes on this lane (P25–P75 band).`,
       };
     } else {
-      guidance = {
-        suggestedLow: null,
-        suggestedHigh: null,
-        benchmark: null,
-        benchmarkSource: "none",
-        confidence: "insufficient_history",
-        message: wonAmounts.length === 0
-          ? "No prior won quotes on this exact lane — try selecting a customer for tailored guidance."
-          : `Only ${wonAmounts.length} won quote(s) on this lane — too few for a reliable range.`,
-      };
+      // Fallback: if exact is sparse, derive a wider band from similar lanes when allowed.
+      const simWon = similarScoped.filter(r => isWon(r.outcomeStatus));
+      const simWonAmounts = simWon.map(r => num(r.quotedAmount)).filter(v => v > 0).sort((a, b) => a - b);
+      if (simWonAmounts.length >= 4) {
+        const p25 = simWonAmounts[Math.floor(simWonAmounts.length * 0.25)];
+        const p75 = simWonAmounts[Math.floor(simWonAmounts.length * 0.75)];
+        guidance = {
+          suggestedLow: Math.round(p25),
+          suggestedHigh: Math.round(p75),
+          benchmark: null,
+          benchmarkSource: "similar_lanes",
+          confidence: "low",
+          message: `Exact-lane history sparse — band derived from ${simWonAmounts.length} similar-lane won quotes (P25–P75).`,
+        };
+      } else {
+        guidance = {
+          suggestedLow: null,
+          suggestedHigh: null,
+          benchmark: null,
+          benchmarkSource: "none",
+          confidence: "insufficient_history",
+          message: wonAmounts.length === 0
+            ? "No prior won quotes on this exact lane — try selecting a customer for tailored guidance."
+            : `Only ${wonAmounts.length} won quote(s) on this lane — too few for a reliable range.`,
+        };
+      }
     }
   }
 
@@ -1944,8 +2008,31 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
     avgMargin: am,
   };
 
-  // Alerts: lost-streak on lane, expiring on lane, low margin, high variance
+  // Alerts: lost-streak on lane, expiring on lane, low margin, high variance, stale data, sparse history
   const alerts: SpotAlert[] = [];
+  if (kpis.freshnessLabel === "stale" && exactScoped.length > 0) {
+    alerts.push({
+      id: "lane_stale_data",
+      severity: "medium",
+      title: "Lane data is stale",
+      detail: `Last quote was ${lastQuotedDays} days ago — confirm rates before using as guidance.`,
+    });
+  }
+  if (exactScoped.length === 0 && similarScoped.length > 0) {
+    alerts.push({
+      id: "lane_only_similar",
+      severity: "medium",
+      title: "No exact match history",
+      detail: `Guidance relies on ${similarScoped.length} similar-lane quote(s) — use with caution.`,
+    });
+  } else if (exactScoped.length > 0 && exactScoped.length < 3) {
+    alerts.push({
+      id: "lane_sparse_history",
+      severity: "low",
+      title: "Limited exact-match history",
+      detail: `Only ${exactScoped.length} prior quote(s) on this exact lane.`,
+    });
+  }
   // Lost streak (last 5 decided in chronological order)
   const recentDecided = exactScoped
     .filter(r => isWon(r.outcomeStatus) || isLost(r.outcomeStatus))

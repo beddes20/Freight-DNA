@@ -3,11 +3,15 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useToast } from "@/hooks/use-toast";
 import {
   Search, MapPin, Truck, Calendar, AlertTriangle, TrendingUp, Award, Users,
-  Clock, Activity, X, ChevronRight,
+  Clock, Activity, X, ChevronRight, ChevronDown, Copy, RefreshCw, SlidersHorizontal,
 } from "lucide-react";
 
 type Customer = { id: string; name: string };
@@ -20,6 +24,21 @@ export type SpotSearchQuery = {
   equipment?: string;
   pickupDate?: string;
   customerId?: string;
+  lookbackDays?: number;
+  exactOnly?: boolean;
+  includeSimilar?: boolean;
+};
+
+export type SpotAdvancedDetails = {
+  weight?: string;
+  commodity?: string;
+  pallets?: string;
+  truckloadType?: string;
+  hazmat?: boolean;
+  tempRequired?: boolean;
+  specialHandling?: string;
+  appointmentRequired?: boolean;
+  accessNotes?: string;
 };
 
 type EnrichedQuote = {
@@ -36,9 +55,10 @@ type SpotResult = {
   resolvedCustomer: { id: string; name: string } | null;
   kpis: {
     exactCount: number; similarCount: number; customersOnLane: number;
-    winRate: number; avgQuoted: number; avgCarrierPaid: number;
+    winRate: number; avgQuoted: number; avgWonQuoted: number; avgCarrierPaid: number;
     avgMargin: number; avgMarginPct: number;
-    lastQuotedDays: number | null; pendingCount: number;
+    lastQuotedDays: number | null; lastWonDays: number | null; pendingCount: number;
+    confidence: string; freshnessLabel: string | null;
   };
   guidance: {
     suggestedLow: number | null; suggestedHigh: number | null;
@@ -71,7 +91,15 @@ type SpotResult = {
 
 type AutoItem = { city: string; state: string; count: number };
 
-const EQUIPMENT_OPTIONS = ["Any", "Dry Van", "Reefer", "Flatbed"];
+const EQUIPMENT_OPTIONS = ["Any", "Van", "Reefer", "Flatbed", "Other"];
+const LOOKBACK_OPTIONS: { label: string; value: string }[] = [
+  { label: "All time", value: "0" },
+  { label: "Last 30 days", value: "30" },
+  { label: "Last 90 days", value: "90" },
+  { label: "Last 180 days", value: "180" },
+  { label: "Last 365 days", value: "365" },
+];
+const TRUCKLOAD_OPTIONS = ["Full TL", "Partial", "LTL"];
 const RECENTS_KEY = "fdna.spotQuote.recents";
 const MAX_RECENTS = 6;
 
@@ -248,10 +276,19 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
   const [equipment, setEquipment] = useState<string>("Any");
   const [pickupDate, setPickupDate] = useState<string>("");
   const [customerId, setCustomerId] = useState<string>("");
+  // Advanced
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [lookbackDays, setLookbackDays] = useState<string>("0");
+  const [exactOnly, setExactOnly] = useState(false);
+  const [includeSimilar, setIncludeSimilar] = useState(true);
+  const [adv, setAdv] = useState<SpotAdvancedDetails>({});
+
   const [recents, setRecents] = useState<Recent[]>(() => loadRecents());
   const [activeQuery, setActiveQuery] = useState<SpotSearchQuery | null>(null);
+  const [searchedAt, setSearchedAt] = useState<Date | null>(null);
   const [openOrigin, setOpenOrigin] = useState(false);
   const [openDest, setOpenDest] = useState(false);
+  const { toast } = useToast();
 
   const canSearch = pickup.city && pickup.state && delivery.city && delivery.state;
 
@@ -265,6 +302,9 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
     if (activeQuery.equipment && activeQuery.equipment !== "Any") p.set("equipment", activeQuery.equipment);
     if (activeQuery.pickupDate) p.set("pickupDate", activeQuery.pickupDate);
     if (activeQuery.customerId) p.set("customerId", activeQuery.customerId);
+    if (activeQuery.lookbackDays && activeQuery.lookbackDays > 0) p.set("lookbackDays", String(activeQuery.lookbackDays));
+    if (activeQuery.exactOnly) p.set("exactOnly", "true");
+    if (activeQuery.includeSimilar === false) p.set("includeSimilar", "false");
     return p.toString();
   }, [activeQuery]);
 
@@ -280,6 +320,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
 
   const submit = (): void => {
     if (!canSearch) return;
+    const lb = parseInt(lookbackDays, 10);
     const q: SpotSearchQuery = {
       pickupCity: pickup.city.trim(),
       pickupState: pickup.state.trim().toUpperCase(),
@@ -288,8 +329,12 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
       equipment: equipment === "Any" ? undefined : equipment,
       pickupDate: pickupDate || undefined,
       customerId: customerId || undefined,
+      lookbackDays: lb > 0 ? lb : undefined,
+      exactOnly: exactOnly || undefined,
+      includeSimilar: !includeSimilar ? false : undefined,
     };
     setActiveQuery(q);
+    setSearchedAt(new Date());
     saveRecent(q);
     setRecents(loadRecents());
   };
@@ -300,7 +345,12 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
     setEquipment("Any");
     setPickupDate("");
     setCustomerId("");
+    setLookbackDays("0");
+    setExactOnly(false);
+    setIncludeSimilar(true);
+    setAdv({});
     setActiveQuery(null);
+    setSearchedAt(null);
   };
 
   const applyRecent = (r: Recent): void => {
@@ -309,11 +359,41 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
     setEquipment(r.equipment ?? "Any");
     setPickupDate(r.pickupDate ?? "");
     setCustomerId(r.customerId ?? "");
+    setLookbackDays(r.lookbackDays ? String(r.lookbackDays) : "0");
+    setExactOnly(!!r.exactOnly);
+    setIncludeSimilar(r.includeSimilar !== false);
     setActiveQuery({
       pickupCity: r.pickupCity, pickupState: r.pickupState,
       deliveryCity: r.deliveryCity, deliveryState: r.deliveryState,
       equipment: r.equipment, pickupDate: r.pickupDate, customerId: r.customerId,
+      lookbackDays: r.lookbackDays, exactOnly: r.exactOnly, includeSimilar: r.includeSimilar,
     });
+    setSearchedAt(new Date());
+  };
+
+  const copyLane = async (): Promise<void> => {
+    if (!activeQuery) return;
+    const txt = `${activeQuery.pickupCity}, ${activeQuery.pickupState} → ${activeQuery.deliveryCity}, ${activeQuery.deliveryState}${activeQuery.equipment ? " · " + activeQuery.equipment : ""}${activeQuery.pickupDate ? " · pickup " + activeQuery.pickupDate : ""}`;
+    try {
+      await navigator.clipboard.writeText(txt);
+      toast({ title: "Copied lane", description: txt });
+    } catch {
+      toast({ title: "Copy failed", variant: "destructive" });
+    }
+  };
+
+  const editSearch = (): void => {
+    setActiveQuery(null);
+  };
+
+  const rerunSearch = (): void => {
+    if (!canSearch) return;
+    if (activeQuery) {
+      void result.refetch();
+      setSearchedAt(new Date());
+    } else {
+      submit();
+    }
   };
 
   const onKeyDown = (e: React.KeyboardEvent): void => {
@@ -336,9 +416,20 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
           <span className="text-sm font-semibold text-zinc-100 tracking-tight">Spot Quote Search</span>
           <span className="text-[10px] uppercase tracking-wider text-zinc-500">— headline workflow</span>
           {activeQuery && (
-            <button onClick={clearAll} className="ml-auto text-[11px] text-zinc-400 hover:text-zinc-100 inline-flex items-center gap-1" data-testid="button-spot-clear">
-              <X className="h-3 w-3" /> Clear
-            </button>
+            <div className="ml-auto flex items-center gap-2">
+              <button onClick={editSearch} className="text-[11px] text-zinc-400 hover:text-zinc-100 inline-flex items-center gap-1" data-testid="button-spot-edit">
+                <SlidersHorizontal className="h-3 w-3" /> Edit
+              </button>
+              <button onClick={rerunSearch} className="text-[11px] text-zinc-400 hover:text-zinc-100 inline-flex items-center gap-1" data-testid="button-spot-rerun">
+                <RefreshCw className="h-3 w-3" /> Rerun
+              </button>
+              <button onClick={copyLane} className="text-[11px] text-zinc-400 hover:text-zinc-100 inline-flex items-center gap-1" data-testid="button-spot-copy">
+                <Copy className="h-3 w-3" /> Copy
+              </button>
+              <button onClick={clearAll} className="text-[11px] text-zinc-400 hover:text-zinc-100 inline-flex items-center gap-1" data-testid="button-spot-clear">
+                <X className="h-3 w-3" /> Clear
+              </button>
+            </div>
           )}
         </div>
         <div className="flex flex-wrap items-end gap-3">
@@ -380,6 +471,96 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             <Search className="h-3.5 w-3.5 mr-1.5" /> Search
           </Button>
         </div>
+
+        {/* Advanced Details — collapsible */}
+        <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen} className="mt-2">
+          <CollapsibleTrigger asChild>
+            <button
+              type="button"
+              className="text-[11px] uppercase tracking-wider text-zinc-400 hover:text-zinc-100 inline-flex items-center gap-1"
+              data-testid="button-spot-advanced-toggle"
+            >
+              <SlidersHorizontal className="h-3 w-3" />
+              Advanced Details
+              <ChevronDown className={`h-3 w-3 transition-transform ${advancedOpen ? "rotate-180" : ""}`} />
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-2" data-testid="spot-advanced-details">
+            <div className="rounded-[4px] border border-zinc-800 bg-zinc-900/60 p-3 space-y-3">
+              {/* Search behavior toggles */}
+              <div className="flex flex-wrap items-end gap-4">
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] uppercase tracking-wider text-zinc-500">Lookback</span>
+                  <Select value={lookbackDays} onValueChange={setLookbackDays}>
+                    <SelectTrigger className="h-8 w-[150px] bg-zinc-900 border-zinc-700 text-xs" data-testid="select-spot-lookback"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {LOOKBACK_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch id="spot-exact-only" checked={exactOnly} onCheckedChange={(v) => { setExactOnly(v); if (v) setIncludeSimilar(false); }} data-testid="switch-spot-exact-only" />
+                  <Label htmlFor="spot-exact-only" className="text-xs text-zinc-300">Exact matches only</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch id="spot-include-similar" checked={includeSimilar} onCheckedChange={(v) => { setIncludeSimilar(v); if (v) setExactOnly(false); }} data-testid="switch-spot-include-similar" />
+                  <Label htmlFor="spot-include-similar" className="text-xs text-zinc-300">Include similar lanes</Label>
+                </div>
+              </div>
+
+              {/* Freight qualification (informational; tags the search context) */}
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2 pt-2 border-t border-zinc-800">
+                <AdvField label="Weight (lbs)">
+                  <Input value={adv.weight ?? ""} onChange={e => setAdv(a => ({ ...a, weight: e.target.value }))}
+                    placeholder="e.g. 42000" className="h-8 bg-zinc-900 border-zinc-700 text-xs" data-testid="input-spot-weight" />
+                </AdvField>
+                <AdvField label="Commodity">
+                  <Input value={adv.commodity ?? ""} onChange={e => setAdv(a => ({ ...a, commodity: e.target.value }))}
+                    placeholder="e.g. Steel coils" className="h-8 bg-zinc-900 border-zinc-700 text-xs" data-testid="input-spot-commodity" />
+                </AdvField>
+                <AdvField label="Pallets">
+                  <Input value={adv.pallets ?? ""} onChange={e => setAdv(a => ({ ...a, pallets: e.target.value }))}
+                    placeholder="e.g. 26" className="h-8 bg-zinc-900 border-zinc-700 text-xs" data-testid="input-spot-pallets" />
+                </AdvField>
+                <AdvField label="TL type">
+                  <Select value={adv.truckloadType ?? "_unset"} onValueChange={v => setAdv(a => ({ ...a, truckloadType: v === "_unset" ? undefined : v }))}>
+                    <SelectTrigger className="h-8 bg-zinc-900 border-zinc-700 text-xs" data-testid="select-spot-tl-type"><SelectValue placeholder="Select" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_unset">—</SelectItem>
+                      {TRUCKLOAD_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </AdvField>
+                <AdvField label="Special handling">
+                  <Input value={adv.specialHandling ?? ""} onChange={e => setAdv(a => ({ ...a, specialHandling: e.target.value }))}
+                    placeholder="Tarps, straps…" className="h-8 bg-zinc-900 border-zinc-700 text-xs" data-testid="input-spot-special" />
+                </AdvField>
+                <AdvField label="Access notes">
+                  <Input value={adv.accessNotes ?? ""} onChange={e => setAdv(a => ({ ...a, accessNotes: e.target.value }))}
+                    placeholder="Residential, jobsite…" className="h-8 bg-zinc-900 border-zinc-700 text-xs" data-testid="input-spot-access" />
+                </AdvField>
+              </div>
+              <div className="flex flex-wrap items-center gap-4 pt-2 border-t border-zinc-800">
+                <div className="flex items-center gap-2">
+                  <Switch id="spot-hazmat" checked={!!adv.hazmat} onCheckedChange={(v) => setAdv(a => ({ ...a, hazmat: v }))} data-testid="switch-spot-hazmat" />
+                  <Label htmlFor="spot-hazmat" className="text-xs text-zinc-300">Hazmat</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch id="spot-temp" checked={!!adv.tempRequired} onCheckedChange={(v) => setAdv(a => ({ ...a, tempRequired: v }))} data-testid="switch-spot-temp" />
+                  <Label htmlFor="spot-temp" className="text-xs text-zinc-300">Temp controlled</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch id="spot-appt" checked={!!adv.appointmentRequired} onCheckedChange={(v) => setAdv(a => ({ ...a, appointmentRequired: v }))} data-testid="switch-spot-appt" />
+                  <Label htmlFor="spot-appt" className="text-xs text-zinc-300">Appointment required</Label>
+                </div>
+                <div className="ml-auto text-[10px] text-zinc-500">
+                  Qualification details tag the search context but do not yet filter historical records.
+                </div>
+              </div>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+
         {recents.length > 0 && !activeQuery && (
           <div className="flex items-center gap-2 mt-2 flex-wrap">
             <span className="text-[10px] uppercase tracking-wider text-zinc-500">Recent:</span>
@@ -426,25 +607,46 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                   {data.query.equipment ?? "Any equipment"}
                   {data.query.pickupDate ? ` · pickup ${data.query.pickupDate}` : ""}
                   {data.resolvedCustomer ? ` · ${data.resolvedCustomer.name}` : " · all customers"}
+                  {data.query.lookbackDays ? ` · last ${data.query.lookbackDays}d` : ""}
+                  {data.query.exactOnly ? " · exact only" : data.query.includeSimilar === false ? " · similar excluded" : ""}
                 </div>
+                {searchedAt && (
+                  <div className="text-[10px] text-zinc-500 mt-0.5" data-testid="text-spot-searched-at">
+                    Searched {searchedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                  </div>
+                )}
               </div>
-              <Button size="sm" variant="outline" onClick={() => onApplyLaneFilter(`${data.query.pickupCity} ${data.query.deliveryCity}`)}
-                className="h-8 border-zinc-700 hover:bg-zinc-800 text-xs" data-testid="button-spot-apply-filter">
-                Filter table by this lane
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" onClick={copyLane}
+                  className="h-8 border-zinc-700 hover:bg-zinc-800 text-xs" data-testid="button-spot-header-copy">
+                  <Copy className="h-3 w-3 mr-1" /> Copy lane
+                </Button>
+                <Button size="sm" variant="outline" onClick={rerunSearch}
+                  className="h-8 border-zinc-700 hover:bg-zinc-800 text-xs" data-testid="button-spot-header-rerun">
+                  <RefreshCw className="h-3 w-3 mr-1" /> Rerun
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => onApplyLaneFilter(`${data.query.pickupCity} ${data.query.deliveryCity}`)}
+                  className="h-8 border-zinc-700 hover:bg-zinc-800 text-xs" data-testid="button-spot-apply-filter">
+                  Filter table by this lane
+                </Button>
+              </div>
             </div>
           </SectionCard>
 
           {/* 2. KPI strip */}
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2" data-testid="spot-section-kpis">
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-12 gap-2" data-testid="spot-section-kpis">
             <Kpi label="Exact" value={String(data.kpis.exactCount)} />
             <Kpi label="Similar" value={String(data.kpis.similarCount)} />
             <Kpi label="Customers" value={String(data.kpis.customersOnLane)} />
+            <Kpi label="Pending" value={String(data.kpis.pendingCount)} />
             <Kpi label="Win rate" value={fmtPct(data.kpis.winRate)} />
             <Kpi label="Avg quoted" value={fmtMoney(data.kpis.avgQuoted)} />
+            <Kpi label="Avg won" value={fmtMoney(data.kpis.avgWonQuoted)} />
             <Kpi label="Avg buy" value={fmtMoney(data.kpis.avgCarrierPaid)} />
             <Kpi label="Avg margin" value={fmtMoney(data.kpis.avgMargin)} sub={data.kpis.avgMarginPct > 0 ? fmtPct(data.kpis.avgMarginPct) : undefined} />
             <Kpi label="Last quoted" value={data.kpis.lastQuotedDays !== null ? `${data.kpis.lastQuotedDays}d` : "—"} />
+            <Kpi label="Last won" value={data.kpis.lastWonDays !== null ? `${data.kpis.lastWonDays}d` : "—"} />
+            <KpiBadge label="Confidence" value={data.kpis.confidence} freshness={data.kpis.freshnessLabel} />
           </div>
 
           {/* 3. Guidance band */}
@@ -626,6 +828,38 @@ function Kpi({ label, value, sub }: { label: string; value: string; sub?: string
       <div className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</div>
       <div className="text-base font-semibold text-zinc-100 tabular-nums">{value}</div>
       {sub && <div className="text-[10px] text-zinc-500">{sub}</div>}
+    </div>
+  );
+}
+
+function KpiBadge({ label, value, freshness }: { label: string; value: string; freshness?: string | null }): JSX.Element {
+  const tier = (value || "insufficient").toLowerCase();
+  const tone =
+    tier === "high" ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30" :
+    tier === "medium" ? "bg-amber-500/15 text-amber-300 border-amber-500/30" :
+    tier === "low" ? "bg-orange-500/15 text-orange-300 border-orange-500/30" :
+    "bg-zinc-700/30 text-zinc-300 border-zinc-600/40";
+  const freshTone =
+    freshness === "fresh" ? "text-emerald-400" :
+    freshness === "recent" ? "text-amber-400" :
+    freshness === "stale" ? "text-orange-400" :
+    "text-zinc-500";
+  return (
+    <div className="rounded-[4px] bg-zinc-900 border border-zinc-800 p-2" data-testid="spot-kpi-confidence">
+      <div className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</div>
+      <div className={`inline-flex items-center mt-0.5 px-1.5 py-0.5 rounded-[4px] text-[11px] font-semibold border ${tone}`}>
+        {value || "—"}
+      </div>
+      {freshness && <div className={`text-[10px] mt-0.5 capitalize ${freshTone}`}>{freshness}</div>}
+    </div>
+  );
+}
+
+function AdvField({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</span>
+      {children}
     </div>
   );
 }

@@ -222,6 +222,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
         equipment: z.string().max(40).optional(),
         pickupDate: z.string().regex(/^\d{4}-\d{2}-\d{2}/).optional(),
         customerId: z.string().min(1).optional(),
+        lookbackDays: z.coerce.number().int().min(1).max(3650).optional(),
+        exactOnly: z.preprocess(v => v === "true" || v === true, z.boolean()).optional(),
+        includeSimilar: z.preprocess(v => !(v === "false" || v === false), z.boolean()).optional(),
       });
       const parsed = schema.safeParse(req.query);
       if (!parsed.success) return res.status(400).json({ error: "Invalid query", issues: parsed.error.issues });
