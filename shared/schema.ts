@@ -552,7 +552,9 @@ export const chatConversations = pgTable("chat_conversations", {
   id: serial("id").primaryKey(),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   title: text("title").notNull().default("New Chat"),
-  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+  // Use a stable SQL default (not new Date()) so drizzle-kit doesn't regenerate
+  // the default literal on every db:push and rewrite the column.
+  createdAt: text("created_at").notNull().default(sql`(now() at time zone 'utc')::text`),
 });
 export const insertChatConversationSchema = createInsertSchema(chatConversations).omit({ id: true });
 export type InsertChatConversation = z.infer<typeof insertChatConversationSchema>;
@@ -563,7 +565,8 @@ export const chatMessages = pgTable("chat_messages", {
   conversationId: integer("conversation_id").notNull().references(() => chatConversations.id, { onDelete: "cascade" }),
   role: text("role").notNull(),
   content: text("content").notNull(),
-  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+  // Stable SQL default — see chatConversations.createdAt note above.
+  createdAt: text("created_at").notNull().default(sql`(now() at time zone 'utc')::text`),
 });
 export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({ id: true });
 export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
@@ -2865,6 +2868,12 @@ export const apiResponseCache = pgTable(
     fetchedAt: timestamp("fetched_at").defaultNow().notNull(),
     ttlSeconds: integer("ttl_seconds").notNull(),
     source: text("source").notNull().default("sonar"),
+    // Legacy columns added inline by server/runMigrations.ts. Declared here so
+    // drizzle-kit doesn't try to drop them on every db:push (which slows
+    // pushes to a crawl and was causing post-merge reconciliation to time
+    // out, blocking task "Apply" from completing).
+    responseData: jsonb("response_data"),
+    cachedAt: timestamp("cached_at").defaultNow(),
   },
   (table) => [
     index("arc_source_idx").on(table.source),
