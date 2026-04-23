@@ -296,6 +296,7 @@ function deriveFlags(row: DetailCarrier): CarrierFlag[] {
 function CarrierRow({
   row, carrier, rank, selected, onSelectChange,
   onLogOutcomeQuick, isFirstInBucket, isLastInBucket, onMove,
+  draggingRowId, setDraggingRowId, onDropOn,
 }: {
   row: DetailCarrier;
   carrier: Carrier | null;
@@ -306,6 +307,9 @@ function CarrierRow({
   isFirstInBucket: boolean;
   isLastInBucket: boolean;
   onMove: (rowId: string, dir: -1 | 1) => void;
+  draggingRowId: string | null;
+  setDraggingRowId: (id: string | null) => void;
+  onDropOn: (sourceRowId: string, targetRowId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [outcome, setOutcome] = useState<string | null>(null);
@@ -320,7 +324,26 @@ function CarrierRow({
 
   return (
     <div
-      className={`border-b border-border/60 last:border-b-0 ${excluded ? "opacity-60" : ""} hover-elevate transition-colors`}
+      draggable={!excluded && !sentAt}
+      onDragStart={(e) => {
+        if (excluded || sentAt) { e.preventDefault(); return; }
+        setDraggingRowId(row.id);
+        e.dataTransfer.effectAllowed = "move";
+        try { e.dataTransfer.setData("text/plain", row.id); } catch { /* ignore */ }
+      }}
+      onDragOver={(e) => {
+        if (!draggingRowId || draggingRowId === row.id) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+      }}
+      onDrop={(e) => {
+        if (!draggingRowId || draggingRowId === row.id) return;
+        e.preventDefault();
+        onDropOn(draggingRowId, row.id);
+        setDraggingRowId(null);
+      }}
+      onDragEnd={() => setDraggingRowId(null)}
+      className={`border-b border-border/60 last:border-b-0 ${excluded ? "opacity-60" : ""} hover-elevate transition-colors ${draggingRowId === row.id ? "opacity-40" : ""} ${draggingRowId && draggingRowId !== row.id ? "data-[dragover=true]:border-amber-500" : ""}`}
       data-testid={`row-carrier-${row.id}`}
     >
       <div className="flex items-center gap-3 px-4 py-2.5">
@@ -328,11 +351,11 @@ function CarrierRow({
           <button
             onClick={() => onMove(row.id, -1)}
             disabled={isFirstInBucket}
-            className="p-0.5 text-muted-foreground/50 hover:text-foreground disabled:opacity-30"
-            title="Move up"
+            className="p-0.5 text-muted-foreground/50 hover:text-foreground disabled:opacity-30 cursor-grab"
+            title="Drag to reorder, or click to move up"
             data-testid={`button-move-up-${row.id}`}
           >
-            <GripVertical className="h-3.5 w-3.5 cursor-grab" />
+            <GripVertical className="h-3.5 w-3.5" />
           </button>
         </div>
         <input
@@ -513,7 +536,7 @@ function CarrierRow({
 // Bucket section (collapsible)
 // ────────────────────────────────────────────────────────────────────────────
 function BucketSection({
-  bucket, rows, carrierById, selected, onSelectChange, onLogOutcomeQuick, onMove, defaultOpen,
+  bucket, rows, carrierById, selected, onSelectChange, onLogOutcomeQuick, onMove, onSwapRows, defaultOpen,
 }: {
   bucket: FreightOpportunityBucket;
   rows: DetailCarrier[];
@@ -522,10 +545,18 @@ function BucketSection({
   onSelectChange: (id: string, sel: boolean) => void;
   onLogOutcomeQuick: (rowId: string, outcome: string, rate: string) => void;
   onMove: (rowId: string, dir: -1 | 1) => void;
+  onSwapRows: (sourceRowId: string, targetRowId: string) => void;
   defaultOpen: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const [draggingRowId, setDraggingRowId] = useState<string | null>(null);
   const selectedInBucket = rows.filter(r => selected.has(r.id)).length;
+  const rowIdSet = new Set(rows.map(r => r.id));
+  const onDropOn = (sourceRowId: string, targetRowId: string) => {
+    // Only allow swaps within this bucket.
+    if (!rowIdSet.has(sourceRowId) || !rowIdSet.has(targetRowId)) return;
+    onSwapRows(sourceRowId, targetRowId);
+  };
   return (
     <div className="border border-border rounded-lg bg-card overflow-hidden" data-testid={`bucket-${bucket}`}>
       <button
@@ -558,6 +589,9 @@ function BucketSection({
               isFirstInBucket={idx === 0}
               isLastInBucket={idx === rows.length - 1}
               onMove={onMove}
+              draggingRowId={draggingRowId}
+              setDraggingRowId={setDraggingRowId}
+              onDropOn={onDropOn}
             />
           ))}
         </div>
@@ -599,6 +633,8 @@ function SuggestedPool({
   const counts = useMemo(() => ({
     all: pool.length,
     in_region: pool.filter(p => p.tag === "in_region").length,
+    prior_quote: pool.filter(p => p.tag === "prior_quote").length,
+    lactalis_history: pool.filter(p => p.tag === "lactalis_history").length,
     new_prospect: pool.filter(p => p.tag === "new_prospect").length,
   }), [pool]);
 
@@ -642,6 +678,8 @@ function SuggestedPool({
               {([
                 ["all", "All"],
                 ["in_region", "In region"],
+                ["prior_quote", "Prior quote"],
+                ["lactalis_history", "Customer history"],
                 ["new_prospect", "New prospects"],
               ] as const).map(([k, label]) => (
                 <button
@@ -685,12 +723,13 @@ function SuggestedPool({
               {allFilteredSelected ? "Clear" : "Select all"} ({filtered.length})
             </button>
           </div>
-          <div className="grid grid-cols-[28px_28px_1fr_140px_110px_60px] items-center gap-2 px-4 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold border-b border-border/60 bg-muted/20">
+          <div className="grid grid-cols-[28px_28px_1fr_140px_120px_90px_60px] items-center gap-2 px-4 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold border-b border-border/60 bg-muted/20">
             <div />
             <div />
             <div>Carrier</div>
             <div>Region</div>
             <div>Tag</div>
+            <div>Last rate</div>
             <div className="text-right">Fit</div>
           </div>
           <div className="max-h-[420px] overflow-y-auto">
@@ -709,7 +748,7 @@ function SuggestedPool({
               return (
                 <div
                   key={p.carrierId}
-                  className={`grid grid-cols-[28px_28px_1fr_140px_110px_60px] items-center gap-2 px-4 py-1.5 border-b border-border/40 last:border-b-0 text-sm hover-elevate ${sel ? "bg-amber-500/10" : ""}`}
+                  className={`grid grid-cols-[28px_28px_1fr_140px_120px_90px_60px] items-center gap-2 px-4 py-1.5 border-b border-border/40 last:border-b-0 text-sm hover-elevate ${sel ? "bg-amber-500/10" : ""}`}
                   data-testid={`row-pool-${p.carrierId}`}
                 >
                   <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40" />
@@ -727,6 +766,9 @@ function SuggestedPool({
                   <div className="text-[12px] text-muted-foreground truncate">{p.region}</div>
                   <div>
                     <Badge variant="outline" className={`text-[10px] ${tag.cls}`}>{tag.label}</Badge>
+                  </div>
+                  <div className="text-[12px] font-mono">
+                    {p.lastRate ? `$${p.lastRate.toLocaleString()}` : <span className="text-muted-foreground/60">—</span>}
                   </div>
                   <div className="text-right text-sm font-semibold tabular-nums">{p.fitScore}</div>
                 </div>
@@ -976,6 +1018,13 @@ export default function AvailableFreightDetailPage() {
     (allCarriers ?? []).forEach(c => m.set(c.id, c));
     return m;
   }, [allCarriers]);
+
+  const promoteFromPoolMutation = useMutation({
+    mutationFn: async (carrierIds: string[]) => {
+      const res = await apiRequest("POST", `/api/freight-opportunities/${id}/carriers/from-pool`, { carrierIds });
+      return res.json() as Promise<{ added: number; reused: number; rowIdsByCarrierId: Record<string, string> }>;
+    },
+  });
 
   const sendMutation = useMutation({
     mutationFn: async ({ carrierRowIds, scheduleAtIso, overrides: ov }: { carrierRowIds: string[]; scheduleAtIso?: string | null; overrides?: Record<string, { subject: string; body: string }> }) => {
@@ -1297,6 +1346,7 @@ export default function AvailableFreightDetailPage() {
                     onSelectChange={onSelectChange}
                     onLogOutcomeQuick={onLogOutcomeQuick}
                     onMove={onMove}
+                    onSwapRows={(sourceRowId, targetRowId) => swapCarrierMutation.mutate({ rowId: sourceRowId, otherRowId: targetRowId })}
                     defaultOpen={idx === 0}
                   />
                 );
@@ -1375,36 +1425,53 @@ export default function AvailableFreightDetailPage() {
               · {selected.size} from shortlist · {selectedPool.size} from pool
             </span>
             {selectedPool.size > 0 && (
-              <span className="text-[11px] text-amber-700 dark:text-amber-300 inline-flex items-center gap-1" data-testid="hint-pool-stub">
-                <Info className="h-3 w-3" /> Pool bulk-send launches next iteration — pool picks won't be included in this wave.
+              <span className="text-[11px] text-muted-foreground inline-flex items-center gap-1" data-testid="hint-pool-promote">
+                <Info className="h-3 w-3" /> Pool picks will be added to the shortlist as "Rep-added" before sending.
               </span>
             )}
             <div className="ml-auto flex items-center gap-2">
-              <Button variant="ghost" size="sm" onClick={() => { setSelected(new Set()); setSelectedPool(new Set()); }} data-testid="button-clear-selection">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => { setSelected(new Set()); setSelectedPool(new Set()); }}
+                data-testid="button-clear-selection"
+              >
                 Clear
               </Button>
               <Button
                 size="sm"
-                onClick={() => {
-                  if (selected.size === 0) {
-                    toast({
-                      title: "Pool send coming soon",
-                      description: "Pool bulk-send launches in the next iteration. Select carriers from the ranked shortlist to send a wave today.",
-                      variant: "destructive",
-                    });
-                    return;
+                onClick={async () => {
+                  // Materialize any pool selections as shortlist rows first.
+                  if (selectedPool.size > 0) {
+                    try {
+                      const promoted = await promoteFromPoolMutation.mutateAsync(Array.from(selectedPool));
+                      // Merge the new row IDs into selected, then re-fetch detail so
+                      // the buckets show the new rep_added rows.
+                      const newRowIds = Object.values(promoted.rowIdsByCarrierId);
+                      setSelected(prev => {
+                        const n = new Set(prev);
+                        newRowIds.forEach(rid => n.add(rid));
+                        return n;
+                      });
+                      setSelectedPool(new Set());
+                      await queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities", id] });
+                      await queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities", id, "carrier-pool"] });
+                    } catch (err: any) {
+                      toast({ title: "Couldn't add pool carriers", description: err?.message ?? "Try again.", variant: "destructive" });
+                      return;
+                    }
                   }
                   setScheduleAt("");
                   setSendModalOpen(true);
                 }}
-                disabled={selected.size === 0 && selectedPool.size === 0}
+                disabled={(selected.size === 0 && selectedPool.size === 0) || promoteFromPoolMutation.isPending}
                 className="bg-amber-500 text-zinc-900 hover:bg-amber-400"
                 data-testid="button-send-wave"
               >
                 <Send className="h-3.5 w-3.5 mr-1.5" />
-                {selected.size > 0
-                  ? `Send wave to ${selected.size} shortlist carrier${selected.size === 1 ? "" : "s"}`
-                  : "Send wave"}
+                {promoteFromPoolMutation.isPending
+                  ? "Adding pool carriers…"
+                  : `Send wave to ${totalSelected} carrier${totalSelected === 1 ? "" : "s"}`}
               </Button>
             </div>
           </div>

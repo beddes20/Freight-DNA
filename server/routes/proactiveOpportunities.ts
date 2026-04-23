@@ -15,7 +15,7 @@ import XLSX from "xlsx";
 import { requireAuth, getCurrentUser } from "../auth";
 import { storage, db } from "../storage";
 import { freightOpportunityCarriers } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { runImportFromWorkbook as runAvailableFreightImportFromWorkbook } from "../availableFreightImporter";
 import { loadEffectivePolicy, ensureShortlistRanked } from "../proactiveOpportunityService";
@@ -286,6 +286,59 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       ]);
       const shortlistIds = new Set(shortlistRows.map(r => r.carrierId));
 
+      // ── Enrichment: prior_quote (90d), customer_history (any prior row for
+      // this companyId), and lastRate (latest quoted_rate for this carrier on
+      // this lane). All bounded to org via the join on freight_opportunities.
+      const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+      const oneYearAgo = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+      const [priorQuoteRows, customerHistRows, lastRateRows] = await Promise.all([
+        // prior_quote: carrier actually quoted us in the last 90d (quoted_rate present),
+        // not merely "was on a shortlist". Sourced from responses, not FOC rows.
+        db.execute<{ carrier_id: string }>(sql`
+          SELECT DISTINCT foc.carrier_id
+          FROM freight_opportunity_responses fr
+          JOIN freight_opportunity_carriers foc ON foc.id = fr.opportunity_carrier_id
+          JOIN freight_opportunities fo ON fo.id = foc.opportunity_id
+          WHERE fo.org_id = ${org}
+            AND fr.quoted_rate IS NOT NULL
+            AND fr.created_at > ${ninetyDaysAgo.toISOString()}
+            AND foc.opportunity_id <> ${opp.id}
+        `),
+        // customer_history: bound to 1y so this stays cheap on long-tenured tenants.
+        opp.companyId ? db.execute<{ carrier_id: string }>(sql`
+          SELECT DISTINCT foc.carrier_id
+          FROM freight_opportunity_carriers foc
+          JOIN freight_opportunities fo ON fo.id = foc.opportunity_id
+          WHERE fo.org_id = ${org}
+            AND fo.company_id = ${opp.companyId}
+            AND foc.created_at > ${oneYearAgo.toISOString()}
+            AND foc.opportunity_id <> ${opp.id}
+        `) : Promise.resolve({ rows: [] as Array<{ carrier_id: string }> }),
+        // lastRate: latest quoted rate per carrier on this exact lane within last year.
+        db.execute<{ carrier_id: string; quoted_rate: string | null; created_at: Date }>(sql`
+          SELECT DISTINCT ON (foc.carrier_id)
+            foc.carrier_id, fr.quoted_rate, fr.created_at
+          FROM freight_opportunity_responses fr
+          JOIN freight_opportunity_carriers foc ON foc.id = fr.opportunity_carrier_id
+          JOIN freight_opportunities fo ON fo.id = foc.opportunity_id
+          WHERE fo.org_id = ${org}
+            AND fr.quoted_rate IS NOT NULL
+            AND fr.created_at > ${oneYearAgo.toISOString()}
+            AND lower(fo.origin) = lower(${opp.origin})
+            AND lower(fo.destination) = lower(${opp.destination})
+          ORDER BY foc.carrier_id, fr.created_at DESC
+        `),
+      ]);
+      const priorQuoteSet = new Set((priorQuoteRows.rows ?? []).map(r => r.carrier_id));
+      const customerHistSet = new Set((customerHistRows.rows ?? []).map(r => r.carrier_id));
+      const lastRateMap = new Map<string, number>();
+      for (const r of (lastRateRows.rows ?? [])) {
+        if (r.quoted_rate != null) {
+          const n = Number(r.quoted_rate);
+          if (!isNaN(n)) lastRateMap.set(r.carrier_id, n);
+        }
+      }
+
       const norm = (s: string | null | undefined) => (s ?? "").trim().toUpperCase();
       const oState = norm(opp.originState);
       const dState = norm(opp.destinationState);
@@ -329,6 +382,17 @@ export function registerProactiveOpportunityRoutes(app: Express) {
           : c.state ? c.state.toUpperCase()
           : (states[0] ?? "—");
 
+        const hasCustomerHistory = customerHistSet.has(c.id);
+        const hasPriorQuote = priorQuoteSet.has(c.id);
+        if (hasCustomerHistory) score += 18;
+        else if (hasPriorQuote) score += 10;
+
+        const tag: "lactalis_history" | "prior_quote" | "in_region" | "new_prospect" =
+          hasCustomerHistory ? "lactalis_history"
+          : hasPriorQuote ? "prior_quote"
+          : inRegion ? "in_region"
+          : "new_prospect";
+
         scored.push({
           id: `pool_${c.id}`,
           carrierId: c.id,
@@ -336,8 +400,8 @@ export function registerProactiveOpportunityRoutes(app: Express) {
           mc: c.mcDot,
           region,
           fitScore: Math.max(0, Math.min(99, Math.round(score))),
-          lastRate: null,
-          tag: inRegion ? "in_region" : "new_prospect",
+          lastRate: lastRateMap.get(c.id) ?? null,
+          tag,
           email: c.primaryEmail,
           phone: c.phone,
         });
@@ -349,6 +413,88 @@ export function registerProactiveOpportunityRoutes(app: Express) {
     } catch (err) {
       console.error("[freight-opps] carrier-pool error:", err);
       res.status(500).json({ error: "Failed to load carrier pool" });
+    }
+  });
+
+  // ── PROMOTE POOL CARRIERS TO SHORTLIST ────────────────────────────────────
+  // Materializes pool selections as freight_opportunity_carriers rows (bucket
+  // `rep_added`). Returns the new row IDs so the client can include them in a
+  // send-wave call alongside any existing shortlist selections.
+  const fromPoolSchema = z.object({
+    carrierIds: z.array(z.string().min(1)).min(1).max(100),
+  });
+  app.post("/api/freight-opportunities/:id/carriers/from-pool", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const opp = await storage.getFreightOpportunity(org, String(req.params.id));
+      if (!opp) return res.status(404).json({ error: "Opportunity not found" });
+      const parsed = fromPoolSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid payload", details: parsed.error.flatten() });
+      }
+
+      const [existing, allCarriers] = await Promise.all([
+        storage.listFreightOpportunityCarriers(opp.id),
+        storage.getCarriers(org),
+      ]);
+      const existingByCarrier = new Map(existing.map(r => [r.carrierId, r]));
+      const carrierById = new Map(allCarriers.map(c => [c.id, c]));
+      const maxRank = existing.reduce((m, r) => Math.max(m, r.rank ?? 0), 0);
+
+      const toInsert: import("@shared/schema").InsertFreightOpportunityCarrier[] = [];
+      const reused: { carrierId: string; rowId: string }[] = [];
+      let nextRank = maxRank;
+      // Dedupe input so a payload with repeated IDs can't insert twice.
+      const seenInPayload = new Set<string>();
+      for (const carrierId of parsed.data.carrierIds) {
+        if (seenInPayload.has(carrierId)) continue;
+        seenInPayload.add(carrierId);
+        const carrier = carrierById.get(carrierId);
+        if (!carrier) continue;
+        const dup = existingByCarrier.get(carrierId);
+        if (dup) {
+          reused.push({ carrierId, rowId: dup.id });
+          continue;
+        }
+        nextRank += 1;
+        toInsert.push({
+          opportunityId: opp.id,
+          carrierId,
+          rank: nextRank,
+          bucket: "rep_added",
+          fitScore: 50,
+          historyMatch: "none",
+          explanation: "Manually added from suggested pool",
+          explanationStructured: { source: "rep_added_from_pool" } as any,
+          responsivenessSnapshot: null,
+          excludedReason: null,
+        });
+      }
+
+      const inserted = toInsert.length > 0
+        ? await storage.insertFreightOpportunityCarriers(toInsert)
+        : [];
+
+      try {
+        await storage.appendFreightOpportunityAudit({
+          opportunityId: opp.id,
+          eventType: "carrier_included_override",
+          actorUserId: userId(req),
+          payload: { source: "pool_promotion", added: inserted.length, reused: reused.length },
+        });
+      } catch { /* audit best-effort */ }
+
+      const allRowsForCarriers = new Map<string, string>();
+      reused.forEach(r => allRowsForCarriers.set(r.carrierId, r.rowId));
+      inserted.forEach(r => allRowsForCarriers.set(r.carrierId, r.id));
+      res.json({
+        added: inserted.length,
+        reused: reused.length,
+        rowIdsByCarrierId: Object.fromEntries(allRowsForCarriers),
+      });
+    } catch (err) {
+      console.error("[freight-opps] from-pool error:", err);
+      res.status(500).json({ error: "Failed to promote pool carriers" });
     }
   });
 
