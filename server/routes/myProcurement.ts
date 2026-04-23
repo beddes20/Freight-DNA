@@ -37,17 +37,24 @@ const APPROVER_ROLES = new Set([
 ]);
 
 /**
- * Direct-manager visibility for read-only queues (LWQ today, more later).
+ * Read-only visibility for queues (LWQ today, more later).
  *
- * A rep sees lanes/freight owned by themselves OR by their immediate manager.
- * Mutation auth elsewhere stays strict (owner/delegated only). The org_id
- * predicate on the SQL above is a defense-in-depth check in case a stale
- * managerId points at a user from a different org.
+ * A user sees lanes/freight where:
+ *   - owner_user_id is themselves OR their immediate manager  (direct-manager rule), OR
+ *   - company_id is an account they were explicitly added to as a collaborator.
+ *
+ * Mutation auth elsewhere stays strict (owner/delegated only). org_id is still
+ * required on every read as a defense-in-depth tenant check.
  */
-function visibleOwnerIds(user: { id: string; managerId?: string | null }): string[] {
-  const ids = new Set<string>([user.id]);
-  if (user.managerId) ids.add(user.managerId);
-  return Array.from(ids);
+async function getLwqVisibility(user: {
+  id: string;
+  organizationId: string;
+  managerId?: string | null;
+}): Promise<{ ownerIds: string[]; companyIds: string[] }> {
+  const ownerIds = new Set<string>([user.id]);
+  if (user.managerId) ownerIds.add(user.managerId);
+  const companyIds = await storage.getCollaboratorCompanyIds(user.id, user.organizationId);
+  return { ownerIds: Array.from(ownerIds), companyIds };
 }
 
 /**
@@ -113,6 +120,7 @@ export function registerMyProcurementRoutes(app: Express) {
 
       // ── 1. My lanes — prefer lane_summary_cache (lean, pre-computed), fall back to recurring_lanes ──
       // Cache path: no joins, no per-lane bench enrichment — just the pre-scored fields.
+      const vis = await getLwqVisibility(user);
       const cacheRows = await storage.pool.query<{
         lane_id: string;
         origin: string;
@@ -143,15 +151,17 @@ export function registerMyProcurementRoutes(app: Express) {
            COALESCE(lsc.carriers_contacted_count, 0) AS carriers_contacted_count,
            true AS has_cache
          FROM lane_summary_cache lsc
-         WHERE lsc.owner_user_id = ANY($1::varchar[])
+         WHERE (
+             lsc.owner_user_id = ANY($1::varchar[])
+             OR lsc.company_id = ANY($3::varchar[])
+           )
            AND lsc.org_id = $2
            AND lsc.resolved_at IS NULL
          ORDER BY lsc.lane_score DESC NULLS LAST, lsc.lane_id`,
-        // Direct-manager visibility: a rep sees their own lanes plus any lane
-        // owned by their immediate manager. Mutation auth elsewhere stays
-        // strict (owner-only). Manager IDs from other orgs are filtered out
-        // by the org_id predicate above as a defense-in-depth check.
-        [visibleOwnerIds(user), user.organizationId]
+        // Visibility: own lanes + immediate-manager lanes (param 1)
+        // OR lanes whose company the user was explicitly added to as a
+        // collaborator (param 3). org_id is required as a tenant guard.
+        [vis.ownerIds, user.organizationId, vis.companyIds]
       );
 
       let lwqLanesAll: Array<{
@@ -215,11 +225,14 @@ export function registerMyProcurementRoutes(app: Express) {
              rl.carriers_contacted_count
            FROM recurring_lanes rl
            LEFT JOIN companies c ON c.id = rl.company_id
-           WHERE rl.owner_user_id = ANY($1::varchar[])
+           WHERE (
+               rl.owner_user_id = ANY($1::varchar[])
+               OR rl.company_id = ANY($3::varchar[])
+             )
              AND rl.org_id = $2
              AND rl.resolved_at IS NULL
            ORDER BY rl.lane_score DESC NULLS LAST`,
-          [visibleOwnerIds(user), user.organizationId]
+          [vis.ownerIds, user.organizationId, vis.companyIds]
         );
         lwqLanesAll = fallbackRows.rows.map((r) => ({
           laneId: r.id,

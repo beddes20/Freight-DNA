@@ -293,7 +293,16 @@ export async function getVisibleCompanyIds(user: User): Promise<string[] | null>
 
   const allCompanies = await storage.getCompanies(user.organizationId);
 
+  // Account-level Collaborators (manual sharing) — these company IDs are
+  // unioned into every role's visible set so a collaborator can drill into
+  // shared accounts (detail page, lane outreach, conversations, etc.) and
+  // not just see them in their LWQ.
+  const collaboratorCompanyIds = new Set(
+    await storage.getCollaboratorCompanyIds(user.id, user.organizationId),
+  );
+
   const isSharedRep = (c: Company) => {
+    if (collaboratorCompanyIds.has(c.id)) return true;
     const reps = (c.sharedReps || []) as SharedRep[];
     return reps.some(r => r.userId === user.id);
   };

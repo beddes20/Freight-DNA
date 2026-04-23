@@ -74,6 +74,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { CarrierOutreachPanel } from "@/components/CarrierOutreachPanel";
+import { AccountSharingDialog } from "@/components/lane-work-queue/AccountSharingDialog";
 import { SendReplyAuditPanel } from "@/components/lane-work-queue/SendReplyAuditPanel";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -1694,6 +1695,7 @@ export default function LaneWorkQueuePage() {
   const [manualOnly, setManualOnly] = useState(false);
   const [customerFilter, setCustomerFilter] = useState<string>("__all__");
   const [buildLaneOpen, setBuildLaneOpen] = useState(false);
+  const [sharingOpen, setSharingOpen] = useState(false);
   const [selectedLaneIds, setSelectedLaneIds] = useState<Set<string>>(new Set());
   const [bulkAssignUserId, setBulkAssignUserId] = useState<string>("");
 
@@ -1989,6 +1991,17 @@ export default function LaneWorkQueuePage() {
           >
             <PlusCircle className="w-3.5 h-3.5" />
             Build Lane
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs gap-1.5"
+            onClick={() => setSharingOpen(true)}
+            data-testid="btn-manage-sharing"
+            title="Add a teammate as a collaborator on one of your accounts"
+          >
+            <User className="w-3.5 h-3.5" />
+            Manage Sharing
           </Button>
           {/* Customer filter dropdown */}
           {(queue?.customers?.length ?? 0) > 0 && (
@@ -2409,6 +2422,9 @@ export default function LaneWorkQueuePage() {
         teamMembers={teamMembers}
         isAdminOrDirector={isAdminOrDirector}
       />
+
+      {/* Account sharing dialog */}
+      <AccountSharingDialog open={sharingOpen} onOpenChange={setSharingOpen} />
 
       {/* Outreach panel */}
       <CarrierOutreachPanel

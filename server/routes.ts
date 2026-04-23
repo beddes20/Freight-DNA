@@ -15,6 +15,7 @@ import { registerForcedFocusRoutes } from "./routes/forcedFocus";
 import { registerLaneCarrierOutreachRoutes } from "./routes/laneCarrierOutreach";
 import { registerCarrierHubRoutes } from "./routes/carrierHub";
 import { registerMyProcurementRoutes } from "./routes/myProcurement";
+import { registerCompanyCollaboratorRoutes } from "./routes/companyCollaborators";
 import { registerProcurementOutreachRoutes } from "./routes/procurementOutreach";
 import { registerProactiveOpportunityRoutes } from "./routes/proactiveOpportunities";
 import { registerIntelRoutes } from "./routes/intel";
@@ -3207,6 +3208,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerLaneCarrierOutreachRoutes(app);
   registerCarrierHubRoutes(app);
   registerMyProcurementRoutes(app);
+  registerCompanyCollaboratorRoutes(app);
   registerProcurementOutreachRoutes(app);
   registerProactiveOpportunityRoutes(app);
   registerIntelRoutes(app);

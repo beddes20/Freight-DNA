@@ -231,6 +231,9 @@ import {
   nbaCardOutcomes,
   type NbaCardOutcome,
   type InsertNbaCardOutcome,
+  companyCollaborators,
+  type CompanyCollaborator,
+  type InsertCompanyCollaborator,
 } from "@shared/schema";
 
 const { Pool } = pg;
@@ -388,6 +391,12 @@ export interface IStorage {
   deleteCompany(id: string, organizationId: string): Promise<boolean>;
   archiveCompany(id: string, organizationId: string): Promise<Company | undefined>;
   unarchiveCompany(id: string, organizationId: string): Promise<Company | undefined>;
+  // Account-level collaborators (manual visibility sharing)
+  listCollaboratorsForCompany(companyId: string, organizationId: string): Promise<Array<CompanyCollaborator & { userName: string; userRole: string }>>;
+  addCompanyCollaborator(input: InsertCompanyCollaborator): Promise<CompanyCollaborator>;
+  removeCompanyCollaborator(companyId: string, userId: string, organizationId: string): Promise<boolean>;
+  getCollaboratorCompanyIds(userId: string, organizationId: string): Promise<string[]>;
+  getAccountsManageableForSharing(viewerId: string, viewerRole: string, organizationId: string): Promise<Company[]>;
   
   getContacts(): Promise<Contact[]>;
   getContactsByCompany(companyId: string): Promise<Contact[]>;
@@ -1439,6 +1448,96 @@ export class DatabaseStorage implements IStorage {
       .returning();
     cacheInvalidatePrefix("companies:");
     return updated;
+  }
+
+  // ============= Company Collaborators (manual visibility sharing) =============
+
+  async listCollaboratorsForCompany(companyId: string, organizationId: string): Promise<Array<CompanyCollaborator & { userName: string; userRole: string }>> {
+    const rows = await db
+      .select({
+        id: companyCollaborators.id,
+        organizationId: companyCollaborators.organizationId,
+        companyId: companyCollaborators.companyId,
+        userId: companyCollaborators.userId,
+        addedByUserId: companyCollaborators.addedByUserId,
+        createdAt: companyCollaborators.createdAt,
+        userName: users.name,
+        userRole: users.role,
+      })
+      .from(companyCollaborators)
+      .innerJoin(users, eq(users.id, companyCollaborators.userId))
+      .where(and(
+        eq(companyCollaborators.companyId, companyId),
+        eq(companyCollaborators.organizationId, organizationId),
+      ));
+    return rows;
+  }
+
+  async addCompanyCollaborator(input: InsertCompanyCollaborator): Promise<CompanyCollaborator> {
+    const [row] = await db
+      .insert(companyCollaborators)
+      .values(input)
+      .onConflictDoNothing({ target: [companyCollaborators.companyId, companyCollaborators.userId] })
+      .returning();
+    if (row) return row;
+    // Conflict — return existing row
+    const [existing] = await db
+      .select()
+      .from(companyCollaborators)
+      .where(and(
+        eq(companyCollaborators.companyId, input.companyId),
+        eq(companyCollaborators.userId, input.userId),
+      ));
+    return existing;
+  }
+
+  async removeCompanyCollaborator(companyId: string, userId: string, organizationId: string): Promise<boolean> {
+    const result = await db
+      .delete(companyCollaborators)
+      .where(and(
+        eq(companyCollaborators.companyId, companyId),
+        eq(companyCollaborators.userId, userId),
+        eq(companyCollaborators.organizationId, organizationId),
+      ))
+      .returning();
+    return result.length > 0;
+  }
+
+  /** Companies the given user is currently a collaborator on. */
+  async getCollaboratorCompanyIds(userId: string, organizationId: string): Promise<string[]> {
+    const rows = await db
+      .select({ companyId: companyCollaborators.companyId })
+      .from(companyCollaborators)
+      .where(and(
+        eq(companyCollaborators.userId, userId),
+        eq(companyCollaborators.organizationId, organizationId),
+      ));
+    return rows.map(r => r.companyId);
+  }
+
+  /** All accounts on which `viewerId` may MANAGE collaborators. Per product policy:
+   *  - admins / directors / sales_director: any company in the org
+   *  - everyone else: companies they own + companies owned by their direct reports
+   */
+  async getAccountsManageableForSharing(viewerId: string, viewerRole: string, organizationId: string): Promise<Company[]> {
+    const ADMIN_ROLES = new Set(["admin", "director", "sales_director"]);
+    if (ADMIN_ROLES.has(viewerRole)) {
+      return db.select().from(companies).where(and(
+        eq(companies.organizationId, organizationId),
+        isNull(companies.archivedAt),
+      ));
+    }
+    // Owner OR owner-is-a-direct-report-of-viewer
+    const directReports = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.managerId, viewerId), eq(users.organizationId, organizationId)));
+    const allowedOwnerIds = [viewerId, ...directReports.map(r => r.id)];
+    return db.select().from(companies).where(and(
+      eq(companies.organizationId, organizationId),
+      isNull(companies.archivedAt),
+      inArray(companies.assignedTo, allowedOwnerIds),
+    ));
   }
 
   async getContacts(): Promise<Contact[]> {

@@ -4494,3 +4494,30 @@ export const insertCarrierRecommendationSchema = createInsertSchema(carrierRecom
   .omit({ id: true, computedAt: true });
 export type InsertCarrierRecommendation = z.infer<typeof insertCarrierRecommendationSchema>;
 export type CarrierRecommendation = typeof carrierRecommendation.$inferSelect;
+
+// =====================================================================
+// Account-level collaborators (manual visibility sharing)
+// =====================================================================
+// A row here grants `userId` read+act access to all freight/lanes/etc.
+// for `companyId`. Sharing is added by the account owner, that owner's
+// manager, or org admins. Mutation auth on individual records still
+// runs through the existing owner/delegated checks; collaborators get
+// the same surface as the owner aside from reassignment/deletion.
+export const companyCollaborators = pgTable("company_collaborators", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  addedByUserId: varchar("added_by_user_id").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  uq: uniqueIndex("company_collaborators_company_user_uq").on(t.companyId, t.userId),
+  userIdx: index("company_collaborators_user_idx").on(t.userId),
+  orgIdx: index("company_collaborators_org_idx").on(t.organizationId),
+}));
+export const insertCompanyCollaboratorSchema = createInsertSchema(companyCollaborators).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertCompanyCollaborator = z.infer<typeof insertCompanyCollaboratorSchema>;
+export type CompanyCollaborator = typeof companyCollaborators.$inferSelect;
