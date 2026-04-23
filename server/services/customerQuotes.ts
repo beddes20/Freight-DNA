@@ -757,6 +757,165 @@ export function quotesToCsv(quotes: EnrichedQuote[]): string {
   return [headers, ...rows].map(r => r.map(escape).join(",")).join("\n");
 }
 
+// ---------- Create / Update ----------
+
+const TRACKED_FIELDS: Array<keyof QuoteOpportunity> = [
+  "customerId", "repId", "carrierId", "outcomeReasonId",
+  "originCity", "originState", "destCity", "destState",
+  "equipment", "quotedAmount", "validThrough", "outcomeStatus",
+  "carrierPaid", "responseTimeHours", "source", "sourceReference",
+  "notes", "score",
+];
+
+export type CreateQuoteInput = {
+  customerId: string;
+  repId?: string | null;
+  carrierId?: string | null;
+  outcomeReasonId?: string | null;
+  originCity: string; originState: string;
+  destCity: string; destState: string;
+  equipment: string;
+  quotedAmount?: string | number | null;
+  validThrough?: string | null;
+  outcomeStatus?: QuoteOutcomeStatus;
+  carrierPaid?: string | number | null;
+  responseTimeHours?: string | number | null;
+  source?: string;
+  sourceReference?: string | null;
+  notes?: string | null;
+  score?: string | number | null;
+  requestDate?: string | null;
+};
+
+export type UpdateQuoteInput = Partial<CreateQuoteInput>;
+
+function toDecimalString(v: string | number | null | undefined): string | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = typeof v === "string" ? Number(v) : v;
+  if (!isFinite(n)) return null;
+  return String(n);
+}
+
+function toDate(v: string | null | undefined): Date | null {
+  if (!v) return null;
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+export async function createQuote(orgId: string, actor: string, input: CreateQuoteInput): Promise<QuoteOpportunity> {
+  // Verify the customer belongs to the org.
+  const [cust] = await db.select().from(quoteCustomers)
+    .where(and(eq(quoteCustomers.organizationId, orgId), eq(quoteCustomers.id, input.customerId))).limit(1);
+  if (!cust) throw new Error("Invalid customer for organization");
+
+  const reqDate = toDate(input.requestDate ?? null) ?? new Date();
+  const status = (input.outcomeStatus ?? "pending") as QuoteOutcomeStatus;
+
+  const [opp] = await db.insert(quoteOpportunities).values({
+    organizationId: orgId,
+    customerId: input.customerId,
+    repId: input.repId ?? null,
+    carrierId: input.carrierId ?? null,
+    outcomeReasonId: input.outcomeReasonId ?? null,
+    requestDate: reqDate,
+    originCity: input.originCity,
+    originState: input.originState,
+    destCity: input.destCity,
+    destState: input.destState,
+    equipment: input.equipment,
+    quotedAmount: toDecimalString(input.quotedAmount ?? null),
+    validThrough: toDate(input.validThrough ?? null),
+    outcomeStatus: status,
+    carrierPaid: toDecimalString(input.carrierPaid ?? null),
+    responseTimeHours: toDecimalString(input.responseTimeHours ?? null),
+    source: input.source ?? "manual",
+    sourceReference: input.sourceReference ?? null,
+    notes: input.notes ?? null,
+    score: toDecimalString(input.score ?? null),
+  }).returning();
+
+  // Audit trail.
+  const events: typeof quoteEvents.$inferInsert[] = [
+    { quoteId: opp.id, eventType: "requested", occurredAt: reqDate, actor,
+      payload: { source: opp.source, reference: opp.sourceReference } },
+  ];
+  if (opp.quotedAmount) {
+    events.push({ quoteId: opp.id, eventType: "quoted", occurredAt: new Date(), actor,
+      payload: { quotedAmount: opp.quotedAmount } });
+  }
+  if (isWon(opp.outcomeStatus)) {
+    events.push({ quoteId: opp.id, eventType: "won", occurredAt: new Date(), actor,
+      payload: { carrierPaid: opp.carrierPaid } });
+  } else if (isLost(opp.outcomeStatus)) {
+    events.push({ quoteId: opp.id, eventType: "lost", occurredAt: new Date(), actor, payload: {} });
+  } else if (opp.outcomeStatus === "expired") {
+    events.push({ quoteId: opp.id, eventType: "expired", occurredAt: new Date(), actor, payload: {} });
+  }
+  await db.insert(quoteEvents).values(events);
+  return opp;
+}
+
+export async function updateQuote(orgId: string, actor: string, id: string, patch: UpdateQuoteInput): Promise<QuoteOpportunity> {
+  const [existing] = await db.select().from(quoteOpportunities)
+    .where(and(eq(quoteOpportunities.organizationId, orgId), eq(quoteOpportunities.id, id))).limit(1);
+  if (!existing) throw new Error("Quote not found");
+
+  const next: Partial<typeof quoteOpportunities.$inferInsert> = {};
+  if (patch.customerId !== undefined) next.customerId = patch.customerId;
+  if (patch.repId !== undefined) next.repId = patch.repId;
+  if (patch.carrierId !== undefined) next.carrierId = patch.carrierId;
+  if (patch.outcomeReasonId !== undefined) next.outcomeReasonId = patch.outcomeReasonId;
+  if (patch.originCity !== undefined) next.originCity = patch.originCity;
+  if (patch.originState !== undefined) next.originState = patch.originState;
+  if (patch.destCity !== undefined) next.destCity = patch.destCity;
+  if (patch.destState !== undefined) next.destState = patch.destState;
+  if (patch.equipment !== undefined) next.equipment = patch.equipment;
+  if (patch.quotedAmount !== undefined) next.quotedAmount = toDecimalString(patch.quotedAmount);
+  if (patch.validThrough !== undefined) next.validThrough = toDate(patch.validThrough);
+  if (patch.outcomeStatus !== undefined) next.outcomeStatus = patch.outcomeStatus;
+  if (patch.carrierPaid !== undefined) next.carrierPaid = toDecimalString(patch.carrierPaid);
+  if (patch.responseTimeHours !== undefined) next.responseTimeHours = toDecimalString(patch.responseTimeHours);
+  if (patch.source !== undefined) next.source = patch.source;
+  if (patch.sourceReference !== undefined) next.sourceReference = patch.sourceReference;
+  if (patch.notes !== undefined) next.notes = patch.notes;
+  if (patch.score !== undefined) next.score = toDecimalString(patch.score);
+  if (patch.requestDate !== undefined) {
+    const d = toDate(patch.requestDate); if (d) next.requestDate = d;
+  }
+
+  const [updated] = await db.update(quoteOpportunities).set(next)
+    .where(and(eq(quoteOpportunities.organizationId, orgId), eq(quoteOpportunities.id, id)))
+    .returning();
+
+  // Build diff for audit.
+  const changes: Record<string, { from: unknown; to: unknown }> = {};
+  for (const k of TRACKED_FIELDS) {
+    const a = existing[k];
+    const b = updated[k];
+    const aVal = a instanceof Date ? a.toISOString() : a;
+    const bVal = b instanceof Date ? b.toISOString() : b;
+    if (aVal !== bVal) changes[k] = { from: aVal, to: bVal };
+  }
+
+  const eventsToAdd: typeof quoteEvents.$inferInsert[] = [];
+  const now = new Date();
+  if (Object.keys(changes).length > 0) {
+    eventsToAdd.push({ quoteId: id, eventType: "updated", occurredAt: now, actor, payload: { changes } });
+  }
+  if (changes.outcomeStatus) {
+    const newStatus = updated.outcomeStatus;
+    if (isWon(newStatus)) eventsToAdd.push({ quoteId: id, eventType: "won", occurredAt: now, actor, payload: { carrierPaid: updated.carrierPaid } });
+    else if (isLost(newStatus)) eventsToAdd.push({ quoteId: id, eventType: "lost", occurredAt: now, actor, payload: {} });
+    else if (newStatus === "expired") eventsToAdd.push({ quoteId: id, eventType: "expired", occurredAt: now, actor, payload: {} });
+    else if (newStatus === "no_response") eventsToAdd.push({ quoteId: id, eventType: "no_response", occurredAt: now, actor, payload: {} });
+  }
+  if (changes.quotedAmount && !changes.outcomeStatus) {
+    eventsToAdd.push({ quoteId: id, eventType: "revised", occurredAt: now, actor, payload: { quotedAmount: updated.quotedAmount } });
+  }
+  if (eventsToAdd.length > 0) await db.insert(quoteEvents).values(eventsToAdd);
+  return updated;
+}
+
 export async function exportCsv(orgId: string, filters: QuoteFilters): Promise<string> {
   const ctx = await loadContext(orgId);
   const all = await db.select().from(quoteOpportunities).where(eq(quoteOpportunities.organizationId, orgId));

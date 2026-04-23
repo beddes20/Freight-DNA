@@ -259,6 +259,7 @@ export default function CustomerQuotesPage(): JSX.Element {
   const [savedViewsOpen, setSavedViewsOpen] = useState(false);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [newViewName, setNewViewName] = useState("");
+  const [newQuoteOpen, setNewQuoteOpen] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("requestDate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(0);
@@ -326,6 +327,38 @@ export default function CustomerQuotesPage(): JSX.Element {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/saved-views"] }),
   });
 
+  const invalidateQuoteData = (id?: string): void => {
+    queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/list"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/snapshot"] });
+    if (id) queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/quote", id] });
+  };
+
+  const createQuoteMutation = useMutation({
+    mutationFn: async (payload: Record<string, unknown>): Promise<QuoteDetail> => {
+      const res = await apiRequest("POST", "/api/customer-quotes/quote", payload);
+      return res.json() as Promise<QuoteDetail>;
+    },
+    onSuccess: (detail) => {
+      invalidateQuoteData();
+      setNewQuoteOpen(false);
+      toast({ title: "Quote logged", description: `${detail.opp.originCity} → ${detail.opp.destCity}` });
+      setDrawerId(detail.opp.id);
+    },
+    onError: (err: Error) => toast({ title: "Could not save quote", description: err.message, variant: "destructive" }),
+  });
+
+  const updateQuoteMutation = useMutation({
+    mutationFn: async ({ id, patch }: { id: string; patch: Record<string, unknown> }): Promise<QuoteDetail> => {
+      const res = await apiRequest("PATCH", `/api/customer-quotes/quote/${id}`, patch);
+      return res.json() as Promise<QuoteDetail>;
+    },
+    onSuccess: (detail) => {
+      invalidateQuoteData(detail.opp.id);
+      toast({ title: "Quote updated" });
+    },
+    onError: (err: Error) => toast({ title: "Update failed", description: err.message, variant: "destructive" }),
+  });
+
   const updateFilter = (patch: Partial<Filters>): void => setFilters(f => ({ ...f, ...patch }));
   const clearAll = (): void => setFilters({});
   const removeFilter = (k: keyof Filters): void => setFilters(f => { const c = { ...f }; delete c[k]; return c; });
@@ -355,6 +388,9 @@ export default function CustomerQuotesPage(): JSX.Element {
             <p className="text-xs text-zinc-500 mt-0.5">Quote requests, outcomes, lane performance — drillable across customers, reps, and lanes.</p>
           </div>
           <div className="flex items-center gap-2">
+            <Button size="sm" onClick={() => setNewQuoteOpen(true)} className="bg-amber-500 hover:bg-amber-600 text-zinc-950" data-testid="button-new-quote">
+              <Plus className="h-3.5 w-3.5 mr-1.5" /> New Quote
+            </Button>
             <Button size="sm" variant="outline" onClick={handleExport} className="border-zinc-700 hover:bg-zinc-800" data-testid="button-export-csv">
               <Download className="h-3.5 w-3.5 mr-1.5" /> Export CSV
             </Button>
@@ -554,6 +590,11 @@ export default function CustomerQuotesPage(): JSX.Element {
                       onSort={toggleSort}
                       onRowClick={(id) => setDrawerId(id)}
                       isLoading={listQuery.isLoading}
+                      reasons={data.reasons}
+                      onInlineOutcome={(id, outcomeStatus, outcomeReasonId) =>
+                        updateQuoteMutation.mutate({ id, patch: { outcomeStatus, outcomeReasonId: outcomeReasonId ?? null } })
+                      }
+                      pendingId={updateQuoteMutation.isPending ? (updateQuoteMutation.variables as { id: string } | undefined)?.id : undefined}
                     />
                   </CardContent>
                 </Card>
@@ -638,7 +679,26 @@ export default function CustomerQuotesPage(): JSX.Element {
         </DialogContent>
       </Dialog>
 
-      <QuoteDetailDrawer quoteId={drawerId} onClose={() => setDrawerId(null)} onPickRelated={(id) => setDrawerId(id)} />
+      <QuoteDetailDrawer
+        quoteId={drawerId}
+        onClose={() => setDrawerId(null)}
+        onPickRelated={(id) => setDrawerId(id)}
+        customers={data?.customers ?? []}
+        reps={data?.reps ?? []}
+        carriers={data?.carriers ?? []}
+        reasons={data?.reasons ?? []}
+        onSave={(id, patch) => updateQuoteMutation.mutate({ id, patch })}
+        isSaving={updateQuoteMutation.isPending}
+      />
+
+      <NewQuoteDialog
+        open={newQuoteOpen}
+        onOpenChange={setNewQuoteOpen}
+        customers={data?.customers ?? []}
+        reps={data?.reps ?? []}
+        onSubmit={(payload) => createQuoteMutation.mutate(payload)}
+        isSubmitting={createQuoteMutation.isPending}
+      />
     </div>
   );
 }
@@ -714,9 +774,12 @@ const COLUMNS: ColumnDef[] = [
   { key: "score", label: "Score", align: "right" },
 ];
 
-function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading }: {
+function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, reasons, onInlineOutcome, pendingId }: {
   rows: Quote[]; sortKey: SortKey; sortDir: "asc" | "desc";
   onSort: (k: SortKey) => void; onRowClick: (id: string) => void; isLoading: boolean;
+  reasons: Reason[];
+  onInlineOutcome: (id: string, status: string, reasonId: string | null) => void;
+  pendingId: string | undefined;
 }): JSX.Element {
   const [scrollTop, setScrollTop] = useState(0);
   const viewportH = 600;
@@ -769,7 +832,14 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading }:
                 <td className="px-2 whitespace-nowrap text-zinc-400">{q.equipment}</td>
                 <td className="px-2 whitespace-nowrap text-right tabular-nums text-zinc-100">{fmtMoney(quoted)}</td>
                 <td className="px-2 whitespace-nowrap text-zinc-400">{q.validThrough ? new Date(q.validThrough).toLocaleDateString() : "—"}</td>
-                <td className="px-2 whitespace-nowrap"><StatusPill status={q.outcomeStatus} /></td>
+                <td className="px-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                  <InlineOutcome
+                    quote={q}
+                    reasons={reasons}
+                    onChange={onInlineOutcome}
+                    pending={pendingId === q.id}
+                  />
+                </td>
                 <td className="px-2 whitespace-nowrap text-zinc-400 max-w-[140px] truncate">{q.outcomeReasonLabel ?? "—"}</td>
                 <td className="px-2 whitespace-nowrap text-right tabular-nums text-zinc-300">{paid ? fmtMoney(paid) : "—"}</td>
                 <td className="px-2 whitespace-nowrap text-right tabular-nums text-zinc-100">{paid ? fmtMoney(margin) : "—"}</td>
@@ -1092,9 +1162,15 @@ function ChartStrip({ charts, taxonomy, agingBuckets, onPickLane, onPickCustomer
   );
 }
 
-function QuoteDetailDrawer({ quoteId, onClose, onPickRelated }: {
+function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, carriers, reasons, onSave, isSaving }: {
   quoteId: string | null; onClose: () => void; onPickRelated: (id: string) => void;
+  customers: Customer[]; reps: Rep[]; carriers: Carrier[]; reasons: Reason[];
+  onSave: (id: string, patch: Record<string, unknown>) => void;
+  isSaving: boolean;
 }): JSX.Element {
+  const [editMode, setEditMode] = useState(false);
+  const [draft, setDraft] = useState<Record<string, unknown>>({});
+  useEffect(() => { setEditMode(false); setDraft({}); }, [quoteId]);
   const detailQuery = useQuery<QuoteDetail>({
     queryKey: ["/api/customer-quotes/quote", quoteId],
     queryFn: async (): Promise<QuoteDetail> => {
@@ -1110,7 +1186,12 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated }: {
   return (
     <Sheet open={!!quoteId} onOpenChange={(o) => { if (!o) onClose(); }}>
       <SheetContent side="right" className="w-full sm:max-w-[520px] bg-zinc-950 border-l border-zinc-800 text-zinc-100 overflow-y-auto" data-testid="quote-detail-drawer">
-        <SheetHeader><SheetTitle className="text-zinc-100">Quote Detail</SheetTitle></SheetHeader>
+        <SheetHeader className="flex-row items-center justify-between space-y-0">
+          <SheetTitle className="text-zinc-100">Quote Detail</SheetTitle>
+          {!detailQuery.isLoading && data && !editMode && (
+            <Button size="sm" variant="outline" className="border-zinc-700 hover:bg-zinc-800 mr-8" onClick={() => { setEditMode(true); setDraft({}); }} data-testid="button-edit-quote">Edit</Button>
+          )}
+        </SheetHeader>
         {detailQuery.isLoading || !data ? (
           <div className="space-y-3 mt-4"><Skeleton className="h-32 bg-zinc-900" /><Skeleton className="h-32 bg-zinc-900" /></div>
         ) : (
@@ -1121,6 +1202,20 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated }: {
               <div className="text-xs text-zinc-400 mt-1">{data.opp.equipment} · Customer: {data.customer?.name ?? "—"} · Rep: {data.rep?.name ?? "—"}</div>
               <div className="mt-2 flex items-center gap-2"><StatusPill status={data.opp.outcomeStatus} /><span className="text-xs text-zinc-400">{data.reason?.label ?? ""}</span></div>
             </div>
+            {editMode && (
+              <QuoteEditForm
+                quote={data.opp}
+                customers={customers}
+                reps={reps}
+                carriers={carriers}
+                reasons={reasons}
+                draft={draft}
+                onChange={setDraft}
+                onCancel={() => { setEditMode(false); setDraft({}); }}
+                onSave={() => { onSave(data.opp.id, draft); setEditMode(false); setDraft({}); }}
+                isSaving={isSaving}
+              />
+            )}
             <div className="grid grid-cols-2 gap-2">
               <Stat label="Quoted" value={fmtMoney(data.opp.quotedAmount)} />
               <Stat label="Carrier paid" value={fmtMoney(data.opp.carrierPaid, { dash: true })} />
@@ -1195,5 +1290,291 @@ function Stat({ label, value }: { label: string; value: string }): JSX.Element {
       <div className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</div>
       <div className="text-lg font-semibold text-zinc-100">{value}</div>
     </div>
+  );
+}
+
+const SOURCES = ["email", "tms", "crm", "manual", "import"] as const;
+
+function InlineOutcome({ quote, reasons, onChange, pending }: {
+  quote: Quote; reasons: Reason[];
+  onChange: (id: string, status: string, reasonId: string | null) => void;
+  pending: boolean;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const eligibleReasons = useMemo(() => {
+    const cat = quote.outcomeStatus.startsWith("won") ? "won"
+      : quote.outcomeStatus.startsWith("lost") ? "lost"
+      : quote.outcomeStatus === "no_response" ? "no_response"
+      : quote.outcomeStatus === "expired" ? "expired" : null;
+    return cat ? reasons.filter(r => r.category === cat) : [];
+  }, [quote.outcomeStatus, reasons]);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button className="inline-flex" data-testid={`inline-outcome-${quote.id}`} disabled={pending}>
+          <StatusPill status={quote.outcomeStatus} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[220px] p-2 bg-zinc-900 border-zinc-700" align="start">
+        <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1.5 px-1">Set outcome</div>
+        <div className="space-y-0.5">
+          {Object.keys(STATUS_LABELS).map(s => (
+            <button key={s}
+              onClick={() => { onChange(quote.id, s, null); setOpen(false); }}
+              className={`w-full text-left px-2 py-1 rounded text-xs hover:bg-zinc-800 ${s === quote.outcomeStatus ? "bg-zinc-800/60" : ""}`}
+              data-testid={`inline-outcome-option-${quote.id}-${s}`}>
+              <StatusPill status={s} />
+            </button>
+          ))}
+        </div>
+        {eligibleReasons.length > 0 && (
+          <div className="mt-2 pt-2 border-t border-zinc-800">
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1 px-1">Reason</div>
+            <div className="space-y-0.5 max-h-[140px] overflow-y-auto">
+              {eligibleReasons.map(r => (
+                <button key={r.id}
+                  onClick={() => { onChange(quote.id, quote.outcomeStatus, r.id); setOpen(false); }}
+                  className={`w-full text-left px-2 py-1 rounded text-xs text-zinc-300 hover:bg-zinc-800 ${quote.outcomeReasonId === r.id ? "bg-zinc-800/60 text-zinc-100" : ""}`}
+                  data-testid={`inline-reason-option-${quote.id}-${r.id}`}>{r.label}</button>
+              ))}
+            </div>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function QuoteEditForm({ quote, customers, reps, carriers, reasons, draft, onChange, onCancel, onSave, isSaving }: {
+  quote: Quote; customers: Customer[]; reps: Rep[]; carriers: Carrier[]; reasons: Reason[];
+  draft: Record<string, unknown>; onChange: (d: Record<string, unknown>) => void;
+  onCancel: () => void; onSave: () => void; isSaving: boolean;
+}): JSX.Element {
+  const get = <T,>(k: string, fallback: T): T => (k in draft ? draft[k] as T : fallback);
+  const set = (k: string, v: unknown): void => onChange({ ...draft, [k]: v });
+  const status = get("outcomeStatus", quote.outcomeStatus);
+  const cat = String(status).startsWith("won") ? "won"
+    : String(status).startsWith("lost") ? "lost"
+    : status === "no_response" ? "no_response"
+    : status === "expired" ? "expired" : null;
+  const eligibleReasons = cat ? reasons.filter(r => r.category === cat) : reasons;
+  const validThroughDraft = get<string | null>("validThrough", quote.validThrough);
+  const validThroughInput = validThroughDraft ? new Date(validThroughDraft).toISOString().slice(0, 10) : "";
+
+  return (
+    <div className="rounded bg-zinc-900 border border-amber-500/30 p-3 space-y-3" data-testid="quote-edit-form">
+      <div className="text-[10px] uppercase tracking-wider text-amber-400">Edit quote</div>
+      <div className="grid grid-cols-2 gap-2">
+        <FormCol label="Customer">
+          <Select value={get("customerId", quote.customerId)} onValueChange={(v) => set("customerId", v)}>
+            <SelectTrigger className="h-8 bg-zinc-950 border-zinc-700 text-xs" data-testid="edit-customer"><SelectValue /></SelectTrigger>
+            <SelectContent>{customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+          </Select>
+        </FormCol>
+        <FormCol label="Rep">
+          <Select value={get("repId", quote.repId ?? "_none") as string} onValueChange={(v) => set("repId", v === "_none" ? null : v)}>
+            <SelectTrigger className="h-8 bg-zinc-950 border-zinc-700 text-xs" data-testid="edit-rep"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="_none">— Unassigned —</SelectItem>
+              {reps.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </FormCol>
+        <FormCol label="Origin city">
+          <Input className="h-8 bg-zinc-950 border-zinc-700 text-xs" value={get("originCity", quote.originCity)} onChange={(e) => set("originCity", e.target.value)} data-testid="edit-origin-city" />
+        </FormCol>
+        <FormCol label="Origin ST">
+          <Input className="h-8 bg-zinc-950 border-zinc-700 text-xs" value={get("originState", quote.originState)} onChange={(e) => set("originState", e.target.value.toUpperCase())} maxLength={2} data-testid="edit-origin-state" />
+        </FormCol>
+        <FormCol label="Dest city">
+          <Input className="h-8 bg-zinc-950 border-zinc-700 text-xs" value={get("destCity", quote.destCity)} onChange={(e) => set("destCity", e.target.value)} data-testid="edit-dest-city" />
+        </FormCol>
+        <FormCol label="Dest ST">
+          <Input className="h-8 bg-zinc-950 border-zinc-700 text-xs" value={get("destState", quote.destState)} onChange={(e) => set("destState", e.target.value.toUpperCase())} maxLength={2} data-testid="edit-dest-state" />
+        </FormCol>
+        <FormCol label="Equipment">
+          <Select value={get("equipment", quote.equipment)} onValueChange={(v) => set("equipment", v)}>
+            <SelectTrigger className="h-8 bg-zinc-950 border-zinc-700 text-xs" data-testid="edit-equipment"><SelectValue /></SelectTrigger>
+            <SelectContent>{EQUIPMENTS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}</SelectContent>
+          </Select>
+        </FormCol>
+        <FormCol label="Source">
+          <Select value={get("source", quote.source)} onValueChange={(v) => set("source", v)}>
+            <SelectTrigger className="h-8 bg-zinc-950 border-zinc-700 text-xs" data-testid="edit-source"><SelectValue /></SelectTrigger>
+            <SelectContent>{SOURCES.map(s => <SelectItem key={s} value={s}>{s.toUpperCase()}</SelectItem>)}</SelectContent>
+          </Select>
+        </FormCol>
+        <FormCol label="Quoted $">
+          <Input type="number" step="0.01" className="h-8 bg-zinc-950 border-zinc-700 text-xs" value={String(get("quotedAmount", quote.quotedAmount ?? ""))} onChange={(e) => set("quotedAmount", e.target.value)} data-testid="edit-quoted-amount" />
+        </FormCol>
+        <FormCol label="Carrier paid $">
+          <Input type="number" step="0.01" className="h-8 bg-zinc-950 border-zinc-700 text-xs" value={String(get("carrierPaid", quote.carrierPaid ?? ""))} onChange={(e) => set("carrierPaid", e.target.value)} data-testid="edit-carrier-paid" />
+        </FormCol>
+        <FormCol label="Carrier">
+          <Select value={get("carrierId", quote.carrierId ?? "_none") as string} onValueChange={(v) => set("carrierId", v === "_none" ? null : v)}>
+            <SelectTrigger className="h-8 bg-zinc-950 border-zinc-700 text-xs" data-testid="edit-carrier"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="_none">— None —</SelectItem>
+              {carriers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </FormCol>
+        <FormCol label="Valid through">
+          <Input type="date" className="h-8 bg-zinc-950 border-zinc-700 text-xs" value={validThroughInput} onChange={(e) => set("validThrough", e.target.value ? new Date(e.target.value).toISOString() : null)} data-testid="edit-valid-through" />
+        </FormCol>
+        <FormCol label="Outcome">
+          <Select value={status as string} onValueChange={(v) => set("outcomeStatus", v)}>
+            <SelectTrigger className="h-8 bg-zinc-950 border-zinc-700 text-xs" data-testid="edit-outcome"><SelectValue /></SelectTrigger>
+            <SelectContent>{Object.keys(STATUS_LABELS).map(s => <SelectItem key={s} value={s}>{STATUS_LABELS[s]}</SelectItem>)}</SelectContent>
+          </Select>
+        </FormCol>
+        <FormCol label="Reason">
+          <Select value={(get("outcomeReasonId", quote.outcomeReasonId ?? "_none") as string) || "_none"} onValueChange={(v) => set("outcomeReasonId", v === "_none" ? null : v)}>
+            <SelectTrigger className="h-8 bg-zinc-950 border-zinc-700 text-xs" data-testid="edit-reason"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="_none">— None —</SelectItem>
+              {eligibleReasons.map(r => <SelectItem key={r.id} value={r.id}>{r.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </FormCol>
+      </div>
+      <div>
+        <Label className="text-[10px] uppercase tracking-wider text-zinc-500">Notes</Label>
+        <textarea className="w-full mt-0.5 rounded bg-zinc-950 border border-zinc-700 p-2 text-xs text-zinc-100 min-h-[60px]"
+          value={String(get("notes", quote.notes ?? ""))} onChange={(e) => set("notes", e.target.value)} data-testid="edit-notes" />
+      </div>
+      <div className="flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={onCancel} data-testid="button-edit-cancel">Cancel</Button>
+        <Button size="sm" onClick={onSave} disabled={isSaving || Object.keys(draft).length === 0}
+          className="bg-amber-500 hover:bg-amber-600 text-zinc-950" data-testid="button-edit-save">
+          {isSaving ? "Saving..." : "Save changes"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function FormCol({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <Label className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</Label>
+      {children}
+    </div>
+  );
+}
+
+function NewQuoteDialog({ open, onOpenChange, customers, reps, onSubmit, isSubmitting }: {
+  open: boolean; onOpenChange: (v: boolean) => void;
+  customers: Customer[]; reps: Rep[];
+  onSubmit: (payload: Record<string, unknown>) => void; isSubmitting: boolean;
+}): JSX.Element {
+  const [form, setForm] = useState({
+    customerId: "", repId: "_none",
+    originCity: "", originState: "",
+    destCity: "", destState: "",
+    equipment: "Dry Van",
+    quotedAmount: "",
+    validThrough: "",
+    source: "manual",
+    sourceReference: "",
+    notes: "",
+  });
+  useEffect(() => {
+    if (open) setForm({
+      customerId: "", repId: "_none",
+      originCity: "", originState: "",
+      destCity: "", destState: "",
+      equipment: "Dry Van", quotedAmount: "",
+      validThrough: "", source: "manual",
+      sourceReference: "", notes: "",
+    });
+  }, [open]);
+  const upd = (k: string, v: string): void => setForm(f => ({ ...f, [k]: v }));
+  const valid = form.customerId && form.originCity && form.originState && form.destCity && form.destState && form.equipment;
+  const submit = (): void => {
+    const payload: Record<string, unknown> = {
+      customerId: form.customerId,
+      repId: form.repId === "_none" ? null : form.repId,
+      originCity: form.originCity.trim(),
+      originState: form.originState.trim().toUpperCase(),
+      destCity: form.destCity.trim(),
+      destState: form.destState.trim().toUpperCase(),
+      equipment: form.equipment,
+      source: form.source,
+    };
+    if (form.quotedAmount) payload.quotedAmount = form.quotedAmount;
+    if (form.validThrough) payload.validThrough = new Date(form.validThrough).toISOString();
+    if (form.sourceReference.trim()) payload.sourceReference = form.sourceReference.trim();
+    if (form.notes.trim()) payload.notes = form.notes.trim();
+    onSubmit(payload);
+  };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-zinc-900 border-zinc-700 text-zinc-100 max-w-[640px]" data-testid="new-quote-dialog">
+        <DialogHeader><DialogTitle>Log a new quote request</DialogTitle></DialogHeader>
+        <div className="grid grid-cols-2 gap-3 mt-2">
+          <FormCol label="Customer *">
+            <Select value={form.customerId} onValueChange={(v) => upd("customerId", v)}>
+              <SelectTrigger className="h-9 bg-zinc-950 border-zinc-700" data-testid="new-customer"><SelectValue placeholder="Select customer" /></SelectTrigger>
+              <SelectContent>{customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+            </Select>
+          </FormCol>
+          <FormCol label="Rep">
+            <Select value={form.repId} onValueChange={(v) => upd("repId", v)}>
+              <SelectTrigger className="h-9 bg-zinc-950 border-zinc-700" data-testid="new-rep"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="_none">— Unassigned —</SelectItem>
+                {reps.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </FormCol>
+          <FormCol label="Origin city *">
+            <Input className="h-9 bg-zinc-950 border-zinc-700" value={form.originCity} onChange={(e) => upd("originCity", e.target.value)} data-testid="new-origin-city" />
+          </FormCol>
+          <FormCol label="Origin state *">
+            <Input className="h-9 bg-zinc-950 border-zinc-700" value={form.originState} onChange={(e) => upd("originState", e.target.value.toUpperCase())} maxLength={2} data-testid="new-origin-state" />
+          </FormCol>
+          <FormCol label="Destination city *">
+            <Input className="h-9 bg-zinc-950 border-zinc-700" value={form.destCity} onChange={(e) => upd("destCity", e.target.value)} data-testid="new-dest-city" />
+          </FormCol>
+          <FormCol label="Destination state *">
+            <Input className="h-9 bg-zinc-950 border-zinc-700" value={form.destState} onChange={(e) => upd("destState", e.target.value.toUpperCase())} maxLength={2} data-testid="new-dest-state" />
+          </FormCol>
+          <FormCol label="Equipment">
+            <Select value={form.equipment} onValueChange={(v) => upd("equipment", v)}>
+              <SelectTrigger className="h-9 bg-zinc-950 border-zinc-700" data-testid="new-equipment"><SelectValue /></SelectTrigger>
+              <SelectContent>{EQUIPMENTS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}</SelectContent>
+            </Select>
+          </FormCol>
+          <FormCol label="Quoted amount $">
+            <Input type="number" step="0.01" className="h-9 bg-zinc-950 border-zinc-700" value={form.quotedAmount} onChange={(e) => upd("quotedAmount", e.target.value)} data-testid="new-quoted-amount" />
+          </FormCol>
+          <FormCol label="Valid through">
+            <Input type="date" className="h-9 bg-zinc-950 border-zinc-700" value={form.validThrough} onChange={(e) => upd("validThrough", e.target.value)} data-testid="new-valid-through" />
+          </FormCol>
+          <FormCol label="Source">
+            <Select value={form.source} onValueChange={(v) => upd("source", v)}>
+              <SelectTrigger className="h-9 bg-zinc-950 border-zinc-700" data-testid="new-source"><SelectValue /></SelectTrigger>
+              <SelectContent>{SOURCES.map(s => <SelectItem key={s} value={s}>{s.toUpperCase()}</SelectItem>)}</SelectContent>
+            </Select>
+          </FormCol>
+          <FormCol label="Source reference">
+            <Input className="h-9 bg-zinc-950 border-zinc-700" placeholder="e.g. EMAIL-1234" value={form.sourceReference} onChange={(e) => upd("sourceReference", e.target.value)} data-testid="new-source-ref" />
+          </FormCol>
+        </div>
+        <div>
+          <Label className="text-[10px] uppercase tracking-wider text-zinc-500">Notes</Label>
+          <textarea className="w-full mt-0.5 rounded bg-zinc-950 border border-zinc-700 p-2 text-xs text-zinc-100 min-h-[60px]"
+            value={form.notes} onChange={(e) => upd("notes", e.target.value)} data-testid="new-notes" />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="button-new-cancel">Cancel</Button>
+          <Button onClick={submit} disabled={!valid || isSubmitting}
+            className="bg-amber-500 hover:bg-amber-600 text-zinc-950" data-testid="button-new-save">
+            {isSubmitting ? "Saving..." : "Log quote"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

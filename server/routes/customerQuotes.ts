@@ -4,9 +4,11 @@ import { requireAuth, getCurrentUser } from "../auth";
 import {
   ensureQuoteSeed, getSnapshot, getQuoteDetail,
   listQuotes, listSavedViews, createSavedView, deleteSavedView, exportCsv,
+  createQuote, updateQuote,
   type QuoteFilters, type ListSortKey,
 } from "../services/customerQuotes";
 import { syncQuoteOutcomesFromTms } from "../services/quoteTmsSync";
+import { QUOTE_OUTCOME_STATUSES, QUOTE_SOURCES } from "@shared/schema";
 
 const filtersSchema = z.object({
   customerId: z.string().min(1).optional(),
@@ -97,6 +99,65 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const msg = err instanceof Error ? err.message : "Internal error";
       console.error("[customer-quotes] list error:", err);
       res.status(500).json({ error: msg });
+    }
+  });
+
+  const createQuoteSchema = z.object({
+    customerId: z.string().min(1),
+    repId: z.string().min(1).nullable().optional(),
+    carrierId: z.string().min(1).nullable().optional(),
+    outcomeReasonId: z.string().min(1).nullable().optional(),
+    originCity: z.string().min(1).max(80),
+    originState: z.string().min(1).max(8),
+    destCity: z.string().min(1).max(80),
+    destState: z.string().min(1).max(8),
+    equipment: z.string().min(1).max(40),
+    quotedAmount: z.union([z.string(), z.number()]).nullable().optional(),
+    validThrough: z.string().nullable().optional(),
+    outcomeStatus: z.enum(QUOTE_OUTCOME_STATUSES).optional(),
+    carrierPaid: z.union([z.string(), z.number()]).nullable().optional(),
+    responseTimeHours: z.union([z.string(), z.number()]).nullable().optional(),
+    source: z.enum(QUOTE_SOURCES).optional(),
+    sourceReference: z.string().max(80).nullable().optional(),
+    notes: z.string().max(2000).nullable().optional(),
+    score: z.union([z.string(), z.number()]).nullable().optional(),
+    requestDate: z.string().nullable().optional(),
+  });
+
+  const updateQuoteSchema = createQuoteSchema.partial();
+
+  function actorName(u: { name?: string | null; username?: string | null; id: string } | null): string {
+    if (!u) return "system";
+    return (u.name && u.name.trim()) || u.username || u.id;
+  }
+
+  app.post("/api/customer-quotes/quote", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const data = createQuoteSchema.parse(req.body);
+      const opp = await createQuote(user.organizationId, actorName(user), data);
+      const detail = await getQuoteDetail(user.organizationId, opp.id);
+      res.status(201).json(detail);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Invalid input";
+      console.error("[customer-quotes] create error:", err);
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  app.patch("/api/customer-quotes/quote/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const data = updateQuoteSchema.parse(req.body);
+      const opp = await updateQuote(user.organizationId, actorName(user), String(req.params.id), data);
+      const detail = await getQuoteDetail(user.organizationId, opp.id);
+      res.json(detail);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Invalid input";
+      console.error("[customer-quotes] update error:", err);
+      res.status(400).json({ error: msg });
     }
   });
 
