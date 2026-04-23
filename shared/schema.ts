@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, serial, decimal, jsonb, boolean, timestamp, uniqueIndex, index, customType } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, serial, decimal, jsonb, boolean, timestamp, date, uniqueIndex, index, customType } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -3837,6 +3837,62 @@ export type FreightOutreachTemplate = typeof freightOutreachTemplates.$inferSele
 // (account at risk / play-not-run / flagged call / response-time outlier /
 // promotion-readiness). Surfaced to the rep in their next ValueIQ Today
 // thread once `deliveredAt` is set by the seeder.
+
+// ─── Legacy tables kept in DB but historically not declared here ─────────
+// These two tables are still actively read/written by server code (see
+// server/lmCheckinScheduler.ts, server/routes.ts, server/routes/dashboard.ts,
+// server/routes/financials.ts). They were never added to this schema file,
+// which caused drizzle-kit to interpret newly-added tables as potential
+// renames of these "orphan" tables and emit an interactive *select* prompt
+// during db:push. That prompt cannot be answered headlessly during the
+// post-merge reconciliation step, which made task-merge "apply" appear to
+// succeed and then revert. Declaring them here matches the live schema 1:1
+// so drizzle-kit no longer considers them rename candidates.
+export const opportunityDismissals = pgTable(
+  "opportunity_dismissals",
+  {
+    id: serial("id").primaryKey(),
+    companyId: varchar("company_id").notNull(),
+    orgId: varchar("org_id").notNull(),
+    dismissedBy: varchar("dismissed_by").notNull(),
+    dismissedAt: text("dismissed_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("opportunity_dismissals_company_id_org_id_key").on(
+      table.companyId,
+      table.orgId,
+    ),
+  ],
+);
+export type OpportunityDismissal = typeof opportunityDismissals.$inferSelect;
+
+export const namLmCheckins = pgTable(
+  "nam_lm_checkins",
+  {
+    id: serial("id").primaryKey(),
+    reviewerId: varchar("reviewer_id").notNull(),
+    lmId: varchar("lm_id").notNull(),
+    organizationId: varchar("organization_id").notNull(),
+    checkDate: date("check_date").notNull().default(sql`CURRENT_DATE`),
+    checkType: varchar("check_type").notNull(),
+    checkCallsDone: boolean("check_calls_done"),
+    boardClean: boolean("board_clean"),
+    checkoutDone: boolean("checkout_done"),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => [
+    index("idx_nam_lm_checkins_lm").on(table.lmId, table.checkDate),
+    index("idx_nam_lm_checkins_reviewer").on(table.reviewerId, table.checkDate),
+    uniqueIndex("nam_lm_checkins_unique").on(
+      table.reviewerId,
+      table.lmId,
+      table.checkDate,
+      table.checkType,
+    ),
+  ],
+);
+export type NamLmCheckin = typeof namLmCheckins.$inferSelect;
 
 export const coachingNotes = pgTable(
   "coaching_notes",
