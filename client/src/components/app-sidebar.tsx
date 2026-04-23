@@ -98,7 +98,7 @@ const laneToolItems: NavItem[] = [
     url: "/contact-suggestions",
     icon: UserPlus,
     description: "Suggested new contacts to add to accounts.",
-    roles: ["admin", "director", "national_account_manager", "account_manager"],
+    roles: ["admin", "director", "sales_director", "national_account_manager", "account_manager", "logistics_manager"],
   },
   {
     title: "Email Intelligence",

@@ -10038,12 +10038,21 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
 
   // ── Account Contact Suggestions (Task #201) ───────────────────────────────
 
-  /** GET /api/internal/accounts/suggestion-counts — batch pending count per account */
+  /** GET /api/internal/accounts/suggestion-counts — batch pending count per account
+   *  Scoped by role: admin/director/sales_director see everything in the org;
+   *  NAMs/LMs see their own accounts plus those owned by their direct/indirect
+   *  reports; AMs/reps see only the accounts they personally own. */
   app.get("/api/internal/accounts/suggestion-counts", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const counts = await storage.countPendingContactSuggestionsByOrg(currentUser.organizationId);
+      const orgWide = ["admin", "director", "sales_director"].includes(currentUser.role);
+      let scope: string[] | undefined;
+      if (!orgWide) {
+        const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
+        scope = Array.from(new Set([currentUser.id, ...teamIds]));
+      }
+      const counts = await storage.countPendingContactSuggestionsByOrg(currentUser.organizationId, scope);
       res.json(counts);
     } catch (err: any) {
       console.error("[suggestion-counts GET]", err?.message ?? err);
@@ -10059,6 +10068,16 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const { accountId } = req.params as { accountId: string };
       const company = await storage.getCompanyInOrg(accountId, currentUser.organizationId);
       if (!company) return res.status(404).json({ error: "Account not found" });
+      // Scope check: non-privileged roles may only read suggestions for accounts
+      // they own or accounts owned by someone in their reporting chain.
+      const orgWide = ["admin", "director", "sales_director"].includes(currentUser.role);
+      if (!orgWide) {
+        const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
+        const scope = new Set([currentUser.id, ...teamIds]);
+        if (!company.salesPersonId || !scope.has(company.salesPersonId)) {
+          return res.status(403).json({ error: "You don't have access to this account's suggestions." });
+        }
+      }
       const status = req.query.status as string | undefined;
       const suggestions = await storage.getAccountContactSuggestions(accountId, status);
       // Only return pending / snoozed suggestions (exclude accepted/ignored/never_suggest unless explicitly requested)

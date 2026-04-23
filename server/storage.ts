@@ -1060,7 +1060,7 @@ export interface IStorage {
   // Account Contact Suggestions (Task #201)
   upsertAccountContactSuggestion(data: import('@shared/schema').InsertAccountContactSuggestion): Promise<import('@shared/schema').AccountContactSuggestion>;
   getAccountContactSuggestions(accountId: string, status?: string): Promise<import('@shared/schema').AccountContactSuggestion[]>;
-  countPendingContactSuggestionsByOrg(orgId: string): Promise<{ accountId: string; accountName: string; pendingCount: number }[]>;
+  countPendingContactSuggestionsByOrg(orgId: string, ownerScope?: string[]): Promise<{ accountId: string; accountName: string; pendingCount: number }[]>;
   getAccountContactSuggestion(id: string): Promise<import('@shared/schema').AccountContactSuggestion | undefined>;
   updateAccountContactSuggestionStatus(id: string, status: string, opts: { userId?: string; snoozedUntil?: Date | null }): Promise<import('@shared/schema').AccountContactSuggestion | undefined>;
   getContactByEmailAndCompany(email: string, companyId: string): Promise<import('@shared/schema').Contact | undefined>;
@@ -6850,7 +6850,27 @@ export class DatabaseStorage implements IStorage {
     });
   }
 
-  async countPendingContactSuggestionsByOrg(orgId: string): Promise<{ accountId: string; accountName: string; pendingCount: number }[]> {
+  async countPendingContactSuggestionsByOrg(orgId: string, ownerScope?: string[]): Promise<{ accountId: string; accountName: string; pendingCount: number }[]> {
+    // When ownerScope is provided, restrict results to accounts whose sales
+    // person is within the scope (user's own accounts + their direct/indirect
+    // reports' accounts). Admins/directors pass undefined to see everything.
+    const whereClauses = [
+      eq(accountContactSuggestions.orgId, orgId),
+      eq(companies.organizationId, orgId),
+      or(
+        eq(accountContactSuggestions.status, "pending"),
+        and(
+          eq(accountContactSuggestions.status, "snoozed"),
+          lte(accountContactSuggestions.snoozedUntil, new Date()),
+        ),
+      ),
+    ];
+    if (ownerScope && ownerScope.length > 0) {
+      whereClauses.push(inArray(companies.salesPersonId, ownerScope));
+    } else if (ownerScope && ownerScope.length === 0) {
+      // Empty scope = user owns nothing → return nothing rather than everything.
+      return [];
+    }
     const rows = await db
       .select({
         accountId: accountContactSuggestions.accountId,
@@ -6859,19 +6879,7 @@ export class DatabaseStorage implements IStorage {
       })
       .from(accountContactSuggestions)
       .innerJoin(companies, eq(companies.id, accountContactSuggestions.accountId))
-      .where(
-        and(
-          eq(accountContactSuggestions.orgId, orgId),
-          eq(companies.organizationId, orgId),
-          or(
-            eq(accountContactSuggestions.status, "pending"),
-            and(
-              eq(accountContactSuggestions.status, "snoozed"),
-              lte(accountContactSuggestions.snoozedUntil, new Date()),
-            ),
-          ),
-        ),
-      )
+      .where(and(...whereClauses))
       .groupBy(accountContactSuggestions.accountId, companies.name);
     return rows as { accountId: string; accountName: string; pendingCount: number }[];
   }
