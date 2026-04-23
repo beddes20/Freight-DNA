@@ -276,6 +276,7 @@ export default function AdminMonitoredMailboxesPage() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [enrollAllOpen, setEnrollAllOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<MonitoredMailbox | null>(null);
   const [newEmail, setNewEmail] = useState("");
   const [newUserId, setNewUserId] = useState("");
@@ -335,6 +336,26 @@ export default function AdminMonitoredMailboxesPage() {
     },
   });
 
+  const enrollAllMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/internal/admin/monitored-mailboxes/enroll-all");
+      return res.json() as Promise<{ added: number; skipped: number; failed?: number; eligible: number }>;
+    },
+    onSuccess: (r) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/admin/monitored-mailboxes"] });
+      setEnrollAllOpen(false);
+      const failedPart = r.failed && r.failed > 0 ? `, ${r.failed} failed` : "";
+      toast({
+        title: r.failed && r.failed > 0 ? "Bulk enroll completed with errors" : "Bulk enroll complete",
+        description: `${r.added} added, ${r.skipped} already enrolled${failedPart}.`,
+        variant: r.failed && r.failed > 0 ? "destructive" : "default",
+      });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Bulk enroll failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   const syncMutation = useMutation({
     mutationFn: async (id: string) => {
       const res = await apiRequest("POST", `/api/internal/admin/monitored-mailboxes/${id}/sync`);
@@ -377,6 +398,61 @@ export default function AdminMonitoredMailboxesPage() {
 
         <div className="flex items-center gap-2">
           <SelfHealSweepButton />
+          {(() => {
+            const enrolledUserIds = new Set(mailboxes.map(m => m.userId));
+            const enrolledEmails = new Set(mailboxes.map(m => m.email.toLowerCase()));
+            const withLogin = orgUsers.filter(u => !!u.username);
+            const alreadyEnrolledCount = withLogin.filter(
+              u => enrolledUserIds.has(u.id) || enrolledEmails.has(u.username.toLowerCase()),
+            ).length;
+            const toEnroll = withLogin.length - alreadyEnrolledCount;
+            const missingLoginCount = orgUsers.length - withLogin.length;
+            return (
+              <AlertDialog open={enrollAllOpen} onOpenChange={setEnrollAllOpen}>
+                <Button
+                  variant="outline"
+                  onClick={() => setEnrollAllOpen(true)}
+                  data-testid="button-enroll-all"
+                  title="Enroll every eligible team member as a monitored mailbox"
+                >
+                  <MailCheck className="h-4 w-4 mr-2" />
+                  Enroll all users
+                </Button>
+                <AlertDialogContent data-testid="dialog-enroll-all">
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Enroll all eligible users?</AlertDialogTitle>
+                    <AlertDialogDescription data-testid="text-enroll-all-summary">
+                      This will enroll <strong>{toEnroll}</strong> eligible user{toEnroll === 1 ? "" : "s"} as
+                      monitored mailboxes (using each user's login email, enabled by default).
+                      {" "}<strong>{alreadyEnrolledCount}</strong> user{alreadyEnrolledCount === 1 ? "" : "s"} already
+                      {alreadyEnrolledCount === 1 ? " has" : " have"} a mailbox and will be skipped.
+                      {missingLoginCount > 0 && (
+                        <>
+                          {" "}<strong>{missingLoginCount}</strong> user{missingLoginCount === 1 ? "" : "s"} cannot be
+                          enrolled because {missingLoginCount === 1 ? "they have" : "they have"} no login email on file.
+                        </>
+                      )}
+                      {" "}You can still toggle individual mailboxes off afterwards.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel data-testid="button-enroll-all-cancel">Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={(e) => {
+                        e.preventDefault();
+                        enrollAllMutation.mutate();
+                      }}
+                      disabled={enrollAllMutation.isPending || toEnroll === 0}
+                      data-testid="button-enroll-all-confirm"
+                    >
+                      {enrollAllMutation.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                      Enroll {toEnroll} user{toEnroll === 1 ? "" : "s"}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            );
+          })()}
           <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
           <DialogTrigger asChild>
             <Button data-testid="button-add-mailbox">

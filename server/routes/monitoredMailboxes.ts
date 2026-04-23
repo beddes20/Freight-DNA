@@ -103,6 +103,87 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
     }
   });
 
+  // Task #473 — Bulk-enroll all eligible org users as monitored mailboxes.
+  // Idempotent: skips users already monitored in this org without changing
+  // their `enabled` value. Reuses createMonitoredMailbox + subscription
+  // registration so newly-added rows go through the normal pending → active
+  // path.
+  app.post("/api/internal/admin/monitored-mailboxes/enroll-all", requireAuth, requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const ELIGIBLE_ROLES = [
+        "national_account_manager",
+        "account_manager",
+        "admin",
+        "director",
+        "sales_director",
+      ];
+
+      const allUsers = await storage.getUsers(user.organizationId);
+      const eligible = allUsers.filter(u => ELIGIBLE_ROLES.includes(u.role) && !!u.username);
+
+      const existing = await storage.getMonitoredMailboxes(user.organizationId);
+      const existingEmails = new Set(existing.map(m => m.email.toLowerCase()));
+      const existingUserIds = new Set(existing.map(m => m.userId));
+
+      let added = 0;
+      let skipped = 0;
+      let failed = 0;
+      const created: typeof existing = [];
+      const failures: Array<{ userId: string; email: string; error: string }> = [];
+
+      for (const u of eligible) {
+        const email = u.username.toLowerCase();
+        if (existingUserIds.has(u.id) || existingEmails.has(email)) {
+          skipped++;
+          continue;
+        }
+        try {
+          const mailbox = await storage.createMonitoredMailbox({
+            orgId: user.organizationId,
+            userId: u.id,
+            email,
+            enabled: true,
+          });
+          existingEmails.add(email);
+          existingUserIds.add(u.id);
+          created.push(mailbox);
+          added++;
+        } catch (err: any) {
+          // Race-condition: unique index (orgId,email) tripped because
+          // another request created the row concurrently. Treat as skip.
+          // Postgres unique_violation = SQLSTATE 23505.
+          const isUniqueViolation =
+            err?.code === "23505" ||
+            /duplicate key|unique constraint/i.test(err?.message ?? "");
+          if (isUniqueViolation) {
+            skipped++;
+          } else {
+            console.error("[monitoredMailboxes] enroll-all create error:", err);
+            failed++;
+            failures.push({ userId: u.id, email, error: err?.message ?? "Unknown error" });
+          }
+        }
+      }
+
+      // Fire subscription registration in the background (mirrors POST path).
+      for (const mailbox of created) {
+        if (mailbox.enabled) {
+          registerMailboxSubscription(mailbox.email, mailbox.id).catch(err => {
+            console.error("[monitoredMailboxes] enroll-all subscription error:", err);
+          });
+        }
+      }
+
+      res.json({ added, skipped, failed, eligible: eligible.length, failures });
+    } catch (err) {
+      console.error("[monitoredMailboxes] POST /enroll-all error:", err);
+      res.status(500).json({ error: "Failed to enroll users" });
+    }
+  });
+
   app.patch("/api/internal/admin/monitored-mailboxes/:id", requireAuth, requireAdmin, async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
