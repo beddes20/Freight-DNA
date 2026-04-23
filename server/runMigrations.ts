@@ -3866,4 +3866,132 @@ export async function runMigrations() {
   } finally {
     client435.release();
   }
+
+  // ── Task #468: Customer Quotes tab — defensive idempotent table creation ──
+  // Schema is owned by Drizzle (`shared/schema.ts`) + `npm run db:push --force`.
+  // The block below only runs CREATE TABLE/INDEX IF NOT EXISTS so a fresh
+  // deploy that has not yet run db:push still gets the tables stood up.
+  const client468 = await pool.connect();
+  try {
+    await client468.query(`
+      CREATE TABLE IF NOT EXISTS quote_customers (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        name text NOT NULL,
+        segment text,
+        notes text,
+        created_at timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client468.query(`ALTER TABLE quote_customers ADD COLUMN IF NOT EXISTS notes text`);
+    await client468.query(`CREATE INDEX IF NOT EXISTS quote_customers_org_idx ON quote_customers (organization_id)`);
+
+    await client468.query(`
+      CREATE TABLE IF NOT EXISTS quote_reps (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        name text NOT NULL,
+        email text
+      )
+    `);
+    await client468.query(`ALTER TABLE quote_reps ADD COLUMN IF NOT EXISTS user_id varchar REFERENCES users(id) ON DELETE SET NULL`);
+    await client468.query(`CREATE INDEX IF NOT EXISTS quote_reps_org_idx ON quote_reps (organization_id)`);
+
+    await client468.query(`
+      CREATE TABLE IF NOT EXISTS quote_carriers (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        name text NOT NULL,
+        mc_number text
+      )
+    `);
+    await client468.query(`ALTER TABLE quote_carriers ADD COLUMN IF NOT EXISTS mc_number text`);
+    await client468.query(`CREATE INDEX IF NOT EXISTS quote_carriers_org_idx ON quote_carriers (organization_id)`);
+
+    await client468.query(`
+      CREATE TABLE IF NOT EXISTS quote_lane_groups (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        name text NOT NULL,
+        origin_region text,
+        dest_region text
+      )
+    `);
+    await client468.query(`CREATE INDEX IF NOT EXISTS quote_lane_groups_org_idx ON quote_lane_groups (organization_id)`);
+
+    await client468.query(`
+      CREATE TABLE IF NOT EXISTS quote_outcome_reasons (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        code text NOT NULL,
+        label text NOT NULL,
+        category text NOT NULL
+      )
+    `);
+    await client468.query(`CREATE INDEX IF NOT EXISTS quote_outcome_reasons_org_idx ON quote_outcome_reasons (organization_id)`);
+
+    await client468.query(`
+      CREATE TABLE IF NOT EXISTS quote_opportunities (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        customer_id varchar NOT NULL REFERENCES quote_customers(id) ON DELETE CASCADE,
+        rep_id varchar REFERENCES quote_reps(id) ON DELETE SET NULL,
+        lane_group_id varchar REFERENCES quote_lane_groups(id) ON DELETE SET NULL,
+        carrier_id varchar REFERENCES quote_carriers(id) ON DELETE SET NULL,
+        outcome_reason_id varchar REFERENCES quote_outcome_reasons(id) ON DELETE SET NULL,
+        request_date timestamp NOT NULL DEFAULT NOW(),
+        origin_city text NOT NULL,
+        origin_state text NOT NULL,
+        dest_city text NOT NULL,
+        dest_state text NOT NULL,
+        equipment text NOT NULL,
+        quoted_amount numeric,
+        valid_through timestamp,
+        outcome_status text NOT NULL,
+        carrier_paid numeric,
+        response_time_hours numeric,
+        source text NOT NULL,
+        source_reference text,
+        notes text,
+        score numeric,
+        created_at timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client468.query(`ALTER TABLE quote_opportunities ADD COLUMN IF NOT EXISTS created_at timestamp NOT NULL DEFAULT NOW()`);
+    await client468.query(`CREATE INDEX IF NOT EXISTS quote_opportunities_org_date_idx ON quote_opportunities (organization_id, request_date DESC)`);
+    await client468.query(`CREATE INDEX IF NOT EXISTS quote_opportunities_customer_idx ON quote_opportunities (customer_id)`);
+    await client468.query(`CREATE INDEX IF NOT EXISTS quote_opportunities_lane_idx ON quote_opportunities (organization_id, origin_city, dest_city)`);
+    await client468.query(`CREATE INDEX IF NOT EXISTS quote_opportunities_status_idx ON quote_opportunities (organization_id, outcome_status)`);
+
+    await client468.query(`
+      CREATE TABLE IF NOT EXISTS quote_events (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        quote_id varchar NOT NULL REFERENCES quote_opportunities(id) ON DELETE CASCADE,
+        event_type text NOT NULL,
+        occurred_at timestamp NOT NULL DEFAULT NOW(),
+        actor text,
+        payload jsonb DEFAULT '{}'::jsonb
+      )
+    `);
+    await client468.query(`CREATE INDEX IF NOT EXISTS quote_events_quote_idx ON quote_events (quote_id, occurred_at)`);
+
+    await client468.query(`
+      CREATE TABLE IF NOT EXISTS quote_saved_views (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id varchar REFERENCES users(id) ON DELETE CASCADE,
+        name text NOT NULL,
+        filters jsonb NOT NULL DEFAULT '{}'::jsonb,
+        created_at timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client468.query(`CREATE INDEX IF NOT EXISTS quote_saved_views_org_idx ON quote_saved_views (organization_id, created_at DESC)`);
+
+    console.log("[migrations] Task #468 customer quotes tables ensured");
+  } catch (err) {
+    console.error("[migrations] Task #468 customer quotes table create error:", err);
+  } finally {
+    client468.release();
+  }
 }

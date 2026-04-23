@@ -4521,3 +4521,135 @@ export const insertCompanyCollaboratorSchema = createInsertSchema(companyCollabo
 });
 export type InsertCompanyCollaborator = z.infer<typeof insertCompanyCollaboratorSchema>;
 export type CompanyCollaborator = typeof companyCollaborators.$inferSelect;
+
+// =====================================================================
+// Customer Quotes — internal visibility into quote requests/outcomes.
+// =====================================================================
+export const QUOTE_OUTCOME_STATUSES = [
+  "pending",
+  "won",
+  "lost_price",
+  "lost_service",
+  "lost_timing",
+  "lost_incumbent",
+  "no_response",
+  "expired",
+  "won_low_margin",
+] as const;
+export type QuoteOutcomeStatus = typeof QUOTE_OUTCOME_STATUSES[number];
+
+export const QUOTE_SOURCES = ["email", "tms", "crm", "manual", "import"] as const;
+
+export const quoteCustomers = pgTable("quote_customers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  segment: text("segment"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertQuoteCustomerSchema = createInsertSchema(quoteCustomers).omit({ id: true, createdAt: true });
+export type InsertQuoteCustomer = z.infer<typeof insertQuoteCustomerSchema>;
+export type QuoteCustomer = typeof quoteCustomers.$inferSelect;
+
+export const quoteReps = pgTable("quote_reps", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
+  name: text("name").notNull(),
+  email: text("email"),
+});
+export const insertQuoteRepSchema = createInsertSchema(quoteReps).omit({ id: true });
+export type InsertQuoteRep = z.infer<typeof insertQuoteRepSchema>;
+export type QuoteRep = typeof quoteReps.$inferSelect;
+
+export const quoteCarriers = pgTable("quote_carriers", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  mcNumber: text("mc_number"),
+});
+export const insertQuoteCarrierSchema = createInsertSchema(quoteCarriers).omit({ id: true });
+export type InsertQuoteCarrier = z.infer<typeof insertQuoteCarrierSchema>;
+export type QuoteCarrier = typeof quoteCarriers.$inferSelect;
+
+export const quoteLaneGroups = pgTable("quote_lane_groups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  originRegion: text("origin_region"),
+  destRegion: text("dest_region"),
+});
+export const insertQuoteLaneGroupSchema = createInsertSchema(quoteLaneGroups).omit({ id: true });
+export type InsertQuoteLaneGroup = z.infer<typeof insertQuoteLaneGroupSchema>;
+export type QuoteLaneGroup = typeof quoteLaneGroups.$inferSelect;
+
+export const quoteOutcomeReasons = pgTable("quote_outcome_reasons", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  code: text("code").notNull(),
+  label: text("label").notNull(),
+  category: text("category").notNull(), // won | lost | no_response | expired
+});
+export const insertQuoteOutcomeReasonSchema = createInsertSchema(quoteOutcomeReasons).omit({ id: true });
+export type InsertQuoteOutcomeReason = z.infer<typeof insertQuoteOutcomeReasonSchema>;
+export type QuoteOutcomeReason = typeof quoteOutcomeReasons.$inferSelect;
+
+export const quoteOpportunities = pgTable("quote_opportunities", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  customerId: varchar("customer_id").notNull().references(() => quoteCustomers.id, { onDelete: "cascade" }),
+  repId: varchar("rep_id").references(() => quoteReps.id, { onDelete: "set null" }),
+  laneGroupId: varchar("lane_group_id").references(() => quoteLaneGroups.id, { onDelete: "set null" }),
+  carrierId: varchar("carrier_id").references(() => quoteCarriers.id, { onDelete: "set null" }),
+  outcomeReasonId: varchar("outcome_reason_id").references(() => quoteOutcomeReasons.id, { onDelete: "set null" }),
+  requestDate: timestamp("request_date").notNull(),
+  originCity: text("origin_city").notNull(),
+  originState: text("origin_state").notNull(),
+  destCity: text("dest_city").notNull(),
+  destState: text("dest_state").notNull(),
+  equipment: text("equipment").notNull(),
+  quotedAmount: decimal("quoted_amount", { precision: 12, scale: 2 }),
+  validThrough: timestamp("valid_through"),
+  outcomeStatus: text("outcome_status").notNull().default("pending"),
+  carrierPaid: decimal("carrier_paid", { precision: 12, scale: 2 }),
+  responseTimeHours: decimal("response_time_hours", { precision: 8, scale: 2 }),
+  source: text("source").notNull().default("email"),
+  sourceReference: text("source_reference"),
+  notes: text("notes"),
+  score: decimal("score", { precision: 6, scale: 2 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("quote_opportunities_org_idx").on(t.organizationId),
+  customerIdx: index("quote_opportunities_customer_idx").on(t.customerId),
+  reqDateIdx: index("quote_opportunities_request_date_idx").on(t.requestDate),
+}));
+export const insertQuoteOpportunitySchema = createInsertSchema(quoteOpportunities).omit({ id: true, createdAt: true });
+export type InsertQuoteOpportunity = z.infer<typeof insertQuoteOpportunitySchema>;
+export type QuoteOpportunity = typeof quoteOpportunities.$inferSelect;
+
+export const quoteEvents = pgTable("quote_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  quoteId: varchar("quote_id").notNull().references(() => quoteOpportunities.id, { onDelete: "cascade" }),
+  eventType: text("event_type").notNull(),
+  occurredAt: timestamp("occurred_at").notNull(),
+  actor: text("actor"),
+  payload: jsonb("payload"),
+}, (t) => ({
+  quoteIdx: index("quote_events_quote_idx").on(t.quoteId),
+}));
+export const insertQuoteEventSchema = createInsertSchema(quoteEvents).omit({ id: true });
+export type InsertQuoteEvent = z.infer<typeof insertQuoteEventSchema>;
+export type QuoteEvent = typeof quoteEvents.$inferSelect;
+
+export const quoteSavedViews = pgTable("quote_saved_views", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  filters: jsonb("filters").notNull().default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const insertQuoteSavedViewSchema = createInsertSchema(quoteSavedViews).omit({ id: true, createdAt: true });
+export type InsertQuoteSavedView = z.infer<typeof insertQuoteSavedViewSchema>;
+export type QuoteSavedView = typeof quoteSavedViews.$inferSelect;

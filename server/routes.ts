@@ -37,6 +37,7 @@ import { registerNbaReadyToActRoutes } from "./routes/nbaReadyToAct";
 import { registerMonitoredMailboxRoutes } from "./routes/monitoredMailboxes";
 import { registerWebexRoutes } from "./routes/webex";
 import { registerCallTrendlineRoutes } from "./routes/callTrendlines";
+import { registerCustomerQuoteRoutes } from "./routes/customerQuotes";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
@@ -3228,6 +3229,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerMonitoredMailboxRoutes(app);
   registerWebexRoutes(app);
   registerCallTrendlineRoutes(app);
+  registerCustomerQuoteRoutes(app);
   const { registerAgentAdminRoutes } = await import("./routes/agentAdmin");
   registerAgentAdminRoutes(app);
   const { registerAgentAnalyticsRoutes } = await import("./routes/agentAnalytics");
