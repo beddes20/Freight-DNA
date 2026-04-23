@@ -1,7 +1,7 @@
 # FreightDNA - Transportation Brokerage Sales Tool
 
 ## Overview
-FreightDNA is a specialized mini CRM application for transportation brokerage sales teams. It streamlines sales workflows by managing customer accounts, organizational charts, contacts, and shipping data. The application includes RFP and Award management with Excel upload and advanced analytical tools. Its core purpose is to enhance customer relationship management, boost sales efficiency, facilitate strategic account penetration, and increase revenue for transportation brokers through robust role-based access control (RBAC).
+FreightDNA is a specialized mini CRM application designed to enhance the efficiency and effectiveness of transportation brokerage sales teams. It provides tools for managing customer accounts, contacts, organizational charts, and shipping data. The application includes robust RFP and Award management, advanced analytics, and AI-powered features to streamline workflows, improve customer relationship management, boost sales, and facilitate strategic account penetration, ultimately increasing revenue for transportation brokers. It features comprehensive role-based access control (RBAC).
 
 ## User Preferences
 I prefer clear and concise information. I like iterative development with regular updates. Please ask for my approval before implementing any major architectural changes or significant feature modifications. I value clean code and well-documented solutions.
@@ -9,101 +9,46 @@ I prefer clear and concise information. I like iterative development with regula
 ## System Architecture
 
 ### UI/UX Decisions
-The application features a modern and responsive user interface built with React, TypeScript, Tailwind CSS, and `shadcn/ui`. It includes dark/light mode, blue and green accent colors, a gradient hero banner, KPI stat cards, and a responsive sidebar. The theme features a black sidebar/header with amber gold accents, the Value Truck logo, and mantras in the header.
+The application uses a modern, responsive UI built with React, TypeScript, Tailwind CSS, and `shadcn/ui`. It supports dark/light mode, features blue and green accent colors, a gradient hero banner, KPI stat cards, and a responsive sidebar. The theme incorporates a black sidebar/header with amber gold accents and the Value Truck logo.
 
 ### Technical Implementations
-FreightDNA is built with a React frontend, an Express.js backend, and a PostgreSQL database utilizing Drizzle ORM. Authentication is session-based with dynamic RBAC.
-
-Core features include:
-- **CRM**: Comprehensive CRUD operations for companies and contacts, with organizational chart visualization.
-- **RFP & Award Management**: Modules for managing RFPs and awards, enhanced with AI-assisted Excel uploads.
-- **Advanced Analytics**: Tools for lane research, facility coverage gap analysis, lane pattern analysis, historical data, and wallet share.
-- **User & Team Management**: Administration, hierarchy, and account reassignment with RBAC.
-- **Data Integration**: Global search, OneDrive sync, and file attachments.
-- **Communication & Collaboration**: Task assignment, shared insights, and discussion topics.
-- **Customer Interaction**: Touchpoint logging, recency tracking, and alerts.
-- **Account Intelligence**: Detailed operational fields and portal credentials storage.
-- **Customer Scorecard**: Secure document management.
-- **Dashboard**: Contextual alerts, goal progress, and role-specific insights.
-- **Momentum Score**: Automated company health/momentum scores (At Risk, Stable, Growth Ready, High Expansion) with AI-powered insights and narratives.
-- **AI-Powered Features**: AI-generated talking points, health score narratives, touchpoint summaries, proactive nudges via chatbot, and AI action execution for logging touchpoints and creating tasks.
-- **AI Email Drafting**: Generates personalized email drafts using GPT-4o-mini, grounded in CRM/freight data, with voice profile analysis. Includes a feedback loop for user ratings and an admin-level email correction system.
-- **Next Best Action (NBA)**: Recommendation engine providing persistent cards based on freight data rules.
-- **Lane Work Queue (LWQ)**: Assignable lane workflow with carrier outreach, email sending/tracking.
-- **Stable Coverage System**: Computes per-lane coverage profiles and tracks incumbent carriers.
-- **My Procurement**: Unified work surface for reps showing LWQ lane assignments and open award carrier procurement tasks.
-- **Carrier Hub**: Central carrier intelligence layer with contact management, claimed lanes, activity tracking, and a Carrier Reliability Score.
-- **Rate Intelligence & Rep Coaching Engine**: SONAR-driven lane rate benchmarks, rate positioning computation, and GPT-4o coaching cards per lane.
-- **Customer Contact Capture from Email**: Detects and suggests new contacts from email threads.
-- **Two-Way Carrier Email**: Outbound emails with replies routed through Microsoft Graph webhook, matching inbound replies to outreach logs.
-- **Customer Email Intelligence Pipeline**: Processes inbound emails to extract customer intent signals (e.g., pricing_request, urgency_signal).
-- **Conversations Inbox**: Org-scoped email conversation thread management with ownership, waiting-state, priority, overdue tracking, archival (manual + auto-archive after 7 days resolved), cursor-based pagination, and search/date filtering for archived threads.
-- **Geographic Lane Patterns**: Defines corridor patterns and tracks contact responsibilities with confidence scoring, including AI-derived geography ownership suggestions.
-- **AI Intelligence Hub**: A unified dashboard offering Meeting Prep Briefs, Sentiment Tracking, Smart Follow-Up Timing, Relationship Health Coaching, Org Chart Gap Analysis, Warm Introduction Paths, Look-Alike Prospecting, Cross-Sell / Lane Gap Intelligence, Wallet Share Expansion Playbook, Win/Loss Pattern Engine, and Competitive Signal Detection.
-- **Auto-Sync Customer Emails**: Monitors individual Outlook mailboxes for NAMs & AMs via Microsoft Graph webhooks, automatically pulling and processing customer email threads for AI signal extraction.
-- **Tactical Learning Engine**: Captures and surfaces successful response approaches for various email signals.
-- **Quote Request SLA Alerting**: Real-time alerting when a customer sends a pricing/quote request. Email batch runs every 2 minutes; reps receive an urgent notification with a 7-minute countdown timer. If unread after 5 minutes, the rep's manager receives an escalation alert. Notification types: `quote_request_alert`, `quote_request_escalation`.
-- **Auto Weekly Account Review**: Friday 4pm cron generates a one-page markdown account review per top-25 customer (by YTD revenue from financial uploads) for each rep. Pulls momentum (growth score delta), lane wins/losses (RFPs + awards), contact health (touchpoints + email signals intent mix), expansion (cross-sell opportunities), and recommended plays (NBA cards), then renders via GPT-4o-mini with a structured fallback. Persists to `account_reviews` table (unique per rep+company+week) and ValueIQ Library (kind=`account-review`). Surfaces on a new "Account Reviews" sub-tab on Company Detail (rolling 8 weeks), supports Generate-now button, follow-up notes (logged as touchpoints), and thumbs-up/down feedback (writes to `draft_feedback`). Manager visibility panel on rep-customers page lists each rep's recent reviews. Endpoints under `/api/account-reviews/*`. Cron override: `WEEKLY_ACCOUNT_REVIEW_CRON`.
-- **Webex Calling Integration**: Click-to-Call via `webextel://` deep links from contact cards, contact detail sheets, and pre-call planner. Call history sync creates touchpoints from Webex CDRs with deduplication. Missed inbound calls surface as NBA cards (`webex_missed_call`). Recording transcription via OpenAI Whisper with AI analysis pipeline. Real-time presence indicators (green/yellow/red dots) on contact phone numbers via batch presence API with 60s cache. Env vars: `WEBEX_CLIENT_ID`, `WEBEX_CLIENT_SECRET`, `WEBEX_ORG_ID`.
-- **AI Center (consolidated admin module)**: Single `/ai` surface that replaces the previously separate AI Agent / Agent Fleet / Approvals / Pods sidebar entries. Tabs: Agents (unified fleet of callable + workflow agents), Approvals (HITL inbox), Pods, Adapters (dry-run/live toggles for every integration), Admin (legacy AiAgentPortal — personas/plays/permissions/activity). Backend aggregation via `GET /api/ai-center/fleet`. Old paths (`/ai-agent`, `/agents`, `/agents/:slug`, `/approvals`, `/pods`) redirect to `/ai/...` so existing links never 404. Sidebar entry gated to admin/manager/director/national_account_manager/sales_director. ValueIQ rep workspace untouched. Note: the `agents` and `workflow_agents` tables remain physically distinct — the AI Center is a UI/aggregation consolidation only; full schema and runtime merge is a follow-up.
+FreightDNA is built on a React frontend, an Express.js backend, and a PostgreSQL database with Drizzle ORM. It uses session-based authentication with dynamic RBAC. Key features include:
+-   **CRM**: CRUD for companies and contacts with organizational charts and various intelligence fields.
+-   **RFP & Award Management**: AI-assisted Excel uploads for RFPs and awards.
+-   **Advanced Analytics**: Lane research, facility coverage gap analysis, lane pattern analysis, historical data, and wallet share.
+-   **User & Team Management**: Administration, hierarchy, and account reassignment.
+-   **Data Integration**: Global search, OneDrive sync, and file attachments.
+-   **Communication & Collaboration**: Task assignment, shared insights, and discussion topics.
+-   **Customer Interaction**: Touchpoint logging, recency tracking, and alerts.
+-   **AI-Powered Features**: AI-generated talking points, health score narratives, touchpoint summaries, proactive nudges, AI action execution (logging touchpoints, creating tasks), and AI email drafting using GPT-4o-mini.
+-   **Next Best Action (NBA)**: Recommendation engine based on freight data rules.
+-   **Lane Work Queue (LWQ)**: Assignable lane workflow with carrier outreach and email tracking.
+-   **Visibility Model**: Role and collaboration-based access control for managers and account collaborators.
+-   **Carrier Hub**: Centralized carrier intelligence, contact management, and Carrier Reliability Score.
+-   **Rate Intelligence & Rep Coaching**: SONAR-driven benchmarks and GPT-4o coaching cards.
+-   **Email Intelligence**: Customer contact capture from emails, two-way carrier email integration via Microsoft Graph, and inbound email intent signal extraction.
+-   **Conversations Inbox**: Org-scoped email thread management with ownership, priority, and tracking.
+-   **Geographic Lane Patterns**: Defines corridor patterns and tracks contact responsibilities with AI-derived suggestions.
+-   **AI Intelligence Hub**: Unified dashboard for Meeting Prep Briefs, Sentiment Tracking, Smart Follow-Up Timing, Relationship Health Coaching, Org Chart Gap Analysis, Warm Introduction Paths, Look-Alike Prospecting, Cross-Sell / Lane Gap Intelligence, Wallet Share Expansion Playbook, Win/Loss Pattern Engine, and Competitive Signal Detection.
+-   **Automated Processes**: Auto-sync customer emails via Microsoft Graph, Tactical Learning Engine for successful response approaches, Quote Request SLA Alerting, and Auto Weekly Account Review generation.
+-   **Webex Calling Integration**: Click-to-Call, call history sync, missed call NBA cards, recording transcription with AI analysis, and real-time presence indicators.
+-   **AI Center**: Consolidated admin module for managing AI agents, approvals, pods, and adapters.
 
 ### System Design Choices
-Key database tables support core functionalities, including pre-computed lane data (`lane_summary_cache`), email-derived contact suggestions (`account_contact_suggestions`), defined corridor patterns (`geographic_lane_patterns`), contact-to-corridor mapping (`account_contact_lane_pattern_responsibilities`), email conversation management (`email_conversation_threads`), AI-inferred geography ownership (`contact_geography_suggestions`), proven tactical responses (`proven_tactics`), AI draft feedback (`draft_feedback`), email correction records (`sent_email_corrections`), and numerous tables for the AI Intelligence Hub features (e.g., `meeting_prep_briefs`, `contact_sentiment_tracking`, `monitored_mailboxes`).
-
-### Available Freight Importer (TMS Daily Upload Format)
-Sheet "Available Freight" is now the canonical source. Key rules:
-- Only rows with `Brokerage status = "AVL"` become `freight_opportunities`.
-- Rows with status in `{POD, DEL, TRANSIT}` feed `load_fact` as `realized` runs (`sourceKind = available_freight_history`), with carrier cost captured from `Total pay` so the carrier ranker has lane-level pay history.
-- Rows with any other status (HOLD, RCA, ACCESS., etc.) are ignored except that they auto-close any prior AVL opportunity for the same Order# (status → `covered`, with audit event).
-- TMS Order# (col A) is the canonical opportunity identity (`stableKey = hash(orderId)`); daily re-imports collapse onto the same row. The legacy ±2-day window-slip soft-merge remains as a fallback when Order# is missing.
-- "Ops user" (col Z) maps to the assigned owner via username/email index (`buildUserEmailIndex`).
-- Equipment codes are mapped to human labels via `EQUIPMENT_CODE_MAP` (FT → "Flatbed w/ Tarps", PO → "Power Only" today; expand as ops surfaces new codes).
-- Pickup datetimes are parsed as `MM/DD/YYYY HHMM`; the time portion is dropped to `YYYY-MM-DD`.
-- Planning-comment column is intentionally not parsed (no drop-trailer detection from text).
-- Revenue/margin are not displayed in the UI but carrier pay (`load_fact.cost`) is tracked per realized run.
-
-### Deployment Recovery Recipe (When Provision Stage Fails on a Unique Index)
-If a future deploy fails at Provision with `Failed to run database migration statement: CREATE UNIQUE INDEX ...`, it means production data has duplicate rows that violate a unique index declared in `shared/schema.ts`. The 2-minute fix:
-
-1. Open Database tab → switch to **Production Database** → toggle Enable Editing ON.
-2. Run a single `DO $$ ... $$` block that LOCKs the table, DELETEs duplicates, and CREATEs the unique index atomically. Template:
-   ```sql
-   DO $$
-   BEGIN
-     LOCK TABLE <table> IN EXCLUSIVE MODE;
-     DELETE FROM <table> t USING (
-       SELECT id FROM (
-         SELECT id, ROW_NUMBER() OVER (
-           PARTITION BY <unique_cols> ORDER BY created_at ASC, id ASC
-         ) AS rn FROM <table> WHERE <unique_cols_not_null>
-       ) ranked WHERE ranked.rn > 1
-     ) d WHERE t.id = d.id;
-     CREATE UNIQUE INDEX IF NOT EXISTS <index_name>
-       ON <table>(<unique_cols>) WHERE <not_null_clause>;
-   END $$;
-   ```
-3. Verify: `SELECT indexname FROM pg_indexes WHERE indexname = '<index_name>';`
-4. Cancel stuck deployment → hard refresh → click Republish. Drizzle-kit sees the index already exists and skips it.
-
-Why a `DO $$` block: Replit's SQL editor only runs the first statement of a multi-statement script unless you highlight all of it. A `DO` block is a single statement so the LOCK + DELETE + CREATE all run atomically as one operation.
-
-To prevent this proactively for any new unique-indexed table, ensure the corresponding insert path uses `ON CONFLICT DO NOTHING` (e.g. `upsertInboundEmailMessage` pattern in `server/storage.ts`).
-
-### Performance Optimizations
-- **Dashboard query optimization**: `getColdContacts` and `getMeaningfulOverdueContacts` use SQL LATERAL joins with LIMIT 20 instead of loading all contacts/touchpoints into memory. Reduced response time from 28-34s to <500ms.
-- **Dashboard caching**: All four slow dashboard endpoints (`cold-contacts`, `meaningful-overdue`, `margin-metrics`, `relationship-summary`) use 10-15 minute server-side cache (via `server/cache.ts`).
-- **Carrier ranking cache**: Per-lane in-memory cache with 3-min TTL in `laneCarrierOutreach.ts`.
+The database schema includes tables for `lane_summary_cache`, `account_contact_suggestions`, `geographic_lane_patterns`, `email_conversation_threads`, `proven_tactics`, and `account_reviews`, among others. The "Available Freight" sheet is the canonical source for `freight_opportunities` and `load_fact`, with specific rules for status mapping and deduplication. Performance is optimized using dashboard query optimization, server-side caching, and in-memory caching. Key engineering patterns include visibility expansion for secure data access, a multi-layered caching strategy, keyset pagination, rate-limited external calls, background workers for scheduled tasks, and webhook-driven reactivity.
 
 ## External Dependencies
-- **PostgreSQL**: Primary database.
-- **xlsx (SheetJS)**: For Excel and CSV parsing.
-- **multer**: For file uploads.
-- **Leaflet**: For interactive mapping.
-- **OneDrive API (Microsoft Graph API)**: For financial data synchronization and reply webhook routing.
-- **node-cron**: For scheduling recurring jobs.
-- **Resend / GoDaddy SMTP**: For sending transactional and report emails.
-- **OpenAI (GPT-4o / GPT-4o-mini)**: For AI-assisted features (RFP column mapping, lane gap insights, email drafting, lane coaching cards, and all AI Intelligence Hub features).
-- **Microsoft Graph API (Outlook)**: Two-way carrier email via webhook subscription and auto-sync of customer emails.
-- **FreightWaves SONAR**: For market rate benchmarking and lane VOTRI capacity signals. Uses 12-second rate limiter, circuit breaker (30-min cooldown on HTTP 451), DB-backed cache with 2-6 hour TTLs, and stale-fallback warm-up on cold start. National summary uses 3 API calls (OTRI, NTI, VCRPM1), market OTRI uses 1 call/market, lane VOTRI uses 1 call/lane. All numeric fields are nullable — when data is unavailable, the UI shows "—" with "Data unavailable — last updated [timestamp]" instead of fake numbers.
-- **Webex Calling API**: Click-to-call deep links, CDR history sync, presence lookup, and recording download. Auth via OAuth client-credentials flow (`server/webexService.ts`).
-- **TRAC API (FreightWaves)**: Primary source for lane-level spot rates, 3-week forecasts, and directional market signals. `tracDirectionSignal()` in `tracAlertEngine.ts` derives hot/warm/cool from `forecast_index_value` (replaces VOTRI's directional role). Used by getLaneSpotRate() and getLaneMarketRate() with null return when unavailable (no fake fallbacks).
+-   **PostgreSQL**: Primary database.
+-   **xlsx (SheetJS)**: For Excel and CSV parsing.
+-   **multer**: For file uploads.
+-   **Leaflet**: For interactive mapping.
+-   **OneDrive API (Microsoft Graph API)**: For financial data synchronization.
+-   **node-cron**: For scheduling recurring jobs.
+-   **Resend / GoDaddy SMTP**: For sending emails.
+-   **OpenAI (GPT-4o / GPT-4o-mini / Whisper)**: For AI-assisted features including RFP column mapping, lane gap insights, email drafting, lane coaching cards, AI Intelligence Hub features, and call transcription.
+-   **Microsoft Graph API (Outlook)**: Two-way carrier email via webhook and auto-sync of customer emails.
+-   **FreightWaves SONAR**: For market rate benchmarking and lane capacity signals.
+-   **Webex Calling API**: For click-to-call, CDR history sync, presence lookup, and recording download.
+-   **FreightWaves TRAC**: Primary source for lane-level spot rates, forecasts, and directional market signals.
+-   **ZoomInfo**: For contact intelligence.
+-   **Clerk**: For authentication.
