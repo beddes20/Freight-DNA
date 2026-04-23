@@ -18,6 +18,7 @@ export type QuoteFilters = {
   outcomeStatus?: string;
   outcomeReasonId?: string;
   laneSearch?: string;
+  laneGroupId?: string;
   wonOnly?: boolean;
   activeOnly?: boolean;
   lostOnly?: boolean;
@@ -329,6 +330,7 @@ async function seedDemoData(orgId: string): Promise<void> {
 function applyFilters(rows: QuoteOpportunity[], f: QuoteFilters): QuoteOpportunity[] {
   return rows.filter((r) => {
     if (f.customerId && r.customerId !== f.customerId) return false;
+    if (f.laneGroupId && r.laneGroupId !== f.laneGroupId) return false;
     if (f.repId && r.repId !== f.repId) return false;
     if (f.equipment && r.equipment !== f.equipment) return false;
     if (f.outcomeStatus && r.outcomeStatus !== f.outcomeStatus) return false;
@@ -709,6 +711,11 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
   } catch (err) {
     console.error("[customer-quotes] pattern alert load error:", err);
   }
+  // Lost-streak alerts (Task #478) — competitive-displacement early warning.
+  // Computed against the entire org dataset (allOpps), not the user-filtered slice,
+  // so the alert fires even when the user has narrowed the page to a different view.
+  const streakAlerts = computeLostStreakAlerts(allOpps, ctx.customerMap, new Map(ctx.laneGroups.map(lg => [lg.id, lg])));
+  for (const sa of streakAlerts) alerts.push(sa.alert);
 
   return {
     total,
@@ -976,6 +983,162 @@ export async function updateQuote(orgId: string, actor: string, id: string, patc
   }
   if (eventsToAdd.length > 0) await db.insert(quoteEvents).values(eventsToAdd);
   return updated;
+}
+
+// ---------- Lost-Streak Alerts (Task #478) ----------
+
+export type LostStreakKind = "customer" | "lane";
+
+export type LostStreakAlert = {
+  kind: LostStreakKind;
+  customerId?: string;
+  laneGroupId?: string;
+  laneGroupName?: string;
+  customerName?: string;
+  streakCount: number;
+  windowDays: number;
+  earliestLossId: string;
+  earliestLossDate: string;
+  latestLossDate: string;
+  lastWonDate: string | null;
+  recentRepIds: string[];
+  dedupeKey: string;
+  alert: Alert;
+};
+
+function lostStreakDefaults(): { threshold: number; windowDays: number } {
+  const threshold = Math.max(2, Number(process.env.QUOTE_LOST_STREAK_THRESHOLD ?? "5") || 5);
+  const windowDays = Math.max(7, Number(process.env.QUOTE_LOST_STREAK_WINDOW_DAYS ?? "60") || 60);
+  return { threshold, windowDays };
+}
+
+export function computeLostStreakAlerts(
+  allOpps: QuoteOpportunity[],
+  customerMap: Map<string, QuoteCustomer>,
+  laneGroupMap: Map<string, QuoteLaneGroup>,
+  opts?: { threshold?: number; windowDays?: number },
+): LostStreakAlert[] {
+  const { threshold: defThreshold, windowDays: defWindow } = lostStreakDefaults();
+  const threshold = opts?.threshold ?? defThreshold;
+  const windowDays = opts?.windowDays ?? defWindow;
+  const cutoff = Date.now() - windowDays * 24 * 3600 * 1000;
+
+  // Only count decided outcomes (won / lost) — pending/expired/no_response do
+  // not break a streak but also aren't counted as a loss.
+  const decided = allOpps
+    .filter(o => isWon(o.outcomeStatus) || isLost(o.outcomeStatus))
+    .filter(o => o.requestDate.getTime() >= cutoff)
+    .slice()
+    .sort((a, b) => b.requestDate.getTime() - a.requestDate.getTime());
+
+  const out: LostStreakAlert[] = [];
+
+  function fmtDate(iso: string): string { return iso.slice(0, 10); }
+
+  function buildAlert(kind: LostStreakKind, key: string, list: QuoteOpportunity[]): LostStreakAlert | null {
+    let streak = 0;
+    let earliest: QuoteOpportunity | null = null;
+    let latest: QuoteOpportunity | null = null;
+    for (const q of list) {
+      if (isLost(q.outcomeStatus)) {
+        if (!latest) latest = q;
+        streak++;
+        earliest = q;
+      } else {
+        break; // a win breaks the streak
+      }
+    }
+    if (streak < threshold || !earliest || !latest) return null;
+
+    // Last won date — searched across the FULL history (not just window)
+    // so the alert text can say "last won 9 months ago" or similar.
+    const won = allOpps
+      .filter(o => isWon(o.outcomeStatus))
+      .filter(o => kind === "customer" ? o.customerId === key : o.laneGroupId === key)
+      .sort((a, b) => b.requestDate.getTime() - a.requestDate.getTime())[0];
+    const lastWonIso = won ? won.requestDate.toISOString() : null;
+
+    const recentRepIds = Array.from(new Set(
+      list.slice(0, streak).map(q => q.repId).filter((x): x is string => !!x),
+    ));
+
+    if (kind === "customer") {
+      const cust = customerMap.get(key);
+      const dedupe = `lost_streak_customer:${key}:since:${earliest.id}`;
+      const lastWonStr = lastWonIso ? `last won ${fmtDate(lastWonIso)}` : "no recorded wins";
+      const detail = `${streak} consecutive lost quotes in ${windowDays}d (since ${fmtDate(earliest.requestDate.toISOString())}) — ${lastWonStr}.`;
+      return {
+        kind, customerId: key, customerName: cust?.name,
+        streakCount: streak, windowDays,
+        earliestLossId: earliest.id,
+        earliestLossDate: earliest.requestDate.toISOString(),
+        latestLossDate: latest.requestDate.toISOString(),
+        lastWonDate: lastWonIso,
+        recentRepIds,
+        dedupeKey: dedupe,
+        alert: {
+          id: dedupe, severity: "high", type: "lost_streak_customer",
+          title: `${cust?.name ?? "Customer"} — ${streak} losses in a row`,
+          detail,
+          data: { customerId: key },
+        },
+      };
+    } else {
+      const lg = laneGroupMap.get(key);
+      const dedupe = `lost_streak_lane:${key}:since:${earliest.id}`;
+      const lastWonStr = lastWonIso ? `last won ${fmtDate(lastWonIso)}` : "no recorded wins";
+      const detail = `${streak} consecutive losses on this lane group in ${windowDays}d (since ${fmtDate(earliest.requestDate.toISOString())}) — ${lastWonStr}.`;
+      return {
+        kind, laneGroupId: key, laneGroupName: lg?.name,
+        streakCount: streak, windowDays,
+        earliestLossId: earliest.id,
+        earliestLossDate: earliest.requestDate.toISOString(),
+        latestLossDate: latest.requestDate.toISOString(),
+        lastWonDate: lastWonIso,
+        recentRepIds,
+        dedupeKey: dedupe,
+        alert: {
+          id: dedupe, severity: "high", type: "lost_streak_lane",
+          title: `${lg?.name ?? "Lane group"} — ${streak} losses in a row`,
+          detail,
+          data: { lane: lg?.name },
+        },
+      };
+    }
+  }
+
+  // Per-customer streaks
+  const byCust = new Map<string, QuoteOpportunity[]>();
+  for (const o of decided) {
+    const arr = byCust.get(o.customerId) ?? [];
+    arr.push(o); byCust.set(o.customerId, arr);
+  }
+  for (const [custId, list] of byCust) {
+    const a = buildAlert("customer", custId, list);
+    if (a) out.push(a);
+  }
+
+  // Per-lane-group streaks
+  const byLane = new Map<string, QuoteOpportunity[]>();
+  for (const o of decided) {
+    if (!o.laneGroupId) continue;
+    const arr = byLane.get(o.laneGroupId) ?? [];
+    arr.push(o); byLane.set(o.laneGroupId, arr);
+  }
+  for (const [lgId, list] of byLane) {
+    const a = buildAlert("lane", lgId, list);
+    if (a) out.push(a);
+  }
+
+  return out;
+}
+
+export async function loadLostStreakAlertsForOrg(orgId: string, opts?: { threshold?: number; windowDays?: number }): Promise<LostStreakAlert[]> {
+  const ctx = await loadContext(orgId);
+  const allOpps = await db.select().from(quoteOpportunities)
+    .where(eq(quoteOpportunities.organizationId, orgId));
+  const laneGroupMap = new Map(ctx.laneGroups.map(lg => [lg.id, lg]));
+  return computeLostStreakAlerts(allOpps, ctx.customerMap, laneGroupMap, opts);
 }
 
 export async function exportCsv(orgId: string, filters: QuoteFilters): Promise<string> {

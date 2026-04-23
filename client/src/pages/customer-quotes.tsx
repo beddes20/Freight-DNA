@@ -137,6 +137,7 @@ type Filters = {
   outcomeStatus?: string;
   outcomeReasonId?: string;
   laneSearch?: string;
+  laneGroupId?: string;
   wonOnly?: boolean;
   activeOnly?: boolean;
   lostOnly?: boolean;
@@ -223,7 +224,7 @@ function filtersToQuery(f: Filters): URLSearchParams {
 function filtersFromUrl(search: string): Filters {
   const p = new URLSearchParams(search);
   const f: Filters = {};
-  (["customerId", "startDate", "endDate", "equipment", "repId", "outcomeStatus", "outcomeReasonId", "laneSearch"] as const).forEach(k => {
+  (["customerId", "startDate", "endDate", "equipment", "repId", "outcomeStatus", "outcomeReasonId", "laneSearch", "laneGroupId"] as const).forEach(k => {
     const v = p.get(k); if (v) f[k] = v;
   });
   if (p.get("wonOnly") === "true") f.wonOnly = true;
@@ -508,6 +509,7 @@ export default function CustomerQuotesPage(): JSX.Element {
               if (k === "customerId") label = `Customer: ${data?.customers.find(c => c.id === v)?.name ?? v}`;
               if (k === "repId") label = `Rep: ${data?.reps.find(r => r.id === v)?.name ?? v}`;
               if (k === "outcomeReasonId") label = `Reason: ${data?.reasons.find(r => r.id === v)?.label ?? v}`;
+              if (k === "laneGroupId") label = `Lane group: ${data?.laneGroups.find(g => g.id === v)?.name ?? v}`;
               if (k === "outcomeStatus") label = `Outcome: ${STATUS_LABELS[v as string] ?? v}`;
               if (k === "wonOnly") label = "Won only";
               if (k === "lostOnly") label = "Lost only";
@@ -649,6 +651,14 @@ export default function CustomerQuotesPage(): JSX.Element {
                             wonOnly: undefined, lostOnly: undefined,
                             activeOnly: undefined, expiringOnly: undefined,
                           });
+                        }
+                        else if (a.type === "lost_streak_customer" && a.data?.customerId) {
+                          updateFilter({ customerId: a.data.customerId, lostOnly: true, wonOnly: undefined, activeOnly: undefined, expiringOnly: undefined });
+                        }
+                        else if (a.type === "lost_streak_lane" && a.data?.lane) {
+                          const lg = data?.laneGroups.find(g => g.name === a.data?.lane);
+                          if (lg) updateFilter({ laneGroupId: lg.id, lostOnly: true, wonOnly: undefined, activeOnly: undefined, expiringOnly: undefined });
+                          else updateFilter({ laneSearch: a.data.lane.replace(/ → /g, " "), lostOnly: true, wonOnly: undefined, activeOnly: undefined, expiringOnly: undefined });
                         }
                         else if (a.data?.quoteId) setDrawerId(a.data.quoteId);
                         else if (a.data?.lane) updateFilter({ laneSearch: a.data.lane.replace(/ → /g, " ") });

@@ -20,6 +20,7 @@ const filtersSchema = z.object({
   outcomeStatus: z.string().min(1).optional(),
   outcomeReasonId: z.string().min(1).optional(),
   laneSearch: z.string().min(1).max(120).optional(),
+  laneGroupId: z.string().min(1).optional(),
   wonOnly: z.boolean().optional(),
   activeOnly: z.boolean().optional(),
   lostOnly: z.boolean().optional(),
@@ -60,6 +61,7 @@ function parseFilters(req: Request): QuoteFilters {
   if (d.outcomeStatus) f.outcomeStatus = d.outcomeStatus;
   if (d.outcomeReasonId) f.outcomeReasonId = d.outcomeReasonId;
   if (d.laneSearch) f.laneSearch = d.laneSearch;
+  if (d.laneGroupId) f.laneGroupId = d.laneGroupId;
   if (d.wonOnly) f.wonOnly = true;
   if (d.activeOnly) f.activeOnly = true;
   if (d.lostOnly) f.lostOnly = true;

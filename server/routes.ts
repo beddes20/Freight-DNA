@@ -3230,6 +3230,13 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerWebexRoutes(app);
   registerCallTrendlineRoutes(app);
   registerCustomerQuoteRoutes(app);
+  // Task #478 — periodic lost-streak alerts for customers and lane groups.
+  {
+    const { initQuoteLostStreakScheduler } = await import("./quoteLostStreakScheduler");
+    initQuoteLostStreakScheduler().catch((err) =>
+      console.error("[quote-lost-streak] init error:", err)
+    );
+  }
   const { registerAgentAdminRoutes } = await import("./routes/agentAdmin");
   registerAgentAdminRoutes(app);
   const { registerAgentAnalyticsRoutes } = await import("./routes/agentAnalytics");
