@@ -274,6 +274,14 @@ export function registerConversationsRoutes(app: Express): void {
       if (team) {
         const teamMemberIds = await storage.getTeamMemberIds(team, orgId);
         const allowedOwnerIds = Array.from(new Set([team, ...teamMemberIds]));
+        // Also pull in accounts whose salesperson is on the team so unowned
+        // threads routed to those accounts still appear under the team view.
+        // Without this, teams with auto-synced inbound mail show zero results
+        // because auto-sync creates threads without stamping an owner.
+        const allCompanies = await storage.getCompanies(orgId);
+        const teamAccountIds = allCompanies
+          .filter(c => c.salesPersonId && allowedOwnerIds.includes(c.salesPersonId))
+          .map(c => c.id);
         // If the caller is also filtering by ownerUserId, intersect with team
         // (owner outside the team -> empty page, otherwise just that owner).
         if (filters.ownerUserId) {
@@ -282,6 +290,9 @@ export function registerConversationsRoutes(app: Express): void {
           }
         } else {
           filters.ownerUserIdIn = allowedOwnerIds;
+          if (teamAccountIds.length > 0) {
+            filters.teamAccountIdsIn = teamAccountIds;
+          }
         }
       }
 

@@ -6966,6 +6966,7 @@ export class DatabaseStorage implements IStorage {
   async listEmailConversationThreads(orgId: string, filters: {
     ownerUserId?: string | null;
     ownerUserIdIn?: string[];
+    teamAccountIdsIn?: string[];
     unowned?: boolean;
     waitingState?: string;
     responsePriority?: string;
@@ -7000,14 +7001,19 @@ export class DatabaseStorage implements IStorage {
       if (filters.ownerUserIdIn.length === 0) {
         conditions.push(sql`false`);
       } else {
-        // Allow team-scoped views to include unowned threads alongside team-owned ones
-        // so directors can still see and claim unassigned conversations.
-        conditions.push(
-          or(
-            inArray(emailConversationThreads.ownerUserId, filters.ownerUserIdIn),
-            isNull(emailConversationThreads.ownerUserId),
-          )!,
-        );
+        // Team-scoped views include: (a) threads owned by team members, (b)
+        // unowned threads (so managers can see and claim unassigned work), and
+        // (c) threads linked to companies whose salesperson is on the team —
+        // covers the common case where auto-sync created a thread without
+        // ever stamping an owner on it, but the account itself is assigned.
+        const teamOrs: SQL[] = [
+          inArray(emailConversationThreads.ownerUserId, filters.ownerUserIdIn),
+          isNull(emailConversationThreads.ownerUserId),
+        ];
+        if (filters.teamAccountIdsIn && filters.teamAccountIdsIn.length > 0) {
+          teamOrs.push(inArray(emailConversationThreads.linkedAccountId, filters.teamAccountIdsIn));
+        }
+        conditions.push(or(...teamOrs)!);
       }
     }
 
