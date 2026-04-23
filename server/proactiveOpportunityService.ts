@@ -675,7 +675,23 @@ export async function ensureShortlistRanked(
 
   const policy = await loadEffectivePolicy(storage, opportunity.orgId, opportunity.companyId);
   const shortlist = await rankCarriersForOpportunity(storage, opportunity, policy);
-  if (shortlist.length === 0) return { ranked: false, carriers: [] };
+  if (shortlist.length === 0) {
+    // Record the empty-result attempt so the activity log shows that ranking
+    // ran (and the frontend can stop expecting a future result). Without this
+    // audit row, "no carriers matched" was indistinguishable from "ranking
+    // never ran" and the page used to spin forever.
+    try {
+      await storage.appendFreightOpportunityAudit({
+        opportunityId: opportunity.id,
+        eventType: "generated",
+        actorUserId: null,
+        payload: { kind: "lazy_shortlist_rank", shortlistSize: 0, result: "no_matches" },
+      });
+    } catch {
+      // Audit is advisory — never block the response on it.
+    }
+    return { ranked: true, carriers: [] };
+  }
 
   const carrierRows: InsertFreightOpportunityCarrier[] = shortlist.map(row => ({
     opportunityId: opportunity.id,

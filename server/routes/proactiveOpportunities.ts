@@ -42,27 +42,39 @@ function userId(req: Express.Request): string | null {
   return (req as any).session?.userId ?? null;
 }
 
-// In-flight lazy-rank set. Prevents duplicate concurrent ranks for the same
-// opportunity when the detail page is polled / refetched while the first rank
-// is still running. Keyed by opportunity id.
-const inflightRanks = new Set<string>();
-function kickOffLazyRank(opp: import("@shared/schema").FreightOpportunity) {
-  if (inflightRanks.has(opp.id)) return;
-  inflightRanks.add(opp.id);
+// In-flight rank coordination. Concurrent detail requests for the same
+// opportunity share the same in-flight Promise instead of each kicking off
+// their own rank (which previously caused the server to hammer the ranker
+// every 3s while the frontend polled).
+const RANK_TIMEOUT_MS = 25_000;
+const inflightRanks = new Map<string, Promise<{ ranked: boolean; carriers: any[]; error?: string }>>();
+function runOrJoinRank(opp: import("@shared/schema").FreightOpportunity) {
+  const existing = inflightRanks.get(opp.id);
+  if (existing) return existing;
   const started = Date.now();
-  void ensureShortlistRanked(storage, opp)
-    .then(({ ranked, carriers }) => {
+  const p = (async () => {
+    try {
+      const result = await Promise.race([
+        ensureShortlistRanked(storage, opp),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Carrier ranking timed out")), RANK_TIMEOUT_MS),
+        ),
+      ]);
       console.log(
-        `[freight-opps] lazy rank ${opp.id} done in ${Date.now() - started}ms ` +
-        `ranked=${ranked} carriers=${carriers.length}`,
+        `[freight-opps] inline rank ${opp.id} done in ${Date.now() - started}ms ` +
+        `ranked=${result.ranked} carriers=${result.carriers.length}`,
       );
-    })
-    .catch(err => {
-      console.error(`[freight-opps] lazy rank ${opp.id} failed after ${Date.now() - started}ms:`, err);
-    })
-    .finally(() => {
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[freight-opps] inline rank ${opp.id} failed after ${Date.now() - started}ms:`, message);
+      return { ranked: false, carriers: [] as any[], error: message };
+    } finally {
       inflightRanks.delete(opp.id);
-    });
+    }
+  })();
+  inflightRanks.set(opp.id, p);
+  return p;
 }
 
 const carrierPatchSchema = z.object({
@@ -161,19 +173,24 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       const org = orgId(req);
       const opp = await storage.getFreightOpportunity(org, String(req.params.id));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
-      const [carriers, audit] = await Promise.all([
-        storage.listFreightOpportunityCarriers(opp.id),
-        storage.listFreightOpportunityAudit(opp.id),
-      ]);
+      let carriers = await storage.listFreightOpportunityCarriers(opp.id);
+      let rankAttempted = false;
+      let rankError: string | undefined;
       // Backfill: rows imported via the Available Freight workbook never went
       // through generateOpportunitiesForCompany, so they may have no carrier
-      // shortlist persisted. Lazily rank-on-first-view, but don't block the
-      // detail response — the frontend will poll this endpoint until carriers
-      // appear (or the ranker gives up). This keeps the page instant.
-      const rankingInFlight = carriers.length === 0 && inflightRanks.has(opp.id);
-      if (carriers.length === 0 && !inflightRanks.has(opp.id)) {
-        kickOffLazyRank(opp);
+      // shortlist persisted. Run the rank inline (mirrors the LWQ
+      // /carrier-suggestions flow with a 25s timeout) so the response is
+      // self-contained. Concurrent requests join a single in-flight Promise
+      // instead of hammering the ranker with one kickoff per poll.
+      if (carriers.length === 0) {
+        const result = await runOrJoinRank(opp);
+        rankAttempted = true;
+        rankError = result.error;
+        if (result.carriers.length > 0) {
+          carriers = result.carriers as typeof carriers;
+        }
       }
+      const audit = await storage.listFreightOpportunityAudit(opp.id);
       // Phase 4: hydrate per-carrier response history so the UI can show
       // outcomes (last + count) without N follow-up calls.
       const responsesByRow = await Promise.all(
@@ -184,7 +201,19 @@ export function registerProactiveOpportunityRoutes(app: Express) {
         responses: responsesByRow[i],
         lastResponse: responsesByRow[i][0] ?? null,
       }));
-      res.json({ opportunity: opp, carriers: carriersWithResponses, audit, rankingInFlight });
+      res.json({
+        opportunity: opp,
+        carriers: carriersWithResponses,
+        audit,
+        // rankingInFlight is now only true when another request is already
+        // ranking and this caller's runOrJoinRank is still awaiting — which
+        // we resolved synchronously above, so it's always false. Kept in the
+        // payload for backwards-compat with the polling client until that
+        // ships.
+        rankingInFlight: false,
+        rankAttempted,
+        rankError: rankError ?? null,
+      });
     } catch (err) {
       console.error("[freight-opps] detail error:", err);
       res.status(500).json({ error: "Failed to fetch freight opportunity" });
