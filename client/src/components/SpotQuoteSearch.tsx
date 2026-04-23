@@ -133,6 +133,7 @@ function saveRecent(q: SpotSearchQuery): void {
 
 function LaneInput({
   label, value, onChange, kind, testIdCity, testIdState, autoOpen, setAutoOpen,
+  cityRef, stateRef, onAdvance,
 }: {
   label: string;
   value: { city: string; state: string };
@@ -142,14 +143,20 @@ function LaneInput({
   testIdState: string;
   autoOpen: boolean;
   setAutoOpen: (v: boolean) => void;
+  cityRef?: React.MutableRefObject<HTMLInputElement | null>;
+  stateRef?: React.MutableRefObject<HTMLInputElement | null>;
+  onAdvance?: () => void;
 }): JSX.Element {
   const [q, setQ] = useState(value.city);
   const [debouncedQ, setDebouncedQ] = useState(value.city);
   const [activeIdx, setActiveIdx] = useState(-1);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const internalCityRef = useRef<HTMLInputElement>(null);
+  const internalStateRef = useRef<HTMLInputElement>(null);
+  const cityEl = cityRef ?? internalCityRef;
+  const stateEl = stateRef ?? internalStateRef;
   useEffect(() => { setQ(value.city); }, [value.city]);
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedQ(q), 200);
+    const t = setTimeout(() => setDebouncedQ(q), 180);
     return () => clearTimeout(t);
   }, [q]);
 
@@ -173,66 +180,92 @@ function LaneInput({
     setQ(it.city);
     setAutoOpen(false);
     setActiveIdx(-1);
+    // Jump to next field — picking from autocomplete is a complete answer.
+    setTimeout(() => onAdvance?.(), 0);
   };
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
-    if (!visible) return;
-    if (e.key === "ArrowDown") {
+  const onCityKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (visible) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActiveIdx(i => Math.min(list.length - 1, i + 1));
+        return;
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActiveIdx(i => Math.max(-1, i - 1));
+        return;
+      } else if (e.key === "Enter" && activeIdx >= 0 && activeIdx < list.length) {
+        e.preventDefault();
+        e.stopPropagation();
+        pick(list[activeIdx]);
+        return;
+      } else if (e.key === "Escape") {
+        e.stopPropagation();
+        setAutoOpen(false);
+        setActiveIdx(-1);
+        return;
+      }
+    }
+    // Tab / Enter from city → jump to state if value present
+    if (e.key === "Tab" && !e.shiftKey && q.trim() && !value.state) {
       e.preventDefault();
-      setActiveIdx(i => Math.min(list.length - 1, i + 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActiveIdx(i => Math.max(-1, i - 1));
-    } else if (e.key === "Enter" && activeIdx >= 0 && activeIdx < list.length) {
-      e.preventDefault();
-      e.stopPropagation();
-      pick(list[activeIdx]);
-    } else if (e.key === "Escape") {
-      e.stopPropagation();
-      setAutoOpen(false);
-      setActiveIdx(-1);
+      stateEl.current?.focus();
+    }
+  };
+
+  const onStateChange = (raw: string): void => {
+    const v = raw.toUpperCase().slice(0, 2);
+    onChange({ city: value.city, state: v });
+    if (v.length === 2) {
+      setTimeout(() => onAdvance?.(), 0);
     }
   };
 
   return (
     <div className="flex flex-col gap-1 relative">
-      <span className="text-[10px] uppercase tracking-wider text-zinc-500 flex items-center gap-1">
+      <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium flex items-center gap-1">
         <MapPin className="h-3 w-3" />{label}
       </span>
       <div className="flex gap-1.5">
         <Input
-          ref={inputRef}
+          ref={cityEl}
           value={q}
           onChange={e => { setQ(e.target.value); onChange({ city: e.target.value, state: value.state }); setAutoOpen(true); setActiveIdx(-1); }}
           onFocus={() => setAutoOpen(true)}
           onBlur={() => setTimeout(() => setAutoOpen(false), 150)}
-          onKeyDown={onKeyDown}
+          onKeyDown={onCityKeyDown}
           placeholder="City"
-          className="h-9 w-[180px] bg-zinc-900 border-zinc-700 text-sm"
+          className="h-10 w-[200px] bg-zinc-900 border-zinc-700 text-sm focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
           data-testid={testIdCity}
         />
         <Input
+          ref={stateEl}
           value={value.state}
-          onChange={e => onChange({ city: value.city, state: e.target.value.toUpperCase().slice(0, 2) })}
+          onChange={e => onStateChange(e.target.value)}
           placeholder="ST"
-          className="h-9 w-[60px] bg-zinc-900 border-zinc-700 text-sm uppercase"
+          className="h-10 w-[60px] bg-zinc-900 border-zinc-700 text-sm uppercase tracking-wider text-center focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
           maxLength={2}
           data-testid={testIdState}
         />
       </div>
       {visible && (
-        <div className="absolute top-full left-0 mt-1 z-30 w-[260px] rounded border border-zinc-700 bg-zinc-900 shadow-xl max-h-[240px] overflow-y-auto" data-testid={`autocomplete-${kind}`}>
+        <div className="absolute top-full left-0 mt-1 z-30 w-[300px] rounded-[4px] border border-zinc-700 bg-zinc-950 shadow-2xl max-h-[280px] overflow-y-auto" data-testid={`autocomplete-${kind}`}>
+          <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-zinc-500 border-b border-zinc-800 bg-zinc-900">
+            {kind === "origin" ? "Pickup matches" : "Delivery matches"} · {list.length}
+          </div>
           {list.map((it, i) => (
             <button
               key={`${it.city}|${it.state}`}
               type="button"
               onMouseDown={(e) => { e.preventDefault(); pick(it); }}
               onMouseEnter={() => setActiveIdx(i)}
-              className={`w-full flex items-center justify-between px-3 py-1.5 text-left text-xs ${i === activeIdx ? "bg-zinc-800" : "hover:bg-zinc-800"}`}
+              className={`w-full flex items-center justify-between px-3 py-2 text-left text-xs border-l-2 ${i === activeIdx ? "bg-zinc-800 border-amber-400" : "border-transparent hover:bg-zinc-900"}`}
               data-testid={`autocomplete-item-${kind}-${it.city}-${it.state}`}
             >
-              <span className="text-zinc-100">{it.city}, {it.state}</span>
-              <span className="text-[10px] text-zinc-500">{it.count} quotes</span>
+              <span className="text-zinc-100 flex items-center gap-1.5">
+                <MapPin className="h-3 w-3 text-zinc-500" />{it.city}, <span className="text-zinc-400">{it.state}</span>
+              </span>
+              <span className="text-[10px] text-zinc-500 tabular-nums">{it.count} quote{it.count === 1 ? "" : "s"}</span>
             </button>
           ))}
         </div>
@@ -289,6 +322,14 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
   const [openOrigin, setOpenOrigin] = useState(false);
   const [openDest, setOpenDest] = useState(false);
   const { toast } = useToast();
+
+  // Field focus chain: pickup-city → pickup-state → delivery-city → delivery-state → date → search
+  const pickupCityRef = useRef<HTMLInputElement | null>(null);
+  const pickupStateRef = useRef<HTMLInputElement | null>(null);
+  const deliveryCityRef = useRef<HTMLInputElement | null>(null);
+  const deliveryStateRef = useRef<HTMLInputElement | null>(null);
+  const dateRef = useRef<HTMLInputElement | null>(null);
+  const searchBtnRef = useRef<HTMLButtonElement | null>(null);
 
   const canSearch = pickup.city && pickup.state && delivery.city && delivery.state;
 
@@ -402,60 +443,121 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
   };
 
   const data = result.data;
+  const hasResults = !!activeQuery && (!!data || result.isFetching);
 
   return (
-    <div className="space-y-3" data-testid="spot-quote-search-root">
-      {/* Sticky search bar */}
+    <div className="space-y-4" data-testid="spot-quote-search-root">
+      {/* Sticky search bar — full form OR compact pinned strip */}
+      {hasResults ? (
+        <div
+          className="sticky top-[124px] z-20 -mx-6 px-6 py-2 bg-[#0A0A0A]/95 backdrop-blur border-y border-zinc-800 shadow-md"
+          data-testid="spot-quote-search-bar-compact"
+        >
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-2">
+              <Search className="h-3.5 w-3.5 text-amber-400" />
+              <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Searching</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-sm font-semibold text-zinc-100 tabular-nums">
+              <MapPin className="h-3.5 w-3.5 text-zinc-500" />
+              {activeQuery!.pickupCity}, {activeQuery!.pickupState}
+              <ChevronRight className="h-3.5 w-3.5 text-amber-400" />
+              {activeQuery!.deliveryCity}, {activeQuery!.deliveryState}
+            </div>
+            <span className="text-[11px] px-2 py-0.5 rounded-[4px] bg-zinc-800 text-zinc-200 border border-zinc-700 inline-flex items-center gap-1">
+              <Truck className="h-3 w-3 text-zinc-400" />{activeQuery!.equipment ?? "Any"}
+            </span>
+            {activeQuery!.pickupDate && (
+              <span className="text-[11px] px-2 py-0.5 rounded-[4px] bg-zinc-800 text-zinc-200 border border-zinc-700 inline-flex items-center gap-1">
+                <Calendar className="h-3 w-3 text-zinc-400" />{activeQuery!.pickupDate}
+              </span>
+            )}
+            {data?.resolvedCustomer && (
+              <span className="text-[11px] px-2 py-0.5 rounded-[4px] bg-amber-500/10 text-amber-300 border border-amber-500/30 inline-flex items-center gap-1">
+                <Users className="h-3 w-3" />{data.resolvedCustomer.name}
+              </span>
+            )}
+            {(activeQuery!.lookbackDays || activeQuery!.exactOnly || activeQuery!.includeSimilar === false) && (
+              <span className="text-[10px] text-zinc-500">
+                {activeQuery!.lookbackDays ? `· last ${activeQuery!.lookbackDays}d` : ""}
+                {activeQuery!.exactOnly ? " · exact only" : activeQuery!.includeSimilar === false ? " · no similar" : ""}
+              </span>
+            )}
+            {searchedAt && (
+              <span className="text-[10px] text-zinc-500 ml-1">
+                · {searchedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </span>
+            )}
+            <div className="ml-auto flex items-center gap-1">
+              <Button size="sm" variant="outline" onClick={editSearch}
+                className="h-7 border-amber-500/40 hover:bg-amber-500/10 text-amber-300 text-[11px] px-2.5"
+                data-testid="button-spot-edit">
+                <SlidersHorizontal className="h-3 w-3 mr-1" /> Edit search
+              </Button>
+              <Button size="sm" variant="ghost" onClick={rerunSearch}
+                className="h-7 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 text-[11px] px-2"
+                data-testid="button-spot-rerun">
+                <RefreshCw className={`h-3 w-3 mr-1 ${result.isFetching ? "animate-spin" : ""}`} /> Rerun
+              </Button>
+              <Button size="sm" variant="ghost" onClick={copyLane}
+                className="h-7 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 text-[11px] px-2"
+                data-testid="button-spot-copy">
+                <Copy className="h-3 w-3 mr-1" /> Copy
+              </Button>
+              <Button size="sm" variant="ghost" onClick={clearAll}
+                className="h-7 text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 text-[11px] px-2"
+                data-testid="button-spot-clear">
+                <X className="h-3 w-3 mr-1" /> Clear
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : (
       <div
-        className="sticky top-[124px] z-10 -mx-6 px-6 py-3 bg-[#0A0A0A] border-y border-zinc-800 shadow-lg"
+        className="sticky top-[124px] z-20 -mx-6 px-6 py-4 bg-gradient-to-b from-[#0A0A0A] to-[#0A0A0A]/95 backdrop-blur border-y border-zinc-800 shadow-lg"
         onKeyDown={onKeyDown}
         data-testid="spot-quote-search-bar"
       >
-        <div className="flex items-center gap-2 mb-1">
-          <Search className="h-4 w-4 text-amber-400" />
-          <span className="text-sm font-semibold text-zinc-100 tracking-tight">Spot Quote Search</span>
-          <span className="text-[10px] uppercase tracking-wider text-zinc-500">— headline workflow</span>
-          {activeQuery && (
-            <div className="ml-auto flex items-center gap-2">
-              <button onClick={editSearch} className="text-[11px] text-zinc-400 hover:text-zinc-100 inline-flex items-center gap-1" data-testid="button-spot-edit">
-                <SlidersHorizontal className="h-3 w-3" /> Edit
-              </button>
-              <button onClick={rerunSearch} className="text-[11px] text-zinc-400 hover:text-zinc-100 inline-flex items-center gap-1" data-testid="button-spot-rerun">
-                <RefreshCw className="h-3 w-3" /> Rerun
-              </button>
-              <button onClick={copyLane} className="text-[11px] text-zinc-400 hover:text-zinc-100 inline-flex items-center gap-1" data-testid="button-spot-copy">
-                <Copy className="h-3 w-3" /> Copy
-              </button>
-              <button onClick={clearAll} className="text-[11px] text-zinc-400 hover:text-zinc-100 inline-flex items-center gap-1" data-testid="button-spot-clear">
-                <X className="h-3 w-3" /> Clear
-              </button>
-            </div>
-          )}
+        <div className="flex items-center gap-2 mb-3">
+          <div className="h-6 w-6 rounded-[4px] bg-amber-500/15 border border-amber-500/30 flex items-center justify-center">
+            <Search className="h-3.5 w-3.5 text-amber-400" />
+          </div>
+          <span className="text-base font-semibold text-zinc-100 tracking-tight">Spot Quote Search</span>
+          <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Pickup → Delivery · Mode · Date</span>
+          <span className="ml-auto text-[10px] text-zinc-500 hidden md:inline">
+            Press <kbd className="px-1 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 text-[9px]">Enter</kbd> to search · <kbd className="px-1 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 text-[9px]">Esc</kbd> to clear
+          </span>
         </div>
-        <div className="flex flex-wrap items-end gap-3">
+        <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
           <LaneInput label="Pickup" value={pickup} onChange={setPickup} kind="origin"
             testIdCity="input-spot-pickup-city" testIdState="input-spot-pickup-state"
-            autoOpen={openOrigin} setAutoOpen={setOpenOrigin} />
+            autoOpen={openOrigin} setAutoOpen={setOpenOrigin}
+            cityRef={pickupCityRef} stateRef={pickupStateRef}
+            onAdvance={() => deliveryCityRef.current?.focus()} />
           <LaneInput label="Delivery" value={delivery} onChange={setDelivery} kind="dest"
             testIdCity="input-spot-delivery-city" testIdState="input-spot-delivery-state"
-            autoOpen={openDest} setAutoOpen={setOpenDest} />
+            autoOpen={openDest} setAutoOpen={setOpenDest}
+            cityRef={deliveryCityRef} stateRef={deliveryStateRef}
+            onAdvance={() => dateRef.current?.focus()} />
           <div className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wider text-zinc-500 flex items-center gap-1"><Truck className="h-3 w-3" /> Mode</span>
+            <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium flex items-center gap-1"><Truck className="h-3 w-3" /> Mode</span>
             <Select value={equipment} onValueChange={setEquipment}>
-              <SelectTrigger className="h-9 w-[120px] bg-zinc-900 border-zinc-700 text-sm" data-testid="select-spot-equipment"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-10 w-[130px] bg-zinc-900 border-zinc-700 text-sm" data-testid="select-spot-equipment"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {EQUIPMENT_OPTIONS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wider text-zinc-500 flex items-center gap-1"><Calendar className="h-3 w-3" /> Pickup date</span>
-            <Input type="date" value={pickupDate} onChange={e => setPickupDate(e.target.value)} className="h-9 w-[150px] bg-zinc-900 border-zinc-700 text-sm" data-testid="input-spot-pickup-date" />
+            <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium flex items-center gap-1"><Calendar className="h-3 w-3" /> Pickup date</span>
+            <Input ref={dateRef} type="date" value={pickupDate} onChange={e => setPickupDate(e.target.value)}
+              className="h-10 w-[160px] bg-zinc-900 border-zinc-700 text-sm focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
+              data-testid="input-spot-pickup-date" />
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wider text-zinc-500 flex items-center gap-1"><Users className="h-3 w-3" /> Customer (optional)</span>
+            <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium flex items-center gap-1"><Users className="h-3 w-3" /> Customer (optional)</span>
             <Select value={customerId || "_any"} onValueChange={v => setCustomerId(v === "_any" ? "" : v)}>
-              <SelectTrigger className="h-9 w-[200px] bg-zinc-900 border-zinc-700 text-sm" data-testid="select-spot-customer"><SelectValue placeholder="Any customer" /></SelectTrigger>
+              <SelectTrigger className="h-10 w-[220px] bg-zinc-900 border-zinc-700 text-sm" data-testid="select-spot-customer"><SelectValue placeholder="Any customer" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="_any">Any customer</SelectItem>
                 {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
@@ -463,12 +565,13 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             </Select>
           </div>
           <Button
+            ref={searchBtnRef}
             onClick={submit}
             disabled={!canSearch || result.isFetching}
-            className="h-9 bg-[#FFC333] hover:bg-amber-400 text-zinc-950 font-semibold rounded-[4px] px-4"
+            className="h-10 bg-[#FFC333] hover:bg-amber-400 text-zinc-950 font-semibold rounded-[4px] px-5 shadow-sm shadow-amber-500/20"
             data-testid="button-spot-search"
           >
-            <Search className="h-3.5 w-3.5 mr-1.5" /> Search
+            <Search className="h-4 w-4 mr-2" /> Search
           </Button>
         </div>
 
