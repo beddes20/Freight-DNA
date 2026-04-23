@@ -144,12 +144,16 @@ async function fetchSentItemsByConversation(
   // Bias to a recent window even when sinceDate is null so we don't scan
   // an entire SentItems folder for never-synced threads.
   const since = sinceDate ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  // Graph $filter cannot mix a string-equality on conversationId with a
-  // datetime range using AND on some tenants — but conversationId is a
-  // first-class top-level field, so this combined filter is supported.
-  const filter = `conversationId eq '${conversationId.replace(/'/g, "''")}' and sentDateTime ge ${since.toISOString()}`;
+
+  // Microsoft Graph rejects `conversationId eq '...' and sentDateTime ge ...`
+  // combined with `$orderby=sentDateTime` on Outlook mailboxes — Graph returns
+  // 400 InefficientFilter ("The restriction or sort order is too complex").
+  // The proven-safe shape on every Outlook tenant is a single-field equality
+  // on conversationId with no $orderby, paged via @odata.nextLink. We then
+  // apply the `since` guardrail and chronological ordering client-side.
+  const filter = `conversationId eq '${conversationId.replace(/'/g, "''")}'`;
   let url: string | undefined =
-    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailboxEmail)}/mailFolders/sentitems/messages?$select=${select}&$filter=${encodeURIComponent(filter)}&$top=50&$orderby=sentDateTime%20asc`;
+    `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailboxEmail)}/mailFolders/sentitems/messages?$select=${select}&$filter=${encodeURIComponent(filter)}&$top=50`;
 
   // Follow @odata.nextLink so long threads / busy windows are recovered
   // completely. Hard cap at 10 pages (≤500 items per thread) as a safety
@@ -165,7 +169,21 @@ async function fetchSentItemsByConversation(
     if (data.value?.length) all.push(...data.value);
     url = data["@odata.nextLink"];
   }
-  return all;
+
+  // Apply the `since` guardrail and chronological ordering client-side, since
+  // Graph wouldn't let us push them into the query.
+  const sinceMs = since.getTime();
+  return all
+    .filter(m => {
+      if (!m.sentDateTime) return true;
+      const t = new Date(m.sentDateTime).getTime();
+      return Number.isFinite(t) ? t >= sinceMs : true;
+    })
+    .sort((a, b) => {
+      const at = a.sentDateTime ? new Date(a.sentDateTime).getTime() : 0;
+      const bt = b.sentDateTime ? new Date(b.sentDateTime).getTime() : 0;
+      return at - bt;
+    });
 }
 
 // ─── Per-thread self-heal ────────────────────────────────────────────────────
