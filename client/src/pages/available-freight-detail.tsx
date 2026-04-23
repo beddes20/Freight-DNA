@@ -588,6 +588,14 @@ export default function AvailableFreightDetailPage() {
       if (!res.ok) throw new Error(`${res.status}`);
       return res.json();
     },
+    // Auto-poll while the server reports ranking is still in-flight (empty
+    // shortlist that's being computed async). Stops as soon as carriers appear.
+    refetchInterval: (query) => {
+      const d = query.state.data as DetailResponse | undefined;
+      if (!d) return false;
+      if ((d as any).rankingInFlight || (d.carriers?.length ?? 0) === 0) return 3000;
+      return false;
+    },
   });
 
   const rerankMutation = useMutation({
@@ -938,24 +946,34 @@ export default function AvailableFreightDetailPage() {
         </CardHeader>
         <CardContent className="p-0">
           {totalCount === 0 ? (
-            <div className="py-12 text-center text-sm text-muted-foreground space-y-3" data-testid="state-empty-carriers">
-              <p className="font-medium">No carriers were ranked for this opportunity.</p>
-              <p className="text-xs">
-                No catalog carrier had history, region, or equipment signal strong enough to score
-                above the exploratory floor for this lane. Try widening the catalog or importing
-                more historical loads on this corridor.
-              </p>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => rerankMutation.mutate()}
-                disabled={rerankMutation.isPending}
-                data-testid="button-rerank-carriers"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${rerankMutation.isPending ? "animate-spin" : ""}`} />
-                {rerankMutation.isPending ? "Re-ranking…" : "Try ranking again"}
-              </Button>
-            </div>
+            (data as any)?.rankingInFlight ? (
+              <div className="py-12 text-center text-sm text-muted-foreground space-y-2" data-testid="state-ranking-in-flight">
+                <RefreshCw className="h-5 w-5 mx-auto animate-spin text-muted-foreground" />
+                <p className="font-medium">Ranking carriers…</p>
+                <p className="text-xs">
+                  Scoring catalog carriers against this lane. This usually takes 10–30 seconds.
+                </p>
+              </div>
+            ) : (
+              <div className="py-12 text-center text-sm text-muted-foreground space-y-3" data-testid="state-empty-carriers">
+                <p className="font-medium">No carriers were ranked for this opportunity.</p>
+                <p className="text-xs">
+                  No catalog carrier had history, region, or equipment signal strong enough to score
+                  above the exploratory floor for this lane. Try widening the catalog or importing
+                  more historical loads on this corridor.
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => rerankMutation.mutate()}
+                  disabled={rerankMutation.isPending}
+                  data-testid="button-rerank-carriers"
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${rerankMutation.isPending ? "animate-spin" : ""}`} />
+                  {rerankMutation.isPending ? "Re-ranking…" : "Try ranking again"}
+                </Button>
+              </div>
+            )
           ) : carriers.every(c => c.excludedReason) ? (
             <div className="py-12 px-6 text-center text-sm text-muted-foreground space-y-3" data-testid="state-all-excluded-carriers">
               <p className="font-medium">All {totalCount} ranked carriers were excluded by guardrails.</p>

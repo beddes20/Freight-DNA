@@ -42,6 +42,29 @@ function userId(req: Express.Request): string | null {
   return (req as any).session?.userId ?? null;
 }
 
+// In-flight lazy-rank set. Prevents duplicate concurrent ranks for the same
+// opportunity when the detail page is polled / refetched while the first rank
+// is still running. Keyed by opportunity id.
+const inflightRanks = new Set<string>();
+function kickOffLazyRank(opp: import("@shared/schema").FreightOpportunity) {
+  if (inflightRanks.has(opp.id)) return;
+  inflightRanks.add(opp.id);
+  const started = Date.now();
+  void ensureShortlistRanked(storage, opp)
+    .then(({ ranked, carriers }) => {
+      console.log(
+        `[freight-opps] lazy rank ${opp.id} done in ${Date.now() - started}ms ` +
+        `ranked=${ranked} carriers=${carriers.length}`,
+      );
+    })
+    .catch(err => {
+      console.error(`[freight-opps] lazy rank ${opp.id} failed after ${Date.now() - started}ms:`, err);
+    })
+    .finally(() => {
+      inflightRanks.delete(opp.id);
+    });
+}
+
 const carrierPatchSchema = z.object({
   excludedReason: z.union([z.enum([
     "recent_contact", "daily_cap", "not_approved", "do_not_use",
@@ -138,25 +161,19 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       const org = orgId(req);
       const opp = await storage.getFreightOpportunity(org, String(req.params.id));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
-      // Backfill: rows imported via the Available Freight workbook never went
-      // through generateOpportunitiesForCompany, so they may have no carrier
-      // shortlist persisted. Lazily rank-on-first-view so the panel populates.
-      // Wrapped in a 12s timeout so a slow carrier-ranker never hangs the
-      // detail page render — the user can always click "Try ranking again".
-      try {
-        await Promise.race([
-          ensureShortlistRanked(storage, opp),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("ensureShortlistRanked timeout")), 12_000),
-          ),
-        ]);
-      } catch (e) {
-        console.warn(`[freight-opps] ensureShortlistRanked skipped for ${opp.id}:`, (e as Error)?.message ?? e);
-      }
       const [carriers, audit] = await Promise.all([
         storage.listFreightOpportunityCarriers(opp.id),
         storage.listFreightOpportunityAudit(opp.id),
       ]);
+      // Backfill: rows imported via the Available Freight workbook never went
+      // through generateOpportunitiesForCompany, so they may have no carrier
+      // shortlist persisted. Lazily rank-on-first-view, but don't block the
+      // detail response — the frontend will poll this endpoint until carriers
+      // appear (or the ranker gives up). This keeps the page instant.
+      const rankingInFlight = carriers.length === 0 && inflightRanks.has(opp.id);
+      if (carriers.length === 0 && !inflightRanks.has(opp.id)) {
+        kickOffLazyRank(opp);
+      }
       // Phase 4: hydrate per-carrier response history so the UI can show
       // outcomes (last + count) without N follow-up calls.
       const responsesByRow = await Promise.all(
@@ -167,7 +184,7 @@ export function registerProactiveOpportunityRoutes(app: Express) {
         responses: responsesByRow[i],
         lastResponse: responsesByRow[i][0] ?? null,
       }));
-      res.json({ opportunity: opp, carriers: carriersWithResponses, audit });
+      res.json({ opportunity: opp, carriers: carriersWithResponses, audit, rankingInFlight });
     } catch (err) {
       console.error("[freight-opps] detail error:", err);
       res.status(500).json({ error: "Failed to fetch freight opportunity" });
