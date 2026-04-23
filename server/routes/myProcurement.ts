@@ -37,6 +37,20 @@ const APPROVER_ROLES = new Set([
 ]);
 
 /**
+ * Direct-manager visibility for read-only queues (LWQ today, more later).
+ *
+ * A rep sees lanes/freight owned by themselves OR by their immediate manager.
+ * Mutation auth elsewhere stays strict (owner/delegated only). The org_id
+ * predicate on the SQL above is a defense-in-depth check in case a stale
+ * managerId points at a user from a different org.
+ */
+function visibleOwnerIds(user: { id: string; managerId?: string | null }): string[] {
+  const ids = new Set<string>([user.id]);
+  if (user.managerId) ids.add(user.managerId);
+  return Array.from(ids);
+}
+
+/**
  * SQL expression that applies the same normalization as normalizeLaneLocation() to a column.
  * Matches: lowercase, trimmed, single-space collapse, comma-space normalization.
  */
@@ -129,11 +143,15 @@ export function registerMyProcurementRoutes(app: Express) {
            COALESCE(lsc.carriers_contacted_count, 0) AS carriers_contacted_count,
            true AS has_cache
          FROM lane_summary_cache lsc
-         WHERE lsc.owner_user_id = $1
+         WHERE lsc.owner_user_id = ANY($1::varchar[])
            AND lsc.org_id = $2
            AND lsc.resolved_at IS NULL
          ORDER BY lsc.lane_score DESC NULLS LAST, lsc.lane_id`,
-        [user.id, user.organizationId]
+        // Direct-manager visibility: a rep sees their own lanes plus any lane
+        // owned by their immediate manager. Mutation auth elsewhere stays
+        // strict (owner-only). Manager IDs from other orgs are filtered out
+        // by the org_id predicate above as a defense-in-depth check.
+        [visibleOwnerIds(user), user.organizationId]
       );
 
       let lwqLanesAll: Array<{
@@ -197,11 +215,11 @@ export function registerMyProcurementRoutes(app: Express) {
              rl.carriers_contacted_count
            FROM recurring_lanes rl
            LEFT JOIN companies c ON c.id = rl.company_id
-           WHERE rl.owner_user_id = $1
+           WHERE rl.owner_user_id = ANY($1::varchar[])
              AND rl.org_id = $2
              AND rl.resolved_at IS NULL
            ORDER BY rl.lane_score DESC NULLS LAST`,
-          [user.id, user.organizationId]
+          [visibleOwnerIds(user), user.organizationId]
         );
         lwqLanesAll = fallbackRows.rows.map((r) => ({
           laneId: r.id,
