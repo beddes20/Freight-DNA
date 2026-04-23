@@ -4,7 +4,7 @@
  */
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,7 @@ interface ContactSuggestion {
   confidenceScore: number;
   status: string;
   threadCount: number;
+  threadId: string | null;
   snoozedUntil: string | null;
   createdAt: string;
 }
@@ -297,9 +298,19 @@ function AccountSuggestionGroup({ accountId, accountName, pendingCount, onNaviga
               <Mail className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm font-medium" data-testid={`text-email-${suggestion.id}`}>
-                    {suggestion.emailAddress}
-                  </span>
+                  {suggestion.threadId ? (
+                    <Link
+                      href={`/conversations?threadId=${encodeURIComponent(suggestion.threadId)}`}
+                      className="text-sm font-medium text-blue-600 hover:underline dark:text-blue-400"
+                      data-testid={`text-email-${suggestion.id}`}
+                    >
+                      {suggestion.emailAddress}
+                    </Link>
+                  ) : (
+                    <span className="text-sm font-medium" data-testid={`text-email-${suggestion.id}`}>
+                      {suggestion.emailAddress}
+                    </span>
+                  )}
                   <ConfidenceBadge score={suggestion.confidenceScore} />
                   {suggestion.suggestionSource === "email_domain_match" && (
                     <Badge variant="outline" className="text-[10px] text-teal-600 border-teal-500/30 dark:text-teal-400">Domain</Badge>

@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,7 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { UserPlus, MoreHorizontal, Mail, Check, EyeOff, Clock, Ban } from "lucide-react";
+import { UserPlus, MoreHorizontal, Mail, Check, EyeOff, Clock, Ban, Link2, Search } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -33,9 +35,17 @@ interface ContactSuggestion {
   confidenceScore: number;
   status: string;
   threadCount: number;
+  threadId: string | null;
   snoozedUntil: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+interface CompanyContactLite {
+  id: string;
+  name: string;
+  title: string | null;
+  email: string | null;
 }
 
 interface SuggestedContactsPanelProps {
@@ -82,6 +92,28 @@ export function SuggestedContactsPanel({ companyId }: SuggestedContactsPanelProp
   const [roleForSuggestion, setRoleForSuggestion] = useState<ContactSuggestion | null>(null);
   const [selectedRole, setSelectedRole] = useState<string>("");
 
+  // Task #450 — "Add to existing contact" dialog state
+  const [addExistingOpen, setAddExistingOpen] = useState(false);
+  const [existingForSuggestion, setExistingForSuggestion] = useState<ContactSuggestion | null>(null);
+  const [existingSearch, setExistingSearch] = useState("");
+  const [pickedContactId, setPickedContactId] = useState<string>("");
+
+  const { data: companyContacts = [] } = useQuery<CompanyContactLite[]>({
+    queryKey: [`/api/companies/${companyId}/contacts`],
+    enabled: addExistingOpen,
+  });
+
+  const filteredContacts = useMemo(() => {
+    const q = existingSearch.trim().toLowerCase();
+    if (!q) return companyContacts;
+    return companyContacts.filter(
+      c =>
+        (c.name || "").toLowerCase().includes(q) ||
+        (c.title || "").toLowerCase().includes(q) ||
+        (c.email || "").toLowerCase().includes(q),
+    );
+  }, [companyContacts, existingSearch]);
+
   const { data: suggestions = [], isLoading } = useQuery<ContactSuggestion[]>({
     queryKey: ["/api/internal/accounts", companyId, "contact-suggestions"],
     queryFn: async () => {
@@ -96,20 +128,29 @@ export function SuggestedContactsPanel({ companyId }: SuggestedContactsPanelProp
   );
 
   const acceptMutation = useMutation({
-    mutationFn: async ({ id, roleType }: { id: string; roleType?: string }) => {
-      return apiRequest("POST", `/api/internal/accounts/${companyId}/contact-suggestions/${id}/accept`, { roleType });
+    mutationFn: async ({ id, roleType, targetContactId }: { id: string; roleType?: string; targetContactId?: string }) => {
+      return apiRequest("POST", `/api/internal/accounts/${companyId}/contact-suggestions/${id}/accept`, { roleType, targetContactId });
     },
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: ["/api/internal/accounts", companyId, "contact-suggestions"] });
       queryClient.invalidateQueries({ queryKey: ["/api/contacts", companyId] });
       queryClient.invalidateQueries({ queryKey: [`/api/companies/${companyId}/contacts`] });
-      toast({ title: "Contact added successfully" });
+      toast({ title: vars.targetContactId ? "Email added to existing contact" : "Contact added successfully" });
       setAddRoleOpen(false);
       setRoleForSuggestion(null);
       setSelectedRole("");
+      setAddExistingOpen(false);
+      setExistingForSuggestion(null);
+      setExistingSearch("");
+      setPickedContactId("");
     },
-    onError: () => {
-      toast({ title: "Failed to add contact", variant: "destructive" });
+    onError: async (err: any) => {
+      let msg = "Failed to add contact";
+      try {
+        const parsed = typeof err?.message === "string" ? JSON.parse(err.message.replace(/^\d+:\s*/, "")) : null;
+        if (parsed?.error) msg = parsed.error;
+      } catch { /* ignore */ }
+      toast({ title: msg, variant: "destructive" });
     },
   });
 
@@ -168,9 +209,19 @@ export function SuggestedContactsPanel({ companyId }: SuggestedContactsPanelProp
               <Mail className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-sm font-medium truncate" data-testid={`suggestion-email-${suggestion.id}`}>
-                    {suggestion.emailAddress}
-                  </span>
+                  {suggestion.threadId ? (
+                    <Link
+                      href={`/conversations?threadId=${encodeURIComponent(suggestion.threadId)}`}
+                      className="text-sm font-medium truncate text-blue-600 hover:underline dark:text-blue-400"
+                      data-testid={`suggestion-email-${suggestion.id}`}
+                    >
+                      {suggestion.emailAddress}
+                    </Link>
+                  ) : (
+                    <span className="text-sm font-medium truncate" data-testid={`suggestion-email-${suggestion.id}`}>
+                      {suggestion.emailAddress}
+                    </span>
+                  )}
                   <ConfidenceBadge score={suggestion.confidenceScore} />
                 </div>
                 {suggestion.suggestedName && (
@@ -181,7 +232,17 @@ export function SuggestedContactsPanel({ companyId }: SuggestedContactsPanelProp
                 )}
                 <p className="text-xs text-muted-foreground mt-0.5" data-testid={`suggestion-source-${suggestion.id}`}>
                   {suggestion.suggestionSource === "email_thread" ? "From email thread" : "From email"}{" · "}
-                  {suggestion.threadCount} thread{suggestion.threadCount !== 1 ? "s" : ""}
+                  {suggestion.threadId ? (
+                    <Link
+                      href={`/conversations?threadId=${encodeURIComponent(suggestion.threadId)}`}
+                      className="text-blue-600 hover:underline dark:text-blue-400"
+                      data-testid={`suggestion-thread-link-${suggestion.id}`}
+                    >
+                      {suggestion.threadCount} thread{suggestion.threadCount !== 1 ? "s" : ""}
+                    </Link>
+                  ) : (
+                    <>{suggestion.threadCount} thread{suggestion.threadCount !== 1 ? "s" : ""}</>
+                  )}
                 </p>
               </div>
               <div className="flex items-center gap-1 shrink-0">
@@ -208,6 +269,21 @@ export function SuggestedContactsPanel({ companyId }: SuggestedContactsPanelProp
                   data-testid={`button-add-role-${suggestion.id}`}
                 >
                   Add + Role
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => {
+                    setExistingForSuggestion(suggestion);
+                    setExistingSearch("");
+                    setPickedContactId("");
+                    setAddExistingOpen(true);
+                  }}
+                  data-testid={`button-add-existing-${suggestion.id}`}
+                >
+                  <Link2 className="h-3.5 w-3.5 mr-1" />
+                  Add to existing
                 </Button>
                 <Button
                   size="sm"
@@ -249,6 +325,68 @@ export function SuggestedContactsPanel({ companyId }: SuggestedContactsPanelProp
           ))}
         </CardContent>
       </Card>
+
+      {/* Task #450 — Add to existing contact */}
+      <Dialog open={addExistingOpen} onOpenChange={setAddExistingOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add Email to Existing Contact</DialogTitle>
+          </DialogHeader>
+          {existingForSuggestion && (
+            <div className="space-y-3 py-2">
+              <p className="text-sm text-muted-foreground">
+                Attach <span className="font-medium text-foreground">{existingForSuggestion.emailAddress}</span> to a contact already on this account.
+              </p>
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  className="pl-9"
+                  placeholder="Search contacts on this account…"
+                  value={existingSearch}
+                  onChange={e => setExistingSearch(e.target.value)}
+                  data-testid="input-search-existing-contacts"
+                />
+              </div>
+              <div className="max-h-64 overflow-y-auto border rounded-md divide-y">
+                {filteredContacts.length === 0 ? (
+                  <div className="p-3 text-xs text-muted-foreground text-center">
+                    No contacts found on this account.
+                  </div>
+                ) : (
+                  filteredContacts.map(c => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => setPickedContactId(c.id)}
+                      className={`w-full text-left p-2.5 text-sm hover:bg-muted/60 transition-colors ${pickedContactId === c.id ? "bg-blue-50 dark:bg-blue-950/30" : ""}`}
+                      data-testid={`row-existing-contact-${c.id}`}
+                    >
+                      <div className="font-medium">{c.name}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {c.title || "—"}{c.email ? ` · ${c.email}` : ""}
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddExistingOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => {
+                if (existingForSuggestion && pickedContactId) {
+                  acceptMutation.mutate({ id: existingForSuggestion.id, targetContactId: pickedContactId });
+                }
+              }}
+              disabled={acceptMutation.isPending || !pickedContactId}
+              data-testid="button-confirm-add-existing"
+            >
+              {acceptMutation.isPending ? "Linking…" : "Add to Contact"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={addRoleOpen} onOpenChange={setAddRoleOpen}>
         <DialogContent className="max-w-sm">

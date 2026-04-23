@@ -1055,6 +1055,24 @@ export default function ConversationsPage() {
     return () => clearTimeout(timer);
   }, [archiveSearch]);
 
+  // Task #451 — Deep link: select the thread referenced by ?threadId=… as soon
+  // as it appears in the loaded list. Strip the param afterwards so the URL
+  // stays clean and the deep link doesn't keep re-firing.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const wantedThreadId = params.get("threadId");
+    if (!wantedThreadId) return;
+    if (selectedThread?.threadId === wantedThreadId) return;
+    const match = allThreads.find(t => t.threadId === wantedThreadId);
+    if (match) {
+      setSelectedThread(match);
+      params.delete("threadId");
+      const qs = params.toString();
+      window.history.replaceState({}, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+    }
+  }, [allThreads, selectedThread]);
+
   function buildParams(cursorParam?: string): string {
     const p = new URLSearchParams();
     p.set("limit", "50");

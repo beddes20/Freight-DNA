@@ -10081,12 +10081,55 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const suggestion = await storage.getAccountContactSuggestion(id);
       if (!suggestion || suggestion.accountId !== accountId) return res.status(404).json({ error: "Suggestion not found" });
 
-      const { roleType } = req.body as { roleType?: string };
+      const { roleType, targetContactId } = req.body as { roleType?: string; targetContactId?: string };
 
-      // Accept: create or update contact
-      const existingContact = await storage.getContactByEmailAndCompany(suggestion.emailAddress, accountId);
       const now = new Date();
       let contact;
+
+      // ── Task #450: Attach suggestion to a specific existing contact ──
+      if (targetContactId) {
+        const target = await storage.getContact(targetContactId);
+        if (!target || target.companyId !== accountId) {
+          return res.status(400).json({ error: "Selected contact does not belong to this account" });
+        }
+        // Reject if the suggestion's email is already taken by a DIFFERENT contact in the org.
+        const emailOwner = await storage.getContactByEmailInOrg(suggestion.emailAddress, currentUser.organizationId);
+        if (emailOwner && emailOwner.contactId !== target.id) {
+          return res.status(409).json({
+            error: `That email is already on contact "${emailOwner.contactName}". Resolve the duplicate before re-assigning.`,
+          });
+        }
+        const updatePayload: import("@shared/schema").InsertContact = {
+          companyId: target.companyId,
+          name: target.name,
+          title: target.title || suggestion.suggestedTitle || null,
+          phone: target.phone || suggestion.suggestedPhone || null,
+          email: suggestion.emailAddress, // attach the suggested email
+          relationshipBase: target.relationshipBase ?? null,
+          reportsToId: target.reportsToId ?? null,
+          lanes: target.lanes ?? null,
+          regions: target.regions ?? null,
+          freightSpend: target.freightSpend ?? null,
+          spotBiddingProcess: target.spotBiddingProcess ?? null,
+          nextSteps: target.nextSteps ?? null,
+          interests: target.interests ?? null,
+          notes: target.notes ?? null,
+          createdAt: target.createdAt ?? null,
+          createdBy: target.createdBy ?? null,
+          baseAdvancedAt: target.baseAdvancedAt ?? null,
+          lastSeenAt: now,
+          roleType: roleType ?? target.roleType ?? null,
+          sourceType: target.sourceType ?? "email_capture",
+          status: target.status ?? "active",
+          isPrimary: target.isPrimary ?? false,
+        };
+        contact = await storage.updateContact(target.id, updatePayload);
+        await storage.updateAccountContactSuggestionStatus(id, "accepted", { userId: currentUser.id });
+        return res.json({ suggestion: { ...suggestion, status: "accepted" }, contact, mode: "merged" });
+      }
+
+      // Accept (default): create or update contact by email match within the account
+      const existingContact = await storage.getContactByEmailAndCompany(suggestion.emailAddress, accountId);
       if (existingContact) {
         // Update lastSeenAt without overwriting manually-curated fields.
         // Build an explicit InsertContact payload.
