@@ -1,0 +1,365 @@
+Build a production-style internal web application tab called "Customer Quotes" for a freight brokerage team.
+
+This app is for internal visibility and analytics around customer quote requests, spot quoting activity, outcomes, and lane performance. The goal is NOT to require every rep to use a new pricing form. Instead, the app should create transparency and shared intelligence from data we already have, especially quote requests from emails, historical quote activity, won/lost results, and carrier cost data.
+
+Use a polished, data-dense, dark-theme design with:
+- Background: #0A0A0A
+- Accent: #FFC333
+- Text: white and muted grays
+- Font: Inter or a similar clean sans-serif
+- Tight 4px corner radius
+- Minimal decorative styling
+- High usability for operational users
+- Keyboard-friendly controls
+- Strong table UX
+- Sticky filters
+- Responsive layout, but optimized for desktop first
+
+Build this as a full-stack Replit app with:
+- frontend for dashboard UI
+- backend API routes
+- database schema for quote opportunities and related entities
+- seed/demo data so the app is fully usable immediately
+- clean architecture so real email/TMS/CRM integrations can be added later
+
+APP NAME / PRIMARY TAB
+- The main tab must be called "Customer Quotes"
+
+CORE PRODUCT VISION
+Create a centralized lane-opportunity intelligence workspace where users can:
+- see what customers are asking us to quote
+- see what we quoted
+- see if we won or lost
+- see what we paid the carrier if we won
+- compare performance by customer, lane, rep, time period, and outcome reason
+- identify which freight is desirable vs low-quality
+- improve quoting speed, consistency, transparency, and margin management
+
+IMPORTANT PRODUCT PRINCIPLE
+Do not design this as a mandatory quote-entry tool. Design it as a transparency and intelligence layer first. Assume the data can come from:
+- emails
+- imported quote records
+- load history
+- execution data
+- carrier payment data
+- rep attribution
+
+INFORMATION ARCHITECTURE
+
+1. HEADER
+At the top:
+- Title: Customer Quotes
+- Subtitle: "Shared visibility into quote requests, outcomes, and lane performance."
+- Compact action area on the right with:
+  - Export CSV button
+  - Saved Views dropdown
+  - Refresh button
+
+2. STICKY FILTER BAR
+Directly under the header, create a sticky filter row with:
+- Customer filter (high priority, searchable dropdown)
+- Date range filter
+- Equipment filter
+- Rep filter
+- Outcome status filter
+- Outcome reason filter
+- Lane search field (search by origin, destination, or combined lane)
+- Toggle: show only won
+- Toggle: show only active quotes
+- Clear all filters action
+
+Show active filters as chips/tags so users always understand what is being filtered.
+Customer filtering must be a first-class interaction. When a customer is selected, the whole page should pivot into that customer's view and update all KPIs, charts, and tables. Use visible active filter chips because persistent filter visibility improves clarity and trust in dashboards. [web:53][web:56]
+
+3. KPI SUMMARY ROW
+Display a KPI row that updates live based on filters:
+- Total Quotes
+- Won Quotes
+- Lost Quotes
+- Win Rate
+- Avg Quoted Amount
+- Avg Carrier Cost on Won Freight
+- Avg Gross Margin $
+- Avg Gross Margin %
+- Avg Response Time
+- Pending / Open Quotes
+- Expiring Soon Quotes
+
+These should be compact dashboard cards with trend indicators.
+
+4. MAIN DASHBOARD LAYOUT
+Create a desktop layout with:
+- left/main content area for charts and table
+- right sidebar or right column for alerts, saved views, and quick summaries
+
+MAIN CONTENT BLOCKS
+
+A. Customer Performance Panel
+When a customer is selected, show:
+- Customer name
+- Total quotes
+- Win/loss rate
+- Avg quoted amount
+- Avg carrier buy
+- Avg gross margin
+- Avg response time
+- Top quoted lanes
+- Top loss reasons
+- Trend over time
+This should clearly answer:
+- How do we perform with this customer?
+- Which lanes do we win?
+- Where do we lose?
+- Are margins healthy?
+
+B. Quote Outcome Taxonomy Module
+Do not only track won/lost.
+Add structured outcome categories:
+- Won
+- Lost on price
+- Lost on service
+- Lost on timing / slow response
+- Lost to incumbent
+- No response / went dark
+- Expired
+- Won but low margin
+
+Show:
+- distribution chart
+- trend over time
+- breakdown by customer
+- breakdown by rep
+- breakdown by lane
+
+This module is mandatory because segmented win/loss reason tracking makes analytics actionable. [web:31][web:44]
+
+C. Quote Validity Window Module
+Each quote opportunity should include:
+- quote sent date
+- valid through date
+- active / expired / expiring soon state
+
+Show:
+- expiring quotes list
+- aging buckets
+- stale quote count
+- active vs expired summary
+
+Use this to help users understand when historical pricing may no longer be reliable.
+
+D. Lane Overlap / Internal Variance Module
+Create analytics to show:
+- same lane quoted by multiple reps
+- quote spread on same/similar lanes
+- quote spread by customer
+- unusually high internal variance
+- inconsistent quoting behavior flags
+
+This should help leadership identify where the team is pricing inconsistently.
+
+E. "Should We Want This Freight?" Scoring Module
+Create a lane/customer opportunity score that combines:
+- historical win rate
+- avg gross margin
+- margin volatility
+- carrier coverage depth
+- repeat frequency
+- service quality if available
+- strategic customer value
+
+Display score labels such as:
+- Pursue Aggressively
+- Good Freight
+- Selective
+- Low Quality / Low Return
+
+This should help users evaluate whether winning more of that freight is desirable, not just possible.
+
+F. Operational Alerts Module
+Right column or top-right panel:
+- lanes quoted frequently but rarely won
+- quotes expiring soon
+- customers with rising quote volume
+- quotes with low-margin risk
+- lanes with high internal variance
+- requests waiting too long for quote response
+
+5. MAIN TABLE: QUOTE OPPORTUNITIES
+Create a powerful, sortable, filterable table with sticky header.
+Columns:
+- Request Date
+- Customer
+- Origin
+- Destination
+- Equipment
+- Quoted Amount
+- Valid Through
+- Outcome Status
+- Outcome Reason
+- Carrier Paid
+- Margin $
+- Margin %
+- Rep
+- Response Time
+- Source
+- Confidence / Opportunity Score
+
+Include:
+- sticky header
+- row hover state
+- sort by any major column
+- pagination or virtualized scrolling
+- inline status pills
+- column density appropriate for operations users
+Sticky table controls and headers help preserve context in dense enterprise tables. [web:1]
+
+Each row should be clickable.
+
+6. ROW DETAILS DRAWER
+When a row is clicked, open a right-side drawer or modal with:
+- lane summary
+- customer
+- quote timeline
+- quote revisions
+- final outcome
+- carrier paid
+- margin details
+- rep attribution
+- notes
+- source email reference / imported source reference
+- related history for same lane
+- related history for same customer
+- similar lane group
+
+IMPORTANT:
+Every high-level metric and chart should drill down into the underlying records. The app must preserve trust by making every summary explainable through record-level data. Drilldown workflows that move from high-level signals to traceable records are a strong pattern for investigation interfaces. [web:51][web:54]
+
+7. CHARTS / VISUALS
+Include a compact set of useful visualizations:
+- Win/Loss trend over time
+- Quote volume over time
+- Outcome reason distribution
+- Win rate by customer
+- Margin by customer
+- Top quoted lanes
+- High-volume low-win lanes
+- Quote aging / validity chart
+
+Do not overdesign charts. Keep them sharp, readable, and dashboard-like.
+
+8. DATABASE / DATA MODEL
+Design a clean schema around a quote opportunity record.
+
+Tables should include something like:
+- customers
+- reps
+- quote_opportunities
+- quote_events
+- lane_groups
+- outcome_reasons
+- carriers
+- loads / execution records
+- saved_views
+
+Core quote_opportunities fields:
+- id
+- customer_id
+- rep_id
+- request_datetime
+- origin_city
+- origin_state
+- destination_city
+- destination_state
+- equipment_type
+- quoted_amount
+- currency
+- quote_sent_datetime
+- valid_through_datetime
+- outcome_status
+- outcome_reason_id
+- carrier_id
+- carrier_paid_amount
+- gross_margin_dollars
+- gross_margin_percent
+- response_time_minutes
+- source_type
+- source_reference
+- lane_key
+- similar_lane_group_id
+- strategic_score
+- notes
+- created_at
+- updated_at
+
+9. DEMO DATA
+Seed realistic demo freight brokerage data including:
+- multiple customers
+- overlapping lanes
+- won and lost quotes
+- different reps
+- some expired quotes
+- some pending quotes
+- a range of outcome reasons
+- carrier paid amounts for won loads
+- margin variation
+- repeated lanes across customers
+
+The seed data should make the dashboard feel immediately useful.
+
+10. UX / PRODUCT EXPECTATIONS
+Make the app answer these questions clearly:
+- What are we quoting most often?
+- Which customers do we win most with?
+- Which lanes do we quote often but rarely win?
+- Why are we losing?
+- Are we quoting too slowly?
+- Are reps inconsistent on similar lanes?
+- Which freight is attractive vs low quality?
+- Which quotes are stale or expiring soon?
+- Where are margins strong or weak?
+
+11. TECHNICAL EXPECTATIONS
+Please:
+- choose a clean modern Replit-friendly stack
+- use a relational database
+- create seed data
+- create API endpoints for filters and drilldowns
+- make the UI feel like a real internal tool, not a prototype
+- keep code organized and reusable
+- add comments only where useful
+- make it easy to replace demo data with real integrations later
+
+12. BUILD ORDER
+Implement in this order:
+1. Project scaffold and theme
+2. Database schema
+3. Seed demo data
+4. Sticky filter bar
+5. KPI row
+6. Main table
+7. Row details drawer
+8. Charts and analytics modules
+9. Saved views
+10. Export CSV
+11. Final UX polish
+
+13. DO NOT DO THESE
+- Do not build a marketing site
+- Do not make the design flashy
+- Do not rely on every rep manually entering data
+- Do not overload the page with too many charts
+- Do not hide filters in confusing menus
+- Do not use generic lorem ipsum
+- Do not create fake-looking toy data
+
+14. FINAL DELIVERABLE
+Return a working Replit app with:
+- "Customer Quotes" as the main tab
+- realistic seeded data
+- customer filtering
+- win/loss analytics
+- lane transparency
+- validity tracking
+- internal variance analytics
+- freight attractiveness scoring
+- drilldown into source records
