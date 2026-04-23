@@ -552,9 +552,10 @@ export const chatConversations = pgTable("chat_conversations", {
   id: serial("id").primaryKey(),
   userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   title: text("title").notNull().default("New Chat"),
-  // Use a stable SQL default (not new Date()) so drizzle-kit doesn't regenerate
-  // the default literal on every db:push and rewrite the column.
-  createdAt: text("created_at").notNull().default(sql`(now() at time zone 'utc')::text`),
+  // App-level default. Avoids a SQL DEFAULT clause containing apostrophes
+  // (e.g. `'utc'`) that drizzle-kit was mis-tokenizing into a truncated
+  // ALTER TABLE statement during prod migrations.
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
 export const insertChatConversationSchema = createInsertSchema(chatConversations).omit({ id: true });
 export type InsertChatConversation = z.infer<typeof insertChatConversationSchema>;
@@ -565,8 +566,8 @@ export const chatMessages = pgTable("chat_messages", {
   conversationId: integer("conversation_id").notNull().references(() => chatConversations.id, { onDelete: "cascade" }),
   role: text("role").notNull(),
   content: text("content").notNull(),
-  // Stable SQL default — see chatConversations.createdAt note above.
-  createdAt: text("created_at").notNull().default(sql`(now() at time zone 'utc')::text`),
+  // App-level default — see chatConversations.createdAt note above.
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
 export const insertChatMessageSchema = createInsertSchema(chatMessages).omit({ id: true });
 export type InsertChatMessage = z.infer<typeof insertChatMessageSchema>;
