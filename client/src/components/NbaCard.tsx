@@ -63,6 +63,8 @@ export interface NbaCardData {
   primaryContactRelationshipBase?: string | null;
   primaryLaneId?: string | null;
   primaryLaneLabel?: string | null;
+  // Task #480 — for stale_quote_followup cards: linkedCommitmentId carries quoteId
+  linkedCommitmentId?: string | null;
 }
 
 export interface NbaCardProps {
@@ -93,6 +95,7 @@ const RULE_LABELS: Record<string, string> = {
   lane_volume_drop:       "Lane Volume Drop",
   payment_credit_issue:   "Payment / Credit Issue",
   market_surge_customer_outreach: "Market Surge",
+  stale_quote_followup:   "Stale Quote Follow-Up",
   R_MARKET_TIGHT:         "Market Tightening",
   R_MARKET_LOOSE:         "Market Loosening",
 };
@@ -521,6 +524,19 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
               <Truck className="w-3 h-3 mr-0.5" />
               Generate Carrier Outreach
             </Button>
+          ) : card.ruleType === "stale_quote_followup" && card.linkedCommitmentId ? (
+            <a
+              href={`/customer-quotes?quote=${card.linkedCommitmentId}`}
+              data-testid={`nba-card-open-quote-${card.id}`}
+            >
+              <Button
+                size="sm"
+                className="h-6 text-[10px] px-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30"
+              >
+                <ArrowRight className="w-3 h-3 mr-0.5" />
+                View Quote
+              </Button>
+            </a>
           ) : card.companyId && card.ruleType === "overdue_next_action" ? (
             <a
               href={`/companies/${card.companyId}?tab=activity`}

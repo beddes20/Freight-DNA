@@ -101,6 +101,13 @@ export const PLAYS_REGISTRY: PlayDefinition[] = [
     ruleTypes: ["market_surge_customer_outreach"],
   },
   {
+    id: "stale_quote_followup",
+    name: "Stale Quote Follow-Up",
+    description: "Re-engage on a customer quote that has aged past their typical decision window — confirm interest, defend price, or close the loop before the opportunity goes cold.",
+    outcomeType: "execute",
+    ruleTypes: ["stale_quote_followup"],
+  },
+  {
     id: "webex_missed_call_follow_up",
     name: "Return Missed Call",
     description: "Follow up on a missed inbound call or voicemail from a known contact — inbound interest should never fall through the cracks.",

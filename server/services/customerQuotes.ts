@@ -6,6 +6,7 @@ import {
   type QuoteOpportunity, type QuoteOutcomeStatus, type QuoteCustomer, type QuoteRep,
   type QuoteCarrier, type QuoteLaneGroup, type QuoteOutcomeReason, type QuoteSavedView,
 } from "@shared/schema";
+import { getStaleQuoteFollowUps } from "./staleQuoteFollowup";
 
 export type QuoteFilters = {
   customerId?: string;
@@ -36,7 +37,20 @@ export type Alert = {
   type: string;
   title: string;
   detail: string;
-  data?: { lane?: string; customerId?: string };
+  data?: { lane?: string; customerId?: string; quoteId?: string };
+};
+
+export type StaleFollowUpItem = {
+  quoteId: string;
+  customerId: string;
+  customerName: string;
+  lane: string;
+  ageHours: number;
+  pTypicalHours: number;
+  hoursOverdue: number;
+  quotedAmount: number;
+  estimatedMargin: number;
+  repName: string | null;
 };
 
 export type CustomerPerformance = {
@@ -93,6 +107,7 @@ export type Snapshot = {
   };
   laneVariance: LaneVarianceItem[];
   attractiveness: AttractivenessItem[];
+  staleFollowUps: StaleFollowUpItem[];
   charts: {
     trend: ChartBucket[];
     winRateByCustomer: { customer: string; winRate: number; total: number }[];
@@ -649,6 +664,29 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
   const lowMargin = won.filter(r => num(r.carrierPaid) > 0 && num(r.quotedAmount) > 0 && (num(r.quotedAmount) - num(r.carrierPaid)) / num(r.quotedAmount) < 0.06).length;
   if (lowMargin > 3) alerts.push({ id: "lowmargin", severity: "medium", type: "low_margin", title: `${lowMargin} loads at <6% margin`, detail: "Won-but-low-margin risk." });
 
+  // Stale follow-ups (Task #480) — surface pending quotes past customer's typical decision window.
+  const staleFollowUpsRaw = await getStaleQuoteFollowUps(orgId).catch((err) => {
+    console.error("[customer-quotes] staleFollowUps error:", err);
+    return [];
+  });
+  let staleFiltered = staleFollowUpsRaw;
+  if (filters.customerId) staleFiltered = staleFiltered.filter(s => s.customerId === filters.customerId);
+  const staleFollowUps: StaleFollowUpItem[] = staleFiltered.slice(0, 25).map(s => ({
+    quoteId: s.quoteId, customerId: s.customerId, customerName: s.customerName,
+    lane: s.lane, ageHours: s.ageHours, pTypicalHours: s.pTypicalHours,
+    hoursOverdue: s.hoursOverdue, quotedAmount: s.quotedAmount,
+    estimatedMargin: s.estimatedMargin, repName: s.repName,
+  }));
+  if (staleFollowUps.length > 0) {
+    const top = staleFollowUps[0];
+    alerts.push({
+      id: "stale-followups", severity: "high", type: "stale_followup_summary",
+      title: `${staleFollowUps.length} stale follow-up${staleFollowUps.length === 1 ? "" : "s"}`,
+      detail: `Top: ${top.customerName} — ${Math.round(top.hoursOverdue)}h past typical (${Math.round(top.pTypicalHours)}h).`,
+      data: { quoteId: top.quoteId },
+    });
+  }
+
   return {
     total,
     kpis: { total, won: won.length, lost: lost.length, winRate, avgQuoted, avgCarrierCost, avgMarginDollar, avgMarginPct, avgResponseTime, pending: pending.length, expiringSoon, trend },
@@ -656,6 +694,7 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
     customerPerformance, taxonomy: taxonomyCounts,
     validityWindow: { expiringList, agingBuckets, staleCount, activeCount, expiredCount },
     laneVariance, attractiveness,
+    staleFollowUps,
     charts: { trend: trendBuckets, winRateByCustomer, marginByCustomer, topLanes, highVolLowWin },
     alerts,
   };

@@ -78,7 +78,20 @@ type AlertSeverity = "high" | "medium" | "low";
 type Alert = {
   id: string; severity: AlertSeverity; type: string;
   title: string; detail: string;
-  data?: { lane?: string; customerId?: string };
+  data?: { lane?: string; customerId?: string; quoteId?: string };
+};
+
+type StaleFollowUpItem = {
+  quoteId: string;
+  customerId: string;
+  customerName: string;
+  lane: string;
+  ageHours: number;
+  pTypicalHours: number;
+  hoursOverdue: number;
+  quotedAmount: number;
+  estimatedMargin: number;
+  repName: string | null;
 };
 
 type Snapshot = {
@@ -104,6 +117,7 @@ type Snapshot = {
   };
   laneVariance: LaneVarianceItem[];
   attractiveness: AttractivenessItem[];
+  staleFollowUps: StaleFollowUpItem[];
   charts: {
     trend: { date: string; total: number; won: number; lost: number }[];
     winRateByCustomer: { customer: string; winRate: number; total: number }[];
@@ -255,7 +269,10 @@ function KpiCard({ label, value, sub, trend, onClick, testId }: {
 export default function CustomerQuotesPage(): JSX.Element {
   const initialSearch = typeof window !== "undefined" ? window.location.search : "";
   const [filters, setFilters] = useState<Filters>(() => filtersFromUrl(initialSearch));
-  const [drawerId, setDrawerId] = useState<string | null>(null);
+  const [drawerId, setDrawerId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("quote");
+  });
   const [savedViewsOpen, setSavedViewsOpen] = useState(false);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [newViewName, setNewViewName] = useState("");
@@ -268,14 +285,26 @@ export default function CustomerQuotesPage(): JSX.Element {
   // Reset page when filters/sort change.
   useEffect(() => { setPage(0); }, [filters, sortKey, sortDir]);
 
-  // Sync filters to URL.
+  // Sync filters + drawer to URL.
   useEffect(() => {
-    const qs = filtersToQuery(filters).toString();
+    const p = filtersToQuery(filters);
+    if (drawerId) p.set("quote", drawerId);
+    const qs = p.toString();
     const target = `/customer-quotes${qs ? "?" + qs : ""}`;
     if (window.location.pathname + window.location.search !== target) {
       window.history.replaceState({}, "", target);
     }
-  }, [filters]);
+  }, [filters, drawerId]);
+
+  // Listen for browser back/forward to keep drawer in sync with URL.
+  useEffect(() => {
+    function onPop() {
+      const q = new URLSearchParams(window.location.search).get("quote");
+      setDrawerId(q);
+    }
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   const filterQs = filtersToQuery(filters).toString();
 
@@ -612,7 +641,8 @@ export default function CustomerQuotesPage(): JSX.Element {
                     {data.alerts.length === 0 && <div className="text-xs text-zinc-500 px-1">All quiet — no urgent items.</div>}
                     {data.alerts.map(a => (
                       <button key={a.id} onClick={() => {
-                        if (a.data?.lane) updateFilter({ laneSearch: a.data.lane.replace(/ → /g, " ") });
+                        if (a.data?.quoteId) setDrawerId(a.data.quoteId);
+                        else if (a.data?.lane) updateFilter({ laneSearch: a.data.lane.replace(/ → /g, " ") });
                         else if (a.data?.customerId) updateFilter({ customerId: a.data.customerId });
                         else if (a.type === "expiring") updateFilter({ expiringOnly: true, activeOnly: undefined, wonOnly: undefined, lostOnly: undefined });
                         else if (a.type === "low_margin") updateFilter({ outcomeStatus: "won_low_margin" });
@@ -625,6 +655,46 @@ export default function CustomerQuotesPage(): JSX.Element {
                         <div className="text-[10px] text-zinc-400 mt-0.5">{a.detail}</div>
                       </button>
                     ))}
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-zinc-900 border-zinc-800" data-testid="stale-followups-panel">
+                  <CardHeader className="py-3 px-4">
+                    <CardTitle className="text-xs uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                      <Hourglass className="h-3.5 w-3.5 text-amber-400" /> Stale Follow-Ups
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="px-3 pb-3 space-y-1.5 max-h-[360px] overflow-y-auto">
+                    {(!data.staleFollowUps || data.staleFollowUps.length === 0) && (
+                      <div className="text-xs text-zinc-500 px-1" data-testid="text-stale-empty">
+                        No quotes past their typical decision window.
+                      </div>
+                    )}
+                    {data.staleFollowUps?.map(s => {
+                      const overdueLabel = s.hoursOverdue >= 48
+                        ? `${Math.round(s.hoursOverdue / 24)}d`
+                        : `${Math.round(s.hoursOverdue)}h`;
+                      const typicalLabel = s.pTypicalHours >= 48
+                        ? `${Math.round(s.pTypicalHours / 24)}d`
+                        : `${Math.round(s.pTypicalHours)}h`;
+                      return (
+                        <button
+                          key={s.quoteId}
+                          onClick={() => setDrawerId(s.quoteId)}
+                          className="w-full text-left rounded p-2 border bg-amber-500/8 border-amber-500/25 hover:bg-amber-500/15 transition"
+                          data-testid={`stale-followup-${s.quoteId}`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-semibold text-zinc-100 truncate">{s.customerName}</span>
+                            <span className="text-[10px] text-amber-300 shrink-0">{overdueLabel} late</span>
+                          </div>
+                          <div className="text-[10px] text-zinc-400 mt-0.5 truncate">{s.lane}</div>
+                          <div className="text-[10px] text-zinc-500 mt-0.5">
+                            {fmtMoney(s.quotedAmount)} · typical {typicalLabel}{s.repName ? ` · ${s.repName}` : ""}
+                          </div>
+                        </button>
+                      );
+                    })}
                   </CardContent>
                 </Card>
 

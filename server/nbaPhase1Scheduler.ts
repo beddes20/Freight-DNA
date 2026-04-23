@@ -19,6 +19,10 @@ import { runRecurringLaneEngineForOrg } from "./recurringLaneCapacityEngine";
 import { scoreAllEligibleLanes } from "./laneScoringService";
 import { evaluatePlayTriggersForOrg } from "./routes/playbook";
 import { syncMarketSignalNbas } from "./marketNbaService";
+import { getStaleQuoteFollowUps } from "./services/staleQuoteFollowup";
+import { db } from "./storage";
+import { users as usersTable } from "@shared/schema";
+import { and, eq } from "drizzle-orm";
 import { generateConversationOwnershipNbas } from "./nextBestActionEngine";
 import { getAvgVotriWoW, getLaneVotrisBatch, getLaneVotrisBatchFresh, buildVotriQualifier } from "./sonarClient";
 import { tracLaneDirectionSignal } from "./tracAlertEngine";
@@ -170,6 +174,74 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
           }
         } catch (marketErr: any) {
           log(`Org ${org.id}: market NBA sync warning (non-fatal): ${marketErr?.message ?? marketErr}`);
+        }
+
+        // ── Stale Quote Follow-Up NBAs (Task #480) ───────────────────────────
+        try {
+          const stale = await getStaleQuoteFollowUps(org.id, { force: true });
+          if (stale.length > 0) {
+            const orgUsers = await db.select().from(usersTable).where(eq(usersTable.organizationId, org.id));
+            const userByEmail = new Map<string, string>();
+            for (const u of orgUsers) {
+              const e = (u.username ?? "").toLowerCase().trim();
+              if (e) userByEmail.set(e, u.id);
+            }
+            const adminFallback = orgUsers.find(u => u.role === "admin" || u.role === "director")?.id ?? orgUsers[0]?.id;
+            let staleCreated = 0;
+            const stalePlay = getPlayForRuleType("stale_quote_followup");
+            for (const item of stale.slice(0, 25)) {
+              try {
+                const exists = await storage.getActiveStaleQuoteFollowUpCard(org.id, item.quoteId);
+                if (exists) { totalSkipped++; continue; }
+                const userId = item.repUserId
+                  ?? (item.repEmail ? userByEmail.get(item.repEmail.toLowerCase()) : undefined)
+                  ?? adminFallback;
+                if (!userId) { totalSkipped++; continue; }
+                const overdueLabel = item.hoursOverdue >= 48
+                  ? `${Math.round(item.hoursOverdue / 24)}d`
+                  : `${Math.round(item.hoursOverdue)}h`;
+                const typicalLabel = item.pTypicalHours >= 48
+                  ? `${Math.round(item.pTypicalHours / 24)}d`
+                  : `${Math.round(item.pTypicalHours)}h`;
+                await storage.createNbaCard({
+                  orgId: org.id,
+                  userId,
+                  companyId: null,
+                  companyName: item.customerName,
+                  ruleType: "stale_quote_followup",
+                  outcomeType: "execute",
+                  confidence: item.hoursOverdue >= item.pTypicalHours ? "high" : "medium",
+                  signalCount: 1,
+                  signalSummary: [
+                    `Quoted $${Math.round(item.quotedAmount).toLocaleString()} on ${item.lane}`,
+                    `${overdueLabel} past customer's typical ${typicalLabel} window`,
+                    item.repName ? `Owned by ${item.repName}` : "No assigned rep",
+                  ],
+                  whyThisNow: `${item.customerName} quote on ${item.lane} has been pending ${overdueLabel} longer than this customer typically takes (${typicalLabel}).`,
+                  suggestedAction: `Follow up with ${item.customerName} on the ${item.equipment} quote — confirm decision or revise.`,
+                  expectedOutcome: "Re-engage before the opportunity goes cold.",
+                  growthLever: "Quote-to-close cycle",
+                  relationshipMove: null,
+                  accountTier: null,
+                  urgencyScore: Math.min(100, Math.round(50 + item.hoursOverdue / 6)),
+                  status: "visible",
+                  createdAt: now,
+                  contactId: null,
+                  linkedCommitmentId: item.quoteId,
+                  playLabel: stalePlay?.name ?? null,
+                  atStakeAmount: item.estimatedMargin > 0 ? String(Math.round(item.estimatedMargin)) : null,
+                  atStakeBasis: item.estimatedMargin > 0 ? `Est. margin ≈ 10% of $${Math.round(item.quotedAmount).toLocaleString()}` : null,
+                });
+                staleCreated++;
+                totalGenerated++;
+              } catch (perItemErr: any) {
+                log(`Org ${org.id}: stale-quote NBA item ${item.quoteId} error: ${perItemErr?.message ?? perItemErr}`);
+              }
+            }
+            if (staleCreated > 0) log(`Org ${org.id}: stale-quote follow-up NBAs created=${staleCreated}`);
+          }
+        } catch (staleErr: any) {
+          log(`Org ${org.id}: stale-quote NBA warning (non-fatal): ${staleErr?.message ?? staleErr}`);
         }
 
         // ── Conversation Ownership NBAs (Task #202) ────────────────────────────

@@ -747,6 +747,8 @@ export interface IStorage {
   getRecentNbaCardByType(companyId: string, ruleType: string, dayLimit: number): Promise<NbaCard | undefined>;
   /** Email NBA dedup: return active card for (companyId, ruleType, threadId) regardless of age. */
   getActiveNbaCardByThreadAndType(companyId: string, ruleType: string, threadId: string): Promise<NbaCard | undefined>;
+  /** Stale quote follow-up dedup (Task #480): active card whose linkedCommitmentId == quoteId. */
+  getActiveStaleQuoteFollowUpCard(orgId: string, quoteId: string): Promise<NbaCard | undefined>;
   getRecentNbaCardByLane(laneId: string, userId: string, dayLimit: number): Promise<NbaCard | undefined>;
   getNbaCard(id: string): Promise<NbaCard | undefined>;
   resolveNbaCard(id: string, userId: string, data: Record<string, unknown>): Promise<NbaCard | undefined>;
@@ -3924,6 +3926,20 @@ export class DatabaseStorage implements IStorage {
       .orderBy((t: any) => t.createdAt)
       .limit(10);
     return rows.filter(r => r.createdAt >= cutoffStr)[0];
+  }
+
+  async getActiveStaleQuoteFollowUpCard(orgId: string, quoteId: string): Promise<NbaCard | undefined> {
+    const rows = await db.select()
+      .from(nbaCards)
+      .where(and(
+        eq(nbaCards.orgId, orgId),
+        eq(nbaCards.ruleType, "stale_quote_followup"),
+        eq(nbaCards.linkedCommitmentId, quoteId),
+        sql`${nbaCards.status} IN ('visible', 'generated', 'snoozed')`,
+      ))
+      .orderBy(desc(nbaCards.createdAt))
+      .limit(1);
+    return rows[0];
   }
 
   async getActiveNbaCardByThreadAndType(

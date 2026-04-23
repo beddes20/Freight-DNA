@@ -9,6 +9,7 @@ import {
 } from "../services/customerQuotes";
 import { syncQuoteOutcomesFromTms } from "../services/quoteTmsSync";
 import { QUOTE_OUTCOME_STATUSES, QUOTE_SOURCES } from "@shared/schema";
+import { getStaleQuoteFollowUps, clearStaleFollowUpCache } from "../services/staleQuoteFollowup";
 
 const filtersSchema = z.object({
   customerId: z.string().min(1).optional(),
@@ -219,6 +220,34 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Internal error";
       console.error("[customer-quotes] tms sync error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Task #480 — list stale quote follow-ups (on-demand recompute supported via ?force=1).
+  app.get("/api/customer-quotes/stale-followups", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const force = req.query.force === "1" || req.query.force === "true";
+      if (force) clearStaleFollowUpCache(user.organizationId);
+      const items = await getStaleQuoteFollowUps(user.organizationId, { force });
+      res.json({ items });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.post("/api/customer-quotes/recompute-stale", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      clearStaleFollowUpCache(user.organizationId);
+      const items = await getStaleQuoteFollowUps(user.organizationId, { force: true });
+      res.json({ ok: true, count: items.length });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
       res.status(500).json({ error: msg });
     }
   });
