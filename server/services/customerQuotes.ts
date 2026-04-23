@@ -289,6 +289,10 @@ async function seedDemoData(orgId: string): Promise<void> {
       validThrough = new Date(now + Math.floor(between(-1, 14)) * dayMs);
     }
     const score = Math.round(between(40, 95));
+    // Synthetic SONAR benchmark: hovers ±6% off a stable lane+equipment base so
+    // demo quotes naturally distribute across price-position bins.
+    const benchBase = baseRate * distFactor;
+    const sonarBenchmark = Math.round(benchBase * (0.96 + rand() * 0.08));
 
     insertOpps.push({
       organizationId: orgId, customerId: customer.id, repId: rep.id,
@@ -302,6 +306,7 @@ async function seedDemoData(orgId: string): Promise<void> {
       responseTimeHours: String(responseHours), source,
       sourceReference: `${source.toUpperCase()}-${1000 + i}`,
       notes: null, score: String(score),
+      sonarBenchmark: String(sonarBenchmark),
     });
   }
 
@@ -774,6 +779,344 @@ export async function getQuoteDetail(orgId: string, quoteId: string): Promise<Qu
     relatedSameCustomer: sameCustomer.filter(r => r.id !== quoteId),
     relatedSameLaneGroup: sameLaneGroup.filter(r => r.id !== quoteId && r.originCity !== opp.originCity),
   };
+}
+
+// ── Pricing Intelligence (Task #479) ────────────────────────────────────────
+//
+// Given a customer + lane + equipment, surface the historical quote dataset
+// that is relevant for pricing the next request:
+//
+//   - Recent N decided quotes from the same customer on the same lane (or
+//     same lane group as a wider fallback).
+//   - Win-rate curve binned by price-position vs the SONAR benchmark snapshot
+//     stored on each quote at the time it was created. Bins:
+//       <-5%, -5..-3, -3..-1, -1..+1, +1..+3, +3..+5, >+5%
+//   - A suggested price range derived from the bin with the highest win-rate
+//     among bins with a sample size >= 2, expressed back into $/load using
+//     the live SONAR benchmark for the lane (or the most recent stored
+//     benchmark if Sonar is unavailable).
+//
+// Empty-state safe:
+//   - If sample size (decided quotes) < 5 we return the raw history with
+//     `suggestion = null` and `confidence = "insufficient_history"`.
+//   - If sample size < 12 we still return a suggestion but mark
+//     `confidence = "low"` so the UI can downplay it.
+
+export type PricingPriceBin = {
+  label: string;
+  /** Inclusive lower-bound of price position vs SONAR (decimal, e.g. -0.05). */
+  lo: number;
+  /** Exclusive upper-bound. Use Infinity for the topmost bin. */
+  hi: number;
+  total: number;
+  won: number;
+  winRate: number;
+};
+
+export type PricingSuggestion = {
+  /** Suggested low/high $/load. */
+  low: number;
+  high: number;
+  /** Center bin's price-position lower/upper bounds (decimal). */
+  positionLow: number;
+  positionHigh: number;
+  binWinRate: number;
+  binSample: number;
+  rationale: string;
+};
+
+export type PricingHistoryRow = {
+  id: string;
+  requestDate: string;
+  quotedAmount: number;
+  sonarBenchmark: number | null;
+  pricePosition: number | null;
+  outcomeStatus: string;
+  outcomeLabel: string;
+  carrierPaid: number | null;
+  marginDollar: number | null;
+  marginPct: number | null;
+  scope: "same_lane" | "same_lane_group";
+};
+
+export type PricingIntelligence = {
+  customerId: string;
+  customerName: string | null;
+  lane: { originCity: string; originState: string; destCity: string; destState: string };
+  equipment: string | null;
+  scope: "same_lane" | "same_lane_group" | "none";
+  totalConsidered: number;
+  decidedSample: number;
+  sonarBenchmark: number | null;
+  benchmarkSource: "stored_recent" | "stored_avg" | "none";
+  bins: PricingPriceBin[];
+  history: PricingHistoryRow[];
+  suggestion: PricingSuggestion | null;
+  confidence: "high" | "medium" | "low" | "insufficient_history" | "no_benchmark";
+  message: string;
+};
+
+export type PricingIntelInput = {
+  customerId: string;
+  originCity: string;
+  originState: string;
+  destCity: string;
+  destState: string;
+  equipment?: string;
+  laneGroupId?: string;
+};
+
+const PRICE_BINS: { label: string; lo: number; hi: number }[] = [
+  { label: "<-5%",   lo: -Infinity, hi: -0.05 },
+  { label: "-5..-3%", lo: -0.05,    hi: -0.03 },
+  { label: "-3..-1%", lo: -0.03,    hi: -0.01 },
+  { label: "-1..+1%", lo: -0.01,    hi:  0.01 },
+  { label: "+1..+3%", lo:  0.01,    hi:  0.03 },
+  { label: "+3..+5%", lo:  0.03,    hi:  0.05 },
+  { label: ">+5%",   lo:  0.05,     hi:  Infinity },
+];
+
+function ciEq(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+export async function getPricingIntelligence(
+  orgId: string, input: PricingIntelInput,
+): Promise<PricingIntelligence> {
+  const ctx = await loadContext(orgId);
+  const customer = ctx.customerMap.get(input.customerId) ?? null;
+  const equipment = input.equipment ?? null;
+
+  // Pull the customer's full quote history once and partition.
+  const allCustomer = await db.select().from(quoteOpportunities)
+    .where(and(
+      eq(quoteOpportunities.organizationId, orgId),
+      eq(quoteOpportunities.customerId, input.customerId),
+    ))
+    .orderBy(desc(quoteOpportunities.requestDate));
+
+  const eqMatch = (r: QuoteOpportunity): boolean =>
+    !equipment || ciEq(r.equipment, equipment);
+
+  const sameLane = allCustomer.filter(r =>
+    ciEq(r.originCity, input.originCity) &&
+    ciEq(r.originState, input.originState) &&
+    ciEq(r.destCity, input.destCity) &&
+    ciEq(r.destState, input.destState) &&
+    eqMatch(r),
+  );
+
+  const sameLaneGroup = input.laneGroupId
+    ? allCustomer.filter(r => r.laneGroupId === input.laneGroupId && eqMatch(r))
+    : [];
+
+  // Prefer same-lane history; fall back to same-lane-group when sparse.
+  let scope: "same_lane" | "same_lane_group" | "none" = "none";
+  let pool: QuoteOpportunity[] = [];
+  if (sameLane.length >= 5) {
+    pool = sameLane;
+    scope = "same_lane";
+  } else if (sameLane.length + sameLaneGroup.length >= 5) {
+    // Merge & dedupe — same-lane rows are a subset of same-lane-group when
+    // laneGroupId matches, but we use the union to widen the sample.
+    const seen = new Set<string>();
+    pool = [...sameLane, ...sameLaneGroup].filter(r => {
+      if (seen.has(r.id)) return false; seen.add(r.id); return true;
+    });
+    scope = "same_lane_group";
+  } else {
+    pool = sameLane.length > 0 ? sameLane : sameLaneGroup;
+    scope = sameLane.length > 0 ? "same_lane" : (sameLaneGroup.length > 0 ? "same_lane_group" : "none");
+  }
+
+  // Build raw history view (cap at 10 most recent for UI).
+  const history: PricingHistoryRow[] = pool.slice(0, 10).map(r => {
+    const quoted = num(r.quotedAmount);
+    const bench = num(r.sonarBenchmark);
+    const paid = num(r.carrierPaid);
+    const marginDollar = paid > 0 ? quoted - paid : null;
+    const marginPct = paid > 0 && quoted > 0 ? ((quoted - paid) / quoted) * 100 : null;
+    return {
+      id: r.id,
+      requestDate: r.requestDate.toISOString(),
+      quotedAmount: quoted,
+      sonarBenchmark: bench > 0 ? bench : null,
+      pricePosition: bench > 0 && quoted > 0 ? (quoted - bench) / bench : null,
+      outcomeStatus: r.outcomeStatus,
+      outcomeLabel: ctx.reasonMap.get(r.outcomeReasonId ?? "")?.label ?? "",
+      carrierPaid: paid > 0 ? paid : null,
+      marginDollar,
+      marginPct,
+      scope: sameLane.find(s => s.id === r.id) ? "same_lane" : "same_lane_group",
+    };
+  });
+
+  // Decided sample for win-rate elasticity (won OR lost only — drop
+  // pending / no-response / expired so they don't bias the curve).
+  const decided = pool.filter(r => isWon(r.outcomeStatus) || isLost(r.outcomeStatus));
+  const decidedWithBench = decided.filter(r => num(r.sonarBenchmark) > 0 && num(r.quotedAmount) > 0);
+
+  // Benchmark for the suggestion: prefer the most recent same-lane stored
+  // benchmark; fall back to the average across the pool.
+  let benchmark: number | null = null;
+  let benchmarkSource: PricingIntelligence["benchmarkSource"] = "none";
+  const recentBench = sameLane.find(r => num(r.sonarBenchmark) > 0);
+  if (recentBench) {
+    benchmark = num(recentBench.sonarBenchmark);
+    benchmarkSource = "stored_recent";
+  } else {
+    const benchVals = pool.map(r => num(r.sonarBenchmark)).filter(v => v > 0);
+    if (benchVals.length > 0) {
+      benchmark = benchVals.reduce((a, b) => a + b, 0) / benchVals.length;
+      benchmarkSource = "stored_avg";
+    }
+  }
+
+  // Bin the decided sample by price-position.
+  const bins: PricingPriceBin[] = PRICE_BINS.map(b => ({ label: b.label, lo: b.lo, hi: b.hi, total: 0, won: 0, winRate: 0 }));
+  for (const r of decidedWithBench) {
+    const pos = (num(r.quotedAmount) - num(r.sonarBenchmark)) / num(r.sonarBenchmark);
+    const bin = bins.find(b => pos >= b.lo && pos < b.hi);
+    if (!bin) continue;
+    bin.total++;
+    if (isWon(r.outcomeStatus)) bin.won++;
+  }
+  for (const b of bins) b.winRate = b.total > 0 ? (b.won / b.total) * 100 : 0;
+
+  // Suggestion logic.
+  let suggestion: PricingSuggestion | null = null;
+  let confidence: PricingIntelligence["confidence"];
+  let message: string;
+
+  if (decided.length < 5) {
+    confidence = "insufficient_history";
+    message = decided.length === 0
+      ? "No prior decided quotes for this customer + lane. No suggested range yet."
+      : `Only ${decided.length} prior decided quote${decided.length === 1 ? "" : "s"} — showing raw history without a suggested range.`;
+  } else if (!benchmark) {
+    confidence = "no_benchmark";
+    message = "No SONAR benchmark stored on prior quotes for this lane — cannot compute price-position elasticity.";
+  } else {
+    // Pick the bin with the best win-rate among bins with sample >= 2 to
+    // avoid getting fooled by a single-quote bin. Prefer lower price-position
+    // on ties (more competitive).
+    const candidates = bins.filter(b => b.total >= 2);
+    if (candidates.length === 0) {
+      confidence = "low";
+      message = `Decided quotes are too thinly distributed across price positions (${decided.length} samples) to recommend a range.`;
+    } else {
+      const best = [...candidates].sort((a, b) => {
+        if (b.winRate !== a.winRate) return b.winRate - a.winRate;
+        return a.lo - b.lo;
+      })[0];
+      // Build a defensible $/load range. Clamp open-ended bins to ±5%.
+      const lo = isFinite(best.lo) ? best.lo : -0.05;
+      const hi = isFinite(best.hi) ? best.hi : 0.05;
+      const low = Math.round(benchmark * (1 + lo));
+      const high = Math.round(benchmark * (1 + hi));
+      // Worst (highest-priced) decided bin with samples — used for rationale.
+      const worst = [...candidates].sort((a, b) => a.winRate - b.winRate)[0];
+      const rationale = worst && worst !== best
+        ? `${best.winRate.toFixed(0)}% win rate at SONAR ${best.label} (n=${best.total}), drops to ${worst.winRate.toFixed(0)}% at ${worst.label} (n=${worst.total}).`
+        : `${best.winRate.toFixed(0)}% win rate at SONAR ${best.label} (n=${best.total}).`;
+      suggestion = {
+        low: Math.min(low, high),
+        high: Math.max(low, high),
+        positionLow: lo,
+        positionHigh: hi,
+        binWinRate: best.winRate,
+        binSample: best.total,
+        rationale,
+      };
+      confidence = decided.length >= 12 ? "high" : "medium";
+      message = `Based on ${decided.length} decided quote${decided.length === 1 ? "" : "s"} from ${customer?.name ?? "this customer"}${scope === "same_lane_group" ? " on this lane group" : " on this lane"}.`;
+    }
+  }
+
+  return {
+    customerId: input.customerId,
+    customerName: customer?.name ?? null,
+    lane: {
+      originCity: input.originCity, originState: input.originState,
+      destCity: input.destCity, destState: input.destState,
+    },
+    equipment,
+    scope,
+    totalConsidered: pool.length,
+    decidedSample: decided.length,
+    sonarBenchmark: benchmark,
+    benchmarkSource,
+    bins,
+    history,
+    suggestion,
+    confidence,
+    message,
+  };
+}
+
+export async function createManualQuote(
+  orgId: string,
+  userId: string,
+  data: {
+    customerId: string;
+    originCity: string; originState: string;
+    destCity: string; destState: string;
+    equipment: string;
+    quotedAmount: number;
+    notes?: string;
+  },
+): Promise<QuoteOpportunity> {
+  // Verify customer belongs to org
+  const [cust] = await db.select().from(quoteCustomers)
+    .where(and(eq(quoteCustomers.organizationId, orgId), eq(quoteCustomers.id, data.customerId)))
+    .limit(1);
+  if (!cust) throw new Error("Customer not found");
+
+  // Try to attach to an existing rep linked to this user (best-effort)
+  let repId: string | null = null;
+  const [rep] = await db.select().from(quoteReps)
+    .where(and(eq(quoteReps.organizationId, orgId), eq(quoteReps.userId, userId)))
+    .limit(1);
+  if (rep) repId = rep.id;
+
+  // Best-effort lane group match (region == state)
+  let laneGroupId: string | null = null;
+  const [lg] = await db.select().from(quoteLaneGroups)
+    .where(and(
+      eq(quoteLaneGroups.organizationId, orgId),
+      eq(quoteLaneGroups.originRegion, data.originState),
+      eq(quoteLaneGroups.destRegion, data.destState),
+    ))
+    .limit(1);
+  if (lg) laneGroupId = lg.id;
+
+  const [created] = await db.insert(quoteOpportunities).values({
+    organizationId: orgId,
+    customerId: data.customerId,
+    repId,
+    laneGroupId,
+    requestDate: new Date(),
+    originCity: data.originCity,
+    originState: data.originState,
+    destCity: data.destCity,
+    destState: data.destState,
+    equipment: data.equipment,
+    quotedAmount: String(data.quotedAmount),
+    outcomeStatus: "pending",
+    source: "manual",
+    sourceReference: `manual-${Date.now()}`,
+    notes: data.notes ?? null,
+  }).returning();
+
+  await db.insert(quoteEvents).values({
+    quoteId: created.id,
+    eventType: "created",
+    occurredAt: new Date(),
+    actor: userId,
+    payload: { quotedAmount: String(data.quotedAmount), source: "manual" } as Record<string, unknown>,
+  });
+
+  return created;
 }
 
 export async function listSavedViews(orgId: string): Promise<QuoteSavedView[]> {

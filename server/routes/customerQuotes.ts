@@ -5,6 +5,7 @@ import {
   ensureQuoteSeed, getSnapshot, getQuoteDetail,
   listQuotes, listSavedViews, createSavedView, deleteSavedView, exportCsv,
   createQuote, updateQuote,
+  getPricingIntelligence,
   type QuoteFilters, type ListSortKey,
 } from "../services/customerQuotes";
 import { syncQuoteOutcomesFromTms } from "../services/quoteTmsSync";
@@ -178,6 +179,31 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     }
   });
 
+  app.get("/api/customer-quotes/pricing-intelligence", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const schema = z.object({
+        customerId: z.string().min(1),
+        originCity: z.string().min(1),
+        originState: z.string().min(1).max(4),
+        destCity: z.string().min(1),
+        destState: z.string().min(1).max(4),
+        equipment: z.string().min(1).optional(),
+        laneGroupId: z.string().min(1).optional(),
+      });
+      const parsed = schema.safeParse(req.query);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid query", issues: parsed.error.issues });
+      await ensureQuoteSeed(user.organizationId);
+      const intel = await getPricingIntelligence(user.organizationId, parsed.data);
+      res.json(intel);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
+      console.error("[customer-quotes] pricing intel error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
   app.get("/api/customer-quotes/saved-views", requireAuth, async (req, res) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
@@ -207,6 +233,29 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     await deleteSavedView(user.organizationId, user.id, String(req.params.id));
     res.json({ ok: true });
+  });
+
+  app.post("/api/customer-quotes/quote", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const schema = z.object({
+        customerId: z.string().min(1),
+        originCity: z.string().min(1).max(80),
+        originState: z.string().min(2).max(20),
+        destCity: z.string().min(1).max(80),
+        destState: z.string().min(2).max(20),
+        equipment: z.string().min(1).max(40),
+        quotedAmount: z.number().finite().min(0).max(1_000_000),
+        notes: z.string().max(2000).optional(),
+      });
+      const data = schema.parse(req.body);
+      const created = await createManualQuote(user.organizationId, user.id, data);
+      res.json(created);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Invalid input";
+      res.status(400).json({ error: msg });
+    }
   });
 
   app.post("/api/customer-quotes/sync-tms", requireAuth, async (req, res) => {

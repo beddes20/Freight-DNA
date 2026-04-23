@@ -3959,6 +3959,7 @@ export async function runMigrations() {
       )
     `);
     await client468.query(`ALTER TABLE quote_opportunities ADD COLUMN IF NOT EXISTS created_at timestamp NOT NULL DEFAULT NOW()`);
+    await client468.query(`ALTER TABLE quote_opportunities ADD COLUMN IF NOT EXISTS sonar_benchmark numeric(12,2)`);
     await client468.query(`CREATE INDEX IF NOT EXISTS quote_opportunities_org_date_idx ON quote_opportunities (organization_id, request_date DESC)`);
     await client468.query(`CREATE INDEX IF NOT EXISTS quote_opportunities_customer_idx ON quote_opportunities (customer_id)`);
     await client468.query(`CREATE INDEX IF NOT EXISTS quote_opportunities_lane_idx ON quote_opportunities (organization_id, origin_city, dest_city)`);

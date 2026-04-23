@@ -4621,6 +4621,7 @@ export const quoteOpportunities = pgTable("quote_opportunities", {
   sourceReference: text("source_reference"),
   notes: text("notes"),
   score: decimal("score", { precision: 6, scale: 2 }),
+  sonarBenchmark: decimal("sonar_benchmark", { precision: 12, scale: 2 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
   orgIdx: index("quote_opportunities_org_idx").on(t.organizationId),

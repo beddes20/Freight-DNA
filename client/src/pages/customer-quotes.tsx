@@ -22,6 +22,7 @@ import {
   LineChart, Line, CartesianGrid,
 } from "recharts";
 import { useToast } from "@/hooks/use-toast";
+import { PricingIntelligencePanel } from "@/components/PricingIntelligencePanel";
 
 // ---------- Types (mirror server contract) ----------
 type Quote = {
@@ -29,6 +30,7 @@ type Quote = {
   organizationId: string;
   customerId: string; customerName: string;
   repId: string | null; repName: string;
+  laneGroupId: string | null;
   carrierId: string | null; carrierName: string | null;
   outcomeReasonId: string | null; outcomeReasonLabel: string | null;
   requestDate: string;
@@ -426,6 +428,9 @@ export default function CustomerQuotesPage(): JSX.Element {
             </Button>
             <Button size="sm" variant="outline" onClick={() => setSavedViewsOpen(v => !v)} className="border-zinc-700 hover:bg-zinc-800" data-testid="button-saved-views">
               <Bookmark className="h-3.5 w-3.5 mr-1.5" /> Saved Views
+            </Button>
+            <Button size="sm" onClick={() => setNewQuoteOpen(true)} className="bg-amber-500 hover:bg-amber-400 text-zinc-950" data-testid="button-new-quote">
+              <Plus className="h-3.5 w-3.5 mr-1.5" /> New Quote
             </Button>
             <Button size="sm" variant="outline" onClick={() => { snapshotQuery.refetch(); listQuery.refetch(); }} disabled={snapshotQuery.isFetching || listQuery.isFetching} className="border-zinc-700 hover:bg-zinc-800" data-testid="button-refresh">
               <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${snapshotQuery.isFetching || listQuery.isFetching ? "animate-spin" : ""}`} /> Refresh
@@ -1342,6 +1347,19 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
                 <div className="text-xs text-zinc-300 whitespace-pre-wrap">{data.opp.notes}</div>
               </div>
             )}
+            {data.opp.outcomeStatus === "pending" && data.customer && (
+              <PricingIntelligencePanel
+                input={{
+                  customerId: data.opp.customerId,
+                  originCity: data.opp.originCity,
+                  originState: data.opp.originState,
+                  destCity: data.opp.destCity,
+                  destState: data.opp.destState,
+                  equipment: data.opp.equipment,
+                  laneGroupId: data.opp.laneGroupId ?? undefined,
+                }}
+              />
+            )}
             <RelatedSection title="Same lane history" items={data.relatedSameLane} onPick={onPickRelated} testId="related-same-lane" />
             <RelatedSection title="Same customer history" items={data.relatedSameCustomer} onPick={onPickRelated} testId="related-same-customer" />
             <RelatedSection title="Similar lane group" items={data.relatedSameLaneGroup} onPick={onPickRelated} testId="related-same-lane-group" />
@@ -1656,6 +1674,23 @@ function NewQuoteDialog({ open, onOpenChange, customers, reps, onSubmit, isSubmi
           <textarea className="w-full mt-0.5 rounded bg-zinc-950 border border-zinc-700 p-2 text-xs text-zinc-100 min-h-[60px]"
             value={form.notes} onChange={(e) => upd("notes", e.target.value)} data-testid="new-notes" />
         </div>
+        {form.customerId && form.originCity && form.originState && form.destCity && form.destState && form.equipment ? (
+          <PricingIntelligencePanel
+            input={{
+              customerId: form.customerId,
+              originCity: form.originCity.trim(),
+              originState: form.originState.trim().toUpperCase(),
+              destCity: form.destCity.trim(),
+              destState: form.destState.trim().toUpperCase(),
+              equipment: form.equipment,
+            }}
+            onUsePrice={(p) => upd("quotedAmount", String(Math.round(p)))}
+          />
+        ) : (
+          <div className="rounded border border-dashed border-zinc-800 p-3 text-xs text-zinc-500" data-testid="pricing-intel-prompt">
+            Pick a customer and lane to see pricing intelligence and a suggested price.
+          </div>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="button-new-cancel">Cancel</Button>
           <Button onClick={submit} disabled={!valid || isSubmitting}
