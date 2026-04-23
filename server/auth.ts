@@ -5,6 +5,7 @@ import connectPgSimple from "connect-pg-simple";
 import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import type { User, Company, SharedRep } from "@shared/schema";
+import { notifyAdminsOfUnprovisionedSignIn } from "./unprovisionedSignInNotifications";
 
 const PgStore = connectPgSimple(session);
 const IS_PROD = process.env.NODE_ENV === "production";
@@ -98,6 +99,9 @@ export function setupAuth(app: any) {
           } catch (err) {
             console.error("[auth/me] Clerk user fetch failed:", err);
           }
+          // Fire-and-forget: alert admins so they can provision this user.
+          // Dedup + email/in-app fan-out are handled inside the helper.
+          void notifyAdminsOfUnprovisionedSignIn(email, storage);
           return res.status(200).json({ unprovisioned: true, email });
         }
         return res.status(401).json({ error: "Not authenticated" });
