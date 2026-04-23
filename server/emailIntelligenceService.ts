@@ -16,7 +16,7 @@ import type {
 } from "@shared/schema";
 import { applyMessageToThread } from "./services/conversationWaitingStateService";
 import { determineInitialOwner } from "./services/conversationOwnershipService";
-import { ingestQuoteFromEmail } from "./services/quoteEmailIngestion";
+import { ingestQuoteFromEmail, applyClosedLostToOpenQuote } from "./services/quoteEmailIngestion";
 
 // ─── Intent taxonomy ─────────────────────────────────────────────────────────
 
@@ -355,6 +355,22 @@ export async function processEmailMessage(messageId: string): Promise<{
         await ingestQuoteFromEmail(msg, { extractedData: quoteSignal.extractedData ?? null });
       } catch (err) {
         console.error(`[emailIntelligence] quote ingestion failed for ${msg.id}:`, err);
+      }
+    }
+
+    // Task #482: when the customer reply on a quote thread reads as a
+    // closed_lost_indicator (e.g. "load is covered"), flip the matching
+    // pending quote_opportunity to a lost_* outcome with the right reason
+    // and record an `email_lost` quote_event. Best-effort.
+    const lostSignal = result.signals.find(s => s.intentType === "closed_lost_indicator");
+    if (lostSignal) {
+      try {
+        await applyClosedLostToOpenQuote(msg, {
+          extractedData: lostSignal.extractedData ?? null,
+          intentSubtype: lostSignal.intentSubtype ?? null,
+        });
+      } catch (err) {
+        console.error(`[emailIntelligence] closed-lost handling failed for ${msg.id}:`, err);
       }
     }
   }

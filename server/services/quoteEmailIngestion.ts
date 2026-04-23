@@ -17,11 +17,12 @@
  * the call is a no-op.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "../storage";
 import {
   quoteOpportunities, quoteEvents, quoteCustomers, quoteReps,
-  type EmailMessage,
+  quoteOutcomeReasons, emailMessages,
+  type EmailMessage, type QuoteOutcomeStatus,
 } from "@shared/schema";
 
 export interface ParsedQuoteFields {
@@ -239,6 +240,138 @@ function mergeExtractedFields(data: Record<string, unknown> | null): ParsedQuote
     quotedAmount: quoted ? parseRate(quoted) : null,
     pickupDate: pickup ? parseDate(pickup) : null,
   };
+}
+
+// ─── Task #482: closed_lost_indicator → flip pending quote to lost ───────────
+
+export interface LostReason {
+  code: "lost_price" | "lost_timing" | "lost_incumbent" | "lost_service";
+  label: string;
+  status: Extract<QuoteOutcomeStatus, "lost_price" | "lost_timing" | "lost_incumbent" | "lost_service">;
+}
+
+const LOST_INCUMBENT: LostReason = { code: "lost_incumbent", label: "Customer covered with another carrier", status: "lost_incumbent" };
+const LOST_PRICE: LostReason     = { code: "lost_price",     label: "Lost on price",                          status: "lost_price" };
+const LOST_TIMING: LostReason    = { code: "lost_timing",    label: "Load cancelled or no longer needed",     status: "lost_timing" };
+const LOST_SERVICE: LostReason   = { code: "lost_service",   label: "Lost on service / fit",                  status: "lost_service" };
+
+/**
+ * Pure mapping from the customer's loss-language phrase to a reason code.
+ * Defaults to lost_incumbent ("they went with someone else") because that is
+ * the dominant pattern behind a "load is covered" reply on a quote thread.
+ * Exposed for unit testing.
+ */
+export function decideLostReason(language: string | null | undefined): LostReason {
+  const s = (language ?? "").toLowerCase();
+  if (!s) return LOST_INCUMBENT;
+  if (/\b(cancel(l?ed)?|no longer needed|don't need|pulled|on hold)\b/.test(s)) return LOST_TIMING;
+  if (/\b(too high|cheaper|lower rate|price|rate is too|found cheaper)\b/.test(s)) return LOST_PRICE;
+  if (/\b(service|transit|fit|equipment|reliability)\b/.test(s)) return LOST_SERVICE;
+  return LOST_INCUMBENT;
+}
+
+async function findOrCreateLostReason(orgId: string, reason: LostReason): Promise<string> {
+  const existing = await db.select().from(quoteOutcomeReasons).where(and(
+    eq(quoteOutcomeReasons.organizationId, orgId),
+    eq(quoteOutcomeReasons.code, reason.code),
+  )).limit(1);
+  if (existing.length > 0) return existing[0].id;
+  const [row] = await db.insert(quoteOutcomeReasons).values({
+    organizationId: orgId,
+    code: reason.code,
+    label: reason.label,
+    category: "lost",
+  }).returning();
+  return row.id;
+}
+
+export interface CloseLostResult {
+  status:
+    | "closed_lost"
+    | "skipped_outbound"
+    | "skipped_no_thread"
+    | "skipped_no_open_quote"
+    | "skipped_already_closed";
+  quoteId?: string;
+  reasonCode?: LostReason["code"];
+}
+
+/**
+ * When a closed_lost_indicator signal is detected on an inbound customer
+ * email, flip the matching pending quote opportunity on the same thread to
+ * a lost_* outcome and record the loss as a `email_lost` quote_event.
+ *
+ * Idempotent: a quote already in a terminal status is not re-closed; a
+ * second loss signal on the same thread is a no-op.
+ */
+export async function applyClosedLostToOpenQuote(
+  message: EmailMessage,
+  opts?: { extractedData?: Record<string, unknown> | null; intentSubtype?: string | null },
+): Promise<CloseLostResult> {
+  if (message.direction !== "inbound") return { status: "skipped_outbound" };
+  if (!message.threadId) return { status: "skipped_no_thread" };
+
+  // All sourceReference values that quote_opportunities could have been
+  // created with for messages on this thread (providerMessageId fallback to
+  // internal id, mirroring `ingestQuoteFromEmail`).
+  const threadMsgs = await db.select({
+    id: emailMessages.id,
+    providerMessageId: emailMessages.providerMessageId,
+  }).from(emailMessages).where(and(
+    eq(emailMessages.orgId, message.orgId),
+    eq(emailMessages.threadId, message.threadId),
+  ));
+  if (threadMsgs.length === 0) return { status: "skipped_no_open_quote" };
+
+  const refs = Array.from(new Set(
+    threadMsgs.flatMap(m => [m.providerMessageId, m.id]).filter((v): v is string => !!v),
+  ));
+  if (refs.length === 0) return { status: "skipped_no_open_quote" };
+
+  const candidates = await db.select().from(quoteOpportunities).where(and(
+    eq(quoteOpportunities.organizationId, message.orgId),
+    eq(quoteOpportunities.source, "email"),
+    inArray(quoteOpportunities.sourceReference, refs),
+  ));
+  if (candidates.length === 0) return { status: "skipped_no_open_quote" };
+
+  // Deterministic selection: when multiple pending quotes share the same
+  // thread (rare, but possible when a customer sends two RFQs in the same
+  // chain), close the most recently requested one — the customer's "we're
+  // covered" reply almost always references the latest ask.
+  const pending = candidates
+    .filter(c => c.outcomeStatus === "pending")
+    .sort((a, b) => b.requestDate.getTime() - a.requestDate.getTime());
+  const open = pending[0];
+  if (!open) return { status: "skipped_already_closed", quoteId: candidates[0].id };
+
+  const lossLanguage = pickStr(opts?.extractedData ?? {}, ["lossLanguage", "loss_language"]);
+  const reason = decideLostReason(lossLanguage);
+  const reasonId = await findOrCreateLostReason(message.orgId, reason);
+
+  await db.update(quoteOpportunities).set({
+    outcomeStatus: reason.status,
+    outcomeReasonId: reasonId,
+  }).where(eq(quoteOpportunities.id, open.id));
+
+  const occurredAt = message.providerSentAt ?? message.createdAt ?? new Date();
+  await db.insert(quoteEvents).values({
+    quoteId: open.id,
+    eventType: "email_lost",
+    occurredAt,
+    actor: message.fromEmail ?? "customer",
+    payload: {
+      source: "email",
+      messageId: message.id,
+      providerMessageId: message.providerMessageId,
+      threadId: message.threadId,
+      lossLanguage: lossLanguage ?? null,
+      intentSubtype: opts?.intentSubtype ?? null,
+      reasonCode: reason.code,
+    },
+  });
+
+  return { status: "closed_lost", quoteId: open.id, reasonCode: reason.code };
 }
 
 function pickStr(data: Record<string, unknown>, keys: string[]): string | null {
