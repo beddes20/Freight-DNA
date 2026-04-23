@@ -2,7 +2,7 @@
  * Contact Suggestions — Org-wide batch review of AI-detected contacts from email threads.
  * Reps and managers can review, accept, or ignore suggestions across all their accounts.
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,7 +15,7 @@ import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  UserPlus, Mail, Check, EyeOff, Building2, Search, RefreshCw, Inbox,
+  UserPlus, Mail, Check, EyeOff, Building2, Search, RefreshCw, Inbox, Link2,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -65,6 +65,12 @@ export default function ContactSuggestionsPage() {
   const [addRoleOpen, setAddRoleOpen] = useState(false);
   const [selectedSuggestion, setSelectedSuggestion] = useState<ContactSuggestion | null>(null);
   const [selectedRole, setSelectedRole] = useState("");
+
+  // "Add to existing contact" dialog state
+  const [addExistingOpen, setAddExistingOpen] = useState(false);
+  const [existingForSuggestion, setExistingForSuggestion] = useState<ContactSuggestion | null>(null);
+  const [existingSearch, setExistingSearch] = useState("");
+  const [pickedContactId, setPickedContactId] = useState("");
 
   // Fetch all accounts with pending suggestions
   const { data: counts = [], isLoading: countsLoading, refetch } = useQuery<SuggestionCountRow[]>({
@@ -152,9 +158,39 @@ export default function ContactSuggestionsPage() {
             pendingCount={account.pendingCount}
             onNavigate={(id) => navigate(`/companies/${id}`)}
             onAddRole={(s) => { setSelectedSuggestion(s); setSelectedRole(""); setAddRoleOpen(true); }}
+            onAddExisting={(s) => {
+              setExistingForSuggestion(s);
+              setExistingSearch("");
+              setPickedContactId("");
+              setAddExistingOpen(true);
+            }}
           />
         ))}
       </div>
+
+      <AddToExistingContactDialog
+        open={addExistingOpen}
+        onOpenChange={(o) => {
+          setAddExistingOpen(o);
+          if (!o) {
+            setExistingForSuggestion(null);
+            setExistingSearch("");
+            setPickedContactId("");
+          }
+        }}
+        suggestion={existingForSuggestion}
+        search={existingSearch}
+        onSearchChange={setExistingSearch}
+        pickedContactId={pickedContactId}
+        onPickContact={setPickedContactId}
+        onSuccess={() => {
+          toast({ title: "Email added to existing contact" });
+          setAddExistingOpen(false);
+          setExistingForSuggestion(null);
+          setExistingSearch("");
+          setPickedContactId("");
+        }}
+      />
 
       <Dialog open={addRoleOpen} onOpenChange={setAddRoleOpen}>
         <DialogContent className="max-w-sm">
@@ -217,12 +253,13 @@ function AcceptWithRoleButton({ suggestion, role, onSuccess }: {
   );
 }
 
-function AccountSuggestionGroup({ accountId, accountName, pendingCount, onNavigate, onAddRole }: {
+function AccountSuggestionGroup({ accountId, accountName, pendingCount, onNavigate, onAddRole, onAddExisting }: {
   accountId: string;
   accountName: string;
   pendingCount: number;
   onNavigate: (id: string) => void;
   onAddRole: (s: ContactSuggestion) => void;
+  onAddExisting: (s: ContactSuggestion) => void;
 }) {
   const { toast } = useToast();
   const [expanded, setExpanded] = useState(true);
@@ -359,6 +396,16 @@ function AccountSuggestionGroup({ accountId, accountName, pendingCount, onNaviga
                 </Button>
                 <Button
                   size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => onAddExisting(suggestion)}
+                  data-testid={`btn-add-existing-${suggestion.id}`}
+                >
+                  <Link2 className="h-3.5 w-3.5 mr-1" />
+                  Add to existing
+                </Button>
+                <Button
+                  size="sm"
                   variant="ghost"
                   className="h-7 px-2 text-xs text-muted-foreground"
                   onClick={() => ignoreMutation.mutate(suggestion.id)}
@@ -374,5 +421,140 @@ function AccountSuggestionGroup({ accountId, accountName, pendingCount, onNaviga
         </CardContent>
       )}
     </Card>
+  );
+}
+
+interface CompanyContactLite {
+  id: string;
+  name: string;
+  title: string | null;
+  email: string | null;
+}
+
+function AddToExistingContactDialog({
+  open,
+  onOpenChange,
+  suggestion,
+  search,
+  onSearchChange,
+  pickedContactId,
+  onPickContact,
+  onSuccess,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  suggestion: ContactSuggestion | null;
+  search: string;
+  onSearchChange: (v: string) => void;
+  pickedContactId: string;
+  onPickContact: (id: string) => void;
+  onSuccess: () => void;
+}) {
+  const { toast } = useToast();
+  const accountId = suggestion?.accountId ?? "";
+
+  const { data: companyContacts = [], isLoading: contactsLoading } = useQuery<CompanyContactLite[]>({
+    queryKey: [`/api/companies/${accountId}/contacts`],
+    enabled: open && !!accountId,
+  });
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return companyContacts;
+    return companyContacts.filter(
+      c =>
+        (c.name || "").toLowerCase().includes(q) ||
+        (c.title || "").toLowerCase().includes(q) ||
+        (c.email || "").toLowerCase().includes(q),
+    );
+  }, [companyContacts, search]);
+
+  const linkMutation = useMutation({
+    mutationFn: async () => {
+      if (!suggestion || !pickedContactId) return;
+      await apiRequest(
+        "POST",
+        `/api/internal/accounts/${suggestion.accountId}/contact-suggestions/${suggestion.id}/accept`,
+        { targetContactId: pickedContactId },
+      );
+    },
+    onSuccess: () => {
+      if (suggestion) {
+        queryClient.invalidateQueries({ queryKey: ["/api/internal/accounts", suggestion.accountId, "contact-suggestions"] });
+        queryClient.invalidateQueries({ queryKey: [`/api/companies/${suggestion.accountId}/contacts`] });
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/accounts/suggestion-counts"] });
+      onSuccess();
+    },
+    onError: (err: any) => {
+      let msg = "Failed to link email";
+      try {
+        const parsed = typeof err?.message === "string" ? JSON.parse(err.message.replace(/^\d+:\s*/, "")) : null;
+        if (parsed?.error) msg = parsed.error;
+      } catch { /* ignore */ }
+      toast({ title: msg, variant: "destructive" });
+    },
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Add Email to Existing Contact</DialogTitle>
+        </DialogHeader>
+        {suggestion && (
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-muted-foreground">
+              Attach <span className="font-medium text-foreground">{suggestion.emailAddress}</span> to a contact already on
+              {suggestion.accountName ? <> <span className="font-medium text-foreground">{suggestion.accountName}</span></> : " this account"}.
+            </p>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                className="pl-9"
+                placeholder="Search contacts on this account…"
+                value={search}
+                onChange={e => onSearchChange(e.target.value)}
+                data-testid="input-search-existing-contacts"
+              />
+            </div>
+            <div className="max-h-64 overflow-y-auto border rounded-md divide-y">
+              {contactsLoading ? (
+                <div className="p-3 text-xs text-muted-foreground text-center">Loading contacts…</div>
+              ) : filtered.length === 0 ? (
+                <div className="p-3 text-xs text-muted-foreground text-center">
+                  No contacts found on this account.
+                </div>
+              ) : (
+                filtered.map(c => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => onPickContact(c.id)}
+                    className={`w-full text-left p-2.5 text-sm hover:bg-muted/60 transition-colors ${pickedContactId === c.id ? "bg-blue-50 dark:bg-blue-950/30" : ""}`}
+                    data-testid={`row-existing-contact-${c.id}`}
+                  >
+                    <div className="font-medium">{c.name}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {c.title || "—"}{c.email ? ` · ${c.email}` : ""}
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button
+            onClick={() => linkMutation.mutate()}
+            disabled={linkMutation.isPending || !pickedContactId}
+            data-testid="button-confirm-add-existing"
+          >
+            {linkMutation.isPending ? "Linking…" : "Add to Contact"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
