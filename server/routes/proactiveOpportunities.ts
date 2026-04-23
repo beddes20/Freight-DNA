@@ -271,6 +271,87 @@ export function registerProactiveOpportunityRoutes(app: Express) {
     }
   });
 
+  // ── SUGGESTED CARRIER POOL (beyond shortlist) ─────────────────────────────
+  // Returns ~28 catalog carriers NOT already in the shortlist, lightly scored
+  // by region/equipment match so the rep can cast a wider net (LWQ-style).
+  app.get("/api/freight-opportunities/:id/carrier-pool", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const opp = await storage.getFreightOpportunity(org, String(req.params.id));
+      if (!opp) return res.status(404).json({ error: "Opportunity not found" });
+
+      const [shortlistRows, allCarriers] = await Promise.all([
+        storage.listFreightOpportunityCarriers(opp.id),
+        storage.getCarriers(org),
+      ]);
+      const shortlistIds = new Set(shortlistRows.map(r => r.carrierId));
+
+      const norm = (s: string | null | undefined) => (s ?? "").trim().toUpperCase();
+      const oState = norm(opp.originState);
+      const dState = norm(opp.destinationState);
+      const oCity = norm(opp.origin);
+      const dCity = norm(opp.destination);
+      const equip = norm(opp.equipmentType);
+
+      type PoolEntry = {
+        id: string;
+        carrierId: string;
+        name: string;
+        mc: string | null;
+        region: string;
+        fitScore: number;
+        lastRate: number | null;
+        tag: "in_region" | "prior_quote" | "new_prospect" | "lactalis_history";
+        email: string | null;
+        phone: string | null;
+      };
+
+      const scored: PoolEntry[] = [];
+      for (const c of allCarriers) {
+        if (shortlistIds.has(c.id)) continue;
+        if (c.status === "do_not_use" || c.status === "inactive") continue;
+        const cState = norm(c.state);
+        const cCity = norm(c.city);
+        const states: string[] = (c.statesServed ?? []).map(s => norm(s));
+        const equips: string[] = (c.equipmentTypes ?? []).map(e => norm(e));
+
+        let score = 30; // baseline
+        let inRegion = false;
+        if (cState && (cState === oState || cState === dState)) { score += 30; inRegion = true; }
+        else if (states.length && (states.includes(oState) || states.includes(dState))) { score += 22; inRegion = true; }
+        if (cCity && (cCity === oCity || cCity === dCity)) score += 12;
+        if (equip && equips.length && equips.includes(equip)) score += 14;
+        if (c.primaryEmail) score += 5;
+        if (c.phone) score += 3;
+        if (c.status === "flagged") score -= 10;
+
+        const region = c.city && c.state ? `${c.city}, ${c.state.toUpperCase()}`
+          : c.state ? c.state.toUpperCase()
+          : (states[0] ?? "—");
+
+        scored.push({
+          id: `pool_${c.id}`,
+          carrierId: c.id,
+          name: c.name,
+          mc: c.mcDot,
+          region,
+          fitScore: Math.max(0, Math.min(99, Math.round(score))),
+          lastRate: null,
+          tag: inRegion ? "in_region" : "new_prospect",
+          email: c.primaryEmail,
+          phone: c.phone,
+        });
+      }
+
+      scored.sort((a, b) => b.fitScore - a.fitScore);
+      const top = scored.slice(0, 28);
+      res.json({ pool: top, total: scored.length });
+    } catch (err) {
+      console.error("[freight-opps] carrier-pool error:", err);
+      res.status(500).json({ error: "Failed to load carrier pool" });
+    }
+  });
+
   // ── CARRIER REORDER (atomic swap) ─────────────────────────────────────────
   app.post("/api/freight-opportunities/:oppId/carriers/:carrierRowId/swap", requireAuth, async (req, res) => {
     try {

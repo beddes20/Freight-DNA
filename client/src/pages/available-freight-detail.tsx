@@ -1,19 +1,20 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Card, CardContent } from "@/components/ui/card";
 import {
-  ArrowLeft, AlertTriangle, ShieldAlert, Truck, MapPin, Calendar,
-  Pin, PinOff, ArrowUp, ArrowDown, Search, Info, Send, Mail, MessageSquare,
-  DollarSign, TrendingUp, RefreshCw,
+  ArrowLeft, AlertTriangle, ShieldAlert, Truck, Calendar,
+  Search, Send, Mail, MessageSquare, Phone, Info, Activity,
+  ChevronDown, ChevronRight, GripVertical, Sparkles, TrendingUp,
+  CheckCircle2, XCircle, RefreshCw, ExternalLink, DollarSign, Clock,
+  Eye,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -35,6 +36,19 @@ interface DetailResponse {
   audit: FreightOpportunityAudit[];
 }
 
+type PoolEntry = {
+  id: string;
+  carrierId: string;
+  name: string;
+  mc: string | null;
+  region: string;
+  fitScore: number;
+  lastRate: number | null;
+  tag: "in_region" | "prior_quote" | "new_prospect" | "lactalis_history";
+  email: string | null;
+  phone: string | null;
+};
+
 const OUTCOME_LABELS: Record<string, { label: string; tone: "good" | "warn" | "bad" | "neutral" }> = {
   interested_now: { label: "Interested now", tone: "good" },
   interested_few_days: { label: "Interested · few days", tone: "good" },
@@ -45,7 +59,6 @@ const OUTCOME_LABELS: Record<string, { label: string; tone: "good" | "warn" | "b
   not_qualified: { label: "Not qualified", tone: "bad" },
   do_not_contact_lane: { label: "Do not contact (lane)", tone: "bad" },
   no_response: { label: "No response", tone: "neutral" },
-  // legacy
   accepted: { label: "Accepted", tone: "good" },
   quoted: { label: "Quoted", tone: "good" },
   passed_busy: { label: "Passed (busy)", tone: "warn" },
@@ -78,18 +91,11 @@ const BUCKET_LABELS: Record<FreightOpportunityBucket, string> = {
   rep_added: "Rep-added",
 };
 
-const BUCKET_COLORS: Record<FreightOpportunityBucket, string> = {
-  proven: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30",
-  strong_fit_underused: "bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30",
-  exploratory: "bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30",
-  rep_added: "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30",
-};
-
-const BUCKET_DESCRIPTIONS: Record<FreightOpportunityBucket, string> = {
-  proven: "Has hauled this lane or pattern before with good outcomes.",
-  strong_fit_underused: "Good fit signals but limited recent volume — worth a fresh look.",
-  exploratory: "Plausible match — gives the shortlist breadth.",
-  rep_added: "Manually pinned by a rep, outside the scoring buckets.",
+const BUCKET_HINTS: Record<FreightOpportunityBucket, string> = {
+  proven: "hauled this exact lane recently",
+  strong_fit_underused: "high score, low recent activity on this lane",
+  exploratory: "new prospects worth a try",
+  rep_added: "manually pinned by a rep",
 };
 
 const BUCKET_ORDER: FreightOpportunityBucket[] = [
@@ -106,74 +112,46 @@ const EXCLUDED_LABELS: Record<FreightOpportunityExcludedReason, string> = {
   customer_carrier_blocked: "Customer-blocked",
 };
 
+const POOL_TAG_LABEL: Record<PoolEntry["tag"], { label: string; cls: string }> = {
+  in_region: { label: "In region", cls: "bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30" },
+  prior_quote: { label: "Prior quote", cls: "bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30" },
+  new_prospect: { label: "New prospect", cls: "bg-muted text-muted-foreground border-border" },
+  lactalis_history: { label: "Customer history", cls: "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30" },
+};
+
 function fmtWindow(start: string, _end?: string | null) {
-  // Available Freight rows always represent a single pickup day. The
-  // pickupWindowEnd field exists for back-compat with the older lane_building
-  // mode but is intentionally ignored for display — show only the canonical
-  // pickup day so reps don't see misleading date ranges.
   if (!start) return "—";
   const s = new Date(start);
   if (isNaN(s.getTime())) return "—";
-  const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric" };
-  return s.toLocaleDateString(undefined, opts);
+  return s.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 function fmtLane(
-  origin: string,
-  originState: string | null | undefined,
-  destination: string,
-  destinationState: string | null | undefined,
+  origin: string, originState: string | null | undefined,
+  destination: string, destinationState: string | null | undefined,
 ) {
   const o = originState ? `${origin}, ${originState.toUpperCase()}` : origin;
   const d = destinationState ? `${destination}, ${destinationState.toUpperCase()}` : destination;
   return `${o} → ${d}`;
 }
 
-function ExplanationChips({ row }: { row: FreightOpportunityCarrier }) {
-  const chips: { label: string; tone?: "default" | "warn" }[] = [];
-  const struct = (row.explanationStructured ?? null) as Record<string, unknown> | null;
-  const snap = (row.responsivenessSnapshot ?? null) as Record<string, unknown> | null;
-
-  if (row.historyMatch && row.historyMatch !== "none") {
-    chips.push({ label: `History: ${String(row.historyMatch).replace(/_/g, " ")}` });
-  }
-  if (typeof row.fitScore === "number") {
-    chips.push({ label: `Fit ${row.fitScore}` });
-  }
-  if (snap?.loadsOnLane) {
-    chips.push({ label: `${snap.loadsOnLane} loads on lane` });
-  }
-  if (snap?.priorOutcomeBoost) {
-    chips.push({ label: `Outcome boost +${snap.priorOutcomeBoost}` });
-  }
-  const suppress = Array.isArray(snap?.suppressionReasons) ? (snap!.suppressionReasons as string[]) : [];
-  for (const reason of suppress) {
-    chips.push({ label: reason.replace(/_/g, " "), tone: "warn" });
-  }
-  if (struct && typeof struct === "object") {
-    for (const [k, v] of Object.entries(struct)) {
-      if (k === "fitScore" || k === "historyMatch") continue;
-      if (typeof v === "string" && v.length < 40) chips.push({ label: v });
-    }
-  }
-  if (chips.length === 0) return null;
-  return (
-    <div className="flex flex-wrap gap-1 mt-1">
-      {chips.slice(0, 6).map((c, i) => (
-        <Badge
-          key={i}
-          variant="outline"
-          className={c.tone === "warn"
-            ? "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[10px]"
-            : "text-[10px] text-muted-foreground"}
-        >
-          {c.label}
-        </Badge>
-      ))}
-    </div>
-  );
+function daysBetween(a: Date, b: Date): number {
+  return Math.round((b.getTime() - a.getTime()) / (24 * 60 * 60 * 1000));
 }
 
+function leadTimeText(pickup: string): string {
+  const p = new Date(pickup);
+  if (isNaN(p.getTime())) return "—";
+  const d = daysBetween(new Date(), p);
+  if (d < 0) return `${Math.abs(d)} days late`;
+  if (d === 0) return "today";
+  if (d === 1) return "tomorrow";
+  return `${d} days lead`;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Carrier Intelligence panel content (used inside collapsible band)
+// ────────────────────────────────────────────────────────────────────────────
 interface BlendedRateResponse {
   targetBuyRpm: number | null;
   suggestedSellRpm: number | null;
@@ -196,257 +174,620 @@ interface BlendedRateResponse {
   historyFallbackTier: string;
 }
 
-function CarrierIntelligencePanel({ opp, customerName }: { opp: FreightOpportunity; customerName: string | null }) {
-  const params = new URLSearchParams({
-    origin: opp.origin,
-    destination: opp.destination,
-  });
+function CarrierIntelligenceBand({ opp, customerName }: { opp: FreightOpportunity; customerName: string | null }) {
+  const [open, setOpen] = useState(false);
+  const params = new URLSearchParams({ origin: opp.origin, destination: opp.destination });
   if (opp.originState) params.set("originState", opp.originState);
   if (opp.destinationState) params.set("destinationState", opp.destinationState);
   if (opp.equipmentType) params.set("trailer", opp.equipmentType);
   if (customerName) params.set("customer", customerName);
 
-  const { data, isLoading, isError } = useQuery<BlendedRateResponse>({
+  const { data, isLoading } = useQuery<BlendedRateResponse>({
     queryKey: ["/api/carrier-intelligence/lane-pricing", params.toString()],
     queryFn: async () => {
-      const res = await fetch(`/api/carrier-intelligence/lane-pricing?${params.toString()}`, {
-        credentials: "include",
-      });
+      const res = await fetch(`/api/carrier-intelligence/lane-pricing?${params.toString()}`, { credentials: "include" });
       if (!res.ok) throw new Error(`Lane pricing failed (${res.status})`);
       return res.json();
     },
   });
 
-  const confidenceTone =
-    data?.confidence === "high"
-      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
-      : data?.confidence === "medium"
-        ? "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30"
-        : "bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30";
+  const buyText = data?.targetBuyRpm != null
+    ? `$${data.targetBuyRpm.toFixed(2)}/mi target buy`
+    : data?.reason === "" ? "—" : (data?.reason ?? "—");
 
   return (
-    <Card data-testid="card-carrier-intelligence">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-          <div>
-            <CardTitle className="text-base flex items-center gap-2">
-              <DollarSign className="h-4 w-4" />
-              Carrier Intelligence — Suggested Buy Rate
-            </CardTitle>
-            <CardDescription className="text-xs">
-              Blended Sonar TRAC market rate + your realized history on this lane.
-            </CardDescription>
-          </div>
+    <div className="border border-border rounded-lg bg-card overflow-hidden">
+      <button
+        onClick={() => setOpen(v => !v)}
+        aria-expanded={open}
+        className="w-full flex items-center justify-between px-4 py-2.5 hover-elevate active-elevate-2"
+        data-testid="button-toggle-intelligence"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+          <Sparkles className="h-4 w-4 text-amber-500" />
+          <span className="text-sm font-semibold">Carrier Intelligence — Suggested buy</span>
+          <span className="text-muted-foreground/60">·</span>
+          <span className="text-sm font-mono font-semibold" data-testid="text-intel-summary">
+            {isLoading ? "…" : buyText}
+          </span>
           {data && (
-            <Badge variant="outline" className={`text-[10px] ${confidenceTone}`} data-testid="badge-pricing-confidence">
-              {data.confidence === "none" ? "no rate" : `${data.confidence} confidence`}
-            </Badge>
+            <span className="text-[11px] text-muted-foreground ml-1 hidden md:inline">
+              SONAR + your realized history
+            </span>
           )}
         </div>
-      </CardHeader>
-      <CardContent className="text-sm">
-        {isLoading && <Skeleton className="h-20 w-full" />}
-        {isError && (
-          <p className="text-xs text-muted-foreground" data-testid="text-pricing-error">
-            Lane pricing temporarily unavailable.
-          </p>
-        )}
-        {data && (
-          <div className="space-y-3">
-            {data.targetBuyRpm == null ? (
-              <p className="text-xs text-muted-foreground" data-testid="text-no-rate">
-                No buy rate suggestion: {data.reason}
-              </p>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div data-testid="metric-target-buy">
-                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Target buy</div>
-                  <div className="text-2xl font-semibold tabular-nums">${data.targetBuyRpm.toFixed(2)}<span className="text-xs text-muted-foreground font-normal">/mi</span></div>
+        <span className="text-[11px] text-muted-foreground">{open ? "Hide" : "Show details"}</span>
+      </button>
+      {open && (
+        <div className="px-4 pb-4 pt-1 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs border-t border-border/60">
+          {isLoading && <Skeleton className="h-20 col-span-full" />}
+          {data && (
+            <>
+              <div className="border border-border rounded p-3">
+                <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">SONAR market</div>
+                <div className="mt-1 font-mono text-base font-semibold">
+                  {data.legs.sonar?.ratePerMile != null ? `$${Number(data.legs.sonar.ratePerMile).toFixed(2)}/mi` : "—"}
                 </div>
-                {data.suggestedSellRpm != null && (
-                  <div data-testid="metric-suggested-sell">
-                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Suggested ask</div>
-                    <div className="text-2xl font-semibold tabular-nums">${data.suggestedSellRpm.toFixed(2)}<span className="text-xs text-muted-foreground font-normal">/mi</span></div>
-                  </div>
-                )}
-                {data.expectedMarginPct && (
-                  <div data-testid="metric-margin-band">
-                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Expected margin</div>
-                    <div className="text-2xl font-semibold tabular-nums">{data.expectedMarginPct.low.toFixed(1)}–{data.expectedMarginPct.high.toFixed(1)}<span className="text-xs text-muted-foreground font-normal">%</span></div>
-                  </div>
-                )}
+                <div className="text-[11px] text-muted-foreground mt-0.5">
+                  {Math.round(data.weights.sonar * 100)}% weight
+                  {data.legs.sonar?.isStale && <span className="text-amber-600 dark:text-amber-400"> · stale</span>}
+                </div>
               </div>
-            )}
-            <div className="border-t pt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
-              <span className="flex items-center gap-1" data-testid="text-leg-sonar">
-                <TrendingUp className="h-3 w-3" />
-                Sonar: {data.legs.sonar?.ratePerMile != null ? `$${Number(data.legs.sonar.ratePerMile).toFixed(2)}/mi` : "n/a"}
-                {" "}({Math.round(data.weights.sonar * 100)}%)
-                {data.legs.sonar?.isStale && <span className="text-amber-600 dark:text-amber-400">· stale</span>}
-              </span>
-              <span data-testid="text-leg-history">
-                History: {data.legs.history?.avgCostPerMile != null ? `$${Number(data.legs.history.avgCostPerMile).toFixed(2)}/mi` : "n/a"}
-                {" "}({Math.round(data.weights.history * 100)}%, {data.legs.history?.loads ?? 0} loads · {data.historyFallbackTier})
-              </span>
-              {data.sonarWeightAutoBumped && (
-                <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30">
-                  Sonar auto-bumped (sparse history)
-                </Badge>
-              )}
-              {data.refusedBelowThreshold && (
-                <Badge variant="outline" className="text-[10px] bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30">
-                  Below refusal threshold
-                </Badge>
-              )}
-            </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+              <div className="border border-border rounded p-3">
+                <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Your history</div>
+                <div className="mt-1 font-mono text-base font-semibold">
+                  {data.legs.history?.avgCostPerMile != null ? `$${Number(data.legs.history.avgCostPerMile).toFixed(2)}/mi` : "—"}
+                </div>
+                <div className="text-[11px] text-muted-foreground mt-0.5">
+                  {data.legs.history?.loads ?? 0} loads · {data.historyFallbackTier}
+                </div>
+              </div>
+              <div className="border border-border rounded p-3">
+                <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Target buy</div>
+                <div className="mt-1 font-mono text-base font-semibold inline-flex items-center gap-1">
+                  {data.targetBuyRpm != null ? `$${data.targetBuyRpm.toFixed(2)}/mi` : "—"}
+                  {data.sonarWeightAutoBumped && <TrendingUp className="h-3.5 w-3.5 text-amber-500" />}
+                </div>
+                <div className="text-[11px] text-muted-foreground mt-0.5">
+                  {data.confidence === "none" ? "no rate" : `${data.confidence} confidence`}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Carrier row — rich card with flags, mini-stats, why-expand, outcome buttons
+// ────────────────────────────────────────────────────────────────────────────
+
+type CarrierFlag = "incumbent" | "fast_responder" | "passed_last_time" | "replied_other_opp";
+
+function flagBadge(flag: CarrierFlag) {
+  switch (flag) {
+    case "incumbent":
+      return { label: "Incumbent", cls: "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30" };
+    case "fast_responder":
+      return { label: "Fast responder", cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30" };
+    case "passed_last_time":
+      return { label: "Passed last time", cls: "bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30" };
+    case "replied_other_opp":
+      return { label: "Replied to another lane", cls: "bg-yellow-500/15 text-yellow-700 dark:text-yellow-300 border-yellow-500/30" };
+  }
+}
+
+function deriveFlags(row: DetailCarrier): CarrierFlag[] {
+  const flags: CarrierFlag[] = [];
+  if (row.historyMatch === "exact_lane" || row.historyMatch === "corridor") flags.push("incumbent");
+  const snap = (row.responsivenessSnapshot ?? null) as Record<string, unknown> | null;
+  const respHours = snap?.replyHours as number | undefined;
+  if (typeof respHours === "number" && respHours <= 2) flags.push("fast_responder");
+  if (row.lastResponse) {
+    const tone = OUTCOME_LABELS[row.lastResponse.outcome]?.tone;
+    if (tone === "warn" || tone === "bad") flags.push("passed_last_time");
+  }
+  return flags;
+}
+
 function CarrierRow({
-  row, rank, included, selected, onSelectChange,
-  onToggleInclude, onPin, onMove, onLogOutcome,
-  isFirstInBucket, isLastInBucket,
+  row, carrier, rank, selected, onSelectChange,
+  onLogOutcomeQuick, isFirstInBucket, isLastInBucket, onMove,
 }: {
-  row: DetailCarrier & { _carrier?: Carrier | null };
+  row: DetailCarrier;
+  carrier: Carrier | null;
   rank: number;
-  included: boolean;
   selected: boolean;
   onSelectChange: (id: string, sel: boolean) => void;
-  onToggleInclude: (id: string, include: boolean) => void;
-  onPin: (id: string, pin: boolean) => void;
-  onMove: (id: string, dir: -1 | 1) => void;
-  onLogOutcome: (row: DetailCarrier) => void;
+  onLogOutcomeQuick: (rowId: string, outcome: string, rate: string) => void;
   isFirstInBucket: boolean;
   isLastInBucket: boolean;
+  onMove: (rowId: string, dir: -1 | 1) => void;
 }) {
-  const carrier = row._carrier ?? null;
+  const [open, setOpen] = useState(false);
+  const [outcome, setOutcome] = useState<string | null>(null);
+  const [rate, setRate] = useState("");
   const excluded = !!row.excludedReason;
-  const isPinned = row.bucket === "rep_added";
   const sentAt = row.sentAt ? new Date(row.sentAt) : null;
-  const scheduledFor = row.scheduledFor ? new Date(row.scheduledFor) : null;
+  const flags = deriveFlags(row);
+  const snap = (row.responsivenessSnapshot ?? null) as Record<string, unknown> | null;
+  const loadsOnLane = (snap?.loadsOnLane as number | undefined) ?? 0;
+  const replyHours = snap?.replyHours as number | undefined;
+  const struct = (row.explanationStructured ?? null) as Record<string, unknown> | null;
 
   return (
     <div
-      className={`flex items-start gap-3 px-3 py-2 border-b last:border-b-0 ${excluded ? "opacity-60" : ""}`}
+      className={`border-b border-border/60 last:border-b-0 ${excluded ? "opacity-60" : ""} hover-elevate transition-colors`}
       data-testid={`row-carrier-${row.id}`}
     >
-      <div className="flex items-start pt-1.5 shrink-0">
+      <div className="flex items-center gap-3 px-4 py-2.5">
+        <div className="flex flex-col items-center gap-0.5 shrink-0">
+          <button
+            onClick={() => onMove(row.id, -1)}
+            disabled={isFirstInBucket}
+            className="p-0.5 text-muted-foreground/50 hover:text-foreground disabled:opacity-30"
+            title="Move up"
+            data-testid={`button-move-up-${row.id}`}
+          >
+            <GripVertical className="h-3.5 w-3.5 cursor-grab" />
+          </button>
+        </div>
         <input
           type="checkbox"
           checked={selected}
           onChange={(e) => onSelectChange(row.id, e.target.checked)}
           disabled={excluded || !!sentAt}
-          className="h-4 w-4 rounded border-input"
+          className="h-4 w-4 rounded border-input accent-amber-500"
           data-testid={`checkbox-select-${row.id}`}
         />
-      </div>
-      <div className="flex flex-col items-center gap-1 shrink-0 w-12">
-        <div className="text-xs font-semibold tabular-nums" data-testid={`text-rank-${row.id}`}>
+        <span className="text-[10px] font-semibold tabular-nums text-muted-foreground w-6 shrink-0" data-testid={`text-rank-${row.id}`}>
           #{rank}
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium text-sm truncate" data-testid={`text-carrier-name-${row.id}`}>
+              {carrier?.name ?? "Unknown carrier"}
+            </span>
+            {carrier?.mcDot && (
+              <span className="text-[11px] text-muted-foreground">MC {carrier.mcDot}</span>
+            )}
+            {flags.map(f => {
+              const b = flagBadge(f);
+              return (
+                <Badge key={f} variant="outline" className={`text-[10px] ${b.cls}`}>
+                  {b.label}
+                </Badge>
+              );
+            })}
+            {sentAt && (
+              <Badge variant="outline" className="bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/30 text-[10px]">
+                <Mail className="h-3 w-3 mr-1" />
+                Sent {sentAt.toLocaleDateString()}{row.wave ? ` · w${row.wave}` : ""}
+              </Badge>
+            )}
+            {row.lastResponse && <OutcomeBadge outcome={row.lastResponse.outcome} />}
+            {row.lastSendError && (
+              <Badge variant="outline" className="bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30 text-[10px]" title={row.lastSendError}>
+                Send failed
+              </Badge>
+            )}
+            {excluded && row.excludedReason && (
+              <Badge variant="outline" className="bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30 text-[10px]">
+                {EXCLUDED_LABELS[row.excludedReason as FreightOpportunityExcludedReason] ?? row.excludedReason}
+              </Badge>
+            )}
+          </div>
+          <div className="flex items-center gap-3 mt-1 text-[11px] text-muted-foreground">
+            <span className="inline-flex items-center gap-1">
+              <Truck className="h-3 w-3" />
+              {loadsOnLane} loads · 90d
+            </span>
+            {typeof replyHours === "number" && (
+              <span className="inline-flex items-center gap-1">
+                <Clock className="h-3 w-3" />
+                ~{replyHours.toFixed(1)}h reply
+              </span>
+            )}
+            {carrier?.city && carrier.state && (
+              <span className="hidden sm:inline">{carrier.city}, {carrier.state.toUpperCase()}</span>
+            )}
+          </div>
         </div>
-        <div className="flex flex-col gap-0.5">
-          <Button
-            size="icon"
-            variant="ghost"
-            className="h-5 w-5"
-            disabled={isFirstInBucket}
-            onClick={() => onMove(row.id, -1)}
-            data-testid={`button-move-up-${row.id}`}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <div className="text-right pr-1">
+            <div className="text-base font-semibold leading-none tabular-nums" data-testid={`text-fit-${row.id}`}>
+              {row.fitScore ?? "—"}
+            </div>
+            <div className="text-[10px] text-muted-foreground mt-0.5">fit</div>
+          </div>
+          <button
+            onClick={() => setOpen(v => !v)}
+            className="p-1.5 rounded text-muted-foreground hover:text-foreground hover-elevate"
+            title="Why this carrier?"
+            data-testid={`button-why-${row.id}`}
           >
-            <ArrowUp className="h-3 w-3" />
-          </Button>
-          <Button
-            size="icon"
-            variant="ghost"
-            className="h-5 w-5"
-            disabled={isLastInBucket}
-            onClick={() => onMove(row.id, 1)}
-            data-testid={`button-move-down-${row.id}`}
-          >
-            <ArrowDown className="h-3 w-3" />
-          </Button>
+            <Info className="h-3.5 w-3.5" />
+          </button>
+          {carrier?.phone && (
+            <a
+              href={`tel:${carrier.phone}`}
+              className="p-1.5 rounded text-muted-foreground hover:text-foreground hover-elevate"
+              title={carrier.phone}
+            >
+              <Phone className="h-3.5 w-3.5" />
+            </a>
+          )}
+          {carrier?.primaryEmail && (
+            <a
+              href={`mailto:${carrier.primaryEmail}`}
+              className="p-1.5 rounded text-muted-foreground hover:text-foreground hover-elevate"
+              title={carrier.primaryEmail}
+            >
+              <Mail className="h-3.5 w-3.5" />
+            </a>
+          )}
         </div>
       </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="font-medium text-sm truncate" data-testid={`text-carrier-name-${row.id}`}>
-            {carrier?.name ?? "Unknown carrier"}
-          </span>
-          {carrier?.mcDot && (
-            <span className="text-[11px] text-muted-foreground">MC {carrier.mcDot}</span>
-          )}
-          {excluded && row.excludedReason && (
-            <Badge variant="outline" className="bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30 text-[10px]">
-              {EXCLUDED_LABELS[row.excludedReason as FreightOpportunityExcludedReason] ?? row.excludedReason}
-            </Badge>
-          )}
-          {sentAt && (
-            <Badge variant="outline" className="bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/30 text-[10px]" data-testid={`badge-sent-${row.id}`}>
-              <Mail className="h-3 w-3 mr-1" />
-              Sent {sentAt.toLocaleDateString()}{row.wave ? ` · wave ${row.wave}` : ""}
-            </Badge>
-          )}
-          {!sentAt && scheduledFor && (
-            <Badge variant="outline" className="bg-violet-500/10 text-violet-700 dark:text-violet-300 border-violet-500/30 text-[10px]" data-testid={`badge-scheduled-${row.id}`}>
-              <Calendar className="h-3 w-3 mr-1" />
-              Scheduled {scheduledFor.toLocaleString()}
-            </Badge>
-          )}
-          {row.lastResponse && <OutcomeBadge outcome={row.lastResponse.outcome} />}
-          {row.lastSendError && (
-            <Badge variant="outline" className="bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30 text-[10px]" title={row.lastSendError}>
-              Send failed
-            </Badge>
-          )}
+      {open && (
+        <div className="px-4 pb-3">
+          <div className="bg-muted/40 border border-border rounded-md p-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-xs">
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">History</div>
+              <div className="mt-0.5">{(struct?.history as string) ?? row.explanation ?? "—"}</div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Rate context</div>
+              <div className="mt-0.5">{(struct?.rate as string) ?? "—"}</div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Region</div>
+              <div className="mt-0.5">
+                {(struct?.region as string) ??
+                  (carrier?.city && carrier.state ? `${carrier.city}, ${carrier.state.toUpperCase()}` : "—")}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Responsiveness</div>
+              <div className="mt-0.5">
+                {typeof replyHours === "number" ? `Replies within ~${replyHours.toFixed(1)}h` : "No prior outreach data"}
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 flex items-center gap-2 flex-wrap">
+            <span className="text-[11px] text-muted-foreground mr-1">Log outcome:</span>
+            {[
+              { k: "interested_now", label: "Interested", cls: "bg-emerald-600 hover:bg-emerald-700 text-white" },
+              { k: "interested_few_days", label: "Maybe (later)", cls: "bg-amber-500 hover:bg-amber-600 text-white" },
+              { k: "declined", label: "Pass", cls: "bg-muted hover:bg-muted-foreground/20 text-foreground" },
+              { k: "no_response", label: "No reply", cls: "bg-muted hover:bg-muted-foreground/20 text-foreground" },
+            ].map(o => (
+              <button
+                key={o.k}
+                onClick={() => setOutcome(o.k)}
+                className={`text-[11px] px-2 py-1 rounded font-medium ${o.cls} ${outcome === o.k ? "ring-2 ring-offset-1 ring-primary" : ""}`}
+                data-testid={`button-quick-outcome-${row.id}-${o.k}`}
+              >
+                {o.label}
+              </button>
+            ))}
+            {(outcome === "interested_now" || outcome === "interested_few_days") && (
+              <>
+                <span className="text-muted-foreground/40">·</span>
+                <div className="relative">
+                  <DollarSign className="h-3 w-3 absolute left-1.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    value={rate}
+                    onChange={(e) => setRate(e.target.value)}
+                    placeholder="quoted rate"
+                    className="text-[11px] pl-5 pr-2 py-1 border border-border rounded w-24 bg-background"
+                    data-testid={`input-quick-rate-${row.id}`}
+                  />
+                </div>
+              </>
+            )}
+            {outcome && (
+              <button
+                onClick={() => {
+                  onLogOutcomeQuick(row.id, outcome, rate);
+                  setOutcome(null);
+                  setRate("");
+                  setOpen(false);
+                }}
+                className="text-[11px] px-2 py-1 rounded font-medium bg-foreground text-background hover:opacity-90"
+                data-testid={`button-quick-save-${row.id}`}
+              >
+                Save
+              </button>
+            )}
+          </div>
         </div>
-        {row.explanation && (
-          <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2" data-testid={`text-explanation-${row.id}`}>
-            {row.explanation}
-          </p>
-        )}
-        <ExplanationChips row={row} />
-      </div>
-      <div className="flex items-center gap-2 shrink-0">
-        {sentAt && (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => onLogOutcome(row)}
-            title="Log carrier response"
-            data-testid={`button-log-outcome-${row.id}`}
-          >
-            <MessageSquare className="h-3.5 w-3.5 mr-1" />
-            Log
-          </Button>
-        )}
-        <Button
-          size="icon"
-          variant="ghost"
-          onClick={() => onPin(row.id, !isPinned)}
-          title={isPinned ? "Unpin" : "Pin to top"}
-          data-testid={`button-pin-${row.id}`}
-        >
-          {isPinned ? <PinOff className="h-4 w-4 text-amber-500" /> : <Pin className="h-4 w-4" />}
-        </Button>
-        <div className="flex items-center gap-1">
-          <Switch
-            checked={included}
-            onCheckedChange={(v) => onToggleInclude(row.id, v)}
-            data-testid={`switch-include-${row.id}`}
-          />
-          <span className="text-[10px] text-muted-foreground w-12">
-            {included ? "Include" : "Exclude"}
-          </span>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Bucket section (collapsible)
+// ────────────────────────────────────────────────────────────────────────────
+function BucketSection({
+  bucket, rows, carrierById, selected, onSelectChange, onLogOutcomeQuick, onMove, defaultOpen,
+}: {
+  bucket: FreightOpportunityBucket;
+  rows: DetailCarrier[];
+  carrierById: Map<string, Carrier>;
+  selected: Set<string>;
+  onSelectChange: (id: string, sel: boolean) => void;
+  onLogOutcomeQuick: (rowId: string, outcome: string, rate: string) => void;
+  onMove: (rowId: string, dir: -1 | 1) => void;
+  defaultOpen: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const selectedInBucket = rows.filter(r => selected.has(r.id)).length;
+  return (
+    <div className="border border-border rounded-lg bg-card overflow-hidden" data-testid={`bucket-${bucket}`}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        aria-expanded={open}
+        className="w-full flex items-center justify-between px-4 py-2.5 bg-muted/30 hover-elevate"
+      >
+        <div className="flex items-center gap-2">
+          {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+          <span className="text-sm font-semibold">{BUCKET_LABELS[bucket]}</span>
+          <span className="text-muted-foreground/60">·</span>
+          <span className="text-xs text-muted-foreground">{rows.length} carriers</span>
+          <span className="text-xs text-muted-foreground/70 hidden md:inline">· {BUCKET_HINTS[bucket]}</span>
+        </div>
+        <span className="text-[11px] text-muted-foreground">
+          {selectedInBucket > 0 ? `${selectedInBucket} selected` : ""}
+        </span>
+      </button>
+      {open && (
+        <div>
+          {rows.map((row, idx) => (
+            <CarrierRow
+              key={row.id}
+              row={row}
+              carrier={carrierById.get(row.carrierId) ?? null}
+              rank={row.rank ?? idx + 1}
+              selected={selected.has(row.id)}
+              onSelectChange={onSelectChange}
+              onLogOutcomeQuick={onLogOutcomeQuick}
+              isFirstInBucket={idx === 0}
+              isLastInBucket={idx === rows.length - 1}
+              onMove={onMove}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Suggested carrier pool (LWQ-style)
+// ────────────────────────────────────────────────────────────────────────────
+function SuggestedPool({
+  oppId,
+  selectedPoolIds,
+  onTogglePool,
+  onSelectPoolIds,
+  onClearPoolIds,
+}: {
+  oppId: string;
+  selectedPoolIds: Set<string>;
+  onTogglePool: (carrierId: string) => void;
+  onSelectPoolIds: (carrierIds: string[]) => void;
+  onClearPoolIds: (carrierIds: string[]) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  const [filter, setFilter] = useState<"all" | PoolEntry["tag"]>("all");
+  const [search, setSearch] = useState("");
+
+  const { data, isLoading, isError, refetch } = useQuery<{ pool: PoolEntry[]; total: number }>({
+    queryKey: ["/api/freight-opportunities", oppId, "carrier-pool"],
+    queryFn: async () => {
+      const res = await fetch(`/api/freight-opportunities/${oppId}/carrier-pool`, { credentials: "include" });
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json();
+    },
+  });
+
+  const pool = data?.pool ?? [];
+  const counts = useMemo(() => ({
+    all: pool.length,
+    in_region: pool.filter(p => p.tag === "in_region").length,
+    new_prospect: pool.filter(p => p.tag === "new_prospect").length,
+  }), [pool]);
+
+  const filtered = pool.filter(p => {
+    if (filter !== "all" && p.tag !== filter) return false;
+    if (search) {
+      const s = search.toLowerCase();
+      if (!p.name.toLowerCase().includes(s) && !p.region.toLowerCase().includes(s)) return false;
+    }
+    return true;
+  });
+  const filteredCarrierIds = filtered.map(p => p.carrierId);
+  const allFilteredSelected = filteredCarrierIds.length > 0 && filteredCarrierIds.every(id => selectedPoolIds.has(id));
+
+  return (
+    <div className="border border-border rounded-lg bg-card overflow-hidden" data-testid="section-pool">
+      <button
+        onClick={() => setOpen(v => !v)}
+        aria-expanded={open}
+        className="w-full flex items-center justify-between px-4 py-2.5 bg-muted/30 hover-elevate"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+          <span className="text-sm font-semibold">Suggested carrier pool</span>
+          <span className="text-muted-foreground/60">·</span>
+          <span className="text-xs text-muted-foreground">
+            {isLoading ? "loading…" : `${pool.length} carriers beyond the ranked shortlist`}
+          </span>
+          <span className="text-xs text-muted-foreground/70 hidden md:inline">· bulk-select to send wide</span>
+        </div>
+        <span className="text-[11px] text-muted-foreground">
+          {Array.from(selectedPoolIds).filter(id => pool.some(p => p.carrierId === id)).length > 0
+            ? `${Array.from(selectedPoolIds).filter(id => pool.some(p => p.carrierId === id)).length} selected from pool`
+            : ""}
+        </span>
+      </button>
+      {open && (
+        <>
+          <div className="px-4 py-2.5 border-b border-border/60 flex items-center gap-2 flex-wrap bg-card">
+            <div className="flex items-center gap-1 flex-wrap">
+              {([
+                ["all", "All"],
+                ["in_region", "In region"],
+                ["new_prospect", "New prospects"],
+              ] as const).map(([k, label]) => (
+                <button
+                  key={k}
+                  onClick={() => setFilter(k)}
+                  className={`text-[11px] px-2 py-1 rounded border ${
+                    filter === k
+                      ? "bg-foreground border-foreground text-background"
+                      : "bg-card border-border text-foreground hover-elevate"
+                  }`}
+                  data-testid={`filter-pool-${k}`}
+                >
+                  {label} <span className="opacity-60">({counts[k]})</span>
+                </button>
+              ))}
+            </div>
+            <div className="relative ml-auto">
+              <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Filter pool"
+                className="pl-8 pr-3 py-1 border border-border rounded text-xs w-44 bg-background"
+                data-testid="input-pool-search"
+              />
+            </div>
+            <button
+              onClick={() => onSelectPoolIds(pool.slice(0, 20).map(p => p.carrierId))}
+              className="text-[11px] px-2.5 py-1 rounded bg-amber-500 text-zinc-900 font-semibold hover:bg-amber-400 inline-flex items-center gap-1"
+              disabled={pool.length === 0}
+              data-testid="button-pool-top20"
+            >
+              <Sparkles className="h-3 w-3" /> Add top 20 to wave
+            </button>
+            <button
+              onClick={() => allFilteredSelected ? onClearPoolIds(filteredCarrierIds) : onSelectPoolIds(filteredCarrierIds)}
+              className="text-[11px] px-2.5 py-1 rounded border border-border text-foreground hover-elevate"
+              disabled={filtered.length === 0}
+              data-testid="button-pool-select-all"
+            >
+              {allFilteredSelected ? "Clear" : "Select all"} ({filtered.length})
+            </button>
+          </div>
+          <div className="grid grid-cols-[28px_28px_1fr_140px_110px_60px] items-center gap-2 px-4 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold border-b border-border/60 bg-muted/20">
+            <div />
+            <div />
+            <div>Carrier</div>
+            <div>Region</div>
+            <div>Tag</div>
+            <div className="text-right">Fit</div>
+          </div>
+          <div className="max-h-[420px] overflow-y-auto">
+            {isLoading && (
+              <div className="px-4 py-6 text-center text-xs text-muted-foreground">Loading pool…</div>
+            )}
+            {isError && !isLoading && (
+              <div className="px-4 py-6 text-center text-xs text-rose-700 dark:text-rose-300 space-y-2" data-testid="state-pool-error">
+                <p>Couldn't load the suggested carrier pool.</p>
+                <Button size="sm" variant="outline" onClick={() => refetch()} data-testid="button-pool-retry">Retry</Button>
+              </div>
+            )}
+            {!isLoading && !isError && filtered.map(p => {
+              const sel = selectedPoolIds.has(p.carrierId);
+              const tag = POOL_TAG_LABEL[p.tag];
+              return (
+                <div
+                  key={p.carrierId}
+                  className={`grid grid-cols-[28px_28px_1fr_140px_110px_60px] items-center gap-2 px-4 py-1.5 border-b border-border/40 last:border-b-0 text-sm hover-elevate ${sel ? "bg-amber-500/10" : ""}`}
+                  data-testid={`row-pool-${p.carrierId}`}
+                >
+                  <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40" />
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 rounded border-input accent-amber-500"
+                    checked={sel}
+                    onChange={() => onTogglePool(p.carrierId)}
+                    data-testid={`checkbox-pool-${p.carrierId}`}
+                  />
+                  <div className="min-w-0">
+                    <div className="font-medium truncate">{p.name}</div>
+                    {p.mc && <div className="text-[10px] text-muted-foreground">MC {p.mc}</div>}
+                  </div>
+                  <div className="text-[12px] text-muted-foreground truncate">{p.region}</div>
+                  <div>
+                    <Badge variant="outline" className={`text-[10px] ${tag.cls}`}>{tag.label}</Badge>
+                  </div>
+                  <div className="text-right text-sm font-semibold tabular-nums">{p.fitScore}</div>
+                </div>
+              );
+            })}
+            {!isLoading && !isError && filtered.length === 0 && (
+              <div className="px-4 py-6 text-center text-xs text-muted-foreground">
+                {pool.length === 0 ? "No additional carriers found beyond the ranked shortlist." : "No carriers match your filter."}
+              </div>
+            )}
+          </div>
+          <div className="px-4 py-2 border-t border-border/60 bg-muted/20 text-[11px] text-muted-foreground flex items-center justify-between flex-wrap gap-2">
+            <span>Cast a wider net (20–30 carriers) when capacity is tight or proven carriers haven't replied.</span>
+            <span className="text-muted-foreground/70">Daily-cap & guardrails still apply at send time.</span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Activity drawer
+// ────────────────────────────────────────────────────────────────────────────
+function ActivityDrawer({ open, onClose, audit }: { open: boolean; onClose: () => void; audit: FreightOpportunityAudit[] }) {
+  if (!open) return null;
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/30 z-40" onClick={onClose} data-testid="overlay-activity" />
+      <div className="fixed top-0 right-0 bottom-0 w-96 bg-card border-l border-border z-50 shadow-xl flex flex-col" data-testid="drawer-activity">
+        <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Activity className="h-4 w-4 text-muted-foreground" />
+            <span className="font-semibold text-sm">Activity</span>
+          </div>
+          <Button variant="ghost" size="sm" onClick={onClose} data-testid="button-close-activity">Close</Button>
+        </div>
+        <div className="overflow-y-auto p-4 text-xs space-y-3">
+          {audit.length === 0 ? (
+            <p className="text-muted-foreground">No activity recorded yet.</p>
+          ) : (
+            audit.slice().reverse().map(a => (
+              <div key={a.id} className="flex gap-3" data-testid={`activity-item-${a.id}`}>
+                <div className="text-[11px] text-muted-foreground w-28 shrink-0">
+                  {new Date(a.createdAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                </div>
+                <div className="flex-1">
+                  <div className="font-medium capitalize">{a.eventType.replace(/_/g, " ")}</div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Send modal body (kept from prior page)
+// ────────────────────────────────────────────────────────────────────────────
 function SendModalBody({
   oppId, mode, carrierIds, carriersById, opportunityCarriers,
   draftIndex, setDraftIndex, overrides, setOverrides, scheduleAt, setScheduleAt,
@@ -567,12 +908,16 @@ function SendModalBody({
   );
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// MAIN PAGE
+// ────────────────────────────────────────────────────────────────────────────
 export default function AvailableFreightDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id!;
   const { toast } = useToast();
   const [carrierSearch, setCarrierSearch] = useState("");
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set()); // shortlist carrier-row ids
+  const [selectedPool, setSelectedPool] = useState<Set<string>>(new Set()); // pool carrier ids (carriers.id)
   const [sendModalOpen, setSendModalOpen] = useState(false);
   const [scheduleAt, setScheduleAt] = useState<string>("");
   const [outcomeRow, setOutcomeRow] = useState<DetailCarrier | null>(null);
@@ -580,6 +925,8 @@ export default function AvailableFreightDetailPage() {
   const [outcomeNotes, setOutcomeNotes] = useState("");
   const [draftIndex, setDraftIndex] = useState(0);
   const [overrides, setOverrides] = useState<Record<string, { subject: string; body: string }>>({});
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [excludedOpen, setExcludedOpen] = useState(false);
 
   const { data, isLoading, isError } = useQuery<DetailResponse>({
     queryKey: ["/api/freight-opportunities", id],
@@ -588,12 +935,6 @@ export default function AvailableFreightDetailPage() {
       if (!res.ok) throw new Error(`${res.status}`);
       return res.json();
     },
-    // Ranking now runs inline on the server (with a 25s timeout, mirroring
-    // the LWQ /carrier-suggestions flow). The response is self-contained, so
-    // polling is only needed in the rare case where another concurrent caller
-    // is still ranking. We never poll just because carriers is empty — that
-    // previously caused infinite re-rank loops when the ranker legitimately
-    // produced zero matches.
     refetchInterval: (query) => {
       const d = query.state.data as DetailResponse | undefined;
       if (!d) return false;
@@ -608,14 +949,11 @@ export default function AvailableFreightDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities", id] });
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities", id, "carrier-pool"] });
       toast({ title: "Re-ranked", description: "Carrier shortlist re-scored." });
     },
     onError: (err: any) => {
-      toast({
-        title: "Couldn't re-rank",
-        description: err?.message ?? "Please try again.",
-        variant: "destructive",
-      });
+      toast({ title: "Couldn't re-rank", description: err?.message ?? "Please try again.", variant: "destructive" });
     },
   });
 
@@ -639,29 +977,6 @@ export default function AvailableFreightDetailPage() {
     return m;
   }, [allCarriers]);
 
-  const updateCarrierMutation = useMutation({
-    mutationFn: async ({ carrierId, fields }: { carrierId: string; fields: Record<string, unknown> }) => {
-      const res = await apiRequest(
-        "PATCH",
-        `/api/freight-opportunities/${id}/carriers/${carrierId}`,
-        fields,
-      );
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities", id] });
-      // Queue counts (included/recommended) depend on this row's state.
-      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities"], exact: false });
-    },
-    onError: (err: any) => {
-      toast({
-        title: "Couldn't update carrier",
-        description: err?.message ?? "Please try again.",
-        variant: "destructive",
-      });
-    },
-  });
-
   const sendMutation = useMutation({
     mutationFn: async ({ carrierRowIds, scheduleAtIso, overrides: ov }: { carrierRowIds: string[]; scheduleAtIso?: string | null; overrides?: Record<string, { subject: string; body: string }> }) => {
       const res = await apiRequest("POST", `/api/freight-opportunities/${id}/send`, {
@@ -684,6 +999,7 @@ export default function AvailableFreightDetailPage() {
       });
       setSendModalOpen(false);
       setSelected(new Set());
+      setSelectedPool(new Set());
       setScheduleAt("");
       setOverrides({});
       setDraftIndex(0);
@@ -695,11 +1011,8 @@ export default function AvailableFreightDetailPage() {
 
   const outcomeMutation = useMutation({
     mutationFn: async ({ rowId, outcome, notes }: { rowId: string; outcome: string; notes: string }) => {
-      const res = await apiRequest(
-        "POST",
-        `/api/freight-opportunities/${id}/carriers/${rowId}/response`,
-        { outcome, notes: notes || null },
-      );
+      const res = await apiRequest("POST", `/api/freight-opportunities/${id}/carriers/${rowId}/response`,
+        { outcome, notes: notes || null });
       return res.json();
     },
     onSuccess: () => {
@@ -715,39 +1028,28 @@ export default function AvailableFreightDetailPage() {
 
   const swapCarrierMutation = useMutation({
     mutationFn: async ({ rowId, otherRowId }: { rowId: string; otherRowId: string }) => {
-      const res = await apiRequest(
-        "POST",
-        `/api/freight-opportunities/${id}/carriers/${rowId}/swap`,
-        { otherRowId },
-      );
+      const res = await apiRequest("POST", `/api/freight-opportunities/${id}/carriers/${rowId}/swap`, { otherRowId });
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities", id] });
-      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities"], exact: false });
     },
     onError: (err: any) => {
-      toast({
-        title: "Couldn't reorder carrier",
-        description: err?.message ?? "Please try again.",
-        variant: "destructive",
-      });
+      toast({ title: "Couldn't reorder", description: err?.message ?? "Please try again.", variant: "destructive" });
     },
   });
 
   const grouped = useMemo(() => {
     const q = carrierSearch.trim().toLowerCase();
-    const annotated = carriers.map(c => ({
-      ...c,
-      _carrier: carrierById.get(c.carrierId) ?? null,
-    }));
-    const filtered = !q ? annotated : annotated.filter(c => {
-      const haystack = `${c._carrier?.name ?? ""} ${c._carrier?.mcDot ?? ""} ${c.explanation ?? ""}`.toLowerCase();
+    const filtered = !q ? carriers : carriers.filter(c => {
+      const carrier = carrierById.get(c.carrierId);
+      const haystack = `${carrier?.name ?? ""} ${carrier?.mcDot ?? ""} ${c.explanation ?? ""}`.toLowerCase();
       return haystack.includes(q);
     });
-    const buckets = new Map<FreightOpportunityBucket, typeof filtered>();
+    const buckets = new Map<FreightOpportunityBucket, DetailCarrier[]>();
     for (const b of BUCKET_ORDER) buckets.set(b, []);
     for (const row of filtered) {
+      if (row.excludedReason) continue;
       const key = (row.bucket as FreightOpportunityBucket) || "exploratory";
       if (!buckets.has(key)) buckets.set(key, []);
       buckets.get(key)!.push(row);
@@ -758,27 +1060,76 @@ export default function AvailableFreightDetailPage() {
     return buckets;
   }, [carriers, carrierById, carrierSearch]);
 
+  const excludedRows = useMemo(() => carriers.filter(c => !!c.excludedReason), [carriers]);
   const includedCount = carriers.filter(c => !c.excludedReason).length;
   const totalCount = carriers.length;
-  const selectableRows = useMemo(
-    () => carriers.filter(c => !c.excludedReason && !c.sentAt),
-    [carriers],
-  );
   const sentCount = carriers.filter(c => !!c.sentAt).length;
   const respondedCount = carriers.filter(c => !!c.lastResponse).length;
   const positiveCount = carriers.filter(c =>
     c.lastResponse && (OUTCOME_LABELS[c.lastResponse.outcome]?.tone === "good")).length;
 
+  const totalSelected = selected.size + selectedPool.size;
+  const coveredAt = opp?.status === "covered" ? (opp as any).coveredAt as string | null : null;
+  const coverWinner = useMemo(() => {
+    if (opp?.status !== "covered") return null;
+    const winRow = carriers.find(c => c.lastResponse?.outcome === "booked");
+    return winRow ? { name: carrierById.get(winRow.carrierId)?.name ?? "carrier", rate: null as number | null } : null;
+  }, [opp, carriers, carrierById]);
+
+  const onSelectChange = (rowId: string, sel: boolean) => {
+    setSelected(prev => {
+      const n = new Set(prev);
+      if (sel) n.add(rowId); else n.delete(rowId);
+      return n;
+    });
+  };
+
+  const onLogOutcomeQuick = (rowId: string, outcome: string, _rate: string) => {
+    outcomeMutation.mutate({ rowId, outcome, notes: _rate ? `Quoted rate: $${_rate}` : "" });
+  };
+
+  const onMove = (rowId: string, dir: -1 | 1) => {
+    const row = carriers.find(c => c.id === rowId);
+    if (!row) return;
+    const peers = (grouped.get((row.bucket as FreightOpportunityBucket) || "exploratory") ?? []);
+    const idx = peers.findIndex(p => p.id === rowId);
+    const swapWith = peers[idx + dir];
+    if (!swapWith) return;
+    swapCarrierMutation.mutate({ rowId, otherRowId: swapWith.id });
+  };
+
+  const togglePool = (carrierId: string) => {
+    setSelectedPool(prev => {
+      const n = new Set(prev);
+      if (n.has(carrierId)) n.delete(carrierId); else n.add(carrierId);
+      return n;
+    });
+  };
+  const selectPoolIds = (carrierIds: string[]) => {
+    setSelectedPool(prev => {
+      const n = new Set(prev);
+      carrierIds.forEach(id => n.add(id));
+      return n;
+    });
+  };
+  const clearPoolIds = (carrierIds: string[]) => {
+    setSelectedPool(prev => {
+      const n = new Set(prev);
+      carrierIds.forEach(id => n.delete(id));
+      return n;
+    });
+  };
+
+  // ── Loading / error states ────────────────────────────────────────────────
   if (isLoading) {
     return (
       <div className="container mx-auto p-4 space-y-4 max-w-screen-xl">
-        <Skeleton className="h-8 w-64" />
+        <Skeleton className="h-12 w-full" />
         <Skeleton className="h-32 w-full" />
         <Skeleton className="h-96 w-full" />
       </div>
     );
   }
-
   if (isError || !opp) {
     return (
       <div className="container mx-auto p-4 max-w-screen-xl">
@@ -797,19 +1148,88 @@ export default function AvailableFreightDetailPage() {
     );
   }
 
+  const customerName = company?.name ?? "Customer";
+  const lane = fmtLane(opp.origin, opp.originState, opp.destination, opp.destinationState);
+
   return (
-    <div className="container mx-auto p-4 space-y-4 max-w-screen-xl">
-      <div>
-        <Link href="/available-freight">
-          <Button variant="ghost" size="sm" data-testid="button-back-to-queue">
-            <ArrowLeft className="h-4 w-4 mr-2" /> Back to queue
-          </Button>
-        </Link>
+    <div className="min-h-screen bg-background pb-20">
+      {/* ── STICKY HEADER ──────────────────────────────────────────────────── */}
+      <div className="sticky top-0 z-30 bg-card border-b border-border shadow-sm">
+        <div className="px-6 py-2.5 flex items-center gap-3">
+          <Link href="/available-freight">
+            <button className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-sm" data-testid="button-back-to-queue">
+              <ArrowLeft className="h-4 w-4" /> Queue
+            </button>
+          </Link>
+          <div className="h-5 w-px bg-border" />
+          <div className="flex items-center gap-2 min-w-0">
+            {company ? (
+              <Link href={`/companies/${company.id}`}>
+                <span className="text-sm font-semibold hover:underline cursor-pointer truncate" data-testid="link-company">{customerName}</span>
+              </Link>
+            ) : (
+              <span className="text-sm font-semibold truncate">{customerName}</span>
+            )}
+            <span className="text-muted-foreground/50">·</span>
+            <span className="text-sm text-muted-foreground truncate" data-testid="text-detail-lane">{lane}</span>
+            {opp.equipmentType && (
+              <Badge variant="outline" className="text-[10px]" data-testid="badge-equipment">{opp.equipmentType}</Badge>
+            )}
+          </div>
+          <div className="ml-auto flex items-center gap-1.5">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setActivityOpen(v => !v)}
+              data-testid="button-activity"
+            >
+              <Activity className="h-3.5 w-3.5 mr-1.5" /> Activity
+            </Button>
+            <Link href={`/lwq?lane=${encodeURIComponent(`${opp.origin}|${opp.destination}`)}`}>
+              <Button variant="ghost" size="sm" data-testid="button-compare-lwq">
+                <ExternalLink className="h-3.5 w-3.5 mr-1.5" /> Compare to LWQ
+              </Button>
+            </Link>
+          </div>
+        </div>
+        {/* One-line opportunity summary */}
+        <div className="px-6 py-2 border-t border-border/60 bg-muted/30">
+          <div className="flex items-center gap-4 text-[12px] text-foreground/80 flex-wrap">
+            <span className="inline-flex items-center gap-1.5">
+              <Truck className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="font-medium" data-testid="text-load-count">{opp.loadCount} load{opp.loadCount === 1 ? "" : "s"}</span>
+            </span>
+            <span className="text-muted-foreground/40">·</span>
+            <span>Pickup <span className="font-medium">{fmtWindow(opp.pickupWindowStart)}</span> · {leadTimeText(opp.pickupWindowStart)}</span>
+            <span className="text-muted-foreground/40">·</span>
+            <span className="inline-flex items-center gap-1">
+              <span className={`h-1.5 w-1.5 rounded-full ${
+                opp.confidenceFlag === "low" ? "bg-rose-500" : opp.confidenceFlag === "high" ? "bg-emerald-500" : "bg-amber-500"
+              }`} />
+              {opp.confidenceFlag === "low" ? "Low confidence" : opp.confidenceFlag === "high" ? "High confidence" : "Normal confidence"}
+            </span>
+            <span className="text-muted-foreground/40">·</span>
+            <span><span className="font-medium tabular-nums">{sentCount} / {totalCount}</span> sent</span>
+            <span className="text-muted-foreground/40">·</span>
+            <span className="tabular-nums">{respondedCount} repl{respondedCount === 1 ? "y" : "ies"}{positiveCount > 0 ? ` · ${positiveCount} positive` : ""}</span>
+            {coverWinner && (
+              <>
+                <span className="text-muted-foreground/40">·</span>
+                <span className="text-emerald-700 dark:text-emerald-300 inline-flex items-center gap-1" data-testid="text-covered">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> Covered by {coverWinner.name}
+                </span>
+              </>
+            )}
+            {opp.status !== "covered" && opp.status !== "open" && (
+              <Badge variant="outline" className="text-[10px]" data-testid="badge-status">{opp.status.replace(/_/g, " ")}</Badge>
+            )}
+          </div>
+        </div>
       </div>
 
-      {opp.confidenceFlag === "low" && (
-        <Card className="border-amber-500/50 bg-amber-500/5" data-testid="banner-low-confidence">
-          <CardContent className="flex items-start gap-3 py-3">
+      <div className="max-w-[1340px] mx-auto px-6 py-5 space-y-4">
+        {opp.confidenceFlag === "low" && (
+          <div className="border border-amber-500/50 bg-amber-500/5 rounded-lg flex items-start gap-3 px-4 py-3" data-testid="banner-low-confidence">
             <ShieldAlert className="h-5 w-5 text-amber-600 mt-0.5 shrink-0" />
             <div className="text-sm">
               <p className="font-medium text-amber-800 dark:text-amber-300">Low confidence shortlist</p>
@@ -817,277 +1237,187 @@ export default function AvailableFreightDetailPage() {
                 Few proven carriers matched. Review the bucket mix carefully before sending.
               </p>
             </div>
-          </CardContent>
-        </Card>
-      )}
+          </div>
+        )}
 
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex items-start justify-between gap-3 flex-wrap">
+        <CarrierIntelligenceBand opp={opp} customerName={customerName} />
+
+        {/* ── RANKED CARRIERS ────────────────────────────────────────────── */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
-              <CardTitle className="text-xl flex items-center gap-2">
-                <Truck className="h-5 w-5" />
-                {company ? (
-                  <Link href={`/companies/${company.id}`} className="hover:underline" data-testid="link-company">
-                    {company.name}
-                  </Link>
-                ) : "Customer"}
-              </CardTitle>
-              <CardDescription className="flex items-center gap-2 flex-wrap text-xs mt-1">
-                <Badge variant="secondary" data-testid="badge-mode">
-                  {opp.mode === "exact_load" ? "Exact load" : "Lane building"}
-                </Badge>
-                <Badge variant="outline" data-testid="badge-status">{opp.status.replace(/_/g, " ")}</Badge>
-                <span className="text-muted-foreground">
-                  Generated {new Date(opp.generatedAt).toLocaleString()}
-                </span>
-              </CardDescription>
+              <h2 className="text-base font-semibold">Ranked carriers</h2>
+              <p className="text-[12px] text-muted-foreground mt-0.5">
+                Grouped into buckets by fit. Drag to reorder within a bucket. Excluded carriers stay visible below.
+              </p>
             </div>
-            <div className="text-right text-xs text-muted-foreground">
-              <div>Loads in this opportunity</div>
-              <div className="text-2xl font-semibold tabular-nums text-foreground" data-testid="text-load-count">
-                {opp.loadCount}
-              </div>
+            <div className="relative">
+              <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={carrierSearch}
+                onChange={e => setCarrierSearch(e.target.value)}
+                placeholder="Filter carriers"
+                className="pl-8 w-56"
+                data-testid="input-carrier-search"
+              />
             </div>
           </div>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-            <div className="flex items-start gap-2">
-              <MapPin className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-              <div>
-                <div className="text-xs text-muted-foreground">Lane</div>
-                <div className="font-medium" data-testid="text-detail-lane">
-                  {fmtLane(opp.origin, opp.originState, opp.destination, opp.destinationState)}
-                </div>
-                {opp.equipmentType && (
-                  <div className="text-xs text-muted-foreground mt-0.5">{opp.equipmentType}</div>
-                )}
-              </div>
-            </div>
-            <div className="flex items-start gap-2">
-              <Calendar className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-              <div>
-                <div className="text-xs text-muted-foreground">Pickup window</div>
-                <div className="font-medium">
-                  {fmtWindow(opp.pickupWindowStart, opp.pickupWindowEnd)}
-                </div>
-              </div>
-            </div>
-            <div className="flex items-start gap-2">
-              <Info className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
-              <div>
-                <div className="text-xs text-muted-foreground">Shortlist</div>
-                <div className="font-medium" data-testid="text-shortlist-count">
-                  {includedCount} included · {totalCount - includedCount} excluded
-                </div>
-              </div>
-            </div>
-          </div>
-          {opp.notes && (
-            <div className="mt-4 rounded-md bg-muted/40 p-3 text-xs text-muted-foreground">
-              {opp.notes}
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
-      <CarrierIntelligencePanel opp={opp} customerName={company?.name ?? null} />
-
-      <Card>
-        <CardHeader className="pb-2">
-          <div className="flex items-start justify-between gap-3 flex-wrap">
-            <div>
-              <CardTitle className="text-base">Ranked carriers</CardTitle>
-              <CardDescription className="text-xs">
-                Grouped into buckets by fit. Excluded carriers stay visible so you can override.
-              </CardDescription>
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="text-xs text-muted-foreground tabular-nums" data-testid="text-outreach-summary">
-                {sentCount} sent · {respondedCount} replied · {positiveCount} positive
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={selected.size === 0}
-                onClick={() => {
-                  setScheduleAt("");
-                  setSendModalOpen(true);
-                }}
-                data-testid="button-open-send"
-              >
-                <Send className="h-4 w-4 mr-1.5" />
-                Send outreach ({selected.size})
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setSelected(prev => {
-                    if (prev.size === selectableRows.length) return new Set();
-                    return new Set(selectableRows.map(r => r.id));
-                  });
-                }}
-                disabled={selectableRows.length === 0}
-                data-testid="button-select-all"
-              >
-                {selected.size === selectableRows.length && selectableRows.length > 0 ? "Clear" : "Select all"}
-              </Button>
-              <div className="relative w-full sm:w-64">
-                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  className="pl-8"
-                  placeholder="Filter carriers"
-                  value={carrierSearch}
-                  onChange={(e) => setCarrierSearch(e.target.value)}
-                  data-testid="input-carrier-search"
-                />
-              </div>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="p-0">
           {totalCount === 0 ? (
-            (data as any)?.rankingInFlight ? (
-              <div className="py-12 text-center text-sm text-muted-foreground space-y-2" data-testid="state-ranking-in-flight">
-                <RefreshCw className="h-5 w-5 mx-auto animate-spin text-muted-foreground" />
-                <p className="font-medium">Ranking carriers…</p>
-                <p className="text-xs">
-                  Scoring catalog carriers against this lane. This usually takes 10–30 seconds.
-                </p>
-              </div>
-            ) : (
-              <div className="py-12 text-center text-sm text-muted-foreground space-y-3" data-testid="state-empty-carriers">
-                {(data as any)?.rankError ? (
+            <Card>
+              <CardContent className="py-12 text-center text-sm text-muted-foreground space-y-3" data-testid="state-empty-carriers">
+                {(data as any)?.rankingInFlight ? (
                   <>
-                    <p className="font-medium text-destructive">Ranking failed</p>
-                    <p className="text-xs">
-                      {(data as any).rankError}. Try again — transient errors often clear on the next attempt.
-                    </p>
+                    <RefreshCw className="h-5 w-5 mx-auto animate-spin" />
+                    <p className="font-medium">Ranking carriers…</p>
                   </>
                 ) : (
                   <>
                     <p className="font-medium">No carriers were ranked for this opportunity.</p>
-                    <p className="text-xs">
-                      No catalog carrier had history, region, or equipment signal strong enough to score
-                      above the exploratory floor for this lane. Try widening the catalog or importing
-                      more historical loads on this corridor.
-                    </p>
+                    <Button size="sm" variant="outline" onClick={() => rerankMutation.mutate()} disabled={rerankMutation.isPending} data-testid="button-rerank-carriers">
+                      <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${rerankMutation.isPending ? "animate-spin" : ""}`} />
+                      Try ranking again
+                    </Button>
                   </>
                 )}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => rerankMutation.mutate()}
-                  disabled={rerankMutation.isPending}
-                  data-testid="button-rerank-carriers"
-                >
-                  <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${rerankMutation.isPending ? "animate-spin" : ""}`} />
-                  {rerankMutation.isPending ? "Re-ranking…" : "Try ranking again"}
-                </Button>
-              </div>
-            )
-          ) : carriers.every(c => c.excludedReason) ? (
-            <div className="py-12 px-6 text-center text-sm text-muted-foreground space-y-3" data-testid="state-all-excluded-carriers">
-              <p className="font-medium">All {totalCount} ranked carriers were excluded by guardrails.</p>
-              <div className="text-xs flex flex-wrap gap-2 justify-center">
-                {Array.from(
-                  carriers.reduce((m, c) => {
-                    const r = c.excludedReason as FreightOpportunityExcludedReason | null;
-                    if (!r) return m;
-                    m.set(r, (m.get(r) ?? 0) + 1);
-                    return m;
-                  }, new Map<FreightOpportunityExcludedReason, number>()).entries(),
-                ).map(([reason, count]) => (
-                  <Badge key={reason} variant="outline" data-testid={`badge-exclusion-${reason}`}>
-                    {EXCLUDED_LABELS[reason] ?? reason}: {count}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          ) : Array.from(grouped.values()).every(rows => rows.length === 0) ? (
-            <div className="py-12 text-center text-sm text-muted-foreground" data-testid="state-empty-carriers-filter">
-              No carriers match "{carrierSearch}". Clear the filter to see all {totalCount}.
-            </div>
+              </CardContent>
+            </Card>
           ) : (
-            <div className="divide-y">
-              {BUCKET_ORDER.map(bucket => {
+            <>
+              {BUCKET_ORDER.map((bucket, idx) => {
                 const rows = grouped.get(bucket) ?? [];
                 if (rows.length === 0) return null;
                 return (
-                  <div key={bucket} data-testid={`bucket-${bucket}`}>
-                    <div className="flex items-center justify-between px-3 py-2 bg-muted/30">
-                      <div className="flex items-center gap-2">
-                        <Badge variant="outline" className={BUCKET_COLORS[bucket]}>
-                          {BUCKET_LABELS[bucket]}
-                        </Badge>
-                        <span className="text-xs text-muted-foreground">
-                          {BUCKET_DESCRIPTIONS[bucket]}
-                        </span>
-                      </div>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {rows.length} carrier{rows.length === 1 ? "" : "s"}
-                      </span>
-                    </div>
-                    {rows.map((row, idx) => (
-                      <CarrierRow
-                        key={row.id}
-                        row={row}
-                        rank={row.rank ?? idx + 1}
-                        included={!row.excludedReason}
-                        selected={selected.has(row.id)}
-                        onSelectChange={(rowId, sel) => {
-                          setSelected(prev => {
-                            const next = new Set(prev);
-                            if (sel) next.add(rowId); else next.delete(rowId);
-                            return next;
-                          });
-                        }}
-                        onLogOutcome={(r) => {
-                          setOutcomeRow(r);
-                          setOutcomeValue("interested_now");
-                          setOutcomeNotes("");
-                        }}
-                        isFirstInBucket={idx === 0}
-                        isLastInBucket={idx === rows.length - 1}
-                        onToggleInclude={(carrierRowId, include) => {
-                          updateCarrierMutation.mutate({
-                            carrierId: carrierRowId,
-                            fields: { excludedReason: include ? null : "rep_override" },
-                          });
-                        }}
-                        onPin={(carrierRowId, pin) => {
-                          updateCarrierMutation.mutate({
-                            carrierId: carrierRowId,
-                            fields: { bucket: pin ? "rep_added" : "exploratory" },
-                          });
-                        }}
-                        onMove={(carrierRowId, dir) => {
-                          const swapWith = rows[idx + dir];
-                          if (!swapWith) return;
-                          swapCarrierMutation.mutate({
-                            rowId: carrierRowId,
-                            otherRowId: swapWith.id,
-                          });
-                        }}
-                      />
-                    ))}
-                  </div>
+                  <BucketSection
+                    key={bucket}
+                    bucket={bucket}
+                    rows={rows}
+                    carrierById={carrierById}
+                    selected={selected}
+                    onSelectChange={onSelectChange}
+                    onLogOutcomeQuick={onLogOutcomeQuick}
+                    onMove={onMove}
+                    defaultOpen={idx === 0}
+                  />
                 );
               })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
+              <SuggestedPool
+                oppId={id}
+                selectedPoolIds={selectedPool}
+                onTogglePool={togglePool}
+                onSelectPoolIds={selectPoolIds}
+                onClearPoolIds={clearPoolIds}
+              />
+            </>
+          )}
+        </div>
+
+        {/* ── EXCLUDED ────────────────────────────────────────────────────── */}
+        {excludedRows.length > 0 && (
+          <div className="border border-border rounded-lg bg-card" data-testid="section-excluded">
+            <button
+              onClick={() => setExcludedOpen(v => !v)}
+              aria-expanded={excludedOpen}
+              className="w-full flex items-center justify-between px-4 py-2.5 hover-elevate"
+            >
+              <div className="flex items-center gap-2 text-sm">
+                {excludedOpen ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                <span className="font-medium">Excluded by guardrails</span>
+                <span className="text-muted-foreground">({excludedRows.length})</span>
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {Object.entries(
+                  excludedRows.reduce<Record<string, number>>((m, r) => {
+                    const k = r.excludedReason ?? "other";
+                    m[k] = (m[k] ?? 0) + 1;
+                    return m;
+                  }, {})
+                ).map(([reason, n]) => (
+                  <Badge key={reason} variant="outline" className="text-[10px]">
+                    {EXCLUDED_LABELS[reason as FreightOpportunityExcludedReason] ?? reason}: {n}
+                  </Badge>
+                ))}
+              </div>
+            </button>
+            {excludedOpen && (
+              <div className="border-t border-border/60 divide-y divide-border/40">
+                {excludedRows.map(r => {
+                  const carrier = carrierById.get(r.carrierId);
+                  return (
+                    <div key={r.id} className="flex items-center gap-3 px-4 py-2 text-sm" data-testid={`row-excluded-${r.id}`}>
+                      <XCircle className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="flex-1 truncate">{carrier?.name ?? "Unknown carrier"}</span>
+                      <span className="text-[11px] text-muted-foreground">
+                        {EXCLUDED_LABELS[r.excludedReason as FreightOpportunityExcludedReason] ?? r.excludedReason}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="h-12" />
+      </div>
+
+      <ActivityDrawer open={activityOpen} onClose={() => setActivityOpen(false)} audit={data?.audit ?? []} />
+
+      {/* ── BULK ACTION BAR ─────────────────────────────────────────────── */}
+      {totalSelected > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 z-30 border-t border-border bg-card shadow-lg" data-testid="bar-bulk-actions">
+          <div className="max-w-[1340px] mx-auto px-6 py-3 flex items-center gap-3 flex-wrap">
+            <span className="text-sm font-medium">
+              {totalSelected} carrier{totalSelected === 1 ? "" : "s"} selected
+            </span>
+            <span className="text-xs text-muted-foreground">
+              · {selected.size} from shortlist · {selectedPool.size} from pool
+            </span>
+            {selectedPool.size > 0 && (
+              <span className="text-[11px] text-amber-700 dark:text-amber-300 inline-flex items-center gap-1" data-testid="hint-pool-stub">
+                <Info className="h-3 w-3" /> Pool bulk-send launches next iteration — pool picks won't be included in this wave.
+              </span>
+            )}
+            <div className="ml-auto flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={() => { setSelected(new Set()); setSelectedPool(new Set()); }} data-testid="button-clear-selection">
+                Clear
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  if (selected.size === 0) {
+                    toast({
+                      title: "Pool send coming soon",
+                      description: "Pool bulk-send launches in the next iteration. Select carriers from the ranked shortlist to send a wave today.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
+                  setScheduleAt("");
+                  setSendModalOpen(true);
+                }}
+                disabled={selected.size === 0 && selectedPool.size === 0}
+                className="bg-amber-500 text-zinc-900 hover:bg-amber-400"
+                data-testid="button-send-wave"
+              >
+                <Send className="h-3.5 w-3.5 mr-1.5" />
+                {selected.size > 0
+                  ? `Send wave to ${selected.size} shortlist carrier${selected.size === 1 ? "" : "s"}`
+                  : "Send wave"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── SEND DIALOG ─────────────────────────────────────────────────── */}
       <Dialog open={sendModalOpen} onOpenChange={setSendModalOpen}>
-        <DialogContent data-testid="dialog-send-outreach">
+        <DialogContent className="max-w-2xl" data-testid="dialog-send-outreach">
           <DialogHeader>
             <DialogTitle>Send outreach</DialogTitle>
             <DialogDescription>
-              {selected.size} carrier{selected.size === 1 ? "" : "s"} selected. Templates and per-carrier subject/body
-              are rendered server-side. Guardrails are re-checked at send time — anyone newly blocked will be skipped.
+              {selected.size} carrier{selected.size === 1 ? "" : "s"} selected from shortlist. Templates render server-side. Guardrails are re-checked at send time.
             </DialogDescription>
           </DialogHeader>
           <SendModalBody
@@ -1104,9 +1434,7 @@ export default function AvailableFreightDetailPage() {
             setScheduleAt={setScheduleAt}
           />
           <DialogFooter>
-            <Button variant="ghost" onClick={() => setSendModalOpen(false)} data-testid="button-cancel-send">
-              Cancel
-            </Button>
+            <Button variant="ghost" onClick={() => setSendModalOpen(false)} data-testid="button-cancel-send">Cancel</Button>
             <Button
               onClick={() => {
                 const carrierRowIds = Array.from(selected);
@@ -1122,13 +1450,13 @@ export default function AvailableFreightDetailPage() {
         </DialogContent>
       </Dialog>
 
+      {/* ── OUTCOME DIALOG (full version, kept for backwards compat) ────── */}
       <Dialog open={!!outcomeRow} onOpenChange={(o) => !o && setOutcomeRow(null)}>
         <DialogContent data-testid="dialog-log-outcome">
           <DialogHeader>
             <DialogTitle>Log carrier response</DialogTitle>
             <DialogDescription>
-              Record what this carrier said. Positive outcomes feed back into lane-fit signals; do-not-contact and
-              decline outcomes suppress future outreach on this lane.
+              Record what this carrier said. Positive outcomes feed back into lane-fit signals.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -1144,12 +1472,7 @@ export default function AvailableFreightDetailPage() {
                   ))}
               </SelectContent>
             </Select>
-            <Textarea
-              placeholder="Notes (optional)"
-              value={outcomeNotes}
-              onChange={(e) => setOutcomeNotes(e.target.value)}
-              data-testid="textarea-outcome-notes"
-            />
+            <Textarea placeholder="Notes (optional)" value={outcomeNotes} onChange={(e) => setOutcomeNotes(e.target.value)} data-testid="textarea-outcome-notes" />
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setOutcomeRow(null)} data-testid="button-cancel-outcome">Cancel</Button>
@@ -1166,26 +1489,6 @@ export default function AvailableFreightDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {data?.audit && data.audit.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Activity</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="space-y-1.5 text-xs" data-testid="list-audit">
-              {data.audit.slice(-10).reverse().map(a => (
-                <li key={a.id} className="flex items-baseline gap-2">
-                  <span className="text-muted-foreground tabular-nums w-32 shrink-0">
-                    {new Date(a.createdAt).toLocaleString()}
-                  </span>
-                  <span className="font-medium">{a.eventType.replace(/_/g, " ")}</span>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }
