@@ -164,6 +164,8 @@ interface MyProcurementData {
     l2Hours: number;
     orgOverSlaCount: number | null;
   };
+  /** Non-fatal sub-query failures from the server. Surfaced for admins. */
+  bucketErrors?: string[];
 }
 
 interface TeamMemberOption {
@@ -788,6 +790,22 @@ export default function MyProcurementPage() {
           </div>
         ) : (
           <>
+          {canViewOthers && (data?.bucketErrors?.length ?? 0) > 0 && (
+            <div
+              className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs"
+              data-testid="banner-bucket-errors"
+            >
+              <div className="font-semibold text-amber-200 mb-1 flex items-center gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5" />
+                Some procurement data couldn't load
+              </div>
+              <ul className="list-disc pl-5 text-amber-200/90 space-y-0.5">
+                {(data?.bucketErrors ?? []).map((e, i) => (
+                  <li key={i}>{e}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           {(data?.triggeredPlays?.length ?? 0) > 0 && (
             <div className="mb-4 rounded-md border border-border/60 bg-card/40 p-3" data-testid="section-triggered-plays">
               <div className="flex items-center justify-between mb-2">

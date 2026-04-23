@@ -118,10 +118,27 @@ export function registerMyProcurementRoutes(app: Express) {
       const lanesCursor = req.query.lanesCursor as string | undefined;
       const tasksCursor = req.query.tasksCursor as string | undefined;
 
+      // Per-bucket error capture so a single failing query no longer blanks
+      // the whole queue. Buckets that fail return their safe-empty default
+      // and we surface a non-fatal `bucketErrors` array in the response so
+      // ops can see *which* sub-query broke without hunting prod logs.
+      const bucketErrors: string[] = [];
+      const noteFailure = (bucket: string, err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[my-procurement] bucket=${bucket} viewer=${viewer.id} target=${user.id} role=${viewer.role}:`, err);
+        bucketErrors.push(`${bucket}: ${msg}`);
+      };
+
       // ── 1. My lanes — prefer lane_summary_cache (lean, pre-computed), fall back to recurring_lanes ──
       // Cache path: no joins, no per-lane bench enrichment — just the pre-scored fields.
-      const vis = await getLwqVisibility(user);
-      const cacheRows = await storage.pool.query<{
+      let vis: { ownerIds: string[]; companyIds: string[] };
+      try {
+        vis = await getLwqVisibility(user);
+      } catch (visErr) {
+        noteFailure("visibility", visErr);
+        vis = { ownerIds: [user.id], companyIds: [] };
+      }
+      let cacheRows: { rows: Array<{
         lane_id: string;
         origin: string;
         origin_state: string | null;
@@ -135,7 +152,9 @@ export function registerMyProcurementRoutes(app: Express) {
         owner_user_id: string | null;
         carriers_contacted_count: number;
         has_cache: boolean;
-      }>(
+      }> } = { rows: [] };
+      try {
+        cacheRows = await storage.pool.query(
         `SELECT
            lsc.lane_id,
            lsc.origin,
@@ -163,6 +182,10 @@ export function registerMyProcurementRoutes(app: Express) {
         // collaborator (param 3). org_id is required as a tenant guard.
         [vis.ownerIds, user.organizationId, vis.companyIds]
       );
+      } catch (cacheErr) {
+        noteFailure("lwq.cache", cacheErr);
+        cacheRows = { rows: [] };
+      }
 
       let lwqLanesAll: Array<{
         laneId: string;
@@ -196,6 +219,7 @@ export function registerMyProcurementRoutes(app: Express) {
         }));
       } else {
         // Fall back to recurring_lanes when cache is empty (first run)
+        try {
         const fallbackRows = await storage.pool.query<{
           id: string;
           origin: string;
@@ -248,6 +272,10 @@ export function registerMyProcurementRoutes(app: Express) {
           ownerUserId: r.owner_user_id,
           carriersContactedCount: r.carriers_contacted_count ?? 0,
         }));
+        } catch (fbErr) {
+          noteFailure("lwq.fallback", fbErr);
+          lwqLanesAll = [];
+        }
       }
 
       // Apply cursor pagination for lwqLanes (keyset by laneScore DESC, laneId)
@@ -268,7 +296,7 @@ export function registerMyProcurementRoutes(app: Express) {
         : null;
 
       // ── 2. Award carrier-procurement tasks assigned to me (lean) ──────────
-      const taskRows = await storage.pool.query<{
+      let taskRows: { rows: Array<{
         id: string;
         title: string;
         status: string;
@@ -276,7 +304,9 @@ export function registerMyProcurementRoutes(app: Express) {
         company_id: string | null;
         created_at: string | null;
         attached_lane_data: unknown;
-      }>(
+      }> } = { rows: [] };
+      try {
+        taskRows = await storage.pool.query(
         `SELECT
            t.id,
            t.title,
@@ -298,6 +328,10 @@ export function registerMyProcurementRoutes(app: Express) {
          ORDER BY t.created_at DESC`,
         [user.id, user.organizationId]
       );
+      } catch (taskErr) {
+        noteFailure("awardTasks.query", taskErr);
+        taskRows = { rows: [] };
+      }
 
       // Parse award task metadata — lean shape only (no replySummary, no full lane object)
       type LeanAwardTask = {
@@ -342,6 +376,7 @@ export function registerMyProcurementRoutes(app: Express) {
       const tasksWithOD = rawTasks.filter((t) => t.origin && t.destination);
 
       if (tasksWithOD.length > 0) {
+        try {
         const pairMap = new Map<string, { normOrigin: string; normDest: string }>();
         for (const t of tasksWithOD) {
           const no = normalizeLaneLocation(t.origin!);
@@ -396,6 +431,9 @@ export function registerMyProcurementRoutes(app: Express) {
           } else {
             task.matchedLaneId = candidates[0].id;
           }
+        }
+        } catch (lookupErr) {
+          noteFailure("awardTasks.laneLookup", lookupErr);
         }
       }
 
@@ -500,7 +538,30 @@ export function registerMyProcurementRoutes(app: Express) {
             eq(freightOpportunities.delegatedToUserId, user.id),
           );
 
-      const freightOppRows = await db.select({
+      let freightOppRows: Array<{
+        id: string;
+        companyId: string;
+        origin: string;
+        originState: string | null;
+        destination: string;
+        destinationState: string | null;
+        equipmentType: string | null;
+        pickupWindowStart: string | null;
+        pickupWindowEnd: string | null;
+        loadCount: number | null;
+        status: string;
+        urgencyScore: number | null;
+        ownerUserId: string | null;
+        delegatedToUserId: string | null;
+        approvedAt: Date | string | null;
+        approvedById: string | null;
+        templateOverrideSubject: string | null;
+        templateOverrideBody: string | null;
+        sourceFileName: string | null;
+        generatedAt: Date | string | null;
+      }> = [];
+      try {
+      freightOppRows = await db.select({
         id: freightOpportunities.id,
         companyId: freightOpportunities.companyId,
         origin: freightOpportunities.origin,
@@ -548,25 +609,37 @@ export function registerMyProcurementRoutes(app: Express) {
         // list with pagination lives at /available-freight; this endpoint is
         // the rep's "today" surface, not their archive.
         .limit(100);
+      } catch (foErr) {
+        noteFailure("availableFreight.query", foErr);
+        freightOppRows = [];
+      }
 
       const companyIds = Array.from(new Set(freightOppRows.map(r => r.companyId)));
       const companyMap = new Map<string, string>();
       if (companyIds.length > 0) {
-        const cos = await storage.getCompaniesByIds(companyIds, user.organizationId);
-        for (const c of cos) companyMap.set(c.id, c.name);
+        try {
+          const cos = await storage.getCompaniesByIds(companyIds, user.organizationId);
+          for (const c of cos) companyMap.set(c.id, c.name);
+        } catch (cmErr) {
+          noteFailure("availableFreight.companies", cmErr);
+        }
       }
 
       // Pull awaiting-approval columns alongside the existing select so we
       // can compute SLA state without rewriting the projection above.
       const slaRowsById = new Map<string, { awaitingSince: Date | null; l1: Date | null; l2: Date | null }>();
       if (freightOppRows.length > 0) {
-        const slaRows = await db.select({
-          id: freightOpportunities.id,
-          awaitingSince: freightOpportunities.awaitingApprovalSince,
-          l1: freightOpportunities.slaNotifiedL1At,
-          l2: freightOpportunities.slaNotifiedL2At,
-        }).from(freightOpportunities).where(inArray(freightOpportunities.id, freightOppRows.map(r => r.id)));
-        for (const s of slaRows) slaRowsById.set(s.id, { awaitingSince: s.awaitingSince, l1: s.l1, l2: s.l2 });
+        try {
+          const slaRows = await db.select({
+            id: freightOpportunities.id,
+            awaitingSince: freightOpportunities.awaitingApprovalSince,
+            l1: freightOpportunities.slaNotifiedL1At,
+            l2: freightOpportunities.slaNotifiedL2At,
+          }).from(freightOpportunities).where(inArray(freightOpportunities.id, freightOppRows.map(r => r.id)));
+          for (const s of slaRows) slaRowsById.set(s.id, { awaitingSince: s.awaitingSince, l1: s.l1, l2: s.l2 });
+        } catch (slaErr) {
+          noteFailure("availableFreight.sla", slaErr);
+        }
       }
 
       // Task #365 — latest customer signal per company within last 7 days.
@@ -580,6 +653,7 @@ export function registerMyProcurementRoutes(app: Express) {
         ageHours: number;
       }>();
       if (companyIds.length > 0) {
+        try {
         // Hard-isolate by joining email_signals → email_messages and filtering
         // on the message's org_id. email_signals has no org_id of its own;
         // a signal's "owner" org is the org that ingested its parent message.
@@ -613,12 +687,15 @@ export function registerMyProcurementRoutes(app: Express) {
             ageHours: Number(((Date.now() - at.getTime()) / 3600000).toFixed(1)),
           });
         }
+        } catch (sigErr) {
+          noteFailure("availableFreight.signals", sigErr);
+        }
       }
 
       const availableFreight = freightOppRows.map(r => {
         const sla = slaRowsById.get(r.id);
         const slaInfo = computeSlaState({
-          approvedAt: r.approvedAt,
+          approvedAt: r.approvedAt instanceof Date ? r.approvedAt : (r.approvedAt ? new Date(r.approvedAt) : null),
           status: r.status,
           awaitingApprovalSince: sla?.awaitingSince ?? null,
         });
@@ -662,7 +739,7 @@ export function registerMyProcurementRoutes(app: Express) {
         try {
           overSlaCount = await countOverSlaForOrg(user.organizationId);
         } catch (slaErr) {
-          console.error("[my-procurement] over-SLA count failed:", slaErr);
+          noteFailure("overSlaCount", slaErr);
         }
       }
 
@@ -682,6 +759,9 @@ export function registerMyProcurementRoutes(app: Express) {
           l2Hours: SLA_L2_HOURS,
           orgOverSlaCount: overSlaCount,
         },
+        // Non-fatal sub-query failures so the UI can stay loaded even if a
+        // single bucket choked. Empty array = everything succeeded.
+        bucketErrors,
       });
     } catch (err) {
       console.error("[my-procurement]", err);
