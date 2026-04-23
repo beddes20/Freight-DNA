@@ -18,6 +18,7 @@
 import type { IStorage } from "./storage";
 import { CARRIER_DAILY_BUDGET_CONFIG } from "./storage";
 import { rankCarriersForLane, HIGH_FREQUENCY_CONFIG, type RankedCarrier } from "./carrierRankingService";
+import { getLaneCoverageProfile } from "./laneCoverageService";
 import type {
   Carrier,
   CompanyOutreachPolicy,
@@ -318,8 +319,34 @@ export async function rankCarriersForOpportunity(
     // Best-effort — proceed without the customer-history boost.
   }
 
-  const syntheticLane: RecurringLane = {
-    id: opportunity.recurringLaneId ?? `synthetic-${opportunity.id}`,
+  // Resolve to a real RecurringLane when possible so the ranker uses the same
+  // weighted inputs as the Lane Work Queue: per-lane carrier bench (prior
+  // outreach outcomes + recent-contact suppression) and lane coverage profile
+  // (incumbents / claimed carriers). Without these the ranker falls back to
+  // catalog-only scoring, which is why Available Freight shortlists looked
+  // thinner than their LWQ counterparts on the same corridor.
+  let resolvedLane: RecurringLane | null = null;
+  try {
+    if (opportunity.recurringLaneId) {
+      const l = await storage.getRecurringLane(opportunity.recurringLaneId);
+      if (l && l.orgId === opportunity.orgId) resolvedLane = l;
+    }
+    if (!resolvedLane) {
+      const lanes = await storage.getRecurringLanesByCompany(opportunity.companyId);
+      const norm = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
+      const match = lanes.find(l =>
+        norm(l.origin) === norm(opportunity.origin) &&
+        norm(l.destination) === norm(opportunity.destination) &&
+        norm(l.equipmentType) === norm(opportunity.equipmentType),
+      );
+      if (match) resolvedLane = match;
+    }
+  } catch (e) {
+    console.warn(`[pafoe] resolvedLane lookup failed for opp ${opportunity.id}:`, (e as Error)?.message ?? e);
+  }
+
+  const syntheticLane: RecurringLane = resolvedLane ?? {
+    id: `synthetic-${opportunity.id}`,
     orgId: opportunity.orgId,
     companyId: opportunity.companyId,
     companyName: lookupCompanyName,
@@ -351,7 +378,30 @@ export async function rankCarriersForOpportunity(
     updatedAt: opportunity.generatedAt,
   };
 
-  const ranked = await rankCarriersForLane(syntheticLane, storage);
+  // Fetch the same signals the LWQ carrier-suggestions endpoint uses so we run
+  // through the identical weighted pipeline. Each is best-effort — if any
+  // lookup fails the ranker degrades gracefully.
+  let bench: Awaited<ReturnType<IStorage["getLaneCarrierBench"]>> | undefined;
+  let coverageProfile: Awaited<ReturnType<typeof getLaneCoverageProfile>>["profile"] | null = null;
+  let coverageCarriers: Awaited<ReturnType<typeof getLaneCoverageProfile>>["carriers"] = [];
+  if (resolvedLane) {
+    try {
+      bench = await storage.getLaneCarrierBench(resolvedLane.id);
+    } catch (e) {
+      console.warn(`[pafoe] bench lookup failed for lane ${resolvedLane.id}:`, (e as Error)?.message ?? e);
+    }
+    try {
+      const prof = await getLaneCoverageProfile(resolvedLane, storage);
+      coverageProfile = prof.profile;
+      if (!coverageProfile?.broadenSearchActive) {
+        coverageCarriers = prof.carriers;
+      }
+    } catch (e) {
+      console.warn(`[pafoe] coverage profile lookup failed for lane ${resolvedLane.id}:`, (e as Error)?.message ?? e);
+    }
+  }
+
+  const ranked = await rankCarriersForLane(syntheticLane, storage, bench, coverageProfile, coverageCarriers);
   const ctx = await buildEligibilityContext(storage, opportunity.orgId, policy);
   ctx.repOverrideCarrierIds = opts.repAddedCarrierIds;
 
