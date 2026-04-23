@@ -141,10 +141,17 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       // Backfill: rows imported via the Available Freight workbook never went
       // through generateOpportunitiesForCompany, so they may have no carrier
       // shortlist persisted. Lazily rank-on-first-view so the panel populates.
+      // Wrapped in a 12s timeout so a slow carrier-ranker never hangs the
+      // detail page render — the user can always click "Try ranking again".
       try {
-        await ensureShortlistRanked(storage, opp);
+        await Promise.race([
+          ensureShortlistRanked(storage, opp),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("ensureShortlistRanked timeout")), 12_000),
+          ),
+        ]);
       } catch (e) {
-        console.warn(`[freight-opps] ensureShortlistRanked failed for ${opp.id}:`, e);
+        console.warn(`[freight-opps] ensureShortlistRanked skipped for ${opp.id}:`, (e as Error)?.message ?? e);
       }
       const [carriers, audit] = await Promise.all([
         storage.listFreightOpportunityCarriers(opp.id),
