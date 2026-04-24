@@ -5337,6 +5337,34 @@ export const insertEmailResponseTimeSlaSettingsSchema = createInsertSchema(email
 export type InsertEmailResponseTimeSlaSettings = z.infer<typeof insertEmailResponseTimeSlaSettingsSchema>;
 export type EmailResponseTimeSlaSettings = typeof emailResponseTimeSlaSettings.$inferSelect;
 
+// ── Email Reply Latency Regression settings (Task #611) ───────────────────────
+// Per-org configurable knobs for the weekly regression detector that compares
+// each rep's most recent full ISO-week p90 reply latency against the trailing
+// baseline and fires an in-app coaching nudge when it gets noticeably worse.
+//
+// Defaults: 4-week trailing baseline, p90 must regress by ≥ 25%, and the rep
+// must have at least 10 replies in the most recent week (avoids screaming at
+// reps with three lucky-or-unlucky responses). Disabled-by-default flag lets
+// orgs trial the feature in a single mailbox before turning it on globally.
+export const emailReplyLatencyRegressionSettings = pgTable(
+  "email_reply_latency_regression_settings",
+  {
+    organizationId: varchar("organization_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
+    enabled: boolean("enabled").notNull().default(true),
+    lookbackWeeks: integer("lookback_weeks").notNull().default(4),
+    p90RegressionPct: integer("p90_regression_pct").notNull().default(25),
+    minReplies: integer("min_replies").notNull().default(10),
+    businessHours: boolean("business_hours").notNull().default(true),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+    updatedBy: varchar("updated_by").references(() => users.id, { onDelete: "set null" }),
+  },
+);
+export const insertEmailReplyLatencyRegressionSettingsSchema = createInsertSchema(emailReplyLatencyRegressionSettings).omit({
+  updatedAt: true,
+});
+export type InsertEmailReplyLatencyRegressionSettings = z.infer<typeof insertEmailReplyLatencyRegressionSettingsSchema>;
+export type EmailReplyLatencyRegressionSettings = typeof emailReplyLatencyRegressionSettings.$inferSelect;
+
 // ── Quote Sender Mappings (Customer Quotes #3) ────────────────────────────────
 // Sender-domain learning. When a rep manually moves a quote out of the
 // "Unknown — needs review" bucket into a real customer, we record the

@@ -32,7 +32,12 @@ import {
   type SlaTarget,
 } from "../services/emailResponseTimeAnalyticsService";
 import { db } from "../storage";
-import { emailResponseTimeSlaSettings, emailConversationThreads, users } from "@shared/schema";
+import { emailResponseTimeSlaSettings, emailReplyLatencyRegressionSettings, emailConversationThreads, users } from "@shared/schema";
+import {
+  DEFAULT_REGRESSION_CONFIG,
+  evaluateOrgRegressions,
+  loadRegressionConfig,
+} from "../services/replyLatencyRegressionService";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 
@@ -378,6 +383,81 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
     } catch (err) {
       console.error("[email-response-time/sla PUT] error:", err);
       res.status(500).json({ error: "Failed to save SLA targets" });
+    }
+  });
+
+  // ── /regression-config: per-org thresholds for the weekly p90 regression
+  //    nudge (Task #611). Admins / managers can read it; only ALLOWED_ROLES
+  //    may PUT. Falls back to DEFAULT_REGRESSION_CONFIG when the row is
+  //    missing so the UI can render the form pre-populated.
+  const regressionConfigSchema = z.object({
+    enabled: z.boolean(),
+    lookbackWeeks: z.number().int().min(1).max(12),
+    p90RegressionPct: z.number().int().min(1).max(1000),
+    minReplies: z.number().int().min(1).max(1000),
+    businessHours: z.boolean(),
+  });
+
+  app.get("/api/analytics/email-response-time/regression-config", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const config = await loadRegressionConfig(user.organizationId);
+      res.json({ defaults: DEFAULT_REGRESSION_CONFIG, config });
+    } catch (err) {
+      console.error("[email-response-time/regression-config GET] error:", err);
+      res.status(500).json({ error: "Failed to load regression config" });
+    }
+  });
+
+  app.put("/api/analytics/email-response-time/regression-config", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!ALLOWED_ROLES.includes(user.role)) return res.status(403).json({ error: "Forbidden" });
+      const parsed = regressionConfigSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      await db.insert(emailReplyLatencyRegressionSettings).values({
+        organizationId: user.organizationId,
+        enabled: parsed.data.enabled,
+        lookbackWeeks: parsed.data.lookbackWeeks,
+        p90RegressionPct: parsed.data.p90RegressionPct,
+        minReplies: parsed.data.minReplies,
+        businessHours: parsed.data.businessHours,
+        updatedBy: user.id,
+      }).onConflictDoUpdate({
+        target: emailReplyLatencyRegressionSettings.organizationId,
+        set: {
+          enabled: parsed.data.enabled,
+          lookbackWeeks: parsed.data.lookbackWeeks,
+          p90RegressionPct: parsed.data.p90RegressionPct,
+          minReplies: parsed.data.minReplies,
+          businessHours: parsed.data.businessHours,
+          updatedBy: user.id,
+          updatedAt: new Date(),
+        },
+      });
+      const config = await loadRegressionConfig(user.organizationId);
+      res.json({ ok: true, config });
+    } catch (err) {
+      console.error("[email-response-time/regression-config PUT] error:", err);
+      res.status(500).json({ error: "Failed to save regression config" });
+    }
+  });
+
+  // ── /regression-preview: dry-run the detector against the org's current
+  //    history so admins can see what would have fired this week. Mirrors
+  //    the scheduler's evaluation but never writes notifications.
+  app.get("/api/analytics/email-response-time/regression-preview", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!ALLOWED_ROLES.includes(user.role)) return res.status(403).json({ error: "Forbidden" });
+      const result = await evaluateOrgRegressions(user.organizationId);
+      res.json(result);
+    } catch (err) {
+      console.error("[email-response-time/regression-preview] error:", err);
+      res.status(500).json({ error: "Failed to evaluate regressions" });
     }
   });
 

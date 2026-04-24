@@ -28,6 +28,7 @@ import { initNbaPhase1Scheduler } from "./nbaPhase1Scheduler";
 import { initSonarDailyRefreshScheduler } from "./sonarDailyRefreshScheduler";
 import { initMarketSignalScheduler } from "./marketSignalScheduler";
 import { initMomentumDropScheduler } from "./momentumDropScheduler";
+import { initReplyLatencyRegressionScheduler } from "./replyLatencyRegressionScheduler";
 import { initConversationArchiveScheduler } from "./conversationArchiveScheduler";
 import { initSuggestionFeedbackLearningScheduler } from "./suggestionFeedbackLearningScheduler";
 import { initPafoeWaveScheduler } from "./pafoeWaveScheduler";
@@ -452,6 +453,7 @@ process.on("uncaughtException", (err) => {
         initSonarDailyRefreshScheduler();
         initMarketSignalScheduler();
         initMomentumDropScheduler();
+        initReplyLatencyRegressionScheduler();
         initConversationArchiveScheduler();
         initSuggestionFeedbackLearningScheduler();
       }, 2000);
