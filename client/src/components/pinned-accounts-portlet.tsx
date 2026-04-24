@@ -7,6 +7,7 @@ import { Star } from "lucide-react";
 import { usePinnedCompanies } from "@/hooks/use-pinned-companies";
 import { GROWTH_BAND_STYLES } from "@/components/account-growth-portlet";
 import type { Company } from "@shared/schema";
+import { formatCustomerName } from "@shared/laneFormatters";
 
 type GrowthScoreRow = { companyId: string; score: number; band: string; bandLabel: string };
 
@@ -69,7 +70,7 @@ export function PinnedAccountsPortlet() {
                 data-testid={`pinned-company-card-${company.id}`}
               >
                 <div className="flex items-center justify-between rounded-md border px-3 py-2 hover:bg-muted/50 cursor-pointer transition-colors group">
-                  <span className="text-sm font-medium truncate group-hover:text-primary transition-colors">{company.name}</span>
+                  <span className="text-sm font-medium truncate group-hover:text-primary transition-colors">{formatCustomerName(company.name)}</span>
                   {gs && style && (
                     <Badge
                       className={`ml-2 shrink-0 text-xs border ${style.bg} ${style.text} ${style.border}`}

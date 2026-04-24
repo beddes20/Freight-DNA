@@ -40,6 +40,7 @@ function nextLevelRole(role: string): { fromRole: string; toRole: string; label:
 }
 
 import { matchRepName, fmtMoney } from "@/lib/rep-utils";
+import { formatCustomerName } from "@shared/laneFormatters";
 import { CopilotActionsCard } from "@/components/dna-copilot/copilot-actions-card";
 
 interface AccountSummaryRow {
@@ -919,9 +920,9 @@ export default function RepReportPage() {
                         <td className="px-4 py-2.5">
                           <div className="flex items-center gap-2">
                             <div className="h-6 w-6 rounded bg-primary/10 flex items-center justify-center text-primary text-[10px] font-bold shrink-0">
-                              {row.customerName[0]}
+                              {formatCustomerName(row.customerName)[0]}
                             </div>
-                            <span className="text-sm font-medium text-foreground truncate max-w-[180px]">{row.customerName}</span>
+                            <span className="text-sm font-medium text-foreground truncate max-w-[180px]">{formatCustomerName(row.customerName)}</span>
                           </div>
                         </td>
                         <td className="px-3 py-2.5 text-center">

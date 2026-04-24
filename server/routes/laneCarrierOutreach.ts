@@ -39,6 +39,7 @@ import { getLaneCoverageProfile, shouldUseIncumbentFirstFlow } from "../laneCove
 import { insertCarrierSchema, insertLaneCarrierInterestSchema, carrierClaimedLanes, carrierOutreachLogs, recurringLanes, type InsertCarrier, type Carrier, type EmailMessage, type EmailConversationThread } from "@shared/schema";
 import { applyMessageToThread } from "../services/conversationWaitingStateService";
 import { formatLaneDisplay, formatWeeklyLoadRange, normalizeEquipmentType, buildFallbackEmail as buildFallbackEmailHelper } from "../laneOutreachEmailBuilder";
+import { formatCustomerName } from "@shared/laneFormatters";
 import { z } from "zod";
 import { inArray, eq, and, gte, lte, desc, isNull, or } from "drizzle-orm";
 import { sendEmail } from "../emailService";
@@ -971,7 +972,9 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         destinationState: destinationState || null,
         equipmentType: equipmentType || null,
         avgLoadsPerWeek: avgLoadsPerWeek != null ? String(avgLoadsPerWeek) : null,
-        companyName: companyName || null,
+        // Normalize the customer label at write time so manually-built lanes
+        // never reintroduce the raw "code - name" pattern in the LWQ.
+        companyName: companyName ? formatCustomerName(companyName) : null,
         isEligible: true,
         eligibilityConfidence: "high",
         isManual: true,
@@ -1128,6 +1131,11 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     // Owner-editable fields — available to managers and owners
     for (const field of OWNER_MUTABLE_FIELDS) {
       if (field in req.body) updates[field] = req.body[field] ?? null;
+    }
+    // Normalize the customer label so manual edits never reintroduce
+    // the raw "code - name" TMS pattern.
+    if (typeof updates.companyName === "string" && updates.companyName.trim()) {
+      updates.companyName = formatCustomerName(updates.companyName);
     }
 
     // Admin-only fields — silently ignored for non-managers

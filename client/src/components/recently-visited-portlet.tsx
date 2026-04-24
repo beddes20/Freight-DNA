@@ -3,6 +3,7 @@ import { Clock, Building2, ChevronRight } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { RecentlyVisitedEntry } from "@/hooks/use-recently-visited";
+import { formatCustomerName } from "@shared/laneFormatters";
 
 function MomentumBadge({ label }: { label?: string }) {
   if (!label) return null;
@@ -47,7 +48,7 @@ export function RecentlyVisitedPortlet({ entries }: RecentlyVisitedPortletProps)
               <Link key={entry.companyId} href={`/companies/${entry.companyId}`} data-testid={`recently-visited-${entry.companyId}`}>
                 <div className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/50 transition-colors cursor-pointer group">
                   <Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                  <span className="flex-1 text-sm font-medium truncate group-hover:text-foreground">{entry.name}</span>
+                  <span className="flex-1 text-sm font-medium truncate group-hover:text-foreground">{formatCustomerName(entry.name)}</span>
                   {entry.momentumLabel && <MomentumBadge label={entry.momentumLabel} />}
                   <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />
                 </div>

@@ -16,7 +16,7 @@ import { useLocation, useSearch, Link } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Eye, X } from "lucide-react";
-import { formatLaneDisplay, normalizeEquipmentType } from "@shared/laneFormatters";
+import { formatLaneDisplay, normalizeEquipmentType, formatCustomerName } from "@shared/laneFormatters";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -386,7 +386,7 @@ function LwqLaneCard({ item, onResolve, readOnly }: { item: LwqLane; onResolve: 
           {item.companyName && (
             <span className="flex items-center gap-1">
               <Building2 className="w-3 h-3" />
-              {item.companyName}
+              {formatCustomerName(item.companyName)}
             </span>
           )}
           <span className="flex items-center gap-1">
@@ -509,7 +509,7 @@ function AwardTaskCard({ item, onClose, readOnly }: { item: AwardTask; onClose: 
           {item.customerName && (
             <span className="flex items-center gap-1">
               <Building2 className="w-3 h-3" />
-              {item.customerName}
+              {formatCustomerName(item.customerName)}
             </span>
           )}
           {item.equipmentType && (
@@ -1611,7 +1611,7 @@ function AvailableFreightCard({
             <div className="flex items-center gap-2 flex-wrap">
               <Package className="w-4 h-4 text-primary shrink-0" />
               <span className="font-medium" data-testid={`text-customer-${item.id}`}>
-                {item.companyName ?? "Unknown customer"}
+                {item.companyName ? formatCustomerName(item.companyName) : "Unknown customer"}
               </span>
               {item.isDelegatedToMe && (
                 <Badge variant="secondary" className="text-[10px]">Delegated to you</Badge>

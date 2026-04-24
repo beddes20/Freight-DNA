@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { formatCustomerName } from "@shared/laneFormatters";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -804,7 +805,7 @@ export default function CustomerQuotesPage(): JSX.Element {
                           data-testid={`stale-followup-${s.quoteId}`}
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <span className="text-[11px] font-semibold text-foreground truncate">{s.customerName}</span>
+                            <span className="text-[11px] font-semibold text-foreground truncate">{formatCustomerName(s.customerName)}</span>
                             <span className="text-[10px] text-amber-700 dark:text-amber-300 shrink-0">{overdueLabel} late</span>
                           </div>
                           <div className="text-[10px] text-muted-foreground mt-0.5 truncate">{s.lane}</div>
@@ -939,7 +940,7 @@ function CustomerCombobox({ customers, value, onChange }: { customers: Customer[
           className="h-8 w-[200px] justify-between bg-card border-border text-xs font-normal"
           data-testid="combobox-customer"
         >
-          <span className="truncate">{selected?.name ?? "All customers"}</span>
+          <span className="truncate">{selected?.name ? formatCustomerName(selected.name) : "All customers"}</span>
           <ChevronsUpDown className="ml-1 h-3.5 w-3.5 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
@@ -955,7 +956,7 @@ function CustomerCombobox({ customers, value, onChange }: { customers: Customer[
               {customers.map(c => (
                 <CommandItem key={c.id} value={c.name} onSelect={() => { onChange(c.id); setOpen(false); }} data-testid={`combobox-customer-item-${c.id}`}>
                   <Check className={`mr-2 h-3.5 w-3.5 ${value === c.id ? "opacity-100" : "opacity-0"}`} />
-                  <span className="text-xs">{c.name}</span>
+                  <span className="text-xs">{formatCustomerName(c.name)}</span>
                   {c.segment && <span className="ml-auto text-[10px] text-muted-foreground">{c.segment}</span>}
                 </CommandItem>
               ))}
@@ -1039,7 +1040,7 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
                 style={{ height: ROW_HEIGHT }}
                 data-testid={`row-quote-${q.id}`}>
                 <td className="px-2 whitespace-nowrap text-foreground/90">{new Date(q.requestDate).toLocaleDateString()}</td>
-                <td className="px-2 whitespace-nowrap text-foreground font-medium">{q.customerName}</td>
+                <td className="px-2 whitespace-nowrap text-foreground font-medium">{formatCustomerName(q.customerName)}</td>
                 <td className="px-2 whitespace-nowrap text-foreground/90">{q.originCity}, {q.originState}</td>
                 <td className="px-2 whitespace-nowrap text-foreground/90">{q.destCity}, {q.destState}</td>
                 <td className="px-2 whitespace-nowrap text-muted-foreground">{q.equipment}</td>
@@ -1095,7 +1096,7 @@ function CustomerPerformancePanel({ cp }: { cp: CustomerPerformance }): JSX.Elem
   const winRate = total > 0 ? (cp.winCount / total) * 100 : 0;
   return (
     <Card className="bg-card border-border" data-testid="customer-performance-panel">
-      <CardHeader className="py-3 px-4"><CardTitle className="text-sm text-foreground">Customer Performance — {cp.customer.name}</CardTitle></CardHeader>
+      <CardHeader className="py-3 px-4"><CardTitle className="text-sm text-foreground">Customer Performance — {formatCustomerName(cp.customer.name)}</CardTitle></CardHeader>
       <CardContent className="px-4 pb-4 grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Win/Loss</div>
@@ -1223,7 +1224,7 @@ function AttractivenessModule({ items }: { items: AttractivenessItem[] }): JSX.E
         {items.slice(0, 12).map(item => (
           <div key={item.customer + item.lane} className="rounded p-2 bg-muted/40 flex items-start justify-between gap-2" data-testid={`attract-${item.customer}-${item.lane}`}>
             <div className="min-w-0">
-              <div className="text-xs text-foreground truncate">{item.customer}</div>
+              <div className="text-xs text-foreground truncate">{formatCustomerName(item.customer)}</div>
               <div className="text-[10px] text-muted-foreground truncate">{item.lane}</div>
             </div>
             <div className="text-right shrink-0">
@@ -1647,7 +1648,7 @@ function QuoteEditForm({ quote, customers, reps, carriers, reasons, draft, onCha
         <FormCol label="Customer">
           <Select value={get("customerId", quote.customerId)} onValueChange={(v) => set("customerId", v)}>
             <SelectTrigger className="h-8 bg-background border-border text-xs" data-testid="edit-customer"><SelectValue /></SelectTrigger>
-            <SelectContent>{customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+            <SelectContent>{customers.map(c => <SelectItem key={c.id} value={c.id}>{formatCustomerName(c.name)}</SelectItem>)}</SelectContent>
           </Select>
         </FormCol>
         <FormCol label="Rep">
@@ -1795,7 +1796,7 @@ function NewQuoteDialog({ open, onOpenChange, customers, reps, onSubmit, isSubmi
           <FormCol label="Customer *">
             <Select value={form.customerId} onValueChange={(v) => upd("customerId", v)}>
               <SelectTrigger className="h-9 bg-background border-border" data-testid="new-customer"><SelectValue placeholder="Select customer" /></SelectTrigger>
-              <SelectContent>{customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+              <SelectContent>{customers.map(c => <SelectItem key={c.id} value={c.id}>{formatCustomerName(c.name)}</SelectItem>)}</SelectContent>
             </Select>
           </FormCol>
           <FormCol label="Rep">

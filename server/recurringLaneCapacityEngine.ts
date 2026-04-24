@@ -10,6 +10,7 @@
 
 import type { IStorage } from "./storage";
 import type { FinancialUpload } from "@shared/schema";
+import { formatCustomerName } from "@shared/laneFormatters";
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -344,7 +345,11 @@ export async function identifyRecurringLanes(
       destinationState: lane.destinationState,
       equipmentType: lane.equipmentType,
       companyId: matchedCompany?.id ?? null,
-      companyName: matchedCompany?.name ?? lane.companyNorm,
+      // Persist a display-ready company name so downstream caches/reads
+      // (lane_summary_cache, LWQ, etc.) never surface the raw
+      // "code - name" TMS label. Idempotent for already-clean names from
+      // the companies table.
+      companyName: formatCustomerName(matchedCompany?.name ?? lane.companyNorm),
       avgLoadsPerWeek: Math.round(avgLoadsPerWeek * 10) / 10,
       weeksActive,
       weeklyBreakdown: Object.fromEntries(lane.weeks),

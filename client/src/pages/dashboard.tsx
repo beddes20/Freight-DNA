@@ -39,6 +39,7 @@ import OneOnOnePortlet from "@/components/one-on-one-portlet";
 import InternalCommsPortlet from "@/components/internal-comms-portlet";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint, Notification, LaneCarrier } from "@shared/schema";
+import { formatCustomerName } from "@shared/laneFormatters";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, fileToBase64, type PendingFile } from "@/components/file-attachment";
 import { LmCareerPanel } from "@/components/lm-career-panel";
 import { SonarMarketPulsePortlet } from "@/components/sonar-market-pulse";
@@ -801,7 +802,8 @@ export default function Dashboard() {
   });
 
   const getUserName = (userId: string) => teamMembers.find(u => u.id === userId)?.name || "";
-  const getCompanyName = (companyId: string | null) => companyId ? companies?.find(c => c.id === companyId)?.name || "" : "";
+  // Apply customer-name cleaner so legacy "code - name" rows render cleanly even without a DB backfill.
+  const getCompanyName = (companyId: string | null) => companyId ? formatCustomerName(companies?.find(c => c.id === companyId)?.name || "") : "";
 
   const totalFreightSpend = contacts?.reduce((acc, c) => {
     return acc + (c.freightSpend ? parseFloat(c.freightSpend) : 0);
@@ -1564,7 +1566,7 @@ export default function Dashboard() {
                       <Badge className={`text-xs font-normal border ${priorityColors[item.priority] ?? priorityColors.medium}`}>
                         {item.priority === "high" ? "🔴" : item.priority === "low" ? "🟢" : "🟡"} {item.priority}
                       </Badge>
-                      <span className="font-medium text-sm">{item.companyName ?? "Account"}</span>
+                      <span className="font-medium text-sm">{item.companyName ? formatCustomerName(item.companyName) : "Account"}</span>
                       {item.acknowledged && (
                         <Badge variant="secondary" className="text-xs font-normal ml-auto">
                           <CheckCircle2 className="h-3 w-3 mr-1 text-green-500" />Acknowledged
@@ -1797,7 +1799,7 @@ export default function Dashboard() {
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="text-xs font-bold text-muted-foreground w-5 shrink-0">#{idx + 1}</span>
                     <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">{item.companyName}</p>
+                      <p className="text-sm font-medium truncate">{formatCustomerName(item.companyName)}</p>
                       <p className="text-xs text-muted-foreground">
                         {item.hasRfp
                           ? `${item.currentLoads.toLocaleString()} of ${item.rfpVolume!.toLocaleString()} RFP loads captured`
@@ -1839,7 +1841,7 @@ export default function Dashboard() {
               <Link key={item.companyId} href={`/companies/${item.companyId}`}>
                 <div className="flex items-center justify-between gap-3 p-2 rounded-md hover:bg-muted/50 transition-colors cursor-pointer" data-testid={`churn-risk-row-${item.companyId}`}>
                   <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">{item.companyName}</p>
+                    <p className="text-sm font-medium truncate">{formatCustomerName(item.companyName)}</p>
                     <p className="text-xs text-muted-foreground">
                       {item.curLoads} loads this month vs {item.priorLoads} last month
                       {item.repName ? ` · ${item.repName}` : ""}
@@ -2568,7 +2570,7 @@ export default function Dashboard() {
                         {ff.assignedToName ?? ff.assignedToUserId}
                       </span>
                       {ff.companyName && (
-                        <span className="text-xs text-muted-foreground">· {ff.companyName}</span>
+                        <span className="text-xs text-muted-foreground">· {formatCustomerName(ff.companyName)}</span>
                       )}
                       {ff.lever && (
                         <span className="text-[10px] font-medium px-1 py-0.5 rounded bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">

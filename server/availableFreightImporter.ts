@@ -24,6 +24,7 @@ import { getGraphAccessToken, azureCredentialsConfigured } from "./graphService"
 import { upsertLoadFact } from "./carrierIntelligenceService";
 import { freightOpportunityToInsert } from "./loadFactBackfill";
 import { ensureShortlistRanked } from "./proactiveOpportunityService";
+import { cleanCustomerLabel } from "@shared/laneFormatters";
 import type {
   FreightOpportunity,
   InsertFreightOpportunity,
@@ -285,27 +286,16 @@ function buildStableKey(parts: Array<string | null>): string {
 }
 
 /**
- * Strip the leading customer-code prefix and trailing logistics noise from a
- * customer name pulled out of the spreadsheet. Examples:
- *   "VERTFOFL - Vertiv Mexico"            → "Vertiv Mexico"
- *   "CTSIMIGA - CTSI C/o Rheem WH 1827"   → "CTSI"
- *   "FOODCHIL - Food In Transit"          → "Food In Transit"
- *   "MOTTNOMI - MOTTS C/O RYDER FREIGHT BILL PROCESSING" → "MOTTS"
- * The cleaned label is what we feed into company-name matching; the original
- * is preserved on the row for diagnostics.
+ * Re-export of the shared customer-label cleaner. Defined in
+ * `shared/laneFormatters.ts` so the frontend display formatter and this
+ * importer stay in lock-step. The cleaned label is what we feed into
+ * company-name matching; the original is preserved on the row for diagnostics.
+ *
+ * NOTE: a bare `export { cleanCustomerLabel } from "..."` re-export does *not*
+ * create a local binding — calls inside this file would resolve to `undefined`
+ * at runtime. Import for local use first, then re-export the identifier.
  */
-export function cleanCustomerLabel(raw: string): string {
-  let s = raw.trim();
-  // Strip leading 4+ char alnum code followed by " - "
-  s = s.replace(/^[A-Z0-9]{4,}\s*[-–—]\s*/, "");
-  // Strip everything from "C/o" / "C/O" onward (warehouse/3PL handler)
-  s = s.replace(/\s+c\s*\/\s*o\b.*$/i, "");
-  // Strip warehouse codes like "WH 1827"
-  s = s.replace(/\s+wh\s*#?\s*\d+\b.*$/i, "");
-  // Strip noisy back-office tails
-  s = s.replace(/\s+(freight\s+bill(\s+processing)?|bill\s+processing|attn[:\s].*)$/i, "");
-  return s.replace(/\s+/g, " ").trim();
-}
+export { cleanCustomerLabel };
 
 /**
  * TMS equipment-code → canonical Mode label. Every common spreadsheet variant

@@ -14,6 +14,7 @@ import {
   CheckCheck, UserCog, X,
 } from "lucide-react";
 import { dueDateBadge, statusIcon, nextStatus } from "./utils";
+import { formatCustomerName } from "@shared/laneFormatters";
 import type { Task, LaneCarrier } from "@shared/schema";
 import type { Notification } from "@shared/schema";
 import type { ActionItem, SafeUser } from "./types";
@@ -40,7 +41,7 @@ function ProcurementTaskSummary({ lane, taskId }: { lane: ProcurementLaneInfo; t
       {(lane.customerName || lane.awardTitle) && (
         <div className="flex items-center gap-2 flex-wrap">
           {lane.customerName && (
-            <span className="text-xs text-muted-foreground font-medium" data-testid={`text-proc-customer-${taskId}`}>{lane.customerName}</span>
+            <span className="text-xs text-muted-foreground font-medium" data-testid={`text-proc-customer-${taskId}`}>{formatCustomerName(lane.customerName)}</span>
           )}
           {lane.awardTitle && (
             <span className="text-xs text-muted-foreground" data-testid={`text-proc-award-${taskId}`}>· {lane.awardTitle}</span>

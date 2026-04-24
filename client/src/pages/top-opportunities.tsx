@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/sheet";
 import { Separator } from "@/components/ui/separator";
 import { useLocation } from "wouter";
+import { formatCustomerName } from "@shared/laneFormatters";
 import { TaskDialog } from "@/components/task-dialog";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -249,7 +250,10 @@ export default function TopOpportunities() {
       }
       map.get(key)!.opportunities.push(opp);
     });
-    return Array.from(map.values()).sort((a, b) => a.companyName.localeCompare(b.companyName));
+    // Sort by the cleaned customer label so the visible order matches the rendered names.
+    return Array.from(map.values()).sort((a, b) =>
+      formatCustomerName(a.companyName).localeCompare(formatCustomerName(b.companyName)),
+    );
   }, [fieldOpportunities]);
 
   const filteredArchived = useMemo(() => {
@@ -273,7 +277,9 @@ export default function TopOpportunities() {
       }
       map.get(key)!.opportunities.push(opp);
     });
-    return Array.from(map.values()).sort((a, b) => a.companyName.localeCompare(b.companyName));
+    return Array.from(map.values()).sort((a, b) =>
+      formatCustomerName(a.companyName).localeCompare(formatCustomerName(b.companyName)),
+    );
   }, [filteredArchived]);
 
   const archiveSummary = useMemo(() => {
@@ -415,7 +421,7 @@ export default function TopOpportunities() {
                               data-testid={`text-company-name-${group.companyId}`}
                               onClick={(e) => { e.stopPropagation(); goToAccount(group.companyId); }}
                             >
-                              {group.companyName}
+                              {formatCustomerName(group.companyName)}
                             </span>
                             {group.hotZoneCount > 0 && (
                               <Badge className="bg-orange-500/10 text-orange-600 dark:text-orange-400 border-0 text-xs">
@@ -498,7 +504,7 @@ export default function TopOpportunities() {
                                     className="text-xs text-primary/80 font-medium"
                                     data-testid={`text-match-company-${group.companyId}-${mIdx}`}
                                   >
-                                    {group.companyName}
+                                    {formatCustomerName(group.companyName)}
                                   </span>
                                 </div>
                                 <div className="flex items-center gap-1 mt-1 text-xs text-muted-foreground">
@@ -561,7 +567,7 @@ export default function TopOpportunities() {
               <div className="space-y-1">
                 {dismissals.map(d => (
                   <div key={d.company_id} className="flex items-center justify-between gap-2 text-sm py-1 border-b last:border-0" data-testid={`row-dismissed-${d.company_id}`}>
-                    <span className="text-muted-foreground">{d.company_name || d.company_id}</span>
+                    <span className="text-muted-foreground">{d.company_name ? formatCustomerName(d.company_name) : d.company_id}</span>
                     <Button
                       size="sm"
                       variant="ghost"
@@ -620,7 +626,7 @@ export default function TopOpportunities() {
                           data-testid={`text-field-company-name-${group.companyId ?? group.companyName}`}
                           onClick={() => group.companyId ? goToAccount(group.companyId) : undefined}
                         >
-                          {group.companyName}
+                          {formatCustomerName(group.companyName)}
                         </span>
                         <Badge variant="outline" className="text-xs">
                           {group.opportunities.length} opportunit{group.opportunities.length !== 1 ? "ies" : "y"}
@@ -799,7 +805,7 @@ export default function TopOpportunities() {
                           data-testid={`text-archived-company-name-${group.companyId ?? group.companyName}`}
                           onClick={() => group.companyId ? navigate(`/companies/${group.companyId}?tab=opportunities`) : undefined}
                         >
-                          {group.companyName}
+                          {formatCustomerName(group.companyName)}
                         </span>
                         <Badge variant="outline" className="text-xs">
                           {group.opportunities.length} opportunit{group.opportunities.length !== 1 ? "ies" : "y"}
@@ -885,7 +891,7 @@ export default function TopOpportunities() {
                 {selectedArchivedOpp.company_name && (
                   <SheetDescription className="flex items-center gap-1 mt-1">
                     <Building2 className="h-3.5 w-3.5" />
-                    {selectedArchivedOpp.company_name}
+                    {formatCustomerName(selectedArchivedOpp.company_name)}
                   </SheetDescription>
                 )}
               </SheetHeader>
@@ -991,7 +997,7 @@ export default function TopOpportunities() {
                 {selectedFieldOpp.company_name && (
                   <SheetDescription className="flex items-center gap-1 mt-1">
                     <Building2 className="h-3.5 w-3.5" />
-                    {selectedFieldOpp.company_name}
+                    {formatCustomerName(selectedFieldOpp.company_name)}
                   </SheetDescription>
                 )}
               </SheetHeader>
@@ -1104,7 +1110,7 @@ export default function TopOpportunities() {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove from Top Opportunities?</AlertDialogTitle>
             <AlertDialogDescription>
-              <strong>{confirmDismiss?.companyName}</strong> will be hidden from this list. You can restore it at the bottom of the page.
+              <strong>{confirmDismiss?.companyName ? formatCustomerName(confirmDismiss.companyName) : ""}</strong> will be hidden from this list. You can restore it at the bottom of the page.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

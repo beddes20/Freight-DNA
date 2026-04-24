@@ -16,7 +16,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QueryError } from "@/components/query-error";
-import { formatLaneDisplay, formatWeeklyLoadRange } from "@shared/laneFormatters";
+import { formatLaneDisplay, formatWeeklyLoadRange, formatCustomerName } from "@shared/laneFormatters";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -544,7 +544,11 @@ function LaneRow({
     destinationState: item.destinationState ?? "",
     equipmentType: item.equipmentType ?? "",
     avgLoadsPerWeek: item.avgLoadsPerWeek ?? "",
-    companyName: item.companyName ?? "",
+    // Seed with the cleaned customer label so the Edit Lane dialog shows the
+    // user-facing name (e.g. "Bloom Energy") instead of a raw TMS-prefixed
+    // value (e.g. "BLOOSACA - Bloom Energy"). The PATCH endpoint re-runs
+    // formatCustomerName on save, so this is also safe round-trip.
+    companyName: formatCustomerName(item.companyName ?? ""),
   });
 
   const selfAssignMutation = useMutation({
@@ -680,7 +684,7 @@ function LaneRow({
           {item.companyName && (
             <div className="flex items-center gap-1.5 mb-1.5">
               <Building2 className="w-3 h-3 text-blue-400 shrink-0" />
-              <span className="text-xs font-semibold text-blue-500 dark:text-blue-400">{item.companyName}</span>
+              <span className="text-xs font-semibold text-blue-500 dark:text-blue-400">{formatCustomerName(item.companyName)}</span>
               {/* CRM match indicator: show 'CRM' badge if companyId resolved, otherwise 'customer name' fallback */}
               {item.companyId ? (
                 <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400 bg-blue-500/10">CRM</Badge>
@@ -899,7 +903,7 @@ function LaneRow({
             {canDelete && (
               <button
                 className="p-1 rounded hover:bg-amber-500/10 text-muted-foreground hover:text-amber-400"
-                onClick={e => { e.stopPropagation(); setEditForm({ origin: item.origin ?? "", originState: item.originState ?? "", destination: item.destination ?? "", destinationState: item.destinationState ?? "", equipmentType: item.equipmentType ?? "", avgLoadsPerWeek: item.avgLoadsPerWeek ?? "", companyName: item.companyName ?? "" }); setEditDialogOpen(true); }}
+                onClick={e => { e.stopPropagation(); setEditForm({ origin: item.origin ?? "", originState: item.originState ?? "", destination: item.destination ?? "", destinationState: item.destinationState ?? "", equipmentType: item.equipmentType ?? "", avgLoadsPerWeek: item.avgLoadsPerWeek ?? "", companyName: formatCustomerName(item.companyName ?? "") }); setEditDialogOpen(true); }}
                 data-testid={`btn-edit-lane-${item.laneId}`}
                 title="Edit lane"
               >
@@ -1110,7 +1114,7 @@ function CustomerGroup({
         <ChevronRight className={`w-4 h-4 text-muted-foreground/60 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`} />
         <Building2 className="w-3.5 h-3.5 text-blue-400 shrink-0" />
         <span className="text-sm font-semibold text-foreground flex-1 min-w-0 truncate">
-          {customerName}
+          {formatCustomerName(customerName)}
         </span>
         <div className="flex items-center gap-2 shrink-0">
           {hasCrmMatch && (
@@ -2016,9 +2020,13 @@ export default function LaneWorkQueuePage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__all__">All customers</SelectItem>
-                {[...(queue?.customers ?? [])].sort((a, b) => a.localeCompare(b)).map(name => (
-                  <SelectItem key={name} value={name}>{name}</SelectItem>
-                ))}
+                {[...(queue?.customers ?? [])]
+                  // Sort by the cleaned label so the dropdown order matches what
+                  // the user sees, not the raw "BLOOSACA - bloom energy" key.
+                  .sort((a, b) => formatCustomerName(a).localeCompare(formatCustomerName(b)))
+                  .map(name => (
+                    <SelectItem key={name} value={name}>{formatCustomerName(name)}</SelectItem>
+                  ))}
               </SelectContent>
             </Select>
           )}

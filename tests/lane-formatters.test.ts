@@ -11,7 +11,7 @@
  * Run with: npx tsx tests/lane-formatters.test.ts
  */
 
-import { formatLaneLocation, formatLaneDisplay, formatWeeklyLoadRange, normalizeEquipmentType } from "../shared/laneFormatters";
+import { formatLaneLocation, formatLaneDisplay, formatWeeklyLoadRange, normalizeEquipmentType, cleanCustomerLabel, formatCustomerName } from "../shared/laneFormatters";
 import { buildFallbackEmail } from "../server/laneOutreachEmailBuilder";
 
 let passed = 0;
@@ -248,6 +248,153 @@ const poEmail = buildFallbackEmail("TestCo", false, laneDisp, normalizeEquipment
 assert(
   '"po" equipment type does not appear as raw code in email body',
   !poEmail.toLowerCase().includes(" po ") && !poEmail.toLowerCase().includes(" po freight"),
+);
+
+// ── cleanCustomerLabel ────────────────────────────────────────────────────────
+
+console.log("\n── cleanCustomerLabel ───────────────────────────────────────────────\n");
+
+assertEqual(
+  "uppercase TMS code stripped",
+  cleanCustomerLabel("VERTFOFL - Vertiv Mexico"),
+  "Vertiv Mexico",
+);
+assertEqual(
+  "lowercase TMS code stripped",
+  cleanCustomerLabel("bloosaca - bloom energy"),
+  "bloom energy",
+);
+assertEqual(
+  "C/O handler tail stripped",
+  cleanCustomerLabel("CTSIMIGA - CTSI C/o Rheem WH 1827"),
+  "CTSI",
+);
+assertEqual(
+  "uppercase C/O tail stripped + freight bill noise removed",
+  cleanCustomerLabel("MOTTNOMI - MOTTS C/O RYDER FREIGHT BILL PROCESSING"),
+  "MOTTS",
+);
+assertEqual(
+  "Coca-Cola is not mangled (no whitespace around dash)",
+  cleanCustomerLabel("Coca-Cola"),
+  "Coca-Cola",
+);
+assertEqual(
+  "name without code prefix is left alone",
+  cleanCustomerLabel("Food In Transit"),
+  "Food In Transit",
+);
+assertEqual("null safe", cleanCustomerLabel(null), "");
+assertEqual("undefined safe", cleanCustomerLabel(undefined), "");
+assertEqual("empty string safe", cleanCustomerLabel("   "), "");
+
+// ── formatCustomerName ────────────────────────────────────────────────────────
+
+console.log("\n── formatCustomerName ───────────────────────────────────────────────\n");
+
+assertEqual(
+  '"bloosaca - bloom energy" → "Bloom Energy"',
+  formatCustomerName("bloosaca - bloom energy"),
+  "Bloom Energy",
+);
+assertEqual(
+  '"BAEMAACT - BAE Maritime" → "BAE Maritime" (acronym preserved)',
+  formatCustomerName("BAEMAACT - BAE Maritime"),
+  "BAE Maritime",
+);
+assertEqual(
+  '"EAEUSCFL - EAE USA" → "EAE USA"',
+  formatCustomerName("EAEUSCFL - EAE USA"),
+  "EAE USA",
+);
+assertEqual(
+  '"HPHOSULP - HP Hood Sulphur Springs" → "HP Hood Sulphur Springs"',
+  formatCustomerName("HPHOSULP - HP Hood Sulphur Springs"),
+  "HP Hood Sulphur Springs",
+);
+assertEqual(
+  '"NALCWHIN - NAL Cargo" → "NAL Cargo"',
+  formatCustomerName("NALCWHIN - NAL Cargo"),
+  "NAL Cargo",
+);
+assertEqual(
+  '"GROUP OF EIGHT" → "Group of Eight" (connector lowercased mid-name)',
+  formatCustomerName("GROUP OF EIGHT"),
+  "Group of Eight",
+);
+assertEqual(
+  '"the museum of art and design" → connectors lowercased, edges title-cased',
+  formatCustomerName("the museum of art and design"),
+  "The Museum of Art and Design",
+);
+assertEqual(
+  '"Coca-Cola" → "Coca-Cola" (hyphenated)',
+  formatCustomerName("Coca-Cola"),
+  "Coca-Cola",
+);
+assertEqual(
+  '"lactalis american group" → "Lactalis American Group"',
+  formatCustomerName("lactalis american group"),
+  "Lactalis American Group",
+);
+assertEqual(
+  'idempotent — already-clean name passes through unchanged',
+  formatCustomerName(formatCustomerName("BAEMAACT - BAE Maritime")),
+  "BAE Maritime",
+);
+assertEqual(
+  '"CTSI C/O Rheem" → "CTSI" (handler tail stripped first)',
+  formatCustomerName("CTSI C/O Rheem"),
+  "CTSI",
+);
+assertEqual("null safe", formatCustomerName(null), "");
+assertEqual("undefined safe", formatCustomerName(undefined), "");
+assertEqual(
+  "collapses extra whitespace",
+  formatCustomerName("  bloosaca  -  bloom    energy  "),
+  "Bloom Energy",
+);
+
+// Unspaced uppercase code prefix (e.g. CSV exports without padding)
+assertEqual(
+  "ALL-CAPS code with unspaced dash is stripped",
+  cleanCustomerLabel("VERTFOFL-Vertiv Mexico"),
+  "Vertiv Mexico",
+);
+assertEqual(
+  "ALL-CAPS code with unspaced dash → formatted",
+  formatCustomerName("VERTFOFL-Vertiv Mexico"),
+  "Vertiv Mexico",
+);
+assertEqual(
+  "Mixed-case unspaced prefix is NOT stripped (Coca-Cola survives)",
+  formatCustomerName("Coca-Cola"),
+  "Coca-Cola",
+);
+assertEqual(
+  "Mixed-case unspaced 'Bloosaca-bloom' survives (no whitespace, not all-caps)",
+  formatCustomerName("Bloosaca-bloom Energy"),
+  "Bloosaca-Bloom Energy",
+);
+
+// Edit Lane dialog seed: when the dialog opens with a raw item.companyName,
+// the editForm.companyName state should be the cleaned, display-ready label.
+// This mirrors the seeding logic in client/src/pages/lane-work-queue.tsx so
+// users see "Bloom Energy" in the input — not "BLOOSACA - bloom energy".
+assertEqual(
+  "Edit Lane dialog seeds with formatted name (TMS prefix stripped)",
+  formatCustomerName("BLOOSACA - bloom energy"),
+  "Bloom Energy",
+);
+assertEqual(
+  "Edit Lane dialog handles null companyName via ?? '' fallback",
+  formatCustomerName(null ?? ""),
+  "",
+);
+assertEqual(
+  "Edit Lane dialog: already-clean name passes through unchanged",
+  formatCustomerName("Bloom Energy"),
+  "Bloom Energy",
 );
 
 // ── Summary ───────────────────────────────────────────────────────────────────
