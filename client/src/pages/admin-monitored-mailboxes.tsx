@@ -475,7 +475,7 @@ export default function AdminMonitoredMailboxesPage() {
             Monitored Mailboxes
           </h1>
           <p className="text-sm text-muted-foreground mt-1" data-testid="text-page-description">
-            Manage which NAM/AM mailboxes are monitored for customer email auto-sync.
+            Manage which team member mailboxes are monitored for customer email auto-sync.
           </p>
         </div>
 
@@ -559,7 +559,7 @@ export default function AdminMonitoredMailboxesPage() {
             <DialogHeader>
               <DialogTitle>Add Monitored Mailbox</DialogTitle>
               <DialogDescription>
-                Select a team member and enter their Outlook email address to start syncing their customer emails.
+                Select a team member and enter their work email address to start syncing their customer emails. Any eligible team member can be added based on their role.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
