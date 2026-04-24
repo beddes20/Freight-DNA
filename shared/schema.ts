@@ -4685,6 +4685,25 @@ export const insertQuoteOpportunitySchema = createInsertSchema(quoteOpportunitie
 export type InsertQuoteOpportunity = z.infer<typeof insertQuoteOpportunitySchema>;
 export type QuoteOpportunity = typeof quoteOpportunities.$inferSelect;
 
+// Spot Quote Search — Quote Builder card payload (Task #516).
+// Derived from the canonical quote-opportunity insert schema so the
+// client form and the server route share a single contract.
+export const spotQuoteCreateSchema = insertQuoteOpportunitySchema
+  .pick({ customerId: true, equipment: true, notes: true })
+  .extend({
+    customerId: z.string().min(1, "Pick a customer"),
+    equipment: z.string().min(1).max(40),
+    pickupCity: z.string().min(1).max(80),
+    pickupState: z.string().min(1).max(8),
+    deliveryCity: z.string().min(1).max(80),
+    deliveryState: z.string().min(1).max(8),
+    quotedAmount: z.number({ invalid_type_error: "Enter a number" }).finite().min(1, "Required").max(1_000_000),
+    estimatedCost: z.number({ invalid_type_error: "Enter a number" }).finite().min(0).max(1_000_000).optional(),
+    validUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD").optional().or(z.literal("")),
+    notes: z.string().max(2000).optional(),
+  });
+export type SpotQuoteCreateInput = z.infer<typeof spotQuoteCreateSchema>;
+
 export const quoteEvents = pgTable("quote_events", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   quoteId: varchar("quote_id").notNull().references(() => quoteOpportunities.id, { onDelete: "cascade" }),

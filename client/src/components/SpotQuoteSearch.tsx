@@ -4,6 +4,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z as zod } from "zod";
+import { spotQuoteCreateSchema } from "@shared/schema";
 import {
   getCityAutocompleteSuggestions,
   getLaneLocationSuggestions,
@@ -1145,10 +1146,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             </div>
             {/* Zone 2 — Carrier shortlist (top 5) */}
             <div className="order-2" data-testid="spot-zone-carriers">
-              <CarrierShortlistCard
-                outreach={data.carrierOutreach}
-                onShowAll={() => document.querySelector('[data-testid="spot-section-carrier-outreach"]')?.scrollIntoView({ behavior: "smooth", block: "start" })}
-              />
+              <CarrierShortlistCard outreach={data.carrierOutreach} />
             </div>
             {/* Zone 3 — Customer lane timeline */}
             <div className="order-3" data-testid="spot-zone-timeline">
@@ -1719,12 +1717,17 @@ function CarrierOutreachList({ outreach }: { outreach: SpotResult["carrierOutrea
  */
 const SPOT_BUILDER_GUARDRAIL_PCT = 5;
 
-const quoteBuilderSchema = zod.object({
-  customerId: zod.string().min(1, "Pick a customer"),
-  quotedAmount: zod.number({ invalid_type_error: "Enter a number" }).finite().min(1, "Required").max(1_000_000),
-  estimatedCost: zod.number({ invalid_type_error: "Enter a number" }).finite().min(0).max(1_000_000).optional(),
-  validUntil: zod.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD").optional().or(zod.literal("")),
-  notes: zod.string().max(2000).optional(),
+// QuoteBuilder form contract is the canonical spotQuoteCreateSchema from
+// @shared/schema (which derives from insertQuoteOpportunitySchema). The
+// lane fields (pickup/delivery + equipment) are filled from the active
+// search query at submit-time, so the form itself only validates the
+// rep-editable subset.
+const quoteBuilderSchema = spotQuoteCreateSchema.pick({
+  customerId: true,
+  quotedAmount: true,
+  estimatedCost: true,
+  validUntil: true,
+  notes: true,
 });
 type QuoteBuilderValues = zod.infer<typeof quoteBuilderSchema>;
 
@@ -2029,12 +2032,12 @@ function QuoteBuilderCard({
  * rolodex flag, DNU). Compact form; opens the full outreach panel on demand.
  */
 function CarrierShortlistCard({
-  outreach, onShowAll,
+  outreach,
 }: {
   outreach: SpotResult["carrierOutreach"];
-  onShowAll?: () => void;
 }): JSX.Element {
-  const top = outreach.slice(0, 5);
+  const [expanded, setExpanded] = useState(false);
+  const top = expanded ? outreach : outreach.slice(0, 5);
   return (
     <Card className="bg-zinc-900 rounded-[4px] border border-zinc-800" data-testid="spot-zone-carrier-shortlist">
       <CardHeader className="py-2.5 px-3 flex flex-row items-center justify-between border-b border-zinc-800">
@@ -2042,8 +2045,8 @@ function CarrierShortlistCard({
           <Truck className="h-3.5 w-3.5 text-amber-400" /> Carriers to Call (top 5)
         </CardTitle>
         {outreach.length > 5 && (
-          <button type="button" onClick={onShowAll} className="text-[10px] text-amber-300 hover:text-amber-200 underline" data-testid="button-shortlist-show-all">
-            Show all {outreach.length}
+          <button type="button" onClick={() => setExpanded(v => !v)} className="text-[10px] text-amber-300 hover:text-amber-200 underline" data-testid="button-shortlist-show-all">
+            {expanded ? "Show top 5" : `Show all ${outreach.length}`}
           </button>
         )}
       </CardHeader>
