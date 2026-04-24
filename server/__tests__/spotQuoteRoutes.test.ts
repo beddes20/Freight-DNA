@@ -200,7 +200,7 @@ describe("POST /api/customer-quotes/spot/create", () => {
     }
   });
 
-  it("rejects a margin below the 5% guardrail with 400", async () => {
+  it("rejects a margin below the 5% guardrail with 400 + structured error payload", async () => {
     const app = buildApp();
     const srv = await listen(app);
     try {
@@ -210,6 +210,12 @@ describe("POST /api/customer-quotes/spot/create", () => {
         body: JSON.stringify({ ...validBody, quotedAmount: 2500, estimatedCost: 2400 }),
       });
       expect(res.status).toBe(400);
+      const json = await res.json();
+      expect(typeof json.error).toBe("string");
+      expect(json.error).toMatch(/guardrail|margin/i);
+      expect(typeof json.marginPct).toBe("number");
+      expect(json.marginPct).toBeLessThan(5);
+      expect(json.minMarginPct).toBe(5);
     } finally {
       await srv.close();
     }

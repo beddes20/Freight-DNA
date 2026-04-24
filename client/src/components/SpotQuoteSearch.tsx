@@ -2138,10 +2138,17 @@ function CustomerLaneTimelineCard({
       </CardHeader>
       <CardContent className="p-3">
         {timeline.length === 0 ? (
-          <div className="text-xs text-zinc-500 text-center py-4">
-            {resolvedCustomer
-              ? `No prior exact-lane quotes for ${resolvedCustomer.name}.`
-              : "No exact-lane quote history yet."}
+          <div className="text-xs text-zinc-400 text-center py-4" data-testid="text-timeline-empty">
+            {resolvedCustomer ? (
+              <>
+                <div className="text-amber-300 font-medium">First-quote opportunity.</div>
+                <div className="text-zinc-500 mt-1">
+                  This is your first quote to {resolvedCustomer.name} on this lane.
+                </div>
+              </>
+            ) : (
+              "No exact-lane quote history yet."
+            )}
           </div>
         ) : (
           <ol className="relative space-y-2.5 pl-4 border-l border-zinc-800">
