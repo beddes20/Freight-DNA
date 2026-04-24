@@ -694,6 +694,26 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
         </Card>
       )}
 
+      {activeQuery && result.isError && !result.isLoading && (
+        <Card className="bg-red-500/10 border-red-500/30 rounded-[4px]" data-testid="spot-results-error">
+          <CardContent className="p-4 flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-red-300 mt-0.5 shrink-0" />
+            <div className="flex-1">
+              <div className="text-sm font-semibold text-red-200">Spot search failed</div>
+              <div className="text-xs text-red-300/80 mt-0.5">
+                {(result.error as Error)?.message ?? "We couldn't load results for this lane. Try again, or adjust the search and rerun."}
+              </div>
+            </div>
+            <Button size="sm" variant="outline"
+              onClick={() => void result.refetch()}
+              className="h-8 border-red-500/40 hover:bg-red-500/20 text-red-200 text-xs"
+              data-testid="button-spot-error-retry">
+              <RefreshCw className="h-3 w-3 mr-1" /> Retry
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       {activeQuery && result.isLoading && (
         <div className="space-y-3" data-testid="spot-results-loading">
           <Skeleton className="h-16 w-full bg-zinc-900 rounded-[4px]" />
