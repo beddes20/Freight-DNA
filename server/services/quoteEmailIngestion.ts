@@ -18,6 +18,7 @@
  */
 
 import { and, eq, inArray } from "drizzle-orm";
+import OpenAI from "openai";
 import { db } from "../storage";
 import {
   quoteOpportunities, quoteEvents, quoteCustomers, quoteReps,
@@ -38,23 +39,76 @@ export interface ParsedQuoteFields {
 const EQUIPMENT_PATTERNS: Array<{ re: RegExp; name: string }> = [
   { re: /\breefer(s)?\b|\brefrigerated\b|\btemp[\s-]?control(led)?\b/i, name: "Reefer" },
   { re: /\bflat[\s-]?bed(s)?\b|\bflats?\b\s*(load)?/i, name: "Flatbed" },
-  { re: /\bdry\s*van(s)?\b|\bvans?\b/i, name: "Dry Van" },
   { re: /\bpower[\s-]?only\b/i, name: "Power Only" },
   { re: /\bstep[\s-]?deck\b/i, name: "Step Deck" },
+  { re: /\bdry\s*van(s)?\b|\bvans?\b/i, name: "Dry Van" },
 ];
+
+// US state name → 2-letter code. Used by Pattern C below to translate
+// "Dallas, Texas to Miami, Florida" style lanes into the strict (city, ST)
+// shape the rest of the pipeline expects.
+const STATE_NAME_TO_CODE: Readonly<Record<string, string>> = {
+  alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA",
+  colorado: "CO", connecticut: "CT", delaware: "DE", florida: "FL", georgia: "GA",
+  hawaii: "HI", idaho: "ID", illinois: "IL", indiana: "IN", iowa: "IA",
+  kansas: "KS", kentucky: "KY", louisiana: "LA", maine: "ME", maryland: "MD",
+  massachusetts: "MA", michigan: "MI", minnesota: "MN", mississippi: "MS",
+  missouri: "MO", montana: "MT", nebraska: "NE", nevada: "NV",
+  "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+  "north carolina": "NC", "north dakota": "ND", ohio: "OH", oklahoma: "OK",
+  oregon: "OR", pennsylvania: "PA", "rhode island": "RI", "south carolina": "SC",
+  "south dakota": "SD", tennessee: "TN", texas: "TX", utah: "UT", vermont: "VT",
+  virginia: "VA", washington: "WA", "west virginia": "WV", wisconsin: "WI",
+  wyoming: "WY",
+};
+const US_STATE_NAMES_RE = Object.keys(STATE_NAME_TO_CODE)
+  .sort((a, b) => b.length - a.length) // longest first so "New York" wins over "New"
+  .map((s) => s.replace(/ /g, "\\s"))
+  .join("|");
 
 // City is one to three capitalized tokens (e.g. "Chicago", "St Louis",
 // "Los Angeles"). Anchoring on capitalization avoids dragging the preceding
 // sentence ("Need a rate from Chicago") into the origin capture.
 const CITY = "[A-Z][A-Za-z'.-]+(?:\\s[A-Z][A-Za-z'.-]+){0,2}";
+
+// Pattern A — strict: "City, ST → City, ST"
 const LANE_RE = new RegExp(
   `\\b(${CITY}),\\s*([A-Z]{2})\\s*(?:to|→|->|-+>?|–|—|>)\\s*(${CITY}),\\s*([A-Z]{2})\\b`,
 );
+
+// Pattern B — uppercase blob with state codes, no commas required:
+//   "EL PASO TX LAS VEGAS NV"  /  "DALLAS, TX MIAMI, FL"
+// Each city is 1-3 ALL-CAPS tokens; followed by 2-letter state code; then dest.
+const UPPER_CITY = "[A-Z][A-Z'.-]+(?:\\s[A-Z][A-Z'.-]+){0,2}";
+const LANE_RE_UPPER = new RegExp(
+  `\\b(${UPPER_CITY}),?\\s+([A-Z]{2})\\s+(?:to\\s+)?(${UPPER_CITY}),?\\s+([A-Z]{2})\\b`,
+);
+
+// Pattern C — full state names: "Dallas, Texas to Miami, Florida"  /
+//   "Dallas Texas → Miami Florida"
+const LANE_RE_STATENAME = new RegExp(
+  `\\b(${CITY}),?\\s+(${US_STATE_NAMES_RE})\\s*(?:to|→|->|-+>?|–|—|>)\\s*(${CITY}),?\\s+(${US_STATE_NAMES_RE})\\b`,
+  "i",
+);
+
+// Pattern D — bare "City to City" (no state info) — used SUBJECT-only as a
+// last-resort regex hit; AI fallback fills in states.
+const LANE_RE_BARE = new RegExp(
+  `\\b(${CITY})\\s+(?:to|→|->|-+>?|–|—|>)\\s+(${CITY})\\b`,
+);
+
 const RATE_RE = /\$\s*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]{3,6}(?:\.[0-9]{1,2})?)/;
 const DATE_RE = /\b(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\b/;
 
 function normalizeCity(city: string): string {
-  return city.trim().replace(/\s+/g, " ");
+  // Title-case "EL PASO" → "El Paso"; preserve mixed-case input as-is.
+  const cleaned = city.trim().replace(/\s+/g, " ");
+  if (cleaned.toUpperCase() !== cleaned) return cleaned;
+  return cleaned
+    .toLowerCase()
+    .split(" ")
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(" ");
 }
 
 function parseRate(s: string): number | null {
@@ -74,32 +128,243 @@ function parseDate(s: string | null): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
+// ─── HTML scrubbing ─────────────────────────────────────────────────────────
+// Real inbound mail comes through Outlook as HTML with embedded CSS, the
+// "CAUTION: This email originated outside your organization" banner, and
+// quoted reply chains. The regex parser only sees noise unless we strip all
+// of that first.
+
+const HTML_ENTITIES: Readonly<Record<string, string>> = {
+  "&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"',
+  "&#39;": "'", "&apos;": "'", "&rsquo;": "'", "&lsquo;": "'",
+  "&rdquo;": '"', "&ldquo;": '"', "&mdash;": "—", "&ndash;": "–",
+  "&hellip;": "…", "&copy;": "©", "&reg;": "®",
+};
+
+export function stripHtml(html: string | null | undefined): string {
+  if (!html) return "";
+  let s = html;
+  // Drop <style>/<script>/<head> entirely (CSS leaks junk tokens otherwise).
+  s = s.replace(/<(style|script|head)[\s\S]*?<\/\1>/gi, " ");
+  // Strip the Outlook external-sender CAUTION banner (one-line variant).
+  s = s.replace(/CAUTION:\s*This email originated outside[^<]*?(?:<\/[^>]+>|$)/gi, " ");
+  // Replace block-level closers with newlines so lanes don't get glued together.
+  s = s.replace(/<\/(p|div|br|tr|li|h[1-6])>/gi, "\n");
+  s = s.replace(/<br\s*\/?\s*>/gi, "\n");
+  // Drop all remaining tags.
+  s = s.replace(/<[^>]+>/g, " ");
+  // Decode the most common entities.
+  s = s.replace(/&[a-z#0-9]+;/gi, (m) => HTML_ENTITIES[m.toLowerCase()] ?? " ");
+  // Strip Outlook quoted-reply blocks ("On <date>, X wrote:" + everything after).
+  s = s.replace(/On\s+\w+,\s+\w+\s+\d+,\s+20\d\d[\s\S]*$/i, "");
+  // Strip MS Word style class chunks left over from Aptos/Cambria CSS.
+  s = s.replace(/@font-face[\s\S]*?\}/g, " ");
+  // Collapse whitespace.
+  s = s.replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim();
+  return s;
+}
+
+const NOT_A_QUOTE_SUBJECTS = [
+  /^auto[\s-]?reply\b/i,
+  /^out\s+of\s+office\b/i,
+  /\bundeliverable\b/i,
+  /\bdelivery\s+(status|notification|failure)\b/i,
+  /\bread\s+receipt\b/i,
+  /^unsubscribe\b/i,
+];
+
+function isObviouslyNotAQuote(subject: string | null | undefined, body: string): boolean {
+  const s = (subject ?? "").trim();
+  if (s && NOT_A_QUOTE_SUBJECTS.some((re) => re.test(s))) return true;
+  const t = `${s}\n${body}`;
+  if (t.length < 8) return true;
+  return false;
+}
+
+function tryLanePattern(text: string, re: RegExp): {
+  oCity: string; oState: string; dCity: string; dState: string;
+} | null {
+  const m = text.match(re);
+  if (!m) return null;
+  const [, oCity, oState, dCity, dState] = m;
+  if (!oCity || !oState || !dCity || !dState) return null;
+  return { oCity, oState, dCity, dState };
+}
+
+function tryStateNamePattern(text: string): {
+  oCity: string; oState: string; dCity: string; dState: string;
+} | null {
+  const m = text.match(LANE_RE_STATENAME);
+  if (!m) return null;
+  const [, oCity, oStateName, dCity, dStateName] = m;
+  const oState = STATE_NAME_TO_CODE[oStateName.toLowerCase().replace(/\s+/g, " ")];
+  const dState = STATE_NAME_TO_CODE[dStateName.toLowerCase().replace(/\s+/g, " ")];
+  if (!oState || !dState) return null;
+  return { oCity, oState, dCity, dState };
+}
+
 /**
  * Parse a quote request out of an email body / subject.
- * Returns null when no usable lane is found.
+ * Tries patterns in order from strict → permissive. Strips HTML from the
+ * body first so the parser only sees prose. Returns null when no usable
+ * lane is found.
  */
 export function parseQuoteEmail(input: { subject?: string | null; body?: string | null }): ParsedQuoteFields | null {
-  const text = `${input.subject ?? ""}\n${input.body ?? ""}`;
-  if (!text.trim()) return null;
+  const subject = (input.subject ?? "").trim();
+  const cleanBody = stripHtml(input.body ?? "");
 
-  const laneMatch = text.match(LANE_RE);
-  if (!laneMatch) return null;
-  const [, oCity, oState, dCity, dState] = laneMatch;
+  if (isObviouslyNotAQuote(subject, cleanBody)) return null;
 
+  // Try the subject FIRST — it's the strongest signal in carrier/customer
+  // mail (e.g. "Re: Load from Maryville, TN to Waterville, OH"). Body is
+  // the fallback so noisy quoted replies don't poison the match.
+  const candidates: string[] = [];
+  if (subject) candidates.push(subject);
+  if (cleanBody) candidates.push(cleanBody);
+
+  let lane: { oCity: string; oState: string; dCity: string; dState: string } | null = null;
+  for (const text of candidates) {
+    lane =
+      tryLanePattern(text, LANE_RE) ??
+      tryLanePattern(text, LANE_RE_UPPER) ??
+      tryStateNamePattern(text);
+    if (lane) break;
+  }
+  if (!lane) return null;
+
+  const fullText = `${subject}\n${cleanBody}`;
   let equipment = "Dry Van";
   for (const p of EQUIPMENT_PATTERNS) {
-    if (p.re.test(text)) { equipment = p.name; break; }
+    if (p.re.test(fullText)) { equipment = p.name; break; }
   }
 
-  const rateMatch = text.match(RATE_RE);
+  const rateMatch = fullText.match(RATE_RE);
   const quotedAmount = rateMatch ? parseRate(rateMatch[1]) : null;
-  const pickupDate = parseDate(text);
+  const pickupDate = parseDate(fullText);
+
+  return {
+    originCity: normalizeCity(lane.oCity),
+    originState: lane.oState.toUpperCase(),
+    destCity: normalizeCity(lane.dCity),
+    destState: lane.dState.toUpperCase(),
+    equipment,
+    quotedAmount,
+    pickupDate,
+  };
+}
+
+// ─── AI fallback (Task #557) ────────────────────────────────────────────────
+// When the regex parser returns null but the email *looks* like a quote
+// (has a city-to-city pattern OR quote/load/rate keywords + 2-letter state
+// codes), call GPT-4o-mini to extract the structured fields. Bounded by a
+// per-process counter and degrades gracefully when OPENAI_API_KEY isn't set.
+
+const QUOTE_SIGNAL_RE = /\b(quote|rate|load|FTL|LTL|freight|haul|tender|capacity|truck|equipment|pickup|delivery|origin|destination)\b/i;
+
+function looksLikeQuoteCandidate(subject: string, body: string): boolean {
+  const text = `${subject}\n${body}`;
+  if (!text.trim()) return false;
+  // Must have either a city-to-city hint OR a quote keyword.
+  const hasLaneHint = LANE_RE_BARE.test(subject) || /\b[A-Z]{2}\b.*\b[A-Z]{2}\b/.test(text);
+  const hasQuoteKw = QUOTE_SIGNAL_RE.test(text);
+  return hasLaneHint || hasQuoteKw;
+}
+
+let _openaiClient: OpenAI | null | undefined;
+function getOpenAi(): OpenAI | null {
+  if (_openaiClient !== undefined) return _openaiClient;
+  const apiKey = process.env.OPENAI_API_KEY;
+  _openaiClient = apiKey ? new OpenAI({ apiKey }) : null;
+  return _openaiClient;
+}
+
+const AI_PARSE_PROMPT =
+  "You are extracting freight quote-request fields from a single email. " +
+  "Return STRICT JSON only, no prose. " +
+  "Schema: {\"isQuote\": boolean, \"originCity\": string|null, \"originState\": string|null (2-letter US code), " +
+  "\"destCity\": string|null, \"destState\": string|null (2-letter US code), " +
+  "\"equipment\": one of [\"Dry Van\",\"Reefer\",\"Flatbed\",\"Power Only\",\"Step Deck\"]|null, " +
+  "\"quotedAmount\": number|null (USD, no $/commas), " +
+  "\"pickupDate\": string|null (YYYY-MM-DD)}. " +
+  "If the email is NOT a freight quote request (rate confirmation, OOO, " +
+  "marketing, status update with no rate ask), set isQuote=false and leave " +
+  "the rest null. Be conservative — null beats guessing.";
+
+const VALID_EQUIPMENT = new Set(["Dry Van", "Reefer", "Flatbed", "Power Only", "Step Deck"]);
+
+export async function parseQuoteEmailAi(input: {
+  subject?: string | null;
+  body?: string | null;
+}): Promise<ParsedQuoteFields | null> {
+  const subject = (input.subject ?? "").trim();
+  const cleanBody = stripHtml(input.body ?? "");
+  if (isObviouslyNotAQuote(subject, cleanBody)) return null;
+  if (!looksLikeQuoteCandidate(subject, cleanBody)) return null;
+
+  const client = getOpenAi();
+  if (!client) return null;
+
+  // Cap the body length so token usage stays predictable across the backfill.
+  const trimmedBody = cleanBody.length > 2000 ? cleanBody.slice(0, 2000) : cleanBody;
+  const userMessage = `Subject: ${subject}\n\nBody:\n${trimmedBody}`;
+
+  let raw: string | null = null;
+  try {
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: AI_PARSE_PROMPT },
+        { role: "user", content: userMessage },
+      ],
+    });
+    raw = completion.choices[0]?.message?.content ?? null;
+  } catch (err) {
+    // Network / rate-limit / quota errors must never crash the backfill.
+    // Caller logs aggregate failures as `unparseable`.
+    console.warn("[quoteEmailIngestion] AI parse error:", err instanceof Error ? err.message : err);
+    return null;
+  }
+  if (!raw) return null;
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  if (parsed.isQuote === false) return null;
+
+  const oCity = typeof parsed.originCity === "string" ? parsed.originCity.trim() : "";
+  const oState = typeof parsed.originState === "string" ? parsed.originState.trim().toUpperCase() : "";
+  const dCity = typeof parsed.destCity === "string" ? parsed.destCity.trim() : "";
+  const dState = typeof parsed.destState === "string" ? parsed.destState.trim().toUpperCase() : "";
+  if (!oCity || !/^[A-Z]{2}$/.test(oState)) return null;
+  if (!dCity || !/^[A-Z]{2}$/.test(dState)) return null;
+
+  const equipmentRaw = typeof parsed.equipment === "string" ? parsed.equipment.trim() : "Dry Van";
+  const equipment = VALID_EQUIPMENT.has(equipmentRaw) ? equipmentRaw : "Dry Van";
+
+  let quotedAmount: number | null = null;
+  if (typeof parsed.quotedAmount === "number" && isFinite(parsed.quotedAmount)) {
+    if (parsed.quotedAmount >= 100 && parsed.quotedAmount <= 100000) {
+      quotedAmount = Math.round(parsed.quotedAmount);
+    }
+  }
+
+  let pickupDate: Date | null = null;
+  if (typeof parsed.pickupDate === "string" && parsed.pickupDate) {
+    const d = new Date(parsed.pickupDate);
+    if (!isNaN(d.getTime())) pickupDate = d;
+  }
 
   return {
     originCity: normalizeCity(oCity),
-    originState: oState.toUpperCase(),
+    originState: oState,
     destCity: normalizeCity(dCity),
-    destState: dState.toUpperCase(),
+    destState: dState,
     equipment,
     quotedAmount,
     pickupDate,
@@ -150,7 +415,14 @@ export interface IngestionResult {
  */
 export async function ingestQuoteFromEmail(
   message: EmailMessage,
-  opts?: { extractedData?: Record<string, unknown> | null; customerName?: string },
+  opts?: {
+    extractedData?: Record<string, unknown> | null;
+    customerName?: string;
+    /** Default true. Set false to skip the GPT-4o-mini fallback (e.g. when
+     * the live ingestion path is rate-limited or you want regex-only
+     * behaviour for cost / latency reasons). */
+    useAiFallback?: boolean;
+  },
 ): Promise<IngestionResult> {
   if (message.direction !== "inbound") return { status: "skipped_outbound" };
 
@@ -165,7 +437,10 @@ export async function ingestQuoteFromEmail(
 
   const fromExtracted = mergeExtractedFields(opts?.extractedData ?? null);
   const fromHeuristic = parseQuoteEmail({ subject: message.subject, body: message.body });
-  const parsed = fromExtracted ?? fromHeuristic;
+  let parsed = fromExtracted ?? fromHeuristic;
+  if (!parsed && opts?.useAiFallback !== false) {
+    parsed = await parseQuoteEmailAi({ subject: message.subject, body: message.body });
+  }
   if (!parsed) return { status: "skipped_unparseable" };
 
   const customerName = opts?.customerName ?? deriveCustomerName(message);
@@ -408,9 +683,17 @@ export interface BackfillSummary {
  */
 export async function backfillQuotesFromEmails(
   orgId: string,
-  opts: { sinceDays?: number; limit?: number } = {},
+  opts: {
+    sinceDays?: number;
+    limit?: number;
+    /** Default true. Set false to skip the GPT-4o-mini fallback. */
+    useAiFallback?: boolean;
+    /** AI calls per batch — too high risks rate-limit, too low slows the
+     * backfill. 5 is a safe middle for the 2-3k-email scale. */
+    concurrency?: number;
+  } = {},
 ): Promise<BackfillSummary> {
-  const { sinceDays, limit } = opts;
+  const { sinceDays, limit, useAiFallback = true, concurrency = 5 } = opts;
   const summary: BackfillSummary = {
     scanned: 0, ingested: 0, duplicates: 0, unparseable: 0, outbound: 0, errors: 0,
   };
@@ -428,22 +711,36 @@ export async function backfillQuotesFromEmails(
     return aT - bT;
   });
 
-  for (const msg of sorted) {
-    if (limit && summary.scanned >= limit) break;
-    if (cutoff) {
-      const ts = msg.providerSentAt ?? msg.createdAt ?? new Date(0);
-      if (ts < cutoff) continue;
-    }
-    summary.scanned++;
-    try {
-      const result = await ingestQuoteFromEmail(msg);
+  // Filter to the active window first so the limit/concurrency math is on
+  // the actual workload, not the raw fetch.
+  const work = sorted.filter((msg) => {
+    if (!cutoff) return true;
+    const ts = msg.providerSentAt ?? msg.createdAt ?? new Date(0);
+    return ts >= cutoff;
+  });
+  const capped = limit ? work.slice(0, limit) : work;
+
+  // Process in fixed-size parallel batches. Each ingestQuoteFromEmail call
+  // is independent (idempotency keyed on sourceReference) so out-of-order
+  // completion is safe.
+  for (let i = 0; i < capped.length; i += concurrency) {
+    const batch = capped.slice(i, i + concurrency);
+    const results = await Promise.allSettled(
+      batch.map((msg) => ingestQuoteFromEmail(msg, { useAiFallback })),
+    );
+    for (let j = 0; j < results.length; j++) {
+      summary.scanned++;
+      const r = results[j];
+      if (r.status === "rejected") {
+        summary.errors++;
+        console.error("[quoteEmailIngestion] backfill error for message", batch[j].id, r.reason);
+        continue;
+      }
+      const result = r.value;
       if (result.status === "ingested") summary.ingested++;
       else if (result.status === "skipped_duplicate") summary.duplicates++;
       else if (result.status === "skipped_unparseable") summary.unparseable++;
       else if (result.status === "skipped_outbound") summary.outbound++;
-    } catch (err) {
-      summary.errors++;
-      console.error("[quoteEmailIngestion] backfill error for message", msg.id, err);
     }
   }
 
