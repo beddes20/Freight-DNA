@@ -10,8 +10,20 @@ import {
   type QuoteFilters, type ListSortKey,
 } from "../services/customerQuotes";
 import { syncQuoteOutcomesFromTms } from "../services/quoteTmsSync";
-import { QUOTE_OUTCOME_STATUSES, QUOTE_SOURCES } from "@shared/schema";
+import { QUOTE_OUTCOME_STATUSES, QUOTE_SOURCES, companies, contacts } from "@shared/schema";
 import { getStaleQuoteFollowUps, clearStaleFollowUpCache } from "../services/staleQuoteFollowup";
+import { db } from "../storage";
+import { and as andSql, eq as eqSql, sql as sqlExpr } from "drizzle-orm";
+import { gatherDataAnchors, generateDraft } from "./emailDrafting";
+import { getVoiceProfile } from "../voiceProfileService";
+
+// Task #516 — Minimum margin % guardrail enforced when an estimatedCost is
+// supplied with a spot-create request. Externalized via env so brokers can
+// tune without a code change.
+const SPOT_MIN_MARGIN_PCT: number = (() => {
+  const raw = parseFloat(process.env.SPOT_MIN_MARGIN_PCT ?? "");
+  return Number.isFinite(raw) && raw >= 0 ? raw : 5;
+})();
 
 const filtersSchema = z.object({
   customerId: z.string().min(1).optional(),
@@ -289,26 +301,126 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     res.json({ ok: true });
   });
 
-  app.post("/api/customer-quotes/quote", requireAuth, async (req, res) => {
+  // Task #516 — Spot Quote Search Deal Sheet: create + email-draft endpoints.
+  // The create path delegates to the same `createQuote` service used elsewhere
+  // (no duplicate insert logic). Margin guardrail is enforced server-side when
+  // an estimatedCost is provided so the frontend can't bypass it.
+  app.post("/api/customer-quotes/spot/create", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const schema = z.object({
-        customerId: z.string().min(1),
-        originCity: z.string().min(1).max(80),
-        originState: z.string().min(2).max(20),
-        destCity: z.string().min(1).max(80),
-        destState: z.string().min(2).max(20),
+        pickupCity: z.string().min(1).max(80),
+        pickupState: z.string().min(1).max(8),
+        deliveryCity: z.string().min(1).max(80),
+        deliveryState: z.string().min(1).max(8),
         equipment: z.string().min(1).max(40),
-        quotedAmount: z.number().finite().min(0).max(1_000_000),
-        notes: z.string().max(2000).optional(),
+        customerId: z.string().min(1),
+        quotedAmount: z.number().finite().min(1).max(1_000_000),
+        estimatedCost: z.number().finite().min(0).max(1_000_000).nullable().optional(),
+        validUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}/).nullable().optional(),
+        notes: z.string().max(2000).nullable().optional(),
       });
-      const data = schema.parse(req.body);
-      const created = await createManualQuote(user.organizationId, user.id, data);
-      res.json(created);
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+      }
+      const data = parsed.data;
+      if (typeof data.estimatedCost === "number" && data.estimatedCost > 0) {
+        const marginPct = ((data.quotedAmount - data.estimatedCost) / data.quotedAmount) * 100;
+        if (marginPct < SPOT_MIN_MARGIN_PCT) {
+          return res.status(400).json({
+            error: `Margin ${marginPct.toFixed(1)}% is below the ${SPOT_MIN_MARGIN_PCT}% guardrail`,
+            marginPct,
+            minMarginPct: SPOT_MIN_MARGIN_PCT,
+          });
+        }
+      }
+      const actor = (user.name && user.name.trim()) || user.username || user.id;
+      const opp = await createQuote(user.organizationId, actor, {
+        customerId: data.customerId,
+        repId: null,
+        originCity: data.pickupCity,
+        originState: data.pickupState.toUpperCase(),
+        destCity: data.deliveryCity,
+        destState: data.deliveryState.toUpperCase(),
+        equipment: data.equipment,
+        quotedAmount: data.quotedAmount,
+        validThrough: data.validUntil ?? null,
+        source: "manual",
+        notes: data.notes ?? null,
+      }, user.id);
+      res.status(201).json(opp);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Invalid input";
+      console.error("[customer-quotes] spot create error:", err);
       res.status(400).json({ error: msg });
+    }
+  });
+
+  app.post("/api/customer-quotes/spot/email-draft", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const schema = z.object({ quoteId: z.string().min(1) });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
+      }
+      const { quoteId } = parsed.data;
+      const detail = await getQuoteDetail(user.organizationId, quoteId);
+      if (!detail) return res.status(404).json({ error: "Quote not found" });
+
+      // Best-effort map of the quote's customer (by name) to a CRM company so
+      // the email can pull contact emails and recent context. Failures here
+      // degrade silently — the rep just gets a draft with no recipients.
+      let accountId: string | undefined;
+      let toEmails: string[] = [];
+      if (detail.customer) {
+        try {
+          const [match] = await db.select().from(companies).where(andSql(
+            eqSql(companies.organizationId, user.organizationId),
+            sqlExpr`lower(${companies.name}) = lower(${detail.customer.name})`,
+          )).limit(1);
+          if (match) {
+            accountId = match.id;
+            const cs = await db.select().from(contacts).where(eqSql(contacts.companyId, match.id)).limit(20);
+            toEmails = cs.map(c => c.email).filter((e): e is string => !!e).slice(0, 5);
+          }
+        } catch (lookupErr) {
+          console.warn("[customer-quotes] spot email-draft contact lookup failed:", lookupErr);
+        }
+      }
+
+      const [voiceProfile, dataResult] = await Promise.all([
+        getVoiceProfile(user.id, user.username, user.organizationId),
+        gatherDataAnchors(user.organizationId, accountId, undefined),
+      ]);
+
+      const lane = `${detail.opp.originCity}, ${detail.opp.originState} → ${detail.opp.destCity}, ${detail.opp.destState}`;
+      const quotedAmt = Number(detail.opp.quotedAmount ?? 0);
+      const validStr = detail.opp.validThrough ? new Date(detail.opp.validThrough).toLocaleDateString() : "";
+      const dataContext = [
+        `Spot quote: ${lane}`,
+        `Equipment: ${detail.opp.equipment}`,
+        `Quoted: $${quotedAmt.toLocaleString()}`,
+        validStr ? `Valid through: ${validStr}` : "",
+        detail.opp.notes ? `Internal notes: ${detail.opp.notes}` : "",
+        dataResult.context,
+      ].filter(Boolean).join("\n");
+
+      const body = await generateDraft({
+        voiceProfile,
+        playType: "general",
+        dataContext,
+        additionalContext: `Outreach for spot quote ${lane} at $${quotedAmt.toLocaleString()}.`,
+      });
+      const subject = `Spot Quote: ${lane}`;
+      res.json({ subject, body, to: toEmails });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Invalid input";
+      console.error("[customer-quotes] spot email-draft error:", err);
+      res.status(500).json({ error: msg });
     }
   });
 

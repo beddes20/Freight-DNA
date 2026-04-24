@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z as zod } from "zod";
 import {
   getCityAutocompleteSuggestions,
   getLaneLocationSuggestions,
@@ -11,12 +15,16 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import {
   Search, MapPin, Truck, Calendar, AlertTriangle, TrendingUp, TrendingDown, Minus, Award, Users,
   Clock, Activity, X, ChevronRight, ChevronDown, Copy, RefreshCw, SlidersHorizontal,
+  DollarSign, Save, Phone, Mail, FileText, ChevronUp, ThumbsDown,
 } from "lucide-react";
 
 type Customer = { id: string; name: string };
@@ -1007,17 +1015,18 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
 
       {activeQuery && result.isLoading && (
         <div className="space-y-3" data-testid="spot-results-loading">
-          <Skeleton className="h-16 w-full bg-zinc-900 rounded-[4px]" />
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-12 gap-2">
-            {Array.from({ length: 12 }).map((_, i) => (
-              <Skeleton key={i} className="h-14 w-full bg-zinc-900 rounded-[4px]" />
-            ))}
-          </div>
-          <Skeleton className="h-24 w-full bg-zinc-900 rounded-[4px]" />
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          {/* Summary strip */}
+          <Skeleton className="h-12 w-full bg-zinc-900 rounded-[4px]" />
+          {/* Collapsed lane-stats bar */}
+          <Skeleton className="h-8 w-full bg-zinc-900 rounded-[4px]" />
+          {/* 4-zone grid mirror */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3" data-testid="spot-results-loading-zones">
+            <Skeleton className="h-72 w-full bg-zinc-900 rounded-[4px]" />
+            <Skeleton className="h-72 w-full bg-zinc-900 rounded-[4px]" />
             <Skeleton className="h-64 w-full bg-zinc-900 rounded-[4px]" />
             <Skeleton className="h-64 w-full bg-zinc-900 rounded-[4px]" />
           </div>
+          {/* Below-fold sections */}
           <Skeleton className="h-40 w-full bg-zinc-900 rounded-[4px]" />
         </div>
       )}
@@ -1106,28 +1115,53 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             </div>
           </div>
 
-          {/* 2. KPI strip */}
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-11 gap-2" data-testid="spot-section-kpis">
-            <Kpi label="Exact" value={String(data.kpis.exactCount)} accent="amber" />
-            <Kpi label="Similar" value={String(data.kpis.similarCount)} accent="blue" />
-            <Kpi label="Customers" value={String(data.kpis.customersOnLane)} />
-            <Kpi label="Pending" value={String(data.kpis.pendingCount)} />
-            <Kpi label="Win rate" value={fmtPct(data.kpis.winRate)} />
-            <Kpi label="Avg quoted" value={fmtMoney(data.kpis.avgQuoted)} />
-            <Kpi label="Avg won" value={fmtMoney(data.kpis.avgWonQuoted)} />
-            <Kpi label="Avg buy" value={fmtMoney(data.kpis.avgCarrierPaid)} />
-            <Kpi label="Avg margin" value={fmtMoney(data.kpis.avgMargin)} sub={data.kpis.avgMarginPct > 0 ? fmtPct(data.kpis.avgMarginPct) : undefined} />
-            <Kpi label="Last quoted" value={data.kpis.lastQuotedDays !== null ? `${data.kpis.lastQuotedDays}d` : "—"} />
-            <Kpi label="Last won" value={data.kpis.lastWonDays !== null ? `${data.kpis.lastWonDays}d` : "—"} />
-          </div>
+          {/* 2. Lane stats bar — collapsible KPI strip (Task #516) */}
+          <LaneStatsBar kpis={data.kpis} />
 
-          {/* 3. Pricing guidance — hero band (Task #515: TRAC primary, internal calibration) */}
-          <PricingGuidanceBand
-            guidance={data.guidance}
-            market={data.market}
-            marketStatus={data.marketStatus}
-            freshnessLabel={data.kpis.freshnessLabel}
-          />
+          {/* 3. Four-zone deal sheet (Task #516):
+              Zone 1 (Pricing + Quote Builder)  | Zone 2 (Carrier Shortlist)
+              Zone 3 (Customer Lane Timeline)   | Zone 4 (Loss Pattern)
+
+              The grid collapses to a single column at md and below, with the
+              Pricing/Builder zone first so reps land on the action surface
+              when the viewport shrinks. */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3" data-testid="spot-section-deal-sheet">
+            {/* Zone 1 — Pricing hero + Quote Builder stacked */}
+            <div className="space-y-3 order-1" data-testid="spot-zone-pricing">
+              <PricingGuidanceBand
+                guidance={data.guidance}
+                market={data.market}
+                marketStatus={data.marketStatus}
+                freshnessLabel={data.kpis.freshnessLabel}
+              />
+              <QuoteBuilderCard
+                query={data.query}
+                customers={customers}
+                customerId={data.resolvedCustomer?.id ?? activeQuery!.customerId ?? null}
+                guidance={data.guidance}
+                market={data.market}
+              />
+            </div>
+            {/* Zone 2 — Carrier shortlist (top 5) */}
+            <div className="order-2" data-testid="spot-zone-carriers">
+              <CarrierShortlistCard
+                outreach={data.carrierOutreach}
+                onShowAll={() => document.querySelector('[data-testid="spot-section-carrier-outreach"]')?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              />
+            </div>
+            {/* Zone 3 — Customer lane timeline */}
+            <div className="order-3" data-testid="spot-zone-timeline">
+              <CustomerLaneTimelineCard
+                exactMatches={data.exactMatches}
+                resolvedCustomer={data.resolvedCustomer}
+                onPickQuote={onPickQuote}
+              />
+            </div>
+            {/* Zone 4 — Loss pattern card */}
+            <div className="order-4" data-testid="spot-zone-loss">
+              <LossPatternCard tieredMatches={data.tieredMatches ?? []} />
+            </div>
+          </div>
 
           {/* Lane traffic (Task #515) — load_fact aggregates */}
           {data.laneTraffic && <LaneTrafficCard traffic={data.laneTraffic} />}
@@ -1671,6 +1705,553 @@ function CarrierOutreachList({ outreach }: { outreach: SpotResult["carrierOutrea
         </table>
       )}
     </SectionCard>
+  );
+}
+
+/**
+ * Task #516 — Quote Builder Card.
+ * Controlled react-hook-form. Pre-fills the quote from pricing guidance and
+ * the active search query, computes margin % live, disables Save when below
+ * the guardrail, and posts to /api/customer-quotes/spot/create. Also exposes
+ * an "Email customer" action that hits /api/customer-quotes/spot/email-draft
+ * after the quote is saved (or, if you prefer, against an existing quoteId).
+ */
+const SPOT_BUILDER_GUARDRAIL_PCT = 5;
+
+const quoteBuilderSchema = zod.object({
+  customerId: zod.string().min(1, "Pick a customer"),
+  quotedAmount: zod.number({ invalid_type_error: "Enter a number" }).finite().min(1, "Required").max(1_000_000),
+  estimatedCost: zod.number({ invalid_type_error: "Enter a number" }).finite().min(0).max(1_000_000).optional(),
+  validUntil: zod.string().regex(/^\d{4}-\d{2}-\d{2}$/, "YYYY-MM-DD").optional().or(zod.literal("")),
+  notes: zod.string().max(2000).optional(),
+});
+type QuoteBuilderValues = zod.infer<typeof quoteBuilderSchema>;
+
+function QuoteBuilderCard({
+  query, customers, customerId, guidance, market, onSaved,
+}: {
+  query: SpotSearchQuery;
+  customers: Customer[];
+  customerId: string | null;
+  guidance: SpotResult["guidance"];
+  market: SpotResult["market"];
+  onSaved?: (quoteId: string) => void;
+}): JSX.Element {
+  const { toast } = useToast();
+  const [savedQuoteId, setSavedQuoteId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<{ subject: string; body: string; to: string[] } | null>(null);
+
+  const suggestedHigh = guidance.suggestedHigh ?? guidance.benchmark ?? market?.band?.high ?? 0;
+  const suggestedLow = guidance.suggestedLow ?? guidance.benchmark ?? market?.band?.low ?? 0;
+  const benchmark = guidance.benchmark ?? market?.band?.mid ?? null;
+  const defaultQuoted = Math.round(suggestedHigh || benchmark || suggestedLow || 0);
+  const defaultCost = market?.band?.mid ?? null;
+
+  const form = useForm<QuoteBuilderValues>({
+    resolver: zodResolver(quoteBuilderSchema),
+    defaultValues: {
+      customerId: customerId ?? "",
+      quotedAmount: defaultQuoted > 0 ? defaultQuoted : undefined as unknown as number,
+      estimatedCost: defaultCost && defaultCost > 0 ? Math.round(defaultCost) : undefined,
+      validUntil: "",
+      notes: "",
+    },
+  });
+
+  // Re-prefill if the search/guidance changes (e.g. user reruns search).
+  useEffect(() => {
+    form.reset({
+      customerId: customerId ?? form.getValues("customerId") ?? "",
+      quotedAmount: defaultQuoted > 0 ? defaultQuoted : (form.getValues("quotedAmount") as number),
+      estimatedCost: defaultCost && defaultCost > 0 ? Math.round(defaultCost) : form.getValues("estimatedCost"),
+      validUntil: form.getValues("validUntil") ?? "",
+      notes: form.getValues("notes") ?? "",
+    });
+    setSavedQuoteId(null);
+    setDraft(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query.pickupCity, query.pickupState, query.deliveryCity, query.deliveryState, query.equipment, customerId, defaultQuoted, defaultCost]);
+
+  const watched = form.watch();
+  const quoted = Number(watched.quotedAmount) || 0;
+  const cost = Number(watched.estimatedCost) || 0;
+  const marginAmt = quoted - cost;
+  const marginPct = quoted > 0 && cost > 0 ? (marginAmt / quoted) * 100 : null;
+  const guardrailViolation = marginPct !== null && marginPct < SPOT_BUILDER_GUARDRAIL_PCT;
+
+  const createMut = useMutation({
+    mutationFn: async (values: QuoteBuilderValues) => {
+      const payload = {
+        pickupCity: query.pickupCity,
+        pickupState: query.pickupState,
+        deliveryCity: query.deliveryCity,
+        deliveryState: query.deliveryState,
+        equipment: query.equipment && query.equipment !== "Any" ? query.equipment : "Van",
+        customerId: values.customerId,
+        quotedAmount: values.quotedAmount,
+        estimatedCost: values.estimatedCost && values.estimatedCost > 0 ? values.estimatedCost : undefined,
+        validUntil: values.validUntil || undefined,
+        notes: values.notes || undefined,
+      };
+      const res = await apiRequest("POST", "/api/customer-quotes/spot/create", payload);
+      return await res.json() as { id: string };
+    },
+    onSuccess: (data) => {
+      setSavedQuoteId(data.id);
+      toast({ title: "Quote saved", description: `$${quoted.toLocaleString()} · ${query.pickupCity} → ${query.deliveryCity}` });
+      void queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/snapshot"] });
+      void queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/list"] });
+      onSaved?.(data.id);
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : "Save failed";
+      toast({ title: "Could not save quote", description: msg, variant: "destructive" });
+    },
+  });
+
+  const draftMut = useMutation({
+    mutationFn: async (quoteId: string) => {
+      const res = await apiRequest("POST", "/api/customer-quotes/spot/email-draft", { quoteId });
+      return await res.json() as { subject: string; body: string; to: string[] };
+    },
+    onSuccess: (d) => {
+      setDraft(d);
+      toast({ title: "Draft ready", description: `${d.body.length} chars` });
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : "Draft failed";
+      toast({ title: "Could not draft email", description: msg, variant: "destructive" });
+    },
+  });
+
+  const submit = form.handleSubmit((values) => {
+    if (guardrailViolation) {
+      toast({
+        title: `Margin below ${SPOT_BUILDER_GUARDRAIL_PCT}% guardrail`,
+        description: "Raise the quoted rate or lower the estimated cost before saving.",
+        variant: "destructive",
+      });
+      return;
+    }
+    createMut.mutate(values);
+  });
+
+  const marginToneClass =
+    marginPct === null ? "text-zinc-400"
+    : guardrailViolation ? "text-red-300"
+    : marginPct < 10 ? "text-amber-300"
+    : "text-emerald-300";
+
+  return (
+    <Card className="bg-zinc-900 rounded-[4px] border border-amber-500/40 shadow-[0_0_0_1px_rgba(251,191,36,0.05)]" data-testid="spot-zone-quote-builder">
+      <CardHeader className="py-2.5 px-3 flex flex-row items-center justify-between border-b border-zinc-800 bg-amber-500/[0.04]">
+        <CardTitle className="text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+          <DollarSign className="h-3.5 w-3.5 text-amber-400" /> Quote Builder
+        </CardTitle>
+        {benchmark != null && (
+          <span className="text-[10px] text-zinc-500 tabular-nums">
+            Benchmark <span className="text-amber-300">{fmtMoney(benchmark)}</span>
+          </span>
+        )}
+      </CardHeader>
+      <CardContent className="p-3">
+        <Form {...form}>
+          <form onSubmit={submit} className="space-y-3" data-testid="form-quote-builder">
+            <div className="grid grid-cols-2 gap-2">
+              <FormField control={form.control} name="customerId" render={({ field }) => (
+                <FormItem className="col-span-2">
+                  <FormLabel className="text-[10px] uppercase tracking-wider text-zinc-500">Customer</FormLabel>
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <FormControl>
+                      <SelectTrigger className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 [&>span]:text-zinc-100" data-testid="select-builder-customer">
+                        <SelectValue placeholder="Select customer" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )} />
+              <FormField control={form.control} name="quotedAmount" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-[10px] uppercase tracking-wider text-zinc-500">Quoted ($)</FormLabel>
+                  <FormControl>
+                    <Input type="number" min={0} step={1} inputMode="decimal"
+                      value={field.value ?? ""}
+                      onChange={e => field.onChange(e.target.value === "" ? undefined : Number(e.target.value))}
+                      className="h-8 bg-zinc-900 border-zinc-700 text-sm text-zinc-100 tabular-nums"
+                      data-testid="input-builder-quoted" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )} />
+              <FormField control={form.control} name="estimatedCost" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-[10px] uppercase tracking-wider text-zinc-500">Est. cost ($)</FormLabel>
+                  <FormControl>
+                    <Input type="number" min={0} step={1} inputMode="decimal"
+                      value={field.value ?? ""}
+                      onChange={e => field.onChange(e.target.value === "" ? undefined : Number(e.target.value))}
+                      className="h-8 bg-zinc-900 border-zinc-700 text-sm text-zinc-100 tabular-nums"
+                      data-testid="input-builder-cost" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )} />
+              <FormField control={form.control} name="validUntil" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-[10px] uppercase tracking-wider text-zinc-500">Valid until</FormLabel>
+                  <FormControl>
+                    <Input type="date" {...field}
+                      className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 [color-scheme:dark]"
+                      data-testid="input-builder-valid" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )} />
+              <FormField control={form.control} name="notes" render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-[10px] uppercase tracking-wider text-zinc-500">Notes</FormLabel>
+                  <FormControl>
+                    <Input {...field} placeholder="Internal note (optional)"
+                      className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 placeholder:text-zinc-500"
+                      data-testid="input-builder-notes" />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )} />
+            </div>
+            <div className="rounded-[4px] border border-zinc-800 bg-zinc-950 px-2 py-1.5 flex items-center justify-between text-[11px]">
+              <div className="flex items-center gap-3">
+                <span className="text-zinc-500 uppercase tracking-wider text-[9px]">Live margin</span>
+                <span className={`font-semibold tabular-nums ${marginToneClass}`} data-testid="text-builder-margin-pct">
+                  {marginPct === null ? "—" : `${marginPct.toFixed(1)}%`}
+                </span>
+                <span className="text-zinc-500 tabular-nums" data-testid="text-builder-margin-amt">
+                  {marginAmt !== 0 ? fmtMoney(marginAmt) : ""}
+                </span>
+              </div>
+              {guardrailViolation && (
+                <span className="text-[10px] text-red-300 inline-flex items-center gap-1" data-testid="text-builder-guardrail">
+                  <AlertTriangle className="h-3 w-3" /> below {SPOT_BUILDER_GUARDRAIL_PCT}%
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <TooltipProvider delayDuration={150}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span>
+                      <Button
+                        type="submit"
+                        size="sm"
+                        disabled={guardrailViolation || createMut.isPending}
+                        className="h-8 bg-[#FFC333] hover:bg-amber-400 text-zinc-950 font-semibold rounded-[4px] px-3 disabled:opacity-50"
+                        data-testid="button-builder-save"
+                      >
+                        <Save className="h-3 w-3 mr-1" /> {createMut.isPending ? "Saving…" : savedQuoteId ? "Saved" : "Save quote"}
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {guardrailViolation && (
+                    <TooltipContent>Margin below {SPOT_BUILDER_GUARDRAIL_PCT}% guardrail.</TooltipContent>
+                  )}
+                </Tooltip>
+              </TooltipProvider>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!savedQuoteId || draftMut.isPending}
+                onClick={() => savedQuoteId && draftMut.mutate(savedQuoteId)}
+                className="h-8 border-amber-500/40 hover:bg-amber-500/10 text-amber-200 text-xs px-3 disabled:opacity-50"
+                data-testid="button-builder-email"
+              >
+                <Mail className="h-3 w-3 mr-1" /> {draftMut.isPending ? "Drafting…" : "Email customer"}
+              </Button>
+              {savedQuoteId && (
+                <span className="text-[10px] text-emerald-300 ml-auto" data-testid="text-builder-saved-id">Quote #{savedQuoteId.slice(0, 8)}</span>
+              )}
+            </div>
+            {draft && (
+              <div className="rounded-[4px] border border-zinc-800 bg-zinc-950 p-2 space-y-1.5" data-testid="builder-email-draft">
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="text-zinc-500 uppercase tracking-wider">Draft</span>
+                  <span className="text-zinc-500" data-testid="text-builder-draft-to">
+                    To: {draft.to.length > 0 ? draft.to.join(", ") : <span className="text-zinc-600 italic">add recipients</span>}
+                  </span>
+                </div>
+                <div className="text-[11px] text-zinc-300 font-medium" data-testid="text-builder-draft-subject">{draft.subject}</div>
+                <Textarea
+                  value={draft.body}
+                  onChange={e => setDraft(d => d ? { ...d, body: e.target.value } : d)}
+                  className="min-h-[120px] text-xs bg-zinc-900 border-zinc-700 text-zinc-200"
+                  data-testid="textarea-builder-draft-body"
+                />
+              </div>
+            )}
+          </form>
+        </Form>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Task #516 — Carrier Shortlist Card.
+ * Top 5 of carrierOutreach with Webex click-to-call + mailto. Reuses the
+ * primitives that CarrierOutreachList already exposes (presence chip, in-
+ * rolodex flag, DNU). Compact form; opens the full outreach panel on demand.
+ */
+function CarrierShortlistCard({
+  outreach, onShowAll,
+}: {
+  outreach: SpotResult["carrierOutreach"];
+  onShowAll?: () => void;
+}): JSX.Element {
+  const top = outreach.slice(0, 5);
+  return (
+    <Card className="bg-zinc-900 rounded-[4px] border border-zinc-800" data-testid="spot-zone-carrier-shortlist">
+      <CardHeader className="py-2.5 px-3 flex flex-row items-center justify-between border-b border-zinc-800">
+        <CardTitle className="text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+          <Truck className="h-3.5 w-3.5 text-amber-400" /> Carriers to Call (top 5)
+        </CardTitle>
+        {outreach.length > 5 && (
+          <button type="button" onClick={onShowAll} className="text-[10px] text-amber-300 hover:text-amber-200 underline" data-testid="button-shortlist-show-all">
+            Show all {outreach.length}
+          </button>
+        )}
+      </CardHeader>
+      <CardContent className="p-3">
+        {top.length === 0 ? (
+          <div className="text-zinc-500 text-xs text-center py-4">No fit carriers found for this lane.</div>
+        ) : (
+          <ul className="space-y-1.5">
+            {top.map((c, i) => (
+              <li key={`${c.carrierId ?? c.name}-${i}`}
+                className={`flex items-center gap-2 rounded-[4px] border border-zinc-800 bg-zinc-950 px-2 py-1.5 ${c.doNotUse ? "opacity-50" : ""}`}
+                data-testid={`row-shortlist-${i}`}>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 text-xs text-zinc-100">
+                    <span className="truncate">{c.name}</span>
+                    {c.inRolodex && <span className="text-[9px] px-1 py-0.5 rounded-[3px] bg-blue-500/15 text-blue-300 border border-blue-500/30" title="In your rolodex">★</span>}
+                    {c.doNotUse && <span className="text-[9px] px-1 py-0.5 rounded-[3px] bg-red-500/15 text-red-300 border border-red-500/30">DNU</span>}
+                    {c.presence === "active" && <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" title="Active" />}
+                    {c.presence === "known" && <span className="h-1.5 w-1.5 rounded-full bg-blue-400" title="Known" />}
+                    {c.presence === "cold" && <span className="h-1.5 w-1.5 rounded-full bg-zinc-500" title="Cold" />}
+                  </div>
+                  <div className="text-[10px] text-zinc-500 tabular-nums">
+                    Rank {c.rankScore.toFixed(0)} · {c.loads90d} loads/90d · {c.marginPct.toFixed(0)}% margin
+                    {c.lastRatePaid != null && <> · last ${c.lastRatePaid.toLocaleString(undefined, { maximumFractionDigits: 0 })}</>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  {c.phone && (
+                    <a href={`tel:${c.phone}`}
+                      className="h-7 w-7 inline-flex items-center justify-center rounded-[4px] border border-zinc-700 hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-300"
+                      title={`Call ${c.phone}`}
+                      data-testid={`button-shortlist-call-${i}`}>
+                      <Phone className="h-3 w-3" />
+                    </a>
+                  )}
+                  {c.primaryEmail && (
+                    <a href={`mailto:${c.primaryEmail}`}
+                      className="h-7 w-7 inline-flex items-center justify-center rounded-[4px] border border-zinc-700 hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-300"
+                      title={`Email ${c.primaryEmail}`}
+                      data-testid={`button-shortlist-email-${i}`}>
+                      <Mail className="h-3 w-3" />
+                    </a>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Task #516 — Customer Lane Timeline Card.
+ * 5-item vertical timeline of the most recent customer-scoped exact-tier
+ * quotes (i.e. the same lane, restricted to the resolved customer when
+ * present, otherwise all customers).
+ */
+function CustomerLaneTimelineCard({
+  exactMatches, resolvedCustomer, onPickQuote,
+}: {
+  exactMatches: EnrichedQuote[];
+  resolvedCustomer: { id: string; name: string } | null;
+  onPickQuote: (id: string) => void;
+}): JSX.Element {
+  const filtered = resolvedCustomer
+    ? exactMatches.filter(q => q.customerId === resolvedCustomer.id)
+    : exactMatches;
+  const timeline = filtered
+    .slice()
+    .sort((a, b) => new Date(b.requestDate).getTime() - new Date(a.requestDate).getTime())
+    .slice(0, 5);
+  return (
+    <Card className="bg-zinc-900 rounded-[4px] border border-zinc-800" data-testid="spot-zone-customer-timeline">
+      <CardHeader className="py-2.5 px-3 flex flex-row items-center justify-between border-b border-zinc-800">
+        <CardTitle className="text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+          <Clock className="h-3.5 w-3.5 text-amber-400" />
+          {resolvedCustomer ? `${resolvedCustomer.name} on this lane` : "Recent on this lane"}
+        </CardTitle>
+        <span className="text-[10px] text-zinc-500">{timeline.length} of {filtered.length}</span>
+      </CardHeader>
+      <CardContent className="p-3">
+        {timeline.length === 0 ? (
+          <div className="text-xs text-zinc-500 text-center py-4">
+            {resolvedCustomer
+              ? `No prior exact-lane quotes for ${resolvedCustomer.name}.`
+              : "No exact-lane quote history yet."}
+          </div>
+        ) : (
+          <ol className="relative space-y-2.5 pl-4 border-l border-zinc-800">
+            {timeline.map((q, i) => {
+              const quoted = num(q.quotedAmount);
+              const paid = num(q.carrierPaid);
+              return (
+                <li key={q.id} className="relative" data-testid={`timeline-item-${i}`}>
+                  <span className={`absolute -left-[18px] top-1 h-2 w-2 rounded-full ${
+                    q.outcomeStatus === "won" || q.outcomeStatus === "won_low_margin" ? "bg-emerald-400" :
+                    q.outcomeStatus === "pending" ? "bg-amber-400" :
+                    q.outcomeStatus.startsWith("lost") ? "bg-red-400" : "bg-zinc-500"
+                  }`} />
+                  <button type="button" onClick={() => onPickQuote(q.id)}
+                    className="text-left w-full hover:bg-zinc-800/40 rounded-[4px] px-1.5 py-1 -mx-1.5 transition"
+                    data-testid={`button-timeline-${q.id}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] text-zinc-300">{new Date(q.requestDate).toLocaleDateString()}</span>
+                      <StatusChip status={q.outcomeStatus} />
+                    </div>
+                    <div className="flex items-center justify-between gap-2 mt-0.5">
+                      <span className="text-xs text-zinc-100 truncate">{q.customerName}</span>
+                      <span className="text-xs text-zinc-200 tabular-nums">{fmtMoney(quoted)}{paid ? <span className="text-zinc-500"> / {fmtMoney(paid)}</span> : null}</span>
+                    </div>
+                    {q.outcomeReasonLabel && (
+                      <div className="text-[10px] text-zinc-500 mt-0.5 truncate">{q.outcomeReasonLabel}</div>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Task #516 — Loss Pattern Card.
+ * Buckets lost (or no_response/expired) quotes from the lane history by
+ * outcomeReasonLabel and surfaces the top reason as a takeaway. Helps the
+ * rep frame the new quote with awareness of why prior bids fell over.
+ */
+function LossPatternCard({ tieredMatches }: { tieredMatches: TierGroup[] }): JSX.Element {
+  const allQuotes: EnrichedQuote[] = tieredMatches.flatMap(g => g.items ?? g.quotes ?? []);
+  const losses = allQuotes.filter(q =>
+    q.outcomeStatus.startsWith("lost") || q.outcomeStatus === "no_response" || q.outcomeStatus === "expired"
+  );
+  const grouped = new Map<string, { reason: string; count: number; sample: EnrichedQuote[] }>();
+  for (const q of losses) {
+    const reason = (q.outcomeReasonLabel ?? "Unknown reason").trim() || "Unknown reason";
+    const entry = grouped.get(reason) ?? { reason, count: 0, sample: [] };
+    entry.count += 1;
+    if (entry.sample.length < 3) entry.sample.push(q);
+    grouped.set(reason, entry);
+  }
+  const buckets = Array.from(grouped.values()).sort((a, b) => b.count - a.count).slice(0, 4);
+  const total = losses.length;
+  const top = buckets[0] ?? null;
+  const takeaway = top
+    ? `${Math.round((top.count / total) * 100)}% of losses on this lane cite "${top.reason}". Address it up front in your pitch.`
+    : "No prior losses on this lane — clean slate.";
+  return (
+    <Card className="bg-zinc-900 rounded-[4px] border border-zinc-800" data-testid="spot-zone-loss-pattern">
+      <CardHeader className="py-2.5 px-3 flex flex-row items-center justify-between border-b border-zinc-800">
+        <CardTitle className="text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+          <ThumbsDown className="h-3.5 w-3.5 text-amber-400" /> Why we lose this lane
+        </CardTitle>
+        <span className="text-[10px] text-zinc-500 tabular-nums">{total} losses</span>
+      </CardHeader>
+      <CardContent className="p-3 space-y-2">
+        {buckets.length === 0 ? (
+          <div className="text-xs text-zinc-500 text-center py-4">No prior losses on this lane.</div>
+        ) : (
+          <>
+            <ul className="space-y-1.5">
+              {buckets.map((b, i) => (
+                <li key={b.reason} className="flex items-center gap-2 text-xs" data-testid={`loss-bucket-${i}`}>
+                  <span className="text-zinc-200 flex-1 truncate">{b.reason}</span>
+                  <div className="w-20 h-1.5 bg-zinc-800 rounded-[4px] overflow-hidden">
+                    <div className="h-full bg-red-400/70" style={{ width: `${Math.min(100, (b.count / total) * 100)}%` }} />
+                  </div>
+                  <span className="text-zinc-400 tabular-nums w-10 text-right">{b.count}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="rounded-[4px] border border-amber-500/30 bg-amber-500/[0.05] px-2 py-1.5 text-[11px] text-amber-200" data-testid="text-loss-takeaway">
+              {takeaway}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Task #516 — Lane Stats Bar (collapsible KPI strip).
+ * Replaces the always-visible KPI grid above Pricing.
+ */
+function LaneStatsBar({ kpis }: { kpis: SpotResult["kpis"] }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} data-testid="spot-section-lane-stats">
+      <div className="rounded-[4px] border border-zinc-800 bg-zinc-900/60 px-3 py-1.5 flex items-center gap-3 flex-wrap">
+        <CollapsibleTrigger asChild>
+          <button type="button"
+            className="text-[10px] uppercase tracking-wider text-zinc-400 hover:text-zinc-100 inline-flex items-center gap-1"
+            data-testid="button-lane-stats-toggle">
+            {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            Lane stats
+          </button>
+        </CollapsibleTrigger>
+        <span className="text-[11px] text-zinc-400">
+          <span className="text-zinc-500">Win</span> <span className="text-zinc-100 tabular-nums font-semibold">{fmtPct(kpis.winRate)}</span>
+        </span>
+        <span className="text-[11px] text-zinc-400">
+          <span className="text-zinc-500">Avg quoted</span> <span className="text-zinc-100 tabular-nums">{fmtMoney(kpis.avgQuoted)}</span>
+        </span>
+        <span className="text-[11px] text-zinc-400">
+          <span className="text-zinc-500">Avg margin</span> <span className="text-zinc-100 tabular-nums">{fmtMoney(kpis.avgMargin)}{kpis.avgMarginPct > 0 ? ` · ${fmtPct(kpis.avgMarginPct)}` : ""}</span>
+        </span>
+        <span className="text-[11px] text-zinc-400">
+          <span className="text-zinc-500">Last quoted</span> <span className="text-zinc-100 tabular-nums">{kpis.lastQuotedDays !== null ? `${kpis.lastQuotedDays}d` : "—"}</span>
+        </span>
+      </div>
+      <CollapsibleContent>
+        <div className="mt-2 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-11 gap-2">
+          <Kpi label="Exact" value={String(kpis.exactCount)} accent="amber" />
+          <Kpi label="Similar" value={String(kpis.similarCount)} accent="blue" />
+          <Kpi label="Customers" value={String(kpis.customersOnLane)} />
+          <Kpi label="Pending" value={String(kpis.pendingCount)} />
+          <Kpi label="Win rate" value={fmtPct(kpis.winRate)} />
+          <Kpi label="Avg quoted" value={fmtMoney(kpis.avgQuoted)} />
+          <Kpi label="Avg won" value={fmtMoney(kpis.avgWonQuoted)} />
+          <Kpi label="Avg buy" value={fmtMoney(kpis.avgCarrierPaid)} />
+          <Kpi label="Avg margin" value={fmtMoney(kpis.avgMargin)} sub={kpis.avgMarginPct > 0 ? fmtPct(kpis.avgMarginPct) : undefined} />
+          <Kpi label="Last quoted" value={kpis.lastQuotedDays !== null ? `${kpis.lastQuotedDays}d` : "—"} />
+          <Kpi label="Last won" value={kpis.lastWonDays !== null ? `${kpis.lastWonDays}d` : "—"} />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
