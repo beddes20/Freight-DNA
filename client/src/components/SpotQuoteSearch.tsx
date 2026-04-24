@@ -1460,9 +1460,7 @@ function QuoteListSection({ title, icon, testId, emptyNode, quotes, onPickQuote,
 }
 
 /**
- * Task #515 — Pricing guidance band. Shows the TRAC market band as the
- * primary suggested range when available, with the rep's internal
- * P25-P75 won-quote band displayed underneath as a calibration line.
+ * Pricing guidance band — TRAC market band primary, internal P25-P75 calibration line below.
  */
 function PricingGuidanceBand({ guidance, market, marketStatus, freshnessLabel }: {
   guidance: SpotResult["guidance"];
@@ -1562,8 +1560,7 @@ function PricingGuidanceBand({ guidance, market, marketStatus, freshnessLabel }:
 }
 
 /**
- * Task #515 — Lane Traffic card. Shows aggregate load_fact volume
- * and the top carriers actually moving freight on this state-state lane.
+ * Lane Traffic — load_fact volume and top carriers moving freight on this state-state lane.
  */
 function LaneTrafficCard({ traffic }: { traffic: NonNullable<SpotResult["laneTraffic"]> }): JSX.Element {
   const tb = traffic.tierBreakdown;
@@ -1620,9 +1617,7 @@ function LaneTrafficCard({ traffic }: { traffic: NonNullable<SpotResult["laneTra
 }
 
 /**
- * Task #515 — Carrier Outreach List. Replaces SpotCarrierHistory.
- * Surfaces top 25 carriers from carrier_lane_fit ⨝ scorecard ⨝ rolodex,
- * with a "call/email" affordance and an in-rolodex flag.
+ * Carrier Outreach List — top 25 carriers from carrier_lane_fit ⨝ scorecard ⨝ rolodex.
  */
 function CarrierOutreachList({ outreach }: { outreach: SpotResult["carrierOutreach"] }): JSX.Element {
   const [showAll, setShowAll] = useState(false);
@@ -1707,14 +1702,8 @@ function CarrierOutreachList({ outreach }: { outreach: SpotResult["carrierOutrea
   );
 }
 
-/**
- * Task #516 — Quote Builder Card.
- * Controlled react-hook-form. Pre-fills the quote from pricing guidance and
- * the active search query, computes margin % live, disables Save when below
- * the guardrail, and posts to /api/customer-quotes/spot/create. Also exposes
- * an "Email customer" action that hits /api/customer-quotes/spot/email-draft
- * after the quote is saved (or, if you prefer, against an existing quoteId).
- */
+// Quote Builder Card — controlled form, live margin %, guardrail-disabled save,
+// posts to /api/customer-quotes/spot/create then /spot/email-draft.
 const SPOT_BUILDER_GUARDRAIL_PCT = 5;
 
 // QuoteBuilder form contract is the canonical spotQuoteCreateSchema from
@@ -2025,12 +2014,7 @@ function QuoteBuilderCard({
   );
 }
 
-/**
- * Task #516 — Carrier Shortlist Card.
- * Top 5 of carrierOutreach with Webex click-to-call + mailto. Reuses the
- * primitives that CarrierOutreachList already exposes (presence chip, in-
- * rolodex flag, DNU). Compact form; opens the full outreach panel on demand.
- */
+// Carrier Shortlist — top 5 outreach rows with click-to-call + mailto.
 function CarrierShortlistCard({
   outreach,
 }: {
@@ -2111,12 +2095,7 @@ function CarrierShortlistCard({
   );
 }
 
-/**
- * Task #516 — Customer Lane Timeline Card.
- * 5-item vertical timeline of the most recent customer-scoped exact-tier
- * quotes (i.e. the same lane, restricted to the resolved customer when
- * present, otherwise all customers).
- */
+// Customer Lane Timeline — last 5 exact-lane quotes for the resolved customer.
 function CustomerLaneTimelineCard({
   exactMatches, resolvedCustomer, onPickQuote,
 }: {
@@ -2184,13 +2163,7 @@ function CustomerLaneTimelineCard({
   );
 }
 
-/**
- * Task #516 — Loss Pattern Card.
- * Buckets lost (or no_response/expired) quotes from the lane history by
- * outcomeReasonLabel and surfaces the top reason as a takeaway. Helps the
- * rep frame the new quote with awareness of why prior bids fell over.
- */
-// Canonical loss buckets for the spot deal sheet (Task #516).
+// Loss Pattern — buckets exact-lane losses by outcome reason and surfaces the top bucket.
 type LossBucketKey = "price_too_high" | "no_truck" | "no_response" | "customer_cancelled" | "other";
 const LOSS_BUCKET_LABELS: Record<LossBucketKey, string> = {
   price_too_high: "Price too high",
@@ -2208,8 +2181,6 @@ function classifyLossReason(q: EnrichedQuote): LossBucketKey {
   if (/(no\s*truck|capac|equip|driver|asset|coverage|avail)/.test(r)) return "no_truck";
   return "other";
 }
-// Scope to exact-lane history only (per spec): the deal-sheet card is about
-// "why we lose THIS lane", so other corridors / reverse direction don't count.
 function LossPatternCard({ tieredMatches }: { tieredMatches: TierGroup[] }): JSX.Element {
   const exactGroup = tieredMatches.find(g => g.tier === "exact");
   const allQuotes: EnrichedQuote[] = exactGroup ? (exactGroup.items ?? exactGroup.quotes ?? []) : [];
@@ -2280,8 +2251,7 @@ function LossPatternCard({ tieredMatches }: { tieredMatches: TierGroup[] }): JSX
 }
 
 /**
- * Task #516 — Lane Stats Bar (collapsible KPI strip).
- * Replaces the always-visible KPI grid above Pricing.
+ * Lane Stats Bar — collapsible KPI strip above Pricing.
  */
 function LaneStatsBar({ kpis }: { kpis: SpotResult["kpis"] }): JSX.Element {
   const [open, setOpen] = useState(false);

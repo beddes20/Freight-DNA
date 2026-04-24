@@ -17,9 +17,7 @@ import { and as andSql, eq as eqSql, sql as sqlExpr } from "drizzle-orm";
 import { gatherDataAnchors, generateDraft } from "./emailDrafting";
 import { getVoiceProfile } from "../voiceProfileService";
 
-// Task #516 — Minimum margin % guardrail enforced when an estimatedCost is
-// supplied with a spot-create request. Externalized via env so brokers can
-// tune without a code change.
+// Minimum margin % guardrail when estimatedCost is supplied. Env-tunable.
 const SPOT_MIN_MARGIN_PCT: number = (() => {
   const raw = parseFloat(process.env.SPOT_MIN_MARGIN_PCT ?? "");
   return Number.isFinite(raw) && raw >= 0 ? raw : 5;
