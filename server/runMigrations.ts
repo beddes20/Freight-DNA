@@ -4112,4 +4112,231 @@ export async function runMigrations() {
   } finally {
     client472.release();
   }
+
+  // ── Task #466: Webex Full API Coverage & Max Backfill ────────────────────
+  // 1. Add `scopes_version` to webex_user_tokens so we can flag every
+  //    pre-expansion connection into needs_reauth=true on first boot.
+  // 2. Create the new tables that back the Webex Health panel: per-API
+  //    sync state, tracked enrichment queue, resumable backfill jobs,
+  //    recent failures log, voicemail metadata, and snapshot tables for
+  //    workspaces / locations / queues / hunt groups / devices / reports.
+  // 3. One-time scope bump: every webex_user_tokens row whose scopes_version
+  //    is < CURRENT bumps to needs_reauth=true with a clear reason so reps
+  //    are prompted to reconnect once. Org-level token (api_response_cache
+  //    key 'webex_refresh_token') is also dropped so the admin reconnects
+  //    once and grants the full analytics scope.
+  const WEBEX_SCOPES_VERSION_CURRENT = 2;
+  const client466 = await pool.connect();
+  try {
+    await client466.query(`
+      ALTER TABLE webex_user_tokens
+        ADD COLUMN IF NOT EXISTS scopes_version INTEGER NOT NULL DEFAULT 1
+    `);
+    await client466.query(`
+      CREATE TABLE IF NOT EXISTS webex_sync_state (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        data_type TEXT NOT NULL,
+        last_success_at TIMESTAMP,
+        last_attempt_at TIMESTAMP,
+        last_error TEXT,
+        last_error_at TIMESTAMP,
+        cursor TEXT,
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client466.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS webex_sync_state_org_type_idx
+        ON webex_sync_state (org_id, data_type)
+    `);
+    await client466.query(`
+      CREATE TABLE IF NOT EXISTS webex_call_enrichment_jobs (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        call_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        next_run_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client466.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS webex_enrich_org_call_idx
+        ON webex_call_enrichment_jobs (org_id, call_id)
+    `);
+    await client466.query(`
+      CREATE INDEX IF NOT EXISTS webex_enrich_status_idx
+        ON webex_call_enrichment_jobs (status, next_run_at)
+    `);
+    await client466.query(`
+      CREATE TABLE IF NOT EXISTS webex_backfill_jobs (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        data_type TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running',
+        target_window_days INTEGER,
+        started_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMP,
+        chunks_total INTEGER NOT NULL DEFAULT 0,
+        chunks_done INTEGER NOT NULL DEFAULT 0,
+        chunks_failed INTEGER NOT NULL DEFAULT 0,
+        items_processed INTEGER NOT NULL DEFAULT 0,
+        progress_pct DECIMAL(5,2),
+        eta_ms INTEGER,
+        last_error TEXT,
+        next_chunk_cursor TEXT,
+        triggered_by TEXT,
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client466.query(`
+      CREATE INDEX IF NOT EXISTS webex_backfill_org_type_idx
+        ON webex_backfill_jobs (org_id, data_type)
+    `);
+    await client466.query(`
+      CREATE INDEX IF NOT EXISTS webex_backfill_status_idx
+        ON webex_backfill_jobs (status)
+    `);
+    await client466.query(`
+      CREATE TABLE IF NOT EXISTS webex_api_failures (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id VARCHAR REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id VARCHAR REFERENCES users(id) ON DELETE SET NULL,
+        endpoint TEXT NOT NULL,
+        method TEXT NOT NULL DEFAULT 'GET',
+        status INTEGER NOT NULL,
+        body TEXT,
+        occurred_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client466.query(`
+      CREATE INDEX IF NOT EXISTS webex_failures_org_time_idx
+        ON webex_api_failures (org_id, occurred_at)
+    `);
+    await client466.query(`
+      CREATE TABLE IF NOT EXISTS webex_voicemails (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id VARCHAR REFERENCES users(id) ON DELETE SET NULL,
+        webex_message_id TEXT NOT NULL,
+        caller_number TEXT,
+        caller_name TEXT,
+        duration_seconds INTEGER NOT NULL DEFAULT 0,
+        received_at TIMESTAMP,
+        is_read BOOLEAN NOT NULL DEFAULT FALSE,
+        transcript TEXT,
+        transcript_source TEXT,
+        audio_fetched_at TIMESTAMP,
+        contact_id VARCHAR,
+        company_id VARCHAR,
+        synced_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client466.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS webex_voicemails_user_msg_idx
+        ON webex_voicemails (user_id, webex_message_id)
+    `);
+    await client466.query(`
+      CREATE INDEX IF NOT EXISTS webex_voicemails_org_time_idx
+        ON webex_voicemails (org_id, received_at)
+    `);
+    for (const [tbl, extra] of [
+      ["webex_workspaces", `display_name TEXT, workspace_location_id TEXT, capacity INTEGER, type TEXT, notes TEXT`],
+      ["webex_locations",  `name TEXT, time_zone TEXT, country_code TEXT, address JSONB`],
+      ["webex_call_queues",`name TEXT, location_id TEXT, phone_number TEXT, extension TEXT, enabled BOOLEAN`],
+      ["webex_hunt_groups",`name TEXT, location_id TEXT, phone_number TEXT, extension TEXT, enabled BOOLEAN`],
+    ] as const) {
+      await client466.query(`
+        CREATE TABLE IF NOT EXISTS ${tbl} (
+          id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+          org_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          webex_id TEXT NOT NULL,
+          ${extra},
+          synced_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+      `);
+      await client466.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS ${tbl}_org_idx ON ${tbl} (org_id, webex_id)
+      `);
+    }
+    await client466.query(`
+      CREATE TABLE IF NOT EXISTS webex_devices_snapshot (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        webex_id TEXT NOT NULL,
+        display_name TEXT,
+        product TEXT,
+        product_type TEXT,
+        type TEXT,
+        mac TEXT,
+        serial TEXT,
+        person_id TEXT,
+        workspace_id TEXT,
+        connection_status TEXT,
+        last_connection_at TIMESTAMP,
+        created_at_webex TIMESTAMP,
+        synced_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client466.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS webex_devices_snapshot_org_idx
+        ON webex_devices_snapshot (org_id, webex_id)
+    `);
+    await client466.query(`
+      CREATE TABLE IF NOT EXISTS webex_admin_reports (
+        id VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id VARCHAR NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        webex_id TEXT NOT NULL,
+        template_id INTEGER,
+        status TEXT,
+        start_date TEXT,
+        end_date TEXT,
+        created_at_webex TIMESTAMP,
+        download_url TEXT,
+        synced_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client466.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS webex_admin_reports_org_idx
+        ON webex_admin_reports (org_id, webex_id)
+    `);
+
+    // One-time scope bump → mark every existing per-user token as needs_reauth.
+    const bumped = await client466.query(
+      `UPDATE webex_user_tokens
+         SET needs_reauth = TRUE,
+             reauth_reason = 'Webex scope expansion: please reconnect to grant analytics, voicemail, devices, workspaces, queues, and reports access.',
+             scopes_version = $1,
+             last_reauth_email_at = NULL,
+             updated_at = NOW()
+       WHERE COALESCE(scopes_version, 1) < $1`,
+      [WEBEX_SCOPES_VERSION_CURRENT],
+    );
+    if ((bumped.rowCount ?? 0) > 0) {
+      console.log(`[migrations] Task #466: marked ${bumped.rowCount} webex_user_tokens for re-auth (scope bump)`);
+    }
+    // Drop the org-level refresh token if it predates the scope bump so the
+    // admin reconnects once. We use a marker key to do this exactly once.
+    const marker = await client466.query(
+      `SELECT 1 FROM api_response_cache WHERE cache_key = 'webex_scopes_v2_applied'`,
+    );
+    if (marker.rowCount === 0) {
+      await client466.query(`DELETE FROM api_response_cache WHERE cache_key = 'webex_refresh_token'`);
+      await client466.query(
+        `INSERT INTO api_response_cache (cache_key, response, fetched_at, ttl_seconds, source)
+         VALUES ('webex_scopes_v2_applied', '{"applied":true}'::jsonb, NOW(), 31536000, 'webex')
+         ON CONFLICT (cache_key) DO NOTHING`,
+      );
+      console.log(`[migrations] Task #466: dropped org-level Webex refresh token (admin must reconnect to grant new scopes)`);
+    }
+    console.log("[migrations] Task #466 Webex schema + scope bump complete");
+  } catch (err) {
+    console.error("[migrations] Task #466 migration error:", err);
+  } finally {
+    client466.release();
+  }
 }

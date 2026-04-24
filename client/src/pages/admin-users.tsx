@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network, Mail, XCircle, AlertTriangle, Wifi, TrendingUp, Save, CreditCard, CalendarDays, Download, FileText, ExternalLink, Building2, Contact, RefreshCw, Database } from "lucide-react";
 import type { User } from "@shared/schema";
 import { WebexConnectionStatus } from "@/components/webex-connection-status";
+import { WebexHealthPanel } from "@/components/webex-health-panel";
 import { WebexUserMappingPanel } from "@/components/webex-user-mapping-panel";
 
 interface PromotionCriteria {
@@ -1475,7 +1476,12 @@ export default function AdminUsers() {
         </div>
       )}
 
-      {currentUser?.role === "admin" && <WebexConnectionStatus />}
+      {currentUser?.role === "admin" && (
+        <>
+          <WebexConnectionStatus />
+          <WebexHealthPanel />
+        </>
+      )}
       {currentUser?.role === "admin" && <WebexUserMappingPanel />}
 
       {currentUser?.role === "admin" && <CareerProgressionSection />}

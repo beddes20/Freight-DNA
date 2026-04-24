@@ -32,7 +32,7 @@ FreightDNA is built on a React frontend, an Express.js backend, and a PostgreSQL
 -   **Geographic Lane Patterns**: Defines corridor patterns and tracks contact responsibilities with AI-derived suggestions.
 -   **AI Intelligence Hub**: Unified dashboard for Meeting Prep Briefs, Sentiment Tracking, Smart Follow-Up Timing, Relationship Health Coaching, Org Chart Gap Analysis, Warm Introduction Paths, Look-Alike Prospecting, Cross-Sell / Lane Gap Intelligence, Wallet Share Expansion Playbook, Win/Loss Pattern Engine, and Competitive Signal Detection.
 -   **Automated Processes**: Auto-sync customer emails via Microsoft Graph, Tactical Learning Engine for successful response approaches, Quote Request SLA Alerting, and Auto Weekly Account Review generation.
--   **Webex Calling Integration**: Click-to-Call, call history sync, missed call NBA cards, recording transcription with AI analysis, and real-time presence indicators.
+-   **Webex Calling Integration**: Click-to-Call, call history sync (~13mo backfill), missed call NBA cards, recording transcription with AI analysis, real-time presence, voicemail metadata + audio, and snapshot syncs for workspaces / locations / call queues / hunt groups / devices / admin reports. Detailed-call enrichment is a tracked queue with retries; admin Webex Health panel shows per-user scopes, last-sync per data type, backfill progress, and recent API failures (Task #466).
 -   **AI Center**: Consolidated admin module for managing AI agents, approvals, pods, and adapters.
 
 ### System Design Choices

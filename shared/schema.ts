@@ -4502,6 +4502,7 @@ export const insertWebexInventorySchema = createInsertSchema(webexInventory).omi
 export type InsertWebexInventory = z.infer<typeof insertWebexInventorySchema>;
 export type WebexInventory = typeof webexInventory.$inferSelect;
 
+
 // ─── Carrier Intelligence: Scoring & Pricing (Task #369) ────────────────────
 //
 // Analytical layer rebuilt from `load_fact` + Sonar TRAC. Idempotent — every

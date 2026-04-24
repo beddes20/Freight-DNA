@@ -25,6 +25,16 @@ import {
   buildWebexCallDeepLink,
   listWebexDevices,
   categorizeWebexCallDevice,
+  WEBEX_OAUTH_SCOPES,
+  WEBEX_SCOPES_VERSION,
+  webexFetch,
+  fetchUserVoicemails,
+  fetchVoicemailAudio,
+  listWebexWorkspaces,
+  listWebexLocations,
+  listWebexCallQueues,
+  listWebexHuntGroups,
+  listWebexAdminReports,
   type WebexCallRecord,
   type DeviceCategory,
 } from "../webexService";
@@ -199,9 +209,19 @@ async function syncCallsForOrg(
   const scope = opts?.forUser ? `user ${opts.forUser.userId}` : `org ${orgId}`;
   log(`Syncing calls for ${scope}: ${startTime} → ${endTime}`);
 
+  const onFailure = (info: { attempt: number; status: number; body: string; url: string }) => {
+    void recordWebexApiFailure({
+      orgId,
+      userId: opts?.forUser?.userId ?? null,
+      endpoint: info.url,
+      method: "GET",
+      status: info.status,
+      body: info.body,
+    });
+  };
   const records = opts?.forUser
-    ? await fetchCallHistory(startTime, endTime, 200, { accessToken: opts.forUser.accessToken, scope: "user" })
-    : await fetchCallHistory(startTime, endTime);
+    ? await fetchCallHistory(startTime, endTime, 200, { accessToken: opts.forUser.accessToken, scope: "user", onFailure })
+    : await fetchCallHistory(startTime, endTime, 200, { onFailure });
   if (records.length === 0) return { touchpoints: [], nbaCards: [] };
 
   const orgCompanies = await storage.getCompanies(orgId);
@@ -632,22 +652,51 @@ Respond with valid JSON only (no markdown):
   return { touchpoints: createdTouchpoints, nbaCards: createdNbaCards };
 }
 
-// ── Reusable 90-day history backfill helper (Task #316) ─────────────────────
+// ── Reusable history backfill helper (Task #316 → expanded #466) ────────────
 // Chunks syncCallsForOrg into 48h windows walking backwards to seed trendlines
-// with historical CDR data. Callable from both the admin endpoint and the
-// OAuth callback auto-trigger path.
+// with historical CDR data. Default window is now ~13 months (395 days) so
+// year-over-year analytics work end-to-end. Progress is persisted to
+// `webex_backfill_jobs` so the admin Health panel can show progress / ETA
+// and so a process restart doesn't lose state.
+export const WEBEX_DEFAULT_BACKFILL_DAYS = 395;
+export const WEBEX_MAX_BACKFILL_DAYS = 395;
+
 async function runWebexHistoryBackfill(
   orgId: string,
   daysBack: number,
-): Promise<{ daysBack: number; synced: number; missedCallCards: number; chunksAttempted: number; chunksFailed: number }> {
-  const hoursBack = daysBack * 24;
+  opts: { triggeredBy?: string } = {},
+): Promise<{ daysBack: number; synced: number; missedCallCards: number; chunksAttempted: number; chunksFailed: number; jobId: string | null }> {
+  const cappedDays = Math.max(1, Math.min(WEBEX_MAX_BACKFILL_DAYS, daysBack));
+  const hoursBack = cappedDays * 24;
   const now = Date.now();
   const chunkHours = 48;
+  const chunksTotal = Math.ceil(hoursBack / chunkHours);
   let syncedCount = 0;
   let missedCount = 0;
   let chunksAttempted = 0;
   let chunksFailed = 0;
-  log(`Backfill-history starting org=${orgId} days=${daysBack}`);
+  const startedAt = Date.now();
+
+  // Persist the job so the Health panel can report progress.
+  let jobId: string | null = null;
+  try {
+    const inserted = await db
+      .insert(webexBackfillJobs)
+      .values({
+        orgId,
+        dataType: "calls",
+        status: "running",
+        targetWindowDays: cappedDays,
+        chunksTotal,
+        triggeredBy: opts.triggeredBy ?? "manual",
+      })
+      .returning({ id: webexBackfillJobs.id });
+    jobId = inserted[0]?.id ?? null;
+  } catch (err) {
+    log(`Backfill job insert failed (continuing anyway): ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  log(`Backfill-history starting org=${orgId} days=${cappedDays} chunks=${chunksTotal}`);
   for (let offset = 0; offset < hoursBack; offset += chunkHours) {
     chunksAttempted++;
     const chunkEndMs = now - offset * 3600_000;
@@ -658,11 +707,73 @@ async function runWebexHistoryBackfill(
       missedCount += result.nbaCards.length;
     } catch (chunkErr) {
       chunksFailed++;
-      log(`Backfill chunk failed (${new Date(chunkEndMs).toISOString()}): ${chunkErr instanceof Error ? chunkErr.message : String(chunkErr)}`);
+      const msg = chunkErr instanceof Error ? chunkErr.message : String(chunkErr);
+      log(`Backfill chunk failed (${new Date(chunkEndMs).toISOString()}): ${msg}`);
+      if (jobId) {
+        try {
+          await db.update(webexBackfillJobs)
+            .set({ lastError: msg.slice(0, 500), updatedAt: new Date() })
+            .where(eq(webexBackfillJobs.id, jobId));
+        } catch {/* ignore */}
+      }
+    }
+    // Persist progress every chunk so the Health panel updates live.
+    if (jobId) {
+      const elapsed = Date.now() - startedAt;
+      const pct = Math.min(100, (chunksAttempted / Math.max(1, chunksTotal)) * 100);
+      const etaMs = chunksAttempted > 0 && pct < 100
+        ? Math.round((elapsed / chunksAttempted) * (chunksTotal - chunksAttempted))
+        : 0;
+      try {
+        await db.update(webexBackfillJobs)
+          .set({
+            chunksDone: chunksAttempted - chunksFailed,
+            chunksFailed,
+            itemsProcessed: syncedCount + missedCount,
+            progressPct: pct.toFixed(2),
+            etaMs,
+            nextChunkCursor: new Date(chunkEndMs).toISOString(),
+            updatedAt: new Date(),
+          })
+          .where(eq(webexBackfillJobs.id, jobId));
+      } catch {/* ignore */}
     }
   }
+  if (jobId) {
+    try {
+      await db.update(webexBackfillJobs)
+        .set({
+          status: chunksFailed === chunksAttempted ? "failed" : "completed",
+          completedAt: new Date(),
+          progressPct: "100.00",
+          etaMs: 0,
+          updatedAt: new Date(),
+        })
+        .where(eq(webexBackfillJobs.id, jobId));
+    } catch {/* ignore */}
+  }
+  // Mark the per-(org, dataType) sync state.
+  try {
+    await db.insert(webexSyncState).values({
+      orgId,
+      dataType: "calls_backfill",
+      lastSuccessAt: new Date(),
+      lastAttemptAt: new Date(),
+      lastError: chunksFailed > 0 ? `${chunksFailed}/${chunksAttempted} chunks failed` : null,
+      lastErrorAt: chunksFailed > 0 ? new Date() : null,
+    }).onConflictDoUpdate({
+      target: [webexSyncState.orgId, webexSyncState.dataType],
+      set: {
+        lastSuccessAt: new Date(),
+        lastAttemptAt: new Date(),
+        lastError: chunksFailed > 0 ? `${chunksFailed}/${chunksAttempted} chunks failed` : null,
+        lastErrorAt: chunksFailed > 0 ? new Date() : null,
+        updatedAt: new Date(),
+      },
+    });
+  } catch {/* ignore */}
   log(`Backfill-history complete org=${orgId} synced=${syncedCount} missed=${missedCount} chunks=${chunksAttempted} failed=${chunksFailed}`);
-  return { daysBack, synced: syncedCount, missedCallCards: missedCount, chunksAttempted, chunksFailed };
+  return { daysBack: cappedDays, synced: syncedCount, missedCallCards: missedCount, chunksAttempted, chunksFailed, jobId };
 }
 
 // Fire-and-forget one-time seed after a fresh org-level Webex authorization.
@@ -679,30 +790,524 @@ async function maybeAutoBackfillOnConnect(orgId: string): Promise<void> {
       log(`Auto-backfill skipped for org=${orgId} — no companies yet`);
       return;
     }
-    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    // Only skip if Webex-derived call touchpoints already exist (notes contain
-    // the `[Webex CDR:` marker). Pre-existing manually logged calls must not
-    // short-circuit the first-time auto-seed on connect.
-    const existing = await db
-      .select({ id: touchpoints.id })
-      .from(touchpoints)
+    // Skip only if a *completed* backfill job already covers the full
+    // ~13-month window. This guarantees orgs that previously ran a 90-day
+    // backfill (pre-Task #466) still get a deep re-seed after reconnecting
+    // with the expanded analytics scopes, and that scope upgrades / scope
+    // re-grants always force a fresh deep pull.
+    const priorDeep = await db
+      .select({ id: webexBackfillJobs.id })
+      .from(webexBackfillJobs)
       .where(and(
-        inArray(touchpoints.companyId, companyIds),
-        eq(touchpoints.type, "call"),
-        lte(touchpoints.date, threeDaysAgo),
-        sql`${touchpoints.notes} LIKE '%[Webex CDR:%'`,
+        eq(webexBackfillJobs.orgId, orgId),
+        eq(webexBackfillJobs.dataType, "calls"),
+        eq(webexBackfillJobs.status, "completed"),
+        sql`${webexBackfillJobs.targetWindowDays} >= ${WEBEX_DEFAULT_BACKFILL_DAYS}`,
       ))
       .limit(1);
-    if (existing.length > 0) {
-      log(`Auto-backfill skipped for org=${orgId} — historical Webex CDR touchpoints already present`);
+    if (priorDeep.length > 0) {
+      log(`Auto-backfill skipped for org=${orgId} — completed ${WEBEX_DEFAULT_BACKFILL_DAYS}d backfill already on record`);
       return;
     }
-    log(`Auto-backfill triggered for org=${orgId} (90d seed on fresh Webex connect)`);
-    await runWebexHistoryBackfill(orgId, 90);
+    log(`Auto-backfill triggered for org=${orgId} (${WEBEX_DEFAULT_BACKFILL_DAYS}d seed on fresh Webex connect)`);
+    await runWebexHistoryBackfill(orgId, WEBEX_DEFAULT_BACKFILL_DAYS, { triggeredBy: "auto-on-connect" });
+    // Snapshot data types (workspaces, locations, queues, hunt groups,
+    // devices, admin reports) get a parallel first-connect backfill so the
+    // Health panel shows progress for every Webex data source we sync.
+    await runAllSnapshotBackfills(orgId, "auto-on-connect");
   } catch (err) {
     log(`Auto-backfill error org=${orgId}: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     webexBackfillInFlight.delete(orgId);
+  }
+}
+
+// ── Tracked detailed-call enrichment (Task #466) ───────────────────────────
+// Replaces the old fire-and-forget `.catch(() => {})` path with a queue
+// that records per-call enrichment status and retries failed jobs with
+// exponential backoff. The sweep cron below picks rows whose `next_run_at`
+// is due and re-runs `fetchCallDetail` + `persistCallAnalytics`.
+const ENRICHMENT_MAX_ATTEMPTS = 6;
+const ENRICHMENT_BACKOFF_MS = [60_000, 300_000, 900_000, 3_600_000, 6 * 3_600_000, 24 * 3_600_000];
+
+export async function enqueueWebexCallEnrichment(orgId: string, callId: string): Promise<void> {
+  if (!orgId || !callId) return;
+  try {
+    await db.insert(webexCallEnrichmentJobs).values({
+      orgId,
+      callId,
+      status: "pending",
+      attempts: 0,
+      nextRunAt: new Date(),
+    }).onConflictDoNothing({ target: [webexCallEnrichmentJobs.orgId, webexCallEnrichmentJobs.callId] });
+  } catch (err) {
+    log(`enqueueWebexCallEnrichment failed for ${callId}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** Process up to `limit` due enrichment jobs. Each job re-fetches the
+ *  detailed call from Webex (which carries the analytics-scope-only fields
+ *  like MOS/jitter/loss) and re-runs `persistCallAnalytics`. */
+export async function processWebexEnrichmentBatch(limit = 25): Promise<{ processed: number; succeeded: number; failed: number }> {
+  let processed = 0, succeeded = 0, failed = 0;
+  const due = await db.select().from(webexCallEnrichmentJobs)
+    .where(and(
+      eq(webexCallEnrichmentJobs.status, "pending"),
+      lte(webexCallEnrichmentJobs.nextRunAt, new Date()),
+    ))
+    .orderBy(asc(webexCallEnrichmentJobs.nextRunAt))
+    .limit(limit);
+  for (const job of due) {
+    processed++;
+    const attempts = (job.attempts ?? 0) + 1;
+    try {
+      const detail = await fetchCallDetail(job.callId, undefined, (info) => {
+        void recordWebexApiFailure({
+          orgId: job.orgId,
+          endpoint: info.url,
+          method: "GET",
+          status: info.status,
+          body: info.body,
+        });
+      });
+      if (!detail) throw new Error("fetchCallDetail returned null");
+      // The detailed-call endpoint only carries the analytics metrics
+      // (talk/hold/silence/MOS/jitter/loss). Patch the existing
+      // webex_call_analytics row in place — the row was created by the
+      // live sync's inline upsert, so all attribution/contact data is
+      // already present. The grade is recomputed from the new metrics.
+      const grade = gradeCallQuality({
+        mosScore: detail.mosScore ?? null,
+        jitterMs: detail.jitterMs ?? null,
+        packetLossPct: detail.packetLossPct ?? null,
+      });
+      const updated = await db.update(webexCallAnalytics)
+        .set({
+          talkTimeSeconds: detail.talkTimeSeconds ?? undefined,
+          holdTimeSeconds: detail.holdTimeSeconds ?? undefined,
+          silenceSeconds: detail.silenceSeconds ?? undefined,
+          ringTimeSeconds: detail.ringTimeSeconds ?? undefined,
+          mosScore: detail.mosScore != null ? String(detail.mosScore) : undefined,
+          jitterMs: detail.jitterMs != null ? String(detail.jitterMs) : undefined,
+          packetLossPct: detail.packetLossPct != null ? String(detail.packetLossPct) : undefined,
+          qualityGrade: grade,
+          updatedAt: new Date(),
+        })
+        .where(and(
+          eq(webexCallAnalytics.orgId, job.orgId),
+          eq(webexCallAnalytics.callId, job.callId),
+        ))
+        .returning({ id: webexCallAnalytics.id });
+      if (updated.length === 0) {
+        // Row not yet inserted by the live sync — skip without erroring,
+        // re-queue once with a 5-minute backoff.
+        throw new Error("analytics row not yet present");
+      }
+      await db.update(webexCallEnrichmentJobs)
+        .set({
+          status: "completed",
+          attempts,
+          completedAt: new Date(),
+          updatedAt: new Date(),
+          lastError: null,
+        })
+        .where(eq(webexCallEnrichmentJobs.id, job.id));
+      succeeded++;
+    } catch (err) {
+      failed++;
+      const msg = err instanceof Error ? err.message : String(err);
+      const giveUp = attempts >= ENRICHMENT_MAX_ATTEMPTS;
+      const backoffMs = ENRICHMENT_BACKOFF_MS[Math.min(attempts - 1, ENRICHMENT_BACKOFF_MS.length - 1)];
+      try {
+        await db.update(webexCallEnrichmentJobs)
+          .set({
+            status: giveUp ? "failed" : "pending",
+            attempts,
+            lastError: msg.slice(0, 500),
+            nextRunAt: giveUp ? job.nextRunAt : new Date(Date.now() + backoffMs),
+            updatedAt: new Date(),
+          })
+          .where(eq(webexCallEnrichmentJobs.id, job.id));
+      } catch {/* ignore */}
+    }
+  }
+  return { processed, succeeded, failed };
+}
+
+/** Failure observer wired into `webexFetch` calls so the admin Health
+ *  panel can show the most recent API failures across the org. Trims to
+ *  the most recent 200 rows per org so storage stays bounded. */
+async function recordWebexApiFailure(input: {
+  orgId?: string | null;
+  userId?: string | null;
+  endpoint: string;
+  method?: string;
+  status: number;
+  body: string;
+}): Promise<void> {
+  try {
+    await db.insert(webexApiFailures).values({
+      orgId: input.orgId ?? null,
+      userId: input.userId ?? null,
+      endpoint: input.endpoint.slice(0, 500),
+      method: input.method ?? "GET",
+      status: input.status,
+      body: input.body.slice(0, 1000),
+    });
+    if (input.orgId) {
+      // Trim to most-recent 200 per org.
+      await db.execute(sql`
+        DELETE FROM webex_api_failures
+         WHERE org_id = ${input.orgId}
+           AND id NOT IN (
+             SELECT id FROM webex_api_failures
+              WHERE org_id = ${input.orgId}
+              ORDER BY occurred_at DESC
+              LIMIT 200
+           )
+      `);
+    }
+  } catch {/* don't let observability hurt the request path */}
+}
+
+/** Mark sync state for a (org, dataType) — success or failure — and trim
+ *  the row's last_error so the Health panel stays readable. Also persists
+ *  a `webex_api_failures` row on failures so the Health panel surfaces it. */
+async function markWebexSyncState(orgId: string, dataType: string, ok: boolean, errMsg?: string | null): Promise<void> {
+  if (!ok) {
+    await recordWebexApiFailure({
+      orgId,
+      endpoint: `sync:${dataType}`,
+      method: "SYNC",
+      status: 0,
+      body: errMsg ?? "unknown error",
+    });
+  }
+  try {
+    const now = new Date();
+    await db.insert(webexSyncState).values({
+      orgId,
+      dataType,
+      lastSuccessAt: ok ? now : null,
+      lastAttemptAt: now,
+      lastError: ok ? null : (errMsg ?? "unknown error").slice(0, 500),
+      lastErrorAt: ok ? null : now,
+    }).onConflictDoUpdate({
+      target: [webexSyncState.orgId, webexSyncState.dataType],
+      set: {
+        lastSuccessAt: ok ? now : sql`webex_sync_state.last_success_at`,
+        lastAttemptAt: now,
+        lastError: ok ? null : (errMsg ?? "unknown error").slice(0, 500),
+        lastErrorAt: ok ? null : now,
+        updatedAt: now,
+      },
+    });
+  } catch {/* ignore */}
+}
+
+// ── Snapshot syncs for the new analytics-scope APIs (Task #466) ────────────
+
+async function syncWebexWorkspaces(orgId: string, accessToken?: string): Promise<{ count: number; error: string | null }> {
+  const r = await listWebexWorkspaces(2000, accessToken);
+  if (r.failed) {
+    await markWebexSyncState(orgId, "workspaces", false, r.lastError);
+    return { count: 0, error: r.lastError };
+  }
+  const now = new Date();
+  for (const w of r.items) {
+    await db.insert(webexWorkspaces).values({
+      orgId, webexId: w.id, displayName: w.displayName ?? null,
+      workspaceLocationId: w.workspaceLocationId ?? null, capacity: w.capacity ?? null,
+      type: w.type ?? null, notes: w.notes ?? null, syncedAt: now,
+    }).onConflictDoUpdate({
+      target: [webexWorkspaces.orgId, webexWorkspaces.webexId],
+      set: { displayName: w.displayName ?? null, workspaceLocationId: w.workspaceLocationId ?? null,
+             capacity: w.capacity ?? null, type: w.type ?? null, notes: w.notes ?? null, syncedAt: now },
+    });
+  }
+  await markWebexSyncState(orgId, "workspaces", true, null);
+  return { count: r.items.length, error: null };
+}
+
+async function syncWebexLocations(orgId: string, accessToken?: string): Promise<{ count: number; error: string | null }> {
+  const r = await listWebexLocations(2000, accessToken);
+  if (r.failed) {
+    await markWebexSyncState(orgId, "locations", false, r.lastError);
+    return { count: 0, error: r.lastError };
+  }
+  const now = new Date();
+  for (const l of r.items) {
+    await db.insert(webexLocations).values({
+      orgId, webexId: l.id, name: l.name ?? null, timeZone: l.timeZone ?? null,
+      countryCode: l.countryCode ?? null, address: l.address ?? null, syncedAt: now,
+    }).onConflictDoUpdate({
+      target: [webexLocations.orgId, webexLocations.webexId],
+      set: { name: l.name ?? null, timeZone: l.timeZone ?? null,
+             countryCode: l.countryCode ?? null, address: l.address ?? null, syncedAt: now },
+    });
+  }
+  await markWebexSyncState(orgId, "locations", true, null);
+  return { count: r.items.length, error: null };
+}
+
+async function syncWebexCallQueues(orgId: string, accessToken?: string): Promise<{ count: number; error: string | null }> {
+  const r = await listWebexCallQueues(2000, accessToken);
+  if (r.failed) {
+    await markWebexSyncState(orgId, "call_queues", false, r.lastError);
+    return { count: 0, error: r.lastError };
+  }
+  const now = new Date();
+  for (const q of r.items) {
+    await db.insert(webexCallQueues).values({
+      orgId, webexId: q.id, name: q.name ?? null, locationId: q.locationId ?? null,
+      phoneNumber: q.phoneNumber ?? null, extension: q.extension ?? null, enabled: q.enabled ?? null, syncedAt: now,
+    }).onConflictDoUpdate({
+      target: [webexCallQueues.orgId, webexCallQueues.webexId],
+      set: { name: q.name ?? null, locationId: q.locationId ?? null,
+             phoneNumber: q.phoneNumber ?? null, extension: q.extension ?? null, enabled: q.enabled ?? null, syncedAt: now },
+    });
+  }
+  await markWebexSyncState(orgId, "call_queues", true, null);
+  return { count: r.items.length, error: null };
+}
+
+async function syncWebexHuntGroups(orgId: string, accessToken?: string): Promise<{ count: number; error: string | null }> {
+  const r = await listWebexHuntGroups(2000, accessToken);
+  if (r.failed) {
+    await markWebexSyncState(orgId, "hunt_groups", false, r.lastError);
+    return { count: 0, error: r.lastError };
+  }
+  const now = new Date();
+  for (const h of r.items) {
+    await db.insert(webexHuntGroups).values({
+      orgId, webexId: h.id, name: h.name ?? null, locationId: h.locationId ?? null,
+      phoneNumber: h.phoneNumber ?? null, extension: h.extension ?? null, enabled: h.enabled ?? null, syncedAt: now,
+    }).onConflictDoUpdate({
+      target: [webexHuntGroups.orgId, webexHuntGroups.webexId],
+      set: { name: h.name ?? null, locationId: h.locationId ?? null,
+             phoneNumber: h.phoneNumber ?? null, extension: h.extension ?? null, enabled: h.enabled ?? null, syncedAt: now },
+    });
+  }
+  await markWebexSyncState(orgId, "hunt_groups", true, null);
+  return { count: r.items.length, error: null };
+}
+
+async function syncWebexDevices(orgId: string): Promise<{ count: number; error: string | null }> {
+  try {
+    const devices = await listWebexDevices(1000);
+    const now = new Date();
+    for (const d of devices) {
+      const webexId = d.id ?? d.deviceId ?? "";
+      if (!webexId) continue;
+      await db.insert(webexDevicesSnapshot).values({
+        orgId,
+        webexId,
+        displayName: d.displayName ?? d.name ?? null,
+        product: d.product ?? null,
+        productType: d.productType ?? null,
+        type: d.type ?? null,
+        mac: d.mac ?? null,
+        serial: d.serial ?? null,
+        personId: d.personId ?? null,
+        workspaceId: d.workspaceId ?? null,
+        connectionStatus: d.connectionStatus ?? null,
+        lastConnectionAt: (d.lastConnectionAt ?? d.lastConnectionTime) ? new Date((d.lastConnectionAt ?? d.lastConnectionTime)!) : null,
+        createdAtWebex: d.created ? new Date(d.created) : null,
+        syncedAt: now,
+      }).onConflictDoUpdate({
+        target: [webexDevicesSnapshot.orgId, webexDevicesSnapshot.webexId],
+        set: {
+          displayName: d.displayName ?? d.name ?? null,
+          product: d.product ?? null,
+          productType: d.productType ?? null,
+          type: d.type ?? null,
+          mac: d.mac ?? null,
+          serial: d.serial ?? null,
+          personId: d.personId ?? null,
+          workspaceId: d.workspaceId ?? null,
+          connectionStatus: d.connectionStatus ?? null,
+          lastConnectionAt: (d.lastConnectionAt ?? d.lastConnectionTime) ? new Date((d.lastConnectionAt ?? d.lastConnectionTime)!) : null,
+          syncedAt: now,
+        },
+      });
+    }
+    await markWebexSyncState(orgId, "devices", true, null);
+    return { count: devices.length, error: null };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await markWebexSyncState(orgId, "devices", false, msg);
+    return { count: 0, error: msg };
+  }
+}
+
+async function syncWebexAdminReports(orgId: string, accessToken?: string): Promise<{ count: number; error: string | null }> {
+  const r = await listWebexAdminReports(accessToken, 200);
+  if (r.failed) {
+    await markWebexSyncState(orgId, "admin_reports", false, r.lastError);
+    return { count: 0, error: r.lastError };
+  }
+  const now = new Date();
+  for (const rep of r.items) {
+    await db.insert(webexAdminReports).values({
+      orgId, webexId: rep.id, templateId: rep.templateId ?? null,
+      status: rep.status ?? null, startDate: rep.startDate ?? null, endDate: rep.endDate ?? null,
+      createdAtWebex: rep.created ? new Date(rep.created) : null,
+      downloadUrl: rep.downloadURL ?? null, syncedAt: now,
+    }).onConflictDoUpdate({
+      target: [webexAdminReports.orgId, webexAdminReports.webexId],
+      set: { status: rep.status ?? null, downloadUrl: rep.downloadURL ?? null, syncedAt: now },
+    });
+  }
+  await markWebexSyncState(orgId, "admin_reports", true, null);
+  return { count: r.items.length, error: null };
+}
+
+/** Whisper fallback transcription for a single voicemail audio buffer.
+ *  Returns the transcript text or null on failure. Called from the
+ *  voicemail sync below when the Webex-provided transcript is missing. */
+async function transcribeVoicemailWithWhisper(audio: Buffer, contentType: string): Promise<string | null> {
+  try {
+    const ext = contentType.includes("mp3") ? "mp3" :
+                contentType.includes("ogg") ? "ogg" :
+                contentType.includes("wav") ? "wav" : "mp3";
+    const file = new File([audio], `voicemail.${ext}`, { type: contentType || "audio/wav" });
+    const res = await openai.audio.transcriptions.create({
+      file,
+      model: "whisper-1",
+      language: "en",
+    });
+    return res.text ?? null;
+  } catch (err) {
+    log(`Whisper voicemail transcription failed: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
+/** Per-user voicemail sync. Pulls metadata + transcript for the connected
+ *  user and upserts into `webex_voicemails`. When Webex doesn't return a
+ *  transcript inline, downloads the audio media and runs Whisper as a
+ *  fallback so every voicemail has a searchable transcript. */
+async function syncWebexVoicemailsForUser(orgId: string, userId: string, accessToken: string): Promise<{ count: number; error: string | null }> {
+  const r = await fetchUserVoicemails(accessToken, 500);
+  if (r.failed) {
+    await markWebexSyncState(orgId, `voicemails:${userId}`, false, r.lastError);
+    return { count: 0, error: r.lastError };
+  }
+  const now = new Date();
+  // Cap Whisper fallback per sync run so a large initial backfill doesn't
+  // blow through OpenAI quota; remaining items are picked up on the next
+  // sync where they appear without transcripts.
+  const WHISPER_MAX_PER_SYNC = 10;
+  let whisperUsed = 0;
+  for (const vm of r.items) {
+    if (!vm.id) continue;
+    let transcript: string | null = vm.transcript ?? null;
+    let transcriptSource: string | null = transcript ? "webex" : null;
+    if (!transcript && whisperUsed < WHISPER_MAX_PER_SYNC) {
+      // Skip if we already have a transcript persisted from a prior sync.
+      const [existing] = await db.select({ transcript: webexVoicemails.transcript })
+        .from(webexVoicemails)
+        .where(and(
+          eq(webexVoicemails.userId, userId),
+          eq(webexVoicemails.webexMessageId, vm.id),
+        ))
+        .limit(1);
+      if (!existing?.transcript) {
+        const audio = await fetchVoicemailAudio(accessToken, vm.id, (info) => {
+          void recordWebexApiFailure({
+            orgId, userId,
+            endpoint: info.url, method: "GET",
+            status: info.status, body: info.body,
+          });
+        });
+        if (audio) {
+          const t = await transcribeVoicemailWithWhisper(audio.buffer, audio.contentType);
+          if (t) {
+            transcript = t;
+            transcriptSource = "whisper";
+            whisperUsed++;
+          }
+        }
+      }
+    }
+    await db.insert(webexVoicemails).values({
+      orgId, userId, webexMessageId: vm.id,
+      callerNumber: vm.callerId ?? null, callerName: vm.callerName ?? null,
+      durationSeconds: vm.duration ?? 0,
+      receivedAt: vm.receivedAt ? new Date(vm.receivedAt) : null,
+      isRead: vm.read ?? false,
+      transcript,
+      transcriptSource,
+      syncedAt: now,
+    }).onConflictDoUpdate({
+      target: [webexVoicemails.userId, webexVoicemails.webexMessageId],
+      set: {
+        callerNumber: vm.callerId ?? null, callerName: vm.callerName ?? null,
+        durationSeconds: vm.duration ?? 0,
+        receivedAt: vm.receivedAt ? new Date(vm.receivedAt) : null,
+        isRead: vm.read ?? false,
+        transcript,
+        transcriptSource,
+        updatedAt: now,
+      },
+    });
+  }
+  await markWebexSyncState(orgId, `voicemails:${userId}`, true, null);
+  return { count: r.items.length, error: null };
+}
+
+/** Run a snapshot sync wrapped in a tracked `webex_backfill_jobs` row so the
+ *  Health panel reports progress consistently across all data types. */
+async function runTrackedSnapshot(
+  orgId: string,
+  dataType: string,
+  triggeredBy: string,
+  exec: () => Promise<{ count: number; error: string | null }>,
+): Promise<{ count: number; error: string | null; jobId: string | null }> {
+  let jobId: string | null = null;
+  try {
+    const inserted = await db.insert(webexBackfillJobs).values({
+      orgId, dataType, status: "running",
+      targetWindowDays: 0, chunksTotal: 1, triggeredBy,
+    }).returning({ id: webexBackfillJobs.id });
+    jobId = inserted[0]?.id ?? null;
+  } catch {/* ignore */}
+  const startedAt = Date.now();
+  const r = await exec();
+  if (jobId) {
+    try {
+      await db.update(webexBackfillJobs).set({
+        status: r.error ? "failed" : "completed",
+        chunksDone: r.error ? 0 : 1,
+        chunksFailed: r.error ? 1 : 0,
+        itemsProcessed: r.count,
+        progressPct: "100.00",
+        etaMs: 0,
+        lastError: r.error?.slice(0, 500) ?? null,
+        completedAt: new Date(),
+        updatedAt: new Date(),
+      }).where(eq(webexBackfillJobs.id, jobId));
+    } catch {/* ignore */}
+  }
+  log(`Snapshot backfill ${dataType} org=${orgId} count=${r.count} err=${r.error ?? "none"} took=${Date.now() - startedAt}ms`);
+  return { ...r, jobId };
+}
+
+/** First-connect / regrant snapshot orchestrator: runs every analytics-enabled
+ *  org-level data type as a tracked backfill so the Health panel shows
+ *  per-type progress. Voicemail backfill happens per-user as tokens connect. */
+export async function runAllSnapshotBackfills(orgId: string, triggeredBy = "auto-on-connect"): Promise<void> {
+  const types: Array<[string, () => Promise<{ count: number; error: string | null }>]> = [
+    ["workspaces",    () => syncWebexWorkspaces(orgId)],
+    ["locations",     () => syncWebexLocations(orgId)],
+    ["call_queues",   () => syncWebexCallQueues(orgId)],
+    ["hunt_groups",   () => syncWebexHuntGroups(orgId)],
+    ["devices",       () => syncWebexDevices(orgId)],
+    ["admin_reports", () => syncWebexAdminReports(orgId)],
+  ];
+  for (const [dataType, fn] of types) {
+    try { await runTrackedSnapshot(orgId, dataType, triggeredBy, fn); }
+    catch (err) { log(`Snapshot backfill ${dataType} threw: ${err instanceof Error ? err.message : String(err)}`); }
   }
 }
 
@@ -911,7 +1516,7 @@ export function registerWebexRoutes(app: Express) {
         }
         await connectUserWebex(u.organizationId, u.id, code, info.redirectUri);
         log(`Per-user OAuth complete for user ${u.id}`);
-        // Auto-seed 90d history trendlines for this org (idempotent, async)
+        // Auto-seed full history trendlines for this org (idempotent, async)
         void maybeAutoBackfillOnConnect(u.organizationId);
         // Task #466: kick off the full 13-month / max-window backfill across
         // CDRs + workspaces + locations + devices + queues + hunt groups.
@@ -1580,7 +2185,7 @@ export function registerWebexRoutes(app: Express) {
           const catMap = lastUseByPersonId.get(d.personId);
           if (catMap) lastUsedAt = catMap.get(categoryGuess) ?? null;
         }
-        if (!lastUsedAt) lastUsedAt = d.lastConnectionAt;
+        if (!lastUsedAt) lastUsedAt = d.lastConnectionAt ?? null;
 
         const lastUsedMs = lastUsedAt ? new Date(lastUsedAt).getTime() : null;
         const daysSinceLastUse =
@@ -2397,8 +3002,8 @@ export function registerWebexRoutes(app: Express) {
    * POST /api/webex/call-quality/backfill
    *
    * Admin-triggered backfill that hydrates the `webex_call_analytics` table
-   * with up to 90 days of history. Idempotent — safe to re-run; existing
-   * rows are upserted.
+   * with up to ~13 months (395 days) of history. Idempotent — safe to
+   * re-run; existing rows are upserted.
    */
   app.post("/api/webex/call-quality/backfill", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -2408,8 +3013,8 @@ export function registerWebexRoutes(app: Express) {
         return res.status(403).json({ error: "Admin access required" });
       }
 
-      const daysRaw = parseInt(String((req.body as any)?.days ?? "90"), 10);
-      const days = Math.min(90, Math.max(1, Number.isFinite(daysRaw) ? daysRaw : 90));
+      const daysRaw = parseInt(String((req.body as any)?.days ?? String(WEBEX_DEFAULT_BACKFILL_DAYS)), 10);
+      const days = Math.min(WEBEX_MAX_BACKFILL_DAYS, Math.max(1, Number.isFinite(daysRaw) ? daysRaw : WEBEX_DEFAULT_BACKFILL_DAYS));
 
       if (!hasWebexTokens()) {
         return res.status(400).json({ error: "Webex is not authorized. Connect Webex first." });
@@ -2437,6 +3042,9 @@ export function registerWebexRoutes(app: Express) {
       res.status(500).json({ error: "Backfill failed" });
     }
   });
+
+  // Task #466: Webex Health, snapshot refresh triggers, voicemails.
+  registerWebexHealthAndAdminRoutes(app);
 }
 
 export function initWebexSyncScheduler(): void {
@@ -2595,4 +3203,258 @@ export function initWebexSyncScheduler(): void {
   });
 
   log("Webex re-auth reminder scheduler started (hourly check, ~24h cadence)");
+
+  // ── Task #466: enrichment-job sweep + nightly snapshot refresh ──────────
+  // Sweep due call-enrichment jobs every 2 minutes so failed detail fetches
+  // get retried with backoff instead of disappearing.
+  cron.schedule("*/2 * * * *", async () => {
+    try {
+      const r = await processWebexEnrichmentBatch(50);
+      if (r.processed > 0) {
+        log(`Enrichment sweep: processed=${r.processed} ok=${r.succeeded} fail=${r.failed}`);
+      }
+    } catch (err) {
+      log(`Enrichment sweep error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+  log("Webex enrichment sweep scheduler started (every 2 minutes)");
+
+  // Nightly refresh of org-level snapshots (workspaces, locations, queues,
+  // hunt groups, devices, admin reports). Runs at 03:23 server time.
+  cron.schedule("23 3 * * *", async () => {
+    try {
+      const orgs = await db.selectDistinct({ orgId: webexUserMappings.orgId }).from(webexUserMappings);
+      for (const { orgId } of orgs) {
+        if (!orgId) continue;
+        try {
+          await syncWebexWorkspaces(orgId);
+          await syncWebexLocations(orgId);
+          await syncWebexCallQueues(orgId);
+          await syncWebexHuntGroups(orgId);
+          await syncWebexDevices(orgId);
+          await syncWebexAdminReports(orgId);
+        } catch (err) {
+          log(`Nightly snapshot sync error for org=${orgId}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    } catch (err) {
+      log(`Nightly snapshot sync top-level error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+  log("Webex snapshot refresh scheduler started (nightly at 03:23)");
+
+  // Resume any backfill jobs that were left in `running` state by a prior
+  // process restart. We compute remaining days from `next_chunk_cursor` so
+  // the resumed run picks up from where it stopped instead of starting
+  // over from `now`. Mark abandoned rows as such before kicking off so
+  // the Health panel doesn't show two `running` rows for the same org.
+  void (async () => {
+    try {
+      const stale = await db
+        .select()
+        .from(webexBackfillJobs)
+        .where(eq(webexBackfillJobs.status, "running"));
+      for (const job of stale) {
+        try {
+          await db.update(webexBackfillJobs)
+            .set({ status: "abandoned", completedAt: new Date(), updatedAt: new Date() })
+            .where(eq(webexBackfillJobs.id, job.id));
+          if (!job.orgId) continue;
+          const cursorIso = job.nextChunkCursor ?? null;
+          let remainingDays = job.targetWindowDays ?? WEBEX_DEFAULT_BACKFILL_DAYS;
+          if (cursorIso) {
+            const cursorMs = Date.parse(cursorIso);
+            if (Number.isFinite(cursorMs)) {
+              const daysCovered = Math.max(0, Math.round((Date.now() - cursorMs) / (24 * 3600 * 1000)));
+              const target = job.targetWindowDays ?? WEBEX_DEFAULT_BACKFILL_DAYS;
+              remainingDays = Math.max(1, target - daysCovered);
+            }
+          }
+          log(`Resuming abandoned Webex backfill org=${job.orgId} remainingDays=${remainingDays}`);
+          void runWebexHistoryBackfill(job.orgId, remainingDays, { triggeredBy: "auto-resume" })
+            .catch(err => log(`Resume backfill error org=${job.orgId}: ${err instanceof Error ? err.message : String(err)}`));
+        } catch (err) {
+          log(`Backfill resume scan error: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    } catch (err) {
+      log(`Backfill resume init error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  })();
+}
+
+// ── Task #466: Admin Webex Health + voicemail + snapshot-refresh routes ────
+// Defined as its own function so it can be invoked from `registerWebexRoutes`
+// (the only place with `app` in scope) without re-declaring scheduler state.
+function registerWebexHealthAndAdminRoutes(app: Express): void {
+  app.get("/api/webex/health", requireAuth, async (req, res) => {
+    try {
+      const sessionUser = await getCurrentUser(req);
+      if (!sessionUser || sessionUser.role !== "admin") {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const orgId = sessionUser.organizationId;
+
+      // Per-user scopes & token state.
+      const tokens = await db
+        .select({
+          userId: webexUserTokens.userId,
+          username: users.username,
+          name: users.name,
+          scopes: webexUserTokens.scopes,
+          scopesVersion: webexUserTokens.scopesVersion,
+          needsReauth: webexUserTokens.needsReauth,
+          reauthReason: webexUserTokens.reauthReason,
+          connectedAt: webexUserTokens.connectedAt,
+          lastRefreshAt: webexUserTokens.lastRefreshAt,
+          lastRefreshError: webexUserTokens.lastRefreshError,
+        })
+        .from(webexUserTokens)
+        .leftJoin(users, eq(webexUserTokens.userId, users.id))
+        .where(eq(webexUserTokens.orgId, orgId));
+
+      // Per-data-type sync state.
+      const syncRows = await db
+        .select()
+        .from(webexSyncState)
+        .where(eq(webexSyncState.orgId, orgId))
+        .orderBy(asc(webexSyncState.dataType));
+
+      // Active + recent backfill jobs (most recent 10).
+      const backfills = await db
+        .select()
+        .from(webexBackfillJobs)
+        .where(eq(webexBackfillJobs.orgId, orgId))
+        .orderBy(desc(webexBackfillJobs.startedAt))
+        .limit(10);
+
+      // Recent API failures (last 50).
+      const failures = await db
+        .select()
+        .from(webexApiFailures)
+        .where(eq(webexApiFailures.orgId, orgId))
+        .orderBy(desc(webexApiFailures.occurredAt))
+        .limit(50);
+
+      // Enrichment queue summary.
+      const enrichSummary = await db
+        .select({ status: webexCallEnrichmentJobs.status, count: sql<number>`count(*)::int` })
+        .from(webexCallEnrichmentJobs)
+        .where(eq(webexCallEnrichmentJobs.orgId, orgId))
+        .groupBy(webexCallEnrichmentJobs.status);
+      const enrichBreakdown: Record<string, number> = {};
+      for (const row of enrichSummary) {
+        if (row.status) enrichBreakdown[row.status] = Number(row.count);
+      }
+
+      const expectedScopes = WEBEX_OAUTH_SCOPES.split(/\s+/).sort();
+      const usersWithStatus = tokens.map(t => {
+        const granted = (t.scopes ?? "").split(/\s+/).filter(Boolean).sort();
+        const missing = expectedScopes.filter(s => !granted.includes(s));
+        return {
+          userId: t.userId,
+          email: t.username,
+          name: t.name || t.username,
+          scopesGranted: granted,
+          scopesMissing: missing,
+          scopesVersion: t.scopesVersion ?? 1,
+          scopesCurrent: (t.scopesVersion ?? 1) >= WEBEX_SCOPES_VERSION && missing.length === 0,
+          needsReauth: t.needsReauth ?? false,
+          reauthReason: t.reauthReason ?? null,
+          connectedAt: t.connectedAt,
+          lastRefreshAt: t.lastRefreshAt,
+          lastRefreshError: t.lastRefreshError,
+        };
+      });
+
+      res.json({
+        scopesVersion: WEBEX_SCOPES_VERSION,
+        expectedScopes,
+        users: usersWithStatus,
+        syncState: syncRows,
+        backfillJobs: backfills,
+        recentFailures: failures,
+        enrichmentQueue: enrichBreakdown,
+        defaultBackfillDays: WEBEX_DEFAULT_BACKFILL_DAYS,
+        maxBackfillDays: WEBEX_MAX_BACKFILL_DAYS,
+      });
+    } catch (err) {
+      log(`webex health endpoint error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to load Webex health" });
+    }
+  });
+
+  // Trigger a refresh of one of the org-level snapshots on demand.
+  app.post("/api/webex/admin/sync/:dataType", requireAuth, async (req, res) => {
+    try {
+      const sessionUser = await getCurrentUser(req);
+      if (!sessionUser || sessionUser.role !== "admin") {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const orgId = sessionUser.organizationId;
+      const dataType = req.params.dataType;
+      let result: { count: number; error: string | null };
+      switch (dataType) {
+        case "workspaces":   result = await syncWebexWorkspaces(orgId); break;
+        case "locations":    result = await syncWebexLocations(orgId); break;
+        case "call_queues":  result = await syncWebexCallQueues(orgId); break;
+        case "hunt_groups":  result = await syncWebexHuntGroups(orgId); break;
+        case "devices":      result = await syncWebexDevices(orgId); break;
+        case "admin_reports":result = await syncWebexAdminReports(orgId); break;
+        default:
+          return res.status(400).json({ error: `Unknown dataType: ${dataType}` });
+      }
+      res.json({ ok: result.error === null, ...result });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "Sync failed" });
+    }
+  });
+
+  // Per-user voicemail list (uses the per-user token).
+  app.get("/api/webex/voicemails", requireAuth, async (req, res) => {
+    try {
+      const sessionUser = await getCurrentUser(req);
+      if (!sessionUser) return res.status(401).json({ error: "Unauthorized" });
+      const tokenResult = await getUserWebexAccessToken(sessionUser.id).catch(() => null);
+      if (!tokenResult) {
+        return res.status(400).json({ error: "Connect your Webex account to view voicemails." });
+      }
+      const r = await syncWebexVoicemailsForUser(sessionUser.organizationId, sessionUser.id, tokenResult.token);
+      const rows = await db
+        .select()
+        .from(webexVoicemails)
+        .where(eq(webexVoicemails.userId, sessionUser.id))
+        .orderBy(desc(webexVoicemails.receivedAt))
+        .limit(200);
+      res.json({ ok: r.error === null, error: r.error, count: rows.length, voicemails: rows });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to load voicemails" });
+    }
+  });
+
+  // Stream voicemail audio for a given message id.
+  app.get("/api/webex/voicemails/:messageId/audio", requireAuth, async (req, res) => {
+    try {
+      const sessionUser = await getCurrentUser(req);
+      if (!sessionUser) return res.status(401).json({ error: "Unauthorized" });
+      const tokenResult = await getUserWebexAccessToken(sessionUser.id).catch(() => null);
+      if (!tokenResult) return res.status(400).json({ error: "Connect your Webex account first." });
+      const messageId = String(req.params.messageId);
+      const audio = await fetchVoicemailAudio(tokenResult.token, messageId, (info) => {
+        void recordWebexApiFailure({
+          orgId: sessionUser.organizationId,
+          userId: sessionUser.id,
+          endpoint: info.url,
+          method: "GET",
+          status: info.status,
+          body: info.body,
+        });
+      });
+      if (!audio) return res.status(404).json({ error: "Audio not available" });
+      res.setHeader("Content-Type", audio.contentType);
+      res.send(audio.buffer);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : "Audio fetch failed" });
+    }
+  });
 }

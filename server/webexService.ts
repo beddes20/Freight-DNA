@@ -531,14 +531,23 @@ export function getWebexAccessTokenExpiresAt(): number | null {
 
 export interface WebexDevice {
   id: string;
-  name: string;
-  type: string;
+  name?: string;
+  displayName?: string;
+  type?: string;
   mac?: string;
+  serial?: string;
   personId?: string;
+  workspaceId?: string;
   orgId?: string;
   ipAddress?: string;
   product?: string;
+  productType?: string;
   software?: string;
+  connectionStatus?: string;
+  lastConnectionTime?: string;
+  lastConnectionAt?: string;
+  created?: string;
+  deviceId?: string;
 }
 
 export interface WebexCallRecord {
@@ -664,7 +673,11 @@ export function gradeCallQuality(metrics: {
  * Used as a best-effort enrichment; returns null if the detail endpoint
  * isn't available (e.g. missing analytics scope on the org token).
  */
-export async function fetchCallDetail(callId: string, accessToken?: string): Promise<{
+export async function fetchCallDetail(
+  callId: string,
+  accessToken?: string,
+  onFailure?: WebexHttpOptions["onFailure"],
+): Promise<{
   talkTimeSeconds?: number;
   holdTimeSeconds?: number;
   silenceSeconds?: number;
@@ -674,16 +687,10 @@ export async function fetchCallDetail(callId: string, accessToken?: string): Pro
   packetLossPct?: number;
 } | null> {
   if (!callId) return null;
-  const token = accessToken ?? (await getWebexAccessToken());
   const url = `https://webexapis.com/v1/telephony/calls/${encodeURIComponent(callId)}`;
-  try {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return extractCallAnalyticsFromItem(data);
-  } catch {
-    return null;
-  }
+  const r = await webexFetch<any>(url, { accessToken, onFailure });
+  if (!r.ok || !r.data) return null;
+  return extractCallAnalyticsFromItem(r.data);
 }
 
 export interface WebexPerson {
@@ -723,13 +730,11 @@ export async function fetchCallHistory(
   startTime: string,
   endTime: string,
   maxRecords = 200,
-  opts?: { accessToken?: string; scope?: "org" | "user" },
+  opts?: { accessToken?: string; scope?: "org" | "user"; onFailure?: WebexHttpOptions["onFailure"] },
 ): Promise<WebexCallRecord[]> {
-  const token = opts?.accessToken ?? (await getWebexAccessToken());
   const scope = opts?.scope ?? (opts?.accessToken ? "user" : "org");
 
   const allRecords: WebexCallRecord[] = [];
-  let nextUrl: string | null = null;
 
   const params = new URLSearchParams({
     startTime,
@@ -741,19 +746,24 @@ export async function fetchCallHistory(
   }
 
   let url: string = `https://webexapis.com/v1/telephony/calls/history?${params.toString()}`;
+  let consecutiveFailures = 0;
 
   while (url && allRecords.length < maxRecords) {
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
+    const r = await webexFetch<any>(url, {
+      accessToken: opts?.accessToken,
+      onFailure: opts?.onFailure,
     });
-
-    if (!res.ok) {
-      const text = await res.text();
-      log(`Call history fetch error ${res.status}: ${text}`);
+    if (!r.ok) {
+      log(`Call history fetch error ${r.status}: ${r.error ?? ""}`);
+      // Continue past transient page failures up to a safety bound rather
+      // than collapsing the entire sync loop on a single page error.
+      consecutiveFailures++;
+      if (consecutiveFailures >= 3) break;
+      // Without a Link header we have nowhere to continue from, so stop.
       break;
     }
-
-    const data = await res.json();
+    consecutiveFailures = 0;
+    const data = r.data ?? {};
     const items = data.items ?? [];
 
     for (const item of items) {
@@ -793,7 +803,7 @@ export async function fetchCallHistory(
       });
     }
 
-    const linkHeader = res.headers.get("link");
+    const linkHeader = r.headers?.get("link") ?? null;
     if (linkHeader) {
       const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
       url = match ? match[1] : "";
@@ -927,47 +937,29 @@ export async function fetchCallRecording(recordingId: string): Promise<Buffer | 
  * List provisioned Webex devices in the configured organization. Used by the
  * admin Device Usage panel to surface unused/last-connected devices.
  */
-export async function listWebexDevices(maxResults = 1000): Promise<WebexDevice[]> {
-  const token = await getWebexAccessToken();
+export async function listWebexDevices(
+  maxResults = 1000,
+  onFailure?: WebexHttpOptions["onFailure"],
+): Promise<WebexDevice[]> {
   const orgId = process.env.WEBEX_ORG_ID!;
-
-  const all: WebexDevice[] = [];
   const params = new URLSearchParams({ orgId, max: "100" });
-  let url: string = `https://webexapis.com/v1/devices?${params.toString()}`;
-
-  while (url && all.length < maxResults) {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) {
-      const text = await res.text();
-      log(`listWebexDevices error ${res.status}: ${text}`);
-      break;
-    }
-    const data = await res.json();
-    for (const d of data.items ?? []) {
-      all.push({
-        id: d.id ?? "",
-        displayName: d.displayName ?? d.product ?? "Unnamed device",
-        product: d.product ?? null,
-        productType: d.productType ?? null,
-        type: d.type ?? null,
-        mac: d.mac ?? null,
-        serial: d.serial ?? null,
-        personId: d.personId ?? null,
-        workspaceId: d.workspaceId ?? null,
-        connectionStatus: d.connectionStatus ?? null,
-        lastConnectionAt: d.lastSeen ?? d.lastConnectionTime ?? d.firstSeen ?? null,
-        created: d.created ?? null,
-      });
-    }
-    const linkHeader = res.headers.get("link");
-    if (linkHeader) {
-      const m = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
-      url = m ? m[1] : "";
-    } else {
-      url = "";
-    }
-  }
-  log(`listWebexDevices fetched ${all.length} devices`);
+  const url = `https://webexapis.com/v1/devices?${params.toString()}`;
+  const r = await webexFetchAllPages<any>(url, { maxItems: maxResults, onFailure });
+  const all: WebexDevice[] = (r.items ?? []).map((d: any) => ({
+    id: d.id ?? "",
+    displayName: d.displayName ?? d.product ?? "Unnamed device",
+    product: d.product ?? null,
+    productType: d.productType ?? null,
+    type: d.type ?? null,
+    mac: d.mac ?? null,
+    serial: d.serial ?? null,
+    personId: d.personId ?? null,
+    workspaceId: d.workspaceId ?? null,
+    connectionStatus: d.connectionStatus ?? null,
+    lastConnectionAt: d.lastSeen ?? d.lastConnectionTime ?? d.firstSeen ?? null,
+    created: d.created ?? null,
+  }));
+  log(`listWebexDevices fetched ${all.length} devices (failed=${r.failed})`);
   return all;
 }
 
@@ -1084,5 +1076,5 @@ export async function downloadWebexVoicemailAudio(voicemailId: string, accessTok
   } catch {
     return null;
   }
+  return null;
 }
-
