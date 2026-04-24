@@ -26,7 +26,7 @@ import {
   users,
   InsertEmailConversationThread,
 } from "@shared/schema";
-import { requireAuth, getCurrentUser, canSeeRepUser } from "../auth";
+import { requireAuth, getCurrentUser, canSeeRepUser, getVisibleRepUserIds } from "../auth";
 import { setWaitingState, setPriority } from "../services/conversationWaitingStateService";
 import { assignOwner } from "../services/conversationOwnershipService";
 import {
@@ -308,20 +308,30 @@ export function registerConversationsRoutes(app: Express): void {
             filters.teamAccountIdsIn = teamAccountIds;
           }
         }
-      } else if (user.role === "director") {
-        // Task #525: a Director with no `team` filter and no explicit owner
-        // used to see every thread in the org (the listing handler had no
-        // implicit scoping). Default-scope to the director's own reporting
-        // tree so they can only see conversations owned by their own reps
-        // (or unowned threads on accounts whose salesperson is on the team).
-        // Admin / Sales Director keep their org-wide visibility.
-        const teamMemberIds = await storage.getTeamMemberIds(user.id, orgId);
-        const allowedOwnerIds = Array.from(new Set([user.id, ...teamMemberIds]));
+      } else if (user.role !== "admin" && user.role !== "sales_director") {
+        // Default-scope conversations for every non-manager role to the
+        // caller's reporting tree (themselves + every direct/indirect
+        // report). Without this, a regular sales rep loading the inbox
+        // sees every email thread in the organization — including emails
+        // that belong to other reps and other reps' accounts.
+        //
+        // Admin and Sales Director keep org-wide visibility for oversight
+        // (matches the Task #525 visibility model). Director, NAM, sales,
+        // logistics_manager, and any other role get scoped to their own
+        // reporting tree via `getVisibleRepUserIds`. For an individual
+        // contributor with no reports, that tree is just `[user.id]`.
+        const visibleIds = await getVisibleRepUserIds(user);
+        // `getVisibleRepUserIds` returns null only for admin (excluded
+        // above), so this is always a non-null array of user ids.
+        const allowedOwnerIds = visibleIds ?? [user.id];
         if (filters.ownerUserId) {
           if (!allowedOwnerIds.includes(filters.ownerUserId)) {
             return res.json({ count: 0, threads: [], nextCursor: null });
           }
         } else {
+          // Also surface unowned threads on accounts whose salesperson is
+          // inside the visible set — auto-synced inbound mail often lands
+          // without an owner stamped, and the rep needs to see it.
           const allCompanies = await storage.getCompanies(orgId);
           const teamAccountIds = allCompanies
             .filter(c => c.salesPersonId && allowedOwnerIds.includes(c.salesPersonId))
@@ -410,6 +420,32 @@ export function registerConversationsRoutes(app: Express): void {
     }
   });
 
+  // Returns true when the caller may read the thread or act on it. Used by
+  // the per-thread GET/POST endpoints below so a rep can't bypass the list
+  // scoping by guessing a conversation UUID. Mirrors the visibility model
+  // applied to the inbox listing:
+  //   - admin / sales_director: org-wide oversight
+  //   - thread owner: always
+  //   - manager whose reporting tree contains the owner: always
+  //   - unowned thread on an account whose salesperson is in the caller's
+  //     reporting tree (covers auto-synced inbound that hasn't been claimed)
+  const canAccessThread = async (
+    requester: { id: string; role: string; organizationId: string },
+    thread: { ownerUserId: string | null; orgId: string; linkedAccountId: string | null },
+  ): Promise<boolean> => {
+    if (thread.orgId !== requester.organizationId) return false;
+    if (requester.role === "admin" || requester.role === "sales_director") return true;
+    if (thread.ownerUserId && thread.ownerUserId === requester.id) return true;
+    if (thread.ownerUserId && (await canSeeRepUser(requester, thread.ownerUserId))) return true;
+    if (!thread.ownerUserId && thread.linkedAccountId) {
+      const company = await storage.getCompany(thread.linkedAccountId);
+      if (company?.salesPersonId && (await canSeeRepUser(requester, company.salesPersonId))) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   // ── POST /api/internal/conversations/:id/archive ──────────────────────────
   app.post("/api/internal/conversations/:id/archive", requireAuth, async (req: Request, res: Response) => {
     try {
@@ -419,6 +455,9 @@ export function registerConversationsRoutes(app: Express): void {
       const thread = await storage.getEmailConversationThreadById(req.params.id);
       if (!thread || thread.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Conversation not found" });
+      }
+      if (!(await canAccessThread(user, thread))) {
+        return res.status(403).json({ error: "You do not have access to this conversation" });
       }
 
       if (thread.waitingState !== "resolved") {
@@ -450,6 +489,17 @@ export function registerConversationsRoutes(app: Express): void {
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
 
+      // Check access on the existing thread BEFORE the assignment so a rep
+      // can't reassign threads outside their visible set (and can't probe
+      // for thread existence by issuing reassign requests).
+      const existing = await storage.getEmailConversationThreadById(req.params.id);
+      if (!existing || existing.orgId !== user.organizationId) {
+        return res.status(404).json({ error: "Conversation not found" });
+      }
+      if (!(await canAccessThread(user, existing))) {
+        return res.status(403).json({ error: "You do not have access to this conversation" });
+      }
+
       await assignOwner(req.params.id, parsed.data.ownerUserId, user.organizationId, storage);
       const thread = await storage.getEmailConversationThreadById(req.params.id);
       if (!thread || thread.orgId !== user.organizationId) {
@@ -471,6 +521,14 @@ export function registerConversationsRoutes(app: Express): void {
       const schema = z.object({ waitingState: z.enum(["waiting_on_us", "waiting_on_them", "resolved", "archived"]) });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+
+      const existing = await storage.getEmailConversationThreadById(req.params.id);
+      if (!existing || existing.orgId !== user.organizationId) {
+        return res.status(404).json({ error: "Conversation not found" });
+      }
+      if (!(await canAccessThread(user, existing))) {
+        return res.status(403).json({ error: "You do not have access to this conversation" });
+      }
 
       await setWaitingState(req.params.id, parsed.data.waitingState, user.organizationId, storage);
       const thread = await storage.getEmailConversationThreadById(req.params.id);
@@ -517,6 +575,24 @@ export function registerConversationsRoutes(app: Express): void {
         return res.status(404).json({ error: "Conversation not found" });
       }
 
+      // Authorize against the conversation thread row (the listing handler
+      // scopes by reporting tree; without this gate, a rep could bypass the
+      // list scoping by guessing or sharing a thread UUID and reading the
+      // full email body for any thread in their org). Look up the thread by
+      // its provider threadId so the orphan-materialise path also gets
+      // checked. If no thread row exists yet (e.g. materialise failed and
+      // the thread is truly empty), fail closed.
+      const threadRow = await storage.getEmailConversationThreadByThreadId(
+        user.organizationId,
+        threadIdForMessages,
+      );
+      if (!threadRow) {
+        return res.status(404).json({ error: "Conversation not found" });
+      }
+      if (!(await canAccessThread(user, threadRow))) {
+        return res.status(403).json({ error: "You do not have access to this conversation" });
+      }
+
       const messages = await db.select()
         .from(emailMessages)
         .where(
@@ -546,6 +622,14 @@ export function registerConversationsRoutes(app: Express): void {
       const schema = z.object({ responsePriority: z.enum(["high", "normal", "low"]) });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+
+      const existing = await storage.getEmailConversationThreadById(req.params.id);
+      if (!existing || existing.orgId !== user.organizationId) {
+        return res.status(404).json({ error: "Conversation not found" });
+      }
+      if (!(await canAccessThread(user, existing))) {
+        return res.status(403).json({ error: "You do not have access to this conversation" });
+      }
 
       await setPriority(req.params.id, parsed.data.responsePriority, user.organizationId, storage);
       const thread = await storage.getEmailConversationThreadById(req.params.id);
