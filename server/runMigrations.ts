@@ -4147,14 +4147,22 @@ export async function runMigrations() {
     `);
     // Composite uniqueness for upsertWebexSyncState — keyed by
     // (org_id, data_source, user_id). user_id is nullable for org-scoped
-    // sync rows, so we use COALESCE to a sentinel UUID inside the index.
+    // sync rows, so we use two PARTIAL unique indexes (one for the
+    // user-scoped case, one for the org-scoped case). Partial indexes
+    // round-trip cleanly through drizzle-kit introspection — the prior
+    // COALESCE-expression index did not, which caused deploy-time
+    // `drizzle-kit push` to emit malformed DDL with truncated cast text.
+    await client466.query(`DROP INDEX IF EXISTS webex_sync_state_org_source_user_idx`);
+    await client466.query(`DROP INDEX IF EXISTS webex_sync_state_unique_idx`);
     await client466.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS webex_sync_state_org_source_user_idx
-        ON webex_sync_state (
-          org_id,
-          data_source,
-          COALESCE(user_id, '00000000-0000-0000-0000-000000000000')
-        )
+      CREATE UNIQUE INDEX IF NOT EXISTS webex_sync_state_user_unique_idx
+        ON webex_sync_state (org_id, data_source, user_id)
+        WHERE user_id IS NOT NULL
+    `);
+    await client466.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS webex_sync_state_org_unique_idx
+        ON webex_sync_state (org_id, data_source)
+        WHERE user_id IS NULL
     `);
 
     // One-time scope bump → mark every existing per-user token as needs_reauth.

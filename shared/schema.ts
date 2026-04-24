@@ -4400,7 +4400,12 @@ export const webexSyncState = pgTable(
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("webex_sync_state_unique_idx").on(table.orgId, table.userId, table.dataSource),
+    uniqueIndex("webex_sync_state_user_unique_idx")
+      .on(table.orgId, table.dataSource, table.userId)
+      .where(sql`${table.userId} IS NOT NULL`),
+    uniqueIndex("webex_sync_state_org_unique_idx")
+      .on(table.orgId, table.dataSource)
+      .where(sql`${table.userId} IS NULL`),
     index("webex_sync_state_org_idx").on(table.orgId),
   ],
 );
