@@ -1,18 +1,22 @@
 /**
  * Customer Quotes #2 — Action Queue card.
  *
- * Top-of-page collapsible card that shows the three categories of work
- * a rep should action right now: SLA-breaching, Needs-Review (unknown
- * customer bucket), and Expiring-Today. Each list is capped server-side
- * at 5 rows. Clicking a row opens the existing QuoteDetailDrawer in the
- * parent page.
+ * Top-of-page collapsible card that shows the categories of work a rep
+ * should action right now: SLA-breaching and Expiring-Today. Each list
+ * is capped server-side at 5 rows. Clicking a row opens the existing
+ * QuoteDetailDrawer in the parent page.
+ *
+ * Task #615 — the historical "Needs review" column has been retired
+ * along with the rest of the unknown-customer surface area; that
+ * triage workflow now lives outside the customer-only Quote
+ * Opportunities feed.
  */
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { AlertTriangle, ChevronDown, ChevronUp, Clock, UserSearch, Hourglass } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, Clock, Hourglass } from "lucide-react";
 import { computeQuoteSla, formatSlaBadge } from "@shared/quoteSla";
 
 type QueueRow = {
@@ -29,7 +33,6 @@ type QueueRow = {
 
 type ActionQueueResponse = {
   slaBreaching: QueueRow[];
-  needsReview: QueueRow[];
   expiringToday: QueueRow[];
 };
 
@@ -50,9 +53,8 @@ export function ActionQueueCard({ onOpenQuote }: Props): JSX.Element | null {
   });
 
   const slaCount = data?.slaBreaching.length ?? 0;
-  const needsCount = data?.needsReview.length ?? 0;
   const expiringCount = data?.expiringToday.length ?? 0;
-  const total = slaCount + needsCount + expiringCount;
+  const total = slaCount + expiringCount;
 
   // Hide entirely when there's nothing to do — keeps the dashboard tidy.
   if (!isLoading && total === 0) return null;
@@ -80,7 +82,7 @@ export function ActionQueueCard({ onOpenQuote }: Props): JSX.Element | null {
         </Button>
       </CardHeader>
       {open && (
-        <CardContent className="px-4 pb-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <CardContent className="px-4 pb-4 grid grid-cols-1 md:grid-cols-2 gap-4">
           <ActionSection
             title="SLA breaching"
             icon={<Clock className="h-3.5 w-3.5 text-red-500" />}
@@ -90,16 +92,6 @@ export function ActionQueueCard({ onOpenQuote }: Props): JSX.Element | null {
             onOpenQuote={onOpenQuote}
             testIdRoot="sla-breaching"
             empty="No SLA breaches."
-          />
-          <ActionSection
-            title="Needs review"
-            icon={<UserSearch className="h-3.5 w-3.5 text-amber-500" />}
-            tone="amber"
-            rows={data?.needsReview ?? []}
-            isLoading={isLoading}
-            onOpenQuote={onOpenQuote}
-            testIdRoot="needs-review"
-            empty="No unclassified rows."
           />
           <ActionSection
             title="Expiring today"

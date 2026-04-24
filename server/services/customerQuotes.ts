@@ -39,16 +39,11 @@ export type QuoteFilters = {
   activeOnly?: boolean;
   lostOnly?: boolean;
   expiringOnly?: boolean;
-  // Task #584 — restricts the result set to opportunities whose customer is
-  // the shared "Unknown — needs review" bucket created by the customer-name
-  // resolver (Task #578). Resolved server-side via `resolveUnknownCustomerIds`
-  // so the client doesn't need to know any specific customer ids.
+  // Task #615 — historical "Unknown — needs review" quick filter. Kept on
+  // the type purely so old saved-view rows that still carry the flag are
+  // accepted by the route validator; the snapshot/list chokepoint always
+  // hides unknown rows now (alongside carriers) so the flag is a no-op.
   needsReviewOnly?: boolean;
-  // Task #597 — when false (default), the snapshot/list/exportCsv chokepoint
-  // hides quotes whose customer row is classified as a carrier. When true the
-  // dashboard surfaces those rows so reps can audit what's bleeding in. The
-  // header "Show carriers too" toggle drives this end-to-end.
-  includeCarriers?: boolean;
 };
 
 export type EnrichedQuote = QuoteOpportunity & {
@@ -128,12 +123,6 @@ export type Snapshot = {
     avgQuoted: number; avgCarrierCost: number;
     avgMarginDollar: number; avgMarginPct: number;
     avgResponseTime: number; pending: number; expiringSoon: number;
-    // Task #584 — count of opportunities sitting in the shared
-    // UNKNOWN_CUSTOMER_NAME bucket. Computed against the org's full quote
-    // set (independent of `needsReviewOnly`) so the dashboard chip can
-    // surface the open backlog even when reps are looking at a different
-    // slice.
-    needsReview: number;
     trend: { winRate: number; total: number; avgMargin: number; avgResponse: number };
   };
   customers: QuoteCustomer[];
@@ -525,17 +514,16 @@ function unknownCustomerIdsFromMap(customerMap: Map<string, QuoteCustomer>): Set
 function applyFilters(
   rows: QuoteOpportunity[],
   f: QuoteFilters,
-  unknownCustomerIds?: Set<string>,
-  // Task #597 — set of customer ids classified as carriers. Always passed by
-  // the snapshot/list/exportCsv chokepoint; rows in this set are filtered OUT
-  // unless `f.includeCarriers` is true. Pass an empty set to disable.
-  carrierCustomerIds?: Set<string>,
+  // Task #615 — single chokepoint for the customer-only rule. Any customer
+  // whose id is in this set has `partyType !== "customer"` (carrier OR
+  // unknown OR missing) and is filtered out of every aggregate driven by
+  // this helper (KPIs, list, charts, taxonomy, attractiveness, CSV export).
+  // The flag is hard-wired ON: there is no opt-in to surface non-customer
+  // rows on the Quote Opportunities feed.
+  nonCustomerCustomerIds?: Set<string>,
 ): QuoteOpportunity[] {
   return rows.filter((r) => {
-    // Task #597 — single chokepoint for the carrier hide rule. Applied first
-    // so all downstream aggregates (KPIs, charts, attractiveness, taxonomy,
-    // etc.) match the visible row count exactly.
-    if (!f.includeCarriers && carrierCustomerIds && carrierCustomerIds.has(r.customerId)) return false;
+    if (nonCustomerCustomerIds && nonCustomerCustomerIds.has(r.customerId)) return false;
     if (f.customerId && r.customerId !== f.customerId) return false;
     if (f.laneGroupId && r.laneGroupId !== f.laneGroupId) return false;
     if (f.repId && r.repId !== f.repId) return false;
@@ -552,11 +540,11 @@ function applyFilters(
       const ms = r.validThrough.getTime() - Date.now();
       if (ms < 0 || ms > 3 * 24 * 3600 * 1000) return false;
     }
-    if (f.needsReviewOnly) {
-      // No bucket exists yet for this org — nothing can match.
-      if (!unknownCustomerIds || unknownCustomerIds.size === 0) return false;
-      if (!unknownCustomerIds.has(r.customerId)) return false;
-    }
+    // Task #615 — `needsReviewOnly` is intentionally ignored. The chokepoint
+    // above already removes every unknown-bucket row, so the unknown-only
+    // quick-filter would always produce an empty set. Old saved-view rows
+    // that still carry the flag therefore behave like an unfiltered view of
+    // the (already-customer-only) result set.
     if (f.laneSearch) {
       const lane = `${r.originCity},${r.originState} ${r.destCity},${r.destState}`.toLowerCase();
       const tokens = f.laneSearch.toLowerCase().split(/\s+/).filter(Boolean);
@@ -567,14 +555,17 @@ function applyFilters(
 }
 
 /**
- * Task #597 — derive the set of `quote_customers.id` values to filter out
- * when "Show carriers too" is OFF. Returns the empty set when nothing is
- * classified as a carrier so callers can pass it unconditionally.
+ * Task #615 — derive the set of `quote_customers.id` values that the
+ * Quote Opportunities feed must NEVER surface. Anything not explicitly
+ * classified as `partyType === "customer"` (i.e. carrier OR unknown OR
+ * a row missing a partyType for any reason) lands in here. Returns an
+ * empty set when nothing in the org needs filtering so callers can pass
+ * it unconditionally.
  */
-function carrierCustomerIdsFromMap(customerMap: Map<string, QuoteCustomer>): Set<string> {
+function nonCustomerCustomerIdsFromMap(customerMap: Map<string, QuoteCustomer>): Set<string> {
   const out = new Set<string>();
   customerMap.forEach((c, id) => {
-    if (c.partyType === "carrier") out.add(id);
+    if (c.partyType !== "customer") out.add(id);
   });
   return out;
 }
@@ -740,9 +731,8 @@ export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: 
   const ctx = await loadContext(orgId);
   const all = await db.select().from(quoteOpportunities)
     .where(eq(quoteOpportunities.organizationId, orgId));
-  const unknownIds = unknownCustomerIdsFromMap(ctx.customerMap);
-  const carrierIds = carrierCustomerIdsFromMap(ctx.customerMap);
-  const filtered = applyFilters(all, filters, unknownIds, carrierIds);
+  const nonCustomerIds = nonCustomerCustomerIdsFromMap(ctx.customerMap);
+  const filtered = applyFilters(all, filters, nonCustomerIds);
   const enriched = enrich(filtered, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
 
   const dir = sortDir === "asc" ? 1 : -1;
@@ -837,12 +827,17 @@ async function attachSourceThreads(orgId: string, rows: EnrichedQuote[]): Promis
 /**
  * Customer Quotes #2 — Action Queue.
  *
- * Returns the three categories of pending work that the rep should
- * prioritise above everything else, each capped at `limit` (default 5):
- *   - slaBreaching: pending quotes whose age >= SLA threshold
- *   - needsReview:  pending quotes still bucketed in the shared
- *                   "Unknown — needs review" customer
+ * Returns the categories of pending work that the rep should prioritise
+ * above everything else, each capped at `limit` (default 5):
+ *   - slaBreaching:  pending quotes whose age >= SLA threshold
  *   - expiringToday: pending quotes whose validThrough is within 24h
+ *
+ * Task #615 — pending rows whose customer is anything other than a
+ * confirmed `partyType === "customer"` (carrier OR unknown) are dropped
+ * before the buckets are computed, matching the customer-only contract
+ * of the surrounding Quote Opportunities page. The historical
+ * "needs review" bucket (which surfaced unknown-bucket rows for triage)
+ * has been retired; that workflow now lives outside this view.
  *
  * Returned rows use the same EnrichedQuote shape as the main list so
  * the client can reuse all existing row-renderers / drawer plumbing.
@@ -852,7 +847,6 @@ export async function getActionQueue(
   opts: { limit?: number; now?: number } = {},
 ): Promise<{
   slaBreaching: EnrichedQuote[];
-  needsReview: EnrichedQuote[];
   expiringToday: EnrichedQuote[];
 }> {
   const limit = Math.max(1, Math.min(50, opts.limit ?? 5));
@@ -861,13 +855,10 @@ export async function getActionQueue(
   const all = await db.select().from(quoteOpportunities)
     .where(eq(quoteOpportunities.organizationId, orgId));
 
-  const unknownIds = unknownCustomerIdsFromMap(ctx.customerMap);
-  const carrierIds = carrierCustomerIdsFromMap(ctx.customerMap);
+  const nonCustomerIds = nonCustomerCustomerIdsFromMap(ctx.customerMap);
 
-  // Action Queue is intentionally pending-only; carriers stay hidden by
-  // default but pass-through if reps already opt in via the page toggle.
   const pending = all.filter(r =>
-    r.outcomeStatus === "pending" && !carrierIds.has(r.customerId)
+    r.outcomeStatus === "pending" && !nonCustomerIds.has(r.customerId)
   );
 
   const enriched = enrich(pending, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, { now });
@@ -877,24 +868,19 @@ export async function getActionQueue(
     .sort((a, b) => a.requestDate.getTime() - b.requestDate.getTime())
     .slice(0, limit);
 
-  const needsReview = enriched
-    .filter(r => unknownIds.has(r.customerId))
-    .sort((a, b) => a.requestDate.getTime() - b.requestDate.getTime())
-    .slice(0, limit);
-
   const dayMs = 24 * 60 * 60 * 1000;
   const expiringToday = enriched
     .filter(r => r.validThrough && r.validThrough.getTime() - now <= dayMs && r.validThrough.getTime() >= now)
     .sort((a, b) => (a.validThrough!.getTime() - b.validThrough!.getTime()))
     .slice(0, limit);
 
-  // Cheaper to attach source thread refs once across the union than thrice.
+  // Cheaper to attach source thread refs once across the union than twice.
   const merged = Array.from(new Map(
-    [...slaBreaching, ...needsReview, ...expiringToday].map(r => [r.id, r] as const),
+    [...slaBreaching, ...expiringToday].map(r => [r.id, r] as const),
   ).values());
   await attachSourceThreads(orgId, merged);
 
-  return { slaBreaching, needsReview, expiringToday };
+  return { slaBreaching, expiringToday };
 }
 
 /**
@@ -1016,9 +1002,8 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
     .where(eq(quoteOpportunities.organizationId, orgId))
     .orderBy(desc(quoteOpportunities.requestDate));
 
-  const unknownIds = unknownCustomerIdsFromMap(ctx.customerMap);
-  const carrierIds = carrierCustomerIdsFromMap(ctx.customerMap);
-  const filtered = applyFilters(allOpps, filters, unknownIds, carrierIds);
+  const nonCustomerIds = nonCustomerCustomerIdsFromMap(ctx.customerMap);
+  const filtered = applyFilters(allOpps, filters, nonCustomerIds);
   const won = filtered.filter(r => isWon(r.outcomeStatus));
   const lost = filtered.filter(r => isLost(r.outcomeStatus));
   const pending = filtered.filter(r => r.outcomeStatus === "pending");
@@ -1228,9 +1213,9 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
   const cutoff14 = now.getTime() - 14 * dayMs;
   const cutoff28 = now.getTime() - 28 * dayMs;
   for (const c of ctx.customers) {
-    // Task #597 — when "Show carriers too" is OFF, don't surface carrier
-    // rising-volume alerts on a dashboard that intentionally hides them.
-    if (!filters.includeCarriers && carrierIds.has(c.id)) continue;
+    // Task #615 — Quote Opportunities is customer-only; never surface
+    // rising-volume alerts for non-customer rows (carriers OR unknown).
+    if (nonCustomerIds.has(c.id)) continue;
     const recent = allOpps.filter(r => r.customerId === c.id && r.requestDate.getTime() >= cutoff14).length;
     const prior = allOpps.filter(r => r.customerId === c.id && r.requestDate.getTime() < cutoff14 && r.requestDate.getTime() >= cutoff28).length;
     if (recent >= 5 && recent > prior * 1.5 && prior > 0) {
@@ -1247,10 +1232,10 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
   });
   let staleFiltered = staleFollowUpsRaw;
   if (filters.customerId) staleFiltered = staleFiltered.filter(s => s.customerId === filters.customerId);
-  // Task #597 — honor the "Show carriers too" toggle on stale-follow-up rows
-  // so the alerts/widgets don't drift from the table behavior.
-  if (!filters.includeCarriers && carrierIds.size > 0) {
-    staleFiltered = staleFiltered.filter(s => !carrierIds.has(s.customerId));
+  // Task #615 — Quote Opportunities is customer-only; drop any stale-follow-up
+  // pointing at a non-customer row so widgets stay consistent with the table.
+  if (nonCustomerIds.size > 0) {
+    staleFiltered = staleFiltered.filter(s => !nonCustomerIds.has(s.customerId));
   }
   const staleFollowUps: StaleFollowUpItem[] = staleFiltered.slice(0, 25).map(s => ({
     quoteId: s.quoteId, customerId: s.customerId, customerName: s.customerName,
@@ -1300,12 +1285,6 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
     kpis: {
       total, won: won.length, lost: lost.length, winRate, avgQuoted, avgCarrierCost,
       avgMarginDollar, avgMarginPct, avgResponseTime, pending: pending.length, expiringSoon,
-      // Task #584 — count of *all* opps in the unknown bucket for this org
-      // (not just the current slice) so the chip surfaces the open backlog
-      // even when the user has narrowed the dashboard to a different view.
-      needsReview: unknownIds.size === 0
-        ? 0
-        : allOpps.reduce((n, r) => n + (unknownIds.has(r.customerId) ? 1 : 0), 0),
       trend,
     },
     customers: ctx.customers, reps: ctx.reps, reasons: ctx.reasons, laneGroups: ctx.laneGroups, carriers: ctx.carriers,
@@ -2306,9 +2285,8 @@ export async function loadLostStreakAlertsForOrg(orgId: string, opts?: { thresho
 export async function exportCsv(orgId: string, filters: QuoteFilters): Promise<string> {
   const ctx = await loadContext(orgId);
   const all = await db.select().from(quoteOpportunities).where(eq(quoteOpportunities.organizationId, orgId));
-  const unknownIds = unknownCustomerIdsFromMap(ctx.customerMap);
-  const carrierIds = carrierCustomerIdsFromMap(ctx.customerMap);
-  const filtered = applyFilters(all, filters, unknownIds, carrierIds);
+  const nonCustomerIds = nonCustomerCustomerIdsFromMap(ctx.customerMap);
+  const filtered = applyFilters(all, filters, nonCustomerIds);
   const enriched = enrich(filtered, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
   enriched.sort((a, b) => b.requestDate.getTime() - a.requestDate.getTime());
   return quotesToCsv(enriched);

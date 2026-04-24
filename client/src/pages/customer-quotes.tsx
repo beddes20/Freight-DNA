@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { formatCustomerName } from "@shared/laneFormatters";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -132,8 +133,6 @@ type Snapshot = {
     avgQuoted: number; avgCarrierCost: number;
     avgMarginDollar: number; avgMarginPct: number;
     avgResponseTime: number; pending: number; expiringSoon: number;
-    // Task #584 — open count of opps in the shared "Unknown — needs review" bucket.
-    needsReview: number;
     trend: Trend;
   };
   customers: Customer[];
@@ -175,12 +174,6 @@ type Filters = {
   activeOnly?: boolean;
   lostOnly?: boolean;
   expiringOnly?: boolean;
-  // Task #584 — quick filter for the shared "Unknown — needs review" customer bucket.
-  needsReviewOnly?: boolean;
-  // Task #597 — header "Show carriers too" toggle. Default OFF so the
-  // dashboard shows only customer/unknown rows and excludes the carrier
-  // noise that the email/TMS importers bring in.
-  includeCarriers?: boolean;
 };
 
 type SortKey =
@@ -288,8 +281,6 @@ function filtersFromUrl(search: string): Filters {
   if (p.get("activeOnly") === "true") f.activeOnly = true;
   if (p.get("lostOnly") === "true") f.lostOnly = true;
   if (p.get("expiringOnly") === "true") f.expiringOnly = true;
-  if (p.get("needsReviewOnly") === "true") f.needsReviewOnly = true;
-  if (p.get("includeCarriers") === "true") f.includeCarriers = true;
   return f;
 }
 function trendIcon(v: number): JSX.Element {
@@ -360,7 +351,47 @@ function useCustomerQuotesTheme(): { theme: "light" | "dark"; toggle: () => void
 }
 
 // ---------- Page ----------
+// Task #615 — Quote Opportunities is restricted to roles that own the
+// customer relationship. Reps outside this set (drivers, ops, dispatch,
+// generic "sales", carrier-side roles, etc.) see an "Access required"
+// empty state and the sidebar entry is hidden for them too.
+const QUOTE_OPPORTUNITIES_ROLES = new Set<string>([
+  "admin",
+  "director",
+  "national_account_manager",
+  "account_manager",
+]);
+
 export default function CustomerQuotesPage(): JSX.Element {
+  // Task #615 — gate the entire dashboard at the page boundary so the
+  // hook order inside the heavy inner page never changes between renders.
+  // Sidebar entry is hidden for ungated roles via the same role list, but
+  // direct URL navigation still lands here, so this short-circuit is the
+  // last line of defence on the client.
+  const { user: currentUser, isLoading: authLoading } = useAuth();
+  const hasAccess =
+    !!currentUser
+    && typeof currentUser === "object"
+    && "role" in currentUser
+    && QUOTE_OPPORTUNITIES_ROLES.has((currentUser as { role: string }).role);
+  if (authLoading) {
+    return (
+      <div className="flex items-center justify-center h-full" data-testid="customer-quotes-auth-loading">
+        <Skeleton className="h-6 w-32 bg-card" />
+      </div>
+    );
+  }
+  if (!hasAccess) {
+    return (
+      <div className="flex items-center justify-center h-full" data-testid="customer-quotes-access-required">
+        <p className="text-muted-foreground">Access required</p>
+      </div>
+    );
+  }
+  return <CustomerQuotesPageInner />;
+}
+
+function CustomerQuotesPageInner(): JSX.Element {
   const { theme, toggle: toggleTheme } = useCustomerQuotesTheme();
   const initialSearch = typeof window !== "undefined" ? window.location.search : "";
   const [filters, setFilters] = useState<Filters>(() => filtersFromUrl(initialSearch));
@@ -768,41 +799,6 @@ export default function CustomerQuotesPage(): JSX.Element {
           <FilterBox label="Active only">
             <div className="h-8 flex items-center"><Switch checked={!!filters.activeOnly} onCheckedChange={v => updateFilter({ activeOnly: v ? true : undefined })} data-testid="switch-active-only" /></div>
           </FilterBox>
-          {/* Task #597 — show/hide carrier-typed rows. Default OFF so the
-              dashboard reads as a customer/RFQ feed; users opt-in to see
-              carrier offers/responses by flipping this. */}
-          <FilterBox label="Show carriers too">
-            <div className="h-8 flex items-center">
-              <Switch
-                checked={!!filters.includeCarriers}
-                onCheckedChange={v => updateFilter({ includeCarriers: v ? true : undefined })}
-                data-testid="switch-include-carriers"
-              />
-            </div>
-          </FilterBox>
-          {/* Task #584 — chip-style quick-filter for the shared "Unknown — needs review" bucket. */}
-          <FilterBox label="Triage">
-            <button
-              type="button"
-              onClick={() => updateFilter({ needsReviewOnly: filters.needsReviewOnly ? undefined : true })}
-              data-testid="chip-needs-review"
-              aria-pressed={!!filters.needsReviewOnly}
-              className={`h-8 inline-flex items-center gap-1.5 px-2.5 rounded-full border text-[11px] font-medium transition-colors ${
-                filters.needsReviewOnly
-                  ? "bg-amber-500/25 text-amber-800 dark:text-amber-200 border-amber-500/60"
-                  : "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 hover:bg-amber-500/20"
-              }`}
-            >
-              <AlertTriangle className="h-3 w-3" />
-              <span>Needs review</span>
-              <span
-                className="inline-flex items-center justify-center min-w-[18px] h-[16px] px-1 rounded-full bg-amber-600/90 text-white text-[10px] tabular-nums"
-                data-testid="badge-needs-review-count"
-              >
-                {data?.kpis.needsReview ?? 0}
-              </span>
-            </button>
-          </FilterBox>
           {hasFilters && (
             <>
               <Button size="sm" variant="ghost" onClick={clearAll} className="h-8 text-xs text-muted-foreground hover:text-foreground" data-testid="button-clear-filters">Clear all</Button>
@@ -824,7 +820,6 @@ export default function CustomerQuotesPage(): JSX.Element {
               if (k === "lostOnly") label = "Lost only";
               if (k === "activeOnly") label = "Active only";
               if (k === "expiringOnly") label = "Expiring <3d";
-              if (k === "needsReviewOnly") label = "Needs review";
               return (
                 <button key={k} onClick={() => removeFilter(k as keyof Filters)}
                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 hover:bg-amber-500/25"

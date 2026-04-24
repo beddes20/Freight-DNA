@@ -52,10 +52,10 @@ const filtersSchema = z.object({
   activeOnly: z.boolean().optional(),
   lostOnly: z.boolean().optional(),
   expiringOnly: z.boolean().optional(),
-  // Task #584 — quick filter for the shared "Unknown — needs review" bucket.
+  // Task #615 — accepted but ignored. Kept on the schema so old saved-view
+  // rows (and any old client builds during deploy) don't 400 the request;
+  // the service layer now hard-filters every non-customer row.
   needsReviewOnly: z.boolean().optional(),
-  // Task #597 — header "Show carriers too" toggle.
-  includeCarriers: z.boolean().optional(),
 }).strict();
 
 const queryFiltersSchema = filtersSchema.extend({
@@ -64,7 +64,6 @@ const queryFiltersSchema = filtersSchema.extend({
   lostOnly: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
   expiringOnly: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
   needsReviewOnly: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
-  includeCarriers: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
 });
 
 const SORT_KEYS = [
@@ -100,7 +99,6 @@ function parseFilters(req: Request): QuoteFilters {
   if (d.lostOnly) f.lostOnly = true;
   if (d.expiringOnly) f.expiringOnly = true;
   if (d.needsReviewOnly) f.needsReviewOnly = true;
-  if (d.includeCarriers) f.includeCarriers = true;
   return f;
 }
 
@@ -380,8 +378,10 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     }
   });
 
-  // Customer Quotes #2 — Action Queue (sla-breaching / needs-review /
-  // expiring-today). Each list capped at `limit` (default 5, max 25).
+  // Customer Quotes #2 — Action Queue (sla-breaching / expiring-today).
+  // Task #615 retired the needs-review bucket along with the rest of the
+  // unknown-customer surface area. Each list capped at `limit` (default 5,
+  // max 25).
   app.get("/api/customer-quotes/action-queue", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
