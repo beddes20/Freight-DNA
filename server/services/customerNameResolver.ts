@@ -64,6 +64,71 @@ const COMPANY_SUFFIX = "Logistics|Logistic|Transport|Transportation|Freight|Truc
 
 const COMPANY_SUFFIX_RE = new RegExp(`\\b(?:${COMPANY_SUFFIX})\\b`, "i");
 
+// Task #597 — tokens that strongly imply a row is a CARRIER (truck/asset
+// company), not a shipper/customer. Matched against the customer's name and
+// the email-domain root used to create it. The "Logistics" / "Express"
+// classification is intentionally fuzzy — Yes, some shippers have those
+// words too — which is why the dashboard always shows a manual override
+// button next to the auto-classification in the drawer.
+const CARRIER_TOKEN = "Carrier|Carriers|Freight|Logistics|Logistic|Transport|Transportation|Trucking|Lines|Express|Haulage|Hauling|Cartage|Dispatch";
+const CARRIER_TOKEN_RE = new RegExp(`\\b(?:${CARRIER_TOKEN})\\b`, "i");
+
+/**
+ * Heuristic classifier for a `quote_customers` row. Returns:
+ *   "carrier"  — name OR email-domain root contains a carrier-suffix token
+ *                ("Freight", "Logistics", "Trucking", etc.) OR the name
+ *                appears in the org's `quote_carriers` table (passed in
+ *                via `knownCarrierNames`, lowercased) OR the from-email's
+ *                domain matches one of the org's known carrier email
+ *                domains (passed in via `knownCarrierDomains`).
+ *   "customer" — looks like a real shipper (no carrier signals) AND has a
+ *                concrete name (not the placeholder UNKNOWN_CUSTOMER_NAME).
+ *   "unknown"  — empty/whitespace name, the shared UNKNOWN_CUSTOMER_NAME
+ *                bucket, OR a free-mail sender with no other signals.
+ *
+ * Auto-classification is conservative: when in doubt we emit "unknown" so
+ * the row stays visible until a rep flips it manually from the drawer.
+ */
+export function classifyPartyType(input: {
+  name?: string | null;
+  fromEmail?: string | null;
+  knownCarrierNames?: ReadonlySet<string>;
+  knownCarrierDomains?: ReadonlySet<string>;
+}): "customer" | "carrier" | "unknown" {
+  const name = (input.name ?? "").trim();
+  const lower = name.toLowerCase();
+  if (input.knownCarrierNames && lower && input.knownCarrierNames.has(lower)) {
+    return "carrier";
+  }
+  if (name && CARRIER_TOKEN_RE.test(name)) return "carrier";
+  const from = parseFromHeader(input.fromEmail);
+  if (from) {
+    // Task #597 — domain-based carrier matching from the org's carriers
+    // catalog wins over heuristics. This catches carriers whose company
+    // names don't include a carrier-suffix token (e.g. "Acme Express LLC"
+    // is obvious, "Patriot Holdings" is not — but we still know the domain).
+    if (input.knownCarrierDomains && input.knownCarrierDomains.has(from.domain.toLowerCase())) {
+      return "carrier";
+    }
+    if (!isFreeMailDomain(from.domain)) {
+      const domainName = nameFromBusinessDomain(from.domain);
+      if (domainName && CARRIER_TOKEN_RE.test(domainName)) return "carrier";
+    }
+  }
+  // Task #597 — preserve the shared "Unknown — needs review" bucket.
+  // Without this, the row would silently graduate to "customer" and the
+  // dashboard's needs-review chip / Triage filter would lose its target.
+  if (!name || lower === UNKNOWN_CUSTOMER_NAME.toLowerCase()) return "unknown";
+  // Task #597 — when the only signal we have is a free-mail sender (gmail/
+  // yahoo/etc.) AND the row name lacks a real company suffix, stay
+  // conservative and emit "unknown". This avoids silently bucketing
+  // free-mail-derived rows into the customer feed without evidence.
+  if (from && isFreeMailDomain(from.domain) && !COMPANY_SUFFIX_RE.test(name)) {
+    return "unknown";
+  }
+  return "customer";
+}
+
 // Up to 3 capitalized tokens followed by a company suffix on the SAME line
 // (so "Marcus\nPatriot Haulers LLC" matches only "Patriot Haulers LLC", not
 // the leading first-name).

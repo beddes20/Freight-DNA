@@ -4892,12 +4892,23 @@ export type QuoteOutcomeStatus = typeof QUOTE_OUTCOME_STATUSES[number];
 
 export const QUOTE_SOURCES = ["email", "tms", "crm", "manual", "import"] as const;
 
+// Task #597 — `partyType` distinguishes shipper customers (default) from
+// carrier rows that leak in via email/TMS ingestion (e.g. carriers cold-emailing
+// for rate quotes get auto-created as a quote_customers row even though they
+// aren't actual customers). The dashboard hides carrier rows by default and
+// reps can flip the classification per-row from the drawer; manual flips set
+// `partyTypeManual=true` so background classifiers never overwrite the rep's call.
+export const QUOTE_PARTY_TYPES = ["customer", "carrier", "unknown"] as const;
+export type QuotePartyType = typeof QUOTE_PARTY_TYPES[number];
+
 export const quoteCustomers = pgTable("quote_customers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   segment: text("segment"),
   notes: text("notes"),
+  partyType: text("party_type").notNull().default("unknown"),
+  partyTypeManual: boolean("party_type_manual").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 export const insertQuoteCustomerSchema = createInsertSchema(quoteCustomers).omit({ id: true, createdAt: true });

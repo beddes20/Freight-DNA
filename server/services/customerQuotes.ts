@@ -1,6 +1,7 @@
 import { and, eq, asc, desc, sql, type SQL } from "drizzle-orm";
 import { db } from "../storage";
 import { logQuoteTouchpointFromEvent } from "./quoteTouchpoints";
+import { carriers as carriersCatalog } from "@shared/schema";
 import {
   quoteCustomers, quoteReps, quoteCarriers, quoteLaneGroups, quoteOutcomeReasons,
   quoteOpportunities, quoteEvents, quoteSavedViews,
@@ -8,7 +9,8 @@ import {
   type QuoteOpportunity, type QuoteOutcomeStatus, type QuoteCustomer, type QuoteRep,
   type QuoteCarrier, type QuoteLaneGroup, type QuoteOutcomeReason, type QuoteSavedView,
 } from "@shared/schema";
-import { UNKNOWN_CUSTOMER_NAME } from "./customerNameResolver";
+import { UNKNOWN_CUSTOMER_NAME, classifyPartyType } from "./customerNameResolver";
+import type { QuotePartyType } from "@shared/schema";
 import { getStaleQuoteFollowUps } from "./staleQuoteFollowup";
 import { getActivePatternAlertsForOrg } from "./quotePatternShift";
 import { normalizeEquipmentType } from "@shared/laneFormatters";
@@ -40,6 +42,11 @@ export type QuoteFilters = {
   // resolver (Task #578). Resolved server-side via `resolveUnknownCustomerIds`
   // so the client doesn't need to know any specific customer ids.
   needsReviewOnly?: boolean;
+  // Task #597 — when false (default), the snapshot/list/exportCsv chokepoint
+  // hides quotes whose customer row is classified as a carrier. When true the
+  // dashboard surfaces those rows so reps can audit what's bleeding in. The
+  // header "Show carriers too" toggle drives this end-to-end.
+  includeCarriers?: boolean;
 };
 
 export type EnrichedQuote = QuoteOpportunity & {
@@ -183,6 +190,11 @@ function isLost(s: string): boolean { return s === "lost_price" || s === "lost_s
  * starts from an empty state until real ingestion lands rows.
  */
 export function isDemoSeedEnabled(orgId?: string): boolean {
+  // Task #597 — hard no-op in production regardless of any env flag, so a
+  // mis-set environment variable can never re-introduce demo rows on a live
+  // tenant. Routes also no longer call ensureQuoteSeed; this is the
+  // belt-and-suspenders guard for the helper itself.
+  if (process.env.NODE_ENV === "production") return false;
   if (process.env.QUOTE_DEMO_SEED_ENABLED !== "true") return false;
   const allow = process.env.QUOTE_DEMO_SEED_ORG_IDS;
   if (!allow || !orgId) return true;
@@ -508,8 +520,16 @@ function applyFilters(
   rows: QuoteOpportunity[],
   f: QuoteFilters,
   unknownCustomerIds?: Set<string>,
+  // Task #597 — set of customer ids classified as carriers. Always passed by
+  // the snapshot/list/exportCsv chokepoint; rows in this set are filtered OUT
+  // unless `f.includeCarriers` is true. Pass an empty set to disable.
+  carrierCustomerIds?: Set<string>,
 ): QuoteOpportunity[] {
   return rows.filter((r) => {
+    // Task #597 — single chokepoint for the carrier hide rule. Applied first
+    // so all downstream aggregates (KPIs, charts, attractiveness, taxonomy,
+    // etc.) match the visible row count exactly.
+    if (!f.includeCarriers && carrierCustomerIds && carrierCustomerIds.has(r.customerId)) return false;
     if (f.customerId && r.customerId !== f.customerId) return false;
     if (f.laneGroupId && r.laneGroupId !== f.laneGroupId) return false;
     if (f.repId && r.repId !== f.repId) return false;
@@ -538,6 +558,128 @@ function applyFilters(
     }
     return true;
   });
+}
+
+/**
+ * Task #597 — derive the set of `quote_customers.id` values to filter out
+ * when "Show carriers too" is OFF. Returns the empty set when nothing is
+ * classified as a carrier so callers can pass it unconditionally.
+ */
+function carrierCustomerIdsFromMap(customerMap: Map<string, QuoteCustomer>): Set<string> {
+  const out = new Set<string>();
+  customerMap.forEach((c, id) => {
+    if (c.partyType === "carrier") out.add(id);
+  });
+  return out;
+}
+
+/**
+ * Task #597 — best-effort backfill that classifies every `quote_customers`
+ * row in the org whose `partyType` is still "unknown" AND `partyTypeManual`
+ * is false (so we never overwrite a rep's manual override). Match signal:
+ *   1. Case-insensitive name match against `quote_carriers` for the org.
+ *   2. Carrier-suffix tokens in the name (Freight, Logistics, Trucking, …).
+ * A row whose name has no carrier signal is classified as "customer" so
+ * the dashboard can stop guessing on every snapshot. Idempotent: a second
+ * run is a no-op.
+ *
+ * Memoized per-org (60 s) so back-to-back snapshot/list/exportCsv calls
+ * don't pay the cost on every request. Callers that want a fresh classify
+ * can call `clearPartyTypeBackfillCache(orgId)`.
+ */
+const PARTY_TYPE_BACKFILL_CACHE = new Map<string, number>();
+const PARTY_TYPE_BACKFILL_TTL_MS = 60 * 1000;
+
+export function clearPartyTypeBackfillCache(orgId?: string): void {
+  if (orgId) PARTY_TYPE_BACKFILL_CACHE.delete(orgId);
+  else PARTY_TYPE_BACKFILL_CACHE.clear();
+}
+
+/**
+ * Task #597 — pull every distinct email domain from the org's carriers
+ * catalog (primary + backup emails) so the classifier can recognize
+ * carriers whose company names lack a carrier-suffix token. Returns a
+ * lowercased set; an empty set when the org has no carrier emails on file.
+ */
+async function loadKnownCarrierDomains(orgId: string): Promise<Set<string>> {
+  const rows = await db.select({
+    primary: carriersCatalog.primaryEmail,
+    backup: carriersCatalog.backupEmail,
+  }).from(carriersCatalog).where(eq(carriersCatalog.orgId, orgId));
+  const domains = new Set<string>();
+  for (const r of rows) {
+    for (const email of [r.primary, r.backup]) {
+      if (!email) continue;
+      const at = email.lastIndexOf("@");
+      if (at < 0) continue;
+      const dom = email.slice(at + 1).trim().toLowerCase();
+      if (dom) domains.add(dom);
+    }
+  }
+  return domains;
+}
+
+export async function backfillCustomerPartyTypes(orgId: string): Promise<{ scanned: number; classified: number }> {
+  const candidates = await db.select().from(quoteCustomers).where(and(
+    eq(quoteCustomers.organizationId, orgId),
+    eq(quoteCustomers.partyTypeManual, false),
+    eq(quoteCustomers.partyType, "unknown"),
+  ));
+  if (candidates.length === 0) return { scanned: 0, classified: 0 };
+
+  const carriers = await db.select({ name: quoteCarriers.name }).from(quoteCarriers)
+    .where(eq(quoteCarriers.organizationId, orgId));
+  const knownCarrierNames = new Set(carriers.map(c => c.name.trim().toLowerCase()).filter(Boolean));
+  // Task #597 — also include the org-wide carrier email-domain catalog so
+  // brokers/carriers whose names don't include a carrier-suffix token are
+  // still classified correctly when they sent quotes from a known domain.
+  const knownCarrierDomains = await loadKnownCarrierDomains(orgId);
+
+  let classified = 0;
+  for (const c of candidates) {
+    const t = classifyPartyType({ name: c.name, knownCarrierNames, knownCarrierDomains });
+    if (t === "unknown") continue;
+    await db.update(quoteCustomers)
+      .set({ partyType: t })
+      .where(and(eq(quoteCustomers.id, c.id), eq(quoteCustomers.partyTypeManual, false)));
+    classified += 1;
+  }
+  return { scanned: candidates.length, classified };
+}
+
+/**
+ * Run `backfillCustomerPartyTypes` lazily and only once per TTL window.
+ * Callers should fire-and-forget; failures are logged and never bubble up
+ * because the caller's primary work (snapshot/list) must always succeed.
+ */
+function maybeBackfillPartyTypesAsync(orgId: string): void {
+  const last = PARTY_TYPE_BACKFILL_CACHE.get(orgId) ?? 0;
+  const now = Date.now();
+  if (now - last < PARTY_TYPE_BACKFILL_TTL_MS) return;
+  PARTY_TYPE_BACKFILL_CACHE.set(orgId, now);
+  void backfillCustomerPartyTypes(orgId).catch(err => {
+    console.warn("[customer-quotes] partyType backfill failed:", err);
+    // Re-arm so the next request retries instead of being throttled.
+    PARTY_TYPE_BACKFILL_CACHE.delete(orgId);
+  });
+}
+
+/**
+ * Task #597 — manual override hook used by the per-row "Mark customer" /
+ * "Mark carrier" / "Mark unknown" buttons in the drawer. Always sets
+ * `partyTypeManual = true` so background classifiers leave this row alone
+ * forever. Returns the updated row or null when no row matched.
+ */
+export async function setCustomerPartyType(
+  orgId: string,
+  customerId: string,
+  partyType: QuotePartyType,
+): Promise<QuoteCustomer | null> {
+  const [row] = await db.update(quoteCustomers)
+    .set({ partyType, partyTypeManual: true })
+    .where(and(eq(quoteCustomers.organizationId, orgId), eq(quoteCustomers.id, customerId)))
+    .returning();
+  return row ?? null;
 }
 
 function num(v: string | null | undefined): number {
@@ -579,11 +721,15 @@ async function loadContext(orgId: string) {
 }
 
 export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: ListSortKey, sortDir: "asc" | "desc", offset: number, limit: number): Promise<ListResult> {
+  // Task #597 — fire-and-forget classifier so unknown rows are graded into
+  // customer/carrier without blocking the response.
+  maybeBackfillPartyTypesAsync(orgId);
   const ctx = await loadContext(orgId);
   const all = await db.select().from(quoteOpportunities)
     .where(eq(quoteOpportunities.organizationId, orgId));
   const unknownIds = unknownCustomerIdsFromMap(ctx.customerMap);
-  const filtered = applyFilters(all, filters, unknownIds);
+  const carrierIds = carrierCustomerIdsFromMap(ctx.customerMap);
+  const filtered = applyFilters(all, filters, unknownIds, carrierIds);
   const enriched = enrich(filtered, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
 
   const dir = sortDir === "asc" ? 1 : -1;
@@ -676,13 +822,17 @@ async function attachSourceThreads(orgId: string, rows: EnrichedQuote[]): Promis
 }
 
 export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise<Snapshot> {
+  // Task #597 — see listQuotes; lazy classifier keeps the snapshot honest
+  // without paying the cost on every request.
+  maybeBackfillPartyTypesAsync(orgId);
   const ctx = await loadContext(orgId);
   const allOpps = await db.select().from(quoteOpportunities)
     .where(eq(quoteOpportunities.organizationId, orgId))
     .orderBy(desc(quoteOpportunities.requestDate));
 
   const unknownIds = unknownCustomerIdsFromMap(ctx.customerMap);
-  const filtered = applyFilters(allOpps, filters, unknownIds);
+  const carrierIds = carrierCustomerIdsFromMap(ctx.customerMap);
+  const filtered = applyFilters(allOpps, filters, unknownIds, carrierIds);
   const won = filtered.filter(r => isWon(r.outcomeStatus));
   const lost = filtered.filter(r => isLost(r.outcomeStatus));
   const pending = filtered.filter(r => r.outcomeStatus === "pending");
@@ -892,6 +1042,9 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
   const cutoff14 = now.getTime() - 14 * dayMs;
   const cutoff28 = now.getTime() - 28 * dayMs;
   for (const c of ctx.customers) {
+    // Task #597 — when "Show carriers too" is OFF, don't surface carrier
+    // rising-volume alerts on a dashboard that intentionally hides them.
+    if (!filters.includeCarriers && carrierIds.has(c.id)) continue;
     const recent = allOpps.filter(r => r.customerId === c.id && r.requestDate.getTime() >= cutoff14).length;
     const prior = allOpps.filter(r => r.customerId === c.id && r.requestDate.getTime() < cutoff14 && r.requestDate.getTime() >= cutoff28).length;
     if (recent >= 5 && recent > prior * 1.5 && prior > 0) {
@@ -908,6 +1061,11 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
   });
   let staleFiltered = staleFollowUpsRaw;
   if (filters.customerId) staleFiltered = staleFiltered.filter(s => s.customerId === filters.customerId);
+  // Task #597 — honor the "Show carriers too" toggle on stale-follow-up rows
+  // so the alerts/widgets don't drift from the table behavior.
+  if (!filters.includeCarriers && carrierIds.size > 0) {
+    staleFiltered = staleFiltered.filter(s => !carrierIds.has(s.customerId));
+  }
   const staleFollowUps: StaleFollowUpItem[] = staleFiltered.slice(0, 25).map(s => ({
     quoteId: s.quoteId, customerId: s.customerId, customerName: s.customerName,
     lane: s.lane, ageHours: s.ageHours, pTypicalHours: s.pTypicalHours,
@@ -1439,11 +1597,16 @@ export async function createQuoteCustomer(
     sql`lower(${quoteCustomers.name}) = lower(${name})`,
   )).limit(1);
   if (existing) return existing;
+  // Task #597 — auto-classify on insert. The dashboard's reassign popover
+  // calls this for net-new "real" customers, so default to `customer` when
+  // the name doesn't look like a carrier.
+  const partyType = classifyPartyType({ name });
   const [row] = await db.insert(quoteCustomers)
     .values({
       organizationId: orgId,
       name,
       segment: segment && segment.trim() ? segment.trim().slice(0, 80) : null,
+      partyType: partyType === "unknown" ? "customer" : partyType,
     })
     .returning();
   return row;
@@ -1938,7 +2101,8 @@ export async function exportCsv(orgId: string, filters: QuoteFilters): Promise<s
   const ctx = await loadContext(orgId);
   const all = await db.select().from(quoteOpportunities).where(eq(quoteOpportunities.organizationId, orgId));
   const unknownIds = unknownCustomerIdsFromMap(ctx.customerMap);
-  const filtered = applyFilters(all, filters, unknownIds);
+  const carrierIds = carrierCustomerIdsFromMap(ctx.customerMap);
+  const filtered = applyFilters(all, filters, unknownIds, carrierIds);
   const enriched = enrich(filtered, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
   enriched.sort((a, b) => b.requestDate.getTime() - a.requestDate.getTime());
   return quotesToCsv(enriched);

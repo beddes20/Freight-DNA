@@ -29,6 +29,7 @@ import {
   resolveCustomerName,
   UNKNOWN_CUSTOMER_NAME,
   isLegacyFreeMailCustomerName,
+  classifyPartyType,
   type ResolvedCustomer,
 } from "./customerNameResolver";
 
@@ -382,15 +383,29 @@ export async function parseQuoteEmailAi(input: {
  * insert a new one. Names are matched case-insensitively so a single
  * "Unknown — needs review" / "Acme Logistics" row is shared across every
  * email that resolves to the same customer.
+ *
+ * Task #597 — when inserting a brand-new row, auto-classify it as
+ * customer/carrier/unknown using `classifyPartyType`. Existing rows are left
+ * alone (the lazy backfill in `customerQuotes.ts` handles them, and any
+ * manual override on the row must win). When the row was already
+ * manually-overridden we never touch it; otherwise we leave classification to
+ * the cheaper background pass which has access to the carriers table.
  */
-async function findOrCreateCustomer(orgId: string, name: string): Promise<string> {
+async function findOrCreateCustomer(orgId: string, name: string, fromEmail?: string | null): Promise<string> {
   const trimmed = name.trim();
   const existing = await db.select().from(quoteCustomers).where(and(
     eq(quoteCustomers.organizationId, orgId),
     sql`lower(${quoteCustomers.name}) = lower(${trimmed})`,
   )).limit(1);
   if (existing.length > 0) return existing[0].id;
-  const [row] = await db.insert(quoteCustomers).values({ organizationId: orgId, name: trimmed }).returning();
+  // Cheap, no-DB classification at insert time. The background backfill will
+  // upgrade unknown -> carrier later if the carriers table grows.
+  const partyType = classifyPartyType({ name: trimmed, fromEmail: fromEmail ?? null });
+  const [row] = await db.insert(quoteCustomers).values({
+    organizationId: orgId,
+    name: trimmed,
+    partyType,
+  }).returning();
   return row.id;
 }
 
@@ -461,7 +476,8 @@ export async function ingestQuoteFromEmail(
   if (!parsed) return { status: "skipped_unparseable" };
 
   const customerName = opts?.customerName ?? deriveCustomerName(message).name;
-  const customerId = await findOrCreateCustomer(message.orgId, customerName);
+  // Task #597 — pass the inbound from-email so brand-new rows get auto-classified.
+  const customerId = await findOrCreateCustomer(message.orgId, customerName, message.fromEmail ?? null);
   const repId = await findOrCreateRep(
     message.orgId,
     (message.toEmail ?? "").split(/[,;]/)[0]?.trim().toLowerCase() ?? "",
@@ -851,6 +867,7 @@ export async function backfillFreeMailCustomerNames(
     affectedCustomerIds.add(row.customerId);
 
     let resolvedName = UNKNOWN_CUSTOMER_NAME;
+    let resolvedFromEmail: string | null = null;
     if (row.source === "email" && row.sourceReference) {
       const msgRows = await db.select().from(emailMessages).where(and(
         eq(emailMessages.orgId, orgId),
@@ -867,10 +884,13 @@ export async function backfillFreeMailCustomerNames(
           subject: msg.subject,
           body: msg.body,
         }).name;
+        resolvedFromEmail = msg.fromEmail ?? null;
       }
     }
 
-    const newCustomerId = await findOrCreateCustomer(orgId, resolvedName);
+    // Task #597 — relink path: pass the original from-email so newly-created
+    // rows are auto-classified at insert.
+    const newCustomerId = await findOrCreateCustomer(orgId, resolvedName, resolvedFromEmail);
     if (newCustomerId === row.customerId) {
       summary.unchanged++;
       continue;

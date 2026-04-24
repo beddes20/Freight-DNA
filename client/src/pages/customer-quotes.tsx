@@ -15,6 +15,10 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Search, Download, RefreshCw, Bookmark, X, ArrowUp, ArrowDown,
   TrendingUp, TrendingDown, Minus, AlertTriangle, Hourglass, Trophy,
   Trash2, Plus, ChevronsUpDown, Check, ChevronLeft, ChevronRight,
@@ -58,7 +62,14 @@ type Quote = {
 
 type ListResult = { rows: Quote[]; total: number; offset: number; limit: number };
 
-type Customer = { id: string; organizationId: string; name: string; segment: string | null };
+type PartyType = "customer" | "carrier" | "unknown";
+type Customer = {
+  id: string; organizationId: string; name: string; segment: string | null;
+  // Task #597 — populated server-side; the drawer surfaces this so users can
+  // flip a row's classification.
+  partyType?: PartyType;
+  partyTypeManual?: boolean;
+};
 type Rep = { id: string; organizationId: string; name: string; email: string | null };
 type Reason = { id: string; organizationId: string; code: string; label: string; category: string };
 type LaneGroup = { id: string; organizationId: string; name: string };
@@ -157,6 +168,10 @@ type Filters = {
   expiringOnly?: boolean;
   // Task #584 — quick filter for the shared "Unknown — needs review" customer bucket.
   needsReviewOnly?: boolean;
+  // Task #597 — header "Show carriers too" toggle. Default OFF so the
+  // dashboard shows only customer/unknown rows and excludes the carrier
+  // noise that the email/TMS importers bring in.
+  includeCarriers?: boolean;
 };
 
 type SortKey =
@@ -265,6 +280,7 @@ function filtersFromUrl(search: string): Filters {
   if (p.get("lostOnly") === "true") f.lostOnly = true;
   if (p.get("expiringOnly") === "true") f.expiringOnly = true;
   if (p.get("needsReviewOnly") === "true") f.needsReviewOnly = true;
+  if (p.get("includeCarriers") === "true") f.includeCarriers = true;
   return f;
 }
 function trendIcon(v: number): JSX.Element {
@@ -416,6 +432,40 @@ export default function CustomerQuotesPage(): JSX.Element {
     queryKey: ["/api/customer-quotes/saved-views"],
   });
 
+  // Task #597 — gate the admin-only "Purge demo data" button on the
+  // current user's role. The backend route also enforces this, but
+  // hiding the button keeps non-admin dashboards uncluttered.
+  const meQuery = useQuery<{ role?: string } | null>({
+    queryKey: ["/api/auth/me"],
+    queryFn: async () => {
+      const res = await fetch("/api/auth/me", { credentials: "include" });
+      if (!res.ok) return null;
+      return res.json() as Promise<{ role?: string } | null>;
+    },
+    staleTime: 5 * 60_000,
+  });
+  const canPurgeDemo = ["admin", "director", "sales_director"].includes(meQuery.data?.role ?? "");
+  const [purgeDemoOpen, setPurgeDemoOpen] = useState(false);
+  const purgeDemoMutation = useMutation({
+    mutationFn: async (): Promise<{ ok: boolean; summary: { customersDeleted: number; opportunitiesDeleted: number; eventsDeleted: number; carriersDeleted: number; repsDeleted: number; laneGroupsDeleted: number; outcomeReasonsDeleted: number } }> => {
+      const res = await apiRequest("POST", "/api/customer-quotes/purge-demo-seed", {});
+      return res.json();
+    },
+    onSuccess: (data) => {
+      const s = data.summary;
+      toast({
+        title: "Demo data purged",
+        description: `Removed ${s.opportunitiesDeleted} quotes, ${s.customersDeleted} customers, ${s.carriersDeleted} carriers.`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/snapshot"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/list"] });
+      setPurgeDemoOpen(false);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Purge failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   const saveViewMutation = useMutation({
     mutationFn: async (payload: { name: string; filters: Filters }): Promise<SavedView> => {
       const res = await apiRequest("POST", "/api/customer-quotes/saved-views", payload);
@@ -549,6 +599,19 @@ export default function CustomerQuotesPage(): JSX.Element {
             <Button size="sm" variant="outline" onClick={() => { snapshotQuery.refetch(); listQuery.refetch(); }} disabled={snapshotQuery.isFetching || listQuery.isFetching} className="border-border hover:bg-muted" data-testid="button-refresh">
               <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${snapshotQuery.isFetching || listQuery.isFetching ? "animate-spin" : ""}`} /> Refresh
             </Button>
+            {/* Task #597 — admin escape hatch to clear demo seed rows that
+                may have leaked into a live org (idempotent on the server). */}
+            {canPurgeDemo && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setPurgeDemoOpen(true)}
+                className="border-border hover:bg-muted text-rose-600 dark:text-rose-400"
+                data-testid="button-purge-demo"
+              >
+                <Trash2 className="h-3.5 w-3.5 mr-1.5" /> Purge demo
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -615,6 +678,18 @@ export default function CustomerQuotesPage(): JSX.Element {
           </FilterBox>
           <FilterBox label="Active only">
             <div className="h-8 flex items-center"><Switch checked={!!filters.activeOnly} onCheckedChange={v => updateFilter({ activeOnly: v ? true : undefined })} data-testid="switch-active-only" /></div>
+          </FilterBox>
+          {/* Task #597 — show/hide carrier-typed rows. Default OFF so the
+              dashboard reads as a customer/RFQ feed; users opt-in to see
+              carrier offers/responses by flipping this. */}
+          <FilterBox label="Show carriers too">
+            <div className="h-8 flex items-center">
+              <Switch
+                checked={!!filters.includeCarriers}
+                onCheckedChange={v => updateFilter({ includeCarriers: v ? true : undefined })}
+                data-testid="switch-include-carriers"
+              />
+            </div>
           </FilterBox>
           {/* Task #584 — chip-style quick-filter for the shared "Unknown — needs review" bucket. */}
           <FilterBox label="Triage">
@@ -976,6 +1051,33 @@ export default function CustomerQuotesPage(): JSX.Element {
         onSubmit={(payload) => createQuoteMutation.mutate(payload)}
         isSubmitting={createQuoteMutation.isPending}
       />
+
+      {/* Task #597 — confirm before purging demo seed rows. The backend
+          deletes only canonical demo records (EMAIL/TMS/CRM/MANUAL-1xxx
+          source refs); real customer data is untouched. */}
+      <AlertDialog open={purgeDemoOpen} onOpenChange={setPurgeDemoOpen}>
+        <AlertDialogContent data-testid="dialog-purge-demo">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Purge demo data?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Deletes the canonical demo seed (Aurora Foods, Northwind, Cascade, etc.) and
+              their quotes/events from this organization. Real customer data is untouched.
+              This is idempotent — safe to re-run.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-purge-demo-cancel">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); purgeDemoMutation.mutate(); }}
+              disabled={purgeDemoMutation.isPending}
+              className="bg-rose-600 hover:bg-rose-700 text-white"
+              data-testid="button-purge-demo-confirm"
+            >
+              {purgeDemoMutation.isPending ? "Purging…" : "Purge demo data"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -1590,6 +1692,63 @@ function ChartStrip({ charts, taxonomy, agingBuckets, onPickLane, onPickCustomer
   );
 }
 
+// Task #597 — small drawer-scoped control that surfaces the customer's
+// classification (customer/carrier/unknown) with a manual-override pill, plus
+// three buttons to flip it. Sets `partyTypeManual=true` server-side so future
+// auto-classifications don't undo the rep's call. Invalidates the lists/snapshot
+// caches so the row immediately disappears (or appears) under the carriers
+// toggle without a manual refresh.
+function PartyTypeControl({ customer }: { customer: Customer }): JSX.Element {
+  const current: PartyType = (customer.partyType as PartyType | undefined) ?? "unknown";
+  const isManual = !!customer.partyTypeManual;
+  const setMutation = useMutation({
+    mutationFn: async (partyType: PartyType): Promise<Customer> => {
+      const res = await apiRequest("PATCH", `/api/customer-quotes/customers/${customer.id}`, { partyType });
+      return res.json() as Promise<Customer>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/list"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/snapshot"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/quote"] });
+    },
+  });
+  const pillColor =
+    current === "customer" ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
+    : current === "carrier" ? "bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/30"
+    : "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30";
+  const Btn = ({ value, label }: { value: PartyType; label: string }): JSX.Element => (
+    <button
+      type="button"
+      onClick={() => { if (current !== value) setMutation.mutate(value); }}
+      disabled={setMutation.isPending || current === value}
+      className={`px-2 py-0.5 rounded text-[10px] border transition-colors ${
+        current === value
+          ? "bg-muted border-border text-foreground cursor-default"
+          : "bg-background border-border text-muted-foreground hover:bg-muted hover:text-foreground"
+      }`}
+      data-testid={`button-mark-${value}`}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="mt-2 flex items-center gap-2 flex-wrap" data-testid="party-type-control">
+      <span
+        className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border ${pillColor}`}
+        data-testid={`pill-party-type-${current}`}
+        title={isManual ? "Manually set" : "Auto-classified"}
+      >
+        {current === "unknown" ? "Unknown party" : current === "carrier" ? "Carrier" : "Customer"}
+        {isManual && <span className="ml-1 opacity-70">·set</span>}
+      </span>
+      <span className="text-[10px] text-muted-foreground">Mark as:</span>
+      <Btn value="customer" label="Customer" />
+      <Btn value="carrier" label="Carrier" />
+      <Btn value="unknown" label="Unknown" />
+    </div>
+  );
+}
+
 function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, carriers, reasons, onSave, isSaving }: {
   quoteId: string | null; onClose: () => void; onPickRelated: (id: string) => void;
   customers: Customer[]; reps: Rep[]; carriers: Carrier[]; reasons: Reason[];
@@ -1628,6 +1787,7 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Lane</div>
               <div className="text-base font-semibold text-foreground mt-0.5">{data.opp.originCity}, {data.opp.originState} → {data.opp.destCity}, {data.opp.destState}</div>
               <div className="text-xs text-muted-foreground mt-1">{data.opp.equipment} · Customer: {data.customer?.name ?? "—"} · Rep: {data.rep?.name ?? "—"}</div>
+              {data.customer && <PartyTypeControl customer={data.customer} />}
               <div className="mt-2 flex items-center gap-2 flex-wrap"><StatusPill status={data.opp.outcomeStatus} /><span className="text-xs text-muted-foreground">{data.reason?.label ?? ""}</span>
                 {data.lwqLaneId && (
                   <a

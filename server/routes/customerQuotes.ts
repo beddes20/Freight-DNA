@@ -2,15 +2,18 @@ import type { Express, Request } from "express";
 import { z } from "zod";
 import { requireAuth, getCurrentUser } from "../auth";
 import {
-  ensureQuoteSeed, getSnapshot, getQuoteDetail,
+  getSnapshot, getQuoteDetail,
   listQuotes, listSavedViews, createSavedView, deleteSavedView, exportCsv,
   createQuote, updateQuote,
   getPricingIntelligence,
   searchSpotQuote, laneAutocomplete,
   purgeDemoSeed,
   createQuoteCustomer,
+  setCustomerPartyType,
+  clearPartyTypeBackfillCache,
   type QuoteFilters, type ListSortKey,
 } from "../services/customerQuotes";
+import { QUOTE_PARTY_TYPES } from "@shared/schema";
 import { syncQuoteOutcomesFromTms } from "../services/quoteTmsSync";
 import { backfillQuotesFromEmails, ensureEmailBackfill, getEmailBackfillStatus } from "../services/quoteEmailIngestion";
 import { QUOTE_OUTCOME_STATUSES, QUOTE_SOURCES, companies, contacts, quoteReps, spotQuoteCreateSchema } from "@shared/schema";
@@ -42,6 +45,8 @@ const filtersSchema = z.object({
   expiringOnly: z.boolean().optional(),
   // Task #584 — quick filter for the shared "Unknown — needs review" bucket.
   needsReviewOnly: z.boolean().optional(),
+  // Task #597 — header "Show carriers too" toggle.
+  includeCarriers: z.boolean().optional(),
 }).strict();
 
 const queryFiltersSchema = filtersSchema.extend({
@@ -50,6 +55,7 @@ const queryFiltersSchema = filtersSchema.extend({
   lostOnly: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
   expiringOnly: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
   needsReviewOnly: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
+  includeCarriers: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
 });
 
 const SORT_KEYS = [
@@ -85,6 +91,7 @@ function parseFilters(req: Request): QuoteFilters {
   if (d.lostOnly) f.lostOnly = true;
   if (d.expiringOnly) f.expiringOnly = true;
   if (d.needsReviewOnly) f.needsReviewOnly = true;
+  if (d.includeCarriers) f.includeCarriers = true;
   return f;
 }
 
@@ -93,7 +100,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      await ensureQuoteSeed(user.organizationId);
+      // Task #597 — `ensureQuoteSeed` removed from request paths so demo
+      // rows can never re-seed an org via the dashboard. Demo seeding is
+      // now strictly opt-in via the dev-only seed script.
       void ensureEmailBackfill(user.organizationId);
       const filters = parseFilters(req);
       const snap = await getSnapshot(user.organizationId, filters);
@@ -109,7 +118,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      await ensureQuoteSeed(user.organizationId);
+      // Task #597 — see snapshot route. No demo seeding from request paths.
       void ensureEmailBackfill(user.organizationId);
       const parsed = listQuerySchema.safeParse(req.query);
       if (!parsed.success) return res.status(400).json({ error: "Invalid query", issues: parsed.error.issues });
@@ -208,6 +217,30 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     }
   });
 
+  // Task #597 — manual party-type override for a single quote_customers row.
+  // Always sets `partyTypeManual=true` so background classifiers leave the
+  // row alone going forward. Used by the drawer's "Mark customer / Mark
+  // carrier" buttons. Returns the updated row.
+  app.patch("/api/customer-quotes/customers/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const data = z.object({
+        partyType: z.enum(QUOTE_PARTY_TYPES),
+      }).parse(req.body);
+      const updated = await setCustomerPartyType(user.organizationId, String(req.params.id), data.partyType);
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      // Bust the lazy backfill cache so other dashboards that depend on the
+      // classification (e.g., snapshot KPIs) reflect the change immediately.
+      clearPartyTypeBackfillCache(user.organizationId);
+      res.json(updated);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Invalid input";
+      console.error("[customer-quotes] set party-type error:", err);
+      res.status(400).json({ error: msg });
+    }
+  });
+
   app.get("/api/customer-quotes/quote/:id", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
@@ -237,7 +270,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       });
       const parsed = schema.safeParse(req.query);
       if (!parsed.success) return res.status(400).json({ error: "Invalid query", issues: parsed.error.issues });
-      await ensureQuoteSeed(user.organizationId);
+      // Task #597 — ensureQuoteSeed removed from request paths.
       void ensureEmailBackfill(user.organizationId);
       const intel = await getPricingIntelligence(user.organizationId, parsed.data);
       res.json(intel);
@@ -268,7 +301,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       });
       const parsed = schema.safeParse(req.query);
       if (!parsed.success) return res.status(400).json({ error: "Invalid query", issues: parsed.error.issues });
-      await ensureQuoteSeed(user.organizationId);
+      // Task #597 — ensureQuoteSeed removed from request paths.
       void ensureEmailBackfill(user.organizationId);
       const result = await searchSpotQuote(user.organizationId, parsed.data);
       res.json(result);
@@ -289,7 +322,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       });
       const parsed = schema.safeParse(req.query);
       if (!parsed.success) return res.json([]);
-      await ensureQuoteSeed(user.organizationId);
+      // Task #597 — ensureQuoteSeed removed from request paths.
       void ensureEmailBackfill(user.organizationId);
       const items = await laneAutocomplete(user.organizationId, parsed.data.q, parsed.data.kind);
       res.json(items);

@@ -122,6 +122,7 @@ function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
+
 function attachmentLooksLikePod(att: PodCandidateAttachment): boolean {
   if (!att.contentType) return false;
   const ct = att.contentType.toLowerCase();
