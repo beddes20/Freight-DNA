@@ -1,19 +1,34 @@
 /**
  * Email response time analytics (Task #414).
  *
- * Pairs each inbound customer email with the *next outbound reply on the
- * same thread*. Computes wall-clock and business-hours (Mon–Fri 8a–6p local)
- * elapsed time. Carrier threads are excluded.
+ * One row per rep "response event" plus one row per "still-waiting" thread.
+ * A response event is a single outbound reply paired with the most recent
+ * inbound on the same thread that arrived strictly before it; the gap is
+ * outbound_sent_at − last_inbound_sent_at. Wall-clock and business-hours
+ * (Mon–Fri 8a–6p local) elapsed time are computed for every event.
+ * Carrier threads are excluded (this is customer email only).
  *
- * Sender attribution: the spec defines response time as the gap to the next
- * outbound reply *from the assigned rep*. email_messages has no
- * sender_user_id, but `users.username` is generally the rep's email address.
- * We therefore match outbound from_email (case-insensitive) against the
- * thread owner's username when that username is email-shaped (contains '@').
- * When it is not — e.g. legacy non-email usernames — we fall back to "any
- * outbound on the thread" and the comment block remains accurate. A future
- * sender_user_id column on email_messages would let us drop the fallback
- * entirely.
+ * Why "one row per outbound, not one per inbound": chatty customers often
+ * send many emails in a burst before the rep replies once. Pairing every
+ * inbound with the same outbound double-counts the gap and badly inflates
+ * avg/median response time when a real rep is, in fact, responsive. This
+ * model collapses each customer-side burst into a single response event
+ * timed from the customer's last message in the burst.
+ *
+ * Why provider_sent_at, not created_at: created_at is the row insert time
+ * in our DB, which can lag the actual send by hours or days for backfilled
+ * Outlook syncs. provider_sent_at is the timestamp Microsoft Graph reports
+ * for the message; we fall back to created_at only when provider_sent_at
+ * is missing (legacy rows).
+ *
+ * Sender attribution: the spec defines a response as the next outbound reply
+ * *from the assigned rep*. email_messages has no sender_user_id, but
+ * users.username is generally the rep's email address. We therefore match
+ * outbound from_email (case-insensitive) against the thread owner's username
+ * when that username is email-shaped (contains '@'). When it is not — e.g.
+ * legacy non-email usernames — we fall back to "any outbound on the thread".
+ * A future sender_user_id column on email_messages would let us drop the
+ * fallback entirely.
  */
 
 import { storage } from "../storage";
@@ -154,9 +169,20 @@ export interface ResponsePair {
 // ─── Core query ──────────────────────────────────────────────────────────────
 
 /**
- * Pulls every inbound customer email in [start, end] and the next outbound
- * reply on the same thread. Threads tied to a carrier (linked_carrier_id)
- * are excluded — this is customer email only.
+ * Pulls two kinds of rows for the requested window, both keyed on
+ * provider_sent_at (falling back to created_at):
+ *
+ *   1. RESPONSE EVENTS — one row per outbound reply that has at least one
+ *      prior inbound on the same thread. inboundAt = the most recent
+ *      inbound's send time; outboundAt = the outbound's send time.
+ *
+ *   2. WAITING THREADS — one row per thread whose latest message in the
+ *      window is inbound (no subsequent outbound reply yet). outboundAt
+ *      is null; inboundAt = the latest inbound's send time.
+ *
+ * Both kinds are filtered by the same owner / account / carrier-exclusion
+ * rules. Aggregations downstream treat outboundAt != null as "responded"
+ * and outboundAt == null as "waiting".
  */
 export async function fetchResponsePairs(filters: ResponseTimeFilters): Promise<ResponsePair[]> {
   const { orgId, start, end, repIds, accountId } = filters;
@@ -170,85 +196,179 @@ export async function fetchResponsePairs(filters: ResponseTimeFilters): Promise<
   let accountFilter = "";
   if (accountId) {
     params.push(accountId);
-    accountFilter = `AND COALESCE(ect.linked_account_id, inb.linked_account_id) = $${params.length}`;
+    accountFilter = `AND COALESCE(ect.linked_account_id, em.linked_account_id) = $${params.length}`;
   }
 
-  const sql = `
+  // ── Part 1: response events (one per outbound reply with prior inbound) ──
+  // We restrict the OUTBOUND's send time to [start, end). The matching prior
+  // inbound can be older — that's fine, it just means the customer wrote
+  // before the window opened and the rep replied inside the window.
+  const sqlReplies = `
     SELECT
-      inb.id            AS inbound_id,
-      inb.thread_id     AS thread_id,
-      inb.created_at    AS inbound_at,
-      inb.from_email    AS from_email,
-      inb.subject       AS subject,
-      COALESCE(ect.linked_account_id, inb.linked_account_id) AS account_id,
+      em.id            AS row_id,
+      em.thread_id     AS thread_id,
+      COALESCE(em.provider_sent_at, em.created_at) AS outbound_at,
+      em.from_email    AS from_email,
+      em.subject       AS subject,
+      COALESCE(ect.linked_account_id, em.linked_account_id) AS account_id,
       ect.owner_user_id AS owner_user_id,
-      u.name            AS owner_name,
-      c.name            AS account_name,
+      u.name           AS owner_name,
+      c.name           AS account_name,
       (
-        SELECT outb.created_at
-        FROM email_messages outb
-        WHERE outb.org_id = inb.org_id
-          AND outb.thread_id = inb.thread_id
-          AND outb.direction = 'outbound'
-          AND outb.created_at > inb.created_at
-          -- Restrict to outbound *from the assigned owner* when we have an
-          -- email-shaped username we can match against. Otherwise (non-email
-          -- username, no owner, etc.) fall back to any outbound on the thread.
-          AND (
-            u.username IS NULL
-            OR u.username NOT LIKE '%@%'
-            OR LOWER(outb.from_email) = LOWER(u.username)
-          )
-        ORDER BY outb.created_at ASC
-        LIMIT 1
-      ) AS outbound_at
-    FROM email_messages inb
+        SELECT MAX(COALESCE(inb.provider_sent_at, inb.created_at))
+        FROM email_messages inb
+        WHERE inb.org_id = em.org_id
+          AND inb.thread_id = em.thread_id
+          AND inb.direction = 'inbound'
+          AND COALESCE(inb.provider_sent_at, inb.created_at)
+              < COALESCE(em.provider_sent_at, em.created_at)
+      ) AS inbound_at
+    FROM email_messages em
     LEFT JOIN email_conversation_threads ect
-      ON ect.org_id = inb.org_id AND ect.thread_id = inb.thread_id
+      ON ect.org_id = em.org_id AND ect.thread_id = em.thread_id
     LEFT JOIN users u ON u.id = ect.owner_user_id
-    LEFT JOIN companies c ON c.id = COALESCE(ect.linked_account_id, inb.linked_account_id)
-    WHERE inb.org_id = $1
-      AND inb.direction = 'inbound'
-      AND inb.thread_id IS NOT NULL
-      AND inb.created_at >= $2
-      AND inb.created_at < $3
-      AND inb.linked_carrier_id IS NULL
+    LEFT JOIN companies c ON c.id = COALESCE(ect.linked_account_id, em.linked_account_id)
+    WHERE em.org_id = $1
+      AND em.direction = 'outbound'
+      AND em.thread_id IS NOT NULL
+      AND COALESCE(em.provider_sent_at, em.created_at) >= $2
+      AND COALESCE(em.provider_sent_at, em.created_at) < $3
+      AND em.linked_carrier_id IS NULL
       AND (ect.linked_carrier_id IS NULL OR ect.id IS NULL)
-      AND (COALESCE(ect.linked_account_id, inb.linked_account_id) IS NOT NULL)
+      AND (COALESCE(ect.linked_account_id, em.linked_account_id) IS NOT NULL)
+      -- Restrict to outbound *from the assigned owner* when we have an
+      -- email-shaped username to match. Otherwise fall back to any outbound.
+      AND (
+        u.username IS NULL
+        OR u.username NOT LIKE '%@%'
+        OR LOWER(em.from_email) = LOWER(u.username)
+      )
       ${repFilter}
       ${accountFilter}
-    ORDER BY inb.created_at DESC
+    ORDER BY COALESCE(em.provider_sent_at, em.created_at) DESC
     LIMIT $${params.push(PAIR_ROW_LIMIT)}
   `;
 
-  const result = await storage.pool.query(sql, params);
-  if (result.rows.length >= PAIR_ROW_LIMIT) {
+  // ── Part 2: waiting threads (latest message in window is inbound) ────────
+  // For each thread that received an inbound in [start, end), check whether
+  // there is any outbound on that thread with send_time > the latest inbound
+  // send_time. If not, it's still waiting. We surface ONE row per thread,
+  // keyed on the latest inbound message id.
+  const waitingParams: unknown[] = [orgId, start.toISOString(), end.toISOString()];
+  let repFilterW = "";
+  if (repIds && repIds.length > 0) {
+    waitingParams.push(repIds);
+    repFilterW = `AND ect.owner_user_id = ANY($${waitingParams.length}::varchar[])`;
+  }
+  let accountFilterW = "";
+  if (accountId) {
+    waitingParams.push(accountId);
+    accountFilterW = `AND COALESCE(ect.linked_account_id, inb.linked_account_id) = $${waitingParams.length}`;
+  }
+  const sqlWaiting = `
+    WITH latest_inbound AS (
+      SELECT DISTINCT ON (inb.thread_id)
+        inb.id          AS row_id,
+        inb.thread_id   AS thread_id,
+        inb.org_id      AS org_id,
+        COALESCE(inb.provider_sent_at, inb.created_at) AS inbound_at,
+        inb.from_email  AS from_email,
+        inb.subject     AS subject,
+        COALESCE(ect.linked_account_id, inb.linked_account_id) AS account_id,
+        ect.owner_user_id AS owner_user_id,
+        u.name          AS owner_name,
+        c.name          AS account_name
+      FROM email_messages inb
+      LEFT JOIN email_conversation_threads ect
+        ON ect.org_id = inb.org_id AND ect.thread_id = inb.thread_id
+      LEFT JOIN users u ON u.id = ect.owner_user_id
+      LEFT JOIN companies c ON c.id = COALESCE(ect.linked_account_id, inb.linked_account_id)
+      WHERE inb.org_id = $1
+        AND inb.direction = 'inbound'
+        AND inb.thread_id IS NOT NULL
+        AND COALESCE(inb.provider_sent_at, inb.created_at) >= $2
+        AND COALESCE(inb.provider_sent_at, inb.created_at) < $3
+        AND inb.linked_carrier_id IS NULL
+        AND (ect.linked_carrier_id IS NULL OR ect.id IS NULL)
+        AND (COALESCE(ect.linked_account_id, inb.linked_account_id) IS NOT NULL)
+        ${repFilterW}
+        ${accountFilterW}
+      ORDER BY inb.thread_id, COALESCE(inb.provider_sent_at, inb.created_at) DESC
+    )
+    SELECT li.*
+    FROM latest_inbound li
+    LEFT JOIN users u2 ON u2.id = li.owner_user_id
+    WHERE NOT EXISTS (
+      -- Same sender-attribution rule as the replies query: an outbound only
+      -- "clears" the wait if it came from the assigned owner (when we have an
+      -- email-shaped username to match). Otherwise any outbound clears it.
+      SELECT 1 FROM email_messages outb
+      WHERE outb.org_id = li.org_id
+        AND outb.thread_id = li.thread_id
+        AND outb.direction = 'outbound'
+        AND COALESCE(outb.provider_sent_at, outb.created_at) > li.inbound_at
+        AND (
+          u2.username IS NULL
+          OR u2.username NOT LIKE '%@%'
+          OR LOWER(outb.from_email) = LOWER(u2.username)
+        )
+    )
+    LIMIT $${waitingParams.push(PAIR_ROW_LIMIT)}
+  `;
+
+  const [repliesResult, waitingResult] = await Promise.all([
+    storage.pool.query(sqlReplies, params),
+    storage.pool.query(sqlWaiting, waitingParams),
+  ]);
+  if (repliesResult.rows.length >= PAIR_ROW_LIMIT || waitingResult.rows.length >= PAIR_ROW_LIMIT) {
     console.warn(
       `[email-response-time] hit row limit (${PAIR_ROW_LIMIT}) for org=${orgId} ` +
       `range=${start.toISOString()}..${end.toISOString()} — aggregates may be truncated`,
     );
   }
 
-  return result.rows.map((r: Record<string, unknown>) => {
+  const replies: ResponsePair[] = repliesResult.rows
+    .filter((r: Record<string, unknown>) => r.inbound_at != null)
+    .map((r: Record<string, unknown>) => {
+      const inboundAt = new Date(r.inbound_at as string);
+      const outboundAt = new Date(r.outbound_at as string);
+      const wallMs = outboundAt.getTime() - inboundAt.getTime();
+      const bizMs = businessHoursMs(inboundAt.getTime(), outboundAt.getTime());
+      return {
+        inboundId: r.row_id as string,
+        threadId: r.thread_id as string,
+        inboundAt,
+        outboundAt,
+        ownerUserId: (r.owner_user_id as string) ?? null,
+        ownerName: (r.owner_name as string) ?? null,
+        accountId: (r.account_id as string) ?? null,
+        accountName: (r.account_name as string) ?? null,
+        subject: (r.subject as string) ?? null,
+        fromEmail: (r.from_email as string) ?? null,
+        wallMs,
+        bizMs,
+      };
+    });
+
+  const waiting: ResponsePair[] = waitingResult.rows.map((r: Record<string, unknown>) => {
     const inboundAt = new Date(r.inbound_at as string);
-    const outboundAt = r.outbound_at ? new Date(r.outbound_at as string) : null;
-    const wallMs = outboundAt ? outboundAt.getTime() - inboundAt.getTime() : null;
-    const bizMs = outboundAt ? businessHoursMs(inboundAt.getTime(), outboundAt.getTime()) : null;
     return {
-      inboundId: r.inbound_id as string,
+      inboundId: r.row_id as string,
       threadId: r.thread_id as string,
       inboundAt,
-      outboundAt,
+      outboundAt: null,
       ownerUserId: (r.owner_user_id as string) ?? null,
       ownerName: (r.owner_name as string) ?? null,
       accountId: (r.account_id as string) ?? null,
       accountName: (r.account_name as string) ?? null,
       subject: (r.subject as string) ?? null,
       fromEmail: (r.from_email as string) ?? null,
-      wallMs,
-      bizMs,
+      wallMs: null,
+      bizMs: null,
     };
   });
+
+  return [...replies, ...waiting];
 }
 
 // ─── Aggregations ────────────────────────────────────────────────────────────
@@ -416,7 +536,11 @@ export function buildTimeseries(
     if (!p.outboundAt) continue;
     const ms = pickMs(p, biz);
     if (ms == null || ms < 0) continue;
-    const key = bucketKey(p.inboundAt, granularity);
+    // Bucket by outboundAt — under the new event model, replies are selected
+    // by outbound-in-window (the inbound that triggered them may predate the
+    // window). Bucketing on outboundAt keeps the trend chart aligned with
+    // the time the rep actually responded.
+    const key = bucketKey(p.outboundAt, granularity);
     const arr = groups.get(key) ?? [];
     arr.push(ms);
     groups.set(key, arr);

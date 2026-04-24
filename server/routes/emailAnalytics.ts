@@ -83,9 +83,31 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
     return pairs;
   }
 
+  // Anchor each pair at its "event time": the outbound send time for replies,
+  // the inbound time for still-waiting threads. Under the new event model,
+  // a reply's inbound may predate the bucket — what matters for KPIs is when
+  // the rep responded.
   function inRange(p: ResponsePair, start: Date, end: Date): boolean {
-    const t = p.inboundAt.getTime();
-    return t >= start.getTime() && t < end.getTime();
+    const anchor = (p.outboundAt ?? p.inboundAt).getTime();
+    return anchor >= start.getTime() && anchor < end.getTime();
+  }
+
+  // ET day boundaries — the rest of the report (business-hours toggle, the
+  // Today/Yesterday range presets) is anchored on America/New_York, so KPI
+  // tiles that say "Today" must use the same calendar day. Server local time
+  // (UTC on Replit) would shift the boundary by ~5 hours.
+  const KPI_TZ = "America/New_York";
+  function getEtDayStartUtc(d: Date): Date {
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: KPI_TZ, hour12: false,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    }).formatToParts(d);
+    const get = (t: string) => Number(fmt.find((p) => p.type === t)?.value);
+    let hour = get("hour"); if (hour === 24) hour = 0;
+    const localMs = Date.UTC(get("year"), get("month") - 1, get("day"), hour, get("minute"), get("second"));
+    const offset = localMs - d.getTime();
+    return new Date(Date.UTC(get("year"), get("month") - 1, get("day"), 0, 0, 0) - offset);
   }
 
   app.get("/api/analytics/email-response-time/kpis", requireAuth, async (req, res) => {
@@ -108,15 +130,16 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
       const pairs = await getCachedPairs(filters);
       const biz = filters.businessHours;
 
-      const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0);
+      // All bucket starts are anchored on ET midnight to match the UI presets
+      // and the business-hours window. Prior periods step back exactly one
+      // window-length so the deltas are comparable.
+      const dayStart = getEtDayStartUtc(now);
       const dayPrevStart = new Date(dayStart.getTime() - 24 * 60 * 60 * 1000);
 
-      const weekStart = new Date(now); weekStart.setHours(0, 0, 0, 0);
-      weekStart.setDate(weekStart.getDate() - 7);
+      const weekStart = new Date(dayStart.getTime() - 7 * 24 * 60 * 60 * 1000);
       const weekPrevStart = new Date(weekStart.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-      const monthStart = new Date(now); monthStart.setHours(0, 0, 0, 0);
-      monthStart.setDate(monthStart.getDate() - 30);
+      const monthStart = new Date(dayStart.getTime() - 30 * 24 * 60 * 60 * 1000);
       const monthPrevStart = new Date(monthStart.getTime() - 30 * 24 * 60 * 60 * 1000);
 
       const today = summarizeBucket(pairs.filter(p => inRange(p, dayStart, now)), biz, "today", dayStart, now);

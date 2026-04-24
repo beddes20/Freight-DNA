@@ -129,12 +129,103 @@ function deltaPct(current: number | null, prior: number | null): number | null {
   return ((current - prior) / prior) * 100;
 }
 
-const RANGE_PRESETS: Record<string, number> = {
-  "7": 7,
-  "30": 30,
-  "60": 60,
-  "90": 90,
-};
+// ─── Range presets ───────────────────────────────────────────────────────────
+// "Today" and "Yesterday" are computed in America/New_York so they line up
+// with the business-hours window the rest of the report uses. "Yesterday"
+// resolves to the previous BUSINESS day — Mon→Fri, Tue→Mon, … Sun→Fri,
+// Sat→Fri — so weekend visits don't show empty tabs.
+
+const BUSINESS_TZ = "America/New_York";
+
+function getEtParts(d: Date): { y: number; m: number; day: number; weekday: number } {
+  // weekday: 0=Sun, 1=Mon, … 6=Sat
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: BUSINESS_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+  }).formatToParts(d);
+  const get = (t: string) => fmt.find((p) => p.type === t)?.value ?? "";
+  const wdMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return {
+    y: Number(get("year")),
+    m: Number(get("month")),
+    day: Number(get("day")),
+    weekday: wdMap[get("weekday")] ?? 0,
+  };
+}
+
+function getEtTzOffsetMs(d: Date): number {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: BUSINESS_TZ,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(d);
+  const get = (t: string) => Number(fmt.find((p) => p.type === t)?.value);
+  let hour = get("hour");
+  if (hour === 24) hour = 0;
+  const localMs = Date.UTC(get("year"), get("month") - 1, get("day"), hour, get("minute"), get("second"));
+  return localMs - d.getTime();
+}
+
+function utcMsForEtMidnight(y: number, m: number, day: number): number {
+  const probe = new Date(Date.UTC(y, m - 1, day, 12, 0, 0));
+  const offset = getEtTzOffsetMs(probe);
+  return Date.UTC(y, m - 1, day, 0, 0, 0) - offset;
+}
+
+/** Subtract one calendar day (in ET) from a Y-M-D triple. */
+function etPrevDay(y: number, m: number, day: number): { y: number; m: number; day: number } {
+  const utcMid = Date.UTC(y, m - 1, day, 12, 0, 0);
+  const prev = new Date(utcMid - 24 * 60 * 60 * 1000);
+  return { y: prev.getUTCFullYear(), m: prev.getUTCMonth() + 1, day: prev.getUTCDate() };
+}
+
+/** Return the previous BUSINESS day's Y/M/D in ET (Sat/Sun → Fri). */
+function etPrevBusinessDay(y: number, m: number, day: number): { y: number; m: number; day: number } {
+  let cur = etPrevDay(y, m, day);
+  // Skip weekends.
+  for (let i = 0; i < 7; i++) {
+    const wd = getEtParts(new Date(utcMsForEtMidnight(cur.y, cur.m, cur.day) + 12 * 60 * 60 * 1000)).weekday;
+    if (wd !== 0 && wd !== 6) return cur;
+    cur = etPrevDay(cur.y, cur.m, cur.day);
+  }
+  return cur;
+}
+
+interface RangeWindow { start: Date; end: Date }
+
+function computeRangeWindow(preset: string, now: Date = new Date()): RangeWindow {
+  const et = getEtParts(now);
+  if (preset === "today") {
+    const start = new Date(utcMsForEtMidnight(et.y, et.m, et.day));
+    return { start, end: new Date(now.getTime() + 60_000) };
+  }
+  if (preset === "yesterday") {
+    // If today is Sat/Sun, "yesterday" still resolves to Friday. If today is
+    // Mon, "yesterday" = Fri. Otherwise it's just the immediately previous
+    // weekday.
+    const prev = etPrevBusinessDay(et.y, et.m, et.day);
+    const start = new Date(utcMsForEtMidnight(prev.y, prev.m, prev.day));
+    // end = start of the calendar day AFTER the chosen day (so the window
+    // covers the full 24h, regardless of whether the day after is itself a
+    // business day).
+    const utcMid = Date.UTC(prev.y, prev.m - 1, prev.day, 12, 0, 0);
+    const next = new Date(utcMid + 24 * 60 * 60 * 1000);
+    const end = new Date(utcMsForEtMidnight(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate()));
+    return { start, end };
+  }
+  // Numeric "last N days" preset
+  const days = Number(preset) || 30;
+  const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+  return { start, end: new Date(now.getTime() + 60_000) };
+}
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -149,12 +240,10 @@ export default function ResponseTimeTab() {
 
   // Build query params shared by all four endpoints
   const filterParams = useMemo(() => {
-    const now = new Date();
-    const days = RANGE_PRESETS[rangeDays] ?? 30;
-    const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+    const { start, end } = computeRangeWindow(rangeDays);
     const params = new URLSearchParams();
     params.set("start", start.toISOString());
-    params.set("end", new Date(now.getTime() + 60_000).toISOString());
+    params.set("end", end.toISOString());
     params.set("businessHours", String(businessHours));
     if (accountId && accountId !== "__all__") params.set("accountId", accountId);
     if (selectedRepIds.length) params.set("repIds", selectedRepIds.join(","));
@@ -299,10 +388,12 @@ export default function ResponseTimeTab() {
           <div className="flex items-center gap-2">
             <Label className="text-xs text-muted-foreground">Range</Label>
             <Select value={rangeDays} onValueChange={setRangeDays}>
-              <SelectTrigger className="h-8 w-[120px]" data-testid="select-rt-range">
+              <SelectTrigger className="h-8 w-[140px]" data-testid="select-rt-range">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="today">Today</SelectItem>
+                <SelectItem value="yesterday">Yesterday</SelectItem>
                 <SelectItem value="7">Last 7 days</SelectItem>
                 <SelectItem value="30">Last 30 days</SelectItem>
                 <SelectItem value="60">Last 60 days</SelectItem>
