@@ -113,7 +113,7 @@ export async function coverFreightOpportunity(args: {
   const loadFactOrderId = sourceRefOrderId ?? `freight_opp:${opp.id}`;
 
   if (sourceRefOrderId) {
-    const { db } = await import("../db");
+    const { db } = await import("../storage");
     const { loadFact } = await import("@shared/schema");
     const { and, eq, sql: sqlOp } = await import("drizzle-orm");
     try {
