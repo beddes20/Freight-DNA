@@ -2190,27 +2190,29 @@ function CustomerLaneTimelineCard({
  * outcomeReasonLabel and surfaces the top reason as a takeaway. Helps the
  * rep frame the new quote with awareness of why prior bids fell over.
  */
-type LossBucketKey = "price" | "service" | "timing" | "capacity" | "no_response" | "other";
+// Canonical loss buckets for the spot deal sheet (Task #516).
+type LossBucketKey = "price_too_high" | "no_truck" | "no_response" | "customer_cancelled" | "other";
 const LOSS_BUCKET_LABELS: Record<LossBucketKey, string> = {
-  price: "Price / rate",
-  service: "Service / quality",
-  timing: "Timing / scheduling",
-  capacity: "Capacity / equipment",
-  no_response: "No response / expired",
-  other: "Other / unknown",
+  price_too_high: "Price too high",
+  no_truck: "No truck",
+  no_response: "No response",
+  customer_cancelled: "Customer cancelled",
+  other: "Other",
 };
 function classifyLossReason(q: EnrichedQuote): LossBucketKey {
   if (q.outcomeStatus === "no_response" || q.outcomeStatus === "expired") return "no_response";
   const r = (q.outcomeReasonLabel ?? "").toLowerCase();
   if (!r) return "other";
-  if (/(price|rate|cost|cheap|expensive|under(cut|bid)|too high|low.*bid)/.test(r)) return "price";
-  if (/(service|quality|perform|reliab|relationship|trust)/.test(r)) return "service";
-  if (/(time|sched|late|day|window|appointment|deadline|tight)/.test(r)) return "timing";
-  if (/(capac|equip|truck|driver|asset|coverage|avail)/.test(r)) return "capacity";
+  if (/(cancel|withdraw|pulled|rescind)/.test(r)) return "customer_cancelled";
+  if (/(price|rate|cost|cheap|expensive|under(cut|bid)|too high|low.*bid)/.test(r)) return "price_too_high";
+  if (/(no\s*truck|capac|equip|driver|asset|coverage|avail)/.test(r)) return "no_truck";
   return "other";
 }
+// Scope to exact-lane history only (per spec): the deal-sheet card is about
+// "why we lose THIS lane", so other corridors / reverse direction don't count.
 function LossPatternCard({ tieredMatches }: { tieredMatches: TierGroup[] }): JSX.Element {
-  const allQuotes: EnrichedQuote[] = tieredMatches.flatMap(g => g.items ?? g.quotes ?? []);
+  const exactGroup = tieredMatches.find(g => g.tier === "exact");
+  const allQuotes: EnrichedQuote[] = exactGroup ? (exactGroup.items ?? exactGroup.quotes ?? []) : [];
   const losses = allQuotes.filter(q =>
     q.outcomeStatus.startsWith("lost") || q.outcomeStatus === "no_response" || q.outcomeStatus === "expired"
   );
