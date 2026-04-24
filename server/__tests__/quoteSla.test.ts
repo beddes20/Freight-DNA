@@ -119,4 +119,19 @@ describe("formatSlaBadge", () => {
     expect(sla.state).toBe("warning");
     expect(formatSlaBadge(sla)).toBe("<1m");
   });
+
+  it("promotes overdue badge from minutes → hours once past 1h", () => {
+    // 67 minutes ago → 60 min overdue → "+1h" not "+60m"
+    const sla = computeQuoteSla(minutesAgo(DEFAULT_QUOTE_SLA_MINUTES + 60), "pending", { now: NOW });
+    expect(sla.state).toBe("breached");
+    expect(formatSlaBadge(sla)).toBe("+1h");
+  });
+
+  it("promotes overdue badge from hours → days once past 24h", () => {
+    // ~30d 5h ago → "+30d", not "+43500m"
+    const overdueMinutes = 30 * 24 * 60 + 5 * 60;
+    const sla = computeQuoteSla(minutesAgo(DEFAULT_QUOTE_SLA_MINUTES + overdueMinutes), "pending", { now: NOW });
+    expect(sla.state).toBe("breached");
+    expect(formatSlaBadge(sla)).toBe("+30d");
+  });
 });

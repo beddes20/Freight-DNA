@@ -91,17 +91,37 @@ export function computeQuoteSla(
 /**
  * Format remainingMs as a compact badge label:
  *   "5m"     ok / warning  → minutes left
- *   "+12m"   breached      → minutes overdue
+ *   "+12m"   breached      → minutes overdue (< 1 hour)
+ *   "+3h"    breached      → hours overdue (< 1 day)
+ *   "+30d"   breached      → days overdue
  *   "<1m"    sub-minute remaining (warning)
  *   ""       na
+ *
+ * Once a quote ages past an hour (or day), we promote the unit so the
+ * badge stays compact. "+43464m" is unreadable; "+30d" is not.
  */
 export function formatSlaBadge(sla: QuoteSla): string {
   if (sla.state === "na") return "";
   if (sla.state === "breached") {
-    const overdue = Math.max(1, Math.floor(-sla.remainingMs / 60_000));
-    return `+${overdue}m`;
+    const overdueMs = Math.max(60_000, -sla.remainingMs);
+    return `+${humanizeCompactDuration(overdueMs)}`;
   }
   const minutes = Math.floor(sla.remainingMs / 60_000);
   if (minutes <= 0) return "<1m";
-  return `${minutes}m`;
+  return humanizeCompactDuration(sla.remainingMs);
+}
+
+/**
+ * Render a positive duration in ms as a compact badge token: "Nm" under
+ * an hour, "Nh" under a day, otherwise "Nd". Values are floored so the
+ * badge never overstates how much time has passed / is left.
+ */
+function humanizeCompactDuration(ms: number): string {
+  const safe = Math.max(0, ms);
+  const minutes = Math.floor(safe / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
 }
