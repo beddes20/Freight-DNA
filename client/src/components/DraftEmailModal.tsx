@@ -82,7 +82,13 @@ export function DraftEmailModal({
   contactName,
 }: DraftEmailModalProps) {
   const isThreadReply = !!threadId;
-  const [playType, setPlayType] = useState(isThreadReply ? "thread_reply" : defaultPlayType);
+  // For thread replies, default to "thread_reply" unless the caller passed a
+  // more specific play type (e.g. the Smarter Conversations suggestion card
+  // sends "quote_request_reply" so the draft is biased toward a rate response).
+  const initialPlayType = isThreadReply
+    ? (defaultPlayType && defaultPlayType !== "general" ? defaultPlayType : "thread_reply")
+    : defaultPlayType;
+  const [playType, setPlayType] = useState(initialPlayType);
   const [draft, setDraft] = useState("");
   const [draftResponse, setDraftResponse] = useState<DraftResponse | null>(null);
   const [copied, setCopied] = useState(false);
@@ -105,7 +111,7 @@ export function DraftEmailModal({
       const res = await apiRequest("POST", "/api/email-drafts/generate", {
         accountId: accountId || undefined,
         contactId: contactId || undefined,
-        playType: isThreadReply ? "thread_reply" : playType,
+        playType,
         threadId: threadId || undefined,
         targetMessageId: targetMessageId || undefined,
         additionalContext: additionalContext || undefined,

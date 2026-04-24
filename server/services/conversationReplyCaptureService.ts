@@ -374,6 +374,25 @@ export async function selfHealConversationThread(opts: {
 
   if (messagesPersisted > 0) {
     log(`Recovered ${messagesPersisted} message(s) for thread=${threadId} cause=${rootCauseLabel}`);
+    // Audit: surface capture-recoveries on the per-thread timeline (Task #534)
+    // so reps can see when the platform pulled in messages that were
+    // previously missing from their inbox view. Best-effort import — keep
+    // it inside the if-block so threads that didn't actually recover
+    // don't get noisy entries on every audit pass.
+    try {
+      const { recordThreadEvent } = await import("./conversationThreadEventsService");
+      await recordThreadEvent({
+        orgId,
+        threadId,
+        eventType: "capture_audit_recovery",
+        description: `Recovered ${messagesPersisted} missing message${messagesPersisted === 1 ? "" : "s"} (${rootCauseLabel})`,
+        actorUserId: triggeredByUserId ?? null,
+        actorName: null,
+        details: { triggeredBy, messagesFoundUpstream, messagesPersisted, rootCauseLabel },
+      });
+    } catch (auditErr) {
+      console.error("[capture-audit] failed to log thread event:", auditErr);
+    }
   }
 
   const finalThread = await storage.getEmailConversationThreadByThreadId(orgId, threadId);

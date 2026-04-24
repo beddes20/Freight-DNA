@@ -4909,3 +4909,124 @@ export const quotePatternAlerts = pgTable("quote_pattern_alerts", {
 export const insertQuotePatternAlertSchema = createInsertSchema(quotePatternAlerts).omit({ id: true, detectedAt: true });
 export type InsertQuotePatternAlert = z.infer<typeof insertQuotePatternAlertSchema>;
 export type QuotePatternAlert = typeof quotePatternAlerts.$inferSelect;
+
+// ─── Conversation Thread Smart Pane (Task #534) ──────────────────────────────
+// Three sibling tables that power the right-hand detail pane on the
+// Conversations page:
+//   1. conversation_thread_summaries — short AI summary cached per thread,
+//      invalidated when new messages arrive (via contentHash).
+//   2. conversation_thread_suggestions — current suggested next action plus
+//      the rep's dismiss / "wrong suggestion" feedback so we can learn.
+//   3. conversation_thread_events — append-only audit log of every meaningful
+//      action on a thread (assignments, state changes, AI drafts, captures…).
+
+export const conversationThreadSummaries = pgTable(
+  "conversation_thread_summaries",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    // Outlook conversationId — matches email_messages.thread_id /
+    // email_conversation_threads.thread_id. Not FK'd because thread rows
+    // can be archived/deleted independently of cached summaries.
+    threadId: text("thread_id").notNull(),
+    // Plain-text 2–3 line summary surfaced at the top of the detail pane.
+    summary: text("summary").notNull(),
+    // Hash over the ordered list of (messageId, providerSentAt) so a new
+    // message on the thread invalidates the cache automatically. The
+    // service rebuilds the summary on the next read when the live hash
+    // doesn't match.
+    contentHash: text("content_hash").notNull(),
+    // Bookkeeping so the UI can show "based on N messages" when useful and
+    // so the regenerate button can show the staleness reason.
+    messageCount: integer("message_count").notNull().default(0),
+    lastMessageAt: timestamp("last_message_at"),
+    model: text("model"),
+    generatedAt: timestamp("generated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("conversation_thread_summaries_org_thread_uq").on(table.orgId, table.threadId),
+  ],
+);
+export const insertConversationThreadSummarySchema = createInsertSchema(conversationThreadSummaries).omit({
+  id: true,
+  generatedAt: true,
+});
+export type InsertConversationThreadSummary = z.infer<typeof insertConversationThreadSummarySchema>;
+export type ConversationThreadSummary = typeof conversationThreadSummaries.$inferSelect;
+
+export const conversationThreadSuggestions = pgTable(
+  "conversation_thread_suggestions",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    threadId: text("thread_id").notNull(),
+    // The suggested action's machine name — drives the one-click handler
+    // on the frontend. Examples:
+    //   draft_reply | quote_request_reply | mark_resolved |
+    //   await_response | none
+    actionType: text("action_type").notNull(),
+    // Human label rendered on the primary button ("Send quote", etc.).
+    actionLabel: text("action_label").notNull(),
+    // 1-line plain-English reason ("They're asking for a rate on PHX→DAL").
+    actionReason: text("action_reason").notNull(),
+    // Free-form params consumed by the handler (e.g. targetMessageId,
+    // suggested play type for the draft modal).
+    actionParams: jsonb("action_params").default({}),
+    contentHash: text("content_hash").notNull(),
+    generatedAt: timestamp("generated_at").defaultNow().notNull(),
+    // Dismissal / feedback so we can analyse suggestion accuracy later
+    // without invalidating the cached suggestion. When dismissedAt is set
+    // the UI hides the card until the next message arrives (new hash).
+    dismissedAt: timestamp("dismissed_at"),
+    dismissedByUserId: varchar("dismissed_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    feedbackKind: text("feedback_kind"), // 'wrong' | 'good' | null
+    feedbackNotes: text("feedback_notes"),
+    feedbackAt: timestamp("feedback_at"),
+    feedbackByUserId: varchar("feedback_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  },
+  (table) => [
+    uniqueIndex("conversation_thread_suggestions_org_thread_uq").on(table.orgId, table.threadId),
+  ],
+);
+export const insertConversationThreadSuggestionSchema = createInsertSchema(conversationThreadSuggestions).omit({
+  id: true,
+  generatedAt: true,
+});
+export type InsertConversationThreadSuggestion = z.infer<typeof insertConversationThreadSuggestionSchema>;
+export type ConversationThreadSuggestion = typeof conversationThreadSuggestions.$inferSelect;
+
+export const conversationThreadEvents = pgTable(
+  "conversation_thread_events",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    threadId: text("thread_id").notNull(),
+    // The user who performed the action. Null when the actor is the
+    // platform itself (scheduled capture-audit recovery, automated AI
+    // draft if we ever fire one autonomously, etc.). The frontend renders
+    // "System" when null.
+    actorUserId: varchar("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+    actorName: text("actor_name"), // Cached so the timeline survives user deletes.
+    // Discriminator. Stable values used by the UI to choose icons:
+    //   assigned | reassigned | unassigned |
+    //   resolved | reopened | archived | unarchived |
+    //   priority_changed |
+    //   ai_drafted | ai_corrected | human_sent |
+    //   capture_audit_recovery
+    eventType: text("event_type").notNull(),
+    // Short prose surfaced verbatim ("Reassigned to Casey Lin", etc.).
+    description: text("description").notNull(),
+    // Free-form payload. Receivers should treat unknown keys as opaque.
+    details: jsonb("details").default({}),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("conversation_thread_events_org_thread_idx").on(table.orgId, table.threadId, table.createdAt),
+  ],
+);
+export const insertConversationThreadEventSchema = createInsertSchema(conversationThreadEvents).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertConversationThreadEvent = z.infer<typeof insertConversationThreadEventSchema>;
+export type ConversationThreadEvent = typeof conversationThreadEvents.$inferSelect;

@@ -469,6 +469,27 @@ export function registerEmailDraftingRoutes(app: Express): void {
         contactName,
       });
 
+      // Audit: surface AI drafts on the per-thread timeline (Task #534).
+      // Only logged when the draft was generated for an existing thread —
+      // brand-new outreach drafts have no thread to attach to. Best-effort
+      // import so a missing module never breaks draft generation.
+      if (threadId) {
+        try {
+          const { recordThreadEvent } = await import("../services/conversationThreadEventsService");
+          await recordThreadEvent({
+            orgId,
+            threadId,
+            eventType: "ai_drafted",
+            description: `${user.name || user.username} generated an AI ${play.label.toLowerCase()} draft`,
+            actorUserId: user.id,
+            actorName: user.name || user.username || null,
+            details: { playType, targetMessageId: targetMessageId ?? null },
+          });
+        } catch (auditErr) {
+          console.error("[emailDrafting] thread-event audit error:", auditErr);
+        }
+      }
+
       res.json({
         draft,
         playLabel: play.label,
@@ -667,6 +688,29 @@ export function registerEmailDraftingRoutes(app: Express): void {
         .returning();
 
       console.log(`[email-corrections] ${user.name} submitted correction for message ${parsed.data.emailMessageId || parsed.data.outreachLogId || "manual"}`);
+
+      // Audit: surface "Teach AI" corrections on the per-thread timeline
+      // (Task #534). Only logged when the correction is scoped to a thread.
+      if (parsed.data.threadId) {
+        try {
+          const { recordThreadEvent } = await import("../services/conversationThreadEventsService");
+          await recordThreadEvent({
+            orgId: user.organizationId,
+            threadId: parsed.data.threadId,
+            eventType: "ai_corrected",
+            description: `${user.name} corrected an AI draft (Teach AI)`,
+            actorUserId: user.id,
+            actorName: user.name || null,
+            details: {
+              emailMessageId: parsed.data.emailMessageId ?? null,
+              outreachLogId: parsed.data.outreachLogId ?? null,
+            },
+          });
+        } catch (auditErr) {
+          console.error("[email-corrections] thread-event audit error:", auditErr);
+        }
+      }
+
       res.json({ correction: inserted });
     } catch (err) {
       console.error("[email-corrections] create error:", err);

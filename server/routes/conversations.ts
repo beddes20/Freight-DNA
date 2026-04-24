@@ -42,6 +42,17 @@ import {
   getCaptureAuditHealthForUsers,
   type CaptureAuditHealthSnapshot,
 } from "../services/conversationReplyCaptureService";
+import {
+  recordThreadEvent,
+  listThreadEvents,
+  type ThreadEventType,
+} from "../services/conversationThreadEventsService";
+import { getOrGenerateThreadSummary } from "../services/conversationThreadSummaryService";
+import {
+  getOrComputeThreadSuggestion,
+  dismissSuggestion,
+  recordSuggestionFeedback,
+} from "../services/conversationThreadSuggestionService";
 
 export function registerConversationsRoutes(app: Express): void {
 
@@ -488,6 +499,16 @@ export function registerConversationsRoutes(app: Express): void {
       };
       const updated = await storage.updateEmailConversationThread(req.params.id, user.organizationId, archiveUpdate);
 
+      // Audit: record archive on the thread timeline (Task #534).
+      await recordThreadEvent({
+        orgId: user.organizationId,
+        threadId: thread.threadId,
+        eventType: "archived",
+        description: `${user.name || user.username} archived this conversation`,
+        actorUserId: user.id,
+        actorName: user.name || user.username || null,
+      });
+
       res.json({ thread: updated });
     } catch (err) {
       console.error("[conversations] POST /conversations/:id/archive error:", err);
@@ -516,11 +537,49 @@ export function registerConversationsRoutes(app: Express): void {
         return res.status(403).json({ error: "You do not have access to this conversation" });
       }
 
+      const previousOwnerId = existing.ownerUserId;
       await assignOwner(req.params.id, parsed.data.ownerUserId, user.organizationId, storage);
       const thread = await storage.getEmailConversationThreadById(req.params.id);
       if (!thread || thread.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Conversation not found" });
       }
+
+      // Audit: assigned / reassigned / unassigned (Task #534). Look up the
+      // new owner's display name once so the timeline survives user deletes.
+      try {
+        const newOwnerId = parsed.data.ownerUserId;
+        let eventType: ThreadEventType;
+        let description: string;
+        if (!newOwnerId) {
+          eventType = "unassigned";
+          description = `${user.name || user.username} cleared the owner`;
+        } else {
+          const [target] = await db.select({ name: users.name, username: users.username })
+            .from(users).where(eq(users.id, newOwnerId)).limit(1);
+          const targetName = target?.name || target?.username || "(unknown)";
+          if (previousOwnerId && previousOwnerId !== newOwnerId) {
+            eventType = "reassigned";
+            description = `${user.name || user.username} reassigned to ${targetName}`;
+          } else {
+            eventType = "assigned";
+            description = newOwnerId === user.id
+              ? `${user.name || user.username} claimed this conversation`
+              : `${user.name || user.username} assigned ${targetName}`;
+          }
+        }
+        await recordThreadEvent({
+          orgId: user.organizationId,
+          threadId: thread.threadId,
+          eventType,
+          description,
+          actorUserId: user.id,
+          actorName: user.name || user.username || null,
+          details: { previousOwnerId, newOwnerId: parsed.data.ownerUserId },
+        });
+      } catch (auditErr) {
+        console.error("[conversations] owner audit error:", auditErr);
+      }
+
       res.json({ thread });
     } catch (err) {
       console.error("[conversations] POST /conversations/:id/owner error:", err);
@@ -546,11 +605,47 @@ export function registerConversationsRoutes(app: Express): void {
         return res.status(403).json({ error: "You do not have access to this conversation" });
       }
 
+      const previousState = existing.waitingState;
       await setWaitingState(req.params.id, parsed.data.waitingState, user.organizationId, storage);
       const thread = await storage.getEmailConversationThreadById(req.params.id);
       if (!thread || thread.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Conversation not found" });
       }
+
+      // Audit: emit semantic state-change events (Task #534). Only log
+      // transitions that actually changed the state; idempotent re-saves
+      // shouldn't pollute the timeline.
+      if (previousState !== parsed.data.waitingState) {
+        try {
+          let eventType: ThreadEventType | null = null;
+          let description = "";
+          const actor = user.name || user.username || "";
+          if (parsed.data.waitingState === "resolved") {
+            eventType = "resolved";
+            description = `${actor} marked this conversation resolved`;
+          } else if (parsed.data.waitingState === "archived") {
+            eventType = "archived";
+            description = `${actor} archived this conversation`;
+          } else if (previousState === "resolved" || previousState === "archived") {
+            eventType = previousState === "archived" ? "unarchived" : "reopened";
+            description = `${actor} reopened this conversation`;
+          }
+          if (eventType) {
+            await recordThreadEvent({
+              orgId: user.organizationId,
+              threadId: thread.threadId,
+              eventType,
+              description,
+              actorUserId: user.id,
+              actorName: user.name || user.username || null,
+              details: { previousState, newState: parsed.data.waitingState },
+            });
+          }
+        } catch (auditErr) {
+          console.error("[conversations] waiting-state audit error:", auditErr);
+        }
+      }
+
       res.json({ thread });
     } catch (err) {
       console.error("[conversations] POST /conversations/:id/waiting-state error:", err);
@@ -742,11 +837,26 @@ export function registerConversationsRoutes(app: Express): void {
         return res.status(403).json({ error: "You do not have access to this conversation" });
       }
 
+      const previousPriority = existing.responsePriority;
       await setPriority(req.params.id, parsed.data.responsePriority, user.organizationId, storage);
       const thread = await storage.getEmailConversationThreadById(req.params.id);
       if (!thread || thread.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Conversation not found" });
       }
+
+      // Audit: priority change (Task #534). Skip no-op writes.
+      if (previousPriority !== parsed.data.responsePriority) {
+        await recordThreadEvent({
+          orgId: user.organizationId,
+          threadId: thread.threadId,
+          eventType: "priority_changed",
+          description: `${user.name || user.username} changed priority to ${parsed.data.responsePriority}`,
+          actorUserId: user.id,
+          actorName: user.name || user.username || null,
+          details: { previousPriority, newPriority: parsed.data.responsePriority },
+        });
+      }
+
       res.json({ thread });
     } catch (err) {
       console.error("[conversations] POST /conversations/:id/priority error:", err);
@@ -1151,4 +1261,175 @@ export function registerConversationsRoutes(app: Express): void {
       }
     },
   );
+
+  // ─── Smarter Conversations detail pane (Task #534) ───────────────────────
+  // Resolves the request's :id param to (canonical record id, outlook
+  // threadId) and runs the standard canAccessThread gate. Mirrors the
+  // pattern used by the messages endpoint so smart-pane endpoints are safe
+  // for orphan threads too.
+  const resolveSmartPaneTarget = async (
+    user: { id: string; role: string; organizationId: string },
+    idParam: string,
+  ): Promise<
+    | { ok: true; threadId: string; recordId: string | null }
+    | { ok: false; status: number; error: string }
+  > => {
+    let threadId: string | null = null;
+    let recordId: string | null = null;
+
+    if (idParam.startsWith("thread:")) {
+      threadId = idParam.slice("thread:".length) || null;
+      if (!threadId) return { ok: false, status: 400, error: "Invalid thread id" };
+      try {
+        await materializeConversationThreadIfMissing(user.organizationId, threadId);
+      } catch (err) {
+        console.error("[conversations] smart-pane materialise error:", err);
+      }
+    } else {
+      const thread = await storage.getEmailConversationThreadById(idParam);
+      if (!thread || thread.orgId !== user.organizationId) {
+        return { ok: false, status: 404, error: "Conversation not found" };
+      }
+      threadId = thread.threadId;
+      recordId = thread.id;
+    }
+
+    const threadRow = await storage.getEmailConversationThreadByThreadId(user.organizationId, threadId);
+    if (!threadRow) {
+      return { ok: false, status: 404, error: "Conversation not found" };
+    }
+    if (!(await canAccessThread(user, threadRow))) {
+      return { ok: false, status: 403, error: "You do not have access to this conversation" };
+    }
+    return { ok: true, threadId, recordId: recordId ?? threadRow.id };
+  };
+
+  // GET /api/internal/conversations/:id/summary — return cached or freshly
+  // generated AI summary. The hash check inside the service makes this
+  // cheap when nothing has changed; first views may take a second or two
+  // because we call OpenAI synchronously.
+  app.get("/api/internal/conversations/:id/summary", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const resolved = await resolveSmartPaneTarget(user, String(req.params.id));
+      if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+      const summary = await getOrGenerateThreadSummary({
+        orgId: user.organizationId,
+        threadId: resolved.threadId,
+      });
+      if (!summary) return res.json({ summary: null });
+      res.json({ summary });
+    } catch (err) {
+      console.error("[conversations] GET /conversations/:id/summary error:", err);
+      res.status(500).json({ error: "Failed to load summary" });
+    }
+  });
+
+  // POST /api/internal/conversations/:id/summary/regenerate — explicit
+  // refresh from the UI. Bypasses the contentHash short-circuit.
+  app.post("/api/internal/conversations/:id/summary/regenerate", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const resolved = await resolveSmartPaneTarget(user, String(req.params.id));
+      if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+      const summary = await getOrGenerateThreadSummary({
+        orgId: user.organizationId,
+        threadId: resolved.threadId,
+        force: true,
+      });
+      if (!summary) return res.json({ summary: null });
+      res.json({ summary });
+    } catch (err) {
+      console.error("[conversations] POST /conversations/:id/summary/regenerate error:", err);
+      res.status(500).json({ error: "Failed to regenerate summary" });
+    }
+  });
+
+  // GET /api/internal/conversations/:id/suggestion — cached suggested next
+  // action plus dismiss/feedback flags (so the UI knows to hide the card).
+  app.get("/api/internal/conversations/:id/suggestion", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const resolved = await resolveSmartPaneTarget(user, String(req.params.id));
+      if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+      const suggestion = await getOrComputeThreadSuggestion({
+        orgId: user.organizationId,
+        threadId: resolved.threadId,
+      });
+      res.json({ suggestion });
+    } catch (err) {
+      console.error("[conversations] GET /conversations/:id/suggestion error:", err);
+      res.status(500).json({ error: "Failed to load suggestion" });
+    }
+  });
+
+  // POST /api/internal/conversations/:id/suggestion/dismiss — soft-hide
+  // the card until the next message arrives.
+  app.post("/api/internal/conversations/:id/suggestion/dismiss", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const resolved = await resolveSmartPaneTarget(user, String(req.params.id));
+      if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+      const ok = await dismissSuggestion({
+        orgId: user.organizationId,
+        threadId: resolved.threadId,
+        userId: user.id,
+      });
+      res.json({ ok });
+    } catch (err) {
+      console.error("[conversations] POST /conversations/:id/suggestion/dismiss error:", err);
+      res.status(500).json({ error: "Failed to dismiss suggestion" });
+    }
+  });
+
+  // POST /api/internal/conversations/:id/suggestion/feedback — record
+  // "wrong"/"good" rating (with optional notes) so we can analyse model
+  // accuracy. A "wrong" rating implicitly hides the card.
+  app.post("/api/internal/conversations/:id/suggestion/feedback", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const schema = z.object({
+        kind: z.enum(["wrong", "good"]),
+        notes: z.string().max(500).optional().nullable(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+
+      const resolved = await resolveSmartPaneTarget(user, String(req.params.id));
+      if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+      const ok = await recordSuggestionFeedback({
+        orgId: user.organizationId,
+        threadId: resolved.threadId,
+        userId: user.id,
+        kind: parsed.data.kind,
+        notes: parsed.data.notes ?? null,
+      });
+      res.json({ ok });
+    } catch (err) {
+      console.error("[conversations] POST /conversations/:id/suggestion/feedback error:", err);
+      res.status(500).json({ error: "Failed to record feedback" });
+    }
+  });
+
+  // GET /api/internal/conversations/:id/events — full audit timeline for
+  // the right-hand pane. Most-recent-first, cap at 100 rows (the UI is a
+  // collapsible scrolled list, not a full report).
+  app.get("/api/internal/conversations/:id/events", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const resolved = await resolveSmartPaneTarget(user, String(req.params.id));
+      if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+      const events = await listThreadEvents(user.organizationId, resolved.threadId, 100);
+      res.json({ events });
+    } catch (err) {
+      console.error("[conversations] GET /conversations/:id/events error:", err);
+      res.status(500).json({ error: "Failed to load events" });
+    }
+  });
 }

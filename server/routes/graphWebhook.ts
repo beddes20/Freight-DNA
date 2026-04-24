@@ -504,6 +504,33 @@ async function processUserMailboxEmail(params: {
 
   log(`[user-mailbox] ${direction} email recorded: from=${fromEmail} to=${toEmail} account=${accountMatch?.companyId ?? "(none)"} msgId=${providerMessageId}`);
 
+  // Task #534 — record a thread-events row for outbound emails sent from
+  // the rep's monitored mailbox (typically composed in Outlook). This is
+  // the "human_sent" audit signal in the Smarter Conversations detail
+  // pane. Best-effort: failures must never break ingestion.
+  if (direction === "outbound" && conversationId) {
+    try {
+      const { recordThreadEvent } = await import("../services/conversationThreadEventsService");
+      const ownerName = (await storage.getUser(monitoredMailbox.userId).catch(() => null))?.name ?? null;
+      await recordThreadEvent({
+        orgId,
+        threadId: conversationId,
+        eventType: "human_sent",
+        description: `Email sent from ${mailboxEmail}`,
+        actorUserId: monitoredMailbox.userId,
+        actorName: ownerName,
+        details: {
+          providerMessageId,
+          to: toEmail,
+          subject,
+          ingestedVia,
+        },
+      });
+    } catch (e) {
+      log(`[user-mailbox] thread-event human_sent log failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   if (conversationId) {
     try {
       const { applyMessageToThread } = await import("../services/conversationWaitingStateService");

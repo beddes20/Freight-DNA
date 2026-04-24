@@ -24,6 +24,7 @@ import { EmailBody } from "./email-body";
 import { ReplyCaptureAuditButton } from "./capture-audit-popover";
 import { CorrectionDialog } from "./correction-dialog";
 import { formatDate } from "./utils";
+import { ThreadSummaryCard, ThreadSuggestionCard, ThreadEventsTimeline } from "./smart-pane-blocks";
 import type { ConversationThread, EmailMessage } from "./types";
 
 interface ThreadDetailPaneProps {
@@ -43,6 +44,7 @@ export function ThreadDetailPane({
 }: ThreadDetailPaneProps) {
   const [showDraftEmail, setShowDraftEmail] = useState(false);
   const [draftTargetMessageId, setDraftTargetMessageId] = useState<string | null>(null);
+  const [draftPlayTypeOverride, setDraftPlayTypeOverride] = useState<string | null>(null);
   const [correctionMsg, setCorrectionMsg] = useState<EmailMessage | null>(null);
   const [correctionRepliedToId, setCorrectionRepliedToId] = useState<string | null>(null);
   const [correctedText, setCorrectedText] = useState("");
@@ -121,6 +123,52 @@ export function ThreadDetailPane({
     },
     onError: () => toast({ title: "Couldn't mark thread unread", variant: "destructive" }),
   });
+
+  // Smart-pane (Task #534): one-click handler invoked by <ThreadSuggestionCard>.
+  // The card stays UI-agnostic and tells us what to do; we either open the
+  // draft modal pre-targeted, or hit the waiting-state endpoint directly.
+  // Once the side effect completes, all three smart-pane queries are
+  // invalidated so the next view shows fresh state and a fresh suggestion.
+  const setWaitingStateMutation = useMutation({
+    mutationFn: async (waitingState: "waiting_on_them" | "resolved") => {
+      await apiRequest("POST", `/api/internal/conversations/${thread.id}/waiting-state`, { waitingState });
+    },
+    onSuccess: (_data, waitingState) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations", thread.id, "suggestion"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations", thread.id, "events"] });
+      toast({
+        title: waitingState === "resolved" ? "Marked as resolved" : "Marked as waiting on them",
+      });
+    },
+    onError: () => toast({ title: "Couldn't update conversation", variant: "destructive" }),
+  });
+
+  const handleSuggestionAct = (args: {
+    actionType: string;
+    actionParams: Record<string, unknown>;
+  }) => {
+    if (args.actionType === "draft_reply" || args.actionType === "quote_request_reply") {
+      const targetId = typeof args.actionParams.targetMessageId === "string"
+        ? args.actionParams.targetMessageId
+        : null;
+      const playType = typeof args.actionParams.playType === "string"
+        ? args.actionParams.playType
+        : null;
+      setDraftTargetMessageId(targetId);
+      setDraftPlayTypeOverride(playType);
+      setShowDraftEmail(true);
+      return;
+    }
+    if (args.actionType === "mark_resolved") {
+      setWaitingStateMutation.mutate("resolved");
+      return;
+    }
+    if (args.actionType === "await_response") {
+      setWaitingStateMutation.mutate("waiting_on_them");
+      return;
+    }
+  };
 
   const autoReadFiredFor = useRef<string | null>(null);
   useEffect(() => {
@@ -206,7 +254,15 @@ export function ThreadDetailPane({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2" data-testid="messages-container">
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3" data-testid="messages-container">
+        {/* Smart-pane (Task #534): summary + suggestion at the top, audit
+            timeline at the bottom of the scroll region. We render them
+            unconditionally — each card handles its own loading/error
+            state, and the suggestion card hides itself when there's
+            nothing actionable. */}
+        <ThreadSummaryCard threadRecordId={thread.id} />
+        <ThreadSuggestionCard threadRecordId={thread.id} onActOnSuggestion={handleSuggestionAct} />
+
         {isLoading ? (
           <div className="space-y-4">
             {[...Array(3)].map((_, i) => (
@@ -308,16 +364,20 @@ export function ThreadDetailPane({
             );
           })
         )}
+
+        {/* Audit timeline lives at the bottom of the scroll region so the
+            most recent email stays the first thing the rep reads. */}
+        <ThreadEventsTimeline threadRecordId={thread.id} />
       </div>
 
       {showDraftEmail && (
         <DraftEmailModal
           open={showDraftEmail}
-          onClose={() => { setShowDraftEmail(false); setDraftTargetMessageId(null); }}
+          onClose={() => { setShowDraftEmail(false); setDraftTargetMessageId(null); setDraftPlayTypeOverride(null); }}
           accountId={thread.linkedAccountId}
           threadId={thread.threadId}
           targetMessageId={draftTargetMessageId}
-          defaultPlayType={thread.linkedCarrierId ? "carrier_capacity" : "check_in"}
+          defaultPlayType={draftPlayTypeOverride ?? (thread.linkedCarrierId ? "carrier_capacity" : "check_in")}
         />
       )}
 
