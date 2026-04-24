@@ -405,13 +405,27 @@ export function registerConversationsRoutes(app: Express): void {
         }
       }
 
-      const enriched = threads.map(t => ({
-        ...t,
-        ownerName: t.ownerUserId ? (ownerMap.get(t.ownerUserId) ?? null) : null,
-        signals: t.threadId && signalsByThread.has(t.threadId)
-          ? Array.from(signalsByThread.get(t.threadId)!)
-          : [],
-      }));
+      // Task #532: enrich each thread with the current user's read state so
+      // the UI can show unread vs read styling consistently across sessions.
+      // A thread is unread when it has an inbound message newer than the
+      // user's lastReadAt (or the user has never marked it read).
+      const threadIdStrings = threads.map(t => t.threadId).filter(Boolean) as string[];
+      const readStates = await storage.getEmailConversationReadStates(user.id, threadIdStrings);
+
+      const enriched = threads.map(t => {
+        const lastReadAt = t.threadId ? readStates.get(t.threadId) ?? null : null;
+        const lastIncoming = t.lastIncomingAt ? new Date(t.lastIncomingAt) : null;
+        const unread = !!lastIncoming && (!lastReadAt || lastReadAt < lastIncoming);
+        return {
+          ...t,
+          ownerName: t.ownerUserId ? (ownerMap.get(t.ownerUserId) ?? null) : null,
+          signals: t.threadId && signalsByThread.has(t.threadId)
+            ? Array.from(signalsByThread.get(t.threadId)!)
+            : [],
+          lastReadAt: lastReadAt ? lastReadAt.toISOString() : null,
+          unread,
+        };
+      });
 
       res.json({ count: result.totalCount, threads: enriched, nextCursor: result.nextCursor });
     } catch (err) {
@@ -610,6 +624,101 @@ export function registerConversationsRoutes(app: Express): void {
     } catch (err) {
       console.error("[conversations] GET /conversations/:id/messages error:", err);
       res.status(500).json({ error: "Failed to fetch messages" });
+    }
+  });
+
+  // ── Resolve & authorize a thread reference for read/unread (Task #532) ───
+  // Both endpoints accept either a real thread record id OR a synthetic
+  // "thread:<outlookConversationId>" key (parity with the messages endpoint
+  // for orphan threads — incoming messages whose thread row hasn't been
+  // backfilled yet). We:
+  //   1. Try to resolve to a real thread row first; if found, run the same
+  //      `canAccessThread` check as the other thread mutations so a rep
+  //      can't flip read state on threads outside their visible set or
+  //      probe for thread existence.
+  //   2. For the orphan "thread:<id>" form, require that the org owns at
+  //      least one persisted email_message in that conversation BEFORE
+  //      writing read state. This prevents a tenant from creating read
+  //      markers against arbitrary conversation IDs they don't own.
+  const resolveAndAuthorizeReadTarget = async (
+    user: { id: string; role: string; organizationId: string },
+    idParam: string,
+  ): Promise<
+    | { ok: true; conversationId: string }
+    | { ok: false; status: number; error: string }
+  > => {
+    let conversationId: string | null = null;
+
+    if (idParam.startsWith("thread:")) {
+      conversationId = idParam.slice("thread:".length) || null;
+      if (!conversationId) {
+        return { ok: false, status: 400, error: "Invalid thread id" };
+      }
+      // Materialise an orphan thread row before authorising so the standard
+      // canAccessThread check has something to inspect (parity with the
+      // GET /messages handler). Failures here never block — we still
+      // authorise against whatever thread row actually exists.
+      try {
+        await materializeConversationThreadIfMissing(user.organizationId, conversationId);
+      } catch (matErr) {
+        console.error("[conversations] read-state thread materialise error:", matErr);
+      }
+    } else {
+      const thread = await storage.getEmailConversationThreadById(idParam);
+      if (!thread || thread.orgId !== user.organizationId) {
+        return { ok: false, status: 404, error: "Conversation not found" };
+      }
+      conversationId = thread.threadId;
+    }
+
+    // Resolve the org-scoped thread row by its provider conversation id and
+    // run the same access gate every other thread mutation uses. Fail closed
+    // when no thread row exists for this org so a tenant can't write read
+    // markers for arbitrary conversation ids they don't own.
+    const threadRow = await storage.getEmailConversationThreadByThreadId(
+      user.organizationId,
+      conversationId,
+    );
+    if (!threadRow) {
+      return { ok: false, status: 404, error: "Conversation not found" };
+    }
+    if (!(await canAccessThread(user, threadRow))) {
+      return {
+        ok: false,
+        status: 403,
+        error: "You do not have access to this conversation",
+      };
+    }
+    return { ok: true, conversationId };
+  };
+
+  // ── POST /api/internal/conversations/:id/read (Task #532) ──────────────────
+  app.post("/api/internal/conversations/:id/read", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const resolved = await resolveAndAuthorizeReadTarget(user, String(req.params.id));
+      if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+      await storage.markEmailConversationThreadRead(user.organizationId, user.id, resolved.conversationId);
+      res.json({ ok: true, threadId: resolved.conversationId, lastReadAt: new Date().toISOString() });
+    } catch (err) {
+      console.error("[conversations] POST /conversations/:id/read error:", err);
+      res.status(500).json({ error: "Failed to mark thread read" });
+    }
+  });
+
+  // ── POST /api/internal/conversations/:id/unread (Task #532) ────────────────
+  app.post("/api/internal/conversations/:id/unread", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const resolved = await resolveAndAuthorizeReadTarget(user, String(req.params.id));
+      if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+      await storage.markEmailConversationThreadUnread(user.organizationId, user.id, resolved.conversationId);
+      res.json({ ok: true, threadId: resolved.conversationId });
+    } catch (err) {
+      console.error("[conversations] POST /conversations/:id/unread error:", err);
+      res.status(500).json({ error: "Failed to mark thread unread" });
     }
   });
 

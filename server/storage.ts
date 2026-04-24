@@ -175,6 +175,8 @@ import {
   emailConversationThreads,
   type EmailConversationThread,
   type InsertEmailConversationThread,
+  emailConversationReadStates,
+  type EmailConversationReadState,
   geographicLanePatterns,
   type GeographicLanePattern,
   type InsertGeographicLanePattern,
@@ -1070,6 +1072,11 @@ export interface IStorage {
     sort?: "priority" | "recency";
   }): Promise<{ threads: EmailConversationThread[]; nextCursor: string | null; totalCount: number }>;
   updateEmailConversationThread(id: string, orgId: string, data: Partial<InsertEmailConversationThread>): Promise<EmailConversationThread | undefined>;
+
+  // Per-user thread read state (Task #532)
+  getEmailConversationReadStates(userId: string, threadIds: string[]): Promise<Map<string, Date | null>>;
+  markEmailConversationThreadRead(orgId: string, userId: string, threadId: string, when?: Date): Promise<void>;
+  markEmailConversationThreadUnread(orgId: string, userId: string, threadId: string): Promise<void>;
 
   // Carrier Intel Suggestions — accepted preference helpers (Task #195)
   // Used by ranking and NBA services to consume accepted intelligence.
@@ -7431,6 +7438,49 @@ export class DatabaseStorage implements IStorage {
       ))
       .returning();
     return row;
+  }
+
+  // ─── Per-user thread read state (Task #532) ─────────────────────────────────
+
+  async getEmailConversationReadStates(userId: string, threadIds: string[]): Promise<Map<string, Date | null>> {
+    const result = new Map<string, Date | null>();
+    if (!userId || threadIds.length === 0) return result;
+    const rows = await db.select({
+      threadId: emailConversationReadStates.threadId,
+      lastReadAt: emailConversationReadStates.lastReadAt,
+    })
+      .from(emailConversationReadStates)
+      .where(and(
+        eq(emailConversationReadStates.userId, userId),
+        inArray(emailConversationReadStates.threadId, threadIds),
+      ));
+    for (const r of rows) {
+      result.set(r.threadId, r.lastReadAt);
+    }
+    return result;
+  }
+
+  async markEmailConversationThreadRead(orgId: string, userId: string, threadId: string, when: Date = new Date()): Promise<void> {
+    if (!userId || !threadId) return;
+    await db.insert(emailConversationReadStates)
+      .values({ orgId, userId, threadId, lastReadAt: when })
+      .onConflictDoUpdate({
+        target: [emailConversationReadStates.userId, emailConversationReadStates.threadId],
+        set: { lastReadAt: when, updatedAt: new Date() },
+      });
+  }
+
+  async markEmailConversationThreadUnread(orgId: string, userId: string, threadId: string): Promise<void> {
+    if (!userId || !threadId) return;
+    // Setting lastReadAt to NULL means "the user has not viewed this thread
+    // since its most recent inbound message", which the unread computation
+    // (lastIncomingAt > lastReadAt) treats as unread.
+    await db.insert(emailConversationReadStates)
+      .values({ orgId, userId, threadId, lastReadAt: null })
+      .onConflictDoUpdate({
+        target: [emailConversationReadStates.userId, emailConversationReadStates.threadId],
+        set: { lastReadAt: null, updatedAt: new Date() },
+      });
   }
 
   // ─── Geographic Lane Patterns (Task #203) ──────────────────────────────────

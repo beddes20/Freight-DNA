@@ -1,1048 +1,95 @@
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useLocation, useSearch } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { QueryError } from "@/components/query-error";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Clock, AlertTriangle, User, Users, MessageSquare, CheckCircle2, Sparkles, X, Mail, ArrowUpRight, ArrowDownLeft, ChevronRight, PenLine, Check, Loader2, Archive, Search, ChevronsUpDown, DollarSign, ShieldAlert, ShieldCheck, RefreshCcw } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import {
+  AlertTriangle,
+  Search,
+  X,
+  Menu,
+  Rows3,
+  Rows2,
+  MessageSquare,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
-import { DraftEmailModal } from "@/components/DraftEmailModal";
+import { BucketSidebar } from "@/components/conversations/bucket-sidebar";
+import { ThreadList } from "@/components/conversations/thread-list";
+import { ThreadDetailPane, EmptyDetailPane } from "@/components/conversations/thread-detail-pane";
+import { RepFilterCombobox } from "@/components/conversations/rep-filter-combobox";
+import type {
+  ConversationBucket,
+  ConversationDensity,
+  ConversationThread,
+  ThreadsResponse,
+} from "@/components/conversations/types";
+import { parseBucket } from "@/components/conversations/types";
 
-export interface ConversationThread {
-  id: string;
-  orgId: string;
-  threadId: string;
-  linkedAccountId: string | null;
-  linkedCarrierId: string | null;
-  ownerUserId: string | null;
-  ownerName: string | null;
-  waitingState: "waiting_on_us" | "waiting_on_them" | "resolved" | "archived";
-  responsePriority: "high" | "normal" | "low" | "urgent";
-  lastMessageId: string | null;
-  lastIncomingAt: string | null;
-  lastOutgoingAt: string | null;
-  waitingSinceAt: string | null;
-  overdueAt: string | null;
-  archivedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-  signals?: string[];
-}
+// Re-export legacy public surface so unrelated importers still work.
+// (Some debug pages and tests import the ConversationThread type from here.)
+export type { ConversationThread } from "@/components/conversations/types";
+export { ThreadDetailPanel } from "@/components/conversations/thread-detail-pane";
 
-const QUOTE_SIGNAL_TYPES = new Set(["pricing_request", "quote_request"]);
+const DENSITY_KEY = "conversations:density";
 
-function hasQuoteSignal(thread: ConversationThread): boolean {
-  return (thread.signals ?? []).some(s => QUOTE_SIGNAL_TYPES.has(s));
-}
-
-interface ThreadsResponse {
-  count: number;
-  threads: ConversationThread[];
-  nextCursor: string | null;
-}
-
-interface EmailMessage {
-  id: string;
-  threadId: string;
-  direction: string;
-  fromEmail: string | null;
-  toEmail: string | null;
-  ccEmail: string | null;
-  subject: string | null;
-  body: string | null;
-  createdAt: string;
-  providerSentAt: string | null;
-}
-
-function stripHtmlToText(input: string | null): string {
-  if (!input) return "";
-  const noStyle = input
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<head[\s\S]*?<\/head>/gi, " ")
-    .replace(/<!--[\s\S]*?-->/g, " ");
-  const noTags = noStyle.replace(/<[^>]+>/g, " ");
-  const decoded = noTags
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&[a-z0-9#]+;/gi, " ");
-  return decoded.replace(/\s+/g, " ").trim();
-}
-
-function looksLikeHtml(input: string | null): boolean {
-  if (!input) return false;
-  return /<\/?(html|body|head|div|span|table|p|br|a|img|style|meta)\b/i.test(input);
-}
-
-function EmailBody({ body, testId }: { body: string | null; testId: string }) {
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [height, setHeight] = useState(40);
-
-  if (!body) return null;
-  if (!looksLikeHtml(body)) {
-    return (
-      <div className="text-sm text-foreground whitespace-pre-wrap leading-snug" data-testid={testId}>
-        {body.trim()}
-      </div>
-    );
-  }
-  const srcdoc = `<!DOCTYPE html><html><head><meta charset="utf-8"><base target="_blank"><style>html,body{margin:0;padding:0;font-family:system-ui,-apple-system,Segoe UI,sans-serif;font-size:13px;color:#0f172a;line-height:1.4;word-wrap:break-word;overflow-wrap:break-word;}body>*:first-child{margin-top:0;}body>*:last-child{margin-bottom:0;}p{margin:0 0 6px;}img{max-width:100%;height:auto;}table{max-width:100%;}a{color:#2563eb;}div[style*="background-color:#FFD700"],div[style*="background-color: #FFD700"]{display:none;}</style></head><body>${body}</body></html>`;
-
-  const handleLoad = () => {
-    const doc = iframeRef.current?.contentDocument;
-    if (!doc) return;
-    const measured = Math.max(doc.documentElement.scrollHeight, doc.body.scrollHeight);
-    setHeight(measured + 4);
-  };
-
-  return (
-    <iframe
-      ref={iframeRef}
-      title="email-body"
-      srcDoc={srcdoc}
-      sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin"
-      referrerPolicy="no-referrer"
-      onLoad={handleLoad}
-      className="w-full border-0 bg-transparent block"
-      style={{ height: `${height}px` }}
-      data-testid={testId}
-    />
-  );
-}
-
-function formatAgo(iso: string | null): string {
-  if (!iso) return "—";
-  const diffMs = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diffMs / 60_000);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
-
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
-}
-
-function WaitingStateBadge({ state, overdue }: { state: ConversationThread["waitingState"]; overdue: boolean }) {
-  if (state === "waiting_on_us") {
-    return (
-      <Badge
-        className={cn(
-          "text-xs font-medium",
-          overdue
-            ? "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200 border-red-300 dark:border-red-800"
-            : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200 border-amber-300 dark:border-amber-800"
-        )}
-        data-testid="badge-waiting-state"
-      >
-        {overdue && <AlertTriangle className="w-3 h-3 mr-1" />}
-        Waiting on us
-      </Badge>
-    );
-  }
-  if (state === "waiting_on_them") {
-    return (
-      <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200 border-blue-300 dark:border-blue-800 text-xs" data-testid="badge-waiting-state">
-        Waiting on them
-      </Badge>
-    );
-  }
-  if (state === "archived") {
-    return (
-      <Badge className="bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300 border-gray-300 dark:border-gray-700 text-xs" data-testid="badge-waiting-state">
-        <Archive className="w-3 h-3 mr-1" />
-        Archived
-      </Badge>
-    );
-  }
-  return (
-    <Badge className="bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-200 border-green-300 dark:border-green-800 text-xs" data-testid="badge-waiting-state">
-      <CheckCircle2 className="w-3 h-3 mr-1" />
-      Resolved
-    </Badge>
-  );
-}
-
-function PriorityDot({ priority }: { priority: ConversationThread["responsePriority"] }) {
-  const colors: Record<string, string> = {
-    urgent: "bg-red-600",
-    high: "bg-red-500",
-    normal: "bg-gray-400",
-    low: "bg-blue-300",
-  };
-  const labels: Record<string, string> = { urgent: "Urgent", high: "High", normal: "Normal", low: "Low" };
-  return (
-    <span className="flex items-center gap-1 text-xs text-muted-foreground" data-testid="text-priority">
-      <span className={cn("inline-block w-2 h-2 rounded-full", colors[priority] ?? "bg-gray-400")} />
-      {labels[priority] ?? priority}
-    </span>
-  );
-}
-
-// ─── Reply Capture Audit (Task #435) ────────────────────────────────────────
-// Per-thread affordance that shows the rep / manager why an outbound message
-// might be missing AND lets them re-pull from Microsoft Graph SentItems on
-// demand (the same routine that the periodic self-heal sweep runs).
-interface ThreadEvidence {
-  windowStart?: string;
-  webhookFiredInWindow?: boolean;
-  lastSentItemsNotificationAt?: string | null;
-  deltaSyncRanInWindow?: boolean;
-  lastSyncAt?: string | null;
-  outboundCapturedInWindow?: boolean;
-  lastOutboundCapturedAt?: string | null;
-}
-interface CaptureAuditEntry {
-  id: string;
-  triggeredBy: string;
-  messagesFoundUpstream: number;
-  messagesPersisted: number;
-  rootCauseLabel: string;
-  createdAt: string;
-  details?: { threadEvidence?: ThreadEvidence; storedProviderMessageIds?: string[] } & Record<string, unknown>;
-  storedProviderMessageIds?: string[];
-}
-interface MailboxHealth {
-  email: string;
-  enabled: boolean;
-  sentItemsHealth: "active" | "expired" | "missing" | "stale" | "unknown";
-  lastSentItemsNotificationAt: string | null;
-  lastOutboundCapturedAt: string | null;
-  reason: string;
-}
-interface CaptureAuditPayload {
-  ok: boolean;
-  mailboxHealth: MailboxHealth | null;
-  storedMessageCount: number;
-  storedMessages?: string[];
-  history: CaptureAuditEntry[];
-}
-
-const ROOT_CAUSE_LABELS: Record<string, string> = {
-  nothing_missing: "Nothing missing",
-  webhook_never_fired: "Webhook never fired",
-  webhook_dropped: "Webhook delivered but dropped",
-  delta_stale: "Delta sync was stale",
-  mailbox_disabled: "Mailbox disabled",
-  mailbox_missing: "Owner has no monitored mailbox",
-  subscription_expired: "Subscription expired",
-  sentitems_subscription_missing: "SentItems subscription missing",
-  thread_not_found: "Thread record missing",
-  error: "Error",
-};
-
-function HealthDot({ health }: { health: MailboxHealth["sentItemsHealth"] | undefined }) {
-  if (!health || health === "active") {
-    return <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />;
-  }
-  return <ShieldAlert className="w-3.5 h-3.5 text-amber-600" />;
-}
-
-function ReplyCaptureAuditButton({ thread }: { thread: ConversationThread }) {
-  const [open, setOpen] = useState(false);
-  const { toast } = useToast();
-
-  const { data, isLoading, refetch, error } = useQuery<CaptureAuditPayload>({
-    queryKey: ["/api/internal/conversations", thread.threadId, "capture-audit"],
-    queryFn: async () => {
-      const res = await fetch(`/api/internal/conversations/${encodeURIComponent(thread.threadId)}/capture-audit`);
-      if (res.status === 403) throw new Error("FORBIDDEN");
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
-    enabled: open,
-    retry: false,
-  });
-  const forbidden = error instanceof Error && error.message === "FORBIDDEN";
-
-  const recheck = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/internal/conversations/${encodeURIComponent(thread.threadId)}/recheck`, {});
-      return res.json() as Promise<{ recovered: number; rootCause: string; messagesFoundUpstream: number }>;
-    },
-    onSuccess: (result) => {
-      if (result.recovered > 0) {
-        toast({
-          title: `Recovered ${result.recovered} missing message${result.recovered === 1 ? "" : "s"}`,
-          description: `Cause: ${ROOT_CAUSE_LABELS[result.rootCause] ?? result.rootCause}`,
-        });
-        queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations", thread.id, "messages"] });
-        queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
-      } else {
-        toast({
-          title: "No new messages found",
-          description: result.messagesFoundUpstream > 0
-            ? "All upstream messages are already captured."
-            : `SentItems has nothing for this thread. (${ROOT_CAUSE_LABELS[result.rootCause] ?? result.rootCause})`,
-        });
-      }
-      refetch();
-    },
-    onError: (err: unknown) => {
-      toast({ title: "Recheck failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
-    },
-  });
-
-  const health = data?.mailboxHealth ?? null;
-  const recoveredTotal = (data?.history ?? []).reduce((acc, h) => acc + h.messagesPersisted, 0);
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          size="sm"
-          variant="outline"
-          className="gap-1 h-8"
-          data-testid="button-capture-audit"
-          title="Reply capture audit — verify webhook health and pull missing replies"
-        >
-          <HealthDot health={health?.sentItemsHealth} />
-          <span className="text-xs">Capture audit</span>
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-96 p-0" align="end" data-testid="popover-capture-audit">
-        <div className="px-4 py-3 border-b">
-          <div className="text-sm font-semibold">Reply capture audit</div>
-          <div className="text-xs text-muted-foreground mt-0.5">
-            Verifies webhook + SentItems coverage for this thread.
-          </div>
-        </div>
-        <div className="px-4 py-3 space-y-3 text-xs">
-          {isLoading && <div className="text-muted-foreground">Loading…</div>}
-          {forbidden && (
-            <div className="text-amber-600" data-testid="text-audit-forbidden">
-              You don't have access to this thread's capture audit. Only the
-              thread owner, their direct manager, or an admin/director can
-              view it.
-            </div>
-          )}
-          {!isLoading && !forbidden && (
-            <>
-              <div className="space-y-1">
-                <div className="font-medium text-muted-foreground uppercase tracking-wide">Mailbox health</div>
-                {health ? (
-                  <>
-                    <div className="flex items-center gap-2">
-                      <HealthDot health={health.sentItemsHealth} />
-                      <span className="font-medium" data-testid="text-audit-mailbox-email">{health.email}</span>
-                      <span className="text-muted-foreground">·</span>
-                      <span data-testid="text-audit-health-status">{health.sentItemsHealth}</span>
-                    </div>
-                    <div className="text-muted-foreground" data-testid="text-audit-health-reason">{health.reason}</div>
-                    {health.lastOutboundCapturedAt && (
-                      <div className="text-muted-foreground">Last outbound captured: {new Date(health.lastOutboundCapturedAt).toLocaleString()}</div>
-                    )}
-                  </>
-                ) : (
-                  <div className="text-amber-600">Owner has no monitored mailbox configured.</div>
-                )}
-              </div>
-
-              {(() => {
-                const ev = data?.history?.[0]?.details?.threadEvidence;
-                if (!ev) return null;
-                const Row = ({ label, ok, ts }: { label: string; ok?: boolean; ts?: string | null }) => (
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-muted-foreground">{label}</span>
-                    <span className={ok ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600"}>
-                      {ok ? "yes" : "no"}{ts ? ` · ${new Date(ts).toLocaleString()}` : ""}
-                    </span>
-                  </div>
-                );
-                return (
-                  <div className="space-y-1" data-testid="section-thread-evidence">
-                    <div className="font-medium text-muted-foreground uppercase tracking-wide">
-                      Thread window evidence
-                    </div>
-                    <Row label="Webhook fired in window" ok={ev.webhookFiredInWindow} ts={ev.lastSentItemsNotificationAt} />
-                    <Row label="Delta sync ran in window" ok={ev.deltaSyncRanInWindow} ts={ev.lastSyncAt} />
-                    <Row label="Outbound captured in window" ok={ev.outboundCapturedInWindow} ts={ev.lastOutboundCapturedAt} />
-                  </div>
-                );
-              })()}
-
-              <div className="space-y-1">
-                <div className="font-medium text-muted-foreground uppercase tracking-wide">Stored in this thread</div>
-                <div data-testid="text-audit-stored-count">{data?.storedMessageCount ?? 0} message(s)</div>
-                {(data?.storedMessages?.length ?? 0) > 0 && (
-                  <details className="text-muted-foreground">
-                    <summary className="cursor-pointer hover:text-foreground" data-testid="toggle-stored-ids">
-                      Show Graph message IDs
-                    </summary>
-                    <ul className="mt-1 max-h-32 overflow-y-auto font-mono text-[10px] space-y-0.5" data-testid="list-stored-ids">
-                      {data!.storedMessages!.map(id => (
-                        <li key={id} className="truncate" title={id}>{id}</li>
-                      ))}
-                    </ul>
-                  </details>
-                )}
-              </div>
-
-              <div className="space-y-1">
-                <div className="font-medium text-muted-foreground uppercase tracking-wide">Recent self-heal runs</div>
-                {(data?.history ?? []).length === 0 ? (
-                  <div className="text-muted-foreground">No runs yet.</div>
-                ) : (
-                  <ul className="space-y-1.5" data-testid="list-audit-history">
-                    {data!.history.map(h => (
-                      <li key={h.id} className="flex items-start justify-between gap-2 border-l-2 pl-2 border-muted" data-testid={`audit-entry-${h.id}`}>
-                        <div className="min-w-0">
-                          <div className="font-medium">
-                            {h.messagesPersisted > 0
-                              ? `Recovered ${h.messagesPersisted} message${h.messagesPersisted === 1 ? "" : "s"}`
-                              : ROOT_CAUSE_LABELS[h.rootCauseLabel] ?? h.rootCauseLabel}
-                          </div>
-                          <div className="text-muted-foreground">
-                            {h.triggeredBy} · {new Date(h.createdAt).toLocaleString()}
-                          </div>
-                        </div>
-                        <span className="text-muted-foreground whitespace-nowrap">
-                          {h.messagesFoundUpstream} upstream
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {recoveredTotal > 0 && (
-                  <div className="text-emerald-600 dark:text-emerald-400 pt-1">
-                    Total recovered for this thread: {recoveredTotal}
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-        <div className="px-4 py-2 border-t flex justify-end">
-          <Button
-            size="sm"
-            variant="default"
-            className="gap-1 h-7"
-            disabled={recheck.isPending}
-            onClick={() => recheck.mutate()}
-            data-testid="button-recheck-capture"
-          >
-            {recheck.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCcw className="w-3 h-3" />}
-            Re-check now
-          </Button>
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-export function ThreadDetailPanel({
-  thread,
-  onClose,
-  readOnly = false,
-}: {
-  thread: ConversationThread;
-  onClose: () => void;
-  readOnly?: boolean;
-}) {
-  const [showDraftEmail, setShowDraftEmail] = useState(false);
-  const [draftTargetMessageId, setDraftTargetMessageId] = useState<string | null>(null);
-  const [correctionMsg, setCorrectionMsg] = useState<EmailMessage | null>(null);
-  const [correctionRepliedToId, setCorrectionRepliedToId] = useState<string | null>(null);
-  const [correctedText, setCorrectedText] = useState("");
-  const [correctionNotes, setCorrectionNotes] = useState("");
-  const { toast } = useToast();
-  const { user } = useAuth();
-
-  const canCorrect = user && ["admin", "sales_director", "director"].includes(user.role);
-
-  const { data: correctionsData } = useQuery<{ corrections: { emailMessageId: string }[] }>({
-    queryKey: ["/api/email-corrections", { threadId: thread.threadId }],
-    queryFn: async () => {
-      const res = await fetch(`/api/email-corrections?threadId=${encodeURIComponent(thread.threadId)}`);
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
-  });
-  const correctedMessageIds = new Set((correctionsData?.corrections ?? []).map(c => c.emailMessageId));
-
-  const correctionMutation = useMutation({
-    mutationFn: async (params: { emailMessageId: string; originalText: string; correctedText: string; correctionNotes?: string; subject?: string; repliedToMessageId?: string | null }) => {
-      const res = await apiRequest("POST", "/api/email-corrections", {
-        emailMessageId: params.emailMessageId,
-        originalText: params.originalText,
-        correctedText: params.correctedText,
-        correctionNotes: params.correctionNotes || undefined,
-        threadId: thread.threadId,
-        accountId: thread.linkedAccountId || undefined,
-        carrierId: thread.linkedCarrierId || undefined,
-        subject: params.subject || undefined,
-        repliedToMessageId: params.repliedToMessageId || undefined,
-      });
-      return res.json();
-    },
-    onSuccess: () => {
-      toast({ title: "Correction saved", description: "AI will learn from this in future drafts." });
-      setCorrectionMsg(null);
-      setCorrectionRepliedToId(null);
-      setCorrectedText("");
-      setCorrectionNotes("");
-      queryClient.invalidateQueries({ queryKey: ["/api/email-corrections"] });
-    },
-    onError: () => {
-      toast({ title: "Failed to save correction", variant: "destructive" });
-    },
-  });
-
-  const { data, isLoading } = useQuery<{ messages: EmailMessage[] }>({
-    queryKey: ["/api/internal/conversations", thread.id, "messages"],
-    queryFn: async () => {
-      const res = await fetch(`/api/internal/conversations/${encodeURIComponent(thread.id)}/messages`);
-      if (!res.ok) throw new Error("Failed to fetch messages");
-      return res.json();
-    },
-  });
-
-  const messages = data?.messages ?? [];
-  const isOverdue = !!thread.overdueAt && thread.waitingState === "waiting_on_us";
-  const subject = messages[0]?.subject ?? thread.threadId;
-
-  return (
-    <div className="fixed inset-0 z-50 flex" data-testid="thread-detail-panel">
-      <div className="flex-1 bg-black/40" onClick={onClose} />
-      <div className="w-full max-w-2xl bg-background border-l shadow-2xl flex flex-col animate-in slide-in-from-right-full duration-200">
-        <div className="flex items-center justify-between px-5 py-4 border-b bg-muted/30">
-          <div className="flex-1 min-w-0 mr-4">
-            <h2 className="text-base font-semibold truncate" data-testid="text-thread-subject">{subject}</h2>
-            <div className="flex items-center gap-2 mt-1">
-              <WaitingStateBadge state={thread.waitingState} overdue={isOverdue} />
-              <PriorityDot priority={thread.responsePriority} />
-              {thread.ownerName && (
-                <span className="text-xs text-muted-foreground">
-                  <User className="w-3 h-3 inline mr-1" />{thread.ownerName}
-                </span>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {/* Visible to: thread owner + manager-class roles
-                (admin / director / sales_director / logistics_manager).
-                Backend `canManageThread` additionally allows the owner's
-                direct manager and is the source of truth — anyone else
-                hitting the endpoint sees a clean "no access" state. */}
-            {user && (
-              user.id === thread.ownerUserId ||
-              ["admin", "director", "sales_director", "logistics_manager"].includes(user.role)
-            ) && <ReplyCaptureAuditButton thread={thread} />}
-            {!readOnly && (
-              <Button
-                size="sm"
-                variant="default"
-                className="gap-1"
-                onClick={() => setShowDraftEmail(true)}
-                data-testid="button-draft-reply"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                Draft Reply
-              </Button>
-            )}
-            <Button size="icon" variant="ghost" onClick={onClose} data-testid="button-close-detail">
-              <X className="w-4 h-4" />
-            </Button>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2" data-testid="messages-container">
-          {isLoading ? (
-            <div className="space-y-4">
-              {[...Array(3)].map((_, i) => (
-                <div key={i} className="space-y-2">
-                  <Skeleton className="h-4 w-40" />
-                  <Skeleton className="h-24 w-full" />
-                </div>
-              ))}
-            </div>
-          ) : messages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
-              <Mail className="w-8 h-8" />
-              <p className="font-medium">No messages found</p>
-              <p className="text-sm">This thread has no associated email messages yet.</p>
-            </div>
-          ) : (
-            messages.map((msg, idx) => {
-              const isOutbound = msg.direction === "outbound";
-              return (
-                <div
-                  key={msg.id}
-                  className={cn(
-                    "rounded-lg border px-3 py-2",
-                    isOutbound
-                      ? "bg-indigo-50/60 dark:bg-indigo-950/20 border-indigo-200 dark:border-indigo-900/50 ml-6"
-                      : "bg-white dark:bg-muted/30 border-border mr-6"
-                  )}
-                  data-testid={`message-${msg.id}`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className={cn(
-                        "flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full",
-                        isOutbound
-                          ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300"
-                          : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
-                      )}>
-                        {isOutbound ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownLeft className="w-3 h-3" />}
-                        {isOutbound ? "Sent" : "Received"}
-                      </span>
-                      <span className="text-xs text-muted-foreground font-medium" data-testid={`text-from-${msg.id}`}>
-                        {msg.fromEmail}
-                      </span>
-                      {isOutbound && correctedMessageIds.has(msg.id) && (
-                        <span className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400" data-testid={`badge-corrected-${msg.id}`}>
-                          <Check className="w-3 h-3" />
-                          Corrected
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      {!isOutbound && !readOnly && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-6 px-2 gap-1 text-xs text-muted-foreground hover:text-indigo-600"
-                          title="Draft an AI reply specifically to this message"
-                          onClick={() => {
-                            setDraftTargetMessageId(msg.id);
-                            setShowDraftEmail(true);
-                          }}
-                          data-testid={`button-draft-reply-${msg.id}`}
-                        >
-                          <Sparkles className="w-3 h-3" />
-                          Draft Reply
-                        </Button>
-                      )}
-                      {isOutbound && canCorrect && !readOnly && !correctedMessageIds.has(msg.id) && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 px-2 gap-1 text-xs border-amber-400 bg-amber-50 text-amber-700 hover:bg-amber-100 hover:text-amber-800 dark:bg-amber-950/30 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-950/60"
-                          title="Teach the AI — rewrite what this email should have said"
-                          onClick={() => {
-                            const prevInbound = [...messages.slice(0, idx)].reverse().find(m => m.direction !== "outbound");
-                            setCorrectionMsg(msg);
-                            setCorrectionRepliedToId(prevInbound?.id ?? null);
-                            setCorrectedText(msg.body || "");
-                            setCorrectionNotes("");
-                          }}
-                          data-testid={`button-correct-${msg.id}`}
-                        >
-                          <PenLine className="w-3.5 h-3.5" />
-                          Teach AI
-                        </Button>
-                      )}
-                      <span className="text-xs text-muted-foreground" data-testid={`text-date-${msg.id}`}>
-                        {formatDate(msg.providerSentAt ?? msg.createdAt)}
-                      </span>
-                    </div>
-                  </div>
-                  {msg.toEmail && (
-                    <div className="text-xs text-muted-foreground mb-2">
-                      To: {msg.toEmail}
-                    </div>
-                  )}
-                  <EmailBody body={msg.body} testId={`text-body-${msg.id}`} />
-                </div>
-              );
-            })
-          )}
-        </div>
-
-        {showDraftEmail && (
-          <DraftEmailModal
-            open={showDraftEmail}
-            onClose={() => { setShowDraftEmail(false); setDraftTargetMessageId(null); }}
-            accountId={thread.linkedAccountId}
-            threadId={thread.threadId}
-            targetMessageId={draftTargetMessageId}
-            defaultPlayType={thread.linkedCarrierId ? "carrier_capacity" : "check_in"}
-          />
-        )}
-
-        <Dialog open={!!correctionMsg} onOpenChange={(open) => { if (!open) { setCorrectionMsg(null); setCorrectionRepliedToId(null); } }}>
-          <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto" data-testid="correction-modal">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <PenLine className="w-5 h-5 text-amber-600" />
-                Correct Sent Email
-              </DialogTitle>
-              <p className="text-sm text-muted-foreground mt-1">
-                Edit what we should have said. AI will learn from this correction for future drafts.
-              </p>
-            </DialogHeader>
-
-            {correctionMsg && (
-              <div className="space-y-4 mt-2">
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                    Original (what was sent)
-                  </label>
-                  <div className="rounded-lg border bg-muted/40 p-3 text-sm whitespace-pre-wrap max-h-40 overflow-y-auto" data-testid="text-original-email">
-                    {stripHtmlToText(correctionMsg.body) || correctionMsg.body}
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                    Corrected version (what we should have said)
-                  </label>
-                  <Textarea
-                    value={correctedText}
-                    onChange={(e) => setCorrectedText(e.target.value)}
-                    className="min-h-[140px] text-sm"
-                    placeholder="Rewrite the email the way it should have been sent..."
-                    data-testid="textarea-corrected"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                    Coaching notes (optional)
-                  </label>
-                  <Textarea
-                    value={correctionNotes}
-                    onChange={(e) => setCorrectionNotes(e.target.value)}
-                    className="h-16 text-sm resize-none"
-                    placeholder="Why is this better? (e.g., 'too aggressive on pricing', 'should have referenced the service issue first')"
-                    data-testid="textarea-correction-notes"
-                  />
-                </div>
-
-                <div className="flex justify-end gap-2 pt-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCorrectionMsg(null)}
-                    data-testid="button-cancel-correction"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    size="sm"
-                    className="gap-1"
-                    disabled={correctionMutation.isPending || correctedText.trim() === (correctionMsg.body || "").trim()}
-                    onClick={() => {
-                      correctionMutation.mutate({
-                        emailMessageId: correctionMsg.id,
-                        originalText: correctionMsg.body || "",
-                        correctedText: correctedText.trim(),
-                        correctionNotes: correctionNotes.trim() || undefined,
-                        subject: correctionMsg.subject || undefined,
-                        repliedToMessageId: correctionRepliedToId,
-                      });
-                    }}
-                    data-testid="button-submit-correction"
-                  >
-                    {correctionMutation.isPending ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <Check className="w-3.5 h-3.5" />
-                    )}
-                    Save Correction
-                  </Button>
-                </div>
-              </div>
-            )}
-          </DialogContent>
-        </Dialog>
-      </div>
-    </div>
-  );
-}
-
-function ThreadRow({
-  thread,
-  onAssignToMe,
-  onChangeState,
-  onArchive,
-  onSelect,
-  isSelected,
-}: {
-  thread: ConversationThread;
-  onAssignToMe: (id: string) => void;
-  onChangeState: (id: string, state: ConversationThread["waitingState"]) => void;
-  onArchive?: (id: string) => void;
-  onSelect: (thread: ConversationThread) => void;
-  isSelected: boolean;
-}) {
-  const [showDraftEmail, setShowDraftEmail] = useState(false);
-  const isOverdue = !!thread.overdueAt && thread.waitingState === "waiting_on_us";
-
-  const { data: msgData } = useQuery<{ messages: EmailMessage[] }>({
-    queryKey: ["/api/internal/conversations", thread.id, "messages"],
-    queryFn: async () => {
-      const res = await fetch(`/api/internal/conversations/${encodeURIComponent(thread.id)}/messages`);
-      if (!res.ok) throw new Error("");
-      return res.json();
-    },
-    staleTime: 60_000,
-  });
-
-  const firstMsg = msgData?.messages?.[0];
-  const msgCount = msgData?.messages?.length ?? 0;
-  const displaySubject = firstMsg?.subject ?? thread.threadId.slice(0, 24) + "…";
-  const lastMsg = msgData?.messages?.[msgData.messages.length - 1];
-  const previewBody = stripHtmlToText(lastMsg?.body ?? "").slice(0, 120);
-
-  return (
-    <>
-      <div
-        className={cn(
-          "flex items-center gap-4 px-4 py-3 border-b last:border-0 hover:bg-muted/40 transition-colors cursor-pointer",
-          isOverdue && "bg-red-50/50 dark:bg-red-950/20",
-          isSelected && "bg-muted/60 dark:bg-muted/40"
-        )}
-        onClick={() => onSelect(thread)}
-        data-testid={`row-conversation-${thread.id}`}
-      >
-        <PriorityDot priority={thread.responsePriority} />
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-0.5">
-            <span className="text-sm font-medium text-foreground truncate" data-testid={`text-thread-id-${thread.id}`}>
-              {displaySubject}
-            </span>
-            <WaitingStateBadge state={thread.waitingState} overdue={isOverdue} />
-            {isOverdue && (
-              <Badge className="text-xs bg-red-600 text-white" data-testid={`badge-overdue-${thread.id}`}>
-                Overdue
-              </Badge>
-            )}
-            {msgCount > 0 && (
-              <Badge variant="outline" className="text-xs">{msgCount} msg{msgCount !== 1 ? "s" : ""}</Badge>
-            )}
-            {hasQuoteSignal(thread) && (
-              <Badge
-                className="text-xs bg-emerald-600 text-white gap-1"
-                data-testid={`badge-quote-request-${thread.id}`}
-              >
-                <DollarSign className="w-3 h-3" />
-                Quote request
-              </Badge>
-            )}
-          </div>
-          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            {thread.linkedAccountId && (
-              <span className="flex items-center gap-1">
-                <User className="w-3 h-3" /> Account
-              </span>
-            )}
-            {thread.linkedCarrierId && (
-              <span className="flex items-center gap-1">
-                <Users className="w-3 h-3" /> Carrier
-              </span>
-            )}
-            {thread.waitingSinceAt && thread.waitingState === "waiting_on_us" && (
-              <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
-                <Clock className="w-3 h-3" />
-                Since {formatAgo(thread.waitingSinceAt)}
-              </span>
-            )}
-            <span>Updated {formatAgo(thread.updatedAt)}</span>
-          </div>
-          {previewBody && (
-            <p className="text-xs text-muted-foreground mt-1 truncate max-w-xl italic">
-              {previewBody}{previewBody.length >= 120 ? "…" : ""}
-            </p>
-          )}
-        </div>
-
-        <div className="text-sm text-muted-foreground min-w-24 text-right" data-testid={`text-owner-${thread.id}`}>
-          {thread.ownerName ? (
-            <span className="font-medium text-foreground">{thread.ownerName}</span>
-          ) : (
-            <span className="italic text-muted-foreground">Unowned</span>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-          {!thread.ownerName && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-xs"
-              onClick={() => onAssignToMe(thread.id)}
-              data-testid={`button-assign-me-${thread.id}`}
-            >
-              Assign to me
-            </Button>
-          )}
-          {thread.waitingState !== "resolved" && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 text-xs"
-              onClick={() => onChangeState(thread.id, "resolved")}
-              data-testid={`button-resolve-${thread.id}`}
-            >
-              Resolve
-            </Button>
-          )}
-          {thread.waitingState === "resolved" && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 text-xs"
-              onClick={() => onChangeState(thread.id, "waiting_on_us")}
-              data-testid={`button-reopen-${thread.id}`}
-            >
-              Reopen
-            </Button>
-          )}
-          {thread.waitingState === "resolved" && onArchive && (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 text-xs gap-1"
-              onClick={() => onArchive(thread.id)}
-              data-testid={`button-archive-${thread.id}`}
-            >
-              <Archive className="w-3 h-3" />
-              Archive
-            </Button>
-          )}
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 text-xs gap-1 text-indigo-600 dark:text-indigo-400"
-            onClick={() => setShowDraftEmail(true)}
-            data-testid={`button-draft-email-thread-${thread.id}`}
-          >
-            <Sparkles className="w-3 h-3" />
-            Draft
-          </Button>
-          <ChevronRight className="w-4 h-4 text-muted-foreground" />
-        </div>
-
-        {showDraftEmail && (
-          <DraftEmailModal
-            open={showDraftEmail}
-            onClose={() => setShowDraftEmail(false)}
-            accountId={thread.linkedAccountId}
-            threadId={thread.threadId}
-            defaultPlayType={thread.linkedCarrierId ? "carrier_capacity" : "check_in"}
-          />
-        )}
-      </div>
-    </>
-  );
-}
-
-function RepFilterCombobox({
-  value,
-  onChange,
-  reps,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  reps: Array<{ id: string; name: string; username: string }>;
-}) {
-  const [open, setOpen] = useState(false);
-
-  let label = "All reps";
-  if (value === "unassigned") label = "Unassigned";
-  else if (value !== "all") {
-    const found = reps.find((r) => r.id === value);
-    if (found) label = found.name || found.username;
-  }
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="outline"
-          role="combobox"
-          aria-expanded={open}
-          className="w-full md:w-56 justify-between font-normal"
-          data-testid="select-filter-rep"
-        >
-          <span className="truncate">{label}</span>
-          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
-        <Command>
-          <CommandInput placeholder="Search reps..." data-testid="input-rep-search" />
-          <CommandList>
-            <CommandEmpty>No reps found.</CommandEmpty>
-            <CommandGroup>
-              <CommandItem
-                value="all reps"
-                onSelect={() => {
-                  onChange("all");
-                  setOpen(false);
-                }}
-                data-testid="select-filter-rep-option-all"
-              >
-                <Check className={cn("mr-2 h-4 w-4", value === "all" ? "opacity-100" : "opacity-0")} />
-                All reps
-              </CommandItem>
-              <CommandItem
-                value="unassigned"
-                onSelect={() => {
-                  onChange("unassigned");
-                  setOpen(false);
-                }}
-                data-testid="select-filter-rep-option-unassigned"
-              >
-                <Check className={cn("mr-2 h-4 w-4", value === "unassigned" ? "opacity-100" : "opacity-0")} />
-                Unassigned
-              </CommandItem>
-              {reps.map((rep) => {
-                const display = rep.name || rep.username;
-                return (
-                  <CommandItem
-                    key={rep.id}
-                    value={`${display} ${rep.username ?? ""}`}
-                    onSelect={() => {
-                      onChange(rep.id);
-                      setOpen(false);
-                    }}
-                    data-testid={`select-filter-rep-option-${rep.id}`}
-                  >
-                    <Check className={cn("mr-2 h-4 w-4", value === rep.id ? "opacity-100" : "opacity-0")} />
-                    {display}
-                  </CommandItem>
-                );
-              })}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  );
+function loadDensity(): ConversationDensity {
+  if (typeof window === "undefined") return "comfortable";
+  const v = window.localStorage.getItem(DENSITY_KEY);
+  return v === "compact" ? "compact" : "comfortable";
 }
 
 export default function ConversationsPage() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const [, setLocation] = useLocation();
+  const search = useSearch();
 
-  const [activeTab, setActiveTab] = useState<"mine" | "unowned" | "quote_requests" | "high_priority" | "all" | "archived">("mine");
+  // ── URL-driven state ──────────────────────────────────────────────────────
+  const urlParams = useMemo(() => new URLSearchParams(search), [search]);
+  const bucket: ConversationBucket = parseBucket(urlParams.get("bucket"));
+  const selectedThreadId = urlParams.get("threadId");
+
+  function updateUrl(updates: Record<string, string | null>) {
+    const next = new URLSearchParams(search);
+    for (const [k, v] of Object.entries(updates)) {
+      if (v === null || v === "") next.delete(k);
+      else next.set(k, v);
+    }
+    const qs = next.toString();
+    setLocation(qs ? `/conversations?${qs}` : "/conversations", { replace: true });
+  }
+
+  function setBucket(b: ConversationBucket) {
+    setAllThreads([]);
+    setNextCursor(null);
+    // Clearing the selected thread on bucket switch keeps the URL sane and
+    // avoids a stale detail pane referencing a thread that's no longer in
+    // the visible list.
+    updateUrl({ bucket: b === "mine" ? null : b, threadId: null });
+  }
+
+  function setSelectedThread(thread: ConversationThread | null) {
+    updateUrl({ threadId: thread?.threadId ?? null });
+  }
+
+  // ── Filters (kept as in-memory state — not part of shareable URLs) ────────
   const [filterState, setFilterState] = useState<string>("all");
   const [filterPriority, setFilterPriority] = useState<string>("all");
   const [filterOverdue, setFilterOverdue] = useState(false);
   const [filterRep, setFilterRep] = useState<string>("all");
-  const [selectedThread, setSelectedThread] = useState<ConversationThread | null>(null);
-  const [allThreads, setAllThreads] = useState<ConversationThread[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
 
   const [archiveSearch, setArchiveSearch] = useState("");
   const [archiveDateFrom, setArchiveDateFrom] = useState("");
@@ -1050,83 +97,71 @@ export default function ConversationsPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
 
   useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearch(archiveSearch), 400);
-    return () => clearTimeout(timer);
+    const t = setTimeout(() => setDebouncedSearch(archiveSearch), 400);
+    return () => clearTimeout(t);
   }, [archiveSearch]);
 
-  // Task #451 — Deep link: select the thread referenced by ?threadId=… as soon
-  // as it appears in the loaded list. Strip the param afterwards so the URL
-  // stays clean and the deep link doesn't keep re-firing.
+  // ── Density (per-user via localStorage) ───────────────────────────────────
+  const [density, setDensity] = useState<ConversationDensity>(loadDensity);
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    const wantedThreadId = params.get("threadId");
-    if (!wantedThreadId) return;
-    if (selectedThread?.threadId === wantedThreadId) return;
-    const match = allThreads.find(t => t.threadId === wantedThreadId);
-    if (match) {
-      setSelectedThread(match);
-      params.delete("threadId");
-      const qs = params.toString();
-      window.history.replaceState({}, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
-    }
-  }, [allThreads, selectedThread]);
+    window.localStorage.setItem(DENSITY_KEY, density);
+  }, [density]);
 
+  // ── Pagination state — accumulated as the user clicks "Load more" ─────────
+  const [allThreads, setAllThreads] = useState<ConversationThread[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+
+  // Mobile drawer for the bucket sidebar (lg+ shows it as a real pane).
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  // ── Build the params for the active bucket + filters ──────────────────────
   function buildParams(cursorParam?: string): string {
     const p = new URLSearchParams();
     p.set("limit", "50");
-    if (activeTab === "mine" && user?.id) {
+    if (bucket === "mine" && user?.id) {
       p.set("ownerUserId", user.id);
       p.set("waitingState", "waiting_on_us");
-    } else if (activeTab === "unowned") {
+    } else if (bucket === "unowned") {
       p.set("unowned", "true");
       p.set("waitingState", "waiting_on_us");
-    } else if (activeTab === "high_priority") {
+    } else if (bucket === "high_priority") {
       p.set("responsePriority", "high");
       p.set("waitingState", "waiting_on_us");
-    } else if (activeTab === "quote_requests") {
+    } else if (bucket === "quote_requests") {
       p.set("signal", "quote_request");
-      // Intentionally NOT scoping to waitingState=waiting_on_us — once a rep
-      // replies the thread flips to waiting_on_them, but we still want it
-      // visible on this tab so reps can track outcomes after responding.
-    } else if (activeTab === "archived") {
+    } else if (bucket === "archived") {
       p.set("archived", "true");
       if (debouncedSearch) p.set("search", debouncedSearch);
       if (archiveDateFrom) p.set("dateFrom", archiveDateFrom);
       if (archiveDateTo) p.set("dateTo", archiveDateTo);
     } else {
-      // "All" tab: chronological firehose (newest first), unlike the triage
-      // tabs which sort by overdue + oldest waiting. Without this, recently
-      // updated threads can sit far below stale "waiting on us" threads, so
-      // users think email ingestion is broken when in fact the sort just
-      // buries new activity.
+      // "all" — chronological firehose.
       p.set("sort", "recency");
       if (filterState !== "all") p.set("waitingState", filterState);
       if (filterPriority !== "all") p.set("responsePriority", filterPriority);
       if (filterOverdue) p.set("overdue", "true");
     }
-    // Apply rep filter on every tab except "mine" (hard-pinned to current user)
-    // and "unowned" (filter is mutually exclusive with that tab's definition).
-    // For a selected rep, we send `team=<repId>` so the server expands the view
-    // to include everyone below that person in the org chart (managers see
-    // their reports' threads; ICs just see their own since they have no reports).
-    if (
-      activeTab !== "mine" &&
-      activeTab !== "unowned" &&
-      filterRep !== "all"
-    ) {
-      if (filterRep === "unassigned") {
-        p.set("unowned", "true");
-      } else {
-        p.set("team", filterRep);
-      }
+    if (bucket !== "mine" && bucket !== "unowned" && filterRep !== "all") {
+      if (filterRep === "unassigned") p.set("unowned", "true");
+      else p.set("team", filterRep);
     }
     if (cursorParam) p.set("cursor", cursorParam);
     return p.toString();
   }
 
   const { data, isLoading, isError, refetch } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", activeTab, filterState, filterPriority, filterOverdue, filterRep, debouncedSearch, archiveDateFrom, archiveDateTo],
+    queryKey: [
+      "/api/internal/conversations",
+      bucket,
+      filterState,
+      filterPriority,
+      filterOverdue,
+      filterRep,
+      debouncedSearch,
+      archiveDateFrom,
+      archiveDateTo,
+    ],
     queryFn: async () => {
       const res = await fetch(`/api/internal/conversations?${buildParams()}`);
       if (!res.ok) throw new Error("Failed to fetch conversations");
@@ -1134,14 +169,6 @@ export default function ConversationsPage() {
     },
   });
 
-  // Sync the page-local thread list with the active query result. We can't
-  // do this inside queryFn because cache hits (e.g. switching back to a tab
-  // we've visited before) skip queryFn entirely — and previously that
-  // caused the new tab to render an empty list forever. Driving this from
-  // useEffect on `data` ensures both fresh fetches and cache hits populate
-  // allThreads. loadMoreMutation continues to append by extending allThreads
-  // without invalidating the query, so this effect won't fire during
-  // pagination (data reference doesn't change).
   useEffect(() => {
     if (data) {
       setAllThreads(data.threads);
@@ -1165,14 +192,7 @@ export default function ConversationsPage() {
     onError: () => toast({ title: "Failed to load more conversations", variant: "destructive" }),
   });
 
-  const { data: repsData = [] } = useQuery<Array<{ id: string; name: string; username: string; role: string }>>({
-    queryKey: ["/api/users?includeManagers=true"],
-  });
-
-  const sortedReps = [...repsData].sort((a, b) =>
-    (a.name || a.username || "").localeCompare(b.name || b.username || "")
-  );
-
+  // ── Per-bucket counts (lightweight 1-row queries) ─────────────────────────
   const { data: mineData } = useQuery<ThreadsResponse>({
     queryKey: ["/api/internal/conversations", "mine-count", user?.id],
     queryFn: async () => {
@@ -1212,10 +232,29 @@ export default function ConversationsPage() {
     },
   });
 
+  const counts: Partial<Record<ConversationBucket, number>> = {
+    mine: mineData?.count,
+    unowned: unownedData?.count,
+    high_priority: highPriData?.count,
+    quote_requests: quoteData?.count,
+  };
+
+  // ── Reps for the filter combobox ──────────────────────────────────────────
+  const { data: repsData = [] } = useQuery<Array<{ id: string; name: string; username: string; role: string }>>({
+    queryKey: ["/api/users?includeManagers=true"],
+  });
+  const sortedReps = useMemo(
+    () => [...repsData]
+      .map(r => ({ id: r.id, fullName: r.name || r.username, email: r.username }))
+      .sort((a, b) => a.fullName.localeCompare(b.fullName)),
+    [repsData]
+  );
+
+  // ── Mutations on threads ──────────────────────────────────────────────────
   const assignToMeMutation = useMutation({
-    mutationFn: async (threadId: string) => {
+    mutationFn: async (threadRecordId: string) => {
       if (!user?.id) throw new Error("Not logged in");
-      return apiRequest("POST", `/api/internal/conversations/${threadId}/owner`, { ownerUserId: user.id });
+      return apiRequest("POST", `/api/internal/conversations/${threadRecordId}/owner`, { ownerUserId: user.id });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
@@ -1236,8 +275,8 @@ export default function ConversationsPage() {
   });
 
   const archiveMutation = useMutation({
-    mutationFn: async (threadId: string) => {
-      return apiRequest("POST", `/api/internal/conversations/${threadId}/archive`, {});
+    mutationFn: async (threadRecordId: string) => {
+      return apiRequest("POST", `/api/internal/conversations/${threadRecordId}/archive`, {});
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
@@ -1246,243 +285,264 @@ export default function ConversationsPage() {
     onError: () => toast({ title: "Failed to archive conversation", variant: "destructive" }),
   });
 
-  const threads = allThreads;
-
-  const sorted = [...threads].sort((a, b) => {
-    if (activeTab === "archived") {
-      const aDate = a.archivedAt ? new Date(a.archivedAt).getTime() : 0;
-      const bDate = b.archivedAt ? new Date(b.archivedAt).getTime() : 0;
-      return bDate - aDate;
-    }
-    // "All" tab: pure recency. Mirrors the server-side `sort=recency` order
-    // so paginated pages stay monotonic and recent threads aren't re-buried
-    // by client-side triage logic. Without this branch, the firehose sort
-    // is overridden client-side and the bug recurs.
-    if (activeTab === "all") {
+  // ── Thread sorting (mirrors the server's intent per bucket) ───────────────
+  const sorted = useMemo(() => {
+    const arr = [...allThreads];
+    arr.sort((a, b) => {
+      if (bucket === "archived") {
+        const aDate = a.archivedAt ? new Date(a.archivedAt).getTime() : 0;
+        const bDate = b.archivedAt ? new Date(b.archivedAt).getTime() : 0;
+        return bDate - aDate;
+      }
+      if (bucket === "all") {
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      }
+      const aOverdue = !!a.overdueAt;
+      const bOverdue = !!b.overdueAt;
+      if (aOverdue !== bOverdue) return aOverdue ? -1 : 1;
+      if (a.waitingSinceAt && b.waitingSinceAt) {
+        return new Date(a.waitingSinceAt).getTime() - new Date(b.waitingSinceAt).getTime();
+      }
       return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
-    }
-    const aOverdue = !!a.overdueAt;
-    const bOverdue = !!b.overdueAt;
-    if (aOverdue !== bOverdue) return aOverdue ? -1 : 1;
-    if (a.waitingSinceAt && b.waitingSinceAt) {
-      return new Date(a.waitingSinceAt).getTime() - new Date(b.waitingSinceAt).getTime();
-    }
-    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+    });
+    return arr;
+  }, [allThreads, bucket]);
+
+  // ── Resolve the selected thread:
+  //   1) Look up in the loaded list. If found we're done.
+  //   2) If we have a threadId from the URL but no match (deep link to a
+  //      thread the current bucket excludes), fetch a single-thread page.
+  // This is what makes URL-deep-linking work across buckets / new sessions.
+  const directMatch = selectedThreadId
+    ? sorted.find(t => t.threadId === selectedThreadId) ?? null
+    : null;
+
+  const { data: deepLinkData } = useQuery<ThreadsResponse>({
+    queryKey: ["/api/internal/conversations", "deep-link", selectedThreadId],
+    queryFn: async () => {
+      const p = new URLSearchParams({ threadId: selectedThreadId!, limit: "1" });
+      const res = await fetch(`/api/internal/conversations?${p.toString()}`);
+      if (!res.ok) throw new Error("");
+      return res.json();
+    },
+    enabled: !!selectedThreadId && !directMatch,
+    staleTime: 30_000,
   });
 
+  const selectedThread: ConversationThread | null =
+    directMatch ?? deepLinkData?.threads?.[0] ?? null;
+
   return (
-    <div className="p-4 md:p-6 max-w-6xl mx-auto">
-      <div className="flex items-center gap-3 mb-4 md:mb-6">
-        <MessageSquare className="w-5 h-5 md:w-6 md:h-6 text-primary" />
-        <h1 className="text-xl md:text-2xl font-semibold">Conversations</h1>
-        <Badge className="text-xs" data-testid="badge-total-count">{data?.count ?? "—"}</Badge>
-      </div>
-
-      <Tabs value={activeTab} onValueChange={(v) => {
-        setActiveTab(v as typeof activeTab);
-        setAllThreads([]);
-        setNextCursor(null);
-      }}>
-        <TabsList className="mb-4 flex md:inline-flex overflow-x-auto no-scrollbar w-full md:w-auto" data-testid="tabs-quick-views">
-          <TabsTrigger value="mine" data-testid="tab-waiting-on-me">
-            Waiting on me
-            {(mineData?.count ?? 0) > 0 && (
-              <Badge className="ml-2 text-xs bg-amber-600 text-white">{mineData?.count}</Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="unowned" data-testid="tab-unowned">
-            Unowned
-            {(unownedData?.count ?? 0) > 0 && (
-              <Badge className="ml-2 text-xs">{unownedData?.count}</Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="quote_requests" data-testid="tab-quote-requests">
-            <DollarSign className="w-3.5 h-3.5 mr-1" />
-            Quote requests
-            {(quoteData?.count ?? 0) > 0 && (
-              <Badge className="ml-2 text-xs bg-emerald-600 text-white">{quoteData?.count}</Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="high_priority" data-testid="tab-high-priority">
-            High priority
-            {(highPriData?.count ?? 0) > 0 && (
-              <Badge className="ml-2 text-xs bg-red-600 text-white">{highPriData?.count}</Badge>
-            )}
-          </TabsTrigger>
-          <TabsTrigger value="all" data-testid="tab-all">All</TabsTrigger>
-          <TabsTrigger value="archived" data-testid="tab-archived">
-            <Archive className="w-3.5 h-3.5 mr-1" />
-            Archived
-          </TabsTrigger>
-        </TabsList>
-
-        {activeTab !== "mine" && (
-          <div className="mb-4 flex flex-col md:flex-row md:items-center gap-2 md:gap-3" data-testid="rep-filter-container">
-            {activeTab !== "unowned" && (
-              <RepFilterCombobox
-                value={filterRep}
-                onChange={setFilterRep}
-                reps={sortedReps}
-              />
-            )}
-          </div>
-        )}
-
-        {activeTab === "all" && (
-          <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-3 mb-4" data-testid="filters-container">
-            <Select value={filterState} onValueChange={setFilterState}>
-              <SelectTrigger className="w-full md:w-44" data-testid="select-filter-state">
-                <SelectValue placeholder="Waiting state" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All states</SelectItem>
-                <SelectItem value="waiting_on_us">Waiting on us</SelectItem>
-                <SelectItem value="waiting_on_them">Waiting on them</SelectItem>
-                <SelectItem value="resolved">Resolved</SelectItem>
-              </SelectContent>
-            </Select>
-
-            <Select value={filterPriority} onValueChange={setFilterPriority}>
-              <SelectTrigger className="w-full md:w-40" data-testid="select-filter-priority">
-                <SelectValue placeholder="Priority" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All priorities</SelectItem>
-                <SelectItem value="high">High</SelectItem>
-                <SelectItem value="normal">Normal</SelectItem>
-                <SelectItem value="low">Low</SelectItem>
-              </SelectContent>
-            </Select>
-
-            <Button
-              variant={filterOverdue ? "default" : "outline"}
-              size="sm"
-              onClick={() => setFilterOverdue(!filterOverdue)}
-              data-testid="button-filter-overdue"
-            >
-              <AlertTriangle className="w-3.5 h-3.5 mr-1" />
-              Overdue only
-            </Button>
-          </div>
-        )}
-
-        {activeTab === "archived" && (
-          <div className="flex items-center gap-3 mb-4" data-testid="archive-filters-container">
-            <div className="relative flex-1 max-w-sm">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
-                placeholder="Search account, carrier, or subject..."
-                value={archiveSearch}
-                onChange={(e) => setArchiveSearch(e.target.value)}
-                className="pl-9"
-                data-testid="input-archive-search"
-              />
-            </div>
-            <Input
-              type="date"
-              value={archiveDateFrom}
-              onChange={(e) => setArchiveDateFrom(e.target.value)}
-              className="w-40"
-              placeholder="From date"
-              data-testid="input-archive-date-from"
-            />
-            <Input
-              type="date"
-              value={archiveDateTo}
-              onChange={(e) => setArchiveDateTo(e.target.value)}
-              className="w-40"
-              placeholder="To date"
-              data-testid="input-archive-date-to"
-            />
-            {(archiveSearch || archiveDateFrom || archiveDateTo) && (
+    <div
+      className="flex flex-col bg-background h-[calc(100dvh-3.5rem-3.5rem)] md:h-[calc(100dvh-3.5rem)]"
+      data-testid="conversations-page"
+    >
+      {/* Top header strip — title, total count, mobile bucket trigger, density toggle */}
+      <div className="flex items-center justify-between gap-3 px-4 py-3 border-b shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+            <SheetTrigger asChild>
               <Button
                 variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setArchiveSearch("");
-                  setDebouncedSearch("");
-                  setArchiveDateFrom("");
-                  setArchiveDateTo("");
-                }}
-                data-testid="button-clear-archive-filters"
+                size="icon"
+                className="lg:hidden"
+                data-testid="button-mobile-buckets"
+                aria-label="Open buckets"
               >
-                <X className="w-3.5 h-3.5 mr-1" />
-                Clear
+                <Menu className="w-5 h-5" />
               </Button>
+            </SheetTrigger>
+            <SheetContent side="left" className="w-72 p-0">
+              <SheetHeader className="px-4 py-3 border-b">
+                <SheetTitle className="text-base">Conversations</SheetTitle>
+              </SheetHeader>
+              <BucketSidebar
+                bucket={bucket}
+                onChange={(b) => { setBucket(b); setMobileNavOpen(false); }}
+                counts={counts}
+              />
+            </SheetContent>
+          </Sheet>
+          <MessageSquare className="w-5 h-5 text-primary shrink-0" />
+          <h1 className="text-base md:text-lg font-semibold truncate">Conversations</h1>
+          <Badge variant="secondary" className="text-xs" data-testid="badge-total-count">
+            {data?.count ?? "—"}
+          </Badge>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 text-xs"
+            onClick={() => setDensity(density === "comfortable" ? "compact" : "comfortable")}
+            data-testid="button-density-toggle"
+            title={`Switch to ${density === "comfortable" ? "compact" : "comfortable"} density`}
+          >
+            {density === "comfortable" ? <Rows3 className="w-3.5 h-3.5" /> : <Rows2 className="w-3.5 h-3.5" />}
+            <span className="hidden sm:inline">{density === "comfortable" ? "Comfortable" : "Compact"}</span>
+          </Button>
+        </div>
+      </div>
+
+      {/* Three-pane grid (lg+).
+          On mobile we stack: list takes full width and the detail pane takes
+          over (with a back button) when a thread is selected. */}
+      <div className="flex-1 flex min-h-0">
+        {/* Left — bucket sidebar (desktop only) */}
+        <aside className="hidden lg:flex w-60 shrink-0 border-r bg-muted/20 flex-col" data-testid="left-pane">
+          <BucketSidebar bucket={bucket} onChange={setBucket} counts={counts} />
+        </aside>
+
+        {/* Middle — thread list */}
+        <section
+          className={cn(
+            "flex flex-col min-w-0 border-r bg-background",
+            // On mobile: hide the list while a detail pane is open.
+            selectedThread ? "hidden lg:flex" : "flex flex-1 lg:flex-1",
+            // On desktop the middle pane has a fixed-ish ideal width when
+            // the right pane is also visible; otherwise it flexes.
+            selectedThread ? "lg:w-[420px] lg:shrink-0" : ""
+          )}
+          data-testid="middle-pane"
+        >
+          {/* Filters bar */}
+          <div className="px-3 py-2 border-b shrink-0 flex flex-wrap items-center gap-2 bg-muted/10">
+            {bucket !== "mine" && bucket !== "unowned" && (
+              <RepFilterCombobox value={filterRep} onChange={setFilterRep} users={sortedReps} />
+            )}
+
+            {bucket === "all" && (
+              <>
+                <Select value={filterState} onValueChange={setFilterState}>
+                  <SelectTrigger className="h-8 w-36 text-xs" data-testid="select-filter-state">
+                    <SelectValue placeholder="Waiting state" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All states</SelectItem>
+                    <SelectItem value="waiting_on_us">Waiting on us</SelectItem>
+                    <SelectItem value="waiting_on_them">Waiting on them</SelectItem>
+                    <SelectItem value="resolved">Resolved</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select value={filterPriority} onValueChange={setFilterPriority}>
+                  <SelectTrigger className="h-8 w-32 text-xs" data-testid="select-filter-priority">
+                    <SelectValue placeholder="Priority" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All priorities</SelectItem>
+                    <SelectItem value="high">High</SelectItem>
+                    <SelectItem value="normal">Normal</SelectItem>
+                    <SelectItem value="low">Low</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant={filterOverdue ? "default" : "outline"}
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => setFilterOverdue(!filterOverdue)}
+                  data-testid="button-filter-overdue"
+                >
+                  <AlertTriangle className="w-3 h-3 mr-1" />
+                  Overdue only
+                </Button>
+              </>
+            )}
+
+            {bucket === "archived" && (
+              <>
+                <div className="relative flex-1 min-w-[180px]">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                  <Input
+                    placeholder="Search account, carrier, or subject…"
+                    value={archiveSearch}
+                    onChange={(e) => setArchiveSearch(e.target.value)}
+                    className="pl-8 h-8 text-xs"
+                    data-testid="input-archive-search"
+                  />
+                </div>
+                <Input
+                  type="date"
+                  value={archiveDateFrom}
+                  onChange={(e) => setArchiveDateFrom(e.target.value)}
+                  className="w-36 h-8 text-xs"
+                  data-testid="input-archive-date-from"
+                />
+                <Input
+                  type="date"
+                  value={archiveDateTo}
+                  onChange={(e) => setArchiveDateTo(e.target.value)}
+                  className="w-36 h-8 text-xs"
+                  data-testid="input-archive-date-to"
+                />
+                {(archiveSearch || archiveDateFrom || archiveDateTo) && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 text-xs"
+                    onClick={() => {
+                      setArchiveSearch("");
+                      setDebouncedSearch("");
+                      setArchiveDateFrom("");
+                      setArchiveDateTo("");
+                    }}
+                    data-testid="button-clear-archive-filters"
+                  >
+                    <X className="w-3 h-3 mr-1" />
+                    Clear
+                  </Button>
+                )}
+              </>
             )}
           </div>
-        )}
 
-        <div className="border rounded-lg overflow-hidden">
-          {isError ? (
-            <QueryError message="Couldn't load conversations. This is usually temporary." onRetry={() => refetch()} />
-          ) : isLoading ? (
-            <div className="divide-y">
-              {[...Array(5)].map((_, i) => (
-                <div key={i} className="flex items-center gap-4 px-4 py-3">
-                  <Skeleton className="h-4 w-16" />
-                  <div className="flex-1 space-y-1.5">
-                    <Skeleton className="h-4 w-48" />
-                    <Skeleton className="h-3 w-32" />
-                  </div>
-                  <Skeleton className="h-4 w-20" />
-                </div>
-              ))}
-            </div>
-          ) : sorted.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2" data-testid="empty-state">
-              {activeTab === "archived" ? <Archive className="w-8 h-8" /> : <CheckCircle2 className="w-8 h-8" />}
-              <p className="font-medium">No conversations found</p>
-              <p className="text-sm">
-                {activeTab === "mine"
-                  ? "You have no conversations waiting on you."
-                  : activeTab === "unowned"
-                  ? "All conversations have an assigned owner."
-                  : activeTab === "archived"
-                  ? "No archived conversations match the selected filters."
-                  : "No conversations match the selected filters."}
-              </p>
-            </div>
-          ) : (
-            <div className="divide-y" data-testid="conversation-list">
-              {sorted.map((thread) => (
-                <ThreadRow
-                  key={thread.id}
-                  thread={thread}
-                  onAssignToMe={(id) => assignToMeMutation.mutate(id)}
-                  onChangeState={(id, state) => changeStateMutation.mutate({ id, state })}
-                  onArchive={(id) => archiveMutation.mutate(id)}
-                  onSelect={(t) => setSelectedThread(t)}
-                  isSelected={selectedThread?.id === thread.id}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-
-        {nextCursor && (
-          <div className="flex justify-center mt-4">
-            <Button
-              variant="outline"
-              onClick={() => loadMoreMutation.mutate()}
-              disabled={loadMoreMutation.isPending}
-              data-testid="button-load-more"
-            >
-              {loadMoreMutation.isPending ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : null}
-              Load more
-            </Button>
+          {/* Scrollable thread list */}
+          <div className="flex-1 overflow-y-auto" data-testid="thread-list-scroll">
+            {isError ? (
+              <QueryError
+                message="Couldn't load conversations. This is usually temporary."
+                onRetry={() => refetch()}
+              />
+            ) : (
+              <ThreadList
+                threads={sorted}
+                isLoading={isLoading}
+                density={density}
+                bucket={bucket}
+                selectedThreadId={selectedThreadId}
+                onSelect={setSelectedThread}
+                onAssignToMe={(id) => assignToMeMutation.mutate(id)}
+                onChangeState={(id, state) => changeStateMutation.mutate({ id, state })}
+                onArchive={(id) => archiveMutation.mutate(id)}
+                hasMore={!!nextCursor}
+                onLoadMore={() => loadMoreMutation.mutate()}
+                isFetchingMore={loadMoreMutation.isPending}
+              />
+            )}
           </div>
-        )}
-      </Tabs>
+        </section>
 
-      {selectedThread && (
-        <ThreadDetailPanel
-          thread={selectedThread}
-          onClose={() => setSelectedThread(null)}
-        />
-      )}
+        {/* Right — detail pane.
+            Mobile: takes over when a thread is selected.
+            Desktop (lg+): always-visible third pane. */}
+        <section
+          className={cn(
+            "flex-1 min-w-0",
+            selectedThread ? "flex" : "hidden lg:flex"
+          )}
+          data-testid="right-pane"
+        >
+          {selectedThread ? (
+            <ThreadDetailPane
+              key={selectedThread.id}
+              thread={selectedThread}
+              showBackButton
+              onBack={() => setSelectedThread(null)}
+            />
+          ) : (
+            <EmptyDetailPane />
+          )}
+        </section>
+      </div>
     </div>
   );
 }

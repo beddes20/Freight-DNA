@@ -1952,6 +1952,31 @@ export const insertEmailConversationThreadSchema = createInsertSchema(emailConve
 export type InsertEmailConversationThread = z.infer<typeof insertEmailConversationThreadSchema>;
 export type EmailConversationThread = typeof emailConversationThreads.$inferSelect;
 
+// ─── Per-user read state for conversation threads (Task #532) ────────────────
+// Tracks the most recent moment a user "viewed" a thread so we can show
+// unread vs read styling consistently across sessions and devices. We key on
+// the Outlook conversation_id (text) instead of the thread record id so that
+// orphan threads (no email_conversation_threads row yet) are still trackable.
+export const emailConversationReadStates = pgTable("email_conversation_read_states", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  threadId: text("thread_id").notNull(),
+  lastReadAt: timestamp("last_read_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (table) => ({
+  uniqUserThread: uniqueIndex("email_conv_read_user_thread_uniq").on(table.userId, table.threadId),
+}));
+
+export const insertEmailConversationReadStateSchema = createInsertSchema(emailConversationReadStates).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertEmailConversationReadState = z.infer<typeof insertEmailConversationReadStateSchema>;
+export type EmailConversationReadState = typeof emailConversationReadStates.$inferSelect;
+
 // ─── Carrier Intel Suggestions (Task #193) ───────────────────────────────────
 
 export const carrierIntelSuggestionStatuses = ["pending", "accepted", "rejected", "auto_accepted"] as const;
