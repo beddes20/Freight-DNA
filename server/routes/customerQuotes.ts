@@ -10,7 +10,7 @@ import {
   type QuoteFilters, type ListSortKey,
 } from "../services/customerQuotes";
 import { syncQuoteOutcomesFromTms } from "../services/quoteTmsSync";
-import { QUOTE_OUTCOME_STATUSES, QUOTE_SOURCES, companies, contacts } from "@shared/schema";
+import { QUOTE_OUTCOME_STATUSES, QUOTE_SOURCES, companies, contacts, insertQuoteOpportunitySchema } from "@shared/schema";
 import { getStaleQuoteFollowUps, clearStaleFollowUpCache } from "../services/staleQuoteFollowup";
 import { db } from "../storage";
 import { and as andSql, eq as eqSql, sql as sqlExpr } from "drizzle-orm";
@@ -309,13 +309,23 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const schema = z.object({
+      // Derived from the canonical insertQuoteOpportunitySchema in
+      // @shared/schema so spot/create stays contract-aligned with the rest
+      // of the quote pipeline. The frontend sends `pickup*`/`delivery*` and
+      // `quotedAmount` as a number, so we extend with ergonomic aliases and
+      // narrow `quotedAmount` to a positive number for the guardrail.
+      const baseSchema = insertQuoteOpportunitySchema.pick({
+        customerId: true,
+        equipment: true,
+        notes: true,
+      });
+      const schema = baseSchema.extend({
+        customerId: z.string().min(1),
+        equipment: z.string().min(1).max(40),
         pickupCity: z.string().min(1).max(80),
         pickupState: z.string().min(1).max(8),
         deliveryCity: z.string().min(1).max(80),
         deliveryState: z.string().min(1).max(8),
-        equipment: z.string().min(1).max(40),
-        customerId: z.string().min(1),
         quotedAmount: z.number().finite().min(1).max(1_000_000),
         estimatedCost: z.number().finite().min(0).max(1_000_000).nullable().optional(),
         validUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}/).nullable().optional(),
