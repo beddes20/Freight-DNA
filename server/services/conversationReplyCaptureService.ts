@@ -515,6 +515,173 @@ export async function selfHealStuckThreads(opts: {
   return result;
 }
 
+// ─── Aggregated capture-audit health for the Conversations page pill ────────
+// Task #536. Returns an at-a-glance health snapshot scoped to the mailboxes
+// of a set of users (the caller's reporting tree, or the whole org for
+// admins). Used to render the always-visible "All synced / Recovering /
+// Issue" pill at the top of the Conversations page.
+
+export type CaptureAuditOverallStatus = "healthy" | "recovering" | "unhealthy";
+
+export interface CaptureAuditHealthRecentRun {
+  id: string;
+  threadId: string;
+  triggeredBy: string;
+  messagesFoundUpstream: number;
+  messagesPersisted: number;
+  rootCauseLabel: string;
+  createdAt: string;
+}
+
+export interface CaptureAuditHealthAffectedThread {
+  threadId: string;
+  rootCauseLabel: string;
+  messagesFoundUpstream: number;
+  messagesPersisted: number;
+  lastAuditAt: string;
+}
+
+export interface CaptureAuditHealthSnapshot {
+  status: CaptureAuditOverallStatus;
+  generatedAt: string;
+  /** Last successful sync across the in-scope mailboxes (max of last
+   * webhook delivery and last outbound captured). Null when no mailboxes
+   * are visible to the caller. */
+  lastSuccessfulSyncAt: string | null;
+  pendingRecoveryThreadCount: number;
+  webhookFailureCount: number;
+  scope: { mailboxes: number; users: number | null };
+  mailboxes: MailboxHealthSnapshot[];
+  recentRuns: CaptureAuditHealthRecentRun[];
+  affectedThreads: CaptureAuditHealthAffectedThread[];
+}
+
+/** Root-cause labels that mean "this thread still has an unresolved
+ * capture problem" — i.e. the rep should look at it. `nothing_missing`
+ * and successful recoveries are not surfaced in the affected list. */
+const UNRESOLVED_ROOT_CAUSES = new Set([
+  "webhook_dropped",
+  "webhook_never_fired",
+  "subscription_expired",
+  "sentitems_subscription_missing",
+  "mailbox_disabled",
+  "mailbox_missing",
+  "delta_stale",
+  "error",
+]);
+
+const DEFAULT_HEALTH_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+
+export async function getCaptureAuditHealthForUsers(opts: {
+  orgId: string;
+  /** When null the caller has org-wide visibility (admin). When a list is
+   * passed only mailboxes owned by these users are inspected. */
+  visibleUserIds: string[] | null;
+  lookbackMs?: number;
+  recentRunsLimit?: number;
+  affectedThreadsLimit?: number;
+}): Promise<CaptureAuditHealthSnapshot> {
+  const lookbackMs = opts.lookbackMs ?? DEFAULT_HEALTH_LOOKBACK_MS;
+  const recentRunsLimit = opts.recentRunsLimit ?? 10;
+  const affectedThreadsLimit = opts.affectedThreadsLimit ?? 25;
+  const since = new Date(Date.now() - lookbackMs);
+
+  // 1. Resolve visible mailboxes for the caller. Reps see only their own;
+  //    managers see their reporting tree's mailboxes; admins see all.
+  const allMailboxes = await db.select().from(monitoredMailboxes)
+    .where(eq(monitoredMailboxes.orgId, opts.orgId));
+  const visibleMailboxes = opts.visibleUserIds === null
+    ? allMailboxes
+    : allMailboxes.filter(m => opts.visibleUserIds!.includes(m.userId));
+  const mailboxIds = visibleMailboxes.map(m => m.id);
+
+  const mailboxHealth = visibleMailboxes.map(getMailboxSentItemsHealth);
+  const webhookFailureCount = mailboxHealth.filter(h =>
+    h.sentItemsHealth === "expired" || h.sentItemsHealth === "missing"
+  ).length;
+  const staleCount = mailboxHealth.filter(h => h.sentItemsHealth === "stale").length;
+
+  const lastSuccessfulSyncAt = visibleMailboxes.reduce<Date | null>((acc, m) => {
+    const candidates = [m.lastSentItemsNotificationAt, m.lastOutboundCapturedAt]
+      .filter((d): d is Date => !!d);
+    if (candidates.length === 0) return acc;
+    const best = candidates.reduce((a, b) => (a > b ? a : b));
+    return acc && acc > best ? acc : best;
+  }, null);
+
+  // 2. Pull recent audit rows scoped to the visible mailboxes (or all when
+  //    visibility is org-wide). Joining on mailboxId is the cleanest scope
+  //    because every audit row records the mailbox at the time of the run.
+  let recentAuditsRaw: ConversationThreadCaptureAudit[] = [];
+  if (opts.visibleUserIds === null || mailboxIds.length > 0) {
+    const baseQuery = db.select().from(conversationThreadCaptureAudits)
+      .where(and(
+        eq(conversationThreadCaptureAudits.orgId, opts.orgId),
+        gte(conversationThreadCaptureAudits.createdAt, since),
+        opts.visibleUserIds === null
+          ? drizzleSql`true`
+          : drizzleSql`${conversationThreadCaptureAudits.mailboxId} = ANY(${mailboxIds})`,
+      ))
+      .orderBy(desc(conversationThreadCaptureAudits.createdAt))
+      .limit(200);
+    recentAuditsRaw = await baseQuery;
+  }
+
+  // 3. Collapse to one entry per thread (most recent audit wins) so the
+  //    "affected" list doesn't show the same thread N times.
+  const latestPerThread = new Map<string, ConversationThreadCaptureAudit>();
+  for (const a of recentAuditsRaw) {
+    if (!latestPerThread.has(a.threadId)) latestPerThread.set(a.threadId, a);
+  }
+
+  const affectedThreads: CaptureAuditHealthAffectedThread[] = [];
+  for (const a of latestPerThread.values()) {
+    if (UNRESOLVED_ROOT_CAUSES.has(a.rootCauseLabel)) {
+      affectedThreads.push({
+        threadId: a.threadId,
+        rootCauseLabel: a.rootCauseLabel,
+        messagesFoundUpstream: a.messagesFoundUpstream,
+        messagesPersisted: a.messagesPersisted,
+        lastAuditAt: a.createdAt.toISOString(),
+      });
+    }
+  }
+  affectedThreads.sort((a, b) => (a.lastAuditAt > b.lastAuditAt ? -1 : 1));
+  const trimmedAffected = affectedThreads.slice(0, affectedThreadsLimit);
+
+  const recentRuns: CaptureAuditHealthRecentRun[] = recentAuditsRaw
+    .slice(0, recentRunsLimit)
+    .map(a => ({
+      id: a.id,
+      threadId: a.threadId,
+      triggeredBy: a.triggeredBy,
+      messagesFoundUpstream: a.messagesFoundUpstream,
+      messagesPersisted: a.messagesPersisted,
+      rootCauseLabel: a.rootCauseLabel,
+      createdAt: a.createdAt.toISOString(),
+    }));
+
+  // 4. Roll up to a single status. Unhealthy wins over recovering.
+  let status: CaptureAuditOverallStatus = "healthy";
+  if (webhookFailureCount > 0) {
+    status = "unhealthy";
+  } else if (affectedThreads.length > 0 || staleCount > 0) {
+    status = "recovering";
+  }
+
+  return {
+    status,
+    generatedAt: new Date().toISOString(),
+    lastSuccessfulSyncAt: lastSuccessfulSyncAt ? lastSuccessfulSyncAt.toISOString() : null,
+    pendingRecoveryThreadCount: affectedThreads.length,
+    webhookFailureCount,
+    scope: { mailboxes: visibleMailboxes.length, users: opts.visibleUserIds?.length ?? null },
+    mailboxes: mailboxHealth,
+    recentRuns,
+    affectedThreads: trimmedAffected,
+  };
+}
+
 // ─── Periodic scheduler ──────────────────────────────────────────────────────
 
 let _sweepTimer: ReturnType<typeof setInterval> | null = null;

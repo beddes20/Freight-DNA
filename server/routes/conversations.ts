@@ -39,6 +39,8 @@ import {
   getThreadCaptureAuditHistory,
   listThreadStoredProviderMessageIds,
   getMailboxSentItemsHealth,
+  getCaptureAuditHealthForUsers,
+  type CaptureAuditHealthSnapshot,
 } from "../services/conversationReplyCaptureService";
 
 export function registerConversationsRoutes(app: Express): void {
@@ -998,6 +1000,127 @@ export function registerConversationsRoutes(app: Express): void {
       } catch (err) {
         console.error("[conversations] POST /recheck error:", err);
         res.status(500).json({ error: err instanceof Error ? err.message : "Recheck failed" });
+      }
+    },
+  );
+
+  // ── Conversations-page capture audit status pill (Task #536) ─────────────
+  // GET .../capture-audit-health   — aggregated status pill snapshot
+  // POST .../capture-audit-health/run-now — manual sweep across visible threads
+  //
+  // Scope mirrors the Conversations list visibility model:
+  //   - admin / sales_director: org-wide
+  //   - everyone else: their reporting tree (`getVisibleRepUserIds`)
+  //
+  // The pill polls this endpoint quietly so reps see "All synced ✓" /
+  // "N pending recovery" / "Webhook unhealthy" without refreshing.
+  app.get(
+    "/api/internal/conversations/capture-audit-health",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+        const visibleUserIds =
+          user.role === "admin" || user.role === "sales_director"
+            ? null
+            : (await getVisibleRepUserIds(user)) ?? [user.id];
+
+        const snapshot = await getCaptureAuditHealthForUsers({
+          orgId: user.organizationId,
+          visibleUserIds,
+        });
+
+        // Enrich affected threads with account name + owner name so the
+        // panel's list is rep-friendly (no opaque thread IDs only). Cheap
+        // because the list is capped at 25.
+        const enrichedAffected = await Promise.all(
+          snapshot.affectedThreads.map(async a => {
+            const thread = await storage.getEmailConversationThreadByThreadId(
+              user.organizationId,
+              a.threadId,
+            );
+            let accountName: string | null = null;
+            let ownerName: string | null = null;
+            let recordId: string | null = null;
+            if (thread) {
+              recordId = thread.id;
+              if (thread.linkedAccountId) {
+                const company = await storage.getCompany(thread.linkedAccountId);
+                accountName = company?.name ?? null;
+              }
+              if (thread.ownerUserId) {
+                const owner = await storage.getUser(thread.ownerUserId);
+                ownerName = owner?.name ?? null;
+              }
+            }
+            return { ...a, accountName, ownerName, recordId };
+          }),
+        );
+
+        res.json({
+          ok: true,
+          ...snapshot,
+          affectedThreads: enrichedAffected,
+        } satisfies { ok: boolean } & CaptureAuditHealthSnapshot & {
+          affectedThreads: Array<typeof enrichedAffected[number]>;
+        });
+      } catch (err) {
+        console.error("[conversations] GET /capture-audit-health error:", err);
+        res.status(500).json({ error: "Failed to load capture audit health" });
+      }
+    },
+  );
+
+  app.post(
+    "/api/internal/conversations/capture-audit-health/run-now",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+        // Reuse the same scoping rules as the GET so a rep can never trigger
+        // a self-heal sweep against threads outside their reporting tree.
+        const visibleUserIds =
+          user.role === "admin" || user.role === "sales_director"
+            ? null
+            : (await getVisibleRepUserIds(user)) ?? [user.id];
+
+        const snapshot = await getCaptureAuditHealthForUsers({
+          orgId: user.organizationId,
+          visibleUserIds,
+          // Run-now should bias toward "anything we currently flag" rather
+          // than only 24h-old issues — widen the lookback so the panel and
+          // the sweep agree on what's affected.
+          lookbackMs: 7 * 24 * 60 * 60 * 1000,
+          affectedThreadsLimit: 50,
+        });
+
+        let recovered = 0;
+        let scanned = 0;
+        let errors = 0;
+        for (const a of snapshot.affectedThreads) {
+          scanned++;
+          try {
+            const r = await selfHealConversationThread({
+              orgId: user.organizationId,
+              threadId: a.threadId,
+              triggeredBy: "manual",
+              triggeredByUserId: user.id,
+            });
+            recovered += r.audit.messagesPersisted;
+          } catch (e) {
+            errors++;
+            console.error(`[capture-audit-health] run-now thread=${a.threadId}:`, e);
+          }
+        }
+
+        res.json({ ok: true, scanned, recovered, errors });
+      } catch (err) {
+        console.error("[conversations] POST /capture-audit-health/run-now error:", err);
+        res.status(500).json({ error: "Run-now failed" });
       }
     },
   );

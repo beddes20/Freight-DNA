@@ -30,6 +30,7 @@ import { BucketSidebar } from "@/components/conversations/bucket-sidebar";
 import { ThreadList } from "@/components/conversations/thread-list";
 import { ThreadDetailPane, EmptyDetailPane } from "@/components/conversations/thread-detail-pane";
 import { RepFilterCombobox } from "@/components/conversations/rep-filter-combobox";
+import { CaptureAuditStatusPill } from "@/components/conversations/capture-audit-status-pill";
 import type {
   ConversationBucket,
   ConversationDensity,
@@ -368,6 +369,13 @@ export default function ConversationsPage() {
           <Badge variant="secondary" className="text-xs" data-testid="badge-total-count">
             {data?.count ?? "—"}
           </Badge>
+          {/* Task #536 — capture-audit health pill. Always-visible
+              indicator of the email capture pipeline scoped to threads
+              the current rep can see. Click to open the diagnostics /
+              affected-thread panel. */}
+          <CaptureAuditStatusPill
+            onOpenThread={(threadId) => updateUrl({ threadId })}
+          />
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <Button
