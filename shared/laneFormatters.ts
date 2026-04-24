@@ -175,6 +175,26 @@ const CUSTOMER_LOWERCASE_CONNECTORS = new Set([
   "the", "to", "vs", "vs.", "with",
 ]);
 
+// Curated allow-list of corporate suffixes and well-known brand acronyms.
+// Tokens whose letter-only content (case-insensitive) appears here are forced
+// to the canonical uppercase form regardless of input case. This handles two
+// real-world rough edges in our customer source data:
+//   1. Mixed-case suffixes from the TMS render as "Brooklyn Bedding Llc"
+//      under the default title-case rule. The allow-list overrides that so
+//      the suffix is rendered as "LLC" — both for fully-lowercase input
+//      ("brooklyn bedding llc") and fully-shouted input ("BROOKLYN BEDDING LLC").
+//   2. Brand-specific acronyms longer than the 4-letter all-caps cap below
+//      (e.g. "USPS", "FEDEX") would otherwise be title-cased into
+//      "Usps" / "Fedex" when the source row is fully shouted.
+// Keep this list small and conservative — only entries whose canonical form
+// is unambiguous in a customer/account-name context.
+const CUSTOMER_UPPERCASE_ACRONYMS = new Set([
+  // Corporate suffixes
+  "LLC", "LLP", "INC", "CO", "CORP", "LTD", "LP", "PLLC", "PC",
+  // Carrier / logistics brand acronyms longer than the 4-letter cap
+  "USPS", "FEDEX", "UPS", "DHL",
+]);
+
 /**
  * Title-case an individual word, preserving internal punctuation
  * (hyphens, slashes, apostrophes). E.g. "coca-cola" → "Coca-Cola".
@@ -234,12 +254,24 @@ export function formatCustomerName(raw: string | null | undefined): string {
         return lc;
       }
 
+      // Letter-only view of the token, so trailing punctuation (e.g. "Inc.")
+      // doesn't break either the curated allow-list or the acronym detector.
+      const letters = tok.replace(/[^A-Za-z]/g, "");
+
+      // Curated allow-list of corporate suffixes ("LLC", "Inc", "Corp", …)
+      // and longer brand acronyms ("USPS", "FEDEX") — force canonical
+      // uppercase regardless of input case. This overrides both the
+      // title-case fallback ("Llc" → "LLC") and the 4-letter acronym cap
+      // ("usps" / "Fedex" → "USPS" / "FEDEX"). We rewrite only the letter
+      // runs so trailing punctuation like "Inc." is preserved as "INC.".
+      if (letters.length > 0 && CUSTOMER_UPPERCASE_ACRONYMS.has(letters.toUpperCase())) {
+        return tok.replace(/[A-Za-z]+/g, m => m.toUpperCase());
+      }
+
       // Preserve all-uppercase short tokens (2–4 letters) as acronyms /
       // abbreviations (BAE, HP, NAL, EAE, USA, NASA). Longer all-caps tokens
       // (e.g. "JOHNSON", "CONTROLS") are treated as shouted text and get
       // title-cased so we don't end up with "JOHNSON Controls".
-      // We test *letters only* so trailing punctuation doesn't break detection.
-      const letters = tok.replace(/[^A-Za-z]/g, "");
       if (
         letters.length >= 2 &&
         letters.length <= 4 &&

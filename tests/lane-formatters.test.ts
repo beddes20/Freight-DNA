@@ -377,6 +377,98 @@ assertEqual(
   "Bloosaca-Bloom Energy",
 );
 
+// Curated corporate-suffix / brand-acronym allow-list — should override both
+// the default title-case fallback and the 4-letter all-caps acronym cap.
+// These cases come from real customer source rows where the suffix arrives
+// either mixed-case ("Brooklyn Bedding Llc") or fully shouted
+// ("BROOKLYN BEDDING LLC"). Both should normalize to "Brooklyn Bedding LLC".
+assertEqual(
+  'mixed-case suffix — "brooklyn bedding llc" → "Brooklyn Bedding LLC"',
+  formatCustomerName("brooklyn bedding llc"),
+  "Brooklyn Bedding LLC",
+);
+assertEqual(
+  'shouted suffix — "BROOKLYN BEDDING LLC" → "Brooklyn Bedding LLC"',
+  formatCustomerName("BROOKLYN BEDDING LLC"),
+  "Brooklyn Bedding LLC",
+);
+assertEqual(
+  'mixed-case "Brooklyn Bedding Llc" → "Brooklyn Bedding LLC"',
+  formatCustomerName("Brooklyn Bedding Llc"),
+  "Brooklyn Bedding LLC",
+);
+assertEqual(
+  'suffix "Inc" — "acme widgets inc" → "Acme Widgets INC"',
+  formatCustomerName("acme widgets inc"),
+  "Acme Widgets INC",
+);
+assertEqual(
+  'suffix "Corp" — "acme corp" → "Acme CORP"',
+  formatCustomerName("acme corp"),
+  "Acme CORP",
+);
+assertEqual(
+  'suffix "Ltd" — "smith holdings ltd" → "Smith Holdings LTD"',
+  formatCustomerName("smith holdings ltd"),
+  "Smith Holdings LTD",
+);
+assertEqual(
+  'suffix "Pllc" — "acme legal pllc" → "Acme Legal PLLC"',
+  formatCustomerName("acme legal pllc"),
+  "Acme Legal PLLC",
+);
+assertEqual(
+  'suffix "LP" — "smith capital lp" → "Smith Capital LP"',
+  formatCustomerName("smith capital lp"),
+  "Smith Capital LP",
+);
+assertEqual(
+  'suffix with trailing period — "Acme Inc." → "Acme INC." (period preserved)',
+  formatCustomerName("Acme Inc."),
+  "Acme INC.",
+);
+
+// Brand acronyms longer than the 4-letter all-caps cap. Without the
+// allow-list, "usps" / "Fedex" would title-case to "Usps" / "Fedex".
+assertEqual(
+  'brand acronym — "usps logistics" → "USPS Logistics"',
+  formatCustomerName("usps logistics"),
+  "USPS Logistics",
+);
+assertEqual(
+  'brand acronym — "Fedex Freight" → "FEDEX Freight"',
+  formatCustomerName("Fedex Freight"),
+  "FEDEX Freight",
+);
+assertEqual(
+  'shouted brand acronym — "FEDEX FREIGHT" → "FEDEX Freight"',
+  formatCustomerName("FEDEX FREIGHT"),
+  "FEDEX Freight",
+);
+
+// Idempotency for the new allow-list cases — running the formatter twice
+// must yield the same result.
+assertEqual(
+  'idempotent — "Brooklyn Bedding LLC" passes through unchanged',
+  formatCustomerName(formatCustomerName("brooklyn bedding llc")),
+  "Brooklyn Bedding LLC",
+);
+assertEqual(
+  'idempotent — "BROOKLYN BEDDING LLC" stable after second pass',
+  formatCustomerName(formatCustomerName("BROOKLYN BEDDING LLC")),
+  "Brooklyn Bedding LLC",
+);
+assertEqual(
+  'idempotent — "USPS Logistics" stable after second pass',
+  formatCustomerName(formatCustomerName("usps logistics")),
+  "USPS Logistics",
+);
+assertEqual(
+  'idempotent — "Acme INC." stable after second pass',
+  formatCustomerName(formatCustomerName("Acme Inc.")),
+  "Acme INC.",
+);
+
 // Edit Lane dialog seed: when the dialog opens with a raw item.companyName,
 // the editForm.companyName state should be the cleaned, display-ready label.
 // This mirrors the seeding logic in client/src/pages/lane-work-queue.tsx so
