@@ -1130,12 +1130,24 @@ export default function ConversationsPage() {
     queryFn: async () => {
       const res = await fetch(`/api/internal/conversations?${buildParams()}`);
       if (!res.ok) throw new Error("Failed to fetch conversations");
-      const json = await res.json();
-      setAllThreads(json.threads);
-      setNextCursor(json.nextCursor);
-      return json;
+      return res.json();
     },
   });
+
+  // Sync the page-local thread list with the active query result. We can't
+  // do this inside queryFn because cache hits (e.g. switching back to a tab
+  // we've visited before) skip queryFn entirely — and previously that
+  // caused the new tab to render an empty list forever. Driving this from
+  // useEffect on `data` ensures both fresh fetches and cache hits populate
+  // allThreads. loadMoreMutation continues to append by extending allThreads
+  // without invalidating the query, so this effect won't fire during
+  // pagination (data reference doesn't change).
+  useEffect(() => {
+    if (data) {
+      setAllThreads(data.threads);
+      setNextCursor(data.nextCursor);
+    }
+  }, [data]);
 
   const loadMoreMutation = useMutation({
     mutationFn: async () => {
