@@ -1054,8 +1054,10 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
               </button>
             )}
             {data.corridorPattern && (
-              <span
-                className="text-[11px] px-1.5 py-0.5 rounded-[4px] bg-teal-500/10 text-teal-300 border border-teal-500/30 inline-flex items-center gap-1"
+              <button
+                type="button"
+                onClick={() => onApplyLaneFilter(data.corridorPattern!.namedCorridor || data.corridorPattern!.name)}
+                className="text-[11px] px-1.5 py-0.5 rounded-[4px] bg-teal-500/10 text-teal-300 border border-teal-500/30 inline-flex items-center gap-1 hover:bg-teal-500/20 cursor-pointer"
                 title={[
                   `${data.corridorPattern.originRegion} → ${data.corridorPattern.destinationRegion}`,
                   data.corridorPattern.description,
@@ -1063,6 +1065,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                   data.corridorPattern.responsibleContact
                     ? `Responsible: ${data.corridorPattern.responsibleContact.contactName} (${data.corridorPattern.responsibleContact.status})`
                     : null,
+                  "Click to filter table by this corridor",
                 ].filter(Boolean).join(" · ")}
                 data-testid="chip-spot-corridor-pattern"
               >
@@ -1079,7 +1082,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                     {data.corridorPattern.responsibleContact.contactName.split(/\s+/)[0]}
                   </span>
                 )}
-              </span>
+              </button>
             )}
             {!data.marketStatus.available && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-[4px] bg-zinc-800 text-zinc-400 border border-zinc-700 inline-flex items-center gap-1" data-testid="chip-spot-market-unavailable">

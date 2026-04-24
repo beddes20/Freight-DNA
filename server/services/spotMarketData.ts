@@ -315,8 +315,17 @@ export async function getLaneTraffic(
 
     for (const r of eqFiltered) {
       const lc = r.loadCount ?? 1;
-      totalLoads += lc;
       const t = r.lastSeenAt ? r.lastSeenAt.getTime() : 0;
+      const tier = tierFor(r);
+      // Tier breakdown counts every row; primary aggregates only count
+      // exact + same_market evidence (Task #515 spec). Same-state rows
+      // remain visible in the breakdown but are excluded from KPI totals.
+      if (tier === "exact") tierBreakdown.exact += lc;
+      else if (tier === "same_market") tierBreakdown.sameMarket += lc;
+      else tierBreakdown.sameState += lc;
+      if (tier === "same_state") continue;
+
+      totalLoads += lc;
       if (t >= cutoff30) loads30d += lc;
       if (t >= cutoff90) loads90d += lc;
       if (r.bucket === "realized") realized += lc;
@@ -324,10 +333,6 @@ export async function getLaneTraffic(
       revenue += num(r.revenue);
       cost += num(r.cost);
       margin += num(r.margin);
-      const tier = tierFor(r);
-      if (tier === "exact") tierBreakdown.exact += lc;
-      else if (tier === "same_market") tierBreakdown.sameMarket += lc;
-      else tierBreakdown.sameState += lc;
 
       const cname = r.carrierName?.trim();
       if (cname) {
@@ -530,10 +535,13 @@ export async function getLaneCarriers(
           reason: f.reason,
         };
       })
-      // Final sort: composite rank desc, with do-not-use sunk to the bottom.
+      // Final sort: strict tuple order — fitScore desc, then reliability
+      // (performanceScore) desc — with do-not-use carriers sunk. The
+      // composite `rankScore` field is kept for display only.
       .sort((a, b) => {
         if (a.doNotUse !== b.doNotUse) return a.doNotUse ? 1 : -1;
-        return b.rankScore - a.rankScore;
+        if (b.fitScore !== a.fitScore) return b.fitScore - a.fitScore;
+        return b.performanceScore - a.performanceScore;
       })
       .slice(0, 25);
     return items;
