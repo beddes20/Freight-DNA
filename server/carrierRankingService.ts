@@ -18,6 +18,9 @@ import type { RecurringLane, Carrier, FinancialUpload, LaneCarrierInterest, Lane
 import type { IStorage } from "./storage";
 import { COVERAGE_THRESHOLDS, shouldUseIncumbentFirstFlow } from "./laneCoverageService";
 import { cityDistanceMiles } from "./cityCoordinates";
+import { db } from "./storage";
+import { loadFact } from "@shared/schema";
+import { and, eq, isNull, ne, or, sql as sqlOp } from "drizzle-orm";
 
 /** Carriers whose historical origin AND destination are within this radius count as "nearby". */
 const NEARBY_RADIUS_MILES = 75;
@@ -600,6 +603,188 @@ function extractCarrierHistoryFromUploads(
 }
 
 /**
+ * Extract carrier history from `load_fact` rows for a given lane.
+ *
+ * Mirrors the logic of `extractCarrierHistoryFromUploads` so the ranker can
+ * blend both data sources. Critical for orgs whose freight history lives in
+ * load_fact (Available Freight imports, TMS replays) rather than in
+ * `financial_uploads` — without this path, lanes the org runs every week
+ * surface zero carriers because the ranker never saw the history.
+ *
+ * Org-scoped, excludes cancelled / expired rows. Tier classification
+ * (exact > nearby > state-pair) uses the same `cityDistanceMiles` and
+ * `NEARBY_RADIUS_MILES` thresholds the upload extractor uses.
+ */
+export async function extractCarrierHistoryFromLoadFact(
+  orgId: string,
+  lane: RecurringLane,
+): Promise<Map<string, CarrierHistory>> {
+  const history = new Map<string, CarrierHistory>();
+  const originNorm = normStr(lane.origin);
+  const destNorm = normStr(lane.destination);
+  const laneOrigStateLower = normStr(lane.originState ?? "");
+  const laneDestStateLower = normStr(lane.destinationState ?? "");
+  const laneOriginCityState = lane.origin;
+  const laneDestCityState = lane.destination;
+
+  let rows: Array<{
+    carrierName: string | null;
+    originCity: string | null;
+    originState: string | null;
+    destinationCity: string | null;
+    destinationState: string | null;
+    month: string | null;
+    pickupDate: string | null;
+  }>;
+  try {
+    rows = await db
+      .select({
+        carrierName: loadFact.carrierName,
+        originCity: loadFact.originCity,
+        originState: loadFact.originState,
+        destinationCity: loadFact.destinationCity,
+        destinationState: loadFact.destinationState,
+        month: loadFact.month,
+        pickupDate: loadFact.pickupDate,
+      })
+      .from(loadFact)
+      .where(and(
+        eq(loadFact.orgId, orgId),
+        isNull(loadFact.expiredAt),
+        ne(loadFact.bucket, "cancelled"),
+        sqlOp`${loadFact.carrierName} IS NOT NULL AND length(trim(${loadFact.carrierName})) > 0`,
+        // Pre-filter to relevant rows: same state-pair OR same exact city-pair.
+        // Nearby-but-cross-state is rare enough to accept the trade-off vs the
+        // cost of pulling every org row into memory on every rank call.
+        or(
+          and(
+            sqlOp`lower(${loadFact.originCity}) = ${originNorm}`,
+            sqlOp`lower(${loadFact.destinationCity}) = ${destNorm}`,
+          ),
+          laneOrigStateLower && laneDestStateLower
+            ? and(
+                sqlOp`lower(${loadFact.originState}) = ${laneOrigStateLower}`,
+                sqlOp`lower(${loadFact.destinationState}) = ${laneDestStateLower}`,
+              )
+            : sqlOp`false`,
+        ),
+      ));
+  } catch (e) {
+    // Best-effort — never fail ranking because of a load_fact lookup.
+    console.warn(`[ranker] load_fact history lookup failed for lane ${lane.id}:`, (e as Error)?.message ?? e);
+    return history;
+  }
+
+  for (const row of rows) {
+    const carrierRaw = normStr(parseCarrierName(row.carrierName ?? ""));
+    if (!carrierRaw) continue;
+    const rowOrigin = normStr(row.originCity ?? "");
+    const rowDest = normStr(row.destinationCity ?? "");
+    const rowOriginState = normStr(row.originState ?? "");
+    const rowDestState = normStr(row.destinationState ?? "");
+    if (!rowOrigin || !rowDest) continue;
+
+    const isExact = rowOrigin === originNorm && rowDest === destNorm;
+
+    let isNearby = false;
+    if (!isExact && row.originCity && row.destinationCity) {
+      const rowOriginForGeo = rowOriginState
+        ? `${row.originCity}, ${rowOriginState}`
+        : row.originCity;
+      const rowDestForGeo = rowDestState
+        ? `${row.destinationCity}, ${rowDestState}`
+        : row.destinationCity;
+      const originDist = cityDistanceMiles(rowOriginForGeo, laneOriginCityState);
+      const destDist = cityDistanceMiles(rowDestForGeo, laneDestCityState);
+      isNearby = originDist !== null && destDist !== null
+        && originDist <= NEARBY_RADIUS_MILES && destDist <= NEARBY_RADIUS_MILES;
+    }
+
+    const isStatePairMatch =
+      laneOrigStateLower.length >= 2 && laneDestStateLower.length >= 2 &&
+      rowOriginState.length >= 2 && rowDestState.length >= 2 &&
+      rowOriginState === laneOrigStateLower && rowDestState === laneDestStateLower;
+
+    if (!isExact && !isNearby && !isStatePairMatch) continue;
+
+    // load_fact stores month as YYYY-MM directly when available; fall back to
+    // pickup_date's first 7 chars (YYYY-MM-DD → YYYY-MM) so old rows without
+    // month still contribute a recency signal.
+    const month = row.month && /^\d{4}-\d{2}/.test(row.month)
+      ? row.month.slice(0, 7)
+      : (row.pickupDate ?? "").slice(0, 7);
+
+    const thisTier: CarrierHistory["bestMatchTier"] =
+      isExact ? "exact" : isNearby ? "nearby" : "state_pair";
+
+    const existing = history.get(carrierRaw) ?? {
+      loads: 0, exactLoads: 0, nearbyLoads: 0, statePairLoads: 0,
+      lastUsedMonth: null, avgOnTimePct: null, totalMargin: null,
+      marginRowCount: 0, bestMatchTier: thisTier,
+    };
+    const tierRank = { exact: 0, nearby: 1, state_pair: 2 } as const;
+    const betterTier = tierRank[thisTier] < tierRank[existing.bestMatchTier]
+      ? thisTier
+      : existing.bestMatchTier;
+
+    history.set(carrierRaw, {
+      loads: existing.loads + 1,
+      exactLoads:     existing.exactLoads     + (isExact ? 1 : 0),
+      nearbyLoads:    existing.nearbyLoads    + (isNearby && !isExact ? 1 : 0),
+      statePairLoads: existing.statePairLoads + (isStatePairMatch && !isExact && !isNearby ? 1 : 0),
+      lastUsedMonth: month && month > (existing.lastUsedMonth ?? "") ? month : existing.lastUsedMonth,
+      // load_fact does not carry on-time / margin per row in a clean enough
+      // shape to blend with the financial-upload signal. Leave nulls — the
+      // upload extractor will populate them when it has them.
+      avgOnTimePct: existing.avgOnTimePct,
+      totalMargin: existing.totalMargin,
+      marginRowCount: existing.marginRowCount,
+      bestMatchTier: betterTier,
+    });
+  }
+
+  return history;
+}
+
+/**
+ * Combine two CarrierHistory maps (e.g. financial_uploads + load_fact) into a
+ * single map keyed by normalized carrier name. Loads are summed per tier;
+ * lastUsedMonth keeps the more recent value; bestMatchTier promotes to the
+ * better of the two; avgOnTimePct / totalMargin prefer the side that actually
+ * has signal (load_fact contributes nulls there today).
+ */
+export function mergeHistoryMaps(
+  a: Map<string, CarrierHistory>,
+  b: Map<string, CarrierHistory>,
+): Map<string, CarrierHistory> {
+  const out = new Map<string, CarrierHistory>(a);
+  const tierRank = { exact: 0, nearby: 1, state_pair: 2 } as const;
+  for (const [key, hb] of b) {
+    const ha = out.get(key);
+    if (!ha) { out.set(key, hb); continue; }
+    const mergedTier = tierRank[hb.bestMatchTier] < tierRank[ha.bestMatchTier]
+      ? hb.bestMatchTier
+      : ha.bestMatchTier;
+    const onTime = ha.avgOnTimePct != null && hb.avgOnTimePct != null
+      ? ((ha.avgOnTimePct * ha.loads) + (hb.avgOnTimePct * hb.loads)) / (ha.loads + hb.loads)
+      : (ha.avgOnTimePct ?? hb.avgOnTimePct);
+    out.set(key, {
+      loads:          ha.loads + hb.loads,
+      exactLoads:     ha.exactLoads + hb.exactLoads,
+      nearbyLoads:    ha.nearbyLoads + hb.nearbyLoads,
+      statePairLoads: ha.statePairLoads + hb.statePairLoads,
+      lastUsedMonth: (hb.lastUsedMonth ?? "") > (ha.lastUsedMonth ?? "")
+        ? hb.lastUsedMonth : ha.lastUsedMonth,
+      avgOnTimePct: onTime,
+      totalMargin: (ha.totalMargin ?? 0) + (hb.totalMargin ?? 0) || null,
+      marginRowCount: ha.marginRowCount + hb.marginRowCount,
+      bestMatchTier: mergedTier,
+    });
+  }
+  return out;
+}
+
+/**
  * Extract how many loads a carrier ran for a specific customer from financial uploads.
  * Used as an additional ranking signal when customer context is available.
  */
@@ -923,7 +1108,15 @@ export async function rankCarriersForLane(
     }
   }
 
-  const history = extractCarrierHistoryFromUploads(uploads, lane);
+  // Build carrier history from BOTH financial uploads and load_fact, then
+  // merge. Most orgs have one or the other (or strongly skewed weights),
+  // and the prior implementation only read uploads — so an org with rich
+  // load_fact history but few uploads saw consistently empty shortlists.
+  const [uploadHistory, loadFactHistory] = await Promise.all([
+    Promise.resolve(extractCarrierHistoryFromUploads(uploads, lane)),
+    extractCarrierHistoryFromLoadFact(lane.orgId, lane),
+  ]);
+  const history = mergeHistoryMaps(uploadHistory, loadFactHistory);
   const laneOrigin = normStr(lane.origin);
   const laneDest = normStr(lane.destination);
   const laneEquip = normStr(lane.equipmentType ?? "");
