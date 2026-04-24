@@ -2356,7 +2356,7 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
   const [marketRes, laneTrafficRes, carrierOutreachRes, corridorRes] = await Promise.all([
     getLaneMarket(input.pickupCity, input.pickupState, input.deliveryCity, input.deliveryState, equipment || null)
       .catch(err => ({ ok: false as const, reason: (err as Error).message ?? "TRAC error" })),
-    getLaneTraffic(orgId, input.pickupState, input.deliveryState, equipment || null)
+    getLaneTraffic(orgId, input.pickupCity, input.pickupState, input.deliveryCity, input.deliveryState, equipment || null)
       .catch(() => null),
     getLaneCarriers(orgId, input.pickupState, input.deliveryState, equipment || null)
       .catch(() => [] as CarrierOutreachItem[]),

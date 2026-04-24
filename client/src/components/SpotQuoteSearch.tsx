@@ -15,7 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Search, MapPin, Truck, Calendar, AlertTriangle, TrendingUp, Award, Users,
+  Search, MapPin, Truck, Calendar, AlertTriangle, TrendingUp, TrendingDown, Minus, Award, Users,
   Clock, Activity, X, ChevronRight, ChevronDown, Copy, RefreshCw, SlidersHorizontal,
 } from "lucide-react";
 
@@ -120,6 +120,8 @@ type SpotResult = {
     avgRpm30d: number | null;
     avgRpm90d: number | null;
     forecast7dRpm: number | null;
+    forecastDirection: "up" | "down" | "flat";
+    capacityOutlook: string | null;
     originKma: string | null;
     destKma: string | null;
     equipment: "VAN" | "REEFER" | "FLATBED";
@@ -131,17 +133,25 @@ type SpotResult = {
     realized: number; available: number;
     revenue: number; cost: number; margin: number; marginPct: number;
     uniqueCarriers: number;
-    topCarriers: { name: string; loads: number; loads30d: number; loads90d: number; revenue: number; cost: number; margin: number; marginPct: number }[];
+    tierBreakdown: { exact: number; sameMarket: number; sameState: number };
+    topCarriers: {
+      name: string; loads: number; loads30d: number; loads90d: number;
+      revenue: number; cost: number; margin: number; marginPct: number;
+      reliabilityScore: number | null; reliabilityTier: string | null;
+      lastBuyRate: number | null;
+    }[];
   } | null;
   carrierOutreach: {
     carrierId: string | null; name: string;
-    fitScore: number; evidenceTier: string;
+    fitScore: number; rankScore: number; evidenceTier: string;
     exactLaneRuns: number; nearbyRuns: number;
     loads90d: number; marginPct: number;
     performanceScore: number; tier: string;
     doNotUse: boolean;
     primaryEmail: string | null; phone: string | null;
-    inRolodex: boolean; reason: string | null;
+    inRolodex: boolean;
+    presence: "active" | "known" | "cold";
+    reason: string | null;
   }[];
   corridorPattern: {
     id: string; name: string; namedCorridor: string | null;
@@ -1412,8 +1422,15 @@ function PricingGuidanceBand({ guidance, market, marketStatus, freshnessLabel }:
         {guidance.benchmark !== null && (
           <div className="flex flex-col border-l border-zinc-800 pl-6">
             <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">{isTrac ? "TRAC mid" : "SONAR benchmark"}</span>
-            <span className="text-xl text-zinc-100 tabular-nums font-semibold mt-0.5">{fmtMoney(guidance.benchmark)}</span>
-            <span className="text-[10px] text-zinc-500 mt-0.5">market reference</span>
+            <span className="text-xl text-zinc-100 tabular-nums font-semibold mt-0.5 flex items-center gap-1.5">
+              {fmtMoney(guidance.benchmark)}
+              {market?.forecastDirection === "up" && <TrendingUp className="h-4 w-4 text-rose-400" data-testid="icon-spot-forecast-up" aria-label="Forecast trending up" />}
+              {market?.forecastDirection === "down" && <TrendingDown className="h-4 w-4 text-emerald-400" data-testid="icon-spot-forecast-down" aria-label="Forecast trending down" />}
+              {market?.forecastDirection === "flat" && <Minus className="h-4 w-4 text-zinc-500" data-testid="icon-spot-forecast-flat" aria-label="Forecast flat" />}
+            </span>
+            <span className="text-[10px] text-zinc-400 mt-0.5" data-testid="text-spot-capacity-outlook">
+              {market?.capacityOutlook ?? "market reference"}
+            </span>
           </div>
         )}
         <div className="flex flex-col border-l border-zinc-800 pl-6">
@@ -1477,6 +1494,7 @@ function PricingGuidanceBand({ guidance, market, marketStatus, freshnessLabel }:
  * and the top carriers actually moving freight on this state-state lane.
  */
 function LaneTrafficCard({ traffic }: { traffic: NonNullable<SpotResult["laneTraffic"]> }): JSX.Element {
+  const tb = traffic.tierBreakdown;
   return (
     <SectionCard title="Lane Traffic" icon={<TrendingUp className="h-3.5 w-3.5 text-amber-400" />} testId="spot-section-lane-traffic">
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-2">
@@ -1486,6 +1504,12 @@ function LaneTrafficCard({ traffic }: { traffic: NonNullable<SpotResult["laneTra
         <Kpi label="Revenue" value={fmtMoney(traffic.revenue)} />
         <Kpi label="Carriers" value={traffic.uniqueCarriers.toLocaleString()} />
       </div>
+      <div className="flex items-center gap-2 text-[10px] text-zinc-500 mb-2" data-testid="spot-traffic-tier-breakdown">
+        <span className="uppercase tracking-wider">Match tiers:</span>
+        <span className="px-1.5 py-0.5 rounded-[3px] bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">Exact {tb.exact}</span>
+        <span className="px-1.5 py-0.5 rounded-[3px] bg-amber-500/10 text-amber-300 border border-amber-500/20">Same market {tb.sameMarket}</span>
+        <span className="px-1.5 py-0.5 rounded-[3px] bg-zinc-800 text-zinc-400 border border-zinc-700">Same state {tb.sameState}</span>
+      </div>
       {traffic.topCarriers.length === 0 ? (
         <div className="text-zinc-500 text-xs">No realized loads on this lane in the last 90 days.</div>
       ) : (
@@ -1493,9 +1517,10 @@ function LaneTrafficCard({ traffic }: { traffic: NonNullable<SpotResult["laneTra
           <thead className="text-zinc-500 text-[10px] uppercase tracking-wider">
             <tr>
               <th className="text-left">Carrier</th>
-              <th className="text-right">Loads (90d / 30d)</th>
-              <th className="text-right">Revenue</th>
+              <th className="text-right">Loads (90d/30d)</th>
+              <th className="text-right">Last buy</th>
               <th className="text-right">Margin %</th>
+              <th className="text-right">Reliability</th>
             </tr>
           </thead>
           <tbody>
@@ -1503,8 +1528,13 @@ function LaneTrafficCard({ traffic }: { traffic: NonNullable<SpotResult["laneTra
               <tr key={`${c.name}-${i}`} className="border-t border-zinc-800/60" data-testid={`row-spot-traffic-carrier-${i}`}>
                 <td className="py-1 text-zinc-100">{c.name}</td>
                 <td className="text-right tabular-nums text-zinc-300">{c.loads90d.toLocaleString()} / {c.loads30d.toLocaleString()}</td>
-                <td className="text-right tabular-nums text-zinc-300">{fmtMoney(c.revenue)}</td>
+                <td className="text-right tabular-nums text-zinc-300">{c.lastBuyRate != null ? fmtMoney(c.lastBuyRate) : "—"}</td>
                 <td className="text-right tabular-nums text-zinc-300">{c.marginPct.toFixed(1)}%</td>
+                <td className="text-right tabular-nums text-zinc-300">
+                  {c.reliabilityScore != null
+                    ? <span title={c.reliabilityTier ?? ""}>{c.reliabilityScore.toFixed(0)}{c.reliabilityTier ? ` · ${c.reliabilityTier}` : ""}</span>
+                    : <span className="text-zinc-600">—</span>}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -1520,8 +1550,16 @@ function LaneTrafficCard({ traffic }: { traffic: NonNullable<SpotResult["laneTra
  * with a "call/email" affordance and an in-rolodex flag.
  */
 function CarrierOutreachList({ outreach }: { outreach: SpotResult["carrierOutreach"] }): JSX.Element {
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? outreach : outreach.slice(0, 5);
+  const hiddenCount = Math.max(0, outreach.length - 5);
   return (
-    <SectionCard title="Carriers to Call" icon={<Truck className="h-3.5 w-3.5 text-amber-400" />} testId="spot-section-carrier-outreach">
+    <SectionCard title="Carriers to Call" icon={<Truck className="h-3.5 w-3.5 text-amber-400" />} testId="spot-section-carrier-outreach"
+      action={hiddenCount > 0 ? (
+        <button type="button" onClick={() => setShowAll(s => !s)} className="text-[10px] text-amber-300 hover:text-amber-200 underline" data-testid="button-spot-outreach-toggle">
+          {showAll ? "Show top 5" : `Show all (${outreach.length})`}
+        </button>
+      ) : undefined}>
       {outreach.length === 0 ? (
         <div className="text-zinc-500">No fit carriers found for this lane.</div>
       ) : (
@@ -1529,15 +1567,15 @@ function CarrierOutreachList({ outreach }: { outreach: SpotResult["carrierOutrea
           <thead className="text-zinc-500 text-[10px] uppercase tracking-wider">
             <tr>
               <th className="text-left">Carrier</th>
-              <th className="text-right">Fit</th>
+              <th className="text-right">Rank (Fit / Reli)</th>
               <th className="text-right">90d / Exact</th>
               <th className="text-right">Margin %</th>
-              <th className="text-left">Tier</th>
+              <th className="text-left">Presence</th>
               <th className="text-left">Contact</th>
             </tr>
           </thead>
           <tbody>
-            {outreach.map((c, i) => (
+            {visible.map((c, i) => (
               <tr key={`${c.carrierId ?? c.name}-${i}`} className={`border-t border-zinc-800/60 ${c.doNotUse ? "opacity-50" : ""}`} data-testid={`row-spot-outreach-${i}`}>
                 <td className="py-1 text-zinc-100">
                   <div className="flex items-center gap-1.5">
@@ -1550,10 +1588,18 @@ function CarrierOutreachList({ outreach }: { outreach: SpotResult["carrierOutrea
                     )}
                   </div>
                 </td>
-                <td className="text-right tabular-nums text-zinc-300">{c.fitScore.toFixed(0)}</td>
+                <td className="text-right tabular-nums text-zinc-300">
+                  <span title={`Composite rank: ${c.rankScore.toFixed(0)} (fit ${c.fitScore.toFixed(0)} · reli ${c.performanceScore.toFixed(0)})`}>
+                    {c.rankScore.toFixed(0)} <span className="text-zinc-500">({c.fitScore.toFixed(0)}/{c.performanceScore.toFixed(0)})</span>
+                  </span>
+                </td>
                 <td className="text-right tabular-nums text-zinc-300">{c.loads90d} / {c.exactLaneRuns}</td>
                 <td className="text-right tabular-nums text-zinc-300">{c.marginPct.toFixed(1)}%</td>
-                <td className="text-zinc-400 text-[10px] uppercase">{c.tier}</td>
+                <td className="text-[10px]" data-testid={`spot-outreach-presence-${i}`}>
+                  {c.presence === "active" && <span className="px-1.5 py-0.5 rounded-[3px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />Active</span>}
+                  {c.presence === "known" && <span className="px-1.5 py-0.5 rounded-[3px] bg-blue-500/15 text-blue-300 border border-blue-500/30 inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-blue-400" />Known</span>}
+                  {c.presence === "cold" && <span className="px-1.5 py-0.5 rounded-[3px] bg-zinc-800 text-zinc-500 border border-zinc-700 inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-zinc-500" />Cold</span>}
+                </td>
                 <td className="text-zinc-400 text-[10px]">
                   <div className="flex items-center gap-2">
                     {c.primaryEmail && (
