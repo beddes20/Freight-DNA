@@ -28,6 +28,13 @@ export function outlookEnabled(): boolean {
   return azureCredentialsConfigured();
 }
 
+export interface OutlookFileAttachment {
+  name: string;
+  contentType: string;
+  /** Base64-encoded file contents (matches Microsoft Graph `contentBytes`). */
+  contentBase64: string;
+}
+
 export interface OutlookSendOptions {
   fromEmail: string;
   toEmail: string;
@@ -40,6 +47,13 @@ export interface OutlookSendOptions {
   /** If set, adds a Reply-To header so carrier replies go to this central mailbox
    *  rather than back to the individual sender's inbox. Used for reply tracking. */
   replyToEmail?: string;
+  /**
+   * File attachments. Inline-attached on the draft (Graph supports up to ~3MB
+   * per attachment this way; larger attachments require an upload session and
+   * are intentionally not supported here — the POD intake pipeline rejects
+   * attachments above 3MB and surfaces them in the admin UI for manual handling).
+   */
+  attachments?: OutlookFileAttachment[];
 }
 
 export interface OutlookSendResult {
@@ -97,6 +111,17 @@ export async function sendOutlookEmail(opts: OutlookSendOptions): Promise<Outloo
     // reply tracking works regardless of which team member sent the email.
     if (opts.replyToEmail) {
       message.replyTo = [{ emailAddress: { address: opts.replyToEmail } }];
+    }
+
+    // Inline file attachments (≤3MB each). Anything larger should be uploaded
+    // through Graph's chunked upload session — caller is expected to filter.
+    if (opts.attachments && opts.attachments.length > 0) {
+      message.attachments = opts.attachments.map((a) => ({
+        "@odata.type": "#microsoft.graph.fileAttachment",
+        name: a.name,
+        contentType: a.contentType,
+        contentBytes: a.contentBase64,
+      }));
     }
 
     const encodedFrom = encodeURIComponent(opts.fromEmail);

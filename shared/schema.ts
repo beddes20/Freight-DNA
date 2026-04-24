@@ -2858,6 +2858,109 @@ export const insertMailboxHistoricalBackfillSchema = createInsertSchema(mailboxH
 export type InsertMailboxHistoricalBackfill = z.infer<typeof insertMailboxHistoricalBackfillSchema>;
 export type MailboxHistoricalBackfill = typeof mailboxHistoricalBackfills.$inferSelect;
 
+// ── POD Intake (Task #589 — getpaid@valuetruckaz.com AR mailbox) ────────────
+// One row per inbound message at the AR distro mailbox. Inbound flow:
+//   1. Graph webhook fires for the configured mailbox.
+//   2. classifyPod() decides pod_keyword | pod_ai | not_pod.
+//   3. extractOrderIds() searches subject + body + attachment filenames for
+//      VT###### style ids (and bare 6-9 digit fallbacks).
+//   4. matchOrderIdToLoad() looks up load_fact + customer + dispatcher.
+//   5. resolveRecipients() builds the dispatcher email + account-owner
+//      email + team fallback.
+//   6. Outlook sendMail with original attachment(s) → status="forwarded"
+//      (matched), "unmatched" (no load + team-notified), or "not_pod".
+// Manual link / re-forward actions update the same row.
+export const podIntakeEmails = pgTable(
+  "pod_intake_emails",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    mailboxId: varchar("mailbox_id").references(() => monitoredMailboxes.id, { onDelete: "set null" }),
+    providerMessageId: text("provider_message_id").notNull(),
+    internetMessageId: text("internet_message_id"),
+    receivedAt: timestamp("received_at").notNull(),
+    fromEmail: text("from_email"),
+    fromName: text("from_name"),
+    subject: text("subject"),
+    bodyPreview: text("body_preview"),
+    bodyText: text("body_text"),
+    hasAttachments: boolean("has_attachments").notNull().default(false),
+    attachmentMeta: jsonb("attachment_meta").$type<Array<{
+      id: string;
+      name: string;
+      contentType: string;
+      sizeBytes: number;
+      isPodCandidate: boolean;
+    }>>().default([]),
+    classification: text("classification").notNull().default("pending"),
+    // pending | pod_keyword | pod_ai | not_pod | error
+    classifierMethod: text("classifier_method"),
+    // keyword | ai | manual | none
+    classifierConfidence: decimal("classifier_confidence", { precision: 4, scale: 3 }),
+    classifierReason: text("classifier_reason"),
+    extractedOrderIds: text("extracted_order_ids").array().default([]),
+    matchedOrderId: text("matched_order_id"),
+    matchedLoadFactId: varchar("matched_load_fact_id"),
+    matchedCompanyId: varchar("matched_company_id"),
+    forwardStatus: text("forward_status").notNull().default("pending"),
+    // pending | forwarded | unmatched | not_pod | failed
+    forwardedAt: timestamp("forwarded_at"),
+    forwardedTo: jsonb("forwarded_to").$type<{
+      dispatcher?: { email: string; name?: string } | null;
+      accountOwner?: { email: string; name?: string } | null;
+      teamFallback?: { email: string } | null;
+    }>(),
+    forwardError: text("forward_error"),
+    manualLinkedByUserId: varchar("manual_linked_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    manualLinkedAt: timestamp("manual_linked_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("pod_intake_emails_org_msg_idx").on(table.orgId, table.providerMessageId),
+    index("pod_intake_emails_org_status_idx").on(table.orgId, table.forwardStatus, table.receivedAt),
+    index("pod_intake_emails_org_classification_idx").on(table.orgId, table.classification, table.receivedAt),
+    index("pod_intake_emails_matched_load_idx").on(table.matchedLoadFactId),
+  ],
+);
+
+export const insertPodIntakeEmailSchema = createInsertSchema(podIntakeEmails).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertPodIntakeEmail = z.infer<typeof insertPodIntakeEmailSchema>;
+export type PodIntakeEmail = typeof podIntakeEmails.$inferSelect;
+
+// Per-org POD intake config. One row per organization.
+//   monitoredMailboxId — which monitored_mailboxes row IS the AR distro
+//     mailbox (e.g., getpaid@valuetruckaz.com). Webhook handler routes
+//     messages from this mailbox to the POD pipeline instead of the
+//     normal carrier-reply path.
+//   teamFallbackEmail — copied on every forwarded POD AND notified when
+//     a POD arrives but no load can be matched.
+//   useAiFallback — when true, run GPT-4o-mini if keyword classifier
+//     returns not_pod (lets us tune cost vs recall per-org).
+export const podIntakeSettings = pgTable(
+  "pod_intake_settings",
+  {
+    orgId: varchar("org_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
+    monitoredMailboxId: varchar("monitored_mailbox_id").references(() => monitoredMailboxes.id, { onDelete: "set null" }),
+    teamFallbackEmail: text("team_fallback_email"),
+    enabled: boolean("enabled").notNull().default(false),
+    useAiFallback: boolean("use_ai_fallback").notNull().default(true),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+);
+
+export const insertPodIntakeSettingsSchema = createInsertSchema(podIntakeSettings).omit({
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertPodIntakeSettings = z.infer<typeof insertPodIntakeSettingsSchema>;
+export type PodIntakeSettings = typeof podIntakeSettings.$inferSelect;
+
 // ─── Conversation Thread Capture Audits (Task #435) ──────────────────────────
 // Records every reply-capture self-heal pass (scheduled or on-demand) for a
 // conversation thread, including the resolved root-cause label and the Graph

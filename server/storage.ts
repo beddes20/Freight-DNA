@@ -200,6 +200,12 @@ import {
   mailboxHistoricalBackfills,
   type MailboxHistoricalBackfill,
   type InsertMailboxHistoricalBackfill,
+  podIntakeEmails,
+  podIntakeSettings,
+  type PodIntakeEmail,
+  type InsertPodIntakeEmail,
+  type PodIntakeSettings,
+  type InsertPodIntakeSettings,
   webexUserMappings,
   type WebexUserMapping,
   type InsertWebexUserMapping,
@@ -1195,6 +1201,17 @@ export interface IStorage {
   updateWebexUserMapping(id: string, orgId: string, data: Partial<InsertWebexUserMapping>): Promise<WebexUserMapping | undefined>;
   deleteWebexUserMapping(id: string, orgId: string): Promise<boolean>;
   getMonitoredMailboxByAnySubscriptionId(subscriptionId: string): Promise<MonitoredMailbox | undefined>;
+
+  // Task #589 — POD intake (getpaid@valuetruckaz.com AR mailbox).
+  upsertPodIntakeEmail(data: InsertPodIntakeEmail): Promise<PodIntakeEmail>;
+  getPodIntakeEmail(orgId: string, id: string): Promise<PodIntakeEmail | undefined>;
+  listPodIntakeEmails(orgId: string, opts: {
+    bucket: "forwarded" | "unmatched" | "not_pod" | "pending" | "all";
+    limit?: number;
+  }): Promise<PodIntakeEmail[]>;
+  updatePodIntakeEmail(orgId: string, id: string, patch: Partial<InsertPodIntakeEmail>): Promise<PodIntakeEmail | undefined>;
+  getPodIntakeSettings(orgId: string): Promise<PodIntakeSettings | undefined>;
+  upsertPodIntakeSettings(data: InsertPodIntakeSettings): Promise<PodIntakeSettings>;
 
   // Task #508 — Mailbox 30-day historical backfill state.
   createMailboxHistoricalBackfill(data: InsertMailboxHistoricalBackfill): Promise<MailboxHistoricalBackfill>;
@@ -8749,6 +8766,113 @@ export class DatabaseStorage implements IStorage {
       [orgId, sinceDate],
     );
     return result.rows.map(r => r.carrier_id).filter(Boolean);
+  }
+
+  // ─── POD Intake (Task #589) ────────────────────────────────────────────────
+
+  async upsertPodIntakeEmail(data: InsertPodIntakeEmail): Promise<PodIntakeEmail> {
+    // Idempotent on (org_id, provider_message_id). Re-deliveries from Graph
+    // hit ON CONFLICT and update mutable fields rather than dup.
+    const inserted = await db
+      .insert(podIntakeEmails)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [podIntakeEmails.orgId, podIntakeEmails.providerMessageId],
+        set: {
+          subject: data.subject ?? null,
+          bodyPreview: data.bodyPreview ?? null,
+          bodyText: data.bodyText ?? null,
+          hasAttachments: data.hasAttachments ?? false,
+          attachmentMeta: data.attachmentMeta as never,
+          classification: data.classification ?? "pending",
+          classifierMethod: data.classifierMethod ?? null,
+          classifierConfidence: data.classifierConfidence ?? null,
+          classifierReason: data.classifierReason ?? null,
+          extractedOrderIds: data.extractedOrderIds as never,
+          matchedOrderId: data.matchedOrderId ?? null,
+          matchedLoadFactId: data.matchedLoadFactId ?? null,
+          matchedCompanyId: data.matchedCompanyId ?? null,
+          forwardStatus: data.forwardStatus ?? "pending",
+          forwardedAt: data.forwardedAt ?? null,
+          forwardedTo: data.forwardedTo as never,
+          forwardError: data.forwardError ?? null,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return inserted[0];
+  }
+
+  async getPodIntakeEmail(orgId: string, id: string): Promise<PodIntakeEmail | undefined> {
+    const [row] = await db
+      .select()
+      .from(podIntakeEmails)
+      .where(and(eq(podIntakeEmails.orgId, orgId), eq(podIntakeEmails.id, id)))
+      .limit(1);
+    return row;
+  }
+
+  async listPodIntakeEmails(orgId: string, opts: {
+    bucket: "forwarded" | "unmatched" | "not_pod" | "pending" | "all";
+    limit?: number;
+  }): Promise<PodIntakeEmail[]> {
+    const limit = Math.min(opts.limit ?? 100, 500);
+    const conds: SQL[] = [eq(podIntakeEmails.orgId, orgId)];
+    if (opts.bucket === "not_pod") {
+      conds.push(eq(podIntakeEmails.classification, "not_pod"));
+    } else if (opts.bucket === "forwarded") {
+      conds.push(eq(podIntakeEmails.forwardStatus, "forwarded"));
+    } else if (opts.bucket === "unmatched") {
+      conds.push(eq(podIntakeEmails.forwardStatus, "unmatched"));
+    } else if (opts.bucket === "pending") {
+      conds.push(eq(podIntakeEmails.forwardStatus, "pending"));
+    }
+    return db
+      .select()
+      .from(podIntakeEmails)
+      .where(and(...conds))
+      .orderBy(desc(podIntakeEmails.receivedAt))
+      .limit(limit);
+  }
+
+  async updatePodIntakeEmail(
+    orgId: string,
+    id: string,
+    patch: Partial<InsertPodIntakeEmail>,
+  ): Promise<PodIntakeEmail | undefined> {
+    const [row] = await db
+      .update(podIntakeEmails)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(and(eq(podIntakeEmails.orgId, orgId), eq(podIntakeEmails.id, id)))
+      .returning();
+    return row;
+  }
+
+  async getPodIntakeSettings(orgId: string): Promise<PodIntakeSettings | undefined> {
+    const [row] = await db
+      .select()
+      .from(podIntakeSettings)
+      .where(eq(podIntakeSettings.orgId, orgId))
+      .limit(1);
+    return row;
+  }
+
+  async upsertPodIntakeSettings(data: InsertPodIntakeSettings): Promise<PodIntakeSettings> {
+    const [row] = await db
+      .insert(podIntakeSettings)
+      .values(data)
+      .onConflictDoUpdate({
+        target: podIntakeSettings.orgId,
+        set: {
+          monitoredMailboxId: data.monitoredMailboxId ?? null,
+          teamFallbackEmail: data.teamFallbackEmail ?? null,
+          enabled: data.enabled ?? false,
+          useAiFallback: data.useAiFallback ?? true,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return row;
   }
 }
 

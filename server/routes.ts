@@ -35,6 +35,7 @@ import { getPlayForRuleType } from "./playsRegistry";
 import { registerEmailDraftingRoutes } from "./routes/emailDrafting";
 import { registerNbaReadyToActRoutes } from "./routes/nbaReadyToAct";
 import { registerMonitoredMailboxRoutes } from "./routes/monitoredMailboxes";
+import { registerPodIntakeRoutes } from "./routes/podIntake";
 import { registerWebexRoutes } from "./routes/webex";
 import { registerCallTrendlineRoutes } from "./routes/callTrendlines";
 import { registerCustomerQuoteRoutes } from "./routes/customerQuotes";
@@ -3233,6 +3234,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerEmailDraftingRoutes(app);
   registerNbaReadyToActRoutes(app);
   registerMonitoredMailboxRoutes(app);
+  registerPodIntakeRoutes(app);
   registerWebexRoutes(app);
   registerCallTrendlineRoutes(app);
   registerCustomerQuoteRoutes(app);

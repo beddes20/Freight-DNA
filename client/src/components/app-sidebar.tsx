@@ -508,6 +508,16 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
+                {(user?.role === "admin" || user?.role === "director" || user?.role === "sales_director") && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/pod-intake"} tooltip={navTooltip("POD Intake", "AR mailbox proof-of-delivery routing.")}>
+                      <Link href="/admin/pod-intake" data-testid="link-admin-pod-intake">
+                        <MailCheck className="h-4 w-4" />
+                        <span>POD Intake</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
                 {["admin", "director", "national_account_manager", "sales_director", "logistics_manager"].includes(user?.role ?? "") && (
                   <SidebarMenuItem>
                     <SidebarMenuButton asChild isActive={location === "/admin/available-freight/imports"} tooltip={navTooltip("Freight Import Health", desc("Freight Import Health"))}>

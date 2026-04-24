@@ -225,6 +225,43 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
   }
 
   if (monitoredMailbox) {
+    // Task #589 — POD intake routing. If this monitored mailbox is the org's
+    // configured AR distro mailbox (e.g. getpaid@valuetruckaz.com), short-
+    // circuit to the POD pipeline instead of the customer-mailbox path. The
+    // POD pipeline owns its own classify → match → forward → persist flow.
+    const podSettings = await storage
+      .getPodIntakeSettings(orgId)
+      .catch(() => undefined);
+    if (
+      podSettings?.enabled &&
+      podSettings.monitoredMailboxId === monitoredMailbox.id
+    ) {
+      try {
+        const { ingestPodEmail } = await import("../services/podIntakeService");
+        const result = await ingestPodEmail({
+          orgId,
+          mailboxId: monitoredMailbox.id,
+          mailboxAddress: monitoredMailbox.email,
+          graphMessageId: providerMessageId,
+          internetMessageId: messageDetails?.internetMessageId ?? null,
+          receivedAt,
+          fromEmail,
+          fromName,
+          subject,
+          bodyText: bodyFull,
+          bodyPreview,
+        });
+        log(
+          `[pod-intake] msg=${providerMessageId} classification=${result.classification} status=${result.forwardStatus}`,
+        );
+      } catch (err) {
+        log(
+          `[pod-intake] error processing msg=${providerMessageId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      return;
+    }
+
     const allToRecipients = (messageDetails?.toRecipients ?? [])
       .map(r => r.emailAddress?.address)
       .filter((a): a is string => !!a);
