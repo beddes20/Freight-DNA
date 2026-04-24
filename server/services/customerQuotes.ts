@@ -4,7 +4,7 @@ import { logQuoteTouchpointFromEvent } from "./quoteTouchpoints";
 import {
   quoteCustomers, quoteReps, quoteCarriers, quoteLaneGroups, quoteOutcomeReasons,
   quoteOpportunities, quoteEvents, quoteSavedViews,
-  recurringLanes, companies,
+  recurringLanes, companies, emailMessages,
   type QuoteOpportunity, type QuoteOutcomeStatus, type QuoteCustomer, type QuoteRep,
   type QuoteCarrier, type QuoteLaneGroup, type QuoteOutcomeReason, type QuoteSavedView,
 } from "@shared/schema";
@@ -41,6 +41,11 @@ export type EnrichedQuote = QuoteOpportunity & {
   repName: string;
   carrierName: string | null;
   outcomeReasonLabel: string | null;
+  // Task #526 — populated for source="email" rows so the table can deep-link
+  // to the source thread in the Conversations tab. Both null when the email
+  // can't be resolved (e.g., purged) or for non-email quotes.
+  sourceThreadId?: string | null;
+  sourceMessageId?: string | null;
 };
 
 export type AlertSeverity = "high" | "medium" | "low";
@@ -343,6 +348,135 @@ async function seedDemoData(orgId: string): Promise<void> {
   }
 }
 
+// Task #526 — purge demo seed rows that may have leaked into a live org. The
+// seeded rows have stable signatures (customer/carrier/lane-group names, rep
+// emails @example.com, and source_reference matching `(EMAIL|TMS|CRM|MANUAL)-1###`).
+// Idempotent and safe to re-run: targets only the demo signature, and the
+// child quote_events cascade away with their parent opportunities.
+const DEMO_CUSTOMER_NAMES = [
+  "Aurora Foods", "Northwind Industrial", "Cascade Beverage Co",
+  "Summit Building Products", "Harbor Retail Group", "Pioneer Auto Parts",
+] as const;
+const DEMO_CARRIER_NAMES = [
+  "Granite Logistics", "Skyway Carriers", "Ironwood Freight",
+  "BlueRidge Transport", "Cobalt Trucking", "Highmark Lines", "Greenfield Express",
+] as const;
+const DEMO_LANE_GROUP_NAMES = [
+  "Midwest → Southeast", "PNW → California", "Texas → Northeast",
+  "Southeast → Midwest", "California → Mountain",
+] as const;
+const DEMO_REP_EMAILS = [
+  "jamie@example.com", "riley@example.com", "morgan@example.com",
+  "sam@example.com", "avery@example.com",
+] as const;
+const DEMO_OUTCOME_REASON_CODES = [
+  "won_competitive", "won_capacity", "won_relationship",
+  "lost_price_high", "lost_service_concerns", "lost_timing", "lost_incumbent_won",
+  "no_response", "expired",
+] as const;
+const DEMO_SOURCE_REF_PATTERN = /^(EMAIL|TMS|CRM|MANUAL)-1\d{3}$/;
+
+export type DemoSeedPurgeSummary = {
+  scope: "org" | "all";
+  organizationId: string | null;
+  opportunitiesDeleted: number;
+  customersDeleted: number;
+  carriersDeleted: number;
+  repsDeleted: number;
+  laneGroupsDeleted: number;
+  outcomeReasonsDeleted: number;
+};
+
+// Build a SQL fragment of comma-separated string literals safe for inline IN ()
+// expansion. Inputs are compile-time constants (DEMO_*_NAMES) so SQL injection
+// is not a concern, but we still use sql.join with parameter binding so values
+// are passed via the driver rather than concatenated.
+function inListLiteral(values: readonly string[]) {
+  return sql.join(values.map((v) => sql`${v}`), sql`, `);
+}
+
+export async function purgeDemoSeed(orgId?: string): Promise<DemoSeedPurgeSummary> {
+  // 1) Delete opportunities matching the demo source_reference signature
+  //    (cascades quote_events). This is the only "by-signature" delete; the
+  //    dim tables below are deleted only when (a) name/code/email matches
+  //    a known demo value AND (b) the row is orphaned with no remaining
+  //    opportunity references. That orphan check protects any legitimate
+  //    real-world rows that happen to share a name/code with seeded data
+  //    (especially generic outcome reason codes like "no_response" or
+  //    "expired") from being deleted alongside the demo rows.
+  const oppsRes = await db.execute<{ id: string }>(sql`
+    DELETE FROM quote_opportunities
+     WHERE source_reference ~ ${DEMO_SOURCE_REF_PATTERN.source}
+       ${orgId ? sql`AND organization_id = ${orgId}` : sql``}
+    RETURNING id
+  `);
+  const opportunitiesDeleted = oppsRes.rows.length;
+
+  // 2) Drop now-orphaned demo customers.
+  const custRes = await db.execute<{ id: string }>(sql`
+    DELETE FROM quote_customers c
+     WHERE c.name IN (${inListLiteral(DEMO_CUSTOMER_NAMES)})
+       ${orgId ? sql`AND c.organization_id = ${orgId}` : sql``}
+       AND NOT EXISTS (SELECT 1 FROM quote_opportunities o WHERE o.customer_id = c.id)
+    RETURNING c.id
+  `);
+  const customersDeleted = custRes.rows.length;
+
+  // 3) Drop now-orphaned demo carriers (carrier_id is SET NULL on opps).
+  const carrierRes = await db.execute<{ id: string }>(sql`
+    DELETE FROM quote_carriers c
+     WHERE c.name IN (${inListLiteral(DEMO_CARRIER_NAMES)})
+       ${orgId ? sql`AND c.organization_id = ${orgId}` : sql``}
+       AND NOT EXISTS (SELECT 1 FROM quote_opportunities o WHERE o.carrier_id = c.id)
+    RETURNING c.id
+  `);
+  const carriersDeleted = carrierRes.rows.length;
+
+  // 4) Drop now-orphaned demo reps (rep_id is SET NULL on opps).
+  const repRes = await db.execute<{ id: string }>(sql`
+    DELETE FROM quote_reps r
+     WHERE r.email IN (${inListLiteral(DEMO_REP_EMAILS)})
+       ${orgId ? sql`AND r.organization_id = ${orgId}` : sql``}
+       AND NOT EXISTS (SELECT 1 FROM quote_opportunities o WHERE o.rep_id = r.id)
+    RETURNING r.id
+  `);
+  const repsDeleted = repRes.rows.length;
+
+  // 5) Drop now-orphaned demo lane groups (lane_group_id is SET NULL on opps).
+  const lgRes = await db.execute<{ id: string }>(sql`
+    DELETE FROM quote_lane_groups g
+     WHERE g.name IN (${inListLiteral(DEMO_LANE_GROUP_NAMES)})
+       ${orgId ? sql`AND g.organization_id = ${orgId}` : sql``}
+       AND NOT EXISTS (SELECT 1 FROM quote_opportunities o WHERE o.lane_group_id = g.id)
+    RETURNING g.id
+  `);
+  const laneGroupsDeleted = lgRes.rows.length;
+
+  // 6) Drop now-orphaned demo outcome reasons (outcome_reason_id is SET NULL).
+  //    The orphan guard is critical here because codes like "expired" and
+  //    "no_response" are generic enough that a real org may legitimately
+  //    use them on real opportunities — those rows must survive.
+  const reasonRes = await db.execute<{ id: string }>(sql`
+    DELETE FROM quote_outcome_reasons r
+     WHERE r.code IN (${inListLiteral(DEMO_OUTCOME_REASON_CODES)})
+       ${orgId ? sql`AND r.organization_id = ${orgId}` : sql``}
+       AND NOT EXISTS (SELECT 1 FROM quote_opportunities o WHERE o.outcome_reason_id = r.id)
+    RETURNING r.id
+  `);
+  const outcomeReasonsDeleted = reasonRes.rows.length;
+
+  return {
+    scope: orgId ? "org" : "all",
+    organizationId: orgId ?? null,
+    opportunitiesDeleted,
+    customersDeleted,
+    carriersDeleted,
+    repsDeleted,
+    laneGroupsDeleted,
+    outcomeReasonsDeleted,
+  };
+}
+
 function applyFilters(rows: QuoteOpportunity[], f: QuoteFilters): QuoteOpportunity[] {
   return rows.filter((r) => {
     if (f.customerId && r.customerId !== f.customerId) return false;
@@ -451,11 +585,57 @@ export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: 
     return 0;
   });
 
+  const page = enriched.slice(offset, offset + limit);
+  await attachSourceThreads(orgId, page);
   return {
-    rows: enriched.slice(offset, offset + limit),
+    rows: page,
     total: enriched.length,
     offset, limit,
   };
+}
+
+/**
+ * Task #526 — batch-resolve source thread / message IDs for the visible page
+ * of email-sourced quotes so the Quote Opportunities table can render a
+ * "Open in Conversations" deep-link in the source cell. Mutates `rows` in
+ * place and is a no-op when the page contains no email-sourced rows.
+ *
+ * The lookup mirrors `loadSourceMessage` (providerMessageId first, then
+ * internal id), but in two batched queries instead of N per-row queries.
+ */
+async function attachSourceThreads(orgId: string, rows: EnrichedQuote[]): Promise<void> {
+  const emailRows = rows.filter(r => r.source === "email" && r.sourceReference);
+  if (emailRows.length === 0) return;
+  const refs = Array.from(new Set(emailRows.map(r => r.sourceReference!).filter(Boolean)));
+  if (refs.length === 0) return;
+  const inList = sql.join(refs.map(v => sql`${v}`), sql`, `);
+  const matches = await db.execute<{
+    id: string;
+    thread_id: string | null;
+    provider_message_id: string | null;
+  }>(sql`
+    SELECT id, thread_id, provider_message_id
+      FROM email_messages
+     WHERE org_id = ${orgId}
+       AND (provider_message_id IN (${inList}) OR id IN (${inList}))
+  `);
+  const byProvider = new Map<string, { id: string; threadId: string | null }>();
+  const byId = new Map<string, { id: string; threadId: string | null }>();
+  for (const m of matches.rows) {
+    if (m.provider_message_id) byProvider.set(m.provider_message_id, { id: m.id, threadId: m.thread_id });
+    byId.set(m.id, { id: m.id, threadId: m.thread_id });
+  }
+  for (const r of emailRows) {
+    const ref = r.sourceReference!;
+    const hit = byProvider.get(ref) ?? byId.get(ref) ?? null;
+    if (hit) {
+      r.sourceMessageId = hit.id;
+      r.sourceThreadId = hit.threadId;
+    } else {
+      r.sourceMessageId = null;
+      r.sourceThreadId = null;
+    }
+  }
 }
 
 export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise<Snapshot> {
@@ -746,6 +926,15 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
   };
 }
 
+export type QuoteSourceMessage = {
+  messageId: string;
+  threadId: string | null;
+  providerMessageId: string | null;
+  subject: string | null;
+  fromEmail: string | null;
+  receivedAt: string | null;
+};
+
 export type QuoteDetail = {
   opp: QuoteOpportunity;
   events: typeof quoteEvents.$inferSelect[];
@@ -758,6 +947,10 @@ export type QuoteDetail = {
   relatedSameLaneGroup: QuoteOpportunity[];
   // Task #477 — populated when this quote auto-created a Lane Work Queue lane.
   lwqLaneId: string | null;
+  // Task #526 — when source = "email", expose the underlying email_messages
+  // row (looked up by sourceReference) so the drawer can deep-link to the
+  // Conversations tab on the right thread.
+  sourceMessage: QuoteSourceMessage | null;
 };
 
 export async function getQuoteDetail(orgId: string, quoteId: string): Promise<QuoteDetail | null> {
@@ -786,12 +979,53 @@ export async function getQuoteDetail(orgId: string, quoteId: string): Promise<Qu
     )).orderBy(desc(quoteOpportunities.requestDate)).limit(20) : Promise.resolve([]),
   ]);
   const lwqLane = await getLwqLaneForQuote(orgId, quoteId);
+  const sourceMessage = await loadSourceMessage(orgId, opp);
   return {
     opp, events, customer, rep, carrier, reason,
     relatedSameLane: sameLane.filter(r => r.id !== quoteId),
     relatedSameCustomer: sameCustomer.filter(r => r.id !== quoteId),
     relatedSameLaneGroup: sameLaneGroup.filter(r => r.id !== quoteId && r.originCity !== opp.originCity),
     lwqLaneId: lwqLane?.laneId ?? null,
+    sourceMessage,
+  };
+}
+
+/**
+ * Resolve the email_messages row that produced this quote so the drawer can
+ * deep-link to the Conversations tab. The sourceReference is set by
+ * `ingestQuoteFromEmail` to providerMessageId (preferred) or the internal
+ * id, so we try both lookups in order. Returns null for non-email quotes
+ * or when the underlying message has been purged.
+ */
+async function loadSourceMessage(
+  orgId: string,
+  opp: QuoteOpportunity,
+): Promise<QuoteSourceMessage | null> {
+  if (opp.source !== "email") return null;
+  const ref = opp.sourceReference;
+  if (!ref) return null;
+  const byProvider = await db.select().from(emailMessages).where(and(
+    eq(emailMessages.orgId, orgId),
+    eq(emailMessages.providerMessageId, ref),
+  )).limit(1);
+  let msg = byProvider[0] ?? null;
+  if (!msg) {
+    const byId = await db.select().from(emailMessages).where(and(
+      eq(emailMessages.orgId, orgId),
+      eq(emailMessages.id, ref),
+    )).limit(1);
+    msg = byId[0] ?? null;
+  }
+  if (!msg) return null;
+  return {
+    messageId: msg.id,
+    threadId: msg.threadId ?? null,
+    providerMessageId: msg.providerMessageId ?? null,
+    subject: msg.subject ?? null,
+    fromEmail: msg.fromEmail ?? null,
+    receivedAt: (msg.providerSentAt ?? msg.createdAt ?? null) instanceof Date
+      ? (msg.providerSentAt ?? msg.createdAt)!.toISOString()
+      : null,
   };
 }
 

@@ -7,9 +7,11 @@ import {
   createQuote, updateQuote,
   getPricingIntelligence,
   searchSpotQuote, laneAutocomplete,
+  purgeDemoSeed,
   type QuoteFilters, type ListSortKey,
 } from "../services/customerQuotes";
 import { syncQuoteOutcomesFromTms } from "../services/quoteTmsSync";
+import { backfillQuotesFromEmails, ensureEmailBackfill, getEmailBackfillStatus } from "../services/quoteEmailIngestion";
 import { QUOTE_OUTCOME_STATUSES, QUOTE_SOURCES, companies, contacts, quoteReps, spotQuoteCreateSchema } from "@shared/schema";
 import { getStaleQuoteFollowUps, clearStaleFollowUpCache } from "../services/staleQuoteFollowup";
 import { db } from "../storage";
@@ -87,6 +89,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       await ensureQuoteSeed(user.organizationId);
+      void ensureEmailBackfill(user.organizationId);
       const filters = parseFilters(req);
       const snap = await getSnapshot(user.organizationId, filters);
       res.json(snap);
@@ -102,6 +105,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       await ensureQuoteSeed(user.organizationId);
+      void ensureEmailBackfill(user.organizationId);
       const parsed = listQuerySchema.safeParse(req.query);
       if (!parsed.success) return res.status(400).json({ error: "Invalid query", issues: parsed.error.issues });
       const d = parsed.data;
@@ -210,6 +214,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const parsed = schema.safeParse(req.query);
       if (!parsed.success) return res.status(400).json({ error: "Invalid query", issues: parsed.error.issues });
       await ensureQuoteSeed(user.organizationId);
+      void ensureEmailBackfill(user.organizationId);
       const intel = await getPricingIntelligence(user.organizationId, parsed.data);
       res.json(intel);
     } catch (err) {
@@ -240,6 +245,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const parsed = schema.safeParse(req.query);
       if (!parsed.success) return res.status(400).json({ error: "Invalid query", issues: parsed.error.issues });
       await ensureQuoteSeed(user.organizationId);
+      void ensureEmailBackfill(user.organizationId);
       const result = await searchSpotQuote(user.organizationId, parsed.data);
       res.json(result);
     } catch (err) {
@@ -260,6 +266,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const parsed = schema.safeParse(req.query);
       if (!parsed.success) return res.json([]);
       await ensureQuoteSeed(user.organizationId);
+      void ensureEmailBackfill(user.organizationId);
       const items = await laneAutocomplete(user.organizationId, parsed.data.q, parsed.data.kind);
       res.json(items);
     } catch (err) {
@@ -496,6 +503,66 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       res.send(csv);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Internal error";
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Task #526 — observability for the lazy auto-backfill (and any admin-
+  // triggered run). Returns the most recent backfill state for the caller's
+  // org so ops can verify the Customer Quotes table is fully real-data-backed.
+  app.get("/api/customer-quotes/email-backfill-status", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const status = getEmailBackfillStatus(user.organizationId);
+      res.json({ ok: true, organizationId: user.organizationId, status });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
+      console.error("[customer-quotes] email-backfill-status error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Task #526 — admin-only endpoint to backfill quote_opportunities from
+  // historical inbound email_messages. Idempotent; safe to invoke repeatedly.
+  app.post("/api/customer-quotes/backfill-from-emails", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!["admin", "director", "sales_director"].includes(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const sinceDays = req.body?.sinceDays ? Number(req.body.sinceDays) : undefined;
+      const limit = req.body?.limit ? Number(req.body.limit) : undefined;
+      const summary = await backfillQuotesFromEmails(user.organizationId, {
+        sinceDays: Number.isFinite(sinceDays) ? sinceDays : undefined,
+        limit: Number.isFinite(limit) ? limit : undefined,
+      });
+      res.json({ ok: true, summary });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
+      console.error("[customer-quotes] backfill error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Task #526 — admin-only endpoint to purge demo seed rows that may have
+  // leaked into a live org (e.g., when QUOTE_DEMO_SEED_ENABLED was briefly on).
+  // Idempotent. Defaults to the caller's org; pass { allOrgs: true } to sweep
+  // every org (admin only).
+  app.post("/api/customer-quotes/purge-demo-seed", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!["admin", "director", "sales_director"].includes(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const allOrgs = Boolean(req.body?.allOrgs) && user.role === "admin";
+      const summary = await purgeDemoSeed(allOrgs ? undefined : user.organizationId);
+      res.json({ ok: true, summary });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
+      console.error("[customer-quotes] purge-demo-seed error:", err);
       res.status(500).json({ error: msg });
     }
   });

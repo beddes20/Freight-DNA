@@ -437,7 +437,7 @@ function LaneInput({
 
   return (
     <div className="flex flex-col gap-1 relative">
-      <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium flex items-center gap-1">
+      <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1">
         <MapPin className="h-3 w-3" />{label}
       </span>
       <div className="flex gap-1.5">
@@ -461,7 +461,7 @@ function LaneInput({
             }
           }}
           placeholder="City"
-          className="h-10 w-[200px] bg-zinc-900 border-zinc-700 text-sm text-zinc-100 placeholder:text-zinc-500 focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
+          className="h-10 w-[200px] bg-card border-border text-sm text-foreground placeholder:text-muted-foreground focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
           data-testid={testIdCity}
           autoComplete="off"
         />
@@ -471,17 +471,17 @@ function LaneInput({
           onChange={e => onStateChange(e.target.value)}
           onBlur={onStateBlur}
           placeholder="ST"
-          className="h-10 w-[60px] bg-zinc-900 border-zinc-700 text-sm text-zinc-100 placeholder:text-zinc-500 uppercase tracking-wider text-center focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
+          className="h-10 w-[60px] bg-card border-border text-sm text-foreground placeholder:text-muted-foreground uppercase tracking-wider text-center focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
           maxLength={20}
           data-testid={testIdState}
           autoComplete="off"
         />
       </div>
       {visible && (
-        <div className="absolute top-full left-0 mt-1 z-30 w-[300px] rounded-[4px] border border-zinc-700 bg-zinc-950 shadow-2xl max-h-[320px] overflow-y-auto" data-testid={`autocomplete-${kind}`}>
+        <div className="absolute top-full left-0 mt-1 z-30 w-[300px] rounded-[4px] border border-border bg-background shadow-2xl max-h-[320px] overflow-y-auto" data-testid={`autocomplete-${kind}`}>
           {historyList.length > 0 && (
             <>
-              <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-amber-300/80 border-b border-zinc-800 bg-zinc-900">
+              <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-amber-300/80 border-b border-border bg-card">
                 Recent · {historyList.length}
               </div>
               {historyList.map((it, i) => {
@@ -492,11 +492,11 @@ function LaneInput({
                     type="button"
                     onMouseDown={(e) => { e.preventDefault(); pick(it); }}
                     onMouseEnter={() => setActiveIdx(idx)}
-                    className={`w-full flex items-center justify-between px-3 py-2 text-left text-xs border-l-2 ${idx === activeIdx ? "bg-zinc-800 border-amber-400" : "border-transparent hover:bg-zinc-900"}`}
+                    className={`w-full flex items-center justify-between px-3 py-2 text-left text-xs border-l-2 ${idx === activeIdx ? "bg-muted border-amber-400" : "border-transparent hover:bg-card"}`}
                     data-testid={`autocomplete-item-${kind}-${it.city}-${it.state}`}
                   >
-                    <span className="text-zinc-100 flex items-center gap-1.5">
-                      <MapPin className="h-3 w-3 text-amber-400/70" />{it.city}, <span className="text-zinc-400">{it.state}</span>
+                    <span className="text-foreground flex items-center gap-1.5">
+                      <MapPin className="h-3 w-3 text-amber-400/70" />{it.city}, <span className="text-muted-foreground">{it.state}</span>
                     </span>
                     <span className="text-[10px] text-amber-300/80 tabular-nums">
                       {it.count > 0 ? `${it.count} quote${it.count === 1 ? "" : "s"}` : "recent"}
@@ -508,7 +508,7 @@ function LaneInput({
           )}
           {cityList.length > 0 && (
             <>
-              <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-zinc-500 border-y border-zinc-800 bg-zinc-900">
+              <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-muted-foreground border-y border-border bg-card">
                 Cities · {cityList.length}
               </div>
               {cityList.map((it, i) => {
@@ -519,21 +519,21 @@ function LaneInput({
                     type="button"
                     onMouseDown={(e) => { e.preventDefault(); pick(it); }}
                     onMouseEnter={() => setActiveIdx(idx)}
-                    className={`w-full flex items-center justify-between px-3 py-2 text-left text-xs border-l-2 ${idx === activeIdx ? "bg-zinc-800 border-amber-400" : "border-transparent hover:bg-zinc-900"}`}
+                    className={`w-full flex items-center justify-between px-3 py-2 text-left text-xs border-l-2 ${idx === activeIdx ? "bg-muted border-amber-400" : "border-transparent hover:bg-card"}`}
                     data-testid={`autocomplete-item-${kind}-${it.city}-${it.state}`}
                   >
-                    <span className="text-zinc-100 flex items-center gap-1.5">
-                      <MapPin className="h-3 w-3 text-zinc-500" />{it.city}, <span className="text-zinc-400">{it.state}</span>
+                    <span className="text-foreground flex items-center gap-1.5">
+                      <MapPin className="h-3 w-3 text-muted-foreground" />{it.city}, <span className="text-muted-foreground">{it.state}</span>
                     </span>
-                    <span className="text-[10px] text-zinc-500 tabular-nums">city</span>
+                    <span className="text-[10px] text-muted-foreground tabular-nums">city</span>
                   </button>
                 );
               })}
             </>
           )}
           {showNoMatches && (
-            <div className="px-3 py-2.5 text-[11px] text-zinc-400" data-testid={`autocomplete-empty-${kind}`}>
-              No matches — press <kbd className="px-1 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 text-[9px] mx-0.5">Enter</kbd> to use as-is
+            <div className="px-3 py-2.5 text-[11px] text-muted-foreground" data-testid={`autocomplete-empty-${kind}`}>
+              No matches — press <kbd className="px-1 py-0.5 rounded bg-muted border border-border text-foreground text-[9px] mx-0.5">Enter</kbd> to use as-is
             </div>
           )}
         </div>
@@ -546,14 +546,14 @@ function SectionCard({ title, icon, children, testId, action }: {
   title: string; icon?: React.ReactNode; children: React.ReactNode; testId: string; action?: React.ReactNode;
 }): JSX.Element {
   return (
-    <Card className="bg-zinc-900 border-zinc-800 rounded-[4px]" data-testid={testId}>
-      <CardHeader className="py-2.5 px-3 flex flex-row items-center justify-between border-b border-zinc-800">
-        <CardTitle className="text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+    <Card className="bg-card border-border rounded-[4px]" data-testid={testId}>
+      <CardHeader className="py-2.5 px-3 flex flex-row items-center justify-between border-b border-border">
+        <CardTitle className="text-xs uppercase tracking-wider text-foreground flex items-center gap-1.5">
           {icon}{title}
         </CardTitle>
         {action}
       </CardHeader>
-      <CardContent className="p-3 text-xs text-zinc-200">{children}</CardContent>
+      <CardContent className="p-3 text-xs text-foreground">{children}</CardContent>
     </Card>
   );
 }
@@ -561,9 +561,9 @@ function SectionCard({ title, icon, children, testId, action }: {
 function ConfidenceDot({ confidence }: { confidence: string }): JSX.Element {
   const map: Record<string, string> = {
     high: "bg-emerald-400", medium: "bg-amber-400",
-    low: "bg-orange-400", insufficient_history: "bg-zinc-500", no_benchmark: "bg-zinc-500",
+    low: "bg-orange-400", insufficient_history: "bg-muted-foreground", no_benchmark: "bg-muted-foreground",
   };
-  return <span className={`inline-block w-1.5 h-1.5 rounded-full ${map[confidence] ?? "bg-zinc-500"}`} />;
+  return <span className={`inline-block w-1.5 h-1.5 rounded-full ${map[confidence] ?? "bg-muted-foreground"}`} />;
 }
 
 export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onPickCustomer }: {
@@ -726,26 +726,26 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
       {/* Sticky search bar — full form OR compact pinned strip */}
       {hasResults ? (
         <div
-          className="sticky top-[124px] z-20 -mx-6 px-6 py-2 bg-[#0A0A0A]/95 backdrop-blur border-y border-zinc-800 shadow-md"
+          className="-mx-6 px-6 py-2 bg-card/60 border-y border-border"
           data-testid="spot-quote-search-bar-compact"
         >
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-2">
               <Search className="h-3.5 w-3.5 text-amber-400" />
-              <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Searching</span>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Searching</span>
             </div>
-            <div className="flex items-center gap-1.5 text-sm font-semibold text-zinc-100 tabular-nums">
-              <MapPin className="h-3.5 w-3.5 text-zinc-500" />
+            <div className="flex items-center gap-1.5 text-sm font-semibold text-foreground tabular-nums">
+              <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
               {activeQuery!.pickupCity}, {activeQuery!.pickupState}
               <ChevronRight className="h-3.5 w-3.5 text-amber-400" />
               {activeQuery!.deliveryCity}, {activeQuery!.deliveryState}
             </div>
-            <span className="text-[11px] px-2 py-0.5 rounded-[4px] bg-zinc-800 text-zinc-200 border border-zinc-700 inline-flex items-center gap-1">
-              <Truck className="h-3 w-3 text-zinc-400" />{activeQuery!.equipment ?? "Any"}
+            <span className="text-[11px] px-2 py-0.5 rounded-[4px] bg-muted text-foreground border border-border inline-flex items-center gap-1">
+              <Truck className="h-3 w-3 text-muted-foreground" />{activeQuery!.equipment ?? "Any"}
             </span>
             {activeQuery!.pickupDate && (
-              <span className="text-[11px] px-2 py-0.5 rounded-[4px] bg-zinc-800 text-zinc-200 border border-zinc-700 inline-flex items-center gap-1">
-                <Calendar className="h-3 w-3 text-zinc-400" />{activeQuery!.pickupDate}
+              <span className="text-[11px] px-2 py-0.5 rounded-[4px] bg-muted text-foreground border border-border inline-flex items-center gap-1">
+                <Calendar className="h-3 w-3 text-muted-foreground" />{activeQuery!.pickupDate}
               </span>
             )}
             {data?.resolvedCustomer && (
@@ -754,13 +754,13 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
               </span>
             )}
             {(activeQuery!.lookbackDays || activeQuery!.exactOnly || activeQuery!.includeSimilar === false) && (
-              <span className="text-[10px] text-zinc-500">
+              <span className="text-[10px] text-muted-foreground">
                 {activeQuery!.lookbackDays ? `· last ${activeQuery!.lookbackDays}d` : ""}
                 {activeQuery!.exactOnly ? " · exact only" : activeQuery!.includeSimilar === false ? " · no similar" : ""}
               </span>
             )}
             {searchedAt && (
-              <span className="text-[10px] text-zinc-500 ml-1">
+              <span className="text-[10px] text-muted-foreground ml-1">
                 · {searchedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
             )}
@@ -771,17 +771,17 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                 <SlidersHorizontal className="h-3 w-3 mr-1" /> Edit search
               </Button>
               <Button size="sm" variant="ghost" onClick={rerunSearch}
-                className="h-7 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 text-[11px] px-2"
+                className="h-7 text-muted-foreground hover:text-foreground hover:bg-muted text-[11px] px-2"
                 data-testid="button-spot-rerun">
                 <RefreshCw className={`h-3 w-3 mr-1 ${result.isFetching ? "animate-spin" : ""}`} /> Rerun
               </Button>
               <Button size="sm" variant="ghost" onClick={copyLane}
-                className="h-7 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 text-[11px] px-2"
+                className="h-7 text-muted-foreground hover:text-foreground hover:bg-muted text-[11px] px-2"
                 data-testid="button-spot-copy">
                 <Copy className="h-3 w-3 mr-1" /> Copy
               </Button>
               <Button size="sm" variant="ghost" onClick={clearAll}
-                className="h-7 text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 text-[11px] px-2"
+                className="h-7 text-muted-foreground hover:text-foreground hover:bg-muted text-[11px] px-2"
                 data-testid="button-spot-clear">
                 <X className="h-3 w-3 mr-1" /> Clear
               </Button>
@@ -790,7 +790,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
         </div>
       ) : (
       <div
-        className="sticky top-[124px] z-20 -mx-6 px-6 py-4 bg-gradient-to-b from-[#0A0A0A] to-[#0A0A0A]/95 backdrop-blur border-y border-zinc-800 shadow-lg"
+        className="-mx-6 px-6 py-4 bg-card/40 border-y border-border"
         onKeyDown={onKeyDown}
         data-testid="spot-quote-search-bar"
       >
@@ -798,10 +798,10 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
           <div className="h-6 w-6 rounded-[4px] bg-amber-500/15 border border-amber-500/30 flex items-center justify-center">
             <Search className="h-3.5 w-3.5 text-amber-400" />
           </div>
-          <span className="text-base font-semibold text-zinc-100 tracking-tight">Spot Quote Search</span>
-          <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Pickup → Delivery · Mode · Date</span>
-          <span className="ml-auto text-[10px] text-zinc-500 hidden md:inline">
-            Press <kbd className="px-1 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 text-[9px]">Enter</kbd> to search · <kbd className="px-1 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 text-[9px]">Esc</kbd> to clear
+          <span className="text-base font-semibold text-foreground tracking-tight">Spot Quote Search</span>
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Pickup → Delivery · Mode · Date</span>
+          <span className="ml-auto text-[10px] text-muted-foreground hidden md:inline">
+            Press <kbd className="px-1 py-0.5 rounded bg-muted border border-border text-foreground text-[9px]">Enter</kbd> to search · <kbd className="px-1 py-0.5 rounded bg-muted border border-border text-foreground text-[9px]">Esc</kbd> to clear
           </span>
         </div>
         <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
@@ -816,24 +816,24 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             cityRef={deliveryCityRef} stateRef={deliveryStateRef}
             onAdvance={() => dateRef.current?.focus()} />
           <div className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium flex items-center gap-1"><Truck className="h-3 w-3" /> Mode</span>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1"><Truck className="h-3 w-3" /> Mode</span>
             <Select value={equipment} onValueChange={setEquipment}>
-              <SelectTrigger className="h-10 w-[130px] bg-zinc-900 border-zinc-700 text-sm text-zinc-100 [&>span]:text-zinc-100" data-testid="select-spot-equipment"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-10 w-[130px] bg-card border-border text-sm text-foreground [&>span]:text-foreground" data-testid="select-spot-equipment"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {EQUIPMENT_OPTIONS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium flex items-center gap-1"><Calendar className="h-3 w-3" /> Pickup date</span>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1"><Calendar className="h-3 w-3" /> Pickup date</span>
             <Input ref={dateRef} type="date" value={pickupDate} onChange={e => setPickupDate(e.target.value)}
-              className="h-10 w-[160px] bg-zinc-900 border-zinc-700 text-sm text-zinc-100 placeholder:text-zinc-500 [color-scheme:dark] focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
+              className="h-10 w-[160px] bg-card border-border text-sm text-foreground placeholder:text-muted-foreground dark:[color-scheme:dark] focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
               data-testid="input-spot-pickup-date" />
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium flex items-center gap-1"><Users className="h-3 w-3" /> Customer (optional)</span>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1"><Users className="h-3 w-3" /> Customer (optional)</span>
             <Select value={customerId || "_any"} onValueChange={v => setCustomerId(v === "_any" ? "" : v)}>
-              <SelectTrigger className="h-10 w-[220px] bg-zinc-900 border-zinc-700 text-sm text-zinc-100 [&>span]:text-zinc-100 data-[placeholder]:text-zinc-500" data-testid="select-spot-customer"><SelectValue placeholder="Any customer" /></SelectTrigger>
+              <SelectTrigger className="h-10 w-[220px] bg-card border-border text-sm text-foreground [&>span]:text-foreground data-[placeholder]:text-muted-foreground" data-testid="select-spot-customer"><SelectValue placeholder="Any customer" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="_any">Any customer</SelectItem>
                 {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
@@ -844,7 +844,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             ref={searchBtnRef}
             onClick={submit}
             disabled={!canSearch || result.isFetching}
-            className="h-10 bg-[#FFC333] hover:bg-amber-400 text-zinc-950 font-semibold rounded-[4px] px-5 shadow-sm shadow-amber-500/20"
+            className="h-10 bg-[#FFC333] hover:bg-amber-400 text-amber-950 font-semibold rounded-[4px] px-5 shadow-sm shadow-amber-500/20"
             data-testid="button-spot-search"
           >
             <Search className="h-4 w-4 mr-2" /> Search
@@ -856,7 +856,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
           <CollapsibleTrigger asChild>
             <button
               type="button"
-              className="text-[11px] uppercase tracking-wider text-zinc-400 hover:text-zinc-100 inline-flex items-center gap-1"
+              className="text-[11px] uppercase tracking-wider text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
               data-testid="button-spot-advanced-toggle"
             >
               <SlidersHorizontal className="h-3 w-3" />
@@ -865,13 +865,13 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             </button>
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-2" data-testid="spot-advanced-details">
-            <div className="rounded-[4px] border border-zinc-800 bg-zinc-900/60 p-3 space-y-3">
+            <div className="rounded-[4px] border border-border bg-card/60 p-3 space-y-3">
               {/* Search behavior toggles */}
               <div className="flex flex-wrap items-end gap-4">
                 <div className="flex flex-col gap-1">
-                  <span className="text-[10px] uppercase tracking-wider text-zinc-500">Lookback</span>
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Lookback</span>
                   <Select value={lookbackDays} onValueChange={setLookbackDays}>
-                    <SelectTrigger className="h-8 w-[150px] bg-zinc-900 border-zinc-700 text-xs text-zinc-100 [&>span]:text-zinc-100" data-testid="select-spot-lookback"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="h-8 w-[150px] bg-card border-border text-xs text-foreground [&>span]:text-foreground" data-testid="select-spot-lookback"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {LOOKBACK_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
                     </SelectContent>
@@ -879,20 +879,20 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                 </div>
                 <div className="flex items-center gap-2">
                   <Switch id="spot-exact-only" checked={exactOnly} onCheckedChange={(v) => { setExactOnly(v); if (v) setIncludeSimilar(false); }} data-testid="switch-spot-exact-only" />
-                  <Label htmlFor="spot-exact-only" className="text-xs text-zinc-300">Exact matches only</Label>
+                  <Label htmlFor="spot-exact-only" className="text-xs text-foreground">Exact matches only</Label>
                 </div>
                 <div className="flex items-center gap-2">
                   <Switch id="spot-include-similar" checked={includeSimilar} onCheckedChange={(v) => { setIncludeSimilar(v); if (v) setExactOnly(false); }} data-testid="switch-spot-include-similar" />
-                  <Label htmlFor="spot-include-similar" className="text-xs text-zinc-300">Include similar lanes</Label>
+                  <Label htmlFor="spot-include-similar" className="text-xs text-foreground">Include similar lanes</Label>
                 </div>
                 {/* Task #514 — Tiered match-mode segmented toggle */}
                 <div className="flex flex-col gap-1">
-                  <span className="text-[10px] uppercase tracking-wider text-zinc-500">Match mode</span>
-                  <div className="inline-flex rounded-[4px] border border-zinc-700 bg-zinc-900 overflow-hidden" role="group" data-testid="segmented-spot-match-mode">
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Match mode</span>
+                  <div className="inline-flex rounded-[4px] border border-border bg-card overflow-hidden" role="group" data-testid="segmented-spot-match-mode">
                     <button
                       type="button"
                       onClick={() => { setMatchMode("relaxed"); setActiveQuery(q => q ? { ...q, matchMode: "relaxed" } : q); }}
-                      className={`px-2.5 h-8 text-[11px] font-medium transition ${matchMode === "relaxed" ? "bg-amber-500/20 text-amber-200 border-r border-amber-500/30" : "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border-r border-zinc-700"}`}
+                      className={`px-2.5 h-8 text-[11px] font-medium transition ${matchMode === "relaxed" ? "bg-amber-500/20 text-amber-200 border-r border-amber-500/30" : "text-muted-foreground hover:text-foreground hover:bg-muted border-r border-border"}`}
                       data-testid="button-spot-match-mode-relaxed"
                       title="Walk the full ladder: exact → market → state → reverse → corridor"
                     >
@@ -901,7 +901,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                     <button
                       type="button"
                       onClick={() => { setMatchMode("strict"); setActiveQuery(q => q ? { ...q, matchMode: "strict" } : q); }}
-                      className={`px-2.5 h-8 text-[11px] font-medium transition ${matchMode === "strict" ? "bg-amber-500/20 text-amber-200" : "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"}`}
+                      className={`px-2.5 h-8 text-[11px] font-medium transition ${matchMode === "strict" ? "bg-amber-500/20 text-amber-200" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
                       data-testid="button-spot-match-mode-strict"
                       title="Only exact lane and same-state-pair matches"
                     >
@@ -912,22 +912,22 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
               </div>
 
               {/* Freight qualification (informational; tags the search context) */}
-              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2 pt-2 border-t border-zinc-800">
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2 pt-2 border-t border-border">
                 <AdvField label="Weight (lbs)">
                   <Input value={adv.weight ?? ""} onChange={e => setAdv(a => ({ ...a, weight: e.target.value }))}
-                    placeholder="e.g. 42000" className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 placeholder:text-zinc-500" data-testid="input-spot-weight" />
+                    placeholder="e.g. 42000" className="h-8 bg-card border-border text-xs text-foreground placeholder:text-muted-foreground" data-testid="input-spot-weight" />
                 </AdvField>
                 <AdvField label="Commodity">
                   <Input value={adv.commodity ?? ""} onChange={e => setAdv(a => ({ ...a, commodity: e.target.value }))}
-                    placeholder="e.g. Steel coils" className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 placeholder:text-zinc-500" data-testid="input-spot-commodity" />
+                    placeholder="e.g. Steel coils" className="h-8 bg-card border-border text-xs text-foreground placeholder:text-muted-foreground" data-testid="input-spot-commodity" />
                 </AdvField>
                 <AdvField label="Pallets">
                   <Input value={adv.pallets ?? ""} onChange={e => setAdv(a => ({ ...a, pallets: e.target.value }))}
-                    placeholder="e.g. 26" className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 placeholder:text-zinc-500" data-testid="input-spot-pallets" />
+                    placeholder="e.g. 26" className="h-8 bg-card border-border text-xs text-foreground placeholder:text-muted-foreground" data-testid="input-spot-pallets" />
                 </AdvField>
                 <AdvField label="TL type">
                   <Select value={adv.truckloadType ?? "_unset"} onValueChange={v => setAdv(a => ({ ...a, truckloadType: v === "_unset" ? undefined : v }))}>
-                    <SelectTrigger className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 placeholder:text-zinc-500" data-testid="select-spot-tl-type"><SelectValue placeholder="Select" /></SelectTrigger>
+                    <SelectTrigger className="h-8 bg-card border-border text-xs text-foreground placeholder:text-muted-foreground" data-testid="select-spot-tl-type"><SelectValue placeholder="Select" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="_unset">—</SelectItem>
                       {TRUCKLOAD_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
@@ -936,27 +936,27 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                 </AdvField>
                 <AdvField label="Special handling">
                   <Input value={adv.specialHandling ?? ""} onChange={e => setAdv(a => ({ ...a, specialHandling: e.target.value }))}
-                    placeholder="Tarps, straps…" className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 placeholder:text-zinc-500" data-testid="input-spot-special" />
+                    placeholder="Tarps, straps…" className="h-8 bg-card border-border text-xs text-foreground placeholder:text-muted-foreground" data-testid="input-spot-special" />
                 </AdvField>
                 <AdvField label="Access notes">
                   <Input value={adv.accessNotes ?? ""} onChange={e => setAdv(a => ({ ...a, accessNotes: e.target.value }))}
-                    placeholder="Residential, jobsite…" className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 placeholder:text-zinc-500" data-testid="input-spot-access" />
+                    placeholder="Residential, jobsite…" className="h-8 bg-card border-border text-xs text-foreground placeholder:text-muted-foreground" data-testid="input-spot-access" />
                 </AdvField>
               </div>
-              <div className="flex flex-wrap items-center gap-4 pt-2 border-t border-zinc-800">
+              <div className="flex flex-wrap items-center gap-4 pt-2 border-t border-border">
                 <div className="flex items-center gap-2">
                   <Switch id="spot-hazmat" checked={!!adv.hazmat} onCheckedChange={(v) => setAdv(a => ({ ...a, hazmat: v }))} data-testid="switch-spot-hazmat" />
-                  <Label htmlFor="spot-hazmat" className="text-xs text-zinc-300">Hazmat</Label>
+                  <Label htmlFor="spot-hazmat" className="text-xs text-foreground">Hazmat</Label>
                 </div>
                 <div className="flex items-center gap-2">
                   <Switch id="spot-temp" checked={!!adv.tempRequired} onCheckedChange={(v) => setAdv(a => ({ ...a, tempRequired: v }))} data-testid="switch-spot-temp" />
-                  <Label htmlFor="spot-temp" className="text-xs text-zinc-300">Temp controlled</Label>
+                  <Label htmlFor="spot-temp" className="text-xs text-foreground">Temp controlled</Label>
                 </div>
                 <div className="flex items-center gap-2">
                   <Switch id="spot-appt" checked={!!adv.appointmentRequired} onCheckedChange={(v) => setAdv(a => ({ ...a, appointmentRequired: v }))} data-testid="switch-spot-appt" />
-                  <Label htmlFor="spot-appt" className="text-xs text-zinc-300">Appointment required</Label>
+                  <Label htmlFor="spot-appt" className="text-xs text-foreground">Appointment required</Label>
                 </div>
-                <div className="ml-auto text-[10px] text-zinc-500">
+                <div className="ml-auto text-[10px] text-muted-foreground">
                   Qualification details tag the search context but do not yet filter historical records.
                 </div>
               </div>
@@ -966,10 +966,10 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
 
         {recents.length > 0 && !activeQuery && (
           <div className="flex items-center gap-2 mt-2 flex-wrap">
-            <span className="text-[10px] uppercase tracking-wider text-zinc-500">Recent:</span>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Recent:</span>
             {recents.map(r => (
               <button key={r.savedAt} onClick={() => applyRecent(r)}
-                className="text-[11px] px-2 py-0.5 rounded-[4px] bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700"
+                className="text-[11px] px-2 py-0.5 rounded-[4px] bg-muted hover:bg-muted text-foreground border border-border"
                 data-testid={`button-spot-recent-${r.savedAt}`}>
                 {r.label}
               </button>
@@ -981,13 +981,13 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
 
       {/* Results workspace */}
       {!activeQuery && (
-        <Card className="bg-zinc-900/40 border-zinc-800 border-dashed rounded-[4px]" data-testid="spot-empty-state">
-          <CardContent className="p-10 text-center text-zinc-400 text-sm">
-            <div className="mx-auto h-12 w-12 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-3">
-              <Search className="h-5 w-5 text-zinc-600" />
+        <Card className="bg-card/40 border-border border-dashed rounded-[4px]" data-testid="spot-empty-state">
+          <CardContent className="p-10 text-center text-muted-foreground text-sm">
+            <div className="mx-auto h-12 w-12 rounded-full bg-card border border-border flex items-center justify-center mb-3">
+              <Search className="h-5 w-5 text-muted-foreground" />
             </div>
-            <div className="text-zinc-200 font-semibold mb-1">Start with a lane</div>
-            <div className="text-xs text-zinc-500 max-w-[480px] mx-auto leading-relaxed">
+            <div className="text-foreground font-semibold mb-1">Start with a lane</div>
+            <div className="text-xs text-muted-foreground max-w-[480px] mx-auto leading-relaxed">
               Enter pickup and delivery to see exact-match history, similar lanes, customer signals, carrier buy-history, internal rep variance, freight attractiveness and pricing guidance — all in one view.
             </div>
           </CardContent>
@@ -1017,41 +1017,41 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
       {activeQuery && result.isLoading && (
         <div className="space-y-3" data-testid="spot-results-loading">
           {/* Summary strip */}
-          <Skeleton className="h-12 w-full bg-zinc-900 rounded-[4px]" />
+          <Skeleton className="h-12 w-full bg-card rounded-[4px]" />
           {/* Collapsed lane-stats bar */}
-          <Skeleton className="h-8 w-full bg-zinc-900 rounded-[4px]" />
+          <Skeleton className="h-8 w-full bg-card rounded-[4px]" />
           {/* 4-zone grid mirror */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3" data-testid="spot-results-loading-zones">
-            <Skeleton className="h-72 w-full bg-zinc-900 rounded-[4px]" />
-            <Skeleton className="h-72 w-full bg-zinc-900 rounded-[4px]" />
-            <Skeleton className="h-64 w-full bg-zinc-900 rounded-[4px]" />
-            <Skeleton className="h-64 w-full bg-zinc-900 rounded-[4px]" />
+            <Skeleton className="h-72 w-full bg-card rounded-[4px]" />
+            <Skeleton className="h-72 w-full bg-card rounded-[4px]" />
+            <Skeleton className="h-64 w-full bg-card rounded-[4px]" />
+            <Skeleton className="h-64 w-full bg-card rounded-[4px]" />
           </div>
           {/* Below-fold sections */}
-          <Skeleton className="h-40 w-full bg-zinc-900 rounded-[4px]" />
+          <Skeleton className="h-40 w-full bg-card rounded-[4px]" />
         </div>
       )}
 
       {activeQuery && data && (
         <div className="space-y-3" data-testid="spot-results">
           {/* 1. Result summary strip */}
-          <div className="rounded-[4px] border border-zinc-800 bg-gradient-to-r from-zinc-900 to-zinc-900/60 px-3 py-2 flex items-center gap-4 flex-wrap" data-testid="spot-section-summary">
+          <div className="rounded-[4px] border border-border bg-card px-3 py-2 flex items-center gap-4 flex-wrap" data-testid="spot-section-summary">
             <div className="flex items-center gap-1.5 text-[11px]">
-              <span className="text-[10px] uppercase tracking-wider text-zinc-500">Found</span>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Found</span>
               <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 font-semibold tabular-nums">{data.kpis.exactCount} exact</span>
               <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-300 border border-blue-500/30 font-semibold tabular-nums">{data.kpis.similarCount} similar</span>
-              <span className="text-zinc-500">·</span>
-              <span className="text-zinc-300 tabular-nums">{data.kpis.customersOnLane} customer{data.kpis.customersOnLane === 1 ? "" : "s"}</span>
+              <span className="text-muted-foreground">·</span>
+              <span className="text-foreground tabular-nums">{data.kpis.customersOnLane} customer{data.kpis.customersOnLane === 1 ? "" : "s"}</span>
               {data.kpis.pendingCount > 0 && (
                 <>
-                  <span className="text-zinc-500">·</span>
+                  <span className="text-muted-foreground">·</span>
                   <span className="text-amber-300 tabular-nums">{data.kpis.pendingCount} pending</span>
                 </>
               )}
             </div>
             <div className="flex items-center gap-1.5 text-[11px]">
-              <span className="text-[10px] uppercase tracking-wider text-zinc-500">Win rate</span>
-              <span className="text-zinc-100 font-semibold tabular-nums">{fmtPct(data.kpis.winRate)}</span>
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Win rate</span>
+              <span className="text-foreground font-semibold tabular-nums">{fmtPct(data.kpis.winRate)}</span>
             </div>
             <div className="flex items-center gap-1.5 text-[11px]">
               <KpiBadgeInline value={data.kpis.confidence} freshness={data.kpis.freshnessLabel} />
@@ -1095,7 +1095,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                 )}
                 {data.corridorPattern.responsibleContact && (
                   <span
-                    className="ml-1 text-[10px] px-1 rounded bg-zinc-800 text-zinc-300 border border-zinc-700"
+                    className="ml-1 text-[10px] px-1 rounded bg-muted text-foreground border border-border"
                     data-testid="chip-spot-corridor-responsible"
                   >
                     {data.corridorPattern.responsibleContact.contactName.split(/\s+/)[0]}
@@ -1104,13 +1104,13 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
               </a>
             )}
             {!data.marketStatus.available && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-[4px] bg-zinc-800 text-zinc-400 border border-zinc-700 inline-flex items-center gap-1" data-testid="chip-spot-market-unavailable">
+              <span className="text-[10px] px-1.5 py-0.5 rounded-[4px] bg-muted text-muted-foreground border border-border inline-flex items-center gap-1" data-testid="chip-spot-market-unavailable">
                 <AlertTriangle className="h-3 w-3" /> Market data unavailable
               </span>
             )}
             <div className="ml-auto">
               <Button size="sm" variant="outline" onClick={() => onApplyLaneFilter(`${data.query.pickupCity} ${data.query.deliveryCity}`)}
-                className="h-7 border-zinc-700 hover:bg-zinc-800 text-[11px] px-2.5" data-testid="button-spot-apply-filter">
+                className="h-7 border-border hover:bg-muted text-[11px] px-2.5" data-testid="button-spot-apply-filter">
                 Filter table by this lane
               </Button>
             </div>
@@ -1187,13 +1187,13 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
               </span>
             ) : undefined}>
             {data.customerPanel.length === 0 ? (
-              <div className="text-zinc-500 text-center py-4">
-                <Users className="h-5 w-5 mx-auto mb-1.5 text-zinc-700" />
+              <div className="text-muted-foreground text-center py-4">
+                <Users className="h-5 w-5 mx-auto mb-1.5 text-muted-foreground" />
                 No customer history on this lane yet — this lane is a clean-slate opportunity.
               </div>
             ) : (
               <table className="w-full text-xs">
-                <thead className="text-zinc-500 text-[10px] uppercase tracking-wider">
+                <thead className="text-muted-foreground text-[10px] uppercase tracking-wider">
                   <tr><th className="text-left py-1">Customer</th><th>Quotes</th><th>Win rate</th><th>Avg quoted</th><th>Avg margin</th><th>Last</th><th className="text-left">Top carriers</th></tr>
                 </thead>
                 <tbody>
@@ -1201,9 +1201,9 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                     const isResolved = data.resolvedCustomer?.id === c.customerId;
                     return (
                       <tr key={c.customerId}
-                        className={`border-t border-zinc-800/60 hover:bg-zinc-800/40 cursor-pointer ${isResolved ? "bg-amber-500/[0.06]" : ""}`}
+                        className={`border-t border-border/60 hover:bg-muted/40 cursor-pointer ${isResolved ? "bg-amber-500/[0.06]" : ""}`}
                         onClick={() => onPickCustomer(c.customerId)} data-testid={`spot-customer-row-${c.customerId}`}>
-                        <td className={`py-1 font-medium ${isResolved ? "text-amber-200 border-l-2 border-amber-400 pl-2" : "text-zinc-100"}`}>
+                        <td className={`py-1 font-medium ${isResolved ? "text-amber-200 border-l-2 border-amber-400 pl-2" : "text-foreground"}`}>
                           {c.customerName}
                           {isResolved && <span className="ml-1.5 text-[9px] uppercase tracking-wider text-amber-400">selected</span>}
                         </td>
@@ -1211,8 +1211,8 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                         <td className="text-center tabular-nums">{fmtPct(c.winRate)}</td>
                         <td className="text-center tabular-nums">{fmtMoney(c.avgQuoted)}</td>
                         <td className="text-center tabular-nums">{fmtMoney(c.avgMargin)}</td>
-                        <td className="text-center tabular-nums text-zinc-400">{c.lastQuotedDays !== null ? `${c.lastQuotedDays}d` : "—"}</td>
-                        <td className="text-zinc-400 text-[10px]">{c.topCarriers.map(t => `${t.name} (${t.loads})`).join(", ") || "—"}</td>
+                        <td className="text-center tabular-nums text-muted-foreground">{c.lastQuotedDays !== null ? `${c.lastQuotedDays}d` : "—"}</td>
+                        <td className="text-muted-foreground text-[10px]">{c.topCarriers.map(t => `${t.name} (${t.loads})`).join(", ") || "—"}</td>
                       </tr>
                     );
                   })}
@@ -1225,16 +1225,16 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             <SectionCard title="Outcome Reasons" icon={<Activity className="h-3.5 w-3.5 text-amber-400" />} testId="spot-section-outcomes">
               {data.outcomeBreakdown.length === 0 ? (
-                <div className="text-zinc-500">No prior outcomes.</div>
+                <div className="text-muted-foreground">No prior outcomes.</div>
               ) : (
                 <div className="space-y-1.5">
                   {data.outcomeBreakdown.map((o, i) => (
                     <div key={i} className="flex items-center gap-2" data-testid={`spot-outcome-${i}`}>
-                      <span className="text-zinc-200 flex-1 truncate">{o.reason}</span>
-                      <div className="w-24 h-1.5 bg-zinc-800 rounded-[4px] overflow-hidden">
+                      <span className="text-foreground flex-1 truncate">{o.reason}</span>
+                      <div className="w-24 h-1.5 bg-muted rounded-[4px] overflow-hidden">
                         <div className="h-full bg-amber-500" style={{ width: `${Math.min(100, o.pct)}%` }} />
                       </div>
-                      <span className="text-zinc-400 tabular-nums w-10 text-right">{o.count}</span>
+                      <span className="text-muted-foreground tabular-nums w-10 text-right">{o.count}</span>
                     </div>
                   ))}
                 </div>
@@ -1247,16 +1247,16 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             <SectionCard title="Internal Variance (per rep)" icon={<Users className="h-3.5 w-3.5 text-amber-400" />} testId="spot-section-variance">
               {data.internalVariance.length === 0 ? (
-                <div className="text-zinc-500">No rep history on this lane.</div>
+                <div className="text-muted-foreground">No rep history on this lane.</div>
               ) : (
                 <table className="w-full text-xs">
-                  <thead className="text-zinc-500 text-[10px] uppercase tracking-wider">
+                  <thead className="text-muted-foreground text-[10px] uppercase tracking-wider">
                     <tr><th className="text-left">Rep</th><th>Quotes</th><th>Avg quoted</th><th>Win rate</th><th>Avg margin</th></tr>
                   </thead>
                   <tbody>
                     {data.internalVariance.map(v => (
-                      <tr key={v.rep} className="border-t border-zinc-800/60" data-testid={`spot-variance-${v.rep}`}>
-                        <td className="py-1 text-zinc-100">{v.rep}</td>
+                      <tr key={v.rep} className="border-t border-border/60" data-testid={`spot-variance-${v.rep}`}>
+                        <td className="py-1 text-foreground">{v.rep}</td>
                         <td className="text-center tabular-nums">{v.count}</td>
                         <td className="text-center tabular-nums">{fmtMoney(v.avgQuoted)}</td>
                         <td className="text-center tabular-nums">{fmtPct(v.winRate)}</td>
@@ -1269,14 +1269,14 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             </SectionCard>
             <SectionCard title="Freight Attractiveness" icon={<Award className="h-3.5 w-3.5 text-amber-400" />} testId="spot-section-attractiveness">
               <div className="flex items-center gap-4">
-                <div className="flex flex-col items-center justify-center w-24 h-24 rounded-full border-4 border-amber-500/40 bg-zinc-950">
+                <div className="flex flex-col items-center justify-center w-24 h-24 rounded-full border-4 border-amber-500/40 bg-background">
                   <span className="text-2xl font-bold text-amber-400 tabular-nums" data-testid="text-spot-attract-score">{data.attractiveness.score}</span>
-                  <span className="text-[10px] text-zinc-500 uppercase tracking-wider">score</span>
+                  <span className="text-[10px] text-muted-foreground uppercase tracking-wider">score</span>
                 </div>
                 <div className="flex-1">
-                  <div className="text-sm font-semibold text-zinc-100" data-testid="text-spot-attract-label">{data.attractiveness.label}</div>
-                  <div className="text-[11px] text-zinc-400 mt-1">{data.attractiveness.rationale}</div>
-                  <div className="text-[10px] text-zinc-500 mt-2">
+                  <div className="text-sm font-semibold text-foreground" data-testid="text-spot-attract-label">{data.attractiveness.label}</div>
+                  <div className="text-[11px] text-muted-foreground mt-1">{data.attractiveness.rationale}</div>
+                  <div className="text-[10px] text-muted-foreground mt-2">
                     {data.attractiveness.totalQuotes} total · {data.attractiveness.decided} decided ·
                     {" "}{fmtPct(data.attractiveness.winRate)} win · {fmtMoney(data.attractiveness.avgMargin)} avg margin
                   </div>
@@ -1288,7 +1288,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
           {/* 11. Alerts */}
           <SectionCard title="Lane Alerts" icon={<AlertTriangle className="h-3.5 w-3.5 text-amber-400" />} testId="spot-section-alerts">
             {data.alerts.length === 0 ? (
-              <div className="text-zinc-500 flex items-center gap-2"><Clock className="h-3 w-3" /> No active alerts on this lane.</div>
+              <div className="text-muted-foreground flex items-center gap-2"><Clock className="h-3 w-3" /> No active alerts on this lane.</div>
             ) : (
               <div className="space-y-2">
                 {data.alerts.map(a => (
@@ -1296,10 +1296,10 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                     className={`rounded-[4px] p-2 border ${
                       a.severity === "high" ? "bg-red-500/10 border-red-500/30"
                       : a.severity === "medium" ? "bg-amber-500/10 border-amber-500/30"
-                      : "bg-zinc-800/40 border-zinc-700"}`}
+                      : "bg-muted/40 border-border"}`}
                     data-testid={`spot-alert-${a.id}`}>
-                    <div className="text-[12px] font-semibold text-zinc-100">{a.title}</div>
-                    <div className="text-[11px] text-zinc-400 mt-0.5">{a.detail}</div>
+                    <div className="text-[12px] font-semibold text-foreground">{a.title}</div>
+                    <div className="text-[11px] text-muted-foreground mt-0.5">{a.detail}</div>
                   </div>
                 ))}
               </div>
@@ -1315,16 +1315,16 @@ function Kpi({ label, value, sub, accent }: { label: string; value: string; sub?
   const accentCls =
     accent === "amber" ? "border-amber-500/30 bg-amber-500/[0.04]" :
     accent === "blue" ? "border-blue-500/30 bg-blue-500/[0.04]" :
-    "border-zinc-800 bg-zinc-900";
+    "border-border bg-card";
   const valueCls =
     accent === "amber" ? "text-amber-300" :
     accent === "blue" ? "text-blue-300" :
-    "text-zinc-100";
+    "text-foreground";
   return (
     <div className={`rounded-[4px] border p-2 ${accentCls}`} data-testid={`spot-kpi-${label.toLowerCase().replace(/\s/g, "-")}`}>
-      <div className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</div>
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
       <div className={`text-base font-semibold tabular-nums ${valueCls}`}>{value}</div>
-      {sub && <div className="text-[10px] text-zinc-500">{sub}</div>}
+      {sub && <div className="text-[10px] text-muted-foreground">{sub}</div>}
     </div>
   );
 }
@@ -1335,12 +1335,12 @@ function KpiBadgeInline({ value, freshness }: { value: string; freshness?: strin
     tier === "high" ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30" :
     tier === "medium" ? "bg-amber-500/15 text-amber-300 border-amber-500/30" :
     tier === "low" ? "bg-orange-500/15 text-orange-300 border-orange-500/30" :
-    "bg-zinc-700/30 text-zinc-300 border-zinc-600/40";
+    "bg-muted/30 text-foreground border-border/40";
   const freshTone =
     freshness === "fresh" ? "text-emerald-400" :
     freshness === "recent" ? "text-amber-400" :
     freshness === "stale" ? "text-orange-400" :
-    "text-zinc-500";
+    "text-muted-foreground";
   return (
     <span className="inline-flex items-center gap-1.5" data-testid="spot-confidence-inline">
       <span className={`px-1.5 py-0.5 rounded-[4px] text-[11px] font-semibold border capitalize ${tone}`}>
@@ -1357,15 +1357,15 @@ function KpiBadge({ label, value, freshness }: { label: string; value: string; f
     tier === "high" ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30" :
     tier === "medium" ? "bg-amber-500/15 text-amber-300 border-amber-500/30" :
     tier === "low" ? "bg-orange-500/15 text-orange-300 border-orange-500/30" :
-    "bg-zinc-700/30 text-zinc-300 border-zinc-600/40";
+    "bg-muted/30 text-foreground border-border/40";
   const freshTone =
     freshness === "fresh" ? "text-emerald-400" :
     freshness === "recent" ? "text-amber-400" :
     freshness === "stale" ? "text-orange-400" :
-    "text-zinc-500";
+    "text-muted-foreground";
   return (
-    <div className="rounded-[4px] bg-zinc-900 border border-zinc-800 p-2" data-testid="spot-kpi-confidence">
-      <div className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</div>
+    <div className="rounded-[4px] bg-card border border-border p-2" data-testid="spot-kpi-confidence">
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
       <div className={`inline-flex items-center mt-0.5 px-1.5 py-0.5 rounded-[4px] text-[11px] font-semibold border ${tone}`}>
         {value || "—"}
       </div>
@@ -1377,7 +1377,7 @@ function KpiBadge({ label, value, freshness }: { label: string; value: string; f
 function AdvField({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[10px] uppercase tracking-wider text-zinc-500">{label}</span>
+      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
       {children}
     </div>
   );
@@ -1388,8 +1388,8 @@ function StatusChip({ status }: { status: string }): JSX.Element {
     won: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
     won_low_margin: "bg-yellow-500/15 text-yellow-300 border-yellow-500/30",
     pending: "bg-amber-500/15 text-amber-300 border-amber-500/30",
-    expired: "bg-zinc-500/15 text-zinc-300 border-zinc-500/30",
-    no_response: "bg-zinc-500/15 text-zinc-300 border-zinc-500/30",
+    expired: "bg-muted-foreground/15 text-foreground border-border",
+    no_response: "bg-muted-foreground/15 text-foreground border-border",
   };
   const cls = colorMap[status] ?? "bg-red-500/15 text-red-300 border-red-500/30";
   return <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] border ${cls}`}>{status.replace(/_/g, " ")}</span>;
@@ -1405,7 +1405,7 @@ function QuoteListSection({ title, icon, testId, emptyNode, quotes, onPickQuote,
   const accentBorder =
     accent === "amber" ? "border-amber-500/40 shadow-[0_0_0_1px_rgba(251,191,36,0.05)]" :
     accent === "blue" ? "border-blue-500/30" :
-    "border-zinc-800";
+    "border-border";
   const headerBg =
     accent === "amber" ? "bg-amber-500/[0.04]" :
     accent === "blue" ? "bg-blue-500/[0.03]" :
@@ -1413,25 +1413,25 @@ function QuoteListSection({ title, icon, testId, emptyNode, quotes, onPickQuote,
   const countTone =
     accent === "amber" ? "text-amber-300" :
     accent === "blue" ? "text-blue-300" :
-    "text-zinc-400";
+    "text-muted-foreground";
   return (
-    <Card className={`bg-zinc-900 rounded-[4px] border ${accentBorder}`} data-testid={testId}>
-      <CardHeader className={`py-2.5 px-3 flex flex-row items-center justify-between border-b border-zinc-800 ${headerBg}`}>
+    <Card className={`bg-card rounded-[4px] border ${accentBorder}`} data-testid={testId}>
+      <CardHeader className={`py-2.5 px-3 flex flex-row items-center justify-between border-b border-border ${headerBg}`}>
         <div className="flex flex-col">
-          <CardTitle className="text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+          <CardTitle className="text-xs uppercase tracking-wider text-foreground flex items-center gap-1.5">
             {icon}{title}
           </CardTitle>
-          {subtitle && <span className="text-[10px] text-zinc-500 mt-0.5">{subtitle}</span>}
+          {subtitle && <span className="text-[10px] text-muted-foreground mt-0.5">{subtitle}</span>}
         </div>
         <span className={`text-[10px] font-semibold tabular-nums ${countTone}`}>{quotes.length} shown</span>
       </CardHeader>
-      <CardContent className="p-3 text-xs text-zinc-200">
+      <CardContent className="p-3 text-xs text-foreground">
         {quotes.length === 0 ? (
           emptyNode
         ) : (
           <div className="max-h-[280px] overflow-y-auto">
             <table className="w-full text-xs">
-              <thead className="text-zinc-500 text-[10px] uppercase tracking-wider sticky top-0 bg-zinc-900">
+              <thead className="text-muted-foreground text-[10px] uppercase tracking-wider sticky top-0 bg-card">
                 <tr><th className="text-left py-1">Date</th><th className="text-left">Customer</th><th>Quoted</th><th>Buy</th><th>Status</th></tr>
               </thead>
               <tbody>
@@ -1440,12 +1440,12 @@ function QuoteListSection({ title, icon, testId, emptyNode, quotes, onPickQuote,
                   const paid = num(q.carrierPaid);
                   return (
                     <tr key={q.id} onClick={() => onPickQuote(q.id)}
-                      className="border-t border-zinc-800/60 hover:bg-zinc-800/40 cursor-pointer"
+                      className="border-t border-border/60 hover:bg-muted/40 cursor-pointer"
                       data-testid={`spot-quote-row-${q.id}`}>
-                      <td className="py-1 text-zinc-300">{new Date(q.requestDate).toLocaleDateString()}</td>
-                      <td className="text-zinc-100 truncate max-w-[140px]">{q.customerName}</td>
+                      <td className="py-1 text-foreground">{new Date(q.requestDate).toLocaleDateString()}</td>
+                      <td className="text-foreground truncate max-w-[140px]">{q.customerName}</td>
                       <td className="text-center tabular-nums">{fmtMoney(quoted)}</td>
-                      <td className="text-center tabular-nums text-zinc-400">{paid ? fmtMoney(paid) : "—"}</td>
+                      <td className="text-center tabular-nums text-muted-foreground">{paid ? fmtMoney(paid) : "—"}</td>
                       <td className="text-center"><StatusChip status={q.outcomeStatus} /></td>
                     </tr>
                   );
@@ -1471,7 +1471,7 @@ function PricingGuidanceBand({ guidance, market, marketStatus, freshnessLabel }:
   const isTrac = guidance.benchmarkSource === "trac";
   const cal = guidance.calibration ?? null;
   return (
-    <div className="rounded-[4px] border border-amber-500/30 bg-gradient-to-br from-amber-500/[0.08] via-zinc-900 to-zinc-900 p-4" data-testid="spot-section-guidance">
+    <div className="rounded-[4px] border border-amber-500/30 bg-gradient-to-br from-amber-500/[0.08] via-card to-card p-4" data-testid="spot-section-guidance">
       <div className="flex items-start gap-6 flex-wrap">
         <div className="flex flex-col">
           <span className="text-[10px] uppercase tracking-wider text-amber-300/80 font-medium flex items-center gap-1">
@@ -1485,70 +1485,70 @@ function PricingGuidanceBand({ guidance, market, marketStatus, freshnessLabel }:
               ? `${fmtMoney(guidance.suggestedLow)} – ${fmtMoney(guidance.suggestedHigh)}`
               : "—"}
           </span>
-          <span className="text-[10px] text-zinc-500 mt-0.5 capitalize">
+          <span className="text-[10px] text-muted-foreground mt-0.5 capitalize">
             Source: {guidance.benchmarkSource.replace(/_/g, " ")}
           </span>
         </div>
         {guidance.benchmark !== null && (
-          <div className="flex flex-col border-l border-zinc-800 pl-6">
-            <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">{isTrac ? "TRAC mid" : "SONAR benchmark"}</span>
-            <span className="text-xl text-zinc-100 tabular-nums font-semibold mt-0.5 flex items-center gap-1.5">
+          <div className="flex flex-col border-l border-border pl-6">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{isTrac ? "TRAC mid" : "SONAR benchmark"}</span>
+            <span className="text-xl text-foreground tabular-nums font-semibold mt-0.5 flex items-center gap-1.5">
               {fmtMoney(guidance.benchmark)}
               {market?.forecastDirection === "up" && <TrendingUp className="h-4 w-4 text-rose-400" data-testid="icon-spot-forecast-up" aria-label="Forecast trending up" />}
               {market?.forecastDirection === "down" && <TrendingDown className="h-4 w-4 text-emerald-400" data-testid="icon-spot-forecast-down" aria-label="Forecast trending down" />}
-              {market?.forecastDirection === "flat" && <Minus className="h-4 w-4 text-zinc-500" data-testid="icon-spot-forecast-flat" aria-label="Forecast flat" />}
+              {market?.forecastDirection === "flat" && <Minus className="h-4 w-4 text-muted-foreground" data-testid="icon-spot-forecast-flat" aria-label="Forecast flat" />}
             </span>
-            <span className="text-[10px] text-zinc-400 mt-0.5" data-testid="text-spot-capacity-outlook">
+            <span className="text-[10px] text-muted-foreground mt-0.5" data-testid="text-spot-capacity-outlook">
               {market?.capacityOutlook ?? "market reference"}
             </span>
           </div>
         )}
-        <div className="flex flex-col border-l border-zinc-800 pl-6">
-          <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Confidence</span>
+        <div className="flex flex-col border-l border-border pl-6">
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Confidence</span>
           <div className="mt-0.5">
             <KpiBadgeInline value={guidance.confidence} freshness={freshnessLabel} />
           </div>
         </div>
-        <div className="flex-1 min-w-[260px] text-[12px] text-zinc-300 leading-relaxed border-l border-zinc-800 pl-6">
+        <div className="flex-1 min-w-[260px] text-[12px] text-foreground leading-relaxed border-l border-border pl-6">
           {guidance.message}
           {!marketStatus.available && marketStatus.reason && (
-            <div className="mt-1 text-[10px] text-zinc-500" data-testid="text-spot-market-reason">
+            <div className="mt-1 text-[10px] text-muted-foreground" data-testid="text-spot-market-reason">
               Market data unavailable: {marketStatus.reason}
             </div>
           )}
         </div>
       </div>
       {(cal || (isTrac && market)) && (
-        <div className="mt-3 pt-3 border-t border-zinc-800 grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px]" data-testid="spot-section-calibration">
+        <div className="mt-3 pt-3 border-t border-border grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px]" data-testid="spot-section-calibration">
           {cal && (
             <div className="flex flex-col">
-              <span className="text-[10px] uppercase tracking-wider text-zinc-500">Internal calibration</span>
-              <span className="text-zinc-200 tabular-nums" data-testid="text-spot-calibration-band">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Internal calibration</span>
+              <span className="text-foreground tabular-nums" data-testid="text-spot-calibration-band">
                 {cal.suggestedLow !== null && cal.suggestedHigh !== null
                   ? `${fmtMoney(cal.suggestedLow)} – ${fmtMoney(cal.suggestedHigh)}`
                   : "—"}
               </span>
-              <span className="text-[10px] text-zinc-500">{cal.note}</span>
+              <span className="text-[10px] text-muted-foreground">{cal.note}</span>
             </div>
           )}
           {market?.rpm?.mid != null && (
             <div className="flex flex-col">
-              <span className="text-[10px] uppercase tracking-wider text-zinc-500">TRAC RPM (low / mid / high)</span>
-              <span className="text-zinc-200 tabular-nums">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">TRAC RPM (low / mid / high)</span>
+              <span className="text-foreground tabular-nums">
                 {market.rpm.low?.toFixed(2) ?? "—"} / {market.rpm.mid.toFixed(2)} / {market.rpm.high?.toFixed(2) ?? "—"}
               </span>
-              <span className="text-[10px] text-zinc-500">
+              <span className="text-[10px] text-muted-foreground">
                 {market.miles ? `${market.miles.toLocaleString()} mi` : ""}{market.contractRpm != null ? ` · contract $${market.contractRpm.toFixed(2)}` : ""}
               </span>
             </div>
           )}
           {market && (market.avgRpm30d != null || market.forecast7dRpm != null) && (
             <div className="flex flex-col">
-              <span className="text-[10px] uppercase tracking-wider text-zinc-500">Trend</span>
-              <span className="text-zinc-200 tabular-nums">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Trend</span>
+              <span className="text-foreground tabular-nums">
                 30d {market.avgRpm30d?.toFixed(2) ?? "—"} · 90d {market.avgRpm90d?.toFixed(2) ?? "—"}
               </span>
-              <span className="text-[10px] text-zinc-500">
+              <span className="text-[10px] text-muted-foreground">
                 7d forecast: {market.forecast7dRpm?.toFixed(2) ?? "—"}
               </span>
             </div>
@@ -1573,20 +1573,20 @@ function LaneTrafficCard({ traffic }: { traffic: NonNullable<SpotResult["laneTra
         <Kpi label="Revenue" value={fmtMoney(traffic.revenue)} sub={`avg ${fmtMoney(traffic.avgRevenuePerLoad)}/load`} />
         <Kpi label="Carriers" value={traffic.uniqueCarriers.toLocaleString()} sub={`avg cost ${fmtMoney(traffic.avgCostPerLoad)}`} />
       </div>
-      <div className="text-[10px] text-zinc-500 mb-1" data-testid="spot-traffic-window">
+      <div className="text-[10px] text-muted-foreground mb-1" data-testid="spot-traffic-window">
         Window: last {traffic.lookbackDays} days
       </div>
-      <div className="flex items-center gap-2 text-[10px] text-zinc-500 mb-2" data-testid="spot-traffic-tier-breakdown">
+      <div className="flex items-center gap-2 text-[10px] text-muted-foreground mb-2" data-testid="spot-traffic-tier-breakdown">
         <span className="uppercase tracking-wider">Match tiers:</span>
         <span className="px-1.5 py-0.5 rounded-[3px] bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">Exact {tb.exact}</span>
         <span className="px-1.5 py-0.5 rounded-[3px] bg-amber-500/10 text-amber-300 border border-amber-500/20">Same market {tb.sameMarket}</span>
-        <span className="px-1.5 py-0.5 rounded-[3px] bg-zinc-800 text-zinc-400 border border-zinc-700">Same state {tb.sameState}</span>
+        <span className="px-1.5 py-0.5 rounded-[3px] bg-muted text-muted-foreground border border-border">Same state {tb.sameState}</span>
       </div>
       {traffic.topCarriers.length === 0 ? (
-        <div className="text-zinc-500 text-xs">No realized loads on this lane in the last {traffic.lookbackDays} days.</div>
+        <div className="text-muted-foreground text-xs">No realized loads on this lane in the last {traffic.lookbackDays} days.</div>
       ) : (
         <table className="w-full text-xs">
-          <thead className="text-zinc-500 text-[10px] uppercase tracking-wider">
+          <thead className="text-muted-foreground text-[10px] uppercase tracking-wider">
             <tr>
               <th className="text-left">Carrier</th>
               <th className="text-right">Loads (90d/30d)</th>
@@ -1597,15 +1597,15 @@ function LaneTrafficCard({ traffic }: { traffic: NonNullable<SpotResult["laneTra
           </thead>
           <tbody>
             {traffic.topCarriers.map((c, i) => (
-              <tr key={`${c.name}-${i}`} className="border-t border-zinc-800/60" data-testid={`row-spot-traffic-carrier-${i}`}>
-                <td className="py-1 text-zinc-100">{c.name}</td>
-                <td className="text-right tabular-nums text-zinc-300">{c.loads90d.toLocaleString()} / {c.loads30d.toLocaleString()}</td>
-                <td className="text-right tabular-nums text-zinc-300">{c.lastBuyRate != null ? fmtMoney(c.lastBuyRate) : "—"}</td>
-                <td className="text-right tabular-nums text-zinc-300">{c.marginPct.toFixed(1)}%</td>
-                <td className="text-right tabular-nums text-zinc-300">
+              <tr key={`${c.name}-${i}`} className="border-t border-border/60" data-testid={`row-spot-traffic-carrier-${i}`}>
+                <td className="py-1 text-foreground">{c.name}</td>
+                <td className="text-right tabular-nums text-foreground">{c.loads90d.toLocaleString()} / {c.loads30d.toLocaleString()}</td>
+                <td className="text-right tabular-nums text-foreground">{c.lastBuyRate != null ? fmtMoney(c.lastBuyRate) : "—"}</td>
+                <td className="text-right tabular-nums text-foreground">{c.marginPct.toFixed(1)}%</td>
+                <td className="text-right tabular-nums text-foreground">
                   {c.reliabilityScore != null
                     ? <span title={c.reliabilityTier ?? ""}>{c.reliabilityScore.toFixed(0)}{c.reliabilityTier ? ` · ${c.reliabilityTier}` : ""}</span>
-                    : <span className="text-zinc-600">—</span>}
+                    : <span className="text-muted-foreground">—</span>}
                 </td>
               </tr>
             ))}
@@ -1631,10 +1631,10 @@ function CarrierOutreachList({ outreach }: { outreach: SpotResult["carrierOutrea
         </button>
       ) : undefined}>
       {outreach.length === 0 ? (
-        <div className="text-zinc-500">No fit carriers found for this lane.</div>
+        <div className="text-muted-foreground">No fit carriers found for this lane.</div>
       ) : (
         <table className="w-full text-xs">
-          <thead className="text-zinc-500 text-[10px] uppercase tracking-wider">
+          <thead className="text-muted-foreground text-[10px] uppercase tracking-wider">
             <tr>
               <th className="text-left">Carrier</th>
               <th className="text-right">Rank (Fit / Reli)</th>
@@ -1648,8 +1648,8 @@ function CarrierOutreachList({ outreach }: { outreach: SpotResult["carrierOutrea
           </thead>
           <tbody>
             {visible.map((c, i) => (
-              <tr key={`${c.carrierId ?? c.name}-${i}`} className={`border-t border-zinc-800/60 ${c.doNotUse ? "opacity-50" : ""}`} data-testid={`row-spot-outreach-${i}`}>
-                <td className="py-1 text-zinc-100">
+              <tr key={`${c.carrierId ?? c.name}-${i}`} className={`border-t border-border/60 ${c.doNotUse ? "opacity-50" : ""}`} data-testid={`row-spot-outreach-${i}`}>
+                <td className="py-1 text-foreground">
                   <div className="flex items-center gap-1.5">
                     <span>{c.name}</span>
                     {c.inRolodex && (
@@ -1660,29 +1660,29 @@ function CarrierOutreachList({ outreach }: { outreach: SpotResult["carrierOutrea
                     )}
                   </div>
                 </td>
-                <td className="text-right tabular-nums text-zinc-300">
+                <td className="text-right tabular-nums text-foreground">
                   <span title={`Composite rank: ${c.rankScore.toFixed(0)} (fit ${c.fitScore.toFixed(0)} · reli ${c.performanceScore.toFixed(0)})`}>
-                    {c.rankScore.toFixed(0)} <span className="text-zinc-500">({c.fitScore.toFixed(0)}/{c.performanceScore.toFixed(0)})</span>
+                    {c.rankScore.toFixed(0)} <span className="text-muted-foreground">({c.fitScore.toFixed(0)}/{c.performanceScore.toFixed(0)})</span>
                   </span>
                 </td>
-                <td className="text-right tabular-nums text-zinc-300">{c.loads90d} / {c.exactLaneRuns}</td>
-                <td className="text-right tabular-nums text-zinc-300">{c.marginPct.toFixed(1)}%</td>
-                <td className="text-right tabular-nums text-zinc-300" data-testid={`spot-outreach-ontime-${i}`}>
-                  {c.onTimePct != null ? `${c.onTimePct.toFixed(0)}%` : <span className="text-zinc-600">—</span>}
+                <td className="text-right tabular-nums text-foreground">{c.loads90d} / {c.exactLaneRuns}</td>
+                <td className="text-right tabular-nums text-foreground">{c.marginPct.toFixed(1)}%</td>
+                <td className="text-right tabular-nums text-foreground" data-testid={`spot-outreach-ontime-${i}`}>
+                  {c.onTimePct != null ? `${c.onTimePct.toFixed(0)}%` : <span className="text-muted-foreground">—</span>}
                 </td>
-                <td className="text-right tabular-nums text-zinc-300" data-testid={`spot-outreach-lastrate-${i}`}>
+                <td className="text-right tabular-nums text-foreground" data-testid={`spot-outreach-lastrate-${i}`}>
                   {c.lastRatePaid != null ? (
                     <span title={c.lastRatePaidAt ? new Date(c.lastRatePaidAt).toLocaleDateString() : undefined}>
                       ${c.lastRatePaid.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                     </span>
-                  ) : <span className="text-zinc-600">—</span>}
+                  ) : <span className="text-muted-foreground">—</span>}
                 </td>
                 <td className="text-[10px]" data-testid={`spot-outreach-presence-${i}`}>
                   {c.presence === "active" && <span className="px-1.5 py-0.5 rounded-[3px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />Active</span>}
                   {c.presence === "known" && <span className="px-1.5 py-0.5 rounded-[3px] bg-blue-500/15 text-blue-300 border border-blue-500/30 inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-blue-400" />Known</span>}
-                  {c.presence === "cold" && <span className="px-1.5 py-0.5 rounded-[3px] bg-zinc-800 text-zinc-500 border border-zinc-700 inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-zinc-500" />Cold</span>}
+                  {c.presence === "cold" && <span className="px-1.5 py-0.5 rounded-[3px] bg-muted text-muted-foreground border border-border inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />Cold</span>}
                 </td>
-                <td className="text-zinc-400 text-[10px]">
+                <td className="text-muted-foreground text-[10px]">
                   <CarrierActionLinks phone={c.phone} email={c.primaryEmail} idx={i} variant="links" />
                 </td>
               </tr>
@@ -1834,19 +1834,19 @@ function QuoteBuilderCard({
   });
 
   const marginToneClass =
-    marginPct === null ? "text-zinc-400"
+    marginPct === null ? "text-muted-foreground"
     : guardrailViolation ? "text-red-300"
     : marginPct < 10 ? "text-amber-300"
     : "text-emerald-300";
 
   return (
-    <Card className="bg-zinc-900 rounded-[4px] border border-amber-500/40 shadow-[0_0_0_1px_rgba(251,191,36,0.05)]" data-testid="spot-zone-quote-builder">
-      <CardHeader className="py-2.5 px-3 flex flex-row items-center justify-between border-b border-zinc-800 bg-amber-500/[0.04]">
-        <CardTitle className="text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+    <Card className="bg-card rounded-[4px] border border-amber-500/40 shadow-[0_0_0_1px_rgba(251,191,36,0.05)]" data-testid="spot-zone-quote-builder">
+      <CardHeader className="py-2.5 px-3 flex flex-row items-center justify-between border-b border-border bg-amber-500/[0.04]">
+        <CardTitle className="text-xs uppercase tracking-wider text-foreground flex items-center gap-1.5">
           <DollarSign className="h-3.5 w-3.5 text-amber-400" /> Quote Builder
         </CardTitle>
         {benchmark != null && (
-          <span className="text-[10px] text-zinc-500 tabular-nums">
+          <span className="text-[10px] text-muted-foreground tabular-nums">
             Benchmark <span className="text-amber-300">{fmtMoney(benchmark)}</span>
           </span>
         )}
@@ -1857,10 +1857,10 @@ function QuoteBuilderCard({
             <div className="grid grid-cols-2 gap-2">
               <FormField control={form.control} name="customerId" render={({ field }) => (
                 <FormItem className="col-span-2">
-                  <FormLabel className="text-[10px] uppercase tracking-wider text-zinc-500">Customer</FormLabel>
+                  <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">Customer</FormLabel>
                   <Select value={field.value} onValueChange={field.onChange}>
                     <FormControl>
-                      <SelectTrigger className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 [&>span]:text-zinc-100" data-testid="select-builder-customer">
+                      <SelectTrigger className="h-8 bg-card border-border text-xs text-foreground [&>span]:text-foreground" data-testid="select-builder-customer">
                         <SelectValue placeholder="Select customer" />
                       </SelectTrigger>
                     </FormControl>
@@ -1873,12 +1873,12 @@ function QuoteBuilderCard({
               )} />
               <FormField control={form.control} name="quotedAmount" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-[10px] uppercase tracking-wider text-zinc-500">Quoted ($)</FormLabel>
+                  <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">Quoted ($)</FormLabel>
                   <FormControl>
                     <Input type="number" min={0} step={1} inputMode="decimal"
                       value={field.value ?? ""}
                       onChange={e => field.onChange(e.target.value === "" ? undefined : Number(e.target.value))}
-                      className="h-8 bg-zinc-900 border-zinc-700 text-sm text-zinc-100 tabular-nums"
+                      className="h-8 bg-card border-border text-sm text-foreground tabular-nums"
                       data-testid="input-builder-quoted" />
                   </FormControl>
                   <FormMessage />
@@ -1886,10 +1886,10 @@ function QuoteBuilderCard({
               )} />
               <FormField control={form.control} name="estimatedCost" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-[10px] uppercase tracking-wider text-zinc-500 flex items-center gap-1">
+                  <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground flex items-center gap-1">
                     Est. cost ($)
                     {costSource && (
-                      <span className="text-[9px] normal-case tracking-normal text-zinc-600" data-testid="text-builder-cost-source">
+                      <span className="text-[9px] normal-case tracking-normal text-muted-foreground" data-testid="text-builder-cost-source">
                         from {costSource === "trac" ? "TRAC mid" : "lane avg"}
                       </span>
                     )}
@@ -1898,7 +1898,7 @@ function QuoteBuilderCard({
                     <Input type="number" min={0} step={1} inputMode="decimal"
                       value={field.value ?? ""}
                       onChange={e => field.onChange(e.target.value === "" ? undefined : Number(e.target.value))}
-                      className="h-8 bg-zinc-900 border-zinc-700 text-sm text-zinc-100 tabular-nums"
+                      className="h-8 bg-card border-border text-sm text-foreground tabular-nums"
                       data-testid="input-builder-cost" />
                   </FormControl>
                   <FormMessage />
@@ -1906,10 +1906,10 @@ function QuoteBuilderCard({
               )} />
               <FormField control={form.control} name="validUntil" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-[10px] uppercase tracking-wider text-zinc-500">Valid until</FormLabel>
+                  <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">Valid until</FormLabel>
                   <FormControl>
                     <Input type="date" {...field}
-                      className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 [color-scheme:dark]"
+                      className="h-8 bg-card border-border text-xs text-foreground dark:[color-scheme:dark]"
                       data-testid="input-builder-valid" />
                   </FormControl>
                   <FormMessage />
@@ -1917,23 +1917,23 @@ function QuoteBuilderCard({
               )} />
               <FormField control={form.control} name="notes" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-[10px] uppercase tracking-wider text-zinc-500">Notes</FormLabel>
+                  <FormLabel className="text-[10px] uppercase tracking-wider text-muted-foreground">Notes</FormLabel>
                   <FormControl>
                     <Input {...field} placeholder="Internal note (optional)"
-                      className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 placeholder:text-zinc-500"
+                      className="h-8 bg-card border-border text-xs text-foreground placeholder:text-muted-foreground"
                       data-testid="input-builder-notes" />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
               )} />
             </div>
-            <div className="rounded-[4px] border border-zinc-800 bg-zinc-950 px-2 py-1.5 flex items-center justify-between text-[11px]">
+            <div className="rounded-[4px] border border-border bg-background px-2 py-1.5 flex items-center justify-between text-[11px]">
               <div className="flex items-center gap-3">
-                <span className="text-zinc-500 uppercase tracking-wider text-[9px]">Live margin</span>
+                <span className="text-muted-foreground uppercase tracking-wider text-[9px]">Live margin</span>
                 <span className={`font-semibold tabular-nums ${marginToneClass}`} data-testid="text-builder-margin-pct">
                   {marginPct === null ? "—" : `${marginPct.toFixed(1)}%`}
                 </span>
-                <span className="text-zinc-500 tabular-nums" data-testid="text-builder-margin-amt">
+                <span className="text-muted-foreground tabular-nums" data-testid="text-builder-margin-amt">
                   {marginAmt !== 0 ? fmtMoney(marginAmt) : ""}
                 </span>
               </div>
@@ -1952,7 +1952,7 @@ function QuoteBuilderCard({
                         type="submit"
                         size="sm"
                         disabled={guardrailViolation || createMut.isPending}
-                        className="h-8 bg-[#FFC333] hover:bg-amber-400 text-zinc-950 font-semibold rounded-[4px] px-3 disabled:opacity-50"
+                        className="h-8 bg-[#FFC333] hover:bg-amber-400 text-amber-950 font-semibold rounded-[4px] px-3 disabled:opacity-50"
                         data-testid="button-builder-save"
                       >
                         <Save className="h-3 w-3 mr-1" /> {createMut.isPending ? "Saving…" : savedQuoteId ? "Saved" : "Save quote"}
@@ -1980,18 +1980,18 @@ function QuoteBuilderCard({
               )}
             </div>
             {draft && (
-              <div className="rounded-[4px] border border-zinc-800 bg-zinc-950 p-2 space-y-1.5" data-testid="builder-email-draft">
+              <div className="rounded-[4px] border border-border bg-background p-2 space-y-1.5" data-testid="builder-email-draft">
                 <div className="flex items-center justify-between text-[10px]">
-                  <span className="text-zinc-500 uppercase tracking-wider">Draft</span>
-                  <span className="text-zinc-500" data-testid="text-builder-draft-to">
-                    To: {draft.to.length > 0 ? draft.to.join(", ") : <span className="text-zinc-600 italic">add recipients</span>}
+                  <span className="text-muted-foreground uppercase tracking-wider">Draft</span>
+                  <span className="text-muted-foreground" data-testid="text-builder-draft-to">
+                    To: {draft.to.length > 0 ? draft.to.join(", ") : <span className="text-muted-foreground italic">add recipients</span>}
                   </span>
                 </div>
-                <div className="text-[11px] text-zinc-300 font-medium" data-testid="text-builder-draft-subject">{draft.subject}</div>
+                <div className="text-[11px] text-foreground font-medium" data-testid="text-builder-draft-subject">{draft.subject}</div>
                 <Textarea
                   value={draft.body}
                   onChange={e => setDraft(d => d ? { ...d, body: e.target.value } : d)}
-                  className="min-h-[120px] text-xs bg-zinc-900 border-zinc-700 text-zinc-200"
+                  className="min-h-[120px] text-xs bg-card border-border text-foreground"
                   data-testid="textarea-builder-draft-body"
                 />
               </div>
@@ -2019,7 +2019,7 @@ function CarrierActionLinks({
     ? `mailto:${email}?subject=${encodeURIComponent("RFQ: lane coverage")}&body=${encodeURIComponent("Hi,\n\nWe have a load looking for coverage. Can you bid on this lane?\n\nThanks,")}`
     : null;
   if (variant === "links") {
-    if (!mailHref && !callHref) return <span className="text-zinc-600">—</span>;
+    if (!mailHref && !callHref) return <span className="text-muted-foreground">—</span>;
     return (
       <div className="flex items-center gap-2">
         {mailHref && <a href={mailHref} className="text-amber-300 hover:text-amber-200 underline" data-testid={`link-outreach-email-${idx}`}>email</a>}
@@ -2031,7 +2031,7 @@ function CarrierActionLinks({
     <div className="flex items-center gap-1 shrink-0">
       {callHref && (
         <a href={callHref}
-          className="h-7 w-7 inline-flex items-center justify-center rounded-[4px] border border-zinc-700 hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-300"
+          className="h-7 w-7 inline-flex items-center justify-center rounded-[4px] border border-border hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-300"
           title={`Webex call ${phone}`}
           data-testid={`button-shortlist-call-${idx}`}>
           <Phone className="h-3 w-3" />
@@ -2039,7 +2039,7 @@ function CarrierActionLinks({
       )}
       {mailHref && (
         <a href={mailHref}
-          className="h-7 w-7 inline-flex items-center justify-center rounded-[4px] border border-zinc-700 hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-300"
+          className="h-7 w-7 inline-flex items-center justify-center rounded-[4px] border border-border hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-300"
           title={`RFQ email ${email}`}
           data-testid={`button-shortlist-email-${idx}`}>
           <Mail className="h-3 w-3" />
@@ -2058,9 +2058,9 @@ function CarrierShortlistCard({
   const [expanded, setExpanded] = useState(false);
   const top = expanded ? outreach : outreach.slice(0, 5);
   return (
-    <Card className="bg-zinc-900 rounded-[4px] border border-zinc-800" data-testid="spot-zone-carrier-shortlist">
-      <CardHeader className="py-2.5 px-3 flex flex-row items-center justify-between border-b border-zinc-800">
-        <CardTitle className="text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+    <Card className="bg-card rounded-[4px] border border-border" data-testid="spot-zone-carrier-shortlist">
+      <CardHeader className="py-2.5 px-3 flex flex-row items-center justify-between border-b border-border">
+        <CardTitle className="text-xs uppercase tracking-wider text-foreground flex items-center gap-1.5">
           <Truck className="h-3.5 w-3.5 text-amber-400" /> Carriers to Call (top 5)
         </CardTitle>
         {outreach.length > 5 && (
@@ -2071,23 +2071,23 @@ function CarrierShortlistCard({
       </CardHeader>
       <CardContent className="p-3">
         {top.length === 0 ? (
-          <div className="text-zinc-500 text-xs text-center py-4">No fit carriers found for this lane.</div>
+          <div className="text-muted-foreground text-xs text-center py-4">No fit carriers found for this lane.</div>
         ) : (
           <ul className="space-y-1.5">
             {top.map((c, i) => (
               <li key={`${c.carrierId ?? c.name}-${i}`}
-                className={`flex items-center gap-2 rounded-[4px] border border-zinc-800 bg-zinc-950 px-2 py-1.5 ${c.doNotUse ? "opacity-50" : ""}`}
+                className={`flex items-center gap-2 rounded-[4px] border border-border bg-background px-2 py-1.5 ${c.doNotUse ? "opacity-50" : ""}`}
                 data-testid={`row-shortlist-${i}`}>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5 text-xs text-zinc-100">
+                  <div className="flex items-center gap-1.5 text-xs text-foreground">
                     <span className="truncate">{c.name}</span>
                     {c.inRolodex && <span className="text-[9px] px-1 py-0.5 rounded-[3px] bg-blue-500/15 text-blue-300 border border-blue-500/30" title="In your rolodex">★</span>}
                     {c.doNotUse && <span className="text-[9px] px-1 py-0.5 rounded-[3px] bg-red-500/15 text-red-300 border border-red-500/30">DNU</span>}
                     {c.presence === "active" && <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" title="Active" />}
                     {c.presence === "known" && <span className="h-1.5 w-1.5 rounded-full bg-blue-400" title="Known" />}
-                    {c.presence === "cold" && <span className="h-1.5 w-1.5 rounded-full bg-zinc-500" title="Cold" />}
+                    {c.presence === "cold" && <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" title="Cold" />}
                   </div>
-                  <div className="text-[10px] text-zinc-500 tabular-nums flex items-center gap-1.5 flex-wrap">
+                  <div className="text-[10px] text-muted-foreground tabular-nums flex items-center gap-1.5 flex-wrap">
                     <span title="Performance / reliability tier">{c.tier}</span>
                     <span>·</span>
                     <span data-testid={`text-shortlist-reliability-${i}`}>rel {c.performanceScore.toFixed(0)}</span>
@@ -2128,21 +2128,21 @@ function CustomerLaneTimelineCard({
     .sort((a, b) => new Date(b.requestDate).getTime() - new Date(a.requestDate).getTime())
     .slice(0, 5);
   return (
-    <Card className="bg-zinc-900 rounded-[4px] border border-zinc-800" data-testid="spot-zone-customer-timeline">
-      <CardHeader className="py-2.5 px-3 flex flex-row items-center justify-between border-b border-zinc-800">
-        <CardTitle className="text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+    <Card className="bg-card rounded-[4px] border border-border" data-testid="spot-zone-customer-timeline">
+      <CardHeader className="py-2.5 px-3 flex flex-row items-center justify-between border-b border-border">
+        <CardTitle className="text-xs uppercase tracking-wider text-foreground flex items-center gap-1.5">
           <Clock className="h-3.5 w-3.5 text-amber-400" />
           {resolvedCustomer ? `${resolvedCustomer.name} on this lane` : "Recent on this lane"}
         </CardTitle>
-        <span className="text-[10px] text-zinc-500">{timeline.length} of {filtered.length}</span>
+        <span className="text-[10px] text-muted-foreground">{timeline.length} of {filtered.length}</span>
       </CardHeader>
       <CardContent className="p-3">
         {timeline.length === 0 ? (
-          <div className="text-xs text-zinc-400 text-center py-4" data-testid="text-timeline-empty">
+          <div className="text-xs text-muted-foreground text-center py-4" data-testid="text-timeline-empty">
             {resolvedCustomer ? (
               <>
                 <div className="text-amber-300 font-medium">First-quote opportunity.</div>
-                <div className="text-zinc-500 mt-1">
+                <div className="text-muted-foreground mt-1">
                   This is your first quote to {resolvedCustomer.name} on this lane.
                 </div>
               </>
@@ -2151,7 +2151,7 @@ function CustomerLaneTimelineCard({
             )}
           </div>
         ) : (
-          <ol className="relative space-y-2.5 pl-4 border-l border-zinc-800">
+          <ol className="relative space-y-2.5 pl-4 border-l border-border">
             {timeline.map((q, i) => {
               const quoted = num(q.quotedAmount);
               const paid = num(q.carrierPaid);
@@ -2160,21 +2160,21 @@ function CustomerLaneTimelineCard({
                   <span className={`absolute -left-[18px] top-1 h-2 w-2 rounded-full ${
                     q.outcomeStatus === "won" || q.outcomeStatus === "won_low_margin" ? "bg-emerald-400" :
                     q.outcomeStatus === "pending" ? "bg-amber-400" :
-                    q.outcomeStatus.startsWith("lost") ? "bg-red-400" : "bg-zinc-500"
+                    q.outcomeStatus.startsWith("lost") ? "bg-red-400" : "bg-muted-foreground"
                   }`} />
                   <button type="button" onClick={() => onPickQuote(q.id)}
-                    className="text-left w-full hover:bg-zinc-800/40 rounded-[4px] px-1.5 py-1 -mx-1.5 transition"
+                    className="text-left w-full hover:bg-muted/40 rounded-[4px] px-1.5 py-1 -mx-1.5 transition"
                     data-testid={`button-timeline-${q.id}`}>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] text-zinc-300">{new Date(q.requestDate).toLocaleDateString()}</span>
+                      <span className="text-[11px] text-foreground">{new Date(q.requestDate).toLocaleDateString()}</span>
                       <StatusChip status={q.outcomeStatus} />
                     </div>
                     <div className="flex items-center justify-between gap-2 mt-0.5">
-                      <span className="text-xs text-zinc-100 truncate">{q.customerName}</span>
-                      <span className="text-xs text-zinc-200 tabular-nums">{fmtMoney(quoted)}{paid ? <span className="text-zinc-500"> / {fmtMoney(paid)}</span> : null}</span>
+                      <span className="text-xs text-foreground truncate">{q.customerName}</span>
+                      <span className="text-xs text-foreground tabular-nums">{fmtMoney(quoted)}{paid ? <span className="text-muted-foreground"> / {fmtMoney(paid)}</span> : null}</span>
                     </div>
                     {q.outcomeReasonLabel && (
-                      <div className="text-[10px] text-zinc-500 mt-0.5 truncate">{q.outcomeReasonLabel}</div>
+                      <div className="text-[10px] text-muted-foreground mt-0.5 truncate">{q.outcomeReasonLabel}</div>
                     )}
                   </button>
                 </li>
@@ -2238,27 +2238,27 @@ function LossPatternCard({ tieredMatches }: { tieredMatches: TierGroup[] }): JSX
     ? `${Math.round((top.count / total) * 100)}% of losses on this lane fall into "${LOSS_BUCKET_LABELS[top.key]}"${top.avgLostMarginPct !== null ? ` (avg margin gap ${top.avgLostMarginPct.toFixed(1)}%)` : ""}. Address it up front in your pitch.`
     : "No prior losses on this lane — clean slate.";
   return (
-    <Card className="bg-zinc-900 rounded-[4px] border border-zinc-800" data-testid="spot-zone-loss-pattern">
-      <CardHeader className="py-2.5 px-3 flex flex-row items-center justify-between border-b border-zinc-800">
-        <CardTitle className="text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+    <Card className="bg-card rounded-[4px] border border-border" data-testid="spot-zone-loss-pattern">
+      <CardHeader className="py-2.5 px-3 flex flex-row items-center justify-between border-b border-border">
+        <CardTitle className="text-xs uppercase tracking-wider text-foreground flex items-center gap-1.5">
           <ThumbsDown className="h-3.5 w-3.5 text-amber-400" /> Why we lose this lane
         </CardTitle>
-        <span className="text-[10px] text-zinc-500 tabular-nums">{total} losses</span>
+        <span className="text-[10px] text-muted-foreground tabular-nums">{total} losses</span>
       </CardHeader>
       <CardContent className="p-3 space-y-2">
         {buckets.length === 0 ? (
-          <div className="text-xs text-zinc-500 text-center py-4">No prior losses on this lane.</div>
+          <div className="text-xs text-muted-foreground text-center py-4">No prior losses on this lane.</div>
         ) : (
           <>
             <ul className="space-y-1.5">
               {buckets.map((b, i) => (
                 <li key={b.key} className="flex items-center gap-2 text-xs" data-testid={`loss-bucket-${b.key}`}>
-                  <span className="text-zinc-200 flex-1 truncate">{LOSS_BUCKET_LABELS[b.key]}</span>
-                  <div className="w-16 h-1.5 bg-zinc-800 rounded-[4px] overflow-hidden">
+                  <span className="text-foreground flex-1 truncate">{LOSS_BUCKET_LABELS[b.key]}</span>
+                  <div className="w-16 h-1.5 bg-muted rounded-[4px] overflow-hidden">
                     <div className="h-full bg-red-400/70" style={{ width: `${Math.min(100, (b.count / total) * 100)}%` }} />
                   </div>
-                  <span className="text-zinc-400 tabular-nums w-8 text-right" data-testid={`loss-bucket-count-${b.key}`}>{b.count}</span>
-                  <span className="text-zinc-500 tabular-nums w-16 text-right text-[10px]" data-testid={`loss-bucket-avg-margin-${b.key}`}>
+                  <span className="text-muted-foreground tabular-nums w-8 text-right" data-testid={`loss-bucket-count-${b.key}`}>{b.count}</span>
+                  <span className="text-muted-foreground tabular-nums w-16 text-right text-[10px]" data-testid={`loss-bucket-avg-margin-${b.key}`}>
                     {b.avgLostMarginPct !== null ? `${b.avgLostMarginPct.toFixed(1)}% mgn` : "—"}
                   </span>
                 </li>
@@ -2281,26 +2281,26 @@ function LaneStatsBar({ kpis }: { kpis: SpotResult["kpis"] }): JSX.Element {
   const [open, setOpen] = useState(false);
   return (
     <Collapsible open={open} onOpenChange={setOpen} data-testid="spot-section-lane-stats">
-      <div className="rounded-[4px] border border-zinc-800 bg-zinc-900/60 px-3 py-1.5 flex items-center gap-3 flex-wrap">
+      <div className="rounded-[4px] border border-border bg-card/60 px-3 py-1.5 flex items-center gap-3 flex-wrap">
         <CollapsibleTrigger asChild>
           <button type="button"
-            className="text-[10px] uppercase tracking-wider text-zinc-400 hover:text-zinc-100 inline-flex items-center gap-1"
+            className="text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
             data-testid="button-lane-stats-toggle">
             {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
             Lane stats
           </button>
         </CollapsibleTrigger>
-        <span className="text-[11px] text-zinc-400">
-          <span className="text-zinc-500">Win</span> <span className="text-zinc-100 tabular-nums font-semibold">{fmtPct(kpis.winRate)}</span>
+        <span className="text-[11px] text-muted-foreground">
+          <span className="text-muted-foreground">Win</span> <span className="text-foreground tabular-nums font-semibold">{fmtPct(kpis.winRate)}</span>
         </span>
-        <span className="text-[11px] text-zinc-400">
-          <span className="text-zinc-500">Avg quoted</span> <span className="text-zinc-100 tabular-nums">{fmtMoney(kpis.avgQuoted)}</span>
+        <span className="text-[11px] text-muted-foreground">
+          <span className="text-muted-foreground">Avg quoted</span> <span className="text-foreground tabular-nums">{fmtMoney(kpis.avgQuoted)}</span>
         </span>
-        <span className="text-[11px] text-zinc-400">
-          <span className="text-zinc-500">Avg margin</span> <span className="text-zinc-100 tabular-nums">{fmtMoney(kpis.avgMargin)}{kpis.avgMarginPct > 0 ? ` · ${fmtPct(kpis.avgMarginPct)}` : ""}</span>
+        <span className="text-[11px] text-muted-foreground">
+          <span className="text-muted-foreground">Avg margin</span> <span className="text-foreground tabular-nums">{fmtMoney(kpis.avgMargin)}{kpis.avgMarginPct > 0 ? ` · ${fmtPct(kpis.avgMarginPct)}` : ""}</span>
         </span>
-        <span className="text-[11px] text-zinc-400">
-          <span className="text-zinc-500">Last quoted</span> <span className="text-zinc-100 tabular-nums">{kpis.lastQuotedDays !== null ? `${kpis.lastQuotedDays}d` : "—"}</span>
+        <span className="text-[11px] text-muted-foreground">
+          <span className="text-muted-foreground">Last quoted</span> <span className="text-foreground tabular-nums">{kpis.lastQuotedDays !== null ? `${kpis.lastQuotedDays}d` : "—"}</span>
         </span>
       </div>
       <CollapsibleContent>
@@ -2339,7 +2339,7 @@ function TieredMatchSections({
   const accentMap: Record<TierAccent, { border: string; headerBg: string; count: string; iconColor: string }> = {
     amber: { border: "border-amber-500/40 shadow-[0_0_0_1px_rgba(251,191,36,0.05)]", headerBg: "bg-amber-500/[0.04]", count: "text-amber-300", iconColor: "text-amber-400" },
     blue: { border: "border-blue-500/30", headerBg: "bg-blue-500/[0.03]", count: "text-blue-300", iconColor: "text-blue-400" },
-    zinc: { border: "border-zinc-700", headerBg: "bg-zinc-800/30", count: "text-zinc-300", iconColor: "text-zinc-400" },
+    zinc: { border: "border-border", headerBg: "bg-muted/30", count: "text-foreground", iconColor: "text-muted-foreground" },
     purple: { border: "border-purple-500/30", headerBg: "bg-purple-500/[0.04]", count: "text-purple-300", iconColor: "text-purple-400" },
     teal: { border: "border-teal-500/30", headerBg: "bg-teal-500/[0.04]", count: "text-teal-300", iconColor: "text-teal-400" },
   };
@@ -2366,14 +2366,14 @@ function TieredMatchSections({
   return (
     <div className="space-y-3" data-testid="spot-section-tiered-matches">
       <div className="flex items-center gap-2 flex-wrap" data-testid="spot-tier-summary">
-        <span className="text-[10px] uppercase tracking-wider text-zinc-500">Tiered matches</span>
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Tiered matches</span>
         {TIER_DISPLAY.map(meta => {
           const c = tierCounts[meta.tier] ?? 0;
           const acc = accentMap[meta.accent];
           return (
             <span
               key={meta.tier}
-              className={`text-[11px] px-1.5 py-0.5 rounded-[4px] border tabular-nums ${c > 0 ? `${acc.headerBg} ${acc.count} border-current/30` : "bg-zinc-900 text-zinc-600 border-zinc-800"}`}
+              className={`text-[11px] px-1.5 py-0.5 rounded-[4px] border tabular-nums ${c > 0 ? `${acc.headerBg} ${acc.count} border-current/30` : "bg-card text-muted-foreground border-border"}`}
               title={meta.rule}
               data-testid={`spot-tier-chip-${meta.tier}`}
             >
@@ -2382,7 +2382,7 @@ function TieredMatchSections({
           );
         })}
         {matchMode === "strict" && (
-          <span className="text-[10px] text-zinc-500 italic">
+          <span className="text-[10px] text-muted-foreground italic">
             Strict mode — only exact + same-state shown.
           </span>
         )}
@@ -2402,45 +2402,45 @@ function TieredMatchSections({
             : freshness <= 60 ? "recent"
             : "stale";
           const freshnessClass = freshness == null
-            ? "text-zinc-500"
+            ? "text-muted-foreground"
             : freshness <= 14 ? "text-emerald-300"
             : freshness <= 60 ? "text-amber-300"
-            : "text-zinc-400";
+            : "text-muted-foreground";
           return (
             <Card
               key={meta.tier}
               id={`spot-section-tier-${meta.tier}`}
-              className={`bg-zinc-900 rounded-[4px] border ${acc.border} scroll-mt-4`}
+              className={`bg-card rounded-[4px] border ${acc.border} scroll-mt-4`}
               data-testid={`spot-section-tier-${meta.tier}`}
             >
-              <CardHeader className={`py-2.5 px-3 flex flex-col gap-1.5 border-b border-zinc-800 ${acc.headerBg}`}>
+              <CardHeader className={`py-2.5 px-3 flex flex-col gap-1.5 border-b border-border ${acc.headerBg}`}>
                 <div className="flex flex-row items-center justify-between">
                   <div className="flex flex-col">
-                    <CardTitle className="text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+                    <CardTitle className="text-xs uppercase tracking-wider text-foreground flex items-center gap-1.5">
                       {iconFor(meta.icon, acc.iconColor)}{meta.label}
                     </CardTitle>
-                    <span className="text-[10px] text-zinc-500 mt-0.5" title={`Why this tier? ${meta.rule}`}>
+                    <span className="text-[10px] text-muted-foreground mt-0.5" title={`Why this tier? ${meta.rule}`}>
                       {meta.rule}
                     </span>
                   </div>
                   <span className={`text-[10px] font-semibold tabular-nums ${acc.count}`}>{items.length} shown</span>
                 </div>
                 {!empty && group && (
-                  <div className="flex items-center gap-3 text-[10px] text-zinc-400" data-testid={`spot-tier-kpis-${meta.tier}`}>
+                  <div className="flex items-center gap-3 text-[10px] text-muted-foreground" data-testid={`spot-tier-kpis-${meta.tier}`}>
                     <span title="Total prior quotes in this tier">
-                      <span className="text-zinc-500">Quotes</span>{" "}
-                      <span className="text-zinc-200 tabular-nums">{group.count}</span>
+                      <span className="text-muted-foreground">Quotes</span>{" "}
+                      <span className="text-foreground tabular-nums">{group.count}</span>
                     </span>
                     <span title="Won / decided">
-                      <span className="text-zinc-500">Win</span>{" "}
-                      <span className="text-zinc-200 tabular-nums">{winPct}%</span>
+                      <span className="text-muted-foreground">Win</span>{" "}
+                      <span className="text-foreground tabular-nums">{winPct}%</span>
                     </span>
                     <span title="Average quoted amount on won quotes">
-                      <span className="text-zinc-500">Avg won</span>{" "}
-                      <span className="text-zinc-200 tabular-nums">{avgWon > 0 ? fmtMoney(avgWon) : "—"}</span>
+                      <span className="text-muted-foreground">Avg won</span>{" "}
+                      <span className="text-foreground tabular-nums">{avgWon > 0 ? fmtMoney(avgWon) : "—"}</span>
                     </span>
                     <span title={freshness == null ? "No prior wins" : `${freshness}d since last win`}>
-                      <span className="text-zinc-500">Last win</span>{" "}
+                      <span className="text-muted-foreground">Last win</span>{" "}
                       <span className={`tabular-nums ${freshnessClass}`}>
                         {freshness == null ? "—" : `${freshness}d`}{" "}
                         <span className="text-[9px] uppercase">({freshnessLabel})</span>
@@ -2449,16 +2449,16 @@ function TieredMatchSections({
                   </div>
                 )}
               </CardHeader>
-              <CardContent className="p-3 text-xs text-zinc-200">
+              <CardContent className="p-3 text-xs text-foreground">
                 {empty ? (
                   isExact ? (
-                    <div className="text-zinc-400 space-y-2" data-testid="spot-tier-empty-exact">
-                      <div className="text-zinc-200 font-medium">No exact-lane quotes yet.</div>
+                    <div className="text-muted-foreground space-y-2" data-testid="spot-tier-empty-exact">
+                      <div className="text-foreground font-medium">No exact-lane quotes yet.</div>
                       {firstNonEmptyOther ? (
-                        <div className="text-[11px] text-zinc-500 space-y-1.5">
+                        <div className="text-[11px] text-muted-foreground space-y-1.5">
                           <div>
                             Closest tier:{" "}
-                            <span className="text-zinc-200 font-semibold">{firstNonEmptyOther.label}</span>
+                            <span className="text-foreground font-semibold">{firstNonEmptyOther.label}</span>
                             {" "}with{" "}
                             <span className="text-amber-300 font-semibold">{firstNonEmptyOther.count}</span>
                             {" "}prior quote{firstNonEmptyOther.count === 1 ? "" : "s"}.
@@ -2476,7 +2476,7 @@ function TieredMatchSections({
                           </button>
                         </div>
                       ) : matchMode === "strict" ? (
-                        <div className="text-[11px] text-zinc-500">
+                        <div className="text-[11px] text-muted-foreground">
                           No same-state-pair quotes either. Try{" "}
                           <button onClick={onSwitchToRelaxed} className="text-amber-300 hover:text-amber-200 underline" data-testid="button-spot-switch-relaxed">
                             switching to Relaxed mode
@@ -2484,29 +2484,29 @@ function TieredMatchSections({
                           {" "}to also include same-market, reverse, and corridor matches.
                         </div>
                       ) : (
-                        <div className="text-[11px] text-zinc-500">
+                        <div className="text-[11px] text-muted-foreground">
                           No prior quotes anywhere in the tier ladder — this is a fresh corridor for your team.
                         </div>
                       )}
-                      <div className="text-[11px] text-zinc-500">Try broadening:</div>
+                      <div className="text-[11px] text-muted-foreground">Try broadening:</div>
                       <div className="flex flex-wrap gap-1.5">
                         {query.pickupDate && (
                           <button onClick={onBroadenDate}
-                            className="text-[10px] px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700"
+                            className="text-[10px] px-2 py-0.5 rounded bg-muted hover:bg-muted text-foreground border border-border"
                             data-testid="button-spot-broaden-clear-date">
                             Clear pickup date
                           </button>
                         )}
                         {(!query.lookbackDays || query.lookbackDays < 365) && (
                           <button onClick={onBroadenLookback}
-                            className="text-[10px] px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700"
+                            className="text-[10px] px-2 py-0.5 rounded bg-muted hover:bg-muted text-foreground border border-border"
                             data-testid="button-spot-broaden-lookback">
                             Use all-time history
                           </button>
                         )}
                         {query.equipment && (
                           <button onClick={onBroadenEquipment}
-                            className="text-[10px] px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700"
+                            className="text-[10px] px-2 py-0.5 rounded bg-muted hover:bg-muted text-foreground border border-border"
                             data-testid="button-spot-broaden-equipment">
                             Drop mode filter
                           </button>
@@ -2514,12 +2514,12 @@ function TieredMatchSections({
                       </div>
                     </div>
                   ) : (
-                    <div className="text-zinc-500">No matches in this tier.</div>
+                    <div className="text-muted-foreground">No matches in this tier.</div>
                   )
                 ) : (
                   <div className="max-h-[280px] overflow-y-auto">
                     <table className="w-full text-xs">
-                      <thead className="text-zinc-500 text-[10px] uppercase tracking-wider sticky top-0 bg-zinc-900">
+                      <thead className="text-muted-foreground text-[10px] uppercase tracking-wider sticky top-0 bg-card">
                         <tr><th className="text-left py-1">Date</th><th className="text-left">Customer</th><th className="text-left">Lane</th><th>Quoted</th><th>Buy</th><th>Status</th></tr>
                       </thead>
                       <tbody>
@@ -2528,15 +2528,15 @@ function TieredMatchSections({
                           const paid = num(q.carrierPaid);
                           return (
                             <tr key={q.id} onClick={() => onPickQuote(q.id)}
-                              className="border-t border-zinc-800/60 hover:bg-zinc-800/40 cursor-pointer"
+                              className="border-t border-border/60 hover:bg-muted/40 cursor-pointer"
                               data-testid={`spot-quote-row-${q.id}`}>
-                              <td className="py-1 text-zinc-300 whitespace-nowrap">{new Date(q.requestDate).toLocaleDateString()}</td>
-                              <td className="text-zinc-100 truncate max-w-[120px]">{q.customerName}</td>
-                              <td className="text-zinc-400 truncate max-w-[140px] text-[10px]">
+                              <td className="py-1 text-foreground whitespace-nowrap">{new Date(q.requestDate).toLocaleDateString()}</td>
+                              <td className="text-foreground truncate max-w-[120px]">{q.customerName}</td>
+                              <td className="text-muted-foreground truncate max-w-[140px] text-[10px]">
                                 {q.originCity}, {q.originState} → {q.destCity}, {q.destState}
                               </td>
                               <td className="text-center tabular-nums">{fmtMoney(quoted)}</td>
-                              <td className="text-center tabular-nums text-zinc-400">{paid ? fmtMoney(paid) : "—"}</td>
+                              <td className="text-center tabular-nums text-muted-foreground">{paid ? fmtMoney(paid) : "—"}</td>
                               <td className="text-center"><StatusChip status={q.outcomeStatus} /></td>
                             </tr>
                           );

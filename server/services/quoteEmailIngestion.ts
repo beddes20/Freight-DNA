@@ -382,3 +382,139 @@ function pickStr(data: Record<string, unknown>, keys: string[]): string | null {
   }
   return null;
 }
+
+// ─── Task #526: one-shot backfill of quote_opportunities from email_messages ──
+
+export interface BackfillSummary {
+  scanned: number;
+  ingested: number;
+  duplicates: number;
+  unparseable: number;
+  outbound: number;
+  errors: number;
+}
+
+/**
+ * Walk every inbound email_message for the given org and try to ingest a
+ * quote opportunity from it, in chronological order.
+ *
+ * Idempotent: each call to `ingestQuoteFromEmail` is keyed on
+ * (org, source=email, sourceReference) so re-running this backfill on the
+ * same dataset is a no-op for already-ingested messages.
+ *
+ * Use this to seed `quote_opportunities` from the historical mailbox after
+ * a customer enrolls a mailbox or after the live ingestion path has been
+ * paused for any length of time.
+ */
+export async function backfillQuotesFromEmails(
+  orgId: string,
+  opts: { sinceDays?: number; limit?: number } = {},
+): Promise<BackfillSummary> {
+  const { sinceDays, limit } = opts;
+  const summary: BackfillSummary = {
+    scanned: 0, ingested: 0, duplicates: 0, unparseable: 0, outbound: 0, errors: 0,
+  };
+
+  const rows = await db.select().from(emailMessages).where(and(
+    eq(emailMessages.orgId, orgId),
+    eq(emailMessages.direction, "inbound"),
+  ));
+  const cutoff = sinceDays && sinceDays > 0
+    ? new Date(Date.now() - sinceDays * 24 * 3600 * 1000)
+    : null;
+  const sorted = rows.sort((a, b) => {
+    const aT = (a.providerSentAt ?? a.createdAt ?? new Date(0)).getTime();
+    const bT = (b.providerSentAt ?? b.createdAt ?? new Date(0)).getTime();
+    return aT - bT;
+  });
+
+  for (const msg of sorted) {
+    if (limit && summary.scanned >= limit) break;
+    if (cutoff) {
+      const ts = msg.providerSentAt ?? msg.createdAt ?? new Date(0);
+      if (ts < cutoff) continue;
+    }
+    summary.scanned++;
+    try {
+      const result = await ingestQuoteFromEmail(msg);
+      if (result.status === "ingested") summary.ingested++;
+      else if (result.status === "skipped_duplicate") summary.duplicates++;
+      else if (result.status === "skipped_unparseable") summary.unparseable++;
+      else if (result.status === "skipped_outbound") summary.outbound++;
+    } catch (err) {
+      summary.errors++;
+      console.error("[quoteEmailIngestion] backfill error for message", msg.id, err);
+    }
+  }
+
+  return summary;
+}
+
+// Per-process guard so the auto-backfill below runs at most once per (org,
+// process). We don't need a persistent marker — `ingestQuoteFromEmail` is
+// idempotent on (org, source=email, sourceReference) so the worst case after
+// a restart is a single no-op rescan of inbound mail (every message hits the
+// dedup index and is reported as a duplicate).
+const _emailBackfillAttempted = new Set<string>();
+
+// Per-org observability for the most-recent auto-backfill. Surfaced via
+// /api/customer-quotes/email-backfill-status so ops can confirm completion.
+type EmailBackfillStatus =
+  | { state: "pending"; startedAt: string }
+  | { state: "complete"; startedAt: string; finishedAt: string; summary: BackfillSummary }
+  | { state: "failed"; startedAt: string; finishedAt: string; error: string };
+const _emailBackfillStatus = new Map<string, EmailBackfillStatus>();
+
+export function getEmailBackfillStatus(orgId: string): EmailBackfillStatus | null {
+  return _emailBackfillStatus.get(orgId) ?? null;
+}
+
+/**
+ * Lazy, one-time-per-process auto-backfill: the first time any customer-quotes
+ * API call lands for an org, walk the org's full inbound email_messages history
+ * through the quote-ingestion pipeline so every historical quote opportunity
+ * appears alongside live ones.
+ *
+ * Always processes the full history (not gated on any pre-existing quote)
+ * because partially-ingested orgs need to be brought to completeness too.
+ * `ingestQuoteFromEmail` deduplicates on (org, source=email, sourceReference),
+ * so re-walking already-ingested messages is cheap and safe.
+ *
+ * Runs as a background task (fire-and-forget) so it never blocks request
+ * latency. Progress is recorded in `_emailBackfillStatus` for observability.
+ */
+export async function ensureEmailBackfill(orgId: string): Promise<void> {
+  if (!orgId) return;
+  if (_emailBackfillAttempted.has(orgId)) return;
+  _emailBackfillAttempted.add(orgId);
+
+  const startedAt = new Date().toISOString();
+  _emailBackfillStatus.set(orgId, { state: "pending", startedAt });
+
+  // No `sinceDays`/`limit` cap — walk the entire inbound history. Idempotency
+  // is guaranteed by the per-message dedup inside `ingestQuoteFromEmail`.
+  void backfillQuotesFromEmails(orgId, {})
+    .then((summary) => {
+      _emailBackfillStatus.set(orgId, {
+        state: "complete",
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        summary,
+      });
+      if (summary.scanned > 0) {
+        console.log("[quoteEmailIngestion] auto-backfill complete", { orgId, ...summary });
+      }
+    })
+    .catch((err) => {
+      _emailBackfillStatus.set(orgId, {
+        state: "failed",
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // Clear the per-process attempt guard on failure so the next API call
+      // for this org will retry the backfill rather than be silently skipped.
+      _emailBackfillAttempted.delete(orgId);
+      console.error("[quoteEmailIngestion] auto-backfill failed (will retry on next request)", orgId, err);
+    });
+}

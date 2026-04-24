@@ -2,6 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import { AlertTriangle, Info, Mail, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/hooks/use-auth";
+
+const COVERAGE_BANNER_ROLES = new Set(["admin", "director", "sales_director"]);
 
 type Severity = "ok" | "info" | "warn" | "error";
 
@@ -63,12 +66,17 @@ const STYLES: Record<Severity, { wrap: string; icon: JSX.Element; label: string 
  * and there's no layout flicker once everything's healthy.
  */
 export function EmailCoverageBanner({ className = "" }: { className?: string }): JSX.Element | null {
+  const { user } = useAuth();
+  const allowed = !!user && COVERAGE_BANNER_ROLES.has(user.role);
+
   const { data, isLoading } = useQuery<CoverageResponse>({
     queryKey: ["/api/internal/admin/monitored-mailboxes/coverage"],
     refetchOnWindowFocus: false,
     staleTime: 60_000,
+    enabled: allowed,
   });
 
+  if (!allowed) return null;
   if (isLoading || !data) return null;
   if (data.severity === "ok") return null;
 

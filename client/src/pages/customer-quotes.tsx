@@ -47,6 +47,10 @@ type Quote = {
   carrierPaid: string | null;
   responseTimeHours: string | null;
   source: string; sourceReference: string | null;
+  // Task #526 — populated for source="email" rows so the table can deep-link
+  // to the source thread in the Conversations tab. Null when not resolvable.
+  sourceThreadId?: string | null;
+  sourceMessageId?: string | null;
   notes: string | null;
   score: string | null;
 };
@@ -163,6 +167,15 @@ type QuoteEvent = {
   actor: string | null; payload: Record<string, unknown> | null;
 };
 
+type QuoteSourceMessage = {
+  messageId: string;
+  threadId: string | null;
+  providerMessageId: string | null;
+  subject: string | null;
+  fromEmail: string | null;
+  receivedAt: string | null;
+};
+
 type QuoteDetail = {
   opp: Quote;
   events: QuoteEvent[];
@@ -175,6 +188,9 @@ type QuoteDetail = {
   relatedSameLaneGroup: Quote[];
   // Task #477 — set when this quote auto-created (or matched) a LWQ lane.
   lwqLaneId: string | null;
+  // Task #526 — populated when source = "email", lets us deep-link the
+  // drawer's Source card to the Conversations tab on the right thread.
+  sourceMessage: QuoteSourceMessage | null;
 };
 
 // ---------- Constants ----------
@@ -1043,7 +1059,26 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
                 <td className="px-2 whitespace-nowrap text-right tabular-nums text-foreground/90">{marginPct !== null ? fmtPct(marginPct) : "—"}</td>
                 <td className="px-2 whitespace-nowrap text-muted-foreground">{q.repName}</td>
                 <td className="px-2 whitespace-nowrap text-right tabular-nums text-muted-foreground">{num(q.responseTimeHours).toFixed(1)}h</td>
-                <td className="px-2 whitespace-nowrap text-muted-foreground uppercase text-[10px]">{q.source}</td>
+                <td className="px-2 whitespace-nowrap text-[10px]">
+                  {q.source === "email" && (q.sourceThreadId || q.sourceMessageId) ? (
+                    <a
+                      href={
+                        q.sourceThreadId
+                          ? `/conversations?threadId=${encodeURIComponent(q.sourceThreadId)}`
+                          : `/conversations?messageId=${encodeURIComponent(q.sourceMessageId!)}`
+                      }
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex items-center gap-0.5 text-amber-700 dark:text-amber-300 uppercase hover:underline"
+                      title="Open the source email thread in Conversations"
+                      data-testid={`link-quote-source-${q.id}`}
+                    >
+                      EMAIL
+                      <ChevronRight className="h-3 w-3" />
+                    </a>
+                  ) : (
+                    <span className="text-muted-foreground uppercase">{q.source}</span>
+                  )}
+                </td>
                 <td className="px-2 whitespace-nowrap text-right tabular-nums text-foreground/90">{num(q.score).toFixed(0)}</td>
               </tr>
             );
@@ -1435,6 +1470,29 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
             <div className="rounded bg-card border border-border p-3">
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Source</div>
               <div className="text-xs text-foreground/90">{data.opp.source.toUpperCase()} <span className="text-muted-foreground ml-2">{data.opp.sourceReference}</span></div>
+              {data.sourceMessage && (data.sourceMessage.threadId || data.sourceMessage.messageId) && (
+                <div className="mt-2 text-xs">
+                  <a
+                    href={
+                      data.sourceMessage.threadId
+                        ? `/conversations?threadId=${encodeURIComponent(data.sourceMessage.threadId)}`
+                        : `/conversations?messageId=${encodeURIComponent(data.sourceMessage.messageId)}`
+                    }
+                    className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300 hover:underline"
+                    data-testid="link-source-conversation"
+                    title={data.sourceMessage.subject ?? "Open the source email thread"}
+                  >
+                    View email thread
+                    <ChevronRight className="h-3 w-3" />
+                  </a>
+                  {data.sourceMessage.fromEmail && (
+                    <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
+                      From {data.sourceMessage.fromEmail}
+                      {data.sourceMessage.receivedAt && ` · ${new Date(data.sourceMessage.receivedAt).toLocaleString()}`}
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="text-xs text-muted-foreground mt-1">Carrier: {data.carrier?.name ?? "—"}</div>
             </div>
             <div className="rounded bg-card border border-border p-3">
