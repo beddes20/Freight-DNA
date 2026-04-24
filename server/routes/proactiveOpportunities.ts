@@ -173,22 +173,21 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       const org = orgId(req);
       const opp = await storage.getFreightOpportunity(org, String(req.params.id));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
-      let carriers = await storage.listFreightOpportunityCarriers(opp.id);
-      let rankAttempted = false;
-      let rankError: string | undefined;
+      const carriers = await storage.listFreightOpportunityCarriers(opp.id);
       // Backfill: rows imported via the Available Freight workbook never went
       // through generateOpportunitiesForCompany, so they may have no carrier
-      // shortlist persisted. Run the rank inline (mirrors the LWQ
-      // /carrier-suggestions flow with a 25s timeout) so the response is
-      // self-contained. Concurrent requests join a single in-flight Promise
-      // instead of hammering the ranker with one kickoff per poll.
+      // shortlist persisted. Kick off the rank in the background and return
+      // immediately with `rankingInFlight: true` — the client polls every 3s
+      // (refetchInterval in available-freight-detail.tsx) and picks up the
+      // shortlist as soon as the rank lands. Awaiting inline previously
+      // blocked the response for up to 25s and made the page appear frozen
+      // after a click. `runOrJoinRank` already dedupes concurrent kickoffs
+      // per opportunity, so polling does not stack up rank work.
+      let rankingInFlight = false;
       if (carriers.length === 0) {
-        const result = await runOrJoinRank(opp);
-        rankAttempted = true;
-        rankError = result.error;
-        if (result.carriers.length > 0) {
-          carriers = result.carriers as typeof carriers;
-        }
+        rankingInFlight = true;
+        // Fire-and-forget; errors are logged inside runOrJoinRank.
+        void runOrJoinRank(opp);
       }
       const audit = await storage.listFreightOpportunityAudit(opp.id);
       // Phase 4: hydrate per-carrier response history so the UI can show
@@ -205,14 +204,9 @@ export function registerProactiveOpportunityRoutes(app: Express) {
         opportunity: opp,
         carriers: carriersWithResponses,
         audit,
-        // rankingInFlight is now only true when another request is already
-        // ranking and this caller's runOrJoinRank is still awaiting — which
-        // we resolved synchronously above, so it's always false. Kept in the
-        // payload for backwards-compat with the polling client until that
-        // ships.
-        rankingInFlight: false,
-        rankAttempted,
-        rankError: rankError ?? null,
+        rankingInFlight,
+        rankAttempted: rankingInFlight,
+        rankError: null,
       });
     } catch (err) {
       console.error("[freight-opps] detail error:", err);
