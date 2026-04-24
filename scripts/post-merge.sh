@@ -22,6 +22,24 @@ if [ $DRIZZLE_EXIT -ne 0 ]; then
   echo "[post-merge] If this was a hang on an interactive prompt, run the prompted DDL manually via psql, then re-run db:push to verify." >&2
 fi
 
+# Belt-and-suspenders fallback: drizzle-kit's interactive *select* prompts
+# (e.g. "Is X table created or renamed from another table?") read from a TTY
+# and can't be answered by piping newlines. When that happens db:push hangs
+# until the timeout above and the schema never lands. To keep dev/prod in
+# sync regardless, also apply every committed migrations/*.sql file via psql.
+# All of our migrations use IF NOT EXISTS / ADD COLUMN IF NOT EXISTS so this
+# is idempotent and safe to re-run on every merge.
+if [ -d migrations ] && command -v psql >/dev/null 2>&1 && [ -n "${DATABASE_URL:-}" ]; then
+  for f in $(ls migrations/*.sql 2>/dev/null | sort); do
+    echo "[post-merge] applying $f"
+    if ! psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$f" >/dev/null 2>&1; then
+      echo "[post-merge] WARN: $f failed (continuing — may already be applied with conflicting state)" >&2
+    fi
+  done
+else
+  echo "[post-merge] skipping migrations/*.sql replay (psql or DATABASE_URL unavailable)" >&2
+fi
+
 # Ensure the session table used by connect-pg-simple is always present.
 # drizzle-kit push does not manage this table (excluded via tablesFilter),
 # but this guard recreates it if it was ever accidentally dropped.

@@ -137,6 +137,7 @@ export function ThreadDetailPane({
       queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
       queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations", thread.id, "suggestion"] });
       queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations", thread.id, "events"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations", thread.id, "summary"] });
       toast({
         title: waitingState === "resolved" ? "Marked as resolved" : "Marked as waiting on them",
       });
