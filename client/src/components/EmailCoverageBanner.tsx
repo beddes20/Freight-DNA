@@ -96,12 +96,12 @@ export function EmailCoverageBanner({ className = "" }: { className?: string }):
           <div className="mt-0.5">{style.icon}</div>
           <div className="min-w-0">
             <div className="text-sm font-semibold" data-testid="text-coverage-label">{style.label}</div>
-            <ul className="mt-1 text-xs leading-snug list-disc list-inside space-y-0.5">
+            <ul className="mt-1 text-xs font-medium leading-snug list-disc list-inside space-y-0.5">
               {messages.map(m => (
                 <li key={m} data-testid={`text-coverage-reason-${m.slice(0, 16).replace(/\W+/g, "-")}`}>{m}</li>
               ))}
             </ul>
-            <div className="mt-1 text-[11px] opacity-80" data-testid="text-coverage-stats">
+            <div className="mt-1 text-[11px] font-medium" data-testid="text-coverage-stats">
               {data.enrolledMailboxes}/{data.eligibleUsers} eligible reps enrolled
               {" · "}{data.backfills.succeeded} backfills OK
               {data.backfills.failed > 0 ? ` · ${data.backfills.failed} failed` : ""}

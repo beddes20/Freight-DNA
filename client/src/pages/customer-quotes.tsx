@@ -581,7 +581,7 @@ export default function CustomerQuotesPage(): JSX.Element {
           {hasFilters && (
             <>
               <Button size="sm" variant="ghost" onClick={clearAll} className="h-8 text-xs text-muted-foreground hover:text-foreground" data-testid="button-clear-filters">Clear all</Button>
-              <Button size="sm" variant="ghost" onClick={() => setSaveDialogOpen(true)} className="h-8 text-xs text-amber-400 hover:text-amber-300" data-testid="button-save-view"><Plus className="h-3 w-3 mr-1" /> Save view</Button>
+              <Button size="sm" variant="ghost" onClick={() => setSaveDialogOpen(true)} className="h-8 text-xs font-medium text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300" data-testid="button-save-view"><Plus className="h-3 w-3 mr-1" /> Save view</Button>
             </>
           )}
         </div>

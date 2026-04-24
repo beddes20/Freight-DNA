@@ -749,7 +749,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
               </span>
             )}
             {data?.resolvedCustomer && (
-              <span className="text-[11px] px-2 py-0.5 rounded-[4px] bg-amber-500/10 text-amber-300 border border-amber-500/30 inline-flex items-center gap-1">
+              <span className="text-[11px] font-medium px-2 py-0.5 rounded-[4px] bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/40 inline-flex items-center gap-1">
                 <Users className="h-3 w-3" />{data.resolvedCustomer.name}
               </span>
             )}
@@ -766,7 +766,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             )}
             <div className="ml-auto flex items-center gap-1">
               <Button size="sm" variant="outline" onClick={editSearch}
-                className="h-7 border-amber-500/40 hover:bg-amber-500/10 text-amber-300 text-[11px] px-2.5"
+                className="h-7 border-amber-500/50 hover:bg-amber-500/10 text-amber-700 dark:text-amber-300 font-medium text-[11px] px-2.5"
                 data-testid="button-spot-edit">
                 <SlidersHorizontal className="h-3 w-3 mr-1" /> Edit search
               </Button>
@@ -892,7 +892,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                     <button
                       type="button"
                       onClick={() => { setMatchMode("relaxed"); setActiveQuery(q => q ? { ...q, matchMode: "relaxed" } : q); }}
-                      className={`px-2.5 h-8 text-[11px] font-medium transition ${matchMode === "relaxed" ? "bg-amber-500/20 text-amber-200 border-r border-amber-500/30" : "text-muted-foreground hover:text-foreground hover:bg-muted border-r border-border"}`}
+                      className={`px-2.5 h-8 text-[11px] font-medium transition ${matchMode === "relaxed" ? "bg-amber-500/20 text-amber-800 dark:text-amber-200 border-r border-amber-500/40" : "text-muted-foreground hover:text-foreground hover:bg-muted border-r border-border"}`}
                       data-testid="button-spot-match-mode-relaxed"
                       title="Walk the full ladder: exact → market → state → reverse → corridor"
                     >
@@ -901,7 +901,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                     <button
                       type="button"
                       onClick={() => { setMatchMode("strict"); setActiveQuery(q => q ? { ...q, matchMode: "strict" } : q); }}
-                      className={`px-2.5 h-8 text-[11px] font-medium transition ${matchMode === "strict" ? "bg-amber-500/20 text-amber-200" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
+                      className={`px-2.5 h-8 text-[11px] font-medium transition ${matchMode === "strict" ? "bg-amber-500/20 text-amber-800 dark:text-amber-200" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}
                       data-testid="button-spot-match-mode-strict"
                       title="Only exact lane and same-state-pair matches"
                     >
@@ -995,18 +995,18 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
       )}
 
       {activeQuery && result.isError && !result.isLoading && (
-        <Card className="bg-red-500/10 border-red-500/30 rounded-[4px]" data-testid="spot-results-error">
+        <Card className="bg-red-500/10 border-red-500/40 rounded-[4px]" data-testid="spot-results-error">
           <CardContent className="p-4 flex items-start gap-3">
-            <AlertTriangle className="h-5 w-5 text-red-300 mt-0.5 shrink-0" />
+            <AlertTriangle className="h-5 w-5 text-red-700 dark:text-red-300 mt-0.5 shrink-0" />
             <div className="flex-1">
-              <div className="text-sm font-semibold text-red-200">Spot search failed</div>
-              <div className="text-xs text-red-300/80 mt-0.5">
+              <div className="text-sm font-semibold text-red-800 dark:text-red-200">Spot search failed</div>
+              <div className="text-xs text-red-700 dark:text-red-300/80 mt-0.5 font-medium">
                 {(result.error as Error)?.message ?? "We couldn't load results for this lane. Try again, or adjust the search and rerun."}
               </div>
             </div>
             <Button size="sm" variant="outline"
               onClick={() => void result.refetch()}
-              className="h-8 border-red-500/40 hover:bg-red-500/20 text-red-200 text-xs"
+              className="h-8 border-red-500/40 hover:bg-red-500/20 text-red-700 dark:text-red-200 font-medium text-xs"
               data-testid="button-spot-error-retry">
               <RefreshCw className="h-3 w-3 mr-1" /> Retry
             </Button>
@@ -1038,14 +1038,14 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
           <div className="rounded-[4px] border border-border bg-card px-3 py-2 flex items-center gap-4 flex-wrap" data-testid="spot-section-summary">
             <div className="flex items-center gap-1.5 text-[11px]">
               <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Found</span>
-              <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 font-semibold tabular-nums">{data.kpis.exactCount} exact</span>
-              <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-300 border border-blue-500/30 font-semibold tabular-nums">{data.kpis.similarCount} similar</span>
+              <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/40 font-semibold tabular-nums">{data.kpis.exactCount} exact</span>
+              <span className="px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/40 font-semibold tabular-nums">{data.kpis.similarCount} similar</span>
               <span className="text-muted-foreground">·</span>
               <span className="text-foreground tabular-nums">{data.kpis.customersOnLane} customer{data.kpis.customersOnLane === 1 ? "" : "s"}</span>
               {data.kpis.pendingCount > 0 && (
                 <>
                   <span className="text-muted-foreground">·</span>
-                  <span className="text-amber-300 tabular-nums">{data.kpis.pendingCount} pending</span>
+                  <span className="text-amber-700 dark:text-amber-300 tabular-nums font-medium">{data.kpis.pendingCount} pending</span>
                 </>
               )}
             </div>
@@ -1059,7 +1059,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             {data.alerts.length > 0 && (
               <button type="button"
                 onClick={() => document.querySelector('[data-testid="spot-section-alerts"]')?.scrollIntoView({ behavior: "smooth", block: "start" })}
-                className="text-[11px] inline-flex items-center gap-1 text-orange-300 hover:text-orange-200" data-testid="link-spot-summary-alerts">
+                className="text-[11px] font-medium inline-flex items-center gap-1 text-orange-700 hover:text-orange-800 dark:text-orange-300 dark:hover:text-orange-200" data-testid="link-spot-summary-alerts">
                 <AlertTriangle className="h-3 w-3" /> {data.alerts.length} alert{data.alerts.length === 1 ? "" : "s"}
               </button>
             )}
@@ -1076,7 +1076,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                   e.preventDefault();
                   onApplyLaneFilter(data.corridorPattern!.namedCorridor || data.corridorPattern!.name);
                 }}
-                className="text-[11px] px-1.5 py-0.5 rounded-[4px] bg-teal-500/10 text-teal-300 border border-teal-500/30 inline-flex items-center gap-1 hover:bg-teal-500/20 cursor-pointer"
+                className="text-[11px] font-medium px-1.5 py-0.5 rounded-[4px] bg-teal-500/15 text-teal-700 dark:text-teal-300 border border-teal-500/40 inline-flex items-center gap-1 hover:bg-teal-500/25 cursor-pointer"
                 title={[
                   `${data.corridorPattern.originRegion} → ${data.corridorPattern.destinationRegion}`,
                   data.corridorPattern.description,
@@ -1091,7 +1091,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                 <MapPin className="h-3 w-3" />
                 {data.corridorPattern.namedCorridor || data.corridorPattern.name}
                 {data.corridorPattern.seasonalityNote && (
-                  <span className="ml-1 text-[10px] px-1 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30" data-testid="chip-spot-corridor-seasonality">seasonal</span>
+                  <span className="ml-1 text-[10px] px-1 rounded bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/40 font-medium" data-testid="chip-spot-corridor-seasonality">seasonal</span>
                 )}
                 {data.corridorPattern.responsibleContact && (
                   <span
@@ -1181,8 +1181,8 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
           {/* 6. Customer panel — highlight resolved customer */}
           <SectionCard title="Customer Signals on this Lane" icon={<Users className="h-3.5 w-3.5 text-amber-400" />} testId="spot-section-customer-panel"
             action={data.resolvedCustomer ? (
-              <span className="text-[10px] text-amber-300 inline-flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+              <span className="text-[10px] font-medium text-amber-700 dark:text-amber-300 inline-flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 dark:bg-amber-400" />
                 {data.resolvedCustomer.name} highlighted
               </span>
             ) : undefined}>
@@ -1203,9 +1203,9 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                       <tr key={c.customerId}
                         className={`border-t border-border/60 hover:bg-muted/40 cursor-pointer ${isResolved ? "bg-amber-500/[0.06]" : ""}`}
                         onClick={() => onPickCustomer(c.customerId)} data-testid={`spot-customer-row-${c.customerId}`}>
-                        <td className={`py-1 font-medium ${isResolved ? "text-amber-200 border-l-2 border-amber-400 pl-2" : "text-foreground"}`}>
+                        <td className={`py-1 font-medium ${isResolved ? "text-amber-800 dark:text-amber-200 border-l-2 border-amber-500 dark:border-amber-400 pl-2" : "text-foreground"}`}>
                           {c.customerName}
-                          {isResolved && <span className="ml-1.5 text-[9px] uppercase tracking-wider text-amber-400">selected</span>}
+                          {isResolved && <span className="ml-1.5 text-[9px] uppercase tracking-wider font-semibold text-amber-700 dark:text-amber-400">selected</span>}
                         </td>
                         <td className="text-center tabular-nums">{c.quotes}</td>
                         <td className="text-center tabular-nums">{fmtPct(c.winRate)}</td>
@@ -1313,16 +1313,16 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
 
 function Kpi({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: "amber" | "blue" }): JSX.Element {
   const accentCls =
-    accent === "amber" ? "border-amber-500/30 bg-amber-500/[0.04]" :
-    accent === "blue" ? "border-blue-500/30 bg-blue-500/[0.04]" :
+    accent === "amber" ? "border-amber-500/40 bg-amber-500/[0.08] dark:bg-amber-500/[0.04]" :
+    accent === "blue" ? "border-blue-500/40 bg-blue-500/[0.08] dark:bg-blue-500/[0.04]" :
     "border-border bg-card";
   const valueCls =
-    accent === "amber" ? "text-amber-300" :
-    accent === "blue" ? "text-blue-300" :
+    accent === "amber" ? "text-amber-700 dark:text-amber-300" :
+    accent === "blue" ? "text-blue-700 dark:text-blue-300" :
     "text-foreground";
   return (
     <div className={`rounded-[4px] border p-2 ${accentCls}`} data-testid={`spot-kpi-${label.toLowerCase().replace(/\s/g, "-")}`}>
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{label}</div>
       <div className={`text-base font-semibold tabular-nums ${valueCls}`}>{value}</div>
       {sub && <div className="text-[10px] text-muted-foreground">{sub}</div>}
     </div>
@@ -1332,21 +1332,21 @@ function Kpi({ label, value, sub, accent }: { label: string; value: string; sub?
 function KpiBadgeInline({ value, freshness }: { value: string; freshness?: string | null }): JSX.Element {
   const tier = (value || "insufficient").toLowerCase();
   const tone =
-    tier === "high" ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30" :
-    tier === "medium" ? "bg-amber-500/15 text-amber-300 border-amber-500/30" :
-    tier === "low" ? "bg-orange-500/15 text-orange-300 border-orange-500/30" :
-    "bg-muted/30 text-foreground border-border/40";
+    tier === "high" ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/40" :
+    tier === "medium" ? "bg-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-500/40" :
+    tier === "low" ? "bg-orange-500/15 text-orange-700 dark:text-orange-300 border-orange-500/40" :
+    "bg-muted text-foreground border-border";
   const freshTone =
-    freshness === "fresh" ? "text-emerald-400" :
-    freshness === "recent" ? "text-amber-400" :
-    freshness === "stale" ? "text-orange-400" :
+    freshness === "fresh" ? "text-emerald-700 dark:text-emerald-400" :
+    freshness === "recent" ? "text-amber-700 dark:text-amber-400" :
+    freshness === "stale" ? "text-orange-700 dark:text-orange-400" :
     "text-muted-foreground";
   return (
     <span className="inline-flex items-center gap-1.5" data-testid="spot-confidence-inline">
       <span className={`px-1.5 py-0.5 rounded-[4px] text-[11px] font-semibold border capitalize ${tone}`}>
         {value ? value.replace(/_/g, " ") : "—"}
       </span>
-      {freshness && <span className={`text-[10px] capitalize ${freshTone}`}>· {freshness}</span>}
+      {freshness && <span className={`text-[10px] capitalize font-medium ${freshTone}`}>· {freshness}</span>}
     </span>
   );
 }
@@ -1354,22 +1354,22 @@ function KpiBadgeInline({ value, freshness }: { value: string; freshness?: strin
 function KpiBadge({ label, value, freshness }: { label: string; value: string; freshness?: string | null }): JSX.Element {
   const tier = (value || "insufficient").toLowerCase();
   const tone =
-    tier === "high" ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/30" :
-    tier === "medium" ? "bg-amber-500/15 text-amber-300 border-amber-500/30" :
-    tier === "low" ? "bg-orange-500/15 text-orange-300 border-orange-500/30" :
-    "bg-muted/30 text-foreground border-border/40";
+    tier === "high" ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/40" :
+    tier === "medium" ? "bg-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-500/40" :
+    tier === "low" ? "bg-orange-500/15 text-orange-700 dark:text-orange-300 border-orange-500/40" :
+    "bg-muted text-foreground border-border";
   const freshTone =
-    freshness === "fresh" ? "text-emerald-400" :
-    freshness === "recent" ? "text-amber-400" :
-    freshness === "stale" ? "text-orange-400" :
+    freshness === "fresh" ? "text-emerald-700 dark:text-emerald-400" :
+    freshness === "recent" ? "text-amber-700 dark:text-amber-400" :
+    freshness === "stale" ? "text-orange-700 dark:text-orange-400" :
     "text-muted-foreground";
   return (
     <div className="rounded-[4px] bg-card border border-border p-2" data-testid="spot-kpi-confidence">
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{label}</div>
       <div className={`inline-flex items-center mt-0.5 px-1.5 py-0.5 rounded-[4px] text-[11px] font-semibold border ${tone}`}>
         {value || "—"}
       </div>
-      {freshness && <div className={`text-[10px] mt-0.5 capitalize ${freshTone}`}>{freshness}</div>}
+      {freshness && <div className={`text-[10px] mt-0.5 capitalize font-medium ${freshTone}`}>{freshness}</div>}
     </div>
   );
 }
@@ -1385,14 +1385,14 @@ function AdvField({ label, children }: { label: string; children: React.ReactNod
 
 function StatusChip({ status }: { status: string }): JSX.Element {
   const colorMap: Record<string, string> = {
-    won: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-    won_low_margin: "bg-yellow-500/15 text-yellow-300 border-yellow-500/30",
-    pending: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+    won: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/40",
+    won_low_margin: "bg-yellow-500/20 text-yellow-800 dark:text-yellow-300 border-yellow-500/40",
+    pending: "bg-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-500/40",
     expired: "bg-muted-foreground/15 text-foreground border-border",
     no_response: "bg-muted-foreground/15 text-foreground border-border",
   };
-  const cls = colorMap[status] ?? "bg-red-500/15 text-red-300 border-red-500/30";
-  return <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] border ${cls}`}>{status.replace(/_/g, " ")}</span>;
+  const cls = colorMap[status] ?? "bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/40";
+  return <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium border ${cls}`}>{status.replace(/_/g, " ")}</span>;
 }
 
 function QuoteListSection({ title, icon, testId, emptyNode, quotes, onPickQuote, accent, subtitle }: {
@@ -1471,21 +1471,21 @@ function PricingGuidanceBand({ guidance, market, marketStatus, freshnessLabel }:
   const isTrac = guidance.benchmarkSource === "trac";
   const cal = guidance.calibration ?? null;
   return (
-    <div className="rounded-[4px] border border-amber-500/30 bg-gradient-to-br from-amber-500/[0.08] via-card to-card p-4" data-testid="spot-section-guidance">
+    <div className="rounded-[4px] border border-amber-500/40 bg-gradient-to-br from-amber-500/[0.12] via-card to-card dark:from-amber-500/[0.08] p-4" data-testid="spot-section-guidance">
       <div className="flex items-start gap-6 flex-wrap">
         <div className="flex flex-col">
-          <span className="text-[10px] uppercase tracking-wider text-amber-300/80 font-medium flex items-center gap-1">
+          <span className="text-[10px] uppercase tracking-wider text-amber-700 dark:text-amber-300/80 font-semibold flex items-center gap-1">
             <Activity className="h-3 w-3" /> Suggested quote range
             {isTrac && (
-              <span className="ml-1 text-[9px] px-1 py-0.5 rounded-[3px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30" data-testid="badge-spot-band-trac">TRAC</span>
+              <span className="ml-1 text-[9px] px-1 py-0.5 rounded-[3px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40 font-semibold" data-testid="badge-spot-band-trac">TRAC</span>
             )}
           </span>
-          <span className="text-3xl font-bold text-amber-400 tabular-nums leading-tight mt-0.5" data-testid="text-spot-guidance-range">
+          <span className="text-3xl font-bold text-amber-700 dark:text-amber-400 tabular-nums leading-tight mt-0.5" data-testid="text-spot-guidance-range">
             {guidance.suggestedLow !== null && guidance.suggestedHigh !== null
               ? `${fmtMoney(guidance.suggestedLow)} – ${fmtMoney(guidance.suggestedHigh)}`
               : "—"}
           </span>
-          <span className="text-[10px] text-muted-foreground mt-0.5 capitalize">
+          <span className="text-[10px] text-muted-foreground mt-0.5 capitalize font-medium">
             Source: {guidance.benchmarkSource.replace(/_/g, " ")}
           </span>
         </div>
@@ -1578,8 +1578,8 @@ function LaneTrafficCard({ traffic }: { traffic: NonNullable<SpotResult["laneTra
       </div>
       <div className="flex items-center gap-2 text-[10px] text-muted-foreground mb-2" data-testid="spot-traffic-tier-breakdown">
         <span className="uppercase tracking-wider">Match tiers:</span>
-        <span className="px-1.5 py-0.5 rounded-[3px] bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">Exact {tb.exact}</span>
-        <span className="px-1.5 py-0.5 rounded-[3px] bg-amber-500/10 text-amber-300 border border-amber-500/20">Same market {tb.sameMarket}</span>
+        <span className="px-1.5 py-0.5 rounded-[3px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40 font-medium">Exact {tb.exact}</span>
+        <span className="px-1.5 py-0.5 rounded-[3px] bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-500/40 font-medium">Same market {tb.sameMarket}</span>
         <span className="px-1.5 py-0.5 rounded-[3px] bg-muted text-muted-foreground border border-border">Same state {tb.sameState}</span>
       </div>
       {traffic.topCarriers.length === 0 ? (
@@ -1835,9 +1835,9 @@ function QuoteBuilderCard({
 
   const marginToneClass =
     marginPct === null ? "text-muted-foreground"
-    : guardrailViolation ? "text-red-300"
-    : marginPct < 10 ? "text-amber-300"
-    : "text-emerald-300";
+    : guardrailViolation ? "text-red-700 dark:text-red-300"
+    : marginPct < 10 ? "text-amber-700 dark:text-amber-300"
+    : "text-emerald-700 dark:text-emerald-300";
 
   return (
     <Card className="bg-card rounded-[4px] border border-amber-500/40 shadow-[0_0_0_1px_rgba(251,191,36,0.05)]" data-testid="spot-zone-quote-builder">
@@ -1847,7 +1847,7 @@ function QuoteBuilderCard({
         </CardTitle>
         {benchmark != null && (
           <span className="text-[10px] text-muted-foreground tabular-nums">
-            Benchmark <span className="text-amber-300">{fmtMoney(benchmark)}</span>
+            Benchmark <span className="text-amber-700 dark:text-amber-300 font-medium">{fmtMoney(benchmark)}</span>
           </span>
         )}
       </CardHeader>
@@ -1938,7 +1938,7 @@ function QuoteBuilderCard({
                 </span>
               </div>
               {guardrailViolation && (
-                <span className="text-[10px] text-red-300 inline-flex items-center gap-1" data-testid="text-builder-guardrail">
+                <span className="text-[10px] font-medium text-red-700 dark:text-red-300 inline-flex items-center gap-1" data-testid="text-builder-guardrail">
                   <AlertTriangle className="h-3 w-3" /> below {SPOT_BUILDER_GUARDRAIL_PCT}%
                 </span>
               )}
@@ -1970,13 +1970,13 @@ function QuoteBuilderCard({
                 variant="outline"
                 disabled={!savedQuoteId || draftMut.isPending}
                 onClick={() => savedQuoteId && draftMut.mutate(savedQuoteId)}
-                className="h-8 border-amber-500/40 hover:bg-amber-500/10 text-amber-200 text-xs px-3 disabled:opacity-50"
+                className="h-8 border-amber-500/50 hover:bg-amber-500/10 text-amber-700 dark:text-amber-200 font-medium text-xs px-3 disabled:opacity-50"
                 data-testid="button-builder-email"
               >
                 <Mail className="h-3 w-3 mr-1" /> {draftMut.isPending ? "Drafting…" : "Email customer"}
               </Button>
               {savedQuoteId && (
-                <span className="text-[10px] text-emerald-300 ml-auto" data-testid="text-builder-saved-id">Quote #{savedQuoteId.slice(0, 8)}</span>
+                <span className="text-[10px] font-medium text-emerald-700 dark:text-emerald-300 ml-auto" data-testid="text-builder-saved-id">Quote #{savedQuoteId.slice(0, 8)}</span>
               )}
             </div>
             {draft && (
@@ -2022,8 +2022,8 @@ function CarrierActionLinks({
     if (!mailHref && !callHref) return <span className="text-muted-foreground">—</span>;
     return (
       <div className="flex items-center gap-2">
-        {mailHref && <a href={mailHref} className="text-amber-300 hover:text-amber-200 underline" data-testid={`link-outreach-email-${idx}`}>email</a>}
-        {callHref && <a href={callHref} className="text-amber-300 hover:text-amber-200 underline" data-testid={`link-outreach-phone-${idx}`}>call</a>}
+        {mailHref && <a href={mailHref} className="text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200 font-medium underline" data-testid={`link-outreach-email-${idx}`}>email</a>}
+        {callHref && <a href={callHref} className="text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200 font-medium underline" data-testid={`link-outreach-phone-${idx}`}>call</a>}
       </div>
     );
   }
@@ -2031,7 +2031,7 @@ function CarrierActionLinks({
     <div className="flex items-center gap-1 shrink-0">
       {callHref && (
         <a href={callHref}
-          className="h-7 w-7 inline-flex items-center justify-center rounded-[4px] border border-border hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-300"
+          className="h-7 w-7 inline-flex items-center justify-center rounded-[4px] border border-border hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-700 dark:text-amber-300"
           title={`Webex call ${phone}`}
           data-testid={`button-shortlist-call-${idx}`}>
           <Phone className="h-3 w-3" />
@@ -2039,7 +2039,7 @@ function CarrierActionLinks({
       )}
       {mailHref && (
         <a href={mailHref}
-          className="h-7 w-7 inline-flex items-center justify-center rounded-[4px] border border-border hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-300"
+          className="h-7 w-7 inline-flex items-center justify-center rounded-[4px] border border-border hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-700 dark:text-amber-300"
           title={`RFQ email ${email}`}
           data-testid={`button-shortlist-email-${idx}`}>
           <Mail className="h-3 w-3" />
@@ -2064,7 +2064,7 @@ function CarrierShortlistCard({
           <Truck className="h-3.5 w-3.5 text-amber-400" /> Carriers to Call (top 5)
         </CardTitle>
         {outreach.length > 5 && (
-          <button type="button" onClick={() => setExpanded(v => !v)} className="text-[10px] text-amber-300 hover:text-amber-200 underline" data-testid="button-shortlist-show-all">
+          <button type="button" onClick={() => setExpanded(v => !v)} className="text-[10px] font-medium text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200 underline" data-testid="button-shortlist-show-all">
             {expanded ? "Show top 5" : `Show all ${outreach.length}`}
           </button>
         )}
@@ -2141,7 +2141,7 @@ function CustomerLaneTimelineCard({
           <div className="text-xs text-muted-foreground text-center py-4" data-testid="text-timeline-empty">
             {resolvedCustomer ? (
               <>
-                <div className="text-amber-300 font-medium">First-quote opportunity.</div>
+                <div className="text-amber-700 dark:text-amber-300 font-semibold">First-quote opportunity.</div>
                 <div className="text-muted-foreground mt-1">
                   This is your first quote to {resolvedCustomer.name} on this lane.
                 </div>
@@ -2264,7 +2264,7 @@ function LossPatternCard({ tieredMatches }: { tieredMatches: TierGroup[] }): JSX
                 </li>
               ))}
             </ul>
-            <div className="rounded-[4px] border border-amber-500/30 bg-amber-500/[0.05] px-2 py-1.5 text-[11px] text-amber-200" data-testid="text-loss-takeaway">
+            <div className="rounded-[4px] border border-amber-500/40 bg-amber-500/[0.10] dark:bg-amber-500/[0.05] px-2 py-1.5 text-[11px] font-medium text-amber-800 dark:text-amber-200" data-testid="text-loss-takeaway">
               {takeaway}
             </div>
           </>
@@ -2337,11 +2337,11 @@ function TieredMatchSections({
   onSwitchToRelaxed: () => void;
 }): JSX.Element {
   const accentMap: Record<TierAccent, { border: string; headerBg: string; count: string; iconColor: string }> = {
-    amber: { border: "border-amber-500/40 shadow-[0_0_0_1px_rgba(251,191,36,0.05)]", headerBg: "bg-amber-500/[0.04]", count: "text-amber-300", iconColor: "text-amber-400" },
-    blue: { border: "border-blue-500/30", headerBg: "bg-blue-500/[0.03]", count: "text-blue-300", iconColor: "text-blue-400" },
+    amber: { border: "border-amber-500/40 shadow-[0_0_0_1px_rgba(251,191,36,0.05)]", headerBg: "bg-amber-500/[0.08] dark:bg-amber-500/[0.04]", count: "text-amber-700 dark:text-amber-300", iconColor: "text-amber-600 dark:text-amber-400" },
+    blue: { border: "border-blue-500/30", headerBg: "bg-blue-500/[0.06] dark:bg-blue-500/[0.03]", count: "text-blue-700 dark:text-blue-300", iconColor: "text-blue-600 dark:text-blue-400" },
     zinc: { border: "border-border", headerBg: "bg-muted/30", count: "text-foreground", iconColor: "text-muted-foreground" },
-    purple: { border: "border-purple-500/30", headerBg: "bg-purple-500/[0.04]", count: "text-purple-300", iconColor: "text-purple-400" },
-    teal: { border: "border-teal-500/30", headerBg: "bg-teal-500/[0.04]", count: "text-teal-300", iconColor: "text-teal-400" },
+    purple: { border: "border-purple-500/30", headerBg: "bg-purple-500/[0.08] dark:bg-purple-500/[0.04]", count: "text-purple-700 dark:text-purple-300", iconColor: "text-purple-600 dark:text-purple-400" },
+    teal: { border: "border-teal-500/30", headerBg: "bg-teal-500/[0.08] dark:bg-teal-500/[0.04]", count: "text-teal-700 dark:text-teal-300", iconColor: "text-teal-600 dark:text-teal-400" },
   };
   const iconFor = (key: "award" | "map" | "users" | "truck" | "activity", color: string): JSX.Element => {
     const cls = `h-3.5 w-3.5 ${color}`;
@@ -2403,8 +2403,8 @@ function TieredMatchSections({
             : "stale";
           const freshnessClass = freshness == null
             ? "text-muted-foreground"
-            : freshness <= 14 ? "text-emerald-300"
-            : freshness <= 60 ? "text-amber-300"
+            : freshness <= 14 ? "text-emerald-700 dark:text-emerald-300 font-medium"
+            : freshness <= 60 ? "text-amber-700 dark:text-amber-300 font-medium"
             : "text-muted-foreground";
           return (
             <Card
@@ -2460,7 +2460,7 @@ function TieredMatchSections({
                             Closest tier:{" "}
                             <span className="text-foreground font-semibold">{firstNonEmptyOther.label}</span>
                             {" "}with{" "}
-                            <span className="text-amber-300 font-semibold">{firstNonEmptyOther.count}</span>
+                            <span className="text-amber-700 dark:text-amber-300 font-semibold">{firstNonEmptyOther.count}</span>
                             {" "}prior quote{firstNonEmptyOther.count === 1 ? "" : "s"}.
                           </div>
                           <button
@@ -2469,7 +2469,7 @@ function TieredMatchSections({
                               const el = document.getElementById(`spot-section-tier-${firstNonEmptyOther.tier}`);
                               if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
                             }}
-                            className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40"
+                            className="text-[10px] font-medium px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-800 dark:text-amber-200 border border-amber-500/50"
                             data-testid={`button-spot-show-tier-${firstNonEmptyOther.tier}`}
                           >
                             Show {firstNonEmptyOther.label} matches →
@@ -2478,7 +2478,7 @@ function TieredMatchSections({
                       ) : matchMode === "strict" ? (
                         <div className="text-[11px] text-muted-foreground">
                           No same-state-pair quotes either. Try{" "}
-                          <button onClick={onSwitchToRelaxed} className="text-amber-300 hover:text-amber-200 underline" data-testid="button-spot-switch-relaxed">
+                          <button onClick={onSwitchToRelaxed} className="text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200 font-medium underline" data-testid="button-spot-switch-relaxed">
                             switching to Relaxed mode
                           </button>
                           {" "}to also include same-market, reverse, and corridor matches.
