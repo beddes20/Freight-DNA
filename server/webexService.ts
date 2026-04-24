@@ -244,7 +244,7 @@ function isInvalidGrantError(status: number, body: string): boolean {
  * row so the boot reconciler can mark older grants as `needs_reauth` and
  * force a one-time reconnect that grants the new analytics-enabled scopes.
  */
-export const WEBEX_SCOPE_VERSION = 2;
+export const WEBEX_SCOPES_VERSION = 2;
 
 /**
  * Full analytics-enabled scope set (Task #466). Personal tokens that lack
@@ -1001,7 +1001,7 @@ async function paginateWebex<T = any>(
   token: string,
   itemsKey: string = "items",
   max: number = 5_000,
-): Promise<{ items: T[]; lastError: string | null }> {
+): Promise<{ items: T[]; lastError: string | null; failed: boolean }> {
   const out: T[] = [];
   let url: string | null = initialUrl;
   let lastError: string | null = null;
@@ -1020,31 +1020,33 @@ async function paginateWebex<T = any>(
     const m = link.match(/<([^>]+)>;\s*rel="next"/);
     url = m ? m[1] : null;
   }
-  return { items: out, lastError };
+  return { items: out, lastError, failed: !!lastError };
 }
 
-export async function listWebexWorkspaces(maxResults = 1000, accessToken?: string): Promise<{ items: any[]; lastError: string | null }> {
+export type WebexListResult = { items: any[]; lastError: string | null; failed: boolean };
+
+export async function listWebexWorkspaces(maxResults = 1000, accessToken?: string): Promise<WebexListResult> {
   const token = accessToken ?? (await getWebexAccessToken());
   const orgId = process.env.WEBEX_ORG_ID!;
   const url = `https://webexapis.com/v1/workspaces?orgId=${encodeURIComponent(orgId)}&max=100`;
   return paginateWebex(url, token, "items", maxResults);
 }
 
-export async function listWebexLocations(maxResults = 1000, accessToken?: string): Promise<{ items: any[]; lastError: string | null }> {
+export async function listWebexLocations(maxResults = 1000, accessToken?: string): Promise<WebexListResult> {
   const token = accessToken ?? (await getWebexAccessToken());
   const orgId = process.env.WEBEX_ORG_ID!;
   const url = `https://webexapis.com/v1/locations?orgId=${encodeURIComponent(orgId)}&max=100`;
   return paginateWebex(url, token, "items", maxResults);
 }
 
-export async function listWebexCallQueues(maxResults = 1000, accessToken?: string): Promise<{ items: any[]; lastError: string | null }> {
+export async function listWebexCallQueues(maxResults = 1000, accessToken?: string): Promise<WebexListResult> {
   const token = accessToken ?? (await getWebexAccessToken());
   const orgId = process.env.WEBEX_ORG_ID!;
   const url = `https://webexapis.com/v1/telephony/config/queues?orgId=${encodeURIComponent(orgId)}&max=100`;
   return paginateWebex(url, token, "queues", maxResults);
 }
 
-export async function listWebexHuntGroups(maxResults = 1000, accessToken?: string): Promise<{ items: any[]; lastError: string | null }> {
+export async function listWebexHuntGroups(maxResults = 1000, accessToken?: string): Promise<WebexListResult> {
   const token = accessToken ?? (await getWebexAccessToken());
   const orgId = process.env.WEBEX_ORG_ID!;
   const url = `https://webexapis.com/v1/telephony/config/huntGroups?orgId=${encodeURIComponent(orgId)}&max=100`;
@@ -1056,9 +1058,27 @@ export async function listWebexHuntGroups(maxResults = 1000, accessToken?: strin
  * `/v1/telephony/voiceMessages` for the authenticated user; admin scopes
  * surface org-wide voicemail summaries via reports.
  */
-export async function listWebexVoicemails(accessToken: string, maxResults = 200): Promise<{ items: any[]; lastError: string | null }> {
+export async function listWebexVoicemails(accessToken: string, maxResults = 200): Promise<WebexListResult> {
   const url = `https://webexapis.com/v1/telephony/voiceMessages?max=${Math.min(100, maxResults)}`;
   return paginateWebex(url, accessToken, "items", maxResults);
+}
+
+/**
+ * Per-user voicemail listing wrapper. Same shape as listWebexVoicemails — the
+ * routes layer prefers this name for clarity (per-user vs org-wide).
+ */
+export async function fetchUserVoicemails(accessToken: string, maxResults = 500): Promise<WebexListResult> {
+  return listWebexVoicemails(accessToken, maxResults);
+}
+
+/**
+ * Org-wide admin reports (usage / call quality summaries). Requires
+ * `analytics:read_all` scope; non-admin tokens will get 403 and `failed=true`.
+ */
+export async function listWebexAdminReports(accessToken?: string, maxResults = 200): Promise<WebexListResult> {
+  const token = accessToken ?? (await getWebexAccessToken());
+  const url = `https://webexapis.com/v1/devices/reports?max=${Math.min(100, maxResults)}`;
+  return paginateWebex(url, token, "items", maxResults);
 }
 
 /**
@@ -1076,5 +1096,31 @@ export async function downloadWebexVoicemailAudio(voicemailId: string, accessTok
   } catch {
     return null;
   }
-  return null;
+}
+
+/**
+ * Download voicemail audio with a structured shape that surfaces the
+ * content-type for downstream Whisper transcription. Invokes `onFailure`
+ * with request metadata so callers can persist into webex_api_failures.
+ */
+export async function fetchVoicemailAudio(
+  accessToken: string,
+  voicemailId: string,
+  onFailure?: (info: { url: string; status: number; body: string }) => void,
+): Promise<{ buffer: Buffer; contentType: string } | null> {
+  if (!voicemailId) return null;
+  const url = `https://webexapis.com/v1/telephony/voiceMessages/${encodeURIComponent(voicemailId)}/audio`;
+  const res = await webexFetch(url, { token: accessToken });
+  if (!res.ok || !res.response) {
+    onFailure?.({ url, status: res.status, body: res.error ?? "" });
+    return null;
+  }
+  try {
+    const ab = await res.response.arrayBuffer();
+    const contentType = res.response.headers.get("content-type") ?? "audio/wav";
+    return { buffer: Buffer.from(ab), contentType };
+  } catch (err) {
+    onFailure?.({ url, status: res.status, body: err instanceof Error ? err.message : String(err) });
+    return null;
+  }
 }

@@ -1347,7 +1347,7 @@ export function registerWebexRoutes(app: Express) {
     // behind the current set. They get prompted to reconnect once so the
     // new analytics/admin scopes are granted; then everything lights up.
     try {
-      const { WEBEX_SCOPE_VERSION } = await import("../webexService");
+      const { WEBEX_SCOPES_VERSION } = await import("../webexService");
       const result = await storage.pool.query(
         `UPDATE webex_user_tokens
            SET needs_reauth = TRUE,
@@ -1356,10 +1356,10 @@ export function registerWebexRoutes(app: Express) {
                updated_at = NOW()
          WHERE COALESCE(scope_version, 0) < $2
            AND needs_reauth = FALSE`,
-        ["scope_upgrade_v" + WEBEX_SCOPE_VERSION, WEBEX_SCOPE_VERSION],
+        ["scope_upgrade_v" + WEBEX_SCOPES_VERSION, WEBEX_SCOPES_VERSION],
       );
       if ((result.rowCount ?? 0) > 0) {
-        log(`Marked ${result.rowCount} per-user Webex tokens as needs-reauth (scope_version < ${WEBEX_SCOPE_VERSION})`);
+        log(`Marked ${result.rowCount} per-user Webex tokens as needs-reauth (scope_version < ${WEBEX_SCOPES_VERSION})`);
       }
     } catch (e) {
       log(`Scope-version reauth bump failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -1615,9 +1615,9 @@ export function registerWebexRoutes(app: Express) {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const record = await storage.getWebexUserToken(user.id);
-      const { WEBEX_SCOPE_VERSION } = await import("../webexService");
+      const { WEBEX_SCOPES_VERSION } = await import("../webexService");
       const grantedScopes = (record?.scopes ?? "").split(/\s+/).filter(Boolean);
-      const scopeUpgradeAvailable = !!record && (record.scopeVersion ?? 0) < WEBEX_SCOPE_VERSION;
+      const scopeUpgradeAvailable = !!record && (record.scopeVersion ?? 0) < WEBEX_SCOPES_VERSION;
       res.json({
         configured: webexCredentialsConfigured(),
         connected: !!record && !record.needsReauth,
@@ -1632,7 +1632,7 @@ export function registerWebexRoutes(app: Express) {
         lastRefreshError: record?.lastRefreshError ?? null,
         grantedScopes,
         scopeVersion: record?.scopeVersion ?? 0,
-        currentScopeVersion: WEBEX_SCOPE_VERSION,
+        currentScopeVersion: WEBEX_SCOPES_VERSION,
         scopeUpgradeAvailable,
       });
     } catch (err) {
@@ -1664,7 +1664,7 @@ export function registerWebexRoutes(app: Express) {
       if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
       if (!user.organizationId) return res.status(400).json({ error: "User has no organization" });
 
-      const { WEBEX_SCOPE_VERSION, WEBEX_OAUTH_SCOPES } = await import("../webexService");
+      const { WEBEX_SCOPES_VERSION, WEBEX_OAUTH_SCOPES } = await import("../webexService");
       const requiredScopes = WEBEX_OAUTH_SCOPES.split(/\s+/).filter(Boolean);
 
       const [tokensResult, syncStatesResult, jobCountsResult, recentFailuresResult, inventoryCountsResult] = await Promise.all([
@@ -1723,7 +1723,7 @@ export function registerWebexRoutes(app: Express) {
           webexDisplayName: row.webex_display_name,
           scopeVersion: row.scope_version,
           needsReauth: !!row.needs_reauth,
-          scopeUpgradeAvailable: row.scope_version < WEBEX_SCOPE_VERSION,
+          scopeUpgradeAvailable: row.scope_version < WEBEX_SCOPES_VERSION,
           grantedScopes: granted,
           missingScopes,
           lastRefreshAt: row.last_refresh_at,
@@ -1763,7 +1763,7 @@ export function registerWebexRoutes(app: Express) {
       }));
 
       res.json({
-        currentScopeVersion: WEBEX_SCOPE_VERSION,
+        currentScopeVersion: WEBEX_SCOPES_VERSION,
         requiredScopes,
         maxBackfillDays: MAX_BACKFILL_DAYS,
         users,

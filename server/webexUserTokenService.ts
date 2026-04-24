@@ -17,7 +17,7 @@ import {
   fetchWebexMe,
   WebexRefreshRevokedError,
   WEBEX_OAUTH_SCOPES,
-  WEBEX_SCOPE_VERSION,
+  WEBEX_SCOPES_VERSION,
   type WebexTokenResponse,
 } from "./webexService";
 import { sendEmail, emailEnabled, baseEmailTemplate } from "./emailService";
@@ -173,7 +173,7 @@ export async function connectUserWebex(
     lastRefreshAt: new Date(),
     lastRefreshError: null,
     scopes: tokens.scope ?? WEBEX_OAUTH_SCOPES,
-    scopeVersion: WEBEX_SCOPE_VERSION,
+    scopeVersion: WEBEX_SCOPES_VERSION,
     disconnectedAt: null,
   };
   let record = await storage.upsertWebexUserToken(insert);
