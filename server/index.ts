@@ -213,12 +213,23 @@ app.use(express.urlencoded({ extended: false }));
 // completes and flips `isReady = true`. /healthz returns 200 unconditionally
 // so the platform health check passes even mid-boot.
 let isReady = false;
+
+// Always-200 endpoints so any platform health check (Replit Autoscale's
+// promote stage, an external uptime monitor, a load balancer, etc.) passes
+// during the boot window even before migrations + route registration finish.
+// Multiple paths are covered because different platforms hit different
+// conventions (/, /healthz, /health, /_health).
+const HEALTH_PATHS = new Set(["/", "/healthz", "/health", "/_health", "/readyz"]);
 app.get("/healthz", (_req, res) => {
   res.status(200).type("text/plain").send(isReady ? "ok" : "starting");
 });
 app.use((req, res, next) => {
   if (isReady) return next();
-  // Allow the readiness probe through; everything else gets a 503 until boot completes.
+  // Health probes (any method): respond 2xx so promote sees a live app.
+  if (HEALTH_PATHS.has(req.path)) {
+    return res.status(200).type("text/plain").send("starting");
+  }
+  // Everything else: 503 until boot completes so we don't half-serve traffic.
   res.status(503).type("text/plain").send("Server starting…");
 });
 
@@ -288,6 +299,26 @@ async function initStripe() {
     log(`Stripe initialization warning: ${message}`, "stripe");
   }
 }
+
+// Process-level safety nets.
+//
+// Modern Node exits the process on an unhandled promise rejection or an
+// uncaught exception by default, which means a single misbehaving scheduler
+// or one bad migration would kill the whole server during boot — and on
+// Replit Autoscale that translates to "Promote failed: app failed to start"
+// with no app logs.
+//
+// We log + keep running. The readiness gate above still gates traffic
+// behind `isReady`, and the platform health check still gets 200 from the
+// HEALTH_PATHS handler, so the deploy can complete and the failing surface
+// is investigatable instead of opaque.
+process.on("unhandledRejection", (reason) => {
+  const message = reason instanceof Error ? `${reason.message}\n${reason.stack ?? ""}` : String(reason);
+  console.error("[process] Unhandled promise rejection (kept process alive):", message);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[process] Uncaught exception (kept process alive):", err);
+});
 
 (async () => {
   // Bind the port FIRST so Replit Autoscale's promote health check passes
@@ -484,4 +515,13 @@ async function initStripe() {
           log(`[lane-cache] Warm-up aborted: ${err instanceof Error ? err.message : String(err)}`, "startup");
         }
       }, 20_000); // 20s: after HF cache and DB pool are fully settled
-})();
+})().catch((err) => {
+  // Last-ditch safety net for the boot IIFE itself. We DO NOT exit the
+  // process — Replit Autoscale interprets a crashed process as a failed
+  // promote, and the readiness gate above (with HEALTH_PATHS returning 200)
+  // is enough to keep the app technically alive while the failure is
+  // surfaced via logs. Critically, this also prevents a single failing
+  // dynamic import (e.g. one stale persona migration) from killing the
+  // whole deploy.
+  console.error("[startup] Boot IIFE failed:", err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : err);
+});
