@@ -1683,13 +1683,12 @@ export function equipmentFamily(raw: string | null | undefined): EquipmentFamily
 }
 
 /**
- * Same-market test for a single endpoint: equal city OR within ~75 mi
- * by haversine. Picks up neighboring origin/destination cities reps
- * think of as "the same market" (Long Beach ↔ Compton, Phoenix ↔
- * Glendale AZ, etc). KMA-based matching is intentionally NOT included
- * here — it lives in the lower-precedence `same_corridor` tier so that
- * cross-state KMA neighbors (Newark, NJ ↔ NYC, NY) still surface but
- * are clearly labelled as corridor matches rather than same-market.
+ * Same-market test for a single endpoint: equal city, OR within ~75 mi
+ * by haversine, OR — as a fallback when coords are missing — sharing
+ * the same KMA (the closest stand-in we have for "shared 3-digit ZIP"
+ * given quote_opportunities lacks postal codes). Picks up neighboring
+ * origin/destination cities reps think of as "the same market"
+ * (Long Beach ↔ Compton, Phoenix ↔ Glendale AZ, etc).
  */
 function endpointsSameMarket(
   cityA: string, stateA: string, cityB: string, stateB: string,
@@ -1701,6 +1700,15 @@ function endpointsSameMarket(
   if (a && b) {
     const d = haversineDistanceMiles(a[0], a[1], b[0], b[1]);
     if (isFinite(d) && d <= withinMiles) return true;
+  }
+  // Fallback when coordinates are missing for either endpoint: shared
+  // KMA stands in for the spec's "shared 3-digit ZIP" concept (we
+  // don't store postal codes on quote_opportunities). Only used as a
+  // backstop so coord-known pairs aren't reclassified.
+  if (!a || !b) {
+    const kmaA = cityToKma(cityA, stateA);
+    const kmaB = cityToKma(cityB, stateB);
+    if (kmaA && kmaB && kmaA.kma === kmaB.kma) return true;
   }
   return false;
 }
@@ -1741,16 +1749,18 @@ export function classifyMatchTier(
   );
   if (reverseOriginMarket && reverseDestMarket) return "reverse_lane";
 
-  // Corridor: same KMA at both ends (catches in-corridor pairs the
-  // 75-mile rule misses).
+  // Corridor: a one-sided KMA touch — at least one endpoint shares a
+  // KMA (origin OR destination), but the lane doesn't qualify under
+  // the tighter tiers above. Catches "in-corridor" partial overlaps
+  // such as a quote that starts in the same metro but delivers
+  // somewhere else, useful as a soft fallback for pricing context.
   const inOriginKma = cityToKma(input.pickupCity, input.pickupState);
   const inDestKma = cityToKma(input.deliveryCity, input.deliveryState);
   const rOriginKma = cityToKma(r.originCity, r.originState);
   const rDestKma = cityToKma(r.destCity, r.destState);
-  if (
-    inOriginKma && inDestKma && rOriginKma && rDestKma &&
-    inOriginKma.kma === rOriginKma.kma && inDestKma.kma === rDestKma.kma
-  ) return "same_corridor";
+  const originKmaTouch = !!(inOriginKma && rOriginKma && inOriginKma.kma === rOriginKma.kma);
+  const destKmaTouch = !!(inDestKma && rDestKma && inDestKma.kma === rDestKma.kma);
+  if (originKmaTouch || destKmaTouch) return "same_corridor";
 
   return null;
 }
@@ -1780,10 +1790,10 @@ const TIER_LABEL: Record<MatchTier, string> = {
 
 const TIER_RULE_TOOLTIP: Record<MatchTier, string> = {
   exact: "Same origin and destination city + state.",
-  same_market: "Both endpoints within ~75 miles or share the same KMA.",
+  same_market: "Both endpoints within ~75 miles by haversine, or sharing the same KMA when coordinates are unavailable.",
   same_state: "Same origin state and destination state, different cities.",
   reverse_lane: "Lane runs in the opposite direction (origin ↔ destination).",
-  same_corridor: "Same KMA pair — broader corridor match.",
+  same_corridor: "At least one endpoint shares a KMA — soft corridor overlap.",
 };
 
 export function tierLabel(tier: MatchTier): string { return TIER_LABEL[tier]; }

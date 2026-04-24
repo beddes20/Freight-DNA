@@ -42,10 +42,10 @@ export type MatchTier = "exact" | "same_market" | "same_state" | "reverse_lane" 
 
 const TIER_DISPLAY: { tier: MatchTier; label: string; rule: string; accent: TierAccent; icon: "award" | "map" | "users" | "truck" | "activity" }[] = [
   { tier: "exact", label: "Exact lane", rule: "Same origin and destination city + state.", accent: "amber", icon: "award" },
-  { tier: "same_market", label: "Same market (~75 mi)", rule: "Both endpoints within ~75 miles or share the same KMA.", accent: "blue", icon: "map" },
+  { tier: "same_market", label: "Same market (~75 mi)", rule: "Both endpoints within ~75 miles by haversine, or sharing the same KMA when coordinates are unavailable.", accent: "blue", icon: "map" },
   { tier: "same_state", label: "Same state pair", rule: "Same origin state and destination state, different cities.", accent: "zinc", icon: "map" },
   { tier: "reverse_lane", label: "Reverse direction", rule: "Lane runs in the opposite direction (origin ↔ destination).", accent: "purple", icon: "activity" },
-  { tier: "same_corridor", label: "Same corridor (KMA)", rule: "Same KMA pair — broader corridor match.", accent: "teal", icon: "truck" },
+  { tier: "same_corridor", label: "Same corridor (KMA)", rule: "At least one endpoint shares a KMA — soft corridor overlap.", accent: "teal", icon: "truck" },
 ];
 
 type TierAccent = "amber" | "blue" | "zinc" | "purple" | "teal";

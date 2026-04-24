@@ -16,10 +16,14 @@ import { describe, it, expect, vi } from "vitest";
 vi.mock("../kmaMapping", async () => {
   const actual = await vi.importActual<typeof import("../kmaMapping")>("../kmaMapping");
   const TEST_OVERRIDES: Record<string, { kma: string; label: string }> = {
+    // same_market coords-missing fallback: both endpoints share a KMA.
+    "market-origin-a|XX": { kma: "MKA", label: "Test Market A" },
+    "market-origin-b|XX": { kma: "MKA", label: "Test Market A" },
+    "market-dest-a|XX":   { kma: "MKB", label: "Test Market B" },
+    "market-dest-b|XX":   { kma: "MKB", label: "Test Market B" },
+    // same_corridor: only ONE endpoint shares a KMA (origin), the other doesn't.
     "corridor-origin-a|XX": { kma: "ZZA", label: "Test Origin Metro" },
     "corridor-origin-b|YY": { kma: "ZZA", label: "Test Origin Metro" },
-    "corridor-dest-a|XX":   { kma: "ZZB", label: "Test Dest Metro" },
-    "corridor-dest-b|YY":   { kma: "ZZB", label: "Test Dest Metro" },
   };
   return {
     ...actual,
@@ -105,16 +109,29 @@ describe("classifyMatchTier", () => {
     })).toBe("reverse_lane");
   });
 
-  it("returns 'same_corridor' when both endpoints share KMAs across state lines", () => {
-    // Synthetic cross-state corridor (mocked KMA above). Both endpoint
-    // pairs share a KMA, but the cities differ, lack coords, and live
-    // in different states — so exact / same_market / same_state /
-    // reverse_lane all fail and the corridor tier wins.
+  it("returns 'same_market' via the KMA fallback when coordinates are missing", () => {
+    // Both endpoint pairs share a mocked KMA. The synthetic city names
+    // have no coordinates, so the haversine path can't fire — the
+    // KMA fallback (stand-in for shared 3-digit ZIP) must classify
+    // this as same_market, not drop to same_corridor.
+    expect(classifyMatchTier(
+      { pickupCity: "market-origin-a", pickupState: "XX",
+        deliveryCity: "market-dest-a", deliveryState: "XX" },
+      { originCity: "market-origin-b", originState: "XX",
+        destCity: "market-dest-b", destState: "XX" },
+    )).toBe("same_market");
+  });
+
+  it("returns 'same_corridor' when only ONE endpoint shares a KMA (one-sided touch)", () => {
+    // Origin endpoints share KMA "ZZA", destination endpoints have
+    // no KMA mapping — so neither same_market (needs both) nor
+    // same_state (states differ) qualify, leaving the soft corridor
+    // tier as the only match.
     expect(classifyMatchTier(
       { pickupCity: "corridor-origin-a", pickupState: "XX",
-        deliveryCity: "corridor-dest-a", deliveryState: "XX" },
+        deliveryCity: "no-kma-dest-a", deliveryState: "XX" },
       { originCity: "corridor-origin-b", originState: "YY",
-        destCity: "corridor-dest-b", destState: "YY" },
+        destCity: "no-kma-dest-b", destState: "YY" },
     )).toBe("same_corridor");
   });
 
