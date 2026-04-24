@@ -4367,4 +4367,89 @@ export async function runMigrations() {
   } finally {
     clientSenderMap.release();
   }
+
+  // ── Task #601: Available Freight Cockpit schema ──────────────────────────
+  // Adds the cockpit's snooze column on freight_opportunities, the auto-pilot
+  // controls on company_outreach_policies, and the two cockpit-only tables
+  // (saved views + per-user prefs). All idempotent.
+  const clientCockpit = await pool.connect();
+  try {
+    await clientCockpit.query(`
+      ALTER TABLE freight_opportunities
+        ADD COLUMN IF NOT EXISTS snoozed_until TIMESTAMP
+    `);
+    await clientCockpit.query(`
+      ALTER TABLE company_outreach_policies
+        ADD COLUMN IF NOT EXISTS auto_send_enabled    BOOLEAN NOT NULL DEFAULT FALSE,
+        ADD COLUMN IF NOT EXISTS auto_send_hour_ct    INTEGER NOT NULL DEFAULT 8,
+        ADD COLUMN IF NOT EXISTS auto_send_top_n      INTEGER NOT NULL DEFAULT 3,
+        ADD COLUMN IF NOT EXISTS auto_send_max_per_day INTEGER NOT NULL DEFAULT 10,
+        ADD COLUMN IF NOT EXISTS auto_send_last_run_at TIMESTAMP
+    `);
+    await clientCockpit.query(`
+      CREATE INDEX IF NOT EXISTS company_outreach_policies_auto_send_idx
+        ON company_outreach_policies (org_id, auto_send_enabled)
+    `);
+    await clientCockpit.query(`
+      CREATE TABLE IF NOT EXISTS freight_opportunity_saved_views (
+        id         varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id     varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id    varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name       text    NOT NULL,
+        filters    jsonb   NOT NULL DEFAULT '{}'::jsonb,
+        is_shared  boolean NOT NULL DEFAULT FALSE,
+        created_at timestamp NOT NULL DEFAULT NOW(),
+        updated_at timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientCockpit.query(`
+      CREATE INDEX IF NOT EXISTS freight_saved_views_org_user_idx
+        ON freight_opportunity_saved_views (org_id, user_id)
+    `);
+    await clientCockpit.query(`
+      CREATE TABLE IF NOT EXISTS user_freight_cockpit_prefs (
+        user_id              varchar PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        org_id               varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        active_view_id       varchar REFERENCES freight_opportunity_saved_views(id) ON DELETE SET NULL,
+        layout               text    NOT NULL DEFAULT 'table',
+        grouping             text    NOT NULL DEFAULT 'none',
+        sort                 text    NOT NULL DEFAULT 'urgency',
+        autopilot_muted_until timestamp,
+        updated_at           timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientCockpit.query(`
+      CREATE INDEX IF NOT EXISTS user_freight_cockpit_prefs_org_idx
+        ON user_freight_cockpit_prefs (org_id)
+    `);
+    console.log("[migrations] Task #601 cockpit schema ensured (snooze, auto-pilot, saved views, prefs)");
+  } catch (err) {
+    console.error("[migrations] Task #601 cockpit migration error:", err);
+  } finally {
+    clientCockpit.release();
+  }
+
+  // ── Task #611: email_reply_latency_regression_settings ────────────────────
+  // Per-org configuration for the weekly reply-speed regression detector.
+  // Idempotent.
+  const clientReplyRegression = await pool.connect();
+  try {
+    await clientReplyRegression.query(`
+      CREATE TABLE IF NOT EXISTS email_reply_latency_regression_settings (
+        organization_id    varchar PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+        enabled            boolean NOT NULL DEFAULT TRUE,
+        lookback_weeks     integer NOT NULL DEFAULT 4,
+        p90_regression_pct integer NOT NULL DEFAULT 25,
+        min_replies        integer NOT NULL DEFAULT 10,
+        business_hours     boolean NOT NULL DEFAULT TRUE,
+        updated_at         timestamp NOT NULL DEFAULT NOW(),
+        updated_by         varchar REFERENCES users(id) ON DELETE SET NULL
+      )
+    `);
+    console.log("[migrations] email_reply_latency_regression_settings table ensured (Task #611)");
+  } catch (err) {
+    console.error("[migrations] email_reply_latency_regression_settings migration error:", err);
+  } finally {
+    clientReplyRegression.release();
+  }
 }
