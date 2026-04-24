@@ -11,6 +11,9 @@ import {
   createQuoteCustomer,
   setCustomerPartyType,
   clearPartyTypeBackfillCache,
+  getActionQueue,
+  bulkReassignCustomerForQuotes,
+  bulkSetQuoteStatus,
   type QuoteFilters, type ListSortKey,
 } from "../services/customerQuotes";
 import { QUOTE_PARTY_TYPES } from "@shared/schema";
@@ -332,6 +335,82 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const msg = err instanceof Error ? err.message : "Internal error";
       console.error("[customer-quotes] pricing-floors patch error:", err);
       res.status(500).json({ error: msg });
+    }
+  });
+
+  // Customer Quotes #2 — Action Queue (sla-breaching / needs-review /
+  // expiring-today). Each list capped at `limit` (default 5, max 25).
+  app.get("/api/customer-quotes/action-queue", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const schema = z.object({
+        limit: z.preprocess(
+          v => v === undefined ? 5 : Number(v),
+          z.number().int().min(1).max(25),
+        ),
+      });
+      const parsed = schema.safeParse(req.query);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid query", issues: parsed.error.issues });
+      const queue = await getActionQueue(user.organizationId, { limit: parsed.data.limit });
+      res.json(queue);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
+      console.error("[customer-quotes] action-queue error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Customer Quotes #2 — bulk reassign Needs-Review quotes to a real
+  // customer. Defensive: a quote is skipped if its current customer is
+  // NOT in the shared "Unknown — needs review" bucket.
+  app.post("/api/customer-quotes/quotes/bulk-reassign-customer", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const schema = z.object({
+        quoteIds: z.array(z.string().min(1)).min(1).max(500),
+        targetCustomerId: z.string().min(1),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid input", issues: parsed.error.issues });
+      const result = await bulkReassignCustomerForQuotes(
+        user.organizationId,
+        parsed.data.quoteIds,
+        parsed.data.targetCustomerId,
+      );
+      // Bust the lazy backfill cache so snapshot KPIs reflect the move.
+      clearPartyTypeBackfillCache(user.organizationId);
+      res.json(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Invalid input";
+      console.error("[customer-quotes] bulk-reassign error:", err);
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // Customer Quotes #2 — bulk-flip outcome status. Used by the
+  // "Mark ignored" / "Mark pending" bulk action.
+  app.post("/api/customer-quotes/quotes/bulk-status", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const schema = z.object({
+        quoteIds: z.array(z.string().min(1)).min(1).max(500),
+        status: z.enum(["ignored", "pending"]),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid input", issues: parsed.error.issues });
+      const result = await bulkSetQuoteStatus(
+        user.organizationId,
+        parsed.data.quoteIds,
+        parsed.data.status,
+      );
+      res.json(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Invalid input";
+      console.error("[customer-quotes] bulk-status error:", err);
+      res.status(400).json({ error: msg });
     }
   });
 

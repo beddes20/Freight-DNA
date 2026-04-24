@@ -34,6 +34,8 @@ import { PricingRecommendationCard } from "@/components/PricingRecommendationCar
 import { MarginFloorsSettings } from "@/components/MarginFloorsSettings";
 import { SpotQuoteSearch } from "@/components/SpotQuoteSearch";
 import { EmailCoverageBanner } from "@/components/EmailCoverageBanner";
+import { ActionQueueCard } from "@/components/customer-quotes/ActionQueueCard";
+import { computeQuoteSla, formatSlaBadge } from "@shared/quoteSla";
 
 // ---------- Types (mirror server contract) ----------
 type Quote = {
@@ -60,6 +62,10 @@ type Quote = {
   sourceMessageId?: string | null;
   notes: string | null;
   score: string | null;
+  // Customer Quotes #2 — server-computed SLA snapshot. The badge column
+  // recomputes off requestDate so it ticks between refetches.
+  slaState?: "ok" | "warning" | "breached" | "na";
+  minutesSinceRequest?: number;
 };
 
 type ListResult = { rows: Quote[]; total: number; offset: number; limit: number };
@@ -547,6 +553,64 @@ export default function CustomerQuotesPage(): JSX.Element {
     await updateQuoteMutation.mutateAsync({ id: quoteId, patch: { customerId } });
   };
 
+  // Customer Quotes #2 — bulk selection lives at the page level so the
+  // floating bulk-action bar and the row checkboxes stay in sync.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const toggleSelect = (id: string): void => setSelectedIds(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const toggleSelectAll = (ids: string[], checked: boolean): void => setSelectedIds(prev => {
+    const next = new Set(prev);
+    for (const id of ids) {
+      if (checked) next.add(id); else next.delete(id);
+    }
+    return next;
+  });
+  const clearSelection = (): void => setSelectedIds(new Set());
+
+  // Customer Quotes #2 — bulk endpoints. Both invalidate snapshot+list so
+  // KPIs and the table reflect the change in one round-trip.
+  const bulkReassignMutation = useMutation({
+    mutationFn: async (input: { quoteIds: string[]; targetCustomerId: string }):
+      Promise<{ updated: number; skipped: string[] }> => {
+      const res = await apiRequest(
+        "POST",
+        "/api/customer-quotes/quotes/bulk-reassign-customer",
+        input,
+      );
+      return res.json() as Promise<{ updated: number; skipped: string[] }>;
+    },
+    onSuccess: (result) => {
+      const skipped = result.skipped?.length ?? 0;
+      toast({
+        title: `${result.updated} quote(s) reassigned`,
+        description: skipped > 0 ? `${skipped} skipped (already classified).` : undefined,
+      });
+      clearSelection();
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/snapshot"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/list"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/action-queue"] });
+    },
+    onError: (err: Error) => toast({ title: "Bulk reassign failed", description: err.message, variant: "destructive" }),
+  });
+
+  const bulkStatusMutation = useMutation({
+    mutationFn: async (input: { quoteIds: string[]; status: "ignored" | "pending" }): Promise<{ updated: number }> => {
+      const res = await apiRequest("POST", "/api/customer-quotes/quotes/bulk-status", input);
+      return res.json() as Promise<{ updated: number }>;
+    },
+    onSuccess: (result, vars) => {
+      toast({ title: `${result.updated} quote(s) marked ${vars.status}` });
+      clearSelection();
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/snapshot"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/list"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/action-queue"] });
+    },
+    onError: (err: Error) => toast({ title: "Bulk status update failed", description: err.message, variant: "destructive" }),
+  });
+
   const updateFilter = (patch: Partial<Filters>): void => setFilters(f => ({ ...f, ...patch }));
   const clearAll = (): void => setFilters({});
   const removeFilter = (k: keyof Filters): void => setFilters(f => { const c = { ...f }; delete c[k]; return c; });
@@ -565,6 +629,24 @@ export default function CustomerQuotesPage(): JSX.Element {
   const data = snapshotQuery.data;
   const list = listQuery.data;
   const totalPages = list ? Math.max(1, Math.ceil(list.total / PAGE_SIZE)) : 1;
+
+  // Customer Quotes #2 — IDs of any quote_customer rows that map to the
+  // shared "Unknown — needs review" bucket. Drives the bulk action bar's
+  // "Reassign to…" enable/disable rule and the bulk-reassign payload.
+  const unknownCustomerIds = useMemo<Set<string>>(() => {
+    const ids = new Set<string>();
+    for (const c of data?.customers ?? []) {
+      if (c.name === UNKNOWN_CUSTOMER_NAME) ids.add(c.id);
+    }
+    return ids;
+  }, [data?.customers]);
+
+  const selectedQuotes = useMemo(
+    () => (list?.rows ?? []).filter(r => selectedIds.has(r.id)),
+    [list?.rows, selectedIds],
+  );
+  const allSelectedAreUnknown = selectedQuotes.length > 0
+    && selectedQuotes.every(q => unknownCustomerIds.has(q.customerId));
 
   return (
     <div className="flex flex-col h-full bg-background text-foreground" style={{ fontFamily: "Inter, sans-serif" }}>
@@ -761,6 +843,9 @@ export default function CustomerQuotesPage(): JSX.Element {
           </div>
         ) : (
           <>
+            {/* Customer Quotes #2 — Action Queue (top-of-page work board) */}
+            <ActionQueueCard onOpenQuote={(id) => setDrawerId(id)} />
+
             {/* Task #505 — Sticky Spot Quote Search workflow (headline) */}
             <SpotQuoteSearch
               customers={data.customers.map(c => ({ id: c.id, name: c.name }))}
@@ -868,6 +953,10 @@ export default function CustomerQuotesPage(): JSX.Element {
                       pendingId={updateQuoteMutation.isPending ? (updateQuoteMutation.variables as { id: string } | undefined)?.id : undefined}
                       customers={data.customers}
                       onReassign={reassignQuoteCustomer}
+                      selectedIds={selectedIds}
+                      onToggleSelect={toggleSelect}
+                      onToggleSelectAll={toggleSelectAll}
+                      unknownCustomerIds={unknownCustomerIds}
                     />
                   </CardContent>
                 </Card>
@@ -1046,6 +1135,26 @@ export default function CustomerQuotesPage(): JSX.Element {
         isSaving={updateQuoteMutation.isPending}
       />
 
+      <BulkActionBar
+        selectedCount={selectedIds.size}
+        canReassign={allSelectedAreUnknown}
+        customers={data?.customers ?? []}
+        onClear={clearSelection}
+        onReassign={(targetCustomerId) =>
+          bulkReassignMutation.mutate({
+            quoteIds: Array.from(selectedIds),
+            targetCustomerId,
+          })
+        }
+        onMarkIgnored={() =>
+          bulkStatusMutation.mutate({
+            quoteIds: Array.from(selectedIds),
+            status: "ignored",
+          })
+        }
+        isPending={bulkReassignMutation.isPending || bulkStatusMutation.isPending}
+      />
+
       <NewQuoteDialog
         open={newQuoteOpen}
         onOpenChange={setNewQuoteOpen}
@@ -1136,9 +1245,151 @@ function CustomerCombobox({ customers, value, onChange }: { customers: Customer[
   );
 }
 
-type ColumnDef = { key: SortKey; label: string; align?: "right" };
+/**
+ * Customer Quotes #2 — sticky bulk-action bar.
+ *
+ * Slides up from the bottom whenever ≥1 row is selected. "Reassign to…"
+ * is enabled only when every selected row is in the Unknown bucket; the
+ * other actions stay open so reps can mass-mark spam as ignored.
+ */
+function BulkActionBar({
+  selectedCount, canReassign, customers, onClear, onReassign, onMarkIgnored, isPending,
+}: {
+  selectedCount: number;
+  canReassign: boolean;
+  customers: Customer[];
+  onClear: () => void;
+  onReassign: (targetCustomerId: string) => void;
+  onMarkIgnored: () => void;
+  isPending: boolean;
+}): JSX.Element | null {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  if (selectedCount === 0) return null;
+
+  const matchable = customers.filter(c => c.name !== UNKNOWN_CUSTOMER_NAME);
+  const trimmed = search.trim().toLowerCase();
+  const filtered = trimmed
+    ? matchable.filter(c => c.name.toLowerCase().includes(trimmed))
+    : matchable.slice(0, 50);
+
+  return (
+    <div
+      className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50"
+      data-testid="bulk-action-bar"
+    >
+      <div className="flex items-center gap-2 rounded-lg bg-card border border-border shadow-lg px-3 py-2">
+        <span className="text-xs font-medium text-foreground tabular-nums px-1" data-testid="text-bulk-count">
+          {selectedCount} selected
+        </span>
+        <div className="h-5 w-px bg-border" />
+        <Popover open={pickerOpen} onOpenChange={(o) => { setPickerOpen(o); if (!o) setSearch(""); }}>
+          <PopoverTrigger asChild>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              disabled={!canReassign || isPending}
+              title={canReassign ? "Reassign Needs-Review rows to a real customer" : "Only Needs-Review rows can be reassigned"}
+              data-testid="button-bulk-reassign"
+            >
+              Reassign to…
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-[280px] p-0" align="center" data-testid="popover-bulk-reassign">
+            <Command shouldFilter={false}>
+              <CommandInput
+                placeholder="Search customer…"
+                value={search}
+                onValueChange={setSearch}
+                data-testid="input-bulk-reassign-search"
+              />
+              <CommandList>
+                <CommandEmpty className="py-2 text-xs text-muted-foreground text-center">
+                  No matching customers
+                </CommandEmpty>
+                {filtered.length > 0 && (
+                  <CommandGroup heading="Pick a customer">
+                    {filtered.slice(0, 30).map(c => (
+                      <CommandItem
+                        key={c.id}
+                        value={c.id}
+                        onSelect={() => { onReassign(c.id); setPickerOpen(false); setSearch(""); }}
+                        disabled={isPending}
+                        data-testid={`option-bulk-reassign-${c.id}`}
+                      >
+                        <Check className="h-3 w-3 mr-2 opacity-0" />
+                        <span className="truncate">{c.name}</span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                )}
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs"
+          onClick={onMarkIgnored}
+          disabled={isPending}
+          data-testid="button-bulk-ignore"
+        >
+          Mark ignored
+        </Button>
+        <div className="h-5 w-px bg-border" />
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs px-2"
+          onClick={onClear}
+          disabled={isPending}
+          data-testid="button-bulk-clear"
+        >
+          <X className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Customer Quotes #2 — per-row SLA badge. Recomputes on the client off
+ * `requestDate` so the badge can flip from ok → warning → breached
+ * without waiting for the next list refetch. Hidden for non-pending
+ * rows (state === "na").
+ */
+function QuoteSlaBadgeCell({ quote }: { quote: Quote }): JSX.Element | null {
+  const sla = computeQuoteSla(quote.requestDate, quote.outcomeStatus);
+  if (sla.state === "na") return null;
+  const tone = sla.state === "breached"
+    ? "bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30"
+    : sla.state === "warning"
+      ? "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30"
+      : "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30";
+  const title = sla.state === "breached"
+    ? `Past 7-min SLA by ${Math.floor(-sla.remainingMs / 60_000)} min`
+    : sla.state === "warning"
+      ? "Approaching 7-min SLA"
+      : "Within SLA";
+  return (
+    <span
+      className={`inline-flex items-center gap-0.5 text-[10px] font-medium border rounded px-1 py-0.5 tabular-nums ${tone}`}
+      title={title}
+      data-testid={`badge-sla-${quote.id}`}
+    >
+      {formatSlaBadge(sla)}
+    </span>
+  );
+}
+
+type ColumnDef =
+  | { key: SortKey; label: string; align?: "right"; sortable?: true }
+  | { key: string; label: string; align?: "right"; sortable: false };
 const COLUMNS: ColumnDef[] = [
   { key: "requestDate", label: "Request" },
+  { key: "slaState", label: "SLA", sortable: false },
   { key: "customerName", label: "Customer" },
   { key: "originCity", label: "Origin" },
   { key: "destCity", label: "Destination" },
@@ -1268,7 +1519,7 @@ function ReassignCustomerControl({ quoteId, customers, onReassign }: {
   );
 }
 
-function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, reasons, onInlineOutcome, pendingId, customers, onReassign }: {
+function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, reasons, onInlineOutcome, pendingId, customers, onReassign, selectedIds, onToggleSelect, onToggleSelectAll, unknownCustomerIds }: {
   rows: Quote[]; sortKey: SortKey; sortDir: "asc" | "desc";
   onSort: (k: SortKey) => void; onRowClick: (id: string) => void; isLoading: boolean;
   reasons: Reason[];
@@ -1278,6 +1529,12 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
   // for rows linked to the shared "Unknown — needs review" bucket.
   customers: Customer[];
   onReassign: (quoteId: string, choice: { existingId: string } | { newName: string }) => Promise<void>;
+  // Customer Quotes #2 — bulk selection state lives in the parent so the
+  // bottom action bar and row checkboxes stay in sync.
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
+  onToggleSelectAll: (ids: string[], checked: boolean) => void;
+  unknownCustomerIds: Set<string>;
 }): JSX.Element {
   const [scrollTop, setScrollTop] = useState(0);
   const viewportH = 600;
@@ -1298,21 +1555,33 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
       <table className="w-full text-xs">
         <thead className="sticky top-0 bg-card z-10 border-b border-border">
           <tr className="text-left text-muted-foreground">
+            <th className="px-2 py-2 w-8">
+              <Checkbox
+                checked={rows.length > 0 && rows.every(r => selectedIds.has(r.id))}
+                onCheckedChange={(c) => onToggleSelectAll(rows.map(r => r.id), c === true)}
+                aria-label="Select all visible"
+                data-testid="checkbox-select-all"
+              />
+            </th>
             {COLUMNS.map(col => (
               <th key={col.key} className={`px-2 py-2 font-medium text-[10px] uppercase tracking-wider ${col.align === "right" ? "text-right" : ""}`}>
-                <button onClick={() => onSort(col.key)} className="inline-flex items-center gap-0.5 hover:text-foreground" data-testid={`sort-${col.key}`}>
-                  {col.label}
-                  {sortKey === col.key && (sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
-                </button>
+                {col.sortable === false ? (
+                  <span className="inline-flex items-center gap-0.5">{col.label}</span>
+                ) : (
+                  <button onClick={() => onSort(col.key as SortKey)} className="inline-flex items-center gap-0.5 hover:text-foreground" data-testid={`sort-${col.key}`}>
+                    {col.label}
+                    {sortKey === col.key && (sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />)}
+                  </button>
+                )}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
           {!isLoading && rows.length === 0 && (
-            <tr><td colSpan={COLUMNS.length} className="text-center py-8 text-muted-foreground">No quote opportunities match these filters.</td></tr>
+            <tr><td colSpan={COLUMNS.length + 1} className="text-center py-8 text-muted-foreground">No quote opportunities match these filters.</td></tr>
           )}
-          {padTop > 0 && <tr style={{ height: padTop }} aria-hidden="true"><td colSpan={COLUMNS.length} /></tr>}
+          {padTop > 0 && <tr style={{ height: padTop }} aria-hidden="true"><td colSpan={COLUMNS.length + 1} /></tr>}
           {visible.map(q => {
             const quoted = num(q.quotedAmount);
             const paid = num(q.carrierPaid);
@@ -1320,10 +1589,21 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
             const marginPct = quoted > 0 && paid > 0 ? (margin / quoted) * 100 : null;
             return (
               <tr key={q.id} onClick={() => onRowClick(q.id)}
-                className="border-b border-border/50 hover:bg-muted/60 cursor-pointer"
+                className={`border-b border-border/50 hover:bg-muted/60 cursor-pointer ${selectedIds.has(q.id) ? "bg-amber-500/5" : ""}`}
                 style={{ height: ROW_HEIGHT }}
                 data-testid={`row-quote-${q.id}`}>
+                <td className="px-2" onClick={(e) => e.stopPropagation()}>
+                  <Checkbox
+                    checked={selectedIds.has(q.id)}
+                    onCheckedChange={() => onToggleSelect(q.id)}
+                    aria-label={`Select quote ${q.id}`}
+                    data-testid={`checkbox-quote-${q.id}`}
+                  />
+                </td>
                 <td className="px-2 whitespace-nowrap text-foreground/90">{new Date(q.requestDate).toLocaleDateString()}</td>
+                <td className="px-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                  <QuoteSlaBadgeCell quote={q} />
+                </td>
                 <td className="px-2 whitespace-nowrap text-foreground font-medium">
                   {q.customerName === UNKNOWN_CUSTOMER_NAME ? (
                     <span className="inline-flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>

@@ -1,4 +1,4 @@
-import { and, eq, asc, desc, sql, type SQL } from "drizzle-orm";
+import { and, eq, asc, desc, inArray, sql, type SQL } from "drizzle-orm";
 import { db } from "../storage";
 import { logQuoteTouchpointFromEvent } from "./quoteTouchpoints";
 import { carriers as carriersCatalog } from "@shared/schema";
@@ -13,6 +13,7 @@ import { UNKNOWN_CUSTOMER_NAME, classifyPartyType } from "./customerNameResolver
 import type { QuotePartyType } from "@shared/schema";
 import { getStaleQuoteFollowUps } from "./staleQuoteFollowup";
 import { getActivePatternAlertsForOrg } from "./quotePatternShift";
+import { computeQuoteSla } from "@shared/quoteSla";
 import { normalizeEquipmentType } from "@shared/laneFormatters";
 import { readFileSync } from "fs";
 import { join } from "path";
@@ -59,6 +60,10 @@ export type EnrichedQuote = QuoteOpportunity & {
   // can't be resolved (e.g., purged) or for non-email quotes.
   sourceThreadId?: string | null;
   sourceMessageId?: string | null;
+  // Customer Quotes #2 — server-computed SLA snapshot. Always present
+  // (`state: "na"` for non-pending rows) so client code never has to guard.
+  slaState: import("@shared/quoteSla").QuoteSlaState;
+  minutesSinceRequest: number;
 };
 
 export type AlertSeverity = "high" | "medium" | "low";
@@ -693,14 +698,21 @@ function enrich(
   repMap: Map<string, QuoteRep>,
   carrierMap: Map<string, QuoteCarrier>,
   reasonMap: Map<string, QuoteOutcomeReason>,
+  opts: { now?: number } = {},
 ): EnrichedQuote[] {
-  return rows.map(r => ({
-    ...r,
-    customerName: customerMap.get(r.customerId)?.name ?? "—",
-    repName: r.repId ? repMap.get(r.repId)?.name ?? "—" : "—",
-    carrierName: r.carrierId ? carrierMap.get(r.carrierId)?.name ?? null : null,
-    outcomeReasonLabel: r.outcomeReasonId ? reasonMap.get(r.outcomeReasonId)?.label ?? null : null,
-  }));
+  const now = opts.now ?? Date.now();
+  return rows.map(r => {
+    const sla = computeQuoteSla(r.requestDate, r.outcomeStatus, { now });
+    return {
+      ...r,
+      customerName: customerMap.get(r.customerId)?.name ?? "—",
+      repName: r.repId ? repMap.get(r.repId)?.name ?? "—" : "—",
+      carrierName: r.carrierId ? carrierMap.get(r.carrierId)?.name ?? null : null,
+      outcomeReasonLabel: r.outcomeReasonId ? reasonMap.get(r.outcomeReasonId)?.label ?? null : null,
+      slaState: sla.state,
+      minutesSinceRequest: sla.minutesSinceRequest,
+    };
+  });
 }
 
 async function loadContext(orgId: string) {
@@ -819,6 +831,168 @@ async function attachSourceThreads(orgId: string, rows: EnrichedQuote[]): Promis
       r.sourceThreadId = null;
     }
   }
+}
+
+/**
+ * Customer Quotes #2 — Action Queue.
+ *
+ * Returns the three categories of pending work that the rep should
+ * prioritise above everything else, each capped at `limit` (default 5):
+ *   - slaBreaching: pending quotes whose age >= SLA threshold
+ *   - needsReview:  pending quotes still bucketed in the shared
+ *                   "Unknown — needs review" customer
+ *   - expiringToday: pending quotes whose validThrough is within 24h
+ *
+ * Returned rows use the same EnrichedQuote shape as the main list so
+ * the client can reuse all existing row-renderers / drawer plumbing.
+ */
+export async function getActionQueue(
+  orgId: string,
+  opts: { limit?: number; now?: number } = {},
+): Promise<{
+  slaBreaching: EnrichedQuote[];
+  needsReview: EnrichedQuote[];
+  expiringToday: EnrichedQuote[];
+}> {
+  const limit = Math.max(1, Math.min(50, opts.limit ?? 5));
+  const now = opts.now ?? Date.now();
+  const ctx = await loadContext(orgId);
+  const all = await db.select().from(quoteOpportunities)
+    .where(eq(quoteOpportunities.organizationId, orgId));
+
+  const unknownIds = unknownCustomerIdsFromMap(ctx.customerMap);
+  const carrierIds = carrierCustomerIdsFromMap(ctx.customerMap);
+
+  // Action Queue is intentionally pending-only; carriers stay hidden by
+  // default but pass-through if reps already opt in via the page toggle.
+  const pending = all.filter(r =>
+    r.outcomeStatus === "pending" && !carrierIds.has(r.customerId)
+  );
+
+  const enriched = enrich(pending, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, { now });
+
+  const slaBreaching = enriched
+    .filter(r => r.slaState === "breached")
+    .sort((a, b) => a.requestDate.getTime() - b.requestDate.getTime())
+    .slice(0, limit);
+
+  const needsReview = enriched
+    .filter(r => unknownIds.has(r.customerId))
+    .sort((a, b) => a.requestDate.getTime() - b.requestDate.getTime())
+    .slice(0, limit);
+
+  const dayMs = 24 * 60 * 60 * 1000;
+  const expiringToday = enriched
+    .filter(r => r.validThrough && r.validThrough.getTime() - now <= dayMs && r.validThrough.getTime() >= now)
+    .sort((a, b) => (a.validThrough!.getTime() - b.validThrough!.getTime()))
+    .slice(0, limit);
+
+  // Cheaper to attach source thread refs once across the union than thrice.
+  const merged = Array.from(new Map(
+    [...slaBreaching, ...needsReview, ...expiringToday].map(r => [r.id, r] as const),
+  ).values());
+  await attachSourceThreads(orgId, merged);
+
+  return { slaBreaching, needsReview, expiringToday };
+}
+
+/**
+ * Customer Quotes #2 — bulk reassign Needs-Review quotes to a real
+ * customer. Defensive against accidental misuse: a quote is skipped
+ * (not silently overwritten) if its current customer is NOT in the
+ * shared "Unknown — needs review" bucket. Returns the per-id outcome
+ * so the UI can surface "23 reassigned, 2 skipped".
+ */
+export async function bulkReassignCustomerForQuotes(
+  orgId: string,
+  quoteIds: string[],
+  targetCustomerId: string,
+): Promise<{ updated: number; skipped: string[]; reassignedIds: string[] }> {
+  if (!quoteIds.length) return { updated: 0, skipped: [], reassignedIds: [] };
+
+  // Confirm the target exists in the same org. Refuse otherwise.
+  const [target] = await db.select().from(quoteCustomers)
+    .where(and(eq(quoteCustomers.organizationId, orgId), eq(quoteCustomers.id, targetCustomerId)))
+    .limit(1);
+  if (!target) {
+    throw new Error("Target customer not found in this organization");
+  }
+  if (target.name === UNKNOWN_CUSTOMER_NAME) {
+    // Reassigning into the unknown bucket is the inverse of the feature
+    // and can hide bad data. Refuse.
+    throw new Error("Cannot reassign into the Unknown bucket");
+  }
+
+  const ctx = await loadContext(orgId);
+  const unknownIds = unknownCustomerIdsFromMap(ctx.customerMap);
+
+  const rows = await db.select().from(quoteOpportunities)
+    .where(and(
+      eq(quoteOpportunities.organizationId, orgId),
+      inArray(quoteOpportunities.id, quoteIds),
+    ));
+
+  const eligible: string[] = [];
+  const skipped: string[] = [];
+  for (const id of quoteIds) {
+    const r = rows.find(x => x.id === id);
+    if (!r) { skipped.push(id); continue; }
+    if (!unknownIds.has(r.customerId)) { skipped.push(id); continue; }
+    eligible.push(id);
+  }
+
+  if (eligible.length > 0) {
+    // Defensive write predicate: even though we pre-filtered by Unknown
+    // bucket, a concurrent classifier run could have flipped a row to a
+    // real customer between the read above and this UPDATE. Re-asserting
+    // `customerId IN unknownIds` in the WHERE makes the invariant hold
+    // at write time, so we never silently overwrite an already-classified
+    // row. Returning the affected ids lets us reconcile with `eligible`
+    // and report the real count.
+    const unknownIdList = Array.from(unknownIds);
+    if (unknownIdList.length === 0) {
+      // No unknown buckets exist (yet) — nothing is reassignable.
+      return { updated: 0, skipped: [...skipped, ...eligible], reassignedIds: [] };
+    }
+    const written = await db.update(quoteOpportunities)
+      .set({ customerId: targetCustomerId })
+      .where(and(
+        eq(quoteOpportunities.organizationId, orgId),
+        inArray(quoteOpportunities.id, eligible),
+        inArray(quoteOpportunities.customerId, unknownIdList),
+      ))
+      .returning({ id: quoteOpportunities.id });
+    const writtenIds = new Set(written.map(w => w.id));
+    const racedSkips = eligible.filter(id => !writtenIds.has(id));
+    return {
+      updated: written.length,
+      skipped: [...skipped, ...racedSkips],
+      reassignedIds: written.map(w => w.id),
+    };
+  }
+
+  return { updated: 0, skipped, reassignedIds: [] };
+}
+
+/**
+ * Customer Quotes #2 — bulk-flip outcome status. Currently used by the
+ * "Mark ignored" bulk action so reps can clear out spam without opening
+ * each row. Org-scoped; rejects unknown statuses.
+ */
+export async function bulkSetQuoteStatus(
+  orgId: string,
+  quoteIds: string[],
+  status: "ignored" | "pending",
+): Promise<{ updated: number }> {
+  if (!quoteIds.length) return { updated: 0 };
+  const result = await db.update(quoteOpportunities)
+    .set({ outcomeStatus: status })
+    .where(and(
+      eq(quoteOpportunities.organizationId, orgId),
+      inArray(quoteOpportunities.id, quoteIds),
+    ))
+    .returning({ id: quoteOpportunities.id });
+  return { updated: result.length };
 }
 
 export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise<Snapshot> {
