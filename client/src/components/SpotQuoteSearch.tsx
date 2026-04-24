@@ -1146,7 +1146,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             </div>
             {/* Zone 2 — Carrier shortlist (top 5) */}
             <div className="order-2" data-testid="spot-zone-carriers">
-              <CarrierShortlistCard outreach={data.carrierOutreach} />
+              <CarrierShortlistCard outreach={data.carrierOutreach ?? []} />
             </div>
             {/* Zone 3 — Customer lane timeline */}
             <div className="order-3" data-testid="spot-zone-timeline">
@@ -1814,6 +1814,7 @@ function QuoteBuilderCard({
       const payload = {
         quoteId,
         recommendedRate: defaultQuoted > 0 ? defaultQuoted : undefined,
+        guidanceMessage: guidance.message?.trim() || undefined,
         bandLow: market?.band?.low ?? guidance.suggestedLow ?? undefined,
         bandMid: market?.band?.mid ?? undefined,
         bandHigh: market?.band?.high ?? guidance.suggestedHigh ?? undefined,

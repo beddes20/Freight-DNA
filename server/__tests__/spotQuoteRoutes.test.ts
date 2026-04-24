@@ -74,12 +74,21 @@ vi.mock("../services/staleQuoteFollowup", () => ({
 const fakeContacts: any[] = [
   { id: "contact-1", companyId: "cust-1", email: "ops@acme.test", firstName: "Pat", lastName: "Doe", isPrimary: true },
 ];
+// db.select() is exercised twice in spot/create+email-draft:
+//  (a) quoteReps lookup by (orgId, userId) → return a fake rep so the route
+//      attributes the new quote to user-1
+//  (b) companies/contacts lookup → return contacts for the email draft
+const fakeRep = [{ id: "rep-1", organizationId: "org-1", userId: "user-1", name: "Pat" }];
 vi.mock("../storage", () => ({
   db: {
     select: () => ({
-      from: () => ({
+      from: (table: any) => ({
         where: () => ({
-          limit: () => Promise.resolve(fakeContacts),
+          limit: () => {
+            const tbl = String(table);
+            if (tbl.includes("quote_reps") || tbl === "quoteReps") return Promise.resolve(fakeRep);
+            return Promise.resolve(fakeContacts);
+          },
           orderBy: () => Promise.resolve(fakeContacts),
         }),
       }),

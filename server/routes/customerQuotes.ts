@@ -10,7 +10,7 @@ import {
   type QuoteFilters, type ListSortKey,
 } from "../services/customerQuotes";
 import { syncQuoteOutcomesFromTms } from "../services/quoteTmsSync";
-import { QUOTE_OUTCOME_STATUSES, QUOTE_SOURCES, companies, contacts, spotQuoteCreateSchema } from "@shared/schema";
+import { QUOTE_OUTCOME_STATUSES, QUOTE_SOURCES, companies, contacts, quoteReps, spotQuoteCreateSchema } from "@shared/schema";
 import { getStaleQuoteFollowUps, clearStaleFollowUpCache } from "../services/staleQuoteFollowup";
 import { db } from "../storage";
 import { and as andSql, eq as eqSql, sql as sqlExpr } from "drizzle-orm";
@@ -326,9 +326,22 @@ export function registerCustomerQuoteRoutes(app: Express): void {
         }
       }
       const actor = (user.name && user.name.trim()) || user.username || user.id;
+      // Resolve the rep row attached to the acting user so the persisted
+      // quote_opportunities row carries the correct ownership attribution
+      // (mirrors the same lookup used elsewhere in createQuote callers).
+      let resolvedRepId: string | null = null;
+      try {
+        const [rep] = await db.select().from(quoteReps).where(andSql(
+          eqSql(quoteReps.organizationId, user.organizationId),
+          eqSql(quoteReps.userId, user.id),
+        )).limit(1);
+        if (rep) resolvedRepId = rep.id;
+      } catch (lookupErr) {
+        console.warn("[customer-quotes] spot create rep lookup failed:", lookupErr);
+      }
       const opp = await createQuote(user.organizationId, actor, {
         customerId: data.customerId,
-        repId: null,
+        repId: resolvedRepId,
         originCity: data.pickupCity,
         originState: data.pickupState.toUpperCase(),
         destCity: data.deliveryCity,
@@ -354,6 +367,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const schema = z.object({
         quoteId: z.string().min(1),
         recommendedRate: z.number().finite().positive().optional(),
+        guidanceMessage: z.string().max(500).optional(),
         bandLow: z.number().finite().positive().optional(),
         bandMid: z.number().finite().positive().optional(),
         bandHigh: z.number().finite().positive().optional(),
@@ -363,7 +377,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       if (!parsed.success) {
         return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
       }
-      const { quoteId, recommendedRate, bandLow, bandMid, bandHigh, bandSource } = parsed.data;
+      const { quoteId, recommendedRate, guidanceMessage, bandLow, bandMid, bandHigh, bandSource } = parsed.data;
       const detail = await getQuoteDetail(user.organizationId, quoteId);
       if (!detail) return res.status(404).json({ error: "Quote not found" });
 
@@ -407,12 +421,16 @@ export function registerCustomerQuoteRoutes(app: Express): void {
             bandHigh ? `high $${Math.round(bandHigh).toLocaleString()}` : "",
           ].filter(Boolean).join(" / ")
         : "";
+      const guidanceContextLine = guidanceMessage && guidanceMessage.trim()
+        ? `Guidance: ${guidanceMessage.trim()}`
+        : "";
       const dataContext = [
         `Spot quote: ${lane}`,
         `Equipment: ${detail.opp.equipment}`,
         `Recommended rate: $${Math.round(recRate).toLocaleString()}`,
         `Quoted: $${quotedAmt.toLocaleString()}`,
         guidanceLine,
+        guidanceContextLine,
         validStr ? `Valid through: ${validStr}` : "",
         detail.opp.notes ? `Internal notes: ${detail.opp.notes}` : "",
         dataResult.context,
