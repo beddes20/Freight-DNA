@@ -80,9 +80,32 @@ vi.mock("../storage", () => ({
     updateEmailConversationThread: vi.fn(async (_id: string, _orgId: string, patch: any) => patch),
   },
   db: {
-    select: () => ({ from: () => ({ where: () => Promise.resolve([]) }) }),
+    // The list endpoint uses both `.select(...).from(...).innerJoin(...).where(...)`
+    // and the simpler `.from(...).where(...)` pattern; build a chainable
+    // stub that resolves to the configured signal rows on `.where()`.
+    select: () => makeDbChain(),
+    selectDistinct: () => makeDbChain(),
   },
 }));
+
+// Per-test override. Tests that exercise the list endpoint set this to
+// either an array of rows or an Error to throw — the latter exercises the
+// resilience guards added in Task #575.
+let dbWhereResult: any[] | Error = [];
+function makeDbChain(): any {
+  const chain: any = {
+    from: () => chain,
+    innerJoin: () => chain,
+    leftJoin: () => chain,
+    where: () => {
+      if (dbWhereResult instanceof Error) return Promise.reject(dbWhereResult);
+      return Promise.resolve(dbWhereResult);
+    },
+    orderBy: () => chain,
+    limit: () => chain,
+  };
+  return chain;
+}
 
 // ── Service mocks ────────────────────────────────────────────────────────
 
@@ -136,6 +159,7 @@ vi.mock("../services/conversationReplyCaptureService", () => ({
 // ── Boot the router after mocks are in place ─────────────────────────────
 
 const { registerConversationsRoutes } = await import("../routes/conversations");
+const { storage: mockedStorage } = await import("../storage");
 
 function buildApp() {
   const app = express();
@@ -167,6 +191,7 @@ beforeEach(() => {
   threadsById.clear();
   threadsByThreadId.clear();
   vi.clearAllMocks();
+  dbWhereResult = [];
   currentUser = { id: "user-1", organizationId: "org-1", role: "admin", name: "Admin" };
   // Default service responses tests can override.
   summaryMock.mockReset().mockResolvedValue(null);
@@ -636,6 +661,113 @@ describe("GET /api/internal/conversations/:id/events", () => {
       const res = await fetch(`${srv.url}/api/internal/conversations/rec-1/events`);
       expect(res.status).toBe(403);
       expect(listEventsMock).not.toHaveBeenCalled();
+    } finally { await srv.close(); }
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// 6. GET /api/internal/conversations — bucket resilience (Task #575)
+//
+// Each per-thread enrichment (owner / account / carrier names, signal
+// badges, per-user read state) is best-effort. A failure inside any one
+// of them used to bubble up and 500 the whole endpoint, blowing away the
+// entire inbox UI. These tests pin in the new behavior: the thread list
+// still comes back when an enrichment side-query falls over, and the
+// affected fields just degrade to null/[].
+// ════════════════════════════════════════════════════════════════════════
+
+describe("GET /api/internal/conversations — enrichment resilience", () => {
+  function seedListThread() {
+    const storage = mockedStorage as any;
+    storage.listEmailConversationThreads.mockResolvedValueOnce({
+      threads: [{
+        id: "rec-1",
+        orgId: "org-1",
+        threadId: "thr-1",
+        ownerUserId: "user-1",
+        linkedAccountId: "acct-1",
+        linkedCarrierId: "car-1",
+        waitingState: "waiting_on_us",
+        responsePriority: "normal",
+        lastIncomingAt: "2025-01-01T00:00:00.000Z",
+      }],
+      totalCount: 1,
+      nextCursor: null,
+    });
+  }
+
+  it("still returns the thread list when read-state lookup throws", async () => {
+    const storage = mockedStorage as any;
+    seedListThread();
+    storage.getEmailConversationReadStates.mockRejectedValueOnce(
+      new Error("read-state table missing"),
+    );
+    const srv = await listen(buildApp());
+    try {
+      const res = await fetch(`${srv.url}/api/internal/conversations`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.count).toBe(1);
+      expect(body.threads).toHaveLength(1);
+      // Read-state degraded to null, but unread is still computed from
+      // lastIncomingAt vs (missing) lastReadAt.
+      expect(body.threads[0].lastReadAt).toBeNull();
+      expect(body.threads[0].unread).toBe(true);
+    } finally { await srv.close(); }
+  });
+
+  it("still returns the thread list when account-name enrichment throws", async () => {
+    const storage = mockedStorage as any;
+    seedListThread();
+    storage.getCompaniesByIds.mockRejectedValueOnce(new Error("companies query failed"));
+    const srv = await listen(buildApp());
+    try {
+      const res = await fetch(`${srv.url}/api/internal/conversations`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.threads).toHaveLength(1);
+      expect(body.threads[0].accountName).toBeNull();
+    } finally { await srv.close(); }
+  });
+
+  it("still returns the thread list when carrier-name enrichment throws", async () => {
+    const storage = mockedStorage as any;
+    seedListThread();
+    storage.getCarriersByIds.mockRejectedValueOnce(new Error("carriers query failed"));
+    const srv = await listen(buildApp());
+    try {
+      const res = await fetch(`${srv.url}/api/internal/conversations`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.threads).toHaveLength(1);
+      expect(body.threads[0].carrierName).toBeNull();
+    } finally { await srv.close(); }
+  });
+
+  it("still returns the thread list when owner enrichment throws", async () => {
+    const storage = mockedStorage as any;
+    seedListThread();
+    storage.getUser.mockRejectedValueOnce(new Error("users table down"));
+    const srv = await listen(buildApp());
+    try {
+      const res = await fetch(`${srv.url}/api/internal/conversations`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.threads).toHaveLength(1);
+      expect(body.threads[0].ownerName).toBeNull();
+    } finally { await srv.close(); }
+  });
+
+  it("still returns the thread list when signal enrichment throws", async () => {
+    seedListThread();
+    dbWhereResult = new Error("email_signals join failed");
+    const srv = await listen(buildApp());
+    try {
+      const res = await fetch(`${srv.url}/api/internal/conversations`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.threads).toHaveLength(1);
+      expect(body.threads[0].signals).toEqual([]);
     } finally { await srv.close(); }
   });
 });

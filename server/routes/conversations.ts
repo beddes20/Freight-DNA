@@ -389,12 +389,31 @@ export function registerConversationsRoutes(app: Express): void {
       const result = await storage.listEmailConversationThreads(orgId, filters);
       const threads = result.threads;
 
+      // Task #575: every per-thread enrichment below (owner/account/carrier
+      // names, signal badges, per-user read state) is best-effort. A failure
+      // in any one of them used to bubble up and 500 the whole endpoint,
+      // which made the entire inbox UI go red ("Couldn't load conversations.")
+      // even though the core thread list was fine. Each helper now isolates
+      // its own errors: it logs the failure and returns an empty map so the
+      // affected fields come back as null/[], and the rest of the page still
+      // renders.
+
       const ownerIds = [...new Set(threads.map(t => t.ownerUserId).filter(Boolean) as string[])];
       const ownerMap = new Map<string, string>();
-      await Promise.all(ownerIds.map(async id => {
-        const u = await storage.getUser(id);
-        if (u) ownerMap.set(id, u.name);
-      }));
+      try {
+        await Promise.all(ownerIds.map(async id => {
+          try {
+            const u = await storage.getUser(id);
+            if (u) ownerMap.set(id, u.name);
+          } catch (innerErr) {
+            // One bad user lookup shouldn't poison the whole batch — that
+            // user just shows up unowned in the UI.
+            console.error("[conversations] owner lookup failed for", id, innerErr);
+          }
+        }));
+      } catch (err) {
+        console.error("[conversations] owner enrichment failed:", err);
+      }
 
       // Task #535: enrich each thread with the linked account/carrier name so
       // the client can group rows by account or carrier without doing a
@@ -405,12 +424,20 @@ export function registerConversationsRoutes(app: Express): void {
       const accountNameMap = new Map<string, string>();
       const carrierNameMap = new Map<string, string>();
       if (accountIds.length > 0) {
-        const companies = await storage.getCompaniesByIds(accountIds, orgId);
-        for (const c of companies) accountNameMap.set(c.id, c.name);
+        try {
+          const companies = await storage.getCompaniesByIds(accountIds, orgId);
+          for (const c of companies) accountNameMap.set(c.id, c.name);
+        } catch (err) {
+          console.error("[conversations] account name enrichment failed:", err);
+        }
       }
       if (carrierIds.length > 0) {
-        const carriers = await storage.getCarriersByIds(carrierIds, orgId);
-        for (const c of carriers) carrierNameMap.set(c.id, c.name);
+        try {
+          const carriers = await storage.getCarriersByIds(carrierIds, orgId);
+          for (const c of carriers) carrierNameMap.set(c.id, c.name);
+        } catch (err) {
+          console.error("[conversations] carrier name enrichment failed:", err);
+        }
       }
 
       // Enrich each thread with the unique set of intent_types found across its
@@ -418,25 +445,32 @@ export function registerConversationsRoutes(app: Express): void {
       const threadKeys = threads.map(t => t.threadId).filter(Boolean) as string[];
       const signalsByThread = new Map<string, Set<string>>();
       if (threadKeys.length > 0) {
-        const sigRows = await db
-          .select({
-            threadId: emailMessages.threadId,
-            intentType: emailSignals.intentType,
-          })
-          .from(emailSignals)
-          .innerJoin(emailMessages, eq(emailMessages.id, emailSignals.messageId))
-          .where(
-            and(
-              eq(emailMessages.orgId, orgId),
-              inArray(emailMessages.threadId, threadKeys),
-            ),
-          );
-        for (const row of sigRows) {
-          if (!row.threadId || !row.intentType) continue;
-          if (!signalsByThread.has(row.threadId)) {
-            signalsByThread.set(row.threadId, new Set());
+        try {
+          const sigRows = await db
+            .select({
+              threadId: emailMessages.threadId,
+              intentType: emailSignals.intentType,
+            })
+            .from(emailSignals)
+            .innerJoin(emailMessages, eq(emailMessages.id, emailSignals.messageId))
+            .where(
+              and(
+                eq(emailMessages.orgId, orgId),
+                inArray(emailMessages.threadId, threadKeys),
+              ),
+            );
+          for (const row of sigRows) {
+            if (!row.threadId || !row.intentType) continue;
+            if (!signalsByThread.has(row.threadId)) {
+              signalsByThread.set(row.threadId, new Set());
+            }
+            signalsByThread.get(row.threadId)!.add(row.intentType);
           }
-          signalsByThread.get(row.threadId)!.add(row.intentType);
+        } catch (err) {
+          // Missing column / missing table on email_signals shouldn't take
+          // out the whole inbox — the UI will just render rows without
+          // intent badges.
+          console.error("[conversations] signal enrichment failed:", err);
         }
       }
 
@@ -445,7 +479,15 @@ export function registerConversationsRoutes(app: Express): void {
       // A thread is unread when it has an inbound message newer than the
       // user's lastReadAt (or the user has never marked it read).
       const threadIdStrings = threads.map(t => t.threadId).filter(Boolean) as string[];
-      const readStates = await storage.getEmailConversationReadStates(user.id, threadIdStrings);
+      let readStates: Map<string, Date | null> = new Map();
+      try {
+        readStates = await storage.getEmailConversationReadStates(user.id, threadIdStrings);
+      } catch (err) {
+        // If the read-state table is missing/broken, default everyone to
+        // "never read" so unread styling still shows for incoming mail —
+        // worst case we over-highlight, but the inbox still loads.
+        console.error("[conversations] read-state enrichment failed:", err);
+      }
 
       const enriched = threads.map(t => {
         const lastReadAt = t.threadId ? readStates.get(t.threadId) ?? null : null;
