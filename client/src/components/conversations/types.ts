@@ -6,6 +6,8 @@ export interface ConversationThread {
   linkedCarrierId: string | null;
   ownerUserId: string | null;
   ownerName: string | null;
+  accountName?: string | null;
+  carrierName?: string | null;
   waitingState: "waiting_on_us" | "waiting_on_them" | "resolved" | "archived" | "snoozed";
   responsePriority: "high" | "normal" | "low" | "urgent";
   lastMessageId: string | null;
@@ -100,6 +102,98 @@ export function parseBucket(raw: string | null | undefined): ConversationBucket 
 }
 
 export type ConversationDensity = "comfortable" | "compact";
+
+// ─── Grouping (Task #535) ────────────────────────────────────────────────────
+// "None" preserves the existing flat list. "Account" groups by linked account
+// (companies); "Carrier" groups by linked carrier. Threads with no link land
+// under an "Unlinked" group at the bottom.
+export type ConversationGroupBy = "none" | "account" | "carrier";
+
+export interface ConversationGroup {
+  // Stable key for React + selection: account/carrier id, or the literal
+  // "__unlinked__" sentinel for threads with no link.
+  key: string;
+  // Display name shown in the header.
+  name: string;
+  threads: ConversationThread[];
+  openCount: number;
+  highestPriority: ConversationThread["responsePriority"];
+  oldestWaitingAt: string | null;
+  unreadCount: number;
+}
+
+export const UNLINKED_GROUP_KEY = "__unlinked__";
+
+const PRIORITY_RANK: Record<ConversationThread["responsePriority"], number> = {
+  urgent: 0,
+  high: 1,
+  normal: 2,
+  low: 3,
+};
+
+// "Open" = anything still in the rep's queue (waiting_on_us / waiting_on_them).
+// Resolved / archived / snoozed don't add to the open count on the header.
+function isOpen(thread: ConversationThread): boolean {
+  return thread.waitingState === "waiting_on_us" || thread.waitingState === "waiting_on_them";
+}
+
+// Build groups from a pre-sorted thread list. Sort order *within* each group is
+// preserved from the input — the page already sorts by overdue / wait age /
+// recency, and grouping doesn't second-guess that. Group order: anything with
+// a real account/carrier first, sorted by name; then the Unlinked bucket.
+export function buildGroups(
+  threads: ConversationThread[],
+  groupBy: ConversationGroupBy,
+): ConversationGroup[] {
+  if (groupBy === "none") return [];
+  const map = new Map<string, ConversationGroup>();
+
+  for (const t of threads) {
+    let key: string;
+    let name: string;
+    if (groupBy === "account") {
+      key = t.linkedAccountId ?? UNLINKED_GROUP_KEY;
+      name = t.linkedAccountId ? (t.accountName ?? "Account") : "Unlinked";
+    } else {
+      key = t.linkedCarrierId ?? UNLINKED_GROUP_KEY;
+      name = t.linkedCarrierId ? (t.carrierName ?? "Carrier") : "Unlinked";
+    }
+
+    let group = map.get(key);
+    if (!group) {
+      group = {
+        key,
+        name,
+        threads: [],
+        openCount: 0,
+        highestPriority: "low",
+        oldestWaitingAt: null,
+        unreadCount: 0,
+      };
+      map.set(key, group);
+    }
+    group.threads.push(t);
+    if (isOpen(t)) group.openCount++;
+    if (t.unread) group.unreadCount++;
+    if (PRIORITY_RANK[t.responsePriority] < PRIORITY_RANK[group.highestPriority]) {
+      group.highestPriority = t.responsePriority;
+    }
+    if (t.waitingSinceAt && t.waitingState === "waiting_on_us") {
+      if (!group.oldestWaitingAt || new Date(t.waitingSinceAt) < new Date(group.oldestWaitingAt)) {
+        group.oldestWaitingAt = t.waitingSinceAt;
+      }
+    }
+  }
+
+  const groups = Array.from(map.values());
+  groups.sort((a, b) => {
+    const aUnlinked = a.key === UNLINKED_GROUP_KEY;
+    const bUnlinked = b.key === UNLINKED_GROUP_KEY;
+    if (aUnlinked !== bUnlinked) return aUnlinked ? 1 : -1;
+    return a.name.localeCompare(b.name);
+  });
+  return groups;
+}
 
 export const QUOTE_SIGNAL_TYPES = new Set(["pricing_request", "quote_request"]);
 

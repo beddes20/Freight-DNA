@@ -45,12 +45,13 @@ import { Bookmark } from "lucide-react";
 import type {
   ConversationBucket,
   ConversationDensity,
+  ConversationGroupBy,
   ConversationThread,
   ThreadsResponse,
   SavedView,
   BulkActionResult,
 } from "@/components/conversations/types";
-import { parseBucket } from "@/components/conversations/types";
+import { parseBucket, buildGroups } from "@/components/conversations/types";
 
 // Re-export legacy public surface so unrelated importers still work.
 // (Some debug pages and tests import the ConversationThread type from here.)
@@ -58,11 +59,48 @@ export type { ConversationThread } from "@/components/conversations/types";
 export { ThreadDetailPanel } from "@/components/conversations/thread-detail-pane";
 
 const DENSITY_KEY = "conversations:density";
+// Per-user persistence keys (Task #535) — scoped by authenticated user id so
+// preferences don't bleed between users sharing the same browser profile.
+const GROUP_BY_KEY_PREFIX = "conversations:groupBy:";
+const COLLAPSED_GROUPS_KEY_PREFIX = "conversations:collapsedGroups:";
+
+function groupByKey(userId: string | null | undefined): string | null {
+  return userId ? `${GROUP_BY_KEY_PREFIX}${userId}` : null;
+}
+function collapsedGroupsKey(userId: string | null | undefined): string | null {
+  return userId ? `${COLLAPSED_GROUPS_KEY_PREFIX}${userId}` : null;
+}
 
 function loadDensity(): ConversationDensity {
   if (typeof window === "undefined") return "comfortable";
   const v = window.localStorage.getItem(DENSITY_KEY);
   return v === "compact" ? "compact" : "comfortable";
+}
+
+function loadGroupBy(userId: string | null | undefined): ConversationGroupBy {
+  if (typeof window === "undefined") return "none";
+  const k = groupByKey(userId);
+  if (!k) return "none";
+  const v = window.localStorage.getItem(k);
+  return v === "account" || v === "carrier" ? v : "none";
+}
+
+// Persisted collapsed-state is keyed by groupBy mode + group key so
+// switching between Account / Carrier doesn't carry the wrong collapse
+// state across to a different set of groups.
+function loadCollapsedGroups(userId: string | null | undefined): Record<string, string[]> {
+  if (typeof window === "undefined") return {};
+  const k = collapsedGroupsKey(userId);
+  if (!k) return {};
+  try {
+    const raw = window.localStorage.getItem(k);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") return parsed as Record<string, string[]>;
+  } catch {
+    // Corrupt JSON shouldn't take the page down — fall through to empty.
+  }
+  return {};
 }
 
 export default function ConversationsPage() {
@@ -125,6 +163,50 @@ export default function ConversationsPage() {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(DENSITY_KEY, density);
   }, [density]);
+
+  // ── Group by (per-user via localStorage, Task #535) ───────────────────────
+  // Persisted (per authenticated user id) so a rep doesn't have to re-set
+  // their preferred grouping every time they reload the inbox, and
+  // preferences from one user don't leak to another sharing a browser.
+  const [groupBy, setGroupBy] = useState<ConversationGroupBy>(() => loadGroupBy(user?.id));
+  // Re-hydrate when the authenticated user becomes known after first render
+  // (useAuth resolves async on initial mount).
+  useEffect(() => {
+    if (!user?.id) return;
+    setGroupBy(loadGroupBy(user.id));
+    setCollapsedGroupsByMode(loadCollapsedGroups(user.id));
+    // We intentionally only re-hydrate when the user identity changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const k = groupByKey(user?.id);
+    if (!k) return;
+    window.localStorage.setItem(k, groupBy);
+  }, [groupBy, user?.id]);
+
+  // Collapsed groups are persisted per (groupBy mode) key so the user's
+  // expand/collapse state survives reloads. Default is "expanded" — the
+  // collapsed set is the only thing we have to track.
+  const [collapsedGroupsByMode, setCollapsedGroupsByMode] = useState<Record<string, string[]>>(() => loadCollapsedGroups(user?.id));
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const k = collapsedGroupsKey(user?.id);
+    if (!k) return;
+    window.localStorage.setItem(k, JSON.stringify(collapsedGroupsByMode));
+  }, [collapsedGroupsByMode, user?.id]);
+  const collapsedGroupKeys = useMemo(
+    () => new Set(collapsedGroupsByMode[groupBy] ?? []),
+    [collapsedGroupsByMode, groupBy],
+  );
+  function toggleGroupCollapsed(key: string) {
+    setCollapsedGroupsByMode(prev => {
+      const current = new Set(prev[groupBy] ?? []);
+      if (current.has(key)) current.delete(key);
+      else current.add(key);
+      return { ...prev, [groupBy]: Array.from(current) };
+    });
+  }
 
   // ── Pagination state — accumulated as the user clicks "Load more" ─────────
   const [allThreads, setAllThreads] = useState<ConversationThread[]>([]);
@@ -485,6 +567,27 @@ export default function ConversationsPage() {
     return arr;
   }, [allThreads, bucket]);
 
+  // ── Group computation (Task #535) ─────────────────────────────────────────
+  // Pure client-side: groupBy maps the already-sorted list into account or
+  // carrier groups. Sort order *within* a group preserves the triage order
+  // above (overdue first, then oldest waiting, then recency).
+  const groups = useMemo(() => buildGroups(sorted, groupBy), [sorted, groupBy]);
+
+  // Wire group-header selection into the existing bulk selection model:
+  // checking a header adds every thread in the group to the selection set,
+  // unchecking removes them. Threads outside the group are left alone, which
+  // is what reps expect when they're working multiple groups in one pass.
+  function toggleGroupSelected(groupThreads: ConversationThread[], checked: boolean) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      for (const t of groupThreads) {
+        if (checked) next.add(t.id);
+        else next.delete(t.id);
+      }
+      return next;
+    });
+  }
+
   // ── Resolve the selected thread:
   //   1) Look up in the loaded list. If found we're done.
   //   2) If we have a threadId from the URL but no match (deep link to a
@@ -607,6 +710,19 @@ export default function ConversationsPage() {
         >
           {/* Filters bar */}
           <div className="px-3 py-2 border-b shrink-0 flex flex-wrap items-center gap-2 bg-muted/10">
+            {/* Group by — Task #535. Available across every bucket so reps
+                can pivot any view by account or carrier. Persisted per user. */}
+            <Select value={groupBy} onValueChange={(v) => setGroupBy(v as ConversationGroupBy)}>
+              <SelectTrigger className="h-8 w-36 text-xs" data-testid="select-group-by">
+                <SelectValue placeholder="Group by" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none" data-testid="option-group-by-none">No grouping</SelectItem>
+                <SelectItem value="account" data-testid="option-group-by-account">Group by account</SelectItem>
+                <SelectItem value="carrier" data-testid="option-group-by-carrier">Group by carrier</SelectItem>
+              </SelectContent>
+            </Select>
+
             {bucket !== "mine" && bucket !== "unowned" && (
               <RepFilterCombobox value={filterRep} onChange={setFilterRep} users={sortedReps} />
             )}
@@ -771,6 +887,11 @@ export default function ConversationsPage() {
                   if (checked) setSelectedIds(new Set(sorted.map(t => t.id)));
                   else setSelectedIds(new Set());
                 }}
+                groupBy={groupBy}
+                groups={groups}
+                collapsedGroupKeys={collapsedGroupKeys}
+                onToggleGroupCollapsed={toggleGroupCollapsed}
+                onToggleGroupSelected={(group, checked) => toggleGroupSelected(group.threads, checked)}
               />
             )}
           </div>

@@ -3,7 +3,14 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Inbox, CheckCircle2, Sparkles, AlertCircle, Mail, Archive, DollarSign, Clock } from "lucide-react";
 import { ThreadRow } from "./thread-row";
-import type { ConversationBucket, ConversationDensity, ConversationThread } from "./types";
+import { GroupHeader } from "./group-header";
+import type {
+  ConversationBucket,
+  ConversationDensity,
+  ConversationGroup,
+  ConversationGroupBy,
+  ConversationThread,
+} from "./types";
 
 interface ThreadListProps {
   threads: ConversationThread[];
@@ -23,6 +30,12 @@ interface ThreadListProps {
   selectedIds?: Set<string>;
   onToggleSelected?: (id: string, checked: boolean) => void;
   onToggleAll?: (checked: boolean) => void;
+  // ── Grouping (Task #535) ────────────────────────────────────────────────
+  groupBy?: ConversationGroupBy;
+  groups?: ConversationGroup[];
+  collapsedGroupKeys?: Set<string>;
+  onToggleGroupCollapsed?: (key: string) => void;
+  onToggleGroupSelected?: (group: ConversationGroup, checked: boolean) => void;
 }
 
 const EMPTY_STATES: Record<ConversationBucket, { icon: typeof Inbox; title: string; subtitle: string }> = {
@@ -81,6 +94,11 @@ export function ThreadList({
   selectedIds,
   onToggleSelected,
   onToggleAll,
+  groupBy = "none",
+  groups,
+  collapsedGroupKeys,
+  onToggleGroupCollapsed,
+  onToggleGroupSelected,
 }: ThreadListProps) {
   const selectionEnabled = !!onToggleSelected;
   const allChecked = selectionEnabled && threads.length > 0 && threads.every(t => selectedIds?.has(t.id));
@@ -116,6 +134,25 @@ export function ThreadList({
     );
   }
 
+  const isGrouped = groupBy !== "none" && Array.isArray(groups) && groups.length > 0;
+
+  const renderRow = (t: ConversationThread) => (
+    <ThreadRow
+      key={t.id}
+      thread={t}
+      density={density}
+      isSelected={selectedThreadId === t.threadId}
+      onSelect={onSelect}
+      onAssignToMe={onAssignToMe}
+      onChangeState={onChangeState}
+      onArchive={onArchive}
+      onSnooze={onSnooze}
+      onUnsnooze={onUnsnooze}
+      isChecked={selectedIds?.has(t.id)}
+      onToggleChecked={onToggleSelected}
+    />
+  );
+
   return (
     <div className="flex flex-col" data-testid="thread-list">
       {selectionEnabled && (
@@ -133,22 +170,31 @@ export function ThreadList({
           </span>
         </div>
       )}
-      {threads.map(t => (
-        <ThreadRow
-          key={t.id}
-          thread={t}
-          density={density}
-          isSelected={selectedThreadId === t.threadId}
-          onSelect={onSelect}
-          onAssignToMe={onAssignToMe}
-          onChangeState={onChangeState}
-          onArchive={onArchive}
-          onSnooze={onSnooze}
-          onUnsnooze={onUnsnooze}
-          isChecked={selectedIds?.has(t.id)}
-          onToggleChecked={onToggleSelected}
-        />
-      ))}
+
+      {isGrouped ? (
+        groups!.map(group => {
+          const collapsed = !!collapsedGroupKeys?.has(group.key);
+          const selectedInGroup = selectionEnabled
+            ? group.threads.filter(t => selectedIds?.has(t.id)).length
+            : 0;
+          return (
+            <div key={group.key} data-testid={`group-${group.key}`}>
+              <GroupHeader
+                group={group}
+                expanded={!collapsed}
+                onToggleExpanded={() => onToggleGroupCollapsed?.(group.key)}
+                selectionEnabled={selectionEnabled}
+                selectedCount={selectedInGroup}
+                onToggleSelected={(checked) => onToggleGroupSelected?.(group, checked)}
+              />
+              {!collapsed && group.threads.map(renderRow)}
+            </div>
+          );
+        })
+      ) : (
+        threads.map(renderRow)
+      )}
+
       {hasMore && (
         <div className="p-3 flex items-center justify-center">
           <Button

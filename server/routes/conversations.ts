@@ -396,6 +396,23 @@ export function registerConversationsRoutes(app: Express): void {
         if (u) ownerMap.set(id, u.name);
       }));
 
+      // Task #535: enrich each thread with the linked account/carrier name so
+      // the client can group rows by account or carrier without doing a
+      // round-trip per row. Without these names a "Group by Account" list
+      // would only show opaque UUIDs.
+      const accountIds = [...new Set(threads.map(t => t.linkedAccountId).filter(Boolean) as string[])];
+      const carrierIds = [...new Set(threads.map(t => t.linkedCarrierId).filter(Boolean) as string[])];
+      const accountNameMap = new Map<string, string>();
+      const carrierNameMap = new Map<string, string>();
+      if (accountIds.length > 0) {
+        const companies = await storage.getCompaniesByIds(accountIds, orgId);
+        for (const c of companies) accountNameMap.set(c.id, c.name);
+      }
+      if (carrierIds.length > 0) {
+        const carriers = await storage.getCarriersByIds(carrierIds, orgId);
+        for (const c of carriers) carrierNameMap.set(c.id, c.name);
+      }
+
       // Enrich each thread with the unique set of intent_types found across its
       // messages so the UI can render badges like "Quote", "Urgent", etc.
       const threadKeys = threads.map(t => t.threadId).filter(Boolean) as string[];
@@ -437,6 +454,8 @@ export function registerConversationsRoutes(app: Express): void {
         return {
           ...t,
           ownerName: t.ownerUserId ? (ownerMap.get(t.ownerUserId) ?? null) : null,
+          accountName: t.linkedAccountId ? (accountNameMap.get(t.linkedAccountId) ?? null) : null,
+          carrierName: t.linkedCarrierId ? (carrierNameMap.get(t.linkedCarrierId) ?? null) : null,
           signals: t.threadId && signalsByThread.has(t.threadId)
             ? Array.from(signalsByThread.get(t.threadId)!)
             : [],
