@@ -142,33 +142,6 @@ function PipelineAnalyticsRedirect() {
   return null;
 }
 
-// Sends reps to ValueIQ Threads on first visit to the dashboard, unless they
-// have opted out (per-user) or the org has disabled the landing flag.
-function ValueIQLandingRedirect({ user }: { user: ReturnType<typeof useAuth>["user"] }) {
-  const [location, navigate] = useLocation();
-  const [checked, setChecked] = useState(false);
-  useEffect(() => {
-    if (checked) return;
-    if (location !== "/") { setChecked(true); return; }
-    if (user?.valueiqLandingDisabled) { setChecked(true); return; }
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch("/api/agent/me/module-access", { credentials: "include" });
-        const access = await res.json().catch(() => ({}));
-        // Honor org kill switch if exposed; default to redirect when unknown.
-        if (access?.orgLandingEnabled === false) { setChecked(true); return; }
-      } catch { /* ignore — default to redirect */ }
-      if (!cancelled) {
-        navigate("/valueiq?tab=threads");
-        setChecked(true);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [location, user?.valueiqLandingDisabled, checked, navigate]);
-  return null;
-}
-
 function Router() {
   return (
     <Switch>
@@ -509,7 +482,6 @@ function AuthenticatedAppContent({ user, isLoading, handleInactivityLogout }: {
               <NotificationBell navBar />
             </header>
             <main className="flex-1 overflow-auto pb-14 md:pb-0">
-              <ValueIQLandingRedirect user={user} />
               <Router />
             </main>
           </div>
