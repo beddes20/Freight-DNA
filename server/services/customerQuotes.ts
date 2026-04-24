@@ -1643,6 +1643,15 @@ export type SpotSearchInput = {
   matchMode?: "strict" | "relaxed" | null;
 };
 
+// Task #514 — Minimum number of won quotes required for a tier to
+// "win" the guidance band walk. Externalized via env so brokers can
+// tune confidence vs. coverage without a code change. Defaults to 4
+// (legacy hardcoded value). Floor of 1 to keep walks well-defined.
+export const SPOT_GUIDANCE_MIN_SAMPLE: number = (() => {
+  const raw = parseInt(process.env.SPOT_GUIDANCE_MIN_SAMPLE ?? "", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 4;
+})();
+
 // Task #514 — Tiered Matching tier identifiers, ordered for display.
 export const MATCH_TIERS = [
   "exact",
@@ -1945,10 +1954,13 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
   // and groups flatbed/step-deck under "open". "Other" matches the catch-all
   // family. "Any" / blank matches everything.
   const inputFamily = equipment && eqLower !== "any" ? equipmentFamily(equipment) : null;
-  // Task #514 — When the rep enables "Exact matches only", we also force
-  // exact equipment-string equality. Otherwise we relax to family-level
-  // matching (van/reefer/open/other) to widen the historical pool.
-  const forceExactEquipment = !!input.exactOnly;
+  // Task #514 — Strict mode preserves the legacy "today's behavior":
+  // exact equipment-string equality and only exact / same_state tiers.
+  // The "Exact matches only" lane toggle is also a way to force exact
+  // equipment regardless of mode. Relaxed mode (default) widens the
+  // historical pool to the equipment family (van/reefer/open/other).
+  const matchModeEarly: "strict" | "relaxed" = input.matchMode === "strict" ? "strict" : "relaxed";
+  const forceExactEquipment = !!input.exactOnly || matchModeEarly === "strict";
   const eqMatch = (r: QuoteOpportunity): boolean => {
     if (!inputFamily) return true;
     if (forceExactEquipment) {
@@ -1960,8 +1972,9 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
 
   // Task #514 — Tiered matching. Classify every (equipment-matched)
   // opportunity into exactly one tier. matchMode "strict" only retains
-  // exact + same_state to mirror the legacy two-tier UI.
-  const matchMode: "strict" | "relaxed" = input.matchMode === "strict" ? "strict" : "relaxed";
+  // exact + same_state to mirror the legacy two-tier UI (and forces
+  // exact equipment-string equality, see forceExactEquipment above).
+  const matchMode = matchModeEarly;
   const exactOnly = !!input.exactOnly;
   const includeSimilar = input.includeSimilar !== false && !exactOnly;
 
@@ -2085,7 +2098,7 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
     }
     const guidanceTier = pickGuidanceTier(
       Object.fromEntries(MATCH_TIERS.map(t => [t, { won: wonByTier[t] }])) as Record<MatchTier, { won: number[] }>,
-      4,
+      SPOT_GUIDANCE_MIN_SAMPLE,
     );
     if (guidanceTier) {
       const series = wonByTier[guidanceTier];

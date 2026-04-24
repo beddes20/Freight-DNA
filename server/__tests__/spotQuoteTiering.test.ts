@@ -42,8 +42,17 @@ import {
   classifyMatchTier,
   pickGuidanceTier,
   MATCH_TIERS,
+  SPOT_GUIDANCE_MIN_SAMPLE,
   type MatchTier,
 } from "../services/customerQuotes";
+
+describe("SPOT_GUIDANCE_MIN_SAMPLE", () => {
+  it("defaults to 4 when env var is unset/invalid", () => {
+    // The constant is captured at module-load time; in CI the env var
+    // is unset so we expect the documented legacy default.
+    expect(SPOT_GUIDANCE_MIN_SAMPLE).toBe(4);
+  });
+});
 
 describe("equipmentFamily", () => {
   it("maps van + dry van + box truck to 'van'", () => {

@@ -818,7 +818,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                   <div className="inline-flex rounded-[4px] border border-zinc-700 bg-zinc-900 overflow-hidden" role="group" data-testid="segmented-spot-match-mode">
                     <button
                       type="button"
-                      onClick={() => setMatchMode("relaxed")}
+                      onClick={() => { setMatchMode("relaxed"); setActiveQuery(q => q ? { ...q, matchMode: "relaxed" } : q); }}
                       className={`px-2.5 h-8 text-[11px] font-medium transition ${matchMode === "relaxed" ? "bg-amber-500/20 text-amber-200 border-r border-amber-500/30" : "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border-r border-zinc-700"}`}
                       data-testid="button-spot-match-mode-relaxed"
                       title="Walk the full ladder: exact → market → state → reverse → corridor"
@@ -827,7 +827,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                     </button>
                     <button
                       type="button"
-                      onClick={() => setMatchMode("strict")}
+                      onClick={() => { setMatchMode("strict"); setActiveQuery(q => q ? { ...q, matchMode: "strict" } : q); }}
                       className={`px-2.5 h-8 text-[11px] font-medium transition ${matchMode === "strict" ? "bg-amber-500/20 text-amber-200" : "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"}`}
                       data-testid="button-spot-match-mode-strict"
                       title="Only exact lane and same-state-pair matches"
