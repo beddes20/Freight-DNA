@@ -235,7 +235,7 @@ function LaneInput({
           onBlur={() => setTimeout(() => setAutoOpen(false), 150)}
           onKeyDown={onCityKeyDown}
           placeholder="City"
-          className="h-10 w-[200px] bg-zinc-900 border-zinc-700 text-sm focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
+          className="h-10 w-[200px] bg-zinc-900 border-zinc-700 text-sm text-zinc-100 placeholder:text-zinc-500 focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
           data-testid={testIdCity}
         />
         <Input
@@ -243,7 +243,7 @@ function LaneInput({
           value={value.state}
           onChange={e => onStateChange(e.target.value)}
           placeholder="ST"
-          className="h-10 w-[60px] bg-zinc-900 border-zinc-700 text-sm uppercase tracking-wider text-center focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
+          className="h-10 w-[60px] bg-zinc-900 border-zinc-700 text-sm text-zinc-100 placeholder:text-zinc-500 uppercase tracking-wider text-center focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
           maxLength={2}
           data-testid={testIdState}
         />
@@ -542,7 +542,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
           <div className="flex flex-col gap-1">
             <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium flex items-center gap-1"><Truck className="h-3 w-3" /> Mode</span>
             <Select value={equipment} onValueChange={setEquipment}>
-              <SelectTrigger className="h-10 w-[130px] bg-zinc-900 border-zinc-700 text-sm" data-testid="select-spot-equipment"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-10 w-[130px] bg-zinc-900 border-zinc-700 text-sm text-zinc-100 [&>span]:text-zinc-100" data-testid="select-spot-equipment"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {EQUIPMENT_OPTIONS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
               </SelectContent>
@@ -551,13 +551,13 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
           <div className="flex flex-col gap-1">
             <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium flex items-center gap-1"><Calendar className="h-3 w-3" /> Pickup date</span>
             <Input ref={dateRef} type="date" value={pickupDate} onChange={e => setPickupDate(e.target.value)}
-              className="h-10 w-[160px] bg-zinc-900 border-zinc-700 text-sm focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
+              className="h-10 w-[160px] bg-zinc-900 border-zinc-700 text-sm text-zinc-100 placeholder:text-zinc-500 [color-scheme:dark] focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
               data-testid="input-spot-pickup-date" />
           </div>
           <div className="flex flex-col gap-1">
             <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium flex items-center gap-1"><Users className="h-3 w-3" /> Customer (optional)</span>
             <Select value={customerId || "_any"} onValueChange={v => setCustomerId(v === "_any" ? "" : v)}>
-              <SelectTrigger className="h-10 w-[220px] bg-zinc-900 border-zinc-700 text-sm" data-testid="select-spot-customer"><SelectValue placeholder="Any customer" /></SelectTrigger>
+              <SelectTrigger className="h-10 w-[220px] bg-zinc-900 border-zinc-700 text-sm text-zinc-100 [&>span]:text-zinc-100 data-[placeholder]:text-zinc-500" data-testid="select-spot-customer"><SelectValue placeholder="Any customer" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="_any">Any customer</SelectItem>
                 {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
@@ -595,7 +595,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                 <div className="flex flex-col gap-1">
                   <span className="text-[10px] uppercase tracking-wider text-zinc-500">Lookback</span>
                   <Select value={lookbackDays} onValueChange={setLookbackDays}>
-                    <SelectTrigger className="h-8 w-[150px] bg-zinc-900 border-zinc-700 text-xs" data-testid="select-spot-lookback"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="h-8 w-[150px] bg-zinc-900 border-zinc-700 text-xs text-zinc-100 [&>span]:text-zinc-100" data-testid="select-spot-lookback"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {LOOKBACK_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
                     </SelectContent>
@@ -615,19 +615,19 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
               <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2 pt-2 border-t border-zinc-800">
                 <AdvField label="Weight (lbs)">
                   <Input value={adv.weight ?? ""} onChange={e => setAdv(a => ({ ...a, weight: e.target.value }))}
-                    placeholder="e.g. 42000" className="h-8 bg-zinc-900 border-zinc-700 text-xs" data-testid="input-spot-weight" />
+                    placeholder="e.g. 42000" className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 placeholder:text-zinc-500" data-testid="input-spot-weight" />
                 </AdvField>
                 <AdvField label="Commodity">
                   <Input value={adv.commodity ?? ""} onChange={e => setAdv(a => ({ ...a, commodity: e.target.value }))}
-                    placeholder="e.g. Steel coils" className="h-8 bg-zinc-900 border-zinc-700 text-xs" data-testid="input-spot-commodity" />
+                    placeholder="e.g. Steel coils" className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 placeholder:text-zinc-500" data-testid="input-spot-commodity" />
                 </AdvField>
                 <AdvField label="Pallets">
                   <Input value={adv.pallets ?? ""} onChange={e => setAdv(a => ({ ...a, pallets: e.target.value }))}
-                    placeholder="e.g. 26" className="h-8 bg-zinc-900 border-zinc-700 text-xs" data-testid="input-spot-pallets" />
+                    placeholder="e.g. 26" className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 placeholder:text-zinc-500" data-testid="input-spot-pallets" />
                 </AdvField>
                 <AdvField label="TL type">
                   <Select value={adv.truckloadType ?? "_unset"} onValueChange={v => setAdv(a => ({ ...a, truckloadType: v === "_unset" ? undefined : v }))}>
-                    <SelectTrigger className="h-8 bg-zinc-900 border-zinc-700 text-xs" data-testid="select-spot-tl-type"><SelectValue placeholder="Select" /></SelectTrigger>
+                    <SelectTrigger className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 placeholder:text-zinc-500" data-testid="select-spot-tl-type"><SelectValue placeholder="Select" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="_unset">—</SelectItem>
                       {TRUCKLOAD_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
@@ -636,11 +636,11 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                 </AdvField>
                 <AdvField label="Special handling">
                   <Input value={adv.specialHandling ?? ""} onChange={e => setAdv(a => ({ ...a, specialHandling: e.target.value }))}
-                    placeholder="Tarps, straps…" className="h-8 bg-zinc-900 border-zinc-700 text-xs" data-testid="input-spot-special" />
+                    placeholder="Tarps, straps…" className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 placeholder:text-zinc-500" data-testid="input-spot-special" />
                 </AdvField>
                 <AdvField label="Access notes">
                   <Input value={adv.accessNotes ?? ""} onChange={e => setAdv(a => ({ ...a, accessNotes: e.target.value }))}
-                    placeholder="Residential, jobsite…" className="h-8 bg-zinc-900 border-zinc-700 text-xs" data-testid="input-spot-access" />
+                    placeholder="Residential, jobsite…" className="h-8 bg-zinc-900 border-zinc-700 text-xs text-zinc-100 placeholder:text-zinc-500" data-testid="input-spot-access" />
                 </AdvField>
               </div>
               <div className="flex flex-wrap items-center gap-4 pt-2 border-t border-zinc-800">
