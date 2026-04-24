@@ -171,6 +171,20 @@ function median(nums: number[]): number | null {
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 }
 
+/**
+ * Nearest-rank percentile (0..100). Returns null on an empty input.
+ * Used by the weekly trend so leaders can spot p90 drift even when the
+ * median looks flat — a few worst-case responses are usually what burns
+ * customers, and a tail-only regression won't move the median.
+ */
+function percentile(nums: number[], p: number): number | null {
+  if (nums.length === 0) return null;
+  const sorted = [...nums].sort((a, b) => a - b);
+  const rank = Math.ceil((p / 100) * sorted.length);
+  const idx = Math.min(sorted.length - 1, Math.max(0, rank - 1));
+  return sorted[idx];
+}
+
 // ─── Sender attribution index ────────────────────────────────────────────────
 
 export interface SenderUserDirectoryEntry {
@@ -806,6 +820,78 @@ export function buildTimeseries(
     }))
     .sort((a, b) => a.bucket.localeCompare(b.bucket));
   return points;
+}
+
+// ─── Weekly trend (median + p90 by ISO-week) ─────────────────────────────────
+// Anchors each reply on the Monday of the ISO-week that contains its outbound
+// send time, then reports median + p90 + count per week so leadership can see
+// week-over-week drift in both the typical and worst-case rep response time.
+
+export interface WeeklyTrendPoint {
+  /** YYYY-MM-DD of the ISO-week Monday this bucket represents (UTC). */
+  weekStart: string;
+  /** ISO week-numbering year (may differ from calendar year near Jan 1 / Dec 31). */
+  isoYear: number;
+  /** ISO week number (1..53). */
+  isoWeek: number;
+  /** Number of replies in the bucket. */
+  count: number;
+  /** Median response time in ms (null when count == 0). */
+  medianMs: number | null;
+  /** p90 response time in ms (null when count == 0). */
+  p90Ms: number | null;
+}
+
+/**
+ * Compute the ISO-week Monday (UTC) plus ISO year/week number for a date.
+ * "ISO week" = week starts Monday; week 1 is the week containing Thursday
+ * Jan 4 (equivalently, the first Thursday of the ISO year). This matches the
+ * definition used by Postgres `EXTRACT(week …)` and ECMA-402.
+ */
+export function isoWeekParts(d: Date): { weekStart: string; isoYear: number; isoWeek: number } {
+  const utcMid = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const dt = new Date(utcMid);
+  const dayNum = dt.getUTCDay() || 7; // 1..7 (Mon..Sun)
+  const monday = new Date(utcMid - (dayNum - 1) * 86400000);
+  // ISO year is determined by the Thursday of this week.
+  const thursday = new Date(monday.getTime() + 3 * 86400000);
+  const isoYear = thursday.getUTCFullYear();
+  const jan4 = new Date(Date.UTC(isoYear, 0, 4));
+  const jan4Day = jan4.getUTCDay() || 7;
+  const week1Monday = new Date(jan4.getTime() - (jan4Day - 1) * 86400000);
+  const isoWeek = Math.round((monday.getTime() - week1Monday.getTime()) / (7 * 86400000)) + 1;
+  const y = monday.getUTCFullYear();
+  const m = String(monday.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(monday.getUTCDate()).padStart(2, "0");
+  return { weekStart: `${y}-${m}-${day}`, isoYear, isoWeek };
+}
+
+/**
+ * Bucket responded pairs by the ISO-week of their outbound send time and
+ * return one point per week with median + p90 + reply count. Sorted by
+ * weekStart ascending so a recharts LineChart can render directly.
+ */
+export function buildWeeklyTrend(pairs: ResponsePair[], biz: boolean): WeeklyTrendPoint[] {
+  const groups = new Map<string, { values: number[]; isoYear: number; isoWeek: number }>();
+  for (const p of pairs) {
+    if (!p.outboundAt) continue;
+    const ms = pickMs(p, biz);
+    if (ms == null || ms < 0) continue;
+    const { weekStart, isoYear, isoWeek } = isoWeekParts(p.outboundAt);
+    const cur = groups.get(weekStart) ?? { values: [], isoYear, isoWeek };
+    cur.values.push(ms);
+    groups.set(weekStart, cur);
+  }
+  return Array.from(groups.entries())
+    .map(([weekStart, { values, isoYear, isoWeek }]) => ({
+      weekStart,
+      isoYear,
+      isoWeek,
+      count: values.length,
+      medianMs: median(values),
+      p90Ms: percentile(values, 90),
+    }))
+    .sort((a, b) => a.weekStart.localeCompare(b.weekStart));
 }
 
 // ─── "Right now" snapshot ────────────────────────────────────────────────────

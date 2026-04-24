@@ -19,6 +19,7 @@ import {
   buildLeaderboard,
   buildSlowestThreads,
   buildTimeseries,
+  buildWeeklyTrend,
   buildRightNow,
   buildSlaCompliance,
   buildAccountOutliers,
@@ -209,6 +210,30 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
     } catch (err) {
       console.error("[email-response-time/timeseries] error:", err);
       res.status(500).json({ error: "Failed to load response time timeseries" });
+    }
+  });
+
+  // ── /trend: weekly median + p90 line for the selected window ─────────────
+  // Honors the same filters as the rest of the tab (range, account, reps,
+  // businessHours toggle). Buckets by ISO week of each reply's outbound
+  // send time, so a week that has no replies simply doesn't appear — the
+  // frontend can decide whether to fill gaps.
+  app.get("/api/analytics/email-response-time/trend", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const filters = parseRtFilters(req, user.organizationId);
+      const pairs = await getCachedPairs(filters);
+      const points = buildWeeklyTrend(pairs, filters.businessHours);
+      res.json({
+        businessHours: filters.businessHours,
+        windowStart: filters.start.toISOString(),
+        windowEnd: filters.end.toISOString(),
+        points,
+      });
+    } catch (err) {
+      console.error("[email-response-time/trend] error:", err);
+      res.status(500).json({ error: "Failed to load weekly trend" });
     }
   });
 

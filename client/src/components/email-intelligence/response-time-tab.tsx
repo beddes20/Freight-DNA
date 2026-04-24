@@ -79,6 +79,22 @@ interface TimeseriesResponse {
   points: TimeseriesPointDto[];
 }
 
+interface WeeklyTrendPointDto {
+  weekStart: string;
+  isoYear: number;
+  isoWeek: number;
+  count: number;
+  medianMs: number | null;
+  p90Ms: number | null;
+}
+
+interface WeeklyTrendResponse {
+  businessHours: boolean;
+  windowStart: string;
+  windowEnd: string;
+  points: WeeklyTrendPointDto[];
+}
+
 interface LeaderboardRowDto {
   ownerUserId: string;
   ownerName: string;
@@ -206,6 +222,22 @@ function formatDuration(ms: number | null): string {
 function deltaPct(current: number | null, prior: number | null): number | null {
   if (current == null || prior == null || prior === 0) return null;
   return ((current - prior) / prior) * 100;
+}
+
+/**
+ * Short label for an ISO-week trend point: "MMM D" of the Monday. Parsed
+ * from the YYYY-MM-DD weekStart string so we don't slide the date by a day
+ * in negative-UTC environments.
+ */
+function formatWeekLabel(weekStart: string): string {
+  const [y, m, d] = weekStart.split("-").map(Number);
+  if (!y || !m || !d) return weekStart;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(dt);
 }
 
 // ─── Range presets ───────────────────────────────────────────────────────────
@@ -390,6 +422,19 @@ export default function ResponseTimeTab() {
     queryKey: ["/api/analytics/email-response-time/timeseries", trendParams],
     queryFn: async () => {
       const r = await fetch(`/api/analytics/email-response-time/timeseries?${trendParams}`);
+      if (!r.ok) throw new Error("failed");
+      return r.json();
+    },
+    staleTime: 60_000,
+  });
+
+  // Weekly median + p90 for the selected window. Honors the page-level
+  // business-hours toggle and all other filters (range, account, reps) via
+  // the shared filterKey.
+  const weeklyTrend = useQuery<WeeklyTrendResponse>({
+    queryKey: ["/api/analytics/email-response-time/trend", filterKey],
+    queryFn: async () => {
+      const r = await fetch(`/api/analytics/email-response-time/trend?${filterKey}`);
       if (!r.ok) throw new Error("failed");
       return r.json();
     },
@@ -901,6 +946,93 @@ export default function ResponseTimeTab() {
                   <Legend wrapperStyle={{ fontSize: 12 }} />
                   <Line type="monotone" dataKey="avg" name="Average" stroke="#3b82f6" strokeWidth={2} dot={false} />
                   <Line type="monotone" dataKey="median" name="Median" stroke="#10b981" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Weekly trend (median + p90) ─────────────────────────────────────── */}
+      <Card data-testid="card-rt-weekly-trend">
+        <CardHeader className="pb-2 flex flex-row items-center justify-between">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            Trend
+            <span className="text-xs text-muted-foreground font-normal">
+              Median &amp; p90 by ISO-week · {businessHours ? "biz hours" : "wall-clock"}
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {weeklyTrend.isLoading ? (
+            <Skeleton className="h-64 w-full" />
+          ) : (weeklyTrend.data?.points.length ?? 0) === 0 ? (
+            <div
+              className="h-64 flex items-center justify-center text-sm text-muted-foreground"
+              data-testid="text-rt-weekly-trend-empty"
+            >
+              No replies in this range
+            </div>
+          ) : (
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart
+                  data={weeklyTrend.data!.points.map((p) => ({
+                    weekStart: p.weekStart,
+                    label: formatWeekLabel(p.weekStart),
+                    isoWeek: p.isoWeek,
+                    isoYear: p.isoYear,
+                    count: p.count,
+                    median: p.medianMs == null ? null : Math.round(p.medianMs / 60000),
+                    p90: p.p90Ms == null ? null : Math.round(p.p90Ms / 60000),
+                    medianRawMs: p.medianMs,
+                    p90RawMs: p.p90Ms,
+                  }))}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                  <YAxis
+                    tick={{ fontSize: 11 }}
+                    label={{ value: "minutes", angle: -90, position: "insideLeft", fontSize: 11 }}
+                  />
+                  <Tooltip
+                    content={(props) => {
+                      if (!props.active || !props.payload?.length) return null;
+                      const row = props.payload[0].payload as {
+                        label: string; isoYear: number; isoWeek: number; count: number;
+                        medianRawMs: number | null; p90RawMs: number | null;
+                      };
+                      return (
+                        <div
+                          className="rounded-md border border-border bg-background/95 px-3 py-2 text-xs shadow-md"
+                          data-testid="tooltip-rt-weekly-trend"
+                        >
+                          <div className="font-medium">
+                            Week of {row.label}{" "}
+                            <span className="text-muted-foreground font-normal">
+                              · {row.isoYear}-W{String(row.isoWeek).padStart(2, "0")}
+                            </span>
+                          </div>
+                          <div className="mt-1 flex items-center gap-2">
+                            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500" />
+                            <span className="text-muted-foreground">Median</span>
+                            <span className="ml-auto font-medium">{formatDuration(row.medianRawMs)}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="inline-block w-2 h-2 rounded-full bg-orange-400" />
+                            <span className="text-muted-foreground">p90</span>
+                            <span className="ml-auto font-medium">{formatDuration(row.p90RawMs)}</span>
+                          </div>
+                          <div className="mt-1 text-muted-foreground">
+                            {row.count} {row.count === 1 ? "reply" : "replies"}
+                          </div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Line type="monotone" dataKey="median" name="Median" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="p90" name="p90" stroke="#fb923c" strokeWidth={2} dot={{ r: 3 }} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
