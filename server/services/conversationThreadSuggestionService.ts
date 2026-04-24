@@ -30,6 +30,11 @@ import {
 } from "@shared/schema";
 import { getAgentOpenAI, AGENT_MODELS } from "../agent/openai";
 import { computeThreadContentHash } from "./conversationThreadSummaryService";
+import {
+  getAccountFeedbackInsight,
+  recordIncrementalFeedback,
+  type AccountFeedbackInsight,
+} from "./suggestionFeedbackLearningService";
 
 export type SuggestionActionType =
   | "draft_reply"
@@ -107,6 +112,32 @@ interface RuleResult {
   actionParams: Record<string, unknown>;
   /** Whether AI should refine the reason. */
   refineWithAI: boolean;
+}
+
+/**
+ * Task #552: Pick a safer fallback when the rule-based suggestion has been
+ * marked wrong for this account recently. The default fallback is
+ * "draft_reply" because it never closes a thread or marks it waiting —
+ * it just opens the compose window with no preset play type.
+ */
+function downgradeAction(base: RuleResult, ctx: ThreadContext): RuleResult {
+  const lastInbound = [...ctx.messages].reverse().find(m => m.direction === "inbound") ?? ctx.messages[ctx.messages.length - 1];
+  if (!lastInbound) {
+    return {
+      actionType: "none",
+      actionLabel: "Nothing to do",
+      actionReason: "This thread has no messages yet.",
+      actionParams: {},
+      refineWithAI: false,
+    };
+  }
+  return {
+    actionType: "draft_reply",
+    actionLabel: "Draft reply",
+    actionReason: "Falling back to a generic reply — past suggestions for this account were marked wrong.",
+    actionParams: { targetMessageId: lastInbound.id },
+    refineWithAI: true,
+  };
 }
 
 /**
@@ -202,7 +233,11 @@ interface AIRefinement {
   recommendation?: SuggestionActionType;
 }
 
-async function refineWithAI(ctx: ThreadContext, base: RuleResult): Promise<AIRefinement | null> {
+async function refineWithAI(
+  ctx: ThreadContext,
+  base: RuleResult,
+  insight?: AccountFeedbackInsight | null,
+): Promise<AIRefinement | null> {
   try {
     const last = ctx.messages[ctx.messages.length - 1];
     if (!last) return null;
@@ -210,6 +245,16 @@ async function refineWithAI(ctx: ThreadContext, base: RuleResult): Promise<AIRef
     const body = stripHtml(lastInbound.body).slice(0, 1500);
     const subject = lastInbound.subject ?? "(no subject)";
     const from = lastInbound.fromEmail ?? "(unknown)";
+
+    // Task #552: Feed past rejected suggestions for this account into the
+    // prompt so the model steers away from framings the rep already told
+    // us were wrong. Capped to 5 short snippets to keep the prompt small.
+    const avoidSection = insight && insight.recentWrongReasons.length > 0
+      ? `\n\nThis account/org recently rejected suggestions phrased like:\n${insight.recentWrongReasons.map(r => `- "${r}"`).join("\n")}\nAvoid suggesting actions that fit the same framing — pick a different angle if those still apply.`
+      : "";
+    const downweightedSection = insight && insight.downweighted.size > 0
+      ? `\n\nDo NOT recommend any of these action types for this account (rep already marked them wrong recently): ${[...insight.downweighted].join(", ")}.`
+      : "";
 
     const prompt = `You are helping a freight broker rep decide what to do next on an email thread.
 
@@ -221,7 +266,7 @@ Body: ${body}
 Existing thread state: ${ctx.thread?.waitingState ?? "waiting_on_us"} (priority ${ctx.thread?.responsePriority ?? "normal"})
 Detected signals: ${[...ctx.intentTypes].join(", ") || "none"}
 
-Our preliminary suggestion: ${base.actionLabel} — ${base.actionReason}
+Our preliminary suggestion: ${base.actionLabel} — ${base.actionReason}${avoidSection}${downweightedSection}
 
 Return STRICT JSON (no markdown, no commentary) with this shape:
 { "reason": "<one short plain-English sentence explaining what they want and why this action fits>",
@@ -294,37 +339,66 @@ export async function getOrComputeThreadSuggestion(opts: {
 
   const ctx = await loadContext(orgId, threadId);
   const base = pickActionFromRules(ctx);
+
+  // Task #552: Pull recent feedback for this account so we don't re-suggest
+  // an action the rep already told us was wrong here. We always look this
+  // up — when the thread isn't linked to a company we still get the
+  // org-wide rollup, and when there's no relevant feedback both fields are
+  // empty (cheap no-op).
+  const insight = await getAccountFeedbackInsight({
+    orgId,
+    accountId: ctx.thread?.linkedAccountId ?? null,
+  }).catch(err => {
+    console.error("[thread-suggestion] feedback insight lookup failed:", err);
+    return null;
+  });
+
   let final: RuleResult = base;
 
-  if (base.refineWithAI) {
-    const refinement = await refineWithAI(ctx, base);
+  // If the rule-based pick lands on a downweighted action, fall back to a
+  // safer default before we even ask the AI. This is what makes the
+  // acceptance test ("a 'wrong' suggestion stops appearing for ~7 days")
+  // hold even when AI refinement isn't run.
+  if (insight && insight.downweighted.has(final.actionType)) {
+    final = downgradeAction(final, ctx);
+  }
+
+  if (final.refineWithAI) {
+    const refinement = await refineWithAI(ctx, final, insight);
     if (refinement) {
       const reason = (refinement.reason ?? "").trim();
       if (reason) final = { ...final, actionReason: reason };
       const allowed: SuggestionActionType[] = ["draft_reply", "quote_request_reply", "mark_resolved", "await_response"];
       if (refinement.recommendation && allowed.includes(refinement.recommendation)) {
-        if (refinement.recommendation === "mark_resolved") {
-          final = {
-            ...final,
-            actionType: "mark_resolved",
-            actionLabel: "Close out — no reply needed",
-            actionParams: {},
-          };
-        } else if (refinement.recommendation === "await_response") {
-          final = {
-            ...final,
-            actionType: "await_response",
-            actionLabel: "Mark as waiting on them",
-            actionParams: {},
-          };
-        } else if (refinement.recommendation !== final.actionType) {
-          // The AI picked draft_reply / quote_request_reply explicitly —
-          // honour it but keep our params (which carry targetMessageId).
-          final = {
-            ...final,
-            actionType: refinement.recommendation,
-            actionLabel: refinement.recommendation === "quote_request_reply" ? "Send quote" : "Draft reply",
-          };
+        // If the AI tries to pick something the rep already rejected
+        // recently for this account, ignore that recommendation and stick
+        // with the (already-downgraded) base action.
+        const aiPick = refinement.recommendation;
+        const blocked = insight?.downweighted.has(aiPick) ?? false;
+        if (!blocked) {
+          if (aiPick === "mark_resolved") {
+            final = {
+              ...final,
+              actionType: "mark_resolved",
+              actionLabel: "Close out — no reply needed",
+              actionParams: {},
+            };
+          } else if (aiPick === "await_response") {
+            final = {
+              ...final,
+              actionType: "await_response",
+              actionLabel: "Mark as waiting on them",
+              actionParams: {},
+            };
+          } else if (aiPick !== final.actionType) {
+            // The AI picked draft_reply / quote_request_reply explicitly —
+            // honour it but keep our params (which carry targetMessageId).
+            final = {
+              ...final,
+              actionType: aiPick,
+              actionLabel: aiPick === "quote_request_reply" ? "Send quote" : "Draft reply",
+            };
+          }
         }
       }
     }
@@ -381,6 +455,17 @@ export async function getOrComputeThreadSuggestion(opts: {
   };
 }
 
+async function lookupAccountIdForThread(orgId: string, threadId: string): Promise<string | null> {
+  const [t] = await db.select({ linkedAccountId: emailConversationThreads.linkedAccountId })
+    .from(emailConversationThreads)
+    .where(and(
+      eq(emailConversationThreads.orgId, orgId),
+      eq(emailConversationThreads.threadId, threadId),
+    ))
+    .limit(1);
+  return t?.linkedAccountId ?? null;
+}
+
 export async function dismissSuggestion(opts: {
   orgId: string;
   threadId: string;
@@ -391,6 +476,22 @@ export async function dismissSuggestion(opts: {
   await db.update(conversationThreadSuggestions)
     .set({ dismissedAt: new Date(), dismissedByUserId: opts.userId })
     .where(eq(conversationThreadSuggestions.id, cached.id));
+
+  // Task #552: feed the dismissal into the rolling stats so future
+  // suggestions for the same account learn from it without waiting for
+  // the nightly aggregate.
+  try {
+    const accountId = await lookupAccountIdForThread(opts.orgId, opts.threadId);
+    await recordIncrementalFeedback({
+      orgId: opts.orgId,
+      accountId,
+      actionType: cached.actionType,
+      kind: "dismissed",
+      reason: cached.actionReason,
+    });
+  } catch (err) {
+    console.error("[thread-suggestion] incremental dismissal record failed:", err);
+  }
   return true;
 }
 
@@ -414,6 +515,21 @@ export async function recordSuggestionFeedback(opts: {
       dismissedByUserId: opts.kind === "wrong" ? opts.userId : cached.dismissedByUserId,
     })
     .where(eq(conversationThreadSuggestions.id, cached.id));
+
+  // Task #552: stream the rating into the learning stats so the next
+  // suggestion request for this account already reflects it.
+  try {
+    const accountId = await lookupAccountIdForThread(opts.orgId, opts.threadId);
+    await recordIncrementalFeedback({
+      orgId: opts.orgId,
+      accountId,
+      actionType: cached.actionType,
+      kind: opts.kind,
+      reason: cached.actionReason,
+    });
+  } catch (err) {
+    console.error("[thread-suggestion] incremental feedback record failed:", err);
+  }
   return true;
 }
 

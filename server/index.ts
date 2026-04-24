@@ -29,6 +29,7 @@ import { initSonarDailyRefreshScheduler } from "./sonarDailyRefreshScheduler";
 import { initMarketSignalScheduler } from "./marketSignalScheduler";
 import { initMomentumDropScheduler } from "./momentumDropScheduler";
 import { initConversationArchiveScheduler } from "./conversationArchiveScheduler";
+import { initSuggestionFeedbackLearningScheduler } from "./suggestionFeedbackLearningScheduler";
 import { initPafoeWaveScheduler } from "./pafoeWaveScheduler";
 import { scoreAllEligibleLanes } from "./laneScoringService";
 import { startIntelEmailScheduler } from "./intelEmailScheduler";
@@ -403,6 +404,7 @@ async function initStripe() {
         initMarketSignalScheduler();
         initMomentumDropScheduler();
         initConversationArchiveScheduler();
+        initSuggestionFeedbackLearningScheduler();
       }, 2000);
 
       // PAFOE Phase 4 — scheduled-wave dispatcher.

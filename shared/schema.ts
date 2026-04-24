@@ -5063,3 +5063,48 @@ export const insertConversationThreadEventSchema = createInsertSchema(conversati
 });
 export type InsertConversationThreadEvent = z.infer<typeof insertConversationThreadEventSchema>;
 export type ConversationThreadEvent = typeof conversationThreadEvents.$inferSelect;
+
+// ─── Suggestion Feedback Learning (Task #552) ────────────────────────────────
+// Rolling per-(org, account, action_type) summary of how reps rated the
+// thread suggestions we produced. Refreshed nightly from
+// conversation_thread_suggestions and incrementally updated whenever a rep
+// dismisses or rates a suggestion. The suggestion service consults this
+// table at suggest-time to avoid re-recommending actions a rep already told
+// us were wrong for the same account in the recent past.
+//
+// We use the sentinel value '__org__' for accountId when the underlying
+// thread isn't linked to a company, so the unique index can stay simple
+// (PostgreSQL treats NULLs as distinct, which would let stats fragment).
+export const conversationSuggestionFeedbackStats = pgTable(
+  "conversation_suggestion_feedback_stats",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    // Linked company id from email_conversation_threads.linked_account_id,
+    // or '__org__' when the thread has no account link. Not an FK because
+    // of the sentinel value.
+    accountId: varchar("account_id").notNull(),
+    // Suggestion machine action (draft_reply, quote_request_reply, etc.).
+    actionType: text("action_type").notNull(),
+    // Counts over the rolling lookback window (default 14 days).
+    wrongCount: integer("wrong_count").notNull().default(0),
+    goodCount: integer("good_count").notNull().default(0),
+    dismissedCount: integer("dismissed_count").notNull().default(0),
+    // Up to ~5 recent actionReason strings from "wrong" feedback. Fed into
+    // the AI refinement prompt as "avoid suggestions like these for this
+    // account" so future reasoning steers clear of the same framing.
+    recentWrongReasons: jsonb("recent_wrong_reasons").$type<string[]>().default([]),
+    lastWrongAt: timestamp("last_wrong_at"),
+    lastFeedbackAt: timestamp("last_feedback_at"),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("conv_sug_fb_stats_org_acct_action_uq").on(table.orgId, table.accountId, table.actionType),
+  ],
+);
+export const insertConversationSuggestionFeedbackStatsSchema = createInsertSchema(conversationSuggestionFeedbackStats).omit({
+  id: true,
+  updatedAt: true,
+});
+export type InsertConversationSuggestionFeedbackStats = z.infer<typeof insertConversationSuggestionFeedbackStatsSchema>;
+export type ConversationSuggestionFeedbackStats = typeof conversationSuggestionFeedbackStats.$inferSelect;
