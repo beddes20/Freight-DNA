@@ -7184,6 +7184,15 @@ export class DatabaseStorage implements IStorage {
     overdue?: boolean;
     linkedAccountId?: string;
     linkedCarrierId?: string;
+    /**
+     * High-level "who is this thread with?" filter:
+     * - "customers" → threads linked to a customer account (linked_account_id IS NOT NULL)
+     * - "carriers"  → threads linked to a carrier (linked_carrier_id IS NOT NULL)
+     * Undefined / "all" returns both. Used by the Conversations page audience
+     * toggle so reps can flip between customer-facing and carrier-facing inboxes
+     * without losing their bucket / filter context.
+     */
+    audience?: "customers" | "carriers";
     threadId?: string;
     threadIdsIn?: string[];
     limit?: number;
@@ -7263,6 +7272,17 @@ export class DatabaseStorage implements IStorage {
 
     if (filters.linkedCarrierId) {
       conditions.push(eq(emailConversationThreads.linkedCarrierId, filters.linkedCarrierId));
+    }
+
+    // Audience toggle: customer-facing vs carrier-facing inbox slice. We
+    // intentionally key off the link columns (not message direction) so a
+    // customer thread without an account linkage doesn't accidentally show
+    // up under "Customers" — better to under-count than to leak the wrong
+    // audience.
+    if (filters.audience === "customers") {
+      conditions.push(isNotNull(emailConversationThreads.linkedAccountId));
+    } else if (filters.audience === "carriers") {
+      conditions.push(isNotNull(emailConversationThreads.linkedCarrierId));
     }
 
     if (filters.threadId) {

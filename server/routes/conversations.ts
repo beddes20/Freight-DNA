@@ -62,10 +62,17 @@ export function registerConversationsRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
+      // Honour the audience toggle so the sidebar count matches what the
+      // rep is currently viewing (Customers vs Carriers vs both).
+      const rawAudience = typeof req.query.audience === "string" ? req.query.audience : "";
+      const audience: "customers" | "carriers" | undefined =
+        rawAudience === "customers" ? "customers" : rawAudience === "carriers" ? "carriers" : undefined;
+
       const result = await storage.listEmailConversationThreads(user.organizationId, {
         ownerUserId: user.id,
         waitingState: "waiting_on_us",
         limit: 1,
+        ...(audience ? { audience } : {}),
       });
       res.json({ count: result.totalCount });
     } catch (err) {
@@ -254,12 +261,18 @@ export function registerConversationsRoutes(app: Express): void {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
       const orgId = user.organizationId;
-      const { accountId, carrierId, ownerUserId, unowned, waitingState, responsePriority, overdue, threadId, archived, snoozed, cursor, limit, search, dateFrom, dateTo, signal, sort } = req.query;
+      const { accountId, carrierId, ownerUserId, unowned, waitingState, responsePriority, overdue, threadId, archived, snoozed, cursor, limit, search, dateFrom, dateTo, signal, sort, audience } = req.query;
 
       const filters: Parameters<typeof storage.listEmailConversationThreads>[1] = {};
 
       if (accountId) filters.linkedAccountId = accountId as string;
       if (carrierId) filters.linkedCarrierId = carrierId as string;
+      // Audience toggle (customers / carriers / both). Anything other than
+      // the two known values is ignored so a typo or stale link doesn't
+      // accidentally hide every thread in the inbox.
+      if (audience === "customers" || audience === "carriers") {
+        filters.audience = audience;
+      }
       if (threadId) filters.threadId = threadId as string;
       if (unowned === "true") {
         filters.unowned = true;

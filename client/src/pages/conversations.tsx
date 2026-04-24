@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Sheet,
   SheetContent,
@@ -63,12 +64,29 @@ const DENSITY_KEY = "conversations:density";
 // preferences don't bleed between users sharing the same browser profile.
 const GROUP_BY_KEY_PREFIX = "conversations:groupBy:";
 const COLLAPSED_GROUPS_KEY_PREFIX = "conversations:collapsedGroups:";
+const AUDIENCE_KEY_PREFIX = "conversations:audience:";
 
 function groupByKey(userId: string | null | undefined): string | null {
   return userId ? `${GROUP_BY_KEY_PREFIX}${userId}` : null;
 }
 function collapsedGroupsKey(userId: string | null | undefined): string | null {
   return userId ? `${COLLAPSED_GROUPS_KEY_PREFIX}${userId}` : null;
+}
+function audienceKey(userId: string | null | undefined): string | null {
+  return userId ? `${AUDIENCE_KEY_PREFIX}${userId}` : null;
+}
+
+// "all" = both customer and carrier threads (default).
+// "customers" = only threads linked to a customer account.
+// "carriers"  = only threads linked to a carrier.
+type ConversationAudience = "all" | "customers" | "carriers";
+
+function loadAudience(userId: string | null | undefined): ConversationAudience {
+  if (typeof window === "undefined") return "all";
+  const k = audienceKey(userId);
+  if (!k) return "all";
+  const v = window.localStorage.getItem(k);
+  return v === "customers" || v === "carriers" ? v : "all";
 }
 
 function loadDensity(): ConversationDensity {
@@ -169,11 +187,16 @@ export default function ConversationsPage() {
   // their preferred grouping every time they reload the inbox, and
   // preferences from one user don't leak to another sharing a browser.
   const [groupBy, setGroupBy] = useState<ConversationGroupBy>(() => loadGroupBy(user?.id));
+  // Audience (Customers / Carriers / Both) — same per-user persistence
+  // pattern as groupBy. Defaults to "all" so directors/admins see the full
+  // firehose on first load, but their last choice sticks across reloads.
+  const [audience, setAudience] = useState<ConversationAudience>(() => loadAudience(user?.id));
   // Re-hydrate when the authenticated user becomes known after first render
   // (useAuth resolves async on initial mount).
   useEffect(() => {
     if (!user?.id) return;
     setGroupBy(loadGroupBy(user.id));
+    setAudience(loadAudience(user.id));
     setCollapsedGroupsByMode(loadCollapsedGroups(user.id));
     // We intentionally only re-hydrate when the user identity changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -184,6 +207,22 @@ export default function ConversationsPage() {
     if (!k) return;
     window.localStorage.setItem(k, groupBy);
   }, [groupBy, user?.id]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const k = audienceKey(user?.id);
+    if (!k) return;
+    window.localStorage.setItem(k, audience);
+  }, [audience, user?.id]);
+  // Switching audience invalidates the visible page — clear the local
+  // accumulator and selection so the rep doesn't see stale rows from the
+  // previous audience flash through before the refetch completes.
+  function changeAudience(next: ConversationAudience) {
+    if (next === audience) return;
+    setAudience(next);
+    setAllThreads([]);
+    setNextCursor(null);
+    setSelectedIds(new Set());
+  }
 
   // Collapsed groups are persisted per (groupBy mode) key so the user's
   // expand/collapse state survives reloads. Default is "expanded" — the
@@ -262,6 +301,10 @@ export default function ConversationsPage() {
       if (filterRep === "unassigned") p.set("unowned", "true");
       else p.set("team", filterRep);
     }
+    // Audience filter (Customers / Carriers / Both). "all" is the default
+    // so we only emit the param when the rep has narrowed it — keeps URLs
+    // and request lines clean.
+    if (audience !== "all") p.set("audience", audience);
     if (cursorParam) p.set("cursor", cursorParam);
     return p.toString();
   }
@@ -270,6 +313,7 @@ export default function ConversationsPage() {
     queryKey: [
       "/api/internal/conversations",
       bucket,
+      audience,
       filterState,
       filterPriority,
       filterOverdue,
@@ -309,11 +353,15 @@ export default function ConversationsPage() {
   });
 
   // ── Per-bucket counts (lightweight 1-row queries) ─────────────────────────
+  // All bucket counts respect the audience filter so the sidebar numbers
+  // match the visible thread count for the rep's chosen slice.
+  const audienceParam = audience !== "all" ? `&audience=${audience}` : "";
   const { data: mineData } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", "mine-count", user?.id],
+    queryKey: ["/api/internal/conversations", "mine-count", user?.id, audience],
     queryFn: async () => {
       const p = new URLSearchParams({ waitingState: "waiting_on_us", limit: "1" });
       if (user?.id) p.set("ownerUserId", user.id);
+      if (audience !== "all") p.set("audience", audience);
       const res = await fetch(`/api/internal/conversations?${p.toString()}`);
       if (!res.ok) throw new Error("");
       return res.json();
@@ -322,27 +370,27 @@ export default function ConversationsPage() {
   });
 
   const { data: unownedData } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", "unowned-count"],
+    queryKey: ["/api/internal/conversations", "unowned-count", audience],
     queryFn: async () => {
-      const res = await fetch("/api/internal/conversations?unowned=true&waitingState=waiting_on_us&limit=1");
+      const res = await fetch(`/api/internal/conversations?unowned=true&waitingState=waiting_on_us&limit=1${audienceParam}`);
       if (!res.ok) throw new Error("");
       return res.json();
     },
   });
 
   const { data: highPriData } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", "high-priority-count"],
+    queryKey: ["/api/internal/conversations", "high-priority-count", audience],
     queryFn: async () => {
-      const res = await fetch("/api/internal/conversations?responsePriority=high&waitingState=waiting_on_us&limit=1");
+      const res = await fetch(`/api/internal/conversations?responsePriority=high&waitingState=waiting_on_us&limit=1${audienceParam}`);
       if (!res.ok) throw new Error("");
       return res.json();
     },
   });
 
   const { data: quoteData } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", "quote-request-count"],
+    queryKey: ["/api/internal/conversations", "quote-request-count", audience],
     queryFn: async () => {
-      const res = await fetch("/api/internal/conversations?signal=quote_request&waitingState=waiting_on_us&limit=1");
+      const res = await fetch(`/api/internal/conversations?signal=quote_request&waitingState=waiting_on_us&limit=1${audienceParam}`);
       if (!res.ok) throw new Error("");
       return res.json();
     },
@@ -710,6 +758,51 @@ export default function ConversationsPage() {
         >
           {/* Filters bar */}
           <div className="px-3 py-2 border-b shrink-0 flex flex-wrap items-center gap-2 bg-muted/10">
+            {/* Audience toggle — flips the inbox between customer-facing and
+                carrier-facing threads (or both). Persisted per user so a
+                rep's preferred audience sticks across reloads. Placed first
+                in the filter bar because it changes the meaning of every
+                other filter and bucket count to its right. */}
+            <ToggleGroup
+              type="single"
+              value={audience}
+              onValueChange={(v) => {
+                // ToggleGroup fires "" when the active item is clicked again.
+                // Treat that as a no-op so reps can't accidentally end up in
+                // an empty/undefined state by double-clicking the active tab.
+                if (v === "all" || v === "customers" || v === "carriers") {
+                  changeAudience(v);
+                }
+              }}
+              className="h-8 rounded-md border bg-background"
+              data-testid="toggle-audience"
+            >
+              <ToggleGroupItem
+                value="all"
+                aria-label="Show all conversations"
+                className="h-8 px-3 text-xs data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                data-testid="toggle-audience-all"
+              >
+                All
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                value="customers"
+                aria-label="Show only customer conversations"
+                className="h-8 px-3 text-xs data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                data-testid="toggle-audience-customers"
+              >
+                Customers
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                value="carriers"
+                aria-label="Show only carrier conversations"
+                className="h-8 px-3 text-xs data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                data-testid="toggle-audience-carriers"
+              >
+                Carriers
+              </ToggleGroupItem>
+            </ToggleGroup>
+
             {/* Group by — Task #535. Available across every bucket so reps
                 can pivot any view by account or carrier. Persisted per user. */}
             <Select value={groupBy} onValueChange={(v) => setGroupBy(v as ConversationGroupBy)}>
