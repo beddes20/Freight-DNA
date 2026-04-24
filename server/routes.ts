@@ -18,6 +18,7 @@ import { registerMyProcurementRoutes } from "./routes/myProcurement";
 import { registerCompanyCollaboratorRoutes } from "./routes/companyCollaborators";
 import { registerProcurementOutreachRoutes } from "./routes/procurementOutreach";
 import { registerProactiveOpportunityRoutes } from "./routes/proactiveOpportunities";
+import { registerFreightCockpitRoutes } from "./routes/freightOpportunityCockpit";
 import { registerIntelRoutes } from "./routes/intel";
 import { registerGraphWebhookRoutes } from "./routes/graphWebhook";
 import { registerMarketSignalRoutes } from "./routes/marketSignals";
@@ -3218,6 +3219,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerMyProcurementRoutes(app);
   registerCompanyCollaboratorRoutes(app);
   registerProcurementOutreachRoutes(app);
+  // Cockpit routes MUST register first so /cockpit, /cockpit-prefs, /bulk-action,
+  // /saved-views aren't shadowed by the proactiveOpportunities `/:id` catch-alls.
+  registerFreightCockpitRoutes(app);
   registerProactiveOpportunityRoutes(app);
   registerIntelRoutes(app);
   registerGraphWebhookRoutes(app);

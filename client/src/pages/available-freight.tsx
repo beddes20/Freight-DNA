@@ -1,471 +1,1698 @@
-import { useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Link } from "wouter";
+// Available Freight Cockpit (Task #601) — triage cockpit page.
+
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { Link, useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
-import { queryClient } from "@/lib/queryClient";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Progress } from "@/components/ui/progress";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
+  DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
-  Truck, AlertCircle, ChevronRight, RefreshCw, Search, Inbox,
-  ArrowUpRight, Upload,
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import {
+  Truck, AlertCircle, RefreshCw, Search, Inbox, Upload,
+  CheckCircle2, Clock, Bookmark, MoreHorizontal, ChevronDown,
+  Send, AlarmClock, X, UserCheck, ClipboardCheck, Star,
 } from "lucide-react";
-import type {
-  Company,
-  FreightOpportunity,
-  FreightOpportunityStatus,
-  FreightOpportunityMode,
-} from "@shared/schema";
+import type { FreightOpportunity } from "@shared/schema";
+import { applyCockpitFilters } from "@/lib/cockpitFilters";
 
-type OpportunityListItem = FreightOpportunity & {
-  recommendedCarrierCount?: number;
-  includedCarrierCount?: number;
-};
 
-interface OpportunityListResponse {
-  items: OpportunityListItem[];
+interface CockpitChip {
+  opportunityCarrierId: string;
+  carrierId: string;
+  carrierName: string;
+  bucket: string;
+  rank: number;
+  fitScore: number;
+  explanation?: string | null;
+  sentAt: string | null;
+  respondedAt: string | null;
 }
 
-const STATUS_LABELS: Record<FreightOpportunityStatus, string> = {
-  new: "New",
-  ready_to_send: "Ready",
-  sent: "Sent",
-  awaiting_carrier_reply: "Awaiting carrier",
-  awaiting_customer_confirm: "Confirm w/ customer",
-  partially_covered: "Partial",
-  covered: "Covered",
-  expired: "Expired",
-  cancelled: "Cancelled",
-};
-
-const MODE_LABELS: Record<FreightOpportunityMode, string> = {
-  exact_load: "Exact load",
-  lane_building: "Lane build",
-  both: "Both",
-};
-
-function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    new: "bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30",
-    ready_to_send: "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30",
-    sent: "bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30",
-    partially_covered: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30",
-    covered: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30",
-    expired: "bg-muted text-muted-foreground border-border",
-    cancelled: "bg-muted text-muted-foreground border-border",
+interface CockpitItem {
+  opportunity: FreightOpportunity;
+  chips: CockpitChip[];
+  coverage: {
+    included: number;
+    sent: number;
+    responded: number;
+    excluded?: number;
+    excludedReasons?: Record<string, number>;
+    covered: boolean;
+    stage?: "none" | "outreach" | "awaiting" | "partial" | "covered";
   };
-  return (
-    <Badge
-      variant="outline"
-      className={map[status] ?? "bg-muted text-muted-foreground border-border"}
-      data-testid={`badge-status-${status}`}
-    >
-      {STATUS_LABELS[status as FreightOpportunityStatus] ?? status}
-    </Badge>
-  );
+  suggestedBuy: {
+    rate: number | null;
+    confidence: string;
+    reason: string;
+    marketRpm?: number | null;
+    marketDeltaPct?: number | null;
+    lastPaidRpm?: number | null;
+    loads30d?: number | null;
+  } | null;
+  urgency: { score: number; level: "critical" | "high" | "medium" | "low"; reasons: string[] };
+  freshnessMinutes: number | null;
+  groupKey: string;
+  customer: {
+    id: string;
+    name: string;
+    accountTier: string | null;
+    autoPilotEnabled: boolean;
+  } | null;
+  owner: { id: string; name: string } | null;
+  sla: { level: "green" | "yellow" | "red" | null; ageMinutes: number | null };
+  laneScore: number | null;
 }
 
-function ModeBadge({ mode }: { mode: string }) {
-  return (
-    <Badge variant="secondary" data-testid={`badge-mode-${mode}`}>
-      {MODE_LABELS[mode as FreightOpportunityMode] ?? mode}
-    </Badge>
-  );
+interface BulkActionResult {
+  opportunityId: string;
+  ok: boolean;
+  message?: string;
+  sent?: number;
+  blocked?: number;
+  loadFact?: { inserted: boolean; updated: boolean } | null;
+}
+interface BulkActionResponse {
+  action: string;
+  results: BulkActionResult[];
 }
 
-function fmtWindow(start: string | null | undefined, _end?: string | null) {
-  // Available Freight rows always represent a single pickup day; ignore the
-  // back-compat pickupWindowEnd field for display so reps never see a range.
-  if (!start) return "—";
-  const s = new Date(start);
-  if (isNaN(s.getTime())) return "—";
-  const dOpts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
-  return s.toLocaleDateString(undefined, dOpts);
+interface UserOption {
+  id: string;
+  name?: string | null;
+  username?: string | null;
 }
 
-function fmtLane(
-  origin: string,
-  originState: string | null | undefined,
-  destination: string,
-  destinationState: string | null | undefined,
-) {
-  const o = originState ? `${origin}, ${originState.toUpperCase()}` : origin;
-  const d = destinationState ? `${destination}, ${destinationState.toUpperCase()}` : destination;
-  return `${o} → ${d}`;
+interface SavedViewResponse { view?: SavedView }
+
+interface CockpitResponse {
+  items: CockpitItem[];
+  kpis: {
+    total: number;
+    generatedToday: number;
+    readyToSend: number;
+    sentAwaitingCarrier: number;
+    atRiskPickup24h: number;
+    coveredToday: number;
+    avgFreshnessMinutes: number | null;
+  };
+  lastImport: { at: string; ageMinutes: number } | null;
+  nextImport?: { at: string; inMinutes: number } | null;
+  roiMetrics?: {
+    responseByBucket: Record<string, { sent: number; responded: number }>;
+    suppressionBreakdown: Record<string, number>;
+    medianTimeToCoverMin: number | null;
+  };
+  sort: string;
+  grouping: string;
 }
 
-function leadTimeDays(start: string): number {
-  const s = new Date(start).getTime();
-  const now = Date.now();
-  return Math.max(0, Math.round((s - now) / (1000 * 60 * 60 * 24)));
+interface SavedView {
+  id: string;
+  name: string;
+  filters: Record<string, unknown>;
+  isShared: boolean;
+  isBuiltIn?: boolean;
 }
+
+interface CockpitPrefs {
+  userId: string;
+  orgId: string;
+  activeViewId: string | null;
+  layout: "table" | "calendar";
+  grouping: "none" | "customer" | "pickup_day" | "lane";
+  sort: "urgency" | "pickup_soonest" | "freshness" | "customer" | "lane";
+  autopilotMutedUntil: string | null;
+}
+
+
+function fmtLane(o: string, os: string | null, d: string, ds: string | null) {
+  return `${os ? `${o}, ${os.toUpperCase()}` : o} → ${ds ? `${d}, ${ds.toUpperCase()}` : d}`;
+}
+function fmtPickup(s: string | null | undefined) {
+  if (!s) return "—";
+  const d = new Date(s);
+  return Number.isFinite(d.getTime())
+    ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    : "—";
+}
+function fmtAge(min: number | null | undefined) {
+  if (min === null || min === undefined) return "—";
+  if (min < 60) return `${min}m`;
+  if (min < 24 * 60) return `${Math.round(min / 60)}h`;
+  return `${Math.round(min / (60 * 24))}d`;
+}
+function urgencyTone(level: CockpitItem["urgency"]["level"]) {
+  switch (level) {
+    case "critical":
+      return "bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30";
+    case "high":
+      return "bg-orange-500/15 text-orange-700 dark:text-orange-300 border-orange-500/30";
+    case "medium":
+      return "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30";
+    default:
+      return "bg-muted text-muted-foreground border-border";
+  }
+}
+function bucketTone(bucket: string) {
+  switch (bucket) {
+    case "proven": return "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30";
+    case "strong_fit_underused": return "bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30";
+    case "exploratory": return "bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30";
+    case "rep_added": return "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30";
+    default: return "bg-muted text-muted-foreground border-border";
+  }
+}
+function freshnessPulseColor(min: number | null) {
+  if (min === null) return "bg-muted";
+  if (min < 60) return "bg-emerald-500 animate-pulse";
+  if (min < 12 * 60) return "bg-amber-500";
+  return "bg-red-500";
+}
+
 
 export default function AvailableFreightPage() {
-  const [companyFilter, setCompanyFilter] = useState<string>("all");
-  const [modeFilter, setModeFilter] = useState<string>("all");
-  const [confidenceFilter, setConfidenceFilter] = useState<string>("all");
-  const [statusFilter, setStatusFilter] = useState<string>("active");
-  const [leadTimeFilter, setLeadTimeFilter] = useState<string>("any");
   const [search, setSearch] = useState("");
+  const [companyFilter, setCompanyFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("active");
+  const [activeViewId, setActiveViewId] = useState<string | null>(null);
+  const [grouping, setGrouping] = useState<CockpitPrefs["grouping"]>("none");
+  const [sort, setSort] = useState<CockpitPrefs["sort"]>("urgency");
+  const [layout, setLayout] = useState<CockpitPrefs["layout"]>("table");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [focusIndex, setFocusIndex] = useState<number>(-1);
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [snoozeHours, setSnoozeHours] = useState<string>("4");
+  const [saveViewOpen, setSaveViewOpen] = useState(false);
+  const [newViewName, setNewViewName] = useState("");
+  const [newViewShared, setNewViewShared] = useState(false);
+  const [confirmBulk, setConfirmBulk] = useState<
+    | { action: "approve" | "send_top" | "dismiss"; extra?: Record<string, unknown> }
+    | null
+  >(null);
+  const [bulkCoverOpen, setBulkCoverOpen] = useState(false);
+  const [bulkCoverCarrier, setBulkCoverCarrier] = useState("");
+  const [bulkCoverPaidRate, setBulkCoverPaidRate] = useState("");
+  const [bulkCoverCustomerRate, setBulkCoverCustomerRate] = useState("");
+  const [bulkCoverNotes, setBulkCoverNotes] = useState("");
+  const [reassignTargetIds, setReassignTargetIds] = useState<string[] | null>(null);
+  const [reassignToUserId, setReassignToUserId] = useState<string>("");
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [draftPreviewId, setDraftPreviewId] = useState<string | null>(null);
+  const [outcomeTargetId, setOutcomeTargetId] = useState<string | null>(null);
+  const [outcomeStatus, setOutcomeStatus] = useState<"covered" | "lost" | "no_bid">("covered");
+  const [outcomeNotes, setOutcomeNotes] = useState<string>("");
+  const [outcomeCarrier, setOutcomeCarrier] = useState<string>("");
+  const [outcomePaidRate, setOutcomePaidRate] = useState<string>("");
+  const [outcomeCustomerRate, setOutcomeCustomerRate] = useState<string>("");
+  const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+  const [lastSeenAt, setLastSeenAt] = useState<string | null>(() => {
+    try { return localStorage.getItem("cockpit:lastSeenAt"); } catch { return null; }
+  });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [, navigate] = useLocation();
   const { toast } = useToast();
+
+  const { data: usersResp } = useQuery<UserOption[]>({
+    queryKey: ["/api/users"],
+  });
+  const users = usersResp ?? [];
+  function ownerLabel(u: UserOption): string {
+    return u.name || u.username || u.id;
+  }
+
+  const { data: prefsResp } = useQuery<{ prefs: CockpitPrefs | null }>({
+    queryKey: ["/api/freight-opportunities/cockpit-prefs"],
+  });
+  const { data: viewsResp } = useQuery<{ views: SavedView[]; builtInViews?: SavedView[] }>({
+    queryKey: ["/api/freight-opportunities/saved-views"],
+  });
+  const builtInViews = (viewsResp?.builtInViews ?? []).map(v => ({ ...v, isBuiltIn: true }));
+  const customViews = viewsResp?.views ?? [];
+  const savedViews: SavedView[] = [...builtInViews, ...customViews];
+
+  // Hydrate UI state from prefs once.
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    if (hydratedRef.current) return;
+    if (!prefsResp) return;
+    hydratedRef.current = true;
+    const p = prefsResp.prefs;
+    if (p) {
+      setActiveViewId(p.activeViewId);
+      setGrouping(p.grouping);
+      setSort(p.sort);
+      if (p.layout) setLayout(p.layout);
+    }
+  }, [prefsResp]);
+
+  useEffect(() => {
+    if (!activeViewId) return;
+    const v = savedViews.find(v => v.id === activeViewId);
+    if (!v) return;
+    const f = v.filters as { search?: string; companyId?: string; status?: string };
+    if (typeof f.search === "string") setSearch(f.search);
+    if (typeof f.companyId === "string") setCompanyFilter(f.companyId);
+    if (typeof f.status === "string") setStatusFilter(f.status);
+  }, [activeViewId, savedViews]);
+
+  const { data: currentUser } = useQuery<{ id: string } | null>({
+    queryKey: ["/api/auth/me"],
+  });
+
+  const upsertPrefs = useMutation({
+    mutationFn: async (patch: Partial<CockpitPrefs>) => {
+      return apiRequest("PATCH", "/api/freight-opportunities/cockpit-prefs", patch);
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities/cockpit-prefs"] }),
+  });
+
+  // Persist grouping/sort/active view changes to prefs (debounced via simple effect dep).
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    upsertPrefs.mutate({ activeViewId, grouping, sort, layout });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeViewId, grouping, sort, layout]);
+
+  const statusParam = statusFilter === "active"
+    ? "new,ready_to_send,sent,awaiting_carrier_reply,awaiting_customer_confirm,partially_covered,awaiting_approval"
+    : statusFilter === "all"
+      ? ""
+      : statusFilter;
+
+  const feedKey = ["/api/freight-opportunities/cockpit", { status: statusParam, sort, grouping, companyId: companyFilter }];
+  const { data: feed, isLoading, isError, refetch, isFetching } = useQuery<CockpitResponse>({
+    queryKey: feedKey,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (statusParam) params.set("status", statusParam);
+      params.set("sort", sort);
+      params.set("grouping", grouping);
+      if (companyFilter !== "all") params.set("companyId", companyFilter);
+      params.set("limit", "200");
+      const res = await fetch(`/api/freight-opportunities/cockpit?${params.toString()}`, { credentials: "include" });
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json();
+    },
+    staleTime: 30_000,
+    // Refetch on focus so a tab-switch back from Excel/email surfaces fresh imports.
+    refetchOnWindowFocus: true,
+  });
+
+  useEffect(() => {
+    if (!feed) return;
+    const t = setTimeout(() => {
+      const now = new Date().toISOString();
+      try { localStorage.setItem("cockpit:lastSeenAt", now); } catch { /* ignore */ }
+      setLastSeenAt(prev => prev ?? now);
+    }, 4_000);
+    return () => clearTimeout(t);
+  }, [feed]);
+
+  const items = feed?.items ?? [];
+  const kpis = feed?.kpis;
+
+  const replyTotalRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!feed) return;
+    const myItems = currentUser?.id
+      ? items.filter(it => it.owner?.id === currentUser.id)
+      : [];
+    const total = myItems.reduce((a, it) => a + (it.coverage?.responded ?? 0), 0);
+    if (replyTotalRef.current !== null && total > replyTotalRef.current) {
+      const delta = total - replyTotalRef.current;
+      toast({
+        title: `${delta} new carrier repl${delta === 1 ? "y" : "ies"}`,
+        description: "Refreshed cockpit shows the latest replies.",
+      });
+    }
+    replyTotalRef.current = total;
+  }, [feed, items, toast]);
+
+  const activeView = activeViewId ? savedViews.find(v => v.id === activeViewId) : null;
+  const viewFilters = (activeView?.filters ?? {}) as {
+    ownerScope?: "mine" | "team";
+    pickupWithinHours?: number;
+    pickupAfterHours?: number;
+    confidenceFlag?: "low" | "medium" | "high";
+    sentNoReplyMinAgeMin?: number;
+    statuses?: string[];
+  };
+
+  const filtered = useMemo(
+    () => applyCockpitFilters(items, search, viewFilters, currentUser?.id ?? null, Date.now()),
+    [items, search, viewFilters, currentUser?.id],
+  );
+
+  // Group items for display.
+  const groups = useMemo(() => {
+    if (grouping === "none") return [{ key: "all", label: "All", items: filtered }];
+    const m = new Map<string, CockpitItem[]>();
+    filtered.forEach(it => {
+      const k = it.groupKey;
+      if (!m.has(k)) m.set(k, []);
+      m.get(k)!.push(it);
+    });
+    return Array.from(m.entries()).map(([k, v]) => ({ key: k, label: k, items: v }));
+  }, [filtered, grouping]);
+
+  const bulkMutate = useMutation<BulkActionResponse, Error, Record<string, unknown>>({
+    mutationFn: async (body) => {
+      const res = await apiRequest("POST", "/api/freight-opportunities/bulk-action", body);
+      return res.json() as Promise<BulkActionResponse>;
+    },
+    onSuccess: (resp) => {
+      const results = resp.results ?? [];
+      const okCount = results.filter(r => r.ok).length;
+      const fail = results.filter(r => !r.ok);
+      const sent = results.reduce((acc, r) => acc + (r.sent ?? 0), 0);
+      toast({
+        title: `Bulk ${resp.action} done`,
+        description: sent
+          ? `${okCount}/${results.length} ok • ${sent} carriers sent${fail.length ? ` • ${fail.length} failed` : ""}`
+          : `${okCount}/${results.length} ok${fail.length ? ` • ${fail.length} failed` : ""}`,
+        variant: fail.length ? "destructive" : "default",
+      });
+      setSelected(new Set());
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities/cockpit"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities"] });
+    },
+    onError: (err) => {
+      toast({ title: "Bulk action failed", description: err.message ?? "Unknown error", variant: "destructive" });
+    },
+  });
+
+  // Run a bulk action against the selected opps; destructive actions go through confirm.
+  function bulk(action: string, extra: Record<string, unknown> = {}) {
+    if (selected.size === 0) return;
+    if (action === "approve" || action === "send_top" || action === "dismiss") {
+      setConfirmBulk({ action: action as "approve" | "send_top" | "dismiss", extra });
+      return;
+    }
+    bulkMutate.mutate({ action, opportunityIds: Array.from(selected), ...extra });
+  }
+
+  // Saved-view CRUD.
+  const createView = useMutation<SavedViewResponse, Error, { name: string; filters: Record<string, unknown>; isShared: boolean }>({
+    mutationFn: async (b) => {
+      const res = await apiRequest("POST", "/api/freight-opportunities/saved-views", b);
+      return res.json() as Promise<SavedViewResponse>;
+    },
+    onSuccess: (resp) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities/saved-views"] });
+      setSaveViewOpen(false);
+      setNewViewName("");
+      if (resp?.view?.id) setActiveViewId(resp.view.id);
+      toast({ title: "View saved" });
+    },
+  });
+  const deleteView = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/freight-opportunities/saved-views/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities/saved-views"] });
+      setActiveViewId(null);
+    },
+  });
+
+  const toggleAutoPilotMutation = useMutation<unknown, Error, { companyId: string; enabled: boolean }>({
+    mutationFn: async ({ companyId, enabled }) => {
+      return apiRequest("PATCH", `/api/companies/${companyId}/outreach-policy`, { autoSendEnabled: enabled });
+    },
+    onSuccess: (_d, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities/cockpit"] });
+      toast({ title: vars.enabled ? "Auto-pilot enabled" : "Auto-pilot disabled" });
+    },
+    onError: (err) => toast({ title: "Couldn't update auto-pilot", description: String(err?.message ?? err), variant: "destructive" }),
+  });
+  const toggleAutoPilot = useCallback((it: CockpitItem) => {
+    if (!it.customer?.id) return;
+    toggleAutoPilotMutation.mutate({ companyId: it.customer.id, enabled: !it.customer.autoPilotEnabled });
+  }, [toggleAutoPilotMutation]);
+
+  const logOutcomeMutation = useMutation<
+    unknown,
+    Error,
+    {
+      id: string;
+      status: "covered" | "lost" | "no_bid";
+      notes: string;
+      carrierName?: string;
+      paidRate?: number;
+      customerRate?: number;
+    }
+  >({
+    mutationFn: async ({ id, status, notes, carrierName, paidRate, customerRate }) => {
+      if (status === "covered") {
+        return apiRequest("POST", `/api/freight-opportunities/${id}/cover`, {
+          carrierName,
+          paidRate,
+          customerRate,
+          notes: notes || undefined,
+        });
+      }
+      return apiRequest("POST", "/api/freight-opportunities/bulk-action", {
+        action: "dismiss",
+        opportunityIds: [id],
+        notes: notes || undefined,
+        outcome: status,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities/cockpit"] });
+      setOutcomeTargetId(null);
+      setOutcomeNotes("");
+      setOutcomeCarrier("");
+      setOutcomePaidRate("");
+      setOutcomeCustomerRate("");
+      setOutcomeStatus("covered");
+      toast({ title: "Outcome logged" });
+    },
+    onError: (err) => toast({ title: "Couldn't log outcome", description: String(err?.message ?? err), variant: "destructive" }),
+  });
+
+  const onKey = useCallback((e: KeyboardEvent) => {
+    const tag = (e.target as HTMLElement)?.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
+    if (e.key === "j") {
+      e.preventDefault();
+      setFocusIndex(i => Math.min(filtered.length - 1, i + 1));
+    } else if (e.key === "k") {
+      e.preventDefault();
+      setFocusIndex(i => Math.max(0, i - 1));
+    } else if (e.key === "Enter") {
+      const it = filtered[focusIndex];
+      if (it) navigate(`/available-freight/${it.opportunity.id}`);
+    } else if (e.key === "x" || e.key === " ") {
+      const it = filtered[focusIndex];
+      if (it) {
+        e.preventDefault();
+        toggleSelected(it.opportunity.id);
+      }
+    } else if (e.key === "a" || e.key === "A") {
+      if (selected.size > 0) bulk("approve");
+    } else if (e.key === "s" || e.key === "S") {
+      if (selected.size > 0) bulk("send_top", { topN: 3 });
+    } else if (e.key === "r" || e.key === "R") {
+      const targets = selected.size > 0
+        ? Array.from(selected)
+        : (filtered[focusIndex] ? [filtered[focusIndex].opportunity.id] : []);
+      if (targets.length > 0) {
+        e.preventDefault();
+        setReassignToUserId("");
+        setReassignTargetIds(targets);
+      }
+    } else if (e.key === "?" || (e.shiftKey && e.key === "/")) {
+      e.preventDefault();
+      setShowShortcutsHelp(true);
+    } else if (e.key === "Escape") {
+      setShowShortcutsHelp(false);
+      setSelected(new Set());
+      setFocusIndex(-1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtered, focusIndex, selected, navigate]);
+
+  useEffect(() => {
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onKey]);
+
+  function toggleSelected(id: string) {
+    setSelected(prev => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  }
+  function toggleAll() {
+    if (selected.size === filtered.length) setSelected(new Set());
+    else setSelected(new Set(filtered.map(i => i.opportunity.id)));
+  }
 
   async function handleUploadFile(file: File) {
     setIsUploading(true);
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch("/api/freight-opportunities/upload", {
-        method: "POST",
-        body: fd,
-        credentials: "include",
-      });
+      const res = await fetch("/api/freight-opportunities/upload", { method: "POST", body: fd, credentials: "include" });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: `${res.status}` }));
         throw new Error(err.error || `Upload failed (${res.status})`);
       }
       const summary = await res.json();
-      const d = summary.diagnostics ?? {};
-      const lines = [
-        `${summary.inserted ?? 0} new, ${summary.updated ?? 0} updated, ${summary.expired ?? 0} expired`,
-      ];
-      if (d.historicalRunsImported || d.historicalRunsTotal) {
-        lines.push(`Recorded ${d.historicalRunsImported ?? 0} historical lane runs (of ${d.historicalRunsTotal ?? 0} carrier-assigned rows) so proven carriers float to the top of future shortlists.`);
-      } else if (d.skippedWithCarrier) {
-        lines.push(`Skipped ${d.skippedWithCarrier} rows that already had a carrier assigned.`);
-      }
-      if (summary.unmatchedCompanies) lines.push(`${summary.unmatchedCompanies} unmatched companies.`);
-      if (d.sampleUnmatchedCustomers?.length) {
-        lines.push(`Examples: ${d.sampleUnmatchedCustomers.slice(0, 5).join(", ")}`);
-      }
-      if (d.sheetName) lines.push(`Sheet: "${d.sheetName}"`);
       toast({
         title: "Available freight imported",
-        description: lines.join(" • "),
-        duration: 12000,
+        description: `${summary.inserted ?? 0} new, ${summary.updated ?? 0} updated, ${summary.expired ?? 0} expired`,
       });
-      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities/cockpit"] });
     } catch (e) {
-      toast({
-        title: "Upload failed",
-        description: e instanceof Error ? e.message : "Unknown error",
-        variant: "destructive",
-      });
+      toast({ title: "Upload failed", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
 
-  const statusParam =
-    statusFilter === "active"
-      // Task #365 — include the new in-flight statuses so newly transitioned
-      // opps stay visible in the default queue view (was excluding them).
-      ? "new,ready_to_send,sent,awaiting_carrier_reply,awaiting_customer_confirm,partially_covered"
-      : statusFilter === "all"
-        ? ""
-        : statusFilter;
-
-  const { data, isLoading, isError, refetch, isFetching } = useQuery<OpportunityListResponse>({
-    queryKey: ["/api/freight-opportunities", { status: statusParam }],
-    queryFn: async () => {
-      const params = new URLSearchParams();
-      if (statusParam) params.set("status", statusParam);
-      params.set("limit", "200");
-      const res = await fetch(`/api/freight-opportunities?${params.toString()}`, { credentials: "include" });
-      if (!res.ok) throw new Error(`${res.status}`);
-      return res.json();
-    },
-    staleTime: 30_000,
-  });
-
-  const { data: companies } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
-  const companyById = useMemo(() => {
-    const m = new Map<string, Company>();
-    (companies ?? []).forEach(c => m.set(c.id, c));
-    return m;
-  }, [companies]);
-
-  const items = data?.items ?? [];
-
-  const filtered = useMemo(() => {
-    return items.filter(opp => {
-      if (companyFilter !== "all" && opp.companyId !== companyFilter) return false;
-      if (modeFilter !== "all" && opp.mode !== modeFilter) return false;
-      if (confidenceFilter !== "all" && opp.confidenceFlag !== confidenceFilter) return false;
-      if (leadTimeFilter !== "any") {
-        const days = leadTimeDays(opp.pickupWindowStart);
-        if (leadTimeFilter === "lt2" && days >= 2) return false;
-        if (leadTimeFilter === "2to4" && (days < 2 || days > 4)) return false;
-        if (leadTimeFilter === "5to7" && (days < 5 || days > 7)) return false;
+  // Distinct customers for the filter dropdown.
+  const customersForFilter = useMemo(() => {
+    const seen = new Map<string, string>();
+    items.forEach(i => {
+      if (i.opportunity.companyId && !seen.has(i.opportunity.companyId)) {
+        seen.set(i.opportunity.companyId, i.customer?.name ?? i.opportunity.companyId.slice(0, 8) + "…");
       }
-      if (search.trim()) {
-        const q = search.trim().toLowerCase();
-        const haystack = [
-          opp.origin, opp.destination, opp.equipmentType ?? "",
-          companyById.get(opp.companyId)?.name ?? "",
-        ].join(" ").toLowerCase();
-        if (!haystack.includes(q)) return false;
-      }
-      return true;
     });
-  }, [items, companyFilter, modeFilter, confidenceFilter, leadTimeFilter, search, companyById]);
+    return Array.from(seen.entries()).map(([id, name]) => ({ id, name }));
+  }, [items]);
 
-  const enabledCompanies = useMemo(() => {
-    const ids = new Set(items.map(i => i.companyId));
-    return Array.from(ids)
-      .map(id => companyById.get(id))
-      .filter((c): c is Company => Boolean(c))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [items, companyById]);
+  const roi = useMemo(() => {
+    const total = filtered.length;
+    const sentRows = filtered.filter(i => i.coverage.sent > 0).length;
+    const replyRows = filtered.filter(i => i.coverage.responded > 0).length;
+    const coveredRows = filtered.filter(i => i.coverage.covered).length;
+    const carriersContacted = filtered.reduce((a, b) => a + b.coverage.sent, 0);
+    const repliedCarriers = filtered.reduce((a, b) => a + b.coverage.responded, 0);
+    const replyRate = carriersContacted > 0 ? Math.round((repliedCarriers / carriersContacted) * 100) : 0;
+    const coverageRate = total > 0 ? Math.round((coveredRows / total) * 100) : 0;
+    return { total, sentRows, replyRows, coveredRows, carriersContacted, repliedCarriers, replyRate, coverageRate };
+  }, [filtered]);
 
   return (
     <div className="container mx-auto p-4 space-y-4 max-w-screen-2xl">
+      {/* Header + upload */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2" data-testid="heading-available-freight">
-            <Truck className="h-6 w-6" /> Available Freight Outreach
+            <Truck className="h-6 w-6" /> Available Freight Cockpit
           </h1>
           <p className="text-sm text-muted-foreground">
-            Customer-eligible open freight, with ranked carrier shortlists. Review-only —
-            sending happens in a later phase.
+            Triage open freight in priority order. Shortcuts: j/k move • x select • Enter open • A approve • S send top 3 • R reassign • Esc clear.
           </p>
         </div>
         <div className="flex items-center gap-2">
           <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            className="hidden"
+            ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden"
             data-testid="input-upload-available-freight"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) handleUploadFile(f);
-            }}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleUploadFile(f); }}
           />
-          <Button
-            variant="default"
-            size="sm"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isUploading}
-            data-testid="button-upload-available-freight"
-          >
+          <Button size="sm" onClick={() => fileInputRef.current?.click()} disabled={isUploading} data-testid="button-upload-available-freight">
             <Upload className={`h-4 w-4 mr-2 ${isUploading ? "animate-pulse" : ""}`} />
             {isUploading ? "Uploading…" : "Upload Excel"}
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => refetch()}
-            disabled={isFetching}
-            data-testid="button-refresh-opportunities"
-          >
+          <Button variant="outline" size="sm" onClick={() => refetch()} disabled={isFetching} data-testid="button-refresh-cockpit">
             <RefreshCw className={`h-4 w-4 mr-2 ${isFetching ? "animate-spin" : ""}`} />
             Refresh
           </Button>
         </div>
       </div>
 
+      {/* KPI strip — Task #601 contract semantics */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+        <KpiTile label="Generated today" value={kpis?.generatedToday ?? 0} testId="kpi-generated-today" />
+        <KpiTile label="Ready to send" value={kpis?.readyToSend ?? 0} tone="ready" testId="kpi-ready" />
+        <KpiTile label="Sent / awaiting carrier" value={kpis?.sentAwaitingCarrier ?? 0} tone="info" testId="kpi-sent-awaiting" />
+        <KpiTile label="At-risk pickup ≤24h" value={kpis?.atRiskPickup24h ?? 0} tone="critical" testId="kpi-at-risk-24h" />
+        <KpiTile label="Covered today" value={kpis?.coveredToday ?? 0} tone="ok" testId="kpi-covered-today" />
+        <KpiTile label="Total in queue" value={kpis?.total ?? 0} testId="kpi-total" />
+      </div>
+
+      {/* Saved-view tab strip + freshness pulse */}
       <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Filters</CardTitle>
-          <CardDescription className="text-xs">
-            Showing {filtered.length} of {items.length} opportunities
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <div className="lg:col-span-2">
-              <div className="relative">
-                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  className="pl-8"
-                  placeholder="Search lane, equipment, customer…"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  data-testid="input-filter-search"
-                />
+        <CardContent className="p-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-1">
+            <Button
+              size="sm" variant={activeViewId === null ? "default" : "outline"}
+              onClick={() => setActiveViewId(null)}
+              data-testid="button-view-all"
+            >
+              All
+            </Button>
+            {savedViews.map(v => (
+              <div key={v.id} className="flex items-center gap-0.5">
+                <Button
+                  size="sm" variant={activeViewId === v.id ? "default" : "outline"}
+                  onClick={() => setActiveViewId(v.id)}
+                  data-testid={`button-view-${v.id}`}
+                  title={v.isBuiltIn ? "Built-in view" : undefined}
+                >
+                  {v.isShared && <Star className="h-3 w-3 mr-1 fill-current" />}
+                  {v.name}
+                </Button>
+                {/* Built-ins cannot be deleted from the UI — only user-created views. */}
+                {activeViewId === v.id && !v.isBuiltIn && (
+                  <Button
+                    size="sm" variant="ghost" className="h-7 w-7 p-0"
+                    onClick={() => deleteView.mutate(v.id)}
+                    data-testid={`button-delete-view-${v.id}`}
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                )}
               </div>
+            ))}
+            <Button size="sm" variant="ghost" onClick={() => setSaveViewOpen(true)} data-testid="button-save-view">
+              <Bookmark className="h-3 w-3 mr-1" /> Save current
+            </Button>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className={`inline-block h-2 w-2 rounded-full ${freshnessPulseColor(feed?.lastImport?.ageMinutes ?? null)}`} data-testid="indicator-freshness-pulse" />
+            <span data-testid="text-last-import">
+              {feed?.lastImport
+                ? `Last import ${fmtAge(feed.lastImport.ageMinutes)} ago`
+                : "No import yet"}
+            </span>
+            {feed?.nextImport && (
+              <span data-testid="text-next-import">
+                · next in {fmtAge(feed.nextImport.inMinutes)}
+              </span>
+            )}
+            {kpis?.avgFreshnessMinutes !== null && kpis?.avgFreshnessMinutes !== undefined && (
+              <span>· avg row age {fmtAge(kpis.avgFreshnessMinutes)}</span>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Filters & view controls */}
+      <Card>
+        <CardContent className="p-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+            <div className="lg:col-span-2 relative">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                className="pl-8" placeholder="Search lane, equipment, carrier…"
+                value={search} onChange={(e) => setSearch(e.target.value)}
+                data-testid="input-filter-search"
+              />
             </div>
             <Select value={companyFilter} onValueChange={setCompanyFilter}>
               <SelectTrigger data-testid="select-filter-company"><SelectValue placeholder="Customer" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All customers</SelectItem>
-                {enabledCompanies.map(c => (
+                {customersForFilter.map(c => (
                   <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                 ))}
-              </SelectContent>
-            </Select>
-            <Select value={modeFilter} onValueChange={setModeFilter}>
-              <SelectTrigger data-testid="select-filter-mode"><SelectValue placeholder="Mode" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All modes</SelectItem>
-                <SelectItem value="exact_load">Exact load</SelectItem>
-                <SelectItem value="lane_building">Lane building</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={leadTimeFilter} onValueChange={setLeadTimeFilter}>
-              <SelectTrigger data-testid="select-filter-leadtime"><SelectValue placeholder="Lead time" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="any">Any lead time</SelectItem>
-                <SelectItem value="lt2">&lt; 2 days</SelectItem>
-                <SelectItem value="2to4">2–4 days</SelectItem>
-                <SelectItem value="5to7">5–7 days</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={confidenceFilter} onValueChange={setConfidenceFilter}>
-              <SelectTrigger data-testid="select-filter-confidence"><SelectValue placeholder="Confidence" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Any confidence</SelectItem>
-                <SelectItem value="normal">Normal</SelectItem>
-                <SelectItem value="low">Low only</SelectItem>
               </SelectContent>
             </Select>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
               <SelectTrigger data-testid="select-filter-status"><SelectValue placeholder="Status" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="active">Active queue</SelectItem>
-                <SelectItem value="new">New</SelectItem>
+                <SelectItem value="awaiting_approval">Awaiting approval</SelectItem>
                 <SelectItem value="ready_to_send">Ready</SelectItem>
                 <SelectItem value="sent">Sent</SelectItem>
                 <SelectItem value="awaiting_carrier_reply">Awaiting carrier</SelectItem>
-                <SelectItem value="awaiting_customer_confirm">Confirm w/ customer</SelectItem>
                 <SelectItem value="partially_covered">Partial</SelectItem>
                 <SelectItem value="covered">Covered</SelectItem>
-                <SelectItem value="expired">Expired</SelectItem>
-                <SelectItem value="cancelled">Cancelled</SelectItem>
-                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="all">All</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={sort} onValueChange={(v) => setSort(v as CockpitPrefs["sort"])}>
+              <SelectTrigger data-testid="select-sort"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="urgency">Sort: urgency</SelectItem>
+                <SelectItem value="pickup_soonest">Sort: pickup soonest</SelectItem>
+                <SelectItem value="freshness">Sort: freshest</SelectItem>
+                <SelectItem value="suggested_buy">Sort: suggested buy</SelectItem>
+                <SelectItem value="coverage_pct">Sort: coverage %</SelectItem>
+                <SelectItem value="confidence">Sort: confidence</SelectItem>
+                <SelectItem value="customer">Sort: customer</SelectItem>
+                <SelectItem value="lane">Sort: lane</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={grouping} onValueChange={(v) => setGrouping(v as CockpitPrefs["grouping"])}>
+              <SelectTrigger data-testid="select-grouping"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Group: none</SelectItem>
+                <SelectItem value="customer">Group: customer</SelectItem>
+                <SelectItem value="pickup_day">Group: pickup day</SelectItem>
+                <SelectItem value="lane">Group: lane</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={layout} onValueChange={(v) => setLayout(v as CockpitPrefs["layout"])}>
+              <SelectTrigger data-testid="select-layout"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="table">Layout: table</SelectItem>
+                <SelectItem value="calendar">Layout: pickup-day swimlane</SelectItem>
               </SelectContent>
             </Select>
           </div>
         </CardContent>
       </Card>
 
-      <Card>
-        <CardContent className="p-0">
-          {isError ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-16 text-center" data-testid="state-error">
-              <AlertCircle className="h-8 w-8 text-destructive" />
-              <p className="text-sm font-medium">Couldn't load opportunities</p>
-              <Button size="sm" variant="outline" onClick={() => refetch()}>Try again</Button>
-            </div>
-          ) : isLoading ? (
-            <div className="p-4 space-y-2" data-testid="state-loading">
-              {[0, 1, 2, 3, 4].map(i => <Skeleton key={i} className="h-12 w-full" />)}
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-3 py-16 text-center" data-testid="state-empty">
-              <Inbox className="h-10 w-10 text-muted-foreground" />
+      {/* Bulk action bar */}
+      {selected.size > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-accent/40 p-2" data-testid="bar-bulk-actions">
+          <div className="text-sm font-medium">{selected.size} selected</div>
+          <div className="flex flex-wrap items-center gap-1">
+            <Button size="sm" onClick={() => bulk("approve")} disabled={bulkMutate.isPending} data-testid="button-bulk-approve">
+              <UserCheck className="h-3 w-3 mr-1" /> Approve
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => bulk("send_top", { topN: 3 })} disabled={bulkMutate.isPending} data-testid="button-bulk-send-top">
+              <Send className="h-3 w-3 mr-1" /> Send top 3
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setSnoozeOpen(true)} disabled={bulkMutate.isPending} data-testid="button-bulk-snooze">
+              <AlarmClock className="h-3 w-3 mr-1" /> Snooze
+            </Button>
+            <Button
+              size="sm" variant="outline" disabled={bulkMutate.isPending}
+              onClick={() => { setReassignToUserId(""); setReassignTargetIds(Array.from(selected)); }}
+              data-testid="button-bulk-reassign"
+            >
+              <UserCheck className="h-3 w-3 mr-1" /> Reassign
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setBulkCoverOpen(true)}
+              disabled={bulkMutate.isPending}
+              title="Cover the selected opportunities with one carrier and rate; emits load_fact for each"
+              data-testid="button-bulk-covered"
+            >
+              <ClipboardCheck className="h-3 w-3 mr-1" /> Mark covered
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => bulk("dismiss")} disabled={bulkMutate.isPending} data-testid="button-bulk-dismiss">
+              <X className="h-3 w-3 mr-1" /> Dismiss
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())} data-testid="button-bulk-clear">Clear</Button>
+          </div>
+        </div>
+      )}
+
+      {/* Main grid: rows + ROI side-rail */}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
+        <Card>
+          <CardContent className="p-0">
+            {isError ? (
+              <div className="flex flex-col items-center justify-center gap-2 py-16 text-center" data-testid="state-error">
+                <AlertCircle className="h-8 w-8 text-destructive" />
+                <p className="text-sm font-medium">Couldn't load cockpit</p>
+                <Button size="sm" variant="outline" onClick={() => refetch()}>Try again</Button>
+              </div>
+            ) : isLoading ? (
+              <div className="p-4 space-y-2" data-testid="state-loading">
+                {[0, 1, 2, 3, 4].map(i => <Skeleton key={i} className="h-20 w-full" />)}
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="flex flex-col items-center justify-center gap-3 py-16 text-center" data-testid="state-empty">
+                <Inbox className="h-10 w-10 text-muted-foreground" />
+                <div>
+                  <p className="text-sm font-medium">No opportunities match these filters</p>
+                  <p className="text-xs text-muted-foreground">
+                    Upload a workbook or wait for the next scheduled import.
+                  </p>
+                </div>
+              </div>
+            ) : (
               <div>
-                <p className="text-sm font-medium">No opportunities match these filters</p>
-                <p className="text-xs text-muted-foreground">
-                  Opportunities appear once eligible customers have unbooked freight in the
-                  configured lead-time window.
-                </p>
+                {/* Select-all bar */}
+                <div className="flex items-center gap-2 border-b px-3 py-2 text-xs text-muted-foreground">
+                  <Checkbox
+                    checked={selected.size > 0 && selected.size === filtered.length}
+                    onCheckedChange={toggleAll}
+                    data-testid="checkbox-select-all"
+                  />
+                  <span>Select all visible ({filtered.length})</span>
+                </div>
+                {layout === "calendar" ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 p-3" data-testid="layout-swimlane">
+                    {(() => {
+                      const lanes = new Map<string, CockpitItem[]>();
+                      for (const it of filtered) {
+                        const d = it.opportunity.pickupWindowStart
+                          ? new Date(it.opportunity.pickupWindowStart).toISOString().slice(0, 10)
+                          : "no-pickup";
+                        if (!lanes.has(d)) lanes.set(d, []);
+                        lanes.get(d)!.push(it);
+                      }
+                      const sortedLanes = Array.from(lanes.entries()).sort(([a], [b]) => a.localeCompare(b));
+                      return sortedLanes.map(([date, laneItems]) => (
+                        <div key={date} className="rounded-md border bg-muted/10" data-testid={`swimlane-${date}`}>
+                          <div className="border-b bg-muted/40 px-3 py-1.5 text-xs font-semibold flex items-center justify-between">
+                            <span>{date === "no-pickup" ? "No pickup date" : new Date(date).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}</span>
+                            <span className="text-muted-foreground">{laneItems.length} load{laneItems.length === 1 ? "" : "s"}</span>
+                          </div>
+                          <div className="divide-y">
+                            {laneItems.map((it, idx) => (
+                              <CockpitRowView
+                                key={it.opportunity.id}
+                                item={it}
+                                isSelected={selected.has(it.opportunity.id)}
+                                onToggleSelected={() => toggleSelected(it.opportunity.id)}
+                                isFocused={filtered[focusIndex]?.opportunity.id === it.opportunity.id}
+                                onFocus={() => setFocusIndex(filtered.findIndex(x => x.opportunity.id === it.opportunity.id))}
+                                onAction={(action, extra) => bulkMutate.mutate({ action, opportunityIds: [it.opportunity.id], ...(extra ?? {}) })}
+                                onReassign={() => { setReassignToUserId(""); setReassignTargetIds([it.opportunity.id]); }}
+                                onOpenDraft={() => setDraftPreviewId(it.opportunity.id)}
+                                onLogOutcome={() => setOutcomeTargetId(it.opportunity.id)}
+                                onToggleAutoPilot={() => toggleAutoPilot(it)}
+                                index={idx}
+                                lastSeenAt={lastSeenAt}
+                                compact
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                ) : (
+                  groups.map(g => {
+                    const isCollapsed = collapsedGroups.has(g.key);
+                    return (
+                      <div key={g.key}>
+                        {grouping !== "none" && (
+                          <button
+                            type="button"
+                            className="w-full text-left border-b bg-muted/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide flex items-center gap-2 hover:bg-muted/50"
+                            onClick={() => setCollapsedGroups(prev => {
+                              const next = new Set(prev);
+                              if (next.has(g.key)) next.delete(g.key); else next.add(g.key);
+                              return next;
+                            })}
+                            data-testid={`group-header-${g.key}`}
+                          >
+                            <ChevronDown className={`h-3 w-3 transition-transform ${isCollapsed ? "-rotate-90" : ""}`} />
+                            <span>{g.label} · {g.items.length}</span>
+                            <span className="ml-auto text-[10px] text-muted-foreground normal-case font-normal">
+                              {/* Roll-up: covered / awaiting reply / no outreach */}
+                              {g.items.filter(i => i.coverage.covered).length} covered ·{" "}
+                              {g.items.filter(i => i.coverage.sent > 0 && i.coverage.responded === 0).length} awaiting ·{" "}
+                              {g.items.filter(i => i.coverage.sent === 0).length} no outreach
+                            </span>
+                          </button>
+                        )}
+                        {!isCollapsed && g.items.map((it, idx) => (
+                          <CockpitRowView
+                            key={it.opportunity.id}
+                            item={it}
+                            isSelected={selected.has(it.opportunity.id)}
+                            onToggleSelected={() => toggleSelected(it.opportunity.id)}
+                            isFocused={filtered[focusIndex]?.opportunity.id === it.opportunity.id}
+                            onFocus={() => setFocusIndex(filtered.findIndex(x => x.opportunity.id === it.opportunity.id))}
+                            onAction={(action, extra) => bulkMutate.mutate({ action, opportunityIds: [it.opportunity.id], ...(extra ?? {}) })}
+                            onReassign={() => { setReassignToUserId(""); setReassignTargetIds([it.opportunity.id]); }}
+                            onOpenDraft={() => setDraftPreviewId(it.opportunity.id)}
+                            onLogOutcome={() => setOutcomeTargetId(it.opportunity.id)}
+                            onToggleAutoPilot={() => toggleAutoPilot(it)}
+                            index={idx}
+                            lastSeenAt={lastSeenAt}
+                          />
+                        ))}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* ROI side panel */}
+        <Card>
+          <CardContent className="p-3 space-y-3" data-testid="panel-roi">
+            <div className="flex items-center gap-2 text-sm font-semibold">
+              <CheckCircle2 className="h-4 w-4 text-emerald-600" /> ROI snapshot
+            </div>
+            <div className="space-y-2 text-sm">
+              <RoiRow label="Opportunities visible" value={String(roi.total)} testId="roi-total" />
+              <RoiRow label="Sent / no reply" value={String(roi.sentRows - roi.replyRows)} testId="roi-no-reply" />
+              <RoiRow label="With at least one reply" value={String(roi.replyRows)} testId="roi-replied" />
+              <RoiRow label="Covered" value={`${roi.coveredRows} (${roi.coverageRate}%)`} testId="roi-coverage" />
+              <RoiRow label="Carriers contacted" value={String(roi.carriersContacted)} testId="roi-carriers-contacted" />
+              <RoiRow label="Reply rate" value={`${roi.replyRate}%`} testId="roi-reply-rate" />
+              {feed?.roiMetrics?.medianTimeToCoverMin !== null &&
+                feed?.roiMetrics?.medianTimeToCoverMin !== undefined && (
+                <RoiRow
+                  label="Median time to cover"
+                  value={fmtAge(feed.roiMetrics.medianTimeToCoverMin)}
+                  testId="roi-median-time-to-cover"
+                />
+              )}
+              <div className="pt-2">
+                <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
+                  <span>Coverage progress</span>
+                  <span>{roi.coverageRate}%</span>
+                </div>
+                <Progress value={roi.coverageRate} data-testid="progress-roi-coverage" />
               </div>
             </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Customer</TableHead>
-                    <TableHead>Lane</TableHead>
-                    <TableHead>Mode</TableHead>
-                    <TableHead>Pickup window</TableHead>
-                    <TableHead className="text-right">Loads</TableHead>
-                    <TableHead className="text-right">Carriers</TableHead>
-                    <TableHead>Confidence</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="w-10" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filtered.map(opp => {
-                    const company = companyById.get(opp.companyId);
-                    const days = leadTimeDays(opp.pickupWindowStart);
-                    return (
-                      <TableRow
-                        key={opp.id}
-                        className="hover-elevate cursor-pointer"
-                        data-testid={`row-opportunity-${opp.id}`}
-                      >
-                        <TableCell className="font-medium">
-                          <Link
-                            href={`/available-freight/${opp.id}`}
-                            data-testid={`link-opportunity-${opp.id}`}
-                            className="hover:underline"
-                          >
-                            {company?.name ?? "Unknown customer"}
-                          </Link>
-                          {company?.archivedAt && (
-                            <Badge variant="outline" className="ml-2 text-[10px]">archived</Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="whitespace-nowrap">
-                          <span data-testid={`text-lane-${opp.id}`}>{fmtLane(opp.origin, opp.originState, opp.destination, opp.destinationState)}</span>
-                          {opp.equipmentType && (
-                            <span className="ml-2 text-xs text-muted-foreground">{opp.equipmentType}</span>
-                          )}
-                        </TableCell>
-                        <TableCell><ModeBadge mode={opp.mode} /></TableCell>
-                        <TableCell className="whitespace-nowrap text-sm">
-                          <div>{fmtWindow(opp.pickupWindowStart, opp.pickupWindowEnd)}</div>
-                          <div className="text-xs text-muted-foreground">
-                            in {days} day{days === 1 ? "" : "s"}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">{opp.loadCount}</TableCell>
-                        <TableCell className="text-right tabular-nums" data-testid={`text-carrier-count-${opp.id}`}>
-                          {opp.recommendedCarrierCount === undefined ? (
-                            <span className="text-muted-foreground">—</span>
-                          ) : (
-                            <span title={`${opp.includedCarrierCount ?? 0} included of ${opp.recommendedCarrierCount} recommended`}>
-                              <span className="font-medium">{opp.includedCarrierCount ?? 0}</span>
-                              <span className="text-muted-foreground"> / {opp.recommendedCarrierCount}</span>
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {opp.confidenceFlag === "low" ? (
-                            <Badge variant="outline" className="bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30" data-testid={`badge-confidence-${opp.id}`}>
-                              Low
-                            </Badge>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">Normal</span>
-                          )}
-                        </TableCell>
-                        <TableCell><StatusBadge status={opp.status} /></TableCell>
-                        <TableCell>
-                          <Link href={`/available-freight/${opp.id}`}>
-                            <Button variant="ghost" size="icon" data-testid={`button-open-${opp.id}`}>
-                              <ChevronRight className="h-4 w-4" />
-                            </Button>
-                          </Link>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
 
-      <p className="text-xs text-muted-foreground flex items-center gap-1">
-        <ArrowUpRight className="h-3 w-3" />
-        Open an opportunity to see ranked carriers, explanations, and include/exclude controls.
-      </p>
+            {/* Response rate per carrier bucket — sourced from server roiMetrics */}
+            {feed?.roiMetrics?.responseByBucket &&
+              Object.keys(feed.roiMetrics.responseByBucket).length > 0 && (
+              <div className="border-t pt-2 space-y-1" data-testid="panel-roi-by-bucket">
+                <div className="text-xs font-semibold text-muted-foreground">
+                  Response by carrier bucket
+                </div>
+                {Object.entries(feed.roiMetrics.responseByBucket).map(([bucket, v]) => {
+                  const rate = v.sent > 0 ? Math.round((v.responded / v.sent) * 100) : 0;
+                  return (
+                    <div
+                      key={bucket}
+                      className="flex items-center justify-between text-xs"
+                      data-testid={`roi-bucket-${bucket}`}
+                    >
+                      <span className="capitalize">{bucket.replace(/_/g, " ")}</span>
+                      <span className="tabular-nums text-muted-foreground">
+                        {v.responded}/{v.sent} ({rate}%)
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Suppression breakdown — explains the carriers we filtered out */}
+            {feed?.roiMetrics?.suppressionBreakdown &&
+              Object.keys(feed.roiMetrics.suppressionBreakdown).length > 0 && (
+              <div className="border-t pt-2 space-y-1" data-testid="panel-roi-suppression">
+                <div className="text-xs font-semibold text-muted-foreground">
+                  Suppressed carriers (why)
+                </div>
+                {Object.entries(feed.roiMetrics.suppressionBreakdown)
+                  .sort((a, b) => b[1] - a[1])
+                  .slice(0, 6)
+                  .map(([reason, count]) => (
+                    <div
+                      key={reason}
+                      className="flex items-center justify-between text-xs"
+                      data-testid={`roi-suppression-${reason}`}
+                    >
+                      <span className="capitalize">{reason.replace(/_/g, " ")}</span>
+                      <span className="tabular-nums text-muted-foreground">{count}</span>
+                    </div>
+                  ))}
+              </div>
+            )}
+
+            <div className="border-t pt-2 text-xs text-muted-foreground">
+              Auto-pilot uses each customer's top-N carrier limit. Mute or change the
+              hour in the customer's outreach policy.
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Snooze dialog */}
+      <Dialog open={snoozeOpen} onOpenChange={setSnoozeOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Snooze {selected.size} opportunit{selected.size === 1 ? "y" : "ies"}</DialogTitle>
+            <DialogDescription>
+              Hide from the cockpit until the wake time. Audit log records who snoozed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="snooze-hours">Hours from now</Label>
+            <Input
+              id="snooze-hours" type="number" min="1" max="168"
+              value={snoozeHours} onChange={(e) => setSnoozeHours(e.target.value)}
+              data-testid="input-snooze-hours"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSnoozeOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => {
+                const h = Math.max(1, parseInt(snoozeHours) || 4);
+                const until = new Date(Date.now() + h * 3600_000).toISOString();
+                bulk("snooze", { snoozeUntil: until });
+                setSnoozeOpen(false);
+              }}
+              data-testid="button-snooze-confirm"
+            >
+              Snooze
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk-action confirm dialog. Per reviewer feedback (Task #601),
+          outbound or destructive bulk actions must require explicit confirm
+          so dispatchers don't accidentally fire dozens of sends. */}
+      <Dialog open={!!confirmBulk} onOpenChange={(open) => { if (!open) setConfirmBulk(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle data-testid="dialog-bulk-confirm-title">
+              {confirmBulk?.action === "approve" && `Approve ${selected.size} opportunit${selected.size === 1 ? "y" : "ies"}?`}
+              {confirmBulk?.action === "send_top" && `Send top ${(confirmBulk.extra?.topN as number) ?? 3} carriers for ${selected.size} opportunit${selected.size === 1 ? "y" : "ies"}?`}
+              {confirmBulk?.action === "dismiss" && `Dismiss ${selected.size} opportunit${selected.size === 1 ? "y" : "ies"}?`}
+            </DialogTitle>
+            <DialogDescription>
+              {confirmBulk && (() => {
+                const sel = items.filter(i => selected.has(i.opportunity.id));
+                const customers = new Set(sel.map(i => i.opportunity.companyId)).size;
+                const carriers = sel.reduce((acc, i) => acc + i.coverage.included, 0);
+                if (confirmBulk.action === "send_top") {
+                  const topN = (confirmBulk.extra?.topN as number) ?? 3;
+                  const willSend = sel.reduce((acc, i) => acc + Math.min(topN, Math.max(0, i.coverage.included - i.coverage.sent)), 0);
+                  return `${selected.size} loads across ${customers} customer${customers === 1 ? "" : "s"} • approx ${willSend} carrier emails will be sent (guardrails still apply).`;
+                }
+                if (confirmBulk.action === "approve") {
+                  return `${selected.size} loads across ${customers} customer${customers === 1 ? "" : "s"} will move to ready_to_send. ${carriers} shortlisted carriers may be sent next.`;
+                }
+                if (confirmBulk.action === "dismiss") {
+                  return `${selected.size} loads will be cancelled and hidden. The audit log records this action.`;
+                }
+                return `${selected.size} loads will be marked covered. This skips outreach for any remaining shortlisted carriers.`;
+              })()}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmBulk(null)} data-testid="button-bulk-confirm-cancel">Cancel</Button>
+            <Button
+              variant={confirmBulk?.action === "dismiss" ? "destructive" : "default"}
+              disabled={bulkMutate.isPending}
+              onClick={() => {
+                if (!confirmBulk) return;
+                bulkMutate.mutate({ action: confirmBulk.action, opportunityIds: Array.from(selected), ...(confirmBulk.extra ?? {}) });
+                setConfirmBulk(null);
+              }}
+              data-testid="button-bulk-confirm-go"
+            >
+              Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reassign dialog — drives both bulk-bar and per-row reassign menu. */}
+      <Dialog open={!!reassignTargetIds} onOpenChange={(open) => { if (!open) setReassignTargetIds(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Reassign {reassignTargetIds?.length ?? 0} opportunit{(reassignTargetIds?.length ?? 0) === 1 ? "y" : "ies"}
+            </DialogTitle>
+            <DialogDescription>
+              Pick a new owner. They become the responsible dispatcher and any
+              awaiting-approval clock continues to tick.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="reassign-owner">Owner</Label>
+            <Select value={reassignToUserId} onValueChange={setReassignToUserId}>
+              <SelectTrigger id="reassign-owner" data-testid="select-reassign-owner">
+                <SelectValue placeholder="Select a user…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__unassign__">Unassign (no owner)</SelectItem>
+                {users.map(u => (
+                  <SelectItem key={u.id} value={u.id}>{ownerLabel(u)}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReassignTargetIds(null)} data-testid="button-reassign-cancel">Cancel</Button>
+            <Button
+              disabled={bulkMutate.isPending || !reassignToUserId}
+              onClick={() => {
+                if (!reassignTargetIds || !reassignToUserId) return;
+                const ownerUserId = reassignToUserId === "__unassign__" ? null : reassignToUserId;
+                bulkMutate.mutate({
+                  action: "reassign",
+                  opportunityIds: reassignTargetIds,
+                  ownerUserId,
+                });
+                setReassignTargetIds(null);
+              }}
+              data-testid="button-reassign-confirm"
+            >
+              Reassign
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* In-place "Open draft" preview — replaces the prior detail-page jump.
+          Shows the carrier shortlist that would be sent and lets the dispatcher
+          fire send-top right from the cockpit. */}
+      <Dialog open={!!draftPreviewId} onOpenChange={(open) => { if (!open) setDraftPreviewId(null); }}>
+        <DialogContent className="max-w-lg">
+          {(() => {
+            const target = items.find(i => i.opportunity.id === draftPreviewId);
+            if (!target) {
+              return (
+                <>
+                  <DialogHeader><DialogTitle>Draft preview</DialogTitle></DialogHeader>
+                  <div className="text-sm text-muted-foreground">Opportunity is no longer in the cockpit feed.</div>
+                </>
+              );
+            }
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle data-testid="dialog-draft-title">
+                    Draft for {fmtLane(target.opportunity.origin, target.opportunity.originState, target.opportunity.destination, target.opportunity.destinationState)}
+                  </DialogTitle>
+                  <DialogDescription>
+                    The top carriers below will receive a templated outreach. Review and confirm to send.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-2">
+                  {target.chips.length === 0 ? (
+                    <div className="text-sm text-muted-foreground" data-testid="text-draft-no-carriers">No carriers ranked yet — try a fresh import.</div>
+                  ) : (
+                    <ul className="divide-y rounded-md border" data-testid="list-draft-carriers">
+                      {target.chips.slice(0, 3).map((c, i) => (
+                        <li key={c.carrierId} className="flex items-center justify-between px-3 py-2 text-sm" data-testid={`row-draft-carrier-${i}`}>
+                          <span className="font-medium truncate">{c.carrierName}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {c.bucket} · fit {c.fitScore}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {target.suggestedBuy?.rate != null && (
+                    <div className="rounded-md bg-muted/40 px-3 py-2 text-xs" data-testid="text-draft-buy">
+                      Suggested buy: ${target.suggestedBuy.rate.toFixed(2)}/mi · {target.suggestedBuy.confidence}
+                    </div>
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setDraftPreviewId(null)} data-testid="button-draft-cancel">Cancel</Button>
+                  <Button
+                    disabled={target.chips.length === 0 || bulkMutate.isPending}
+                    onClick={() => {
+                      bulkMutate.mutate({ action: "send_top", opportunityIds: [target.opportunity.id], topN: Math.min(3, target.chips.length) });
+                      setDraftPreviewId(null);
+                    }}
+                    data-testid="button-draft-send"
+                  >
+                    Send to top {Math.min(3, target.chips.length)}
+                  </Button>
+                </DialogFooter>
+              </>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!outcomeTargetId} onOpenChange={(open) => {
+        if (!open) {
+          setOutcomeTargetId(null);
+          setOutcomeNotes("");
+          setOutcomeCarrier("");
+          setOutcomePaidRate("");
+          setOutcomeCustomerRate("");
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Log outcome</DialogTitle>
+            <DialogDescription>
+              Covered loads emit a load_fact row for coaching/rate intelligence.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="outcome-status">Outcome</Label>
+              <Select value={outcomeStatus} onValueChange={(v) => setOutcomeStatus(v as "covered" | "lost" | "no_bid")}>
+                <SelectTrigger id="outcome-status" data-testid="select-outcome-status"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="covered">Won — covered</SelectItem>
+                  <SelectItem value="lost">Lost</SelectItem>
+                  <SelectItem value="no_bid">No bid</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {outcomeStatus === "covered" && (
+              <>
+                <div className="space-y-1">
+                  <Label htmlFor="outcome-carrier">Carrier name</Label>
+                  <Input id="outcome-carrier" value={outcomeCarrier} onChange={(e) => setOutcomeCarrier(e.target.value)} placeholder="e.g. Acme Logistics" data-testid="input-outcome-carrier" />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="outcome-paid-rate">Paid rate ($)</Label>
+                    <Input id="outcome-paid-rate" type="number" inputMode="decimal" min="0" step="0.01" value={outcomePaidRate} onChange={(e) => setOutcomePaidRate(e.target.value)} placeholder="2200" data-testid="input-outcome-paid-rate" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="outcome-customer-rate">Customer rate ($)</Label>
+                    <Input id="outcome-customer-rate" type="number" inputMode="decimal" min="0" step="0.01" value={outcomeCustomerRate} onChange={(e) => setOutcomeCustomerRate(e.target.value)} placeholder="2500" data-testid="input-outcome-customer-rate" />
+                  </div>
+                </div>
+              </>
+            )}
+            <div className="space-y-1">
+              <Label htmlFor="outcome-notes">Notes (optional)</Label>
+              <Input id="outcome-notes" value={outcomeNotes} onChange={(e) => setOutcomeNotes(e.target.value)} placeholder="Why, lane context, etc." data-testid="input-outcome-notes" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              setOutcomeTargetId(null);
+              setOutcomeNotes("");
+              setOutcomeCarrier("");
+              setOutcomePaidRate("");
+              setOutcomeCustomerRate("");
+            }} data-testid="button-outcome-cancel">Cancel</Button>
+            <Button
+              disabled={
+                logOutcomeMutation.isPending
+                || !outcomeTargetId
+                || (outcomeStatus === "covered" && (!outcomeCarrier.trim() || !(parseFloat(outcomePaidRate) > 0) || !(parseFloat(outcomeCustomerRate) > 0)))
+              }
+              onClick={() => {
+                if (!outcomeTargetId) return;
+                logOutcomeMutation.mutate({
+                  id: outcomeTargetId,
+                  status: outcomeStatus,
+                  notes: outcomeNotes,
+                  ...(outcomeStatus === "covered" ? {
+                    carrierName: outcomeCarrier.trim(),
+                    paidRate: parseFloat(outcomePaidRate),
+                    customerRate: parseFloat(outcomeCustomerRate),
+                  } : {}),
+                });
+              }}
+              data-testid="button-outcome-confirm"
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={bulkCoverOpen} onOpenChange={(open) => {
+        if (!open) {
+          setBulkCoverOpen(false);
+          setBulkCoverCarrier("");
+          setBulkCoverPaidRate("");
+          setBulkCoverCustomerRate("");
+          setBulkCoverNotes("");
+        }
+      }}>
+        <DialogContent data-testid="dialog-bulk-cover">
+          <DialogHeader>
+            <DialogTitle>Mark {selected.size} opportunit{selected.size === 1 ? "y" : "ies"} covered</DialogTitle>
+            <DialogDescription>
+              Applies the same carrier + rates to every selected opportunity. Each one routes through the canonical cover endpoint and emits a load_fact row for coaching/rate intelligence.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="bulk-cover-carrier">Carrier name</Label>
+              <Input id="bulk-cover-carrier" value={bulkCoverCarrier} onChange={(e) => setBulkCoverCarrier(e.target.value)} placeholder="e.g. Acme Logistics" data-testid="input-bulk-cover-carrier" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="bulk-cover-paid-rate">Paid rate ($)</Label>
+                <Input id="bulk-cover-paid-rate" type="number" inputMode="decimal" min="0" step="0.01" value={bulkCoverPaidRate} onChange={(e) => setBulkCoverPaidRate(e.target.value)} placeholder="2200" data-testid="input-bulk-cover-paid-rate" />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="bulk-cover-customer-rate">Customer rate ($)</Label>
+                <Input id="bulk-cover-customer-rate" type="number" inputMode="decimal" min="0" step="0.01" value={bulkCoverCustomerRate} onChange={(e) => setBulkCoverCustomerRate(e.target.value)} placeholder="2500" data-testid="input-bulk-cover-customer-rate" />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="bulk-cover-notes">Notes (optional)</Label>
+              <Input id="bulk-cover-notes" value={bulkCoverNotes} onChange={(e) => setBulkCoverNotes(e.target.value)} placeholder="Why, lane context, etc." data-testid="input-bulk-cover-notes" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              setBulkCoverOpen(false);
+              setBulkCoverCarrier("");
+              setBulkCoverPaidRate("");
+              setBulkCoverCustomerRate("");
+              setBulkCoverNotes("");
+            }} data-testid="button-bulk-cover-cancel">Cancel</Button>
+            <Button
+              disabled={
+                bulkMutate.isPending
+                || selected.size === 0
+                || !bulkCoverCarrier.trim()
+                || !(parseFloat(bulkCoverPaidRate) > 0)
+                || !(parseFloat(bulkCoverCustomerRate) > 0)
+              }
+              onClick={() => {
+                bulkMutate.mutate({
+                  action: "mark_covered",
+                  opportunityIds: Array.from(selected),
+                  carrierName: bulkCoverCarrier.trim(),
+                  paidRate: parseFloat(bulkCoverPaidRate),
+                  customerRate: parseFloat(bulkCoverCustomerRate),
+                  notes: bulkCoverNotes || undefined,
+                });
+                setBulkCoverOpen(false);
+                setBulkCoverCarrier("");
+                setBulkCoverPaidRate("");
+                setBulkCoverCustomerRate("");
+                setBulkCoverNotes("");
+              }}
+              data-testid="button-bulk-cover-confirm"
+            >
+              Cover {selected.size}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showShortcutsHelp} onOpenChange={setShowShortcutsHelp}>
+        <DialogContent data-testid="dialog-shortcuts-help">
+          <DialogHeader>
+            <DialogTitle>Keyboard shortcuts</DialogTitle>
+            <DialogDescription>Move faster through the freight cockpit.</DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
+            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">j</kbd><span>Focus next row</span>
+            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">k</kbd><span>Focus previous row</span>
+            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">x</kbd><span>Toggle selection on focused row</span>
+            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">Enter</kbd><span>Open focused opportunity</span>
+            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">A</kbd><span>Approve selected</span>
+            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">S</kbd><span>Send top 3 carriers for selected</span>
+            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">R</kbd><span>Reassign selected (or focused) row</span>
+            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">?</kbd><span>Show this cheat sheet</span>
+            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">Esc</kbd><span>Clear selection / close dialogs</span>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowShortcutsHelp(false)} data-testid="button-close-shortcuts">Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={saveViewOpen} onOpenChange={setSaveViewOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Save current view</DialogTitle>
+            <DialogDescription>Save the current filters as a reusable view.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="view-name">Name</Label>
+              <Input id="view-name" value={newViewName} onChange={(e) => setNewViewName(e.target.value)} data-testid="input-view-name" />
+            </div>
+            <div className="flex items-center gap-2">
+              <Checkbox id="view-shared" checked={newViewShared} onCheckedChange={(v) => setNewViewShared(!!v)} data-testid="checkbox-view-shared" />
+              <Label htmlFor="view-shared" className="text-sm">Share with team</Label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSaveViewOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => createView.mutate({
+                name: newViewName.trim() || "Untitled view",
+                filters: { search, companyId: companyFilter, status: statusFilter },
+                isShared: newViewShared,
+              })}
+              data-testid="button-view-save-confirm"
+              disabled={createView.isPending}
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+
+function KpiTile({ label, value, tone, testId }: { label: string; value: number; tone?: "critical" | "warn" | "ready" | "info" | "ok"; testId: string }) {
+  const toneCls = tone === "critical"
+    ? "text-red-700 dark:text-red-300"
+    : tone === "warn"
+      ? "text-amber-700 dark:text-amber-300"
+      : tone === "ready"
+        ? "text-blue-700 dark:text-blue-300"
+        : tone === "info"
+          ? "text-violet-700 dark:text-violet-300"
+          : tone === "ok"
+            ? "text-emerald-700 dark:text-emerald-300"
+            : "text-foreground";
+  return (
+    <Card>
+      <CardContent className="p-3">
+        <div className="text-xs text-muted-foreground">{label}</div>
+        <div className={`text-2xl font-semibold tabular-nums ${toneCls}`} data-testid={`text-${testId}`}>{value}</div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function RoiRow({ label, value, testId }: { label: string; value: string; testId: string }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="font-medium tabular-nums" data-testid={`text-${testId}`}>{value}</span>
+    </div>
+  );
+}
+
+function ownerInitials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function tierTone(tier: string | null): string {
+  switch ((tier ?? "").toLowerCase()) {
+    case "platinum": return "bg-slate-200 text-slate-900 dark:bg-slate-300/20 dark:text-slate-100 border-slate-400";
+    case "gold":     return "bg-amber-200 text-amber-900 dark:bg-amber-300/20 dark:text-amber-100 border-amber-400";
+    case "silver":   return "bg-zinc-200 text-zinc-900 dark:bg-zinc-300/20 dark:text-zinc-100 border-zinc-400";
+    case "bronze":   return "bg-orange-200 text-orange-900 dark:bg-orange-300/20 dark:text-orange-100 border-orange-400";
+    default:         return "bg-muted text-muted-foreground border-border";
+  }
+}
+
+function slaDotColor(level: "green" | "yellow" | "red" | null): string {
+  if (level === "red") return "bg-red-500";
+  if (level === "yellow") return "bg-amber-500";
+  if (level === "green") return "bg-emerald-500";
+  return "bg-transparent";
+}
+
+function CockpitRowView(props: {
+  item: CockpitItem;
+  isSelected: boolean;
+  isFocused: boolean;
+  onToggleSelected: () => void;
+  onFocus: () => void;
+  onAction: (action: string, extra?: Record<string, unknown>) => void;
+  onReassign: () => void;
+  onOpenDraft?: () => void;
+  onLogOutcome?: () => void;
+  onToggleAutoPilot?: () => void;
+  index: number;
+  lastSeenAt: string | null;
+  compact?: boolean;
+}) {
+  const { item, isSelected, isFocused, onToggleSelected, onFocus, onAction, onReassign, onOpenDraft, onLogOutcome, onToggleAutoPilot, lastSeenAt } = props;
+  const opp = item.opportunity;
+  const coveragePct = item.coverage.included > 0
+    ? Math.round((item.coverage.responded / Math.max(1, item.coverage.included)) * 100)
+    : 0;
+  // NEW pill — opp generated after the user's last visit. We only show it when
+  // we *have* a baseline so the very first session doesn't paint everything new.
+  const isNewSinceLastView = !!lastSeenAt && opp.generatedAt
+    ? new Date(opp.generatedAt).getTime() > new Date(lastSeenAt).getTime()
+    : false;
+
+  return (
+    <div
+      onClick={onFocus}
+      className={`flex flex-col gap-2 border-b px-3 py-3 hover:bg-accent/30 cursor-pointer ${isFocused ? "bg-accent/40" : ""}`}
+      data-testid={`row-opportunity-${opp.id}`}
+    >
+      <div className="flex items-center gap-3 flex-wrap">
+        <Checkbox
+          checked={isSelected}
+          onCheckedChange={() => { onToggleSelected(); }}
+          onClick={(e) => e.stopPropagation()}
+          data-testid={`checkbox-row-${opp.id}`}
+        />
+        {/* SLA dot — only shown while approval is pending */}
+        {item.sla.level && (
+          <span
+            className={`inline-block h-2.5 w-2.5 rounded-full ${slaDotColor(item.sla.level)}`}
+            title={`Awaiting approval ${fmtAge(item.sla.ageMinutes)}`}
+            data-testid={`indicator-sla-${opp.id}`}
+          />
+        )}
+        <Badge variant="outline" className={urgencyTone(item.urgency.level)} data-testid={`badge-urgency-${opp.id}`}>
+          {item.urgency.level} · {item.urgency.score}
+        </Badge>
+        {isNewSinceLastView && (
+          <Badge className="bg-violet-600 text-white hover:bg-violet-600" data-testid={`badge-new-${opp.id}`}>NEW</Badge>
+        )}
+        <Link
+          href={`/available-freight/${opp.id}`}
+          className="font-medium hover:underline"
+          data-testid={`link-opportunity-${opp.id}`}
+        >
+          {fmtLane(opp.origin, opp.originState, opp.destination, opp.destinationState)}
+        </Link>
+        {opp.equipmentType && <span className="text-xs text-muted-foreground">{opp.equipmentType}</span>}
+        {item.customer && (
+          <span className="flex items-center gap-1 text-xs">
+            <span className="text-muted-foreground" data-testid={`text-customer-${opp.id}`}>{item.customer.name}</span>
+            {item.customer.accountTier && (
+              <Badge variant="outline" className={`text-[10px] ${tierTone(item.customer.accountTier)}`} data-testid={`badge-tier-${opp.id}`}>
+                {item.customer.accountTier}
+              </Badge>
+            )}
+            {item.customer.autoPilotEnabled && (
+              <Badge variant="outline" className="text-[10px] bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30" data-testid={`badge-autopilot-${opp.id}`}>
+                AP on
+              </Badge>
+            )}
+          </span>
+        )}
+        <Badge variant="secondary" data-testid={`badge-status-${opp.id}`}>{opp.status.replace(/_/g, " ")}</Badge>
+        <span className="text-xs text-muted-foreground flex items-center gap-1">
+          <Clock className="h-3 w-3" /> pickup {fmtPickup(opp.pickupWindowStart)}
+        </span>
+        {item.coverage.covered && (
+          <Badge variant="outline" className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30">
+            <CheckCircle2 className="h-3 w-3 mr-1" /> covered
+          </Badge>
+        )}
+        <div className="ml-auto flex items-center gap-2">
+          {/* Owner avatar — small initials chip; falls back to "—" if unassigned */}
+          <span
+            className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground"
+            title={item.owner ? item.owner.name : "Unassigned"}
+            data-testid={`avatar-owner-${opp.id}`}
+          >
+            {item.owner ? ownerInitials(item.owner.name) : "—"}
+          </span>
+          <span className="text-xs text-muted-foreground" data-testid={`text-freshness-${opp.id}`}>{fmtAge(item.freshnessMinutes)} ago</span>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => e.stopPropagation()} data-testid={`button-row-menu-${opp.id}`}>
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Quick actions</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => onOpenDraft?.()} data-testid={`menu-open-draft-${opp.id}`}>
+                Open draft
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onLogOutcome?.()} data-testid={`menu-log-outcome-${opp.id}`}>
+                Log outcome
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => onAction("approve")} data-testid={`menu-approve-${opp.id}`}>Approve</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onAction("send_top", { topN: 3 })} data-testid={`menu-send-top-${opp.id}`}>Send top 3</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onAction("snooze", { snoozeUntil: new Date(Date.now() + 4 * 3600_000).toISOString() })} data-testid={`menu-snooze-${opp.id}`}>Snooze 4h</DropdownMenuItem>
+              <DropdownMenuItem onClick={onReassign} data-testid={`menu-reassign-${opp.id}`}>Reassign…</DropdownMenuItem>
+              {item.customer && onToggleAutoPilot && (
+                <DropdownMenuItem onClick={() => onToggleAutoPilot()} data-testid={`menu-toggle-autopilot-${opp.id}`}>
+                  {item.customer.autoPilotEnabled ? "Turn off auto-pilot for this customer" : "Turn on auto-pilot for this customer"}
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => onAction("dismiss")} data-testid={`menu-dismiss-${opp.id}`} className="text-destructive">Dismiss</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 pl-7">
+        {item.chips.length === 0 ? (
+          <span className="text-xs text-muted-foreground italic">No carriers shortlisted yet</span>
+        ) : (
+          item.chips.map(chip => {
+            // Server-side fit-score reason for tooltip.
+            const tip = [
+              `${chip.bucket.replace(/_/g, " ")} • fit ${Math.round(chip.fitScore)}`,
+              chip.explanation,
+              chip.respondedAt
+                ? "responded"
+                : chip.sentAt
+                  ? "sent, awaiting reply"
+                  : "queued",
+            ].filter(Boolean).join(" · ");
+            return (
+              <Badge
+                key={chip.opportunityCarrierId}
+                variant="outline"
+                className={bucketTone(chip.bucket)}
+                data-testid={`chip-carrier-${opp.id}-${chip.carrierId}`}
+                title={tip}
+              >
+                #{chip.rank} {chip.carrierName}
+                {chip.respondedAt && <CheckCircle2 className="h-3 w-3 ml-1" />}
+                {!chip.respondedAt && chip.sentAt && <Send className="h-3 w-3 ml-1" />}
+              </Badge>
+            );
+          })
+        )}
+        <div className="flex items-center gap-2 text-xs text-muted-foreground ml-auto">
+          {item.suggestedBuy?.rate !== null && item.suggestedBuy?.rate !== undefined && (
+            <span
+              data-testid={`text-suggested-buy-${opp.id}`}
+              title={[
+                item.suggestedBuy.reason,
+                item.suggestedBuy.lastPaidRpm
+                  ? `Last paid $${item.suggestedBuy.lastPaidRpm.toFixed(2)}/mi · ${item.suggestedBuy.loads30d ?? 0} loads/30d`
+                  : null,
+              ].filter(Boolean).join(" — ")}
+            >
+              suggested ${item.suggestedBuy.rate.toFixed(2)}/mi · {item.suggestedBuy.confidence}
+              {item.suggestedBuy.lastPaidRpm != null && (
+                <span className="text-muted-foreground/70 ml-1" data-testid={`text-last-paid-${opp.id}`}>
+                  (last ${item.suggestedBuy.lastPaidRpm.toFixed(2)})
+                </span>
+              )}
+            </span>
+          )}
+          {/* Market delta badge — green when below market, red when above */}
+          {item.suggestedBuy?.marketDeltaPct !== null &&
+            item.suggestedBuy?.marketDeltaPct !== undefined && (
+            <Badge
+              variant="outline"
+              className={
+                item.suggestedBuy.marketDeltaPct <= 0
+                  ? "border-emerald-300 text-emerald-700 dark:text-emerald-400"
+                  : "border-red-300 text-red-700 dark:text-red-400"
+              }
+              data-testid={`badge-market-delta-${opp.id}`}
+              title={
+                item.suggestedBuy.marketRpm
+                  ? `Market ~$${item.suggestedBuy.marketRpm.toFixed(2)}/mi`
+                  : "vs current market RPM"
+              }
+            >
+              {item.suggestedBuy.marketDeltaPct > 0 ? "+" : ""}
+              {item.suggestedBuy.marketDeltaPct.toFixed(1)}% vs mkt
+            </Badge>
+          )}
+          <span data-testid={`text-coverage-${opp.id}`}>
+            {item.coverage.responded}/{item.coverage.sent || item.coverage.included || 0} replied
+          </span>
+          <div className="w-24">
+            <Progress value={coveragePct} data-testid={`progress-coverage-${opp.id}`} />
+          </div>
+        </div>
+      </div>
+
+      {item.urgency.reasons.length > 0 && (
+        <div className="pl-7 text-xs text-muted-foreground" data-testid={`text-urgency-reasons-${opp.id}`}>
+          {item.urgency.reasons.join(" · ")}
+        </div>
+      )}
     </div>
   );
 }

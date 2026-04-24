@@ -251,6 +251,12 @@ import {
   type FreightOutreachTemplate,
   type InsertFreightOutreachTemplate,
   type FreightOutreachTemplateKind,
+  freightOpportunitySavedViews,
+  type FreightOpportunitySavedView,
+  type InsertFreightOpportunitySavedView,
+  userFreightCockpitPrefs,
+  type UserFreightCockpitPrefs,
+  type InsertUserFreightCockpitPrefs,
   nbaCardEvents,
   type NbaCardEvent,
   type InsertNbaCardEvent,
@@ -1286,6 +1292,9 @@ export interface IStorage {
 
   appendFreightOpportunityAudit(data: InsertFreightOpportunityAudit): Promise<FreightOpportunityAudit>;
   listFreightOpportunityAudit(opportunityId: string): Promise<FreightOpportunityAudit[]>;
+  /** Count opps that transitioned to a covered/partially_covered status since
+   * `since` for this org — used by the cockpit "Covered today" KPI. */
+  countFreightOpportunitiesCoveredSince(orgId: string, since: Date): Promise<number>;
   /** Distinct carrier IDs that received outreach within the given lookback window (cross-lane). */
   getRecentlyContactedCarrierIds(orgId: string, sinceDate: Date): Promise<string[]>;
 
@@ -1297,6 +1306,14 @@ export interface IStorage {
   listDueScheduledOpportunityCarriers(now: Date, limit?: number): Promise<FreightOpportunityCarrier[]>;
   /** Find any opportunity-carrier rows whose Outlook thread/message ID matches an inbound reply. */
   findOpportunityCarriersByThreadOrMessage(orgId: string, opts: { threadId?: string | null; internetMessageId?: string | null }): Promise<FreightOpportunityCarrier[]>;
+
+  // Available Freight Cockpit (Task #601)
+  listFreightOpportunitySavedViews(orgId: string, userId: string): Promise<FreightOpportunitySavedView[]>;
+  createFreightOpportunitySavedView(data: InsertFreightOpportunitySavedView): Promise<FreightOpportunitySavedView>;
+  updateFreightOpportunitySavedView(id: string, userId: string, fields: Partial<Pick<FreightOpportunitySavedView, "name" | "filters" | "isShared">>, orgId?: string): Promise<FreightOpportunitySavedView | undefined>;
+  deleteFreightOpportunitySavedView(id: string, userId: string, orgId?: string): Promise<boolean>;
+  getUserFreightCockpitPrefs(userId: string): Promise<UserFreightCockpitPrefs | undefined>;
+  upsertUserFreightCockpitPrefs(data: InsertUserFreightCockpitPrefs): Promise<UserFreightCockpitPrefs>;
 }
 
 const pool = new Pool({
@@ -8753,6 +8770,94 @@ export class DatabaseStorage implements IStorage {
     return rows.map(r => r.c);
   }
 
+  // ─── Available Freight Cockpit (Task #601) ─────────────────────────────────
+
+  async listFreightOpportunitySavedViews(orgId: string, userId: string): Promise<FreightOpportunitySavedView[]> {
+    return db
+      .select()
+      .from(freightOpportunitySavedViews)
+      .where(and(
+        eq(freightOpportunitySavedViews.orgId, orgId),
+        or(
+          eq(freightOpportunitySavedViews.userId, userId),
+          eq(freightOpportunitySavedViews.isShared, true),
+        )!,
+      ))
+      .orderBy(asc(freightOpportunitySavedViews.name));
+  }
+
+  async createFreightOpportunitySavedView(data: InsertFreightOpportunitySavedView): Promise<FreightOpportunitySavedView> {
+    const [row] = await db
+      .insert(freightOpportunitySavedViews)
+      .values(data)
+      .returning();
+    return row;
+  }
+
+  async updateFreightOpportunitySavedView(
+    id: string,
+    userId: string,
+    fields: Partial<Pick<FreightOpportunitySavedView, "name" | "filters" | "isShared">>,
+    orgId?: string,
+  ): Promise<FreightOpportunitySavedView | undefined> {
+    const [row] = await db
+      .update(freightOpportunitySavedViews)
+      .set({
+        ...(fields.name !== undefined ? { name: fields.name } : {}),
+        ...(fields.filters !== undefined ? { filters: fields.filters as never } : {}),
+        ...(fields.isShared !== undefined ? { isShared: fields.isShared } : {}),
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(freightOpportunitySavedViews.id, id),
+        eq(freightOpportunitySavedViews.userId, userId),
+        ...(orgId ? [eq(freightOpportunitySavedViews.orgId, orgId)] : []),
+      ))
+      .returning();
+    return row;
+  }
+
+  async deleteFreightOpportunitySavedView(id: string, userId: string, orgId?: string): Promise<boolean> {
+    const rows = await db
+      .delete(freightOpportunitySavedViews)
+      .where(and(
+        eq(freightOpportunitySavedViews.id, id),
+        eq(freightOpportunitySavedViews.userId, userId),
+        ...(orgId ? [eq(freightOpportunitySavedViews.orgId, orgId)] : []),
+      ))
+      .returning({ id: freightOpportunitySavedViews.id });
+    return rows.length > 0;
+  }
+
+  async getUserFreightCockpitPrefs(userId: string): Promise<UserFreightCockpitPrefs | undefined> {
+    const [row] = await db
+      .select()
+      .from(userFreightCockpitPrefs)
+      .where(eq(userFreightCockpitPrefs.userId, userId))
+      .limit(1);
+    return row;
+  }
+
+  async upsertUserFreightCockpitPrefs(data: InsertUserFreightCockpitPrefs): Promise<UserFreightCockpitPrefs> {
+    const [row] = await db
+      .insert(userFreightCockpitPrefs)
+      .values(data)
+      .onConflictDoUpdate({
+        target: userFreightCockpitPrefs.userId,
+        set: {
+          orgId: data.orgId,
+          activeViewId: data.activeViewId ?? null,
+          layout: data.layout ?? "table",
+          grouping: data.grouping ?? "none",
+          sort: data.sort ?? "urgency",
+          autopilotMutedUntil: data.autopilotMutedUntil ?? null,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return row;
+  }
+
   async getRecentlyContactedCarrierIds(orgId: string, sinceDate: Date): Promise<string[]> {
     // Cross-lane lookup: any carrier that received outbound outreach since
     // sinceDate. We expand the carrier_ids array via SQL so the result is a
@@ -8766,6 +8871,28 @@ export class DatabaseStorage implements IStorage {
       [orgId, sinceDate],
     );
     return result.rows.map(r => r.carrier_id).filter(Boolean);
+  }
+
+  async countFreightOpportunitiesCoveredSince(orgId: string, since: Date): Promise<number> {
+    // Counts distinct opportunities that the audit pipeline recorded a
+    // status_changed → covered/partially_covered transition for since `since`.
+    // Joins through freight_opportunities so we can org-scope without trusting
+    // the audit row alone. Used by the cockpit "Covered today" KPI.
+    const result = await pool.query<{ n: string }>(
+      `SELECT COUNT(DISTINCT a.opportunity_id)::text AS n
+         FROM freight_opportunity_audit a
+         JOIN freight_opportunities o ON o.id = a.opportunity_id
+        WHERE o.org_id = $1
+          AND a.event_type = 'status_changed'
+          AND a.created_at >= $2
+          AND (
+                a.payload->>'newStatus' IN ('covered','partially_covered')
+             OR a.payload->>'status'    IN ('covered','partially_covered')
+             OR a.payload->>'to'        IN ('covered','partially_covered')
+          )`,
+      [orgId, since],
+    );
+    return Number(result.rows[0]?.n ?? 0);
   }
 
   // ─── POD Intake (Task #589) ────────────────────────────────────────────────

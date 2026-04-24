@@ -3870,10 +3870,17 @@ export const companyOutreachPolicies = pgTable("company_outreach_policies", {
   approvedCarrierIds: text("approved_carrier_ids").array().notNull().default(sql`'{}'::text[]`),
   doNotAutomate: boolean("do_not_automate").notNull().default(false),
   specialNotes: text("special_notes"),
+  // Task #601 — auto-pilot scheduler controls (Available Freight Cockpit)
+  autoSendEnabled: boolean("auto_send_enabled").notNull().default(false),
+  autoSendHourCt: integer("auto_send_hour_ct").notNull().default(8),
+  autoSendTopN: integer("auto_send_top_n").notNull().default(3),
+  autoSendMaxPerDay: integer("auto_send_max_per_day").notNull().default(10),
+  autoSendLastRunAt: timestamp("auto_send_last_run_at"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
   updatedById: varchar("updated_by_id").references(() => users.id, { onDelete: "set null" }),
 }, (t) => ({
   orgEnabledIdx: index("company_outreach_policies_org_enabled_idx").on(t.orgId, t.enabled),
+  autoSendIdx: index("company_outreach_policies_auto_send_idx").on(t.orgId, t.autoSendEnabled),
 }));
 export const insertCompanyOutreachPolicySchema = createInsertSchema(companyOutreachPolicies)
   .omit({ id: true, updatedAt: true })
@@ -3927,6 +3934,10 @@ export const freightOpportunities = pgTable("freight_opportunities", {
   awaitingApprovalSince: timestamp("awaiting_approval_since"),
   slaNotifiedL1At: timestamp("sla_notified_l1_at"),
   slaNotifiedL2At: timestamp("sla_notified_l2_at"),
+  // Task #601 — cockpit snooze. When set, the cockpit hides this opp until the
+  // wake time passes. Audit log records who snoozed and why; status is left
+  // untouched so SLA / coverage continue to work after un-snooze.
+  snoozedUntil: timestamp("snoozed_until"),
 }, (t) => ({
   orgStatusUrgencyIdx: index("freight_opps_org_status_urgency_idx").on(t.orgId, t.status, t.urgencyScore),
   companyPickupIdx: index("freight_opps_company_pickup_idx").on(t.companyId, t.pickupWindowStart),
@@ -4059,6 +4070,75 @@ export const insertFreightOutreachTemplateSchema = createInsertSchema(freightOut
   .extend({ kind: z.enum(FREIGHT_OUTREACH_TEMPLATE_KINDS) });
 export type InsertFreightOutreachTemplate = z.infer<typeof insertFreightOutreachTemplateSchema>;
 export type FreightOutreachTemplate = typeof freightOutreachTemplates.$inferSelect;
+
+// ─── Available Freight Cockpit (Task #601) ──────────────────────────────────
+// Per-user saved views (filter snapshots) and per-user UI prefs for the
+// triage cockpit. Both keyed on userId so each rep has an independent
+// workspace; org_id is denormalized for fast org-bound delete-cascades.
+
+export const FREIGHT_COCKPIT_LAYOUTS = ["table", "calendar"] as const;
+export type FreightCockpitLayout = typeof FREIGHT_COCKPIT_LAYOUTS[number];
+
+export const FREIGHT_COCKPIT_GROUPINGS = ["none", "customer", "pickup_day", "lane"] as const;
+export type FreightCockpitGrouping = typeof FREIGHT_COCKPIT_GROUPINGS[number];
+
+export const FREIGHT_COCKPIT_SORTS = [
+  "urgency",
+  "pickup_soonest",
+  "freshness",
+  "customer",
+  "lane",
+  "suggested_buy",
+  "coverage_pct",
+  "confidence",
+] as const;
+export type FreightCockpitSort = typeof FREIGHT_COCKPIT_SORTS[number];
+
+export const freightOpportunitySavedViews = pgTable("freight_opportunity_saved_views", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  // Filters JSONB shape (any combination):
+  //   { customerIds?: string[], statuses?: string[], modes?: string[],
+  //     leadTimeBucket?: "<2"|"2-4"|"5-7"|"any",
+  //     ownerScope?: "mine"|"team"|"all",
+  //     equipmentTypes?: string[], confidenceFlag?: "low"|"normal"|"any",
+  //     minUrgency?: number, search?: string,
+  //     sort?: FreightCockpitSort, grouping?: FreightCockpitGrouping }
+  filters: jsonb("filters").notNull().default(sql`'{}'::jsonb`),
+  isShared: boolean("is_shared").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  orgUserIdx: index("freight_saved_views_org_user_idx").on(t.orgId, t.userId),
+}));
+export const insertFreightOpportunitySavedViewSchema = createInsertSchema(freightOpportunitySavedViews)
+  .omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertFreightOpportunitySavedView = z.infer<typeof insertFreightOpportunitySavedViewSchema>;
+export type FreightOpportunitySavedView = typeof freightOpportunitySavedViews.$inferSelect;
+
+export const userFreightCockpitPrefs = pgTable("user_freight_cockpit_prefs", {
+  userId: varchar("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  activeViewId: varchar("active_view_id").references(() => freightOpportunitySavedViews.id, { onDelete: "set null" }),
+  layout: text("layout").notNull().default("table"),
+  grouping: text("grouping").notNull().default("none"),
+  sort: text("sort").notNull().default("urgency"),
+  autopilotMutedUntil: timestamp("autopilot_muted_until"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  orgIdx: index("user_freight_cockpit_prefs_org_idx").on(t.orgId),
+}));
+export const insertUserFreightCockpitPrefsSchema = createInsertSchema(userFreightCockpitPrefs)
+  .omit({ updatedAt: true })
+  .extend({
+    layout: z.enum(FREIGHT_COCKPIT_LAYOUTS).optional(),
+    grouping: z.enum(FREIGHT_COCKPIT_GROUPINGS).optional(),
+    sort: z.enum(FREIGHT_COCKPIT_SORTS).optional(),
+  });
+export type InsertUserFreightCockpitPrefs = z.infer<typeof insertUserFreightCockpitPrefsSchema>;
+export type UserFreightCockpitPrefs = typeof userFreightCockpitPrefs.$inferSelect;
 
 // ─── Manager Coaching Mode (Task #301) ──────────────────────────────────────
 // Manager-authored coaching notes tied to a specific Coaching Card item

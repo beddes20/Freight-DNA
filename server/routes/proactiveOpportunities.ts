@@ -97,6 +97,10 @@ const policyPatchSchema = z.object({
   approvedCarrierIds: z.array(z.string()).optional(),
   doNotAutomate: z.boolean().optional(),
   specialNotes: z.string().nullable().optional(),
+  autoSendEnabled: z.boolean().optional(),
+  autoSendHourCt: z.number().int().min(0).max(23).optional(),
+  autoSendTopN: z.number().int().min(1).max(10).optional(),
+  autoSendMaxPerDay: z.number().int().min(1).max(100).optional(),
 });
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -791,182 +795,27 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       if (!parsed.success) {
         return res.status(400).json({ error: "Invalid cover payload", details: parsed.error.flatten() });
       }
-      if (opp.status === "covered") {
-        return res.status(400).json({ error: "Opportunity is already covered" });
-      }
-
-      // Resolve carrier name (either explicit or from the catalog).
-      let carrierName: string | null = parsed.data.carrierName ?? null;
-      if (!carrierName && parsed.data.carrierId) {
-        const c = await storage.getCarrier(parsed.data.carrierId);
-        carrierName = c?.name ?? null;
-        if (c && c.organizationId !== org) {
-          return res.status(403).json({ error: "Carrier does not belong to your organization" });
-        }
-      }
-      if (!carrierName) {
-        return res.status(400).json({ error: "Could not resolve carrier name" });
-      }
-
-      // Resolve the customer name for the load_fact row.
-      const company = await storage.getCompany(opp.companyId);
-      const customerName = company?.name ?? null;
-
-      const loadCount = Math.max(1, opp.loadCount ?? 1);
-      const revenue = parsed.data.customerRate * loadCount;
-      const cost = parsed.data.paidRate * loadCount;
-      const margin = revenue - cost;
-      const marginPct = revenue > 0 ? margin / revenue : 0;
-
-      const updated = await storage.updateFreightOpportunity(
+      const { coverFreightOpportunity } = await import("../services/coverFreightOpportunity");
+      const outcome = await coverFreightOpportunity({
         org,
-        opp.id,
-        {
-          status: "covered",
-          // Clear any pending SLA clock — covered freight no longer needs
-          // approval reminders.
-          awaitingApprovalSince: null,
-        },
-        // Canonical opt-in: this is the one and only path allowed to flip an
-        // opportunity to `covered`. The downstream load_fact emit + audit
-        // happen below in this same handler.
-        { allowCoveredTransition: true },
-      );
-      await storage.appendFreightOpportunityAudit({
-        opportunityId: opp.id,
-        eventType: "status_changed",
-        actorUserId: uid,
+        rep,
+        opp,
         payload: {
-          kind: "covered",
           carrierId: parsed.data.carrierId ?? null,
-          carrierName,
+          carrierName: parsed.data.carrierName ?? null,
           paidRate: parsed.data.paidRate,
           customerRate: parsed.data.customerRate,
-          revenue,
-          cost,
-          margin,
-          loadCount,
           notes: parsed.data.notes ?? null,
         },
       });
-
-      // Emit to load_fact so coaching / rate positioning sees the win.
-      // Order id is deterministic so re-running cover (e.g. a follow-up
-      // edit) updates the same row instead of inserting duplicates. We
-      // prefer the real TMS Order # captured by the importer on
-      // sourceRef.orderId so load_fact rows stay aligned with the rest of
-      // the carrier-intel surfaces (and the Available Loads board renders
-      // a real Order # rather than `freight_opp:<uuid>`).
-      const { upsertLoadFact } = await import("../carrierIntelligenceService");
-      const month = (opp.pickupWindowStart || new Date().toISOString()).slice(0, 7);
-      const sourceRefOrderId = (() => {
-        const ref = opp.sourceRef as { orderId?: unknown } | null | undefined;
-        const candidate = ref?.orderId;
-        if (typeof candidate !== "string") return null;
-        const trimmed = candidate.trim();
-        if (!trimmed || trimmed.startsWith("freight_opp:")) return null;
-        return trimmed;
-      })();
-      const loadFactOrderId = sourceRefOrderId ?? `freight_opp:${opp.id}`;
-      // If a load_fact row for this opp was already mirrored under the
-      // synthetic `freight_opp:<uuid>` orderId (importer wrote it before we
-      // started persisting the real Order # on sourceRef), rename it in-place
-      // before the upsert so we don't end up with two parallel rows for the
-      // same load. Idempotent: a no-op when the synthetic row is absent or
-      // when the real Order # is unchanged.
-      if (sourceRefOrderId) {
-        const { db } = await import("../db");
-        const { loadFact } = await import("@shared/schema");
-        const { and, eq, sql: sqlOp } = await import("drizzle-orm");
-        try {
-          await db.update(loadFact)
-            .set({ orderId: sourceRefOrderId, lastChangedAt: new Date() })
-            .where(and(
-              eq(loadFact.orgId, org),
-              eq(loadFact.orderId, `freight_opp:${opp.id}`),
-              sqlOp`NOT EXISTS (
-                SELECT 1 FROM ${loadFact} lf2
-                 WHERE lf2.org_id = ${org}
-                   AND lf2.order_id = ${sourceRefOrderId}
-              )`,
-            ));
-        } catch (e) {
-          console.warn(
-            `[freight-opps] cover synthetic→real orderId rename failed for opp ${opp.id}:`,
-            e instanceof Error ? e.message : String(e),
-          );
-        }
+      if (!outcome.ok) {
+        return res.status(outcome.status).json({ error: outcome.error });
       }
-      let loadFactEmit: { inserted: boolean; updated: boolean; loadFactId?: string } | null = null;
-      try {
-        const out = await upsertLoadFact({
-          orgId: org,
-          orderId: loadFactOrderId,
-          companyId: opp.companyId,
-          customerName,
-          carrierName,
-          carrierPayeeCode: null,
-          originCity: opp.origin,
-          originState: opp.originState ?? null,
-          originZip: null,
-          destinationCity: opp.destination,
-          destinationState: opp.destinationState ?? null,
-          destinationZip: null,
-          accountManager: rep.name ?? rep.email ?? null,
-          dispatcher: null,
-          equipmentType: opp.equipmentType ?? null,
-          pickupDate: opp.pickupWindowStart ?? null,
-          deliveryDate: null,
-          pickupApptStart: null,
-          pickupApptEnd: null,
-          deliveryApptStart: null,
-          deliveryApptEnd: null,
-          arrivedAtPickup: null,
-          arrivedAtDelivery: null,
-          totalStops: null,
-          totalMiles: null,
-          month,
-          moveStatus: "covered",
-          bucket: "realized",
-          revenue: revenue.toFixed(2),
-          cost: cost.toFixed(2),
-          margin: margin.toFixed(2),
-          marginPct: marginPct.toFixed(4),
-          loadCount,
-          rawRow: { source: "freight_opp_coverage", oppId: opp.id, repUserId: uid },
-          sourceFileName: null,
-          sourceKind: "freight_opp_coverage",
-        });
-        loadFactEmit = { inserted: out.inserted, updated: out.updated, loadFactId: out.loadFactId };
-        await storage.appendFreightOpportunityAudit({
-          opportunityId: opp.id,
-          eventType: "load_fact_emitted",
-          actorUserId: uid,
-          payload: {
-            loadFactId: out.loadFactId,
-            inserted: out.inserted,
-            updated: out.updated,
-            changedFields: out.changedFields,
-          },
-        });
-      } catch (emitErr) {
-        // Coverage status transition still wins even if the load_fact emit
-        // fails — log loudly so an admin can backfill, but don't roll back
-        // the manual close (which would erase the rep's work).
-        console.error("[freight-opps] cover load_fact emit failed:", emitErr);
-        await storage.appendFreightOpportunityAudit({
-          opportunityId: opp.id,
-          eventType: "load_fact_emit_failed",
-          actorUserId: uid,
-          payload: { error: emitErr instanceof Error ? emitErr.message : String(emitErr) },
-        });
-      }
-
-      return res.json({ opportunity: updated, loadFact: loadFactEmit });
+      return res.json({ opportunity: outcome.opportunity, loadFact: outcome.loadFact });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error("[freight-opps] cover error:", msg);
-      return res.status(500).json({ error: "Failed to mark covered" });
+      console.error("[freight-opps] cover failed:", msg);
+      return res.status(500).json({ error: "Failed to cover opportunity" });
     }
   });
 
@@ -995,6 +844,10 @@ export function registerProactiveOpportunityRoutes(app: Express) {
         approvedCarrierIds: parsed.data.approvedCarrierIds ?? existing?.approvedCarrierIds ?? [],
         doNotAutomate: parsed.data.doNotAutomate ?? existing?.doNotAutomate ?? false,
         specialNotes: parsed.data.specialNotes ?? existing?.specialNotes ?? null,
+        autoSendEnabled: parsed.data.autoSendEnabled ?? existing?.autoSendEnabled ?? false,
+        autoSendHourCt: parsed.data.autoSendHourCt ?? existing?.autoSendHourCt ?? 8,
+        autoSendTopN: parsed.data.autoSendTopN ?? existing?.autoSendTopN ?? 3,
+        autoSendMaxPerDay: parsed.data.autoSendMaxPerDay ?? existing?.autoSendMaxPerDay ?? 10,
         updatedById: userId(req),
       };
       const policy = await storage.upsertCompanyOutreachPolicy(merged);

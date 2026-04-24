@@ -55,6 +55,30 @@ which the post-run audit confirms zero rows still match
 denormalized `company_name` column — it inherits cleaned values via
 `company_id → companies.id`, and the script's audit cross-checks that join.
 
+### Available Freight Cockpit (Task #601)
+The flat freight queue at `/available-freight` is now a triage cockpit.
+Backend lives in `server/routes/freightOpportunityCockpit.ts`:
+`GET /api/freight-opportunities/cockpit` returns KPI strip + per-row payload
+(top-3 ranked carrier chips, suggested buy via `getBlendedRate`, coverage,
+freshness minutes, customer/owner/SLA/lane enrichment, urgency score). Urgency
+= pickup-proximity × customer-tier × lane-score with bonuses for coverage gaps,
+empty shortlists, and stale generations (`computeCockpitUrgency`, pure +
+unit-tested). Customer tier is derived from
+`companies.estimatedFreightSpend` via `deriveCustomerTier` (≥$1M platinum, ≥$500K
+gold, ≥$100K silver, >0 bronze) since the table has no explicit tier column.
+`POST /api/freight-opportunities/bulk-action` handles approve / snooze /
+dismiss / reassign / mark_covered / send_top — `send_top` re-uses
+`sendOpportunityWave` so guardrails + audit pipeline are not bypassed.
+Saved views (`freight_opportunity_saved_views`) and per-user prefs
+(`user_freight_cockpit_prefs`) are scoped by `(orgId, userId)` for
+defense-in-depth on PATCH/DELETE. The hourly auto-pilot scheduler in
+`server/freightOpportunityAutoPilot.ts` picks up policies with
+`autoSendEnabled` at the configured CT hour and sends top-N waves per
+company, respecting `autoSendMaxPerDay` via `autoSendLastRunAt`. Tests:
+`server/__tests__/freightOpportunityCockpit.test.ts` (24 passing — urgency
+scoring incl. tier × lane multipliers, saved-view persistence, auto-pilot
+guardrails, bulk-send audit).
+
 ### Shared inbox / Microsoft Graph webhook (Task #549)
 Production inbound email is wired through Microsoft Graph change notification subscriptions on a shared M365 mailbox (`OUTLOOK_REPLY_EMAIL`). `OUTLOOK_WEBHOOK_SECRET` is a hard requirement in every environment — both the per-rep webhook (`server/routes/graphWebhook.ts`) and the shared-mailbox webhook (`server/routes/laneCarrierOutreach.ts`) refuse to process payloads without it, and `server/graphSubscriptionService.ts` refuses to register subscriptions without it. The Monitored Mailboxes admin page hosts a `ReadinessChecklistCard` backed by `GET /api/internal/admin/monitored-mailboxes/readiness` that surfaces 8 go-live gates (Azure creds, reply mailbox, APP_BASE_URL, webhook secret, Mail.Read consent, ≥1 enrolled mailbox, recent sync, no draining failures). End-to-end coverage lives in `tests/shared-inbox-webhook-e2e.test.ts` (registered as the `test:shared-inbox` validation command). IT setup is documented in `docs/shared-inbox-go-live-runbook.md`.
 
