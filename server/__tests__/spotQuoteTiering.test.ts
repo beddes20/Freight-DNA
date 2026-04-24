@@ -8,7 +8,31 @@
  *   3. pickGuidanceTier — walks the tier ladder, picking the first tier
  *      whose won-quote series meets the minimum sample size.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+// Mock the KMA mapping so we can construct a deterministic
+// same_corridor positive case (real KMA data is mostly state-bounded
+// which makes corridor cases collide with same_state in the wild).
+vi.mock("../kmaMapping", async () => {
+  const actual = await vi.importActual<typeof import("../kmaMapping")>("../kmaMapping");
+  const TEST_OVERRIDES: Record<string, { kma: string; label: string }> = {
+    "corridor-origin-a|XX": { kma: "ZZA", label: "Test Origin Metro" },
+    "corridor-origin-b|YY": { kma: "ZZA", label: "Test Origin Metro" },
+    "corridor-dest-a|XX":   { kma: "ZZB", label: "Test Dest Metro" },
+    "corridor-dest-b|YY":   { kma: "ZZB", label: "Test Dest Metro" },
+  };
+  return {
+    ...actual,
+    cityToKma: (city: string, state?: string | null) => {
+      const k = `${(city || "").toLowerCase()}|${(state || "").toUpperCase()}`;
+      return TEST_OVERRIDES[k] ?? actual.cityToKma(city, state ?? undefined);
+    },
+  };
+});
+
+// Coords are absent for the synthetic "corridor-*" cities, so the
+// haversine path naturally returns false, isolating the corridor tier.
+
 import {
   equipmentFamily,
   classifyMatchTier,
@@ -81,6 +105,19 @@ describe("classifyMatchTier", () => {
     })).toBe("reverse_lane");
   });
 
+  it("returns 'same_corridor' when both endpoints share KMAs across state lines", () => {
+    // Synthetic cross-state corridor (mocked KMA above). Both endpoint
+    // pairs share a KMA, but the cities differ, lack coords, and live
+    // in different states — so exact / same_market / same_state /
+    // reverse_lane all fail and the corridor tier wins.
+    expect(classifyMatchTier(
+      { pickupCity: "corridor-origin-a", pickupState: "XX",
+        deliveryCity: "corridor-dest-a", deliveryState: "XX" },
+      { originCity: "corridor-origin-b", originState: "YY",
+        destCity: "corridor-dest-b", destState: "YY" },
+    )).toBe("same_corridor");
+  });
+
   it("returns null when neither endpoints, states, reverse, nor corridor match", () => {
     expect(classifyMatchTier(LB_PHX, {
       originCity: "Boston", originState: "MA",
@@ -141,5 +178,13 @@ describe("pickGuidanceTier", () => {
     expect(MATCH_TIERS).toEqual([
       "exact", "same_market", "same_state", "reverse_lane", "same_corridor",
     ]);
+  });
+
+  it("returns same_corridor (deepest tier) when only that tier qualifies — guidance provenance", () => {
+    const b = blank();
+    b.same_corridor.won = [800, 900, 1000, 1100];
+    // The picked tier is what the result's `guidance.tierUsed` is
+    // populated with downstream — confirms the provenance signal.
+    expect(pickGuidanceTier(b, 4)).toBe("same_corridor");
   });
 });

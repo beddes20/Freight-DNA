@@ -76,7 +76,13 @@ type TierGroup = {
   label: string;
   rule: string;
   count: number;
-  quotes: EnrichedQuote[];
+  // Task #514 — per-tier KPIs from the backend.
+  winRate: number;
+  avgWonQuoted: number;
+  lastWonDays: number | null;
+  items: EnrichedQuote[];
+  /** @deprecated kept for transitional compatibility — use `items`. */
+  quotes?: EnrichedQuote[];
 };
 
 type SpotResult = {
@@ -1424,23 +1430,64 @@ function TieredMatchSections({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         {sections.map(({ meta, group }) => {
           const acc = accentMap[meta.accent];
-          const quotes = group?.quotes ?? [];
+          const items = group?.items ?? group?.quotes ?? [];
           const isExact = meta.tier === "exact";
-          const empty = quotes.length === 0;
+          const empty = items.length === 0;
+          const winPct = group ? Math.round((group.winRate ?? 0) * 100) : 0;
+          const avgWon = group?.avgWonQuoted ?? 0;
+          const freshness = group?.lastWonDays ?? null;
+          const freshnessLabel = freshness == null
+            ? "no wins"
+            : freshness <= 14 ? "fresh"
+            : freshness <= 60 ? "recent"
+            : "stale";
+          const freshnessClass = freshness == null
+            ? "text-zinc-500"
+            : freshness <= 14 ? "text-emerald-300"
+            : freshness <= 60 ? "text-amber-300"
+            : "text-zinc-400";
           return (
             <Card
               key={meta.tier}
-              className={`bg-zinc-900 rounded-[4px] border ${acc.border}`}
+              id={`spot-section-tier-${meta.tier}`}
+              className={`bg-zinc-900 rounded-[4px] border ${acc.border} scroll-mt-4`}
               data-testid={`spot-section-tier-${meta.tier}`}
             >
-              <CardHeader className={`py-2.5 px-3 flex flex-row items-center justify-between border-b border-zinc-800 ${acc.headerBg}`}>
-                <div className="flex flex-col">
-                  <CardTitle className="text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
-                    {iconFor(meta.icon, acc.iconColor)}{meta.label}
-                  </CardTitle>
-                  <span className="text-[10px] text-zinc-500 mt-0.5" title={meta.rule}>{meta.rule}</span>
+              <CardHeader className={`py-2.5 px-3 flex flex-col gap-1.5 border-b border-zinc-800 ${acc.headerBg}`}>
+                <div className="flex flex-row items-center justify-between">
+                  <div className="flex flex-col">
+                    <CardTitle className="text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+                      {iconFor(meta.icon, acc.iconColor)}{meta.label}
+                    </CardTitle>
+                    <span className="text-[10px] text-zinc-500 mt-0.5" title={`Why this tier? ${meta.rule}`}>
+                      {meta.rule}
+                    </span>
+                  </div>
+                  <span className={`text-[10px] font-semibold tabular-nums ${acc.count}`}>{items.length} shown</span>
                 </div>
-                <span className={`text-[10px] font-semibold tabular-nums ${acc.count}`}>{quotes.length} shown</span>
+                {!empty && group && (
+                  <div className="flex items-center gap-3 text-[10px] text-zinc-400" data-testid={`spot-tier-kpis-${meta.tier}`}>
+                    <span title="Total prior quotes in this tier">
+                      <span className="text-zinc-500">Quotes</span>{" "}
+                      <span className="text-zinc-200 tabular-nums">{group.count}</span>
+                    </span>
+                    <span title="Won / decided">
+                      <span className="text-zinc-500">Win</span>{" "}
+                      <span className="text-zinc-200 tabular-nums">{winPct}%</span>
+                    </span>
+                    <span title="Average quoted amount on won quotes">
+                      <span className="text-zinc-500">Avg won</span>{" "}
+                      <span className="text-zinc-200 tabular-nums">{avgWon > 0 ? fmtMoney(avgWon) : "—"}</span>
+                    </span>
+                    <span title={freshness == null ? "No prior wins" : `${freshness}d since last win`}>
+                      <span className="text-zinc-500">Last win</span>{" "}
+                      <span className={`tabular-nums ${freshnessClass}`}>
+                        {freshness == null ? "—" : `${freshness}d`}{" "}
+                        <span className="text-[9px] uppercase">({freshnessLabel})</span>
+                      </span>
+                    </span>
+                  </div>
+                )}
               </CardHeader>
               <CardContent className="p-3 text-xs text-zinc-200">
                 {empty ? (
@@ -1448,12 +1495,25 @@ function TieredMatchSections({
                     <div className="text-zinc-400 space-y-2" data-testid="spot-tier-empty-exact">
                       <div className="text-zinc-200 font-medium">No exact-lane quotes yet.</div>
                       {firstNonEmptyOther ? (
-                        <div className="text-[11px] text-zinc-500">
-                          Closest tier:{" "}
-                          <span className="text-zinc-200 font-semibold">{firstNonEmptyOther.label}</span>
-                          {" "}with{" "}
-                          <span className="text-amber-300 font-semibold">{firstNonEmptyOther.count}</span>
-                          {" "}prior quote{firstNonEmptyOther.count === 1 ? "" : "s"} — see below.
+                        <div className="text-[11px] text-zinc-500 space-y-1.5">
+                          <div>
+                            Closest tier:{" "}
+                            <span className="text-zinc-200 font-semibold">{firstNonEmptyOther.label}</span>
+                            {" "}with{" "}
+                            <span className="text-amber-300 font-semibold">{firstNonEmptyOther.count}</span>
+                            {" "}prior quote{firstNonEmptyOther.count === 1 ? "" : "s"}.
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const el = document.getElementById(`spot-section-tier-${firstNonEmptyOther.tier}`);
+                              if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+                            }}
+                            className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40"
+                            data-testid={`button-spot-show-tier-${firstNonEmptyOther.tier}`}
+                          >
+                            Show {firstNonEmptyOther.label} matches →
+                          </button>
                         </div>
                       ) : matchMode === "strict" ? (
                         <div className="text-[11px] text-zinc-500">
@@ -1503,7 +1563,7 @@ function TieredMatchSections({
                         <tr><th className="text-left py-1">Date</th><th className="text-left">Customer</th><th className="text-left">Lane</th><th>Quoted</th><th>Buy</th><th>Status</th></tr>
                       </thead>
                       <tbody>
-                        {quotes.map(q => {
+                        {items.map((q: EnrichedQuote) => {
                           const quoted = num(q.quotedAmount);
                           const paid = num(q.carrierPaid);
                           return (

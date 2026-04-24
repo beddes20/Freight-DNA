@@ -1683,10 +1683,13 @@ export function equipmentFamily(raw: string | null | undefined): EquipmentFamily
 }
 
 /**
- * Same-market test for a single endpoint: equal city, OR within ~75 mi
- * by haversine, OR sharing the same KMA. Keeps the rule lenient so it
- * picks up neighboring origin/destination cities reps think of as "the
- * same market" (Long Beach ↔ Compton, Phoenix ↔ Glendale AZ, etc).
+ * Same-market test for a single endpoint: equal city OR within ~75 mi
+ * by haversine. Picks up neighboring origin/destination cities reps
+ * think of as "the same market" (Long Beach ↔ Compton, Phoenix ↔
+ * Glendale AZ, etc). KMA-based matching is intentionally NOT included
+ * here — it lives in the lower-precedence `same_corridor` tier so that
+ * cross-state KMA neighbors (Newark, NJ ↔ NYC, NY) still surface but
+ * are clearly labelled as corridor matches rather than same-market.
  */
 function endpointsSameMarket(
   cityA: string, stateA: string, cityB: string, stateB: string,
@@ -1699,10 +1702,6 @@ function endpointsSameMarket(
     const d = haversineDistanceMiles(a[0], a[1], b[0], b[1]);
     if (isFinite(d) && d <= withinMiles) return true;
   }
-  // KMA fall-back catches market neighbors we don't have lat/lng for.
-  const kmaA = cityToKma(cityA, stateA);
-  const kmaB = cityToKma(cityB, stateB);
-  if (kmaA && kmaB && kmaA.kma === kmaB.kma) return true;
   return false;
 }
 
@@ -1796,6 +1795,13 @@ export type SpotTierGroup = {
   label: string;
   rule: string;
   count: number;
+  // Per-tier KPIs (Task #514) — let reps gauge each tier independently.
+  winRate: number;            // 0..1, won / decided
+  avgWonQuoted: number;       // average quoted amount on won quotes
+  lastWonDays: number | null; // freshness of the most recent win
+  /** Enriched quote rows for this tier (capped at 25 by service). */
+  items: EnrichedQuote[];
+  /** @deprecated Backwards-compat alias for `items`. Will be removed once consumers migrate. */
   quotes: EnrichedQuote[];
 };
 
@@ -1868,6 +1874,8 @@ export type SpotGuidance = {
   benchmarkSource: PricingIntelligence["benchmarkSource"];
   confidence: PricingIntelligence["confidence"];
   message: string;
+  /** Task #514 — which tier the guidance band was actually derived from. */
+  tierUsed: MatchTier | null;
 };
 
 export type SpotAlert = {
@@ -1927,8 +1935,15 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
   // and groups flatbed/step-deck under "open". "Other" matches the catch-all
   // family. "Any" / blank matches everything.
   const inputFamily = equipment && eqLower !== "any" ? equipmentFamily(equipment) : null;
+  // Task #514 — When the rep enables "Exact matches only", we also force
+  // exact equipment-string equality. Otherwise we relax to family-level
+  // matching (van/reefer/open/other) to widen the historical pool.
+  const forceExactEquipment = !!input.exactOnly;
   const eqMatch = (r: QuoteOpportunity): boolean => {
     if (!inputFamily) return true;
+    if (forceExactEquipment) {
+      return (r.equipment ?? "").trim().toLowerCase() === eqLower;
+    }
     if (inputFamily === "other") return equipmentFamily(r.equipment) === "other";
     return equipmentFamily(r.equipment) === inputFamily;
   };
@@ -2042,6 +2057,7 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
       benchmarkSource: intel.benchmarkSource,
       confidence: intel.confidence,
       message: intel.message,
+      tierUsed: null, // customer-scoped path uses pricing intel, not tier ladder
     };
   } else {
     // Task #514 — Tier-aware guidance: walk the tier ladder and use
@@ -2082,10 +2098,12 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
         message: guidanceTier === "exact"
           ? `Based on ${series.length} won quotes on this exact lane (P25–P75 band).`
           : `Exact-lane history sparse — band derived from ${series.length} won quote(s) at the ${TIER_LABEL[guidanceTier].toLowerCase()} tier (P25–P75).`,
+        tierUsed: guidanceTier,
       };
     } else {
       const totalWon = MATCH_TIERS.reduce((s, t) => s + wonByTier[t].length, 0);
       guidance = {
+        tierUsed: null,
         suggestedLow: null,
         suggestedHigh: null,
         benchmark: null,
@@ -2284,16 +2302,37 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
   const exactMatches = enrich(exactScoped.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
   const similarMatches = enrich(similarScoped.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
 
+  // Task #514 — per-tier KPIs so each tier card can stand alone.
+  const nowMs = Date.now();
   const tieredMatches: SpotTierGroup[] = MATCH_TIERS
     .map(tier => {
       const list = tierBucketsScoped[tier];
       if (list.length === 0) return null;
+      const decided = list.filter(r => isWon(r.outcomeStatus) || isLost(r.outcomeStatus));
+      const wonRows = list.filter(r => isWon(r.outcomeStatus));
+      const wonAmts = wonRows.map(r => num(r.quotedAmount)).filter(v => v > 0);
+      const winRate = decided.length > 0 ? wonRows.length / decided.length : 0;
+      const avgWonQuoted = wonAmts.length > 0
+        ? wonAmts.reduce((s, v) => s + v, 0) / wonAmts.length
+        : 0;
+      const lastWonMs = wonRows
+        .map(r => new Date(r.requestDate as unknown as string).getTime())
+        .filter(t => Number.isFinite(t))
+        .sort((a, b) => b - a)[0];
+      const lastWonDays = lastWonMs
+        ? Math.max(0, Math.round((nowMs - lastWonMs) / 86_400_000))
+        : null;
+      const items = enrich(list.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
       return {
         tier,
         label: TIER_LABEL[tier],
         rule: TIER_RULE_TOOLTIP[tier],
         count: list.length,
-        quotes: enrich(list.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap),
+        winRate,
+        avgWonQuoted,
+        lastWonDays,
+        items,
+        quotes: items, // backwards-compat alias
       } satisfies SpotTierGroup;
     })
     .filter((g): g is SpotTierGroup => g !== null);
