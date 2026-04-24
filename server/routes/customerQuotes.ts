@@ -30,6 +30,7 @@ import { db } from "../storage";
 import { and as andSql, eq as eqSql, sql as sqlExpr } from "drizzle-orm";
 import { gatherDataAnchors, generateDraft } from "./emailDrafting";
 import { getVoiceProfile } from "../voiceProfileService";
+import { listMappings, deleteMapping } from "../services/quoteSenderMappings";
 
 // Minimum margin % guardrail when estimatedCost is supplied. Env-tunable.
 const SPOT_MIN_MARGIN_PCT: number = (() => {
@@ -334,6 +335,47 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Internal error";
       console.error("[customer-quotes] pricing-floors patch error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Customer Quotes #3 — admin list of learned sender→customer mappings.
+  // Visible only to admin/director/sales_director — these mappings are an
+  // org-level config artifact, not a per-rep view.
+  app.get("/api/customer-quotes/sender-mappings", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!["admin", "director", "sales_director"].includes(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const mappings = await listMappings(user.organizationId);
+      res.json({ mappings });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
+      console.error("[customer-quotes] sender-mappings list error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Customer Quotes #3 — admin delete of a learned mapping. Org-scoped at
+  // the service layer; we still re-check the role here so we never let a
+  // rep delete an org-wide config row.
+  app.delete("/api/customer-quotes/sender-mappings/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!["admin", "director", "sales_director"].includes(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const id = String(req.params.id ?? "");
+      if (!id) return res.status(400).json({ error: "Missing mapping id" });
+      const result = await deleteMapping(user.organizationId, id);
+      if (!result.deleted) return res.status(404).json({ error: "Mapping not found" });
+      res.json({ deleted: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
+      console.error("[customer-quotes] sender-mappings delete error:", err);
       res.status(500).json({ error: msg });
     }
   });

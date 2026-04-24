@@ -32,6 +32,7 @@ import { useToast } from "@/hooks/use-toast";
 import { PricingIntelligencePanel } from "@/components/PricingIntelligencePanel";
 import { PricingRecommendationCard } from "@/components/PricingRecommendationCard";
 import { MarginFloorsSettings } from "@/components/MarginFloorsSettings";
+import { SenderMappingsDialog } from "@/components/SenderMappingsDialog";
 import { SpotQuoteSearch } from "@/components/SpotQuoteSearch";
 import { EmailCoverageBanner } from "@/components/EmailCoverageBanner";
 import { ActionQueueCard } from "@/components/customer-quotes/ActionQueueCard";
@@ -684,6 +685,9 @@ export default function CustomerQuotesPage(): JSX.Element {
               <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${snapshotQuery.isFetching || listQuery.isFetching ? "animate-spin" : ""}`} /> Refresh
             </Button>
             <MarginFloorsSettings canEdit={canPurgeDemo} />
+            {/* Customer Quotes #3 — admin view of learned sender→customer
+                mappings, with the ability to remove a stale or wrong row. */}
+            <SenderMappingsDialog canEdit={canPurgeDemo} />
             {/* Task #597 — admin escape hatch to clear demo seed rows that
                 may have leaked into a live org (idempotent on the server). */}
             {canPurgeDemo && (

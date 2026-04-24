@@ -5256,3 +5256,44 @@ export const insertEmailResponseTimeSlaSettingsSchema = createInsertSchema(email
 });
 export type InsertEmailResponseTimeSlaSettings = z.infer<typeof insertEmailResponseTimeSlaSettingsSchema>;
 export type EmailResponseTimeSlaSettings = typeof emailResponseTimeSlaSettings.$inferSelect;
+
+// ── Quote Sender Mappings (Customer Quotes #3) ────────────────────────────────
+// Sender-domain learning. When a rep manually moves a quote out of the
+// "Unknown — needs review" bucket into a real customer, we record the
+// sender's domain (or, for free-mail senders, the full sender email) so
+// the next inbound email from that sender auto-classifies. Mappings are
+// org-scoped. EXACTLY ONE of (sender_email, sender_domain) is set per row:
+//   - business-domain sender  → sender_domain = "acme-logistics.com"
+//   - free-mail sender        → sender_email  = "joe@gmail.com"
+// The DB enforces the one-of constraint via a CHECK and the uniqueness via
+// two partial unique indexes (one per nullable column). Lookups at ingest
+// prefer sender_email matches over sender_domain matches.
+export const QUOTE_SENDER_MAPPING_SOURCES = ["manual", "auto"] as const;
+export type QuoteSenderMappingSource = typeof QUOTE_SENDER_MAPPING_SOURCES[number];
+
+export const quoteSenderMappings = pgTable(
+  "quote_sender_mappings",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    senderDomain: text("sender_domain"),
+    senderEmail: text("sender_email"),
+    customerId: varchar("customer_id").notNull().references(() => quoteCustomers.id, { onDelete: "cascade" }),
+    source: text("source").notNull().default("manual"),
+    sampleCount: integer("sample_count").notNull().default(1),
+    lastUsedAt: timestamp("last_used_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    orgIdx: index("quote_sender_mappings_org_idx").on(t.organizationId),
+    customerIdx: index("quote_sender_mappings_customer_idx").on(t.customerId),
+  }),
+);
+export const insertQuoteSenderMappingSchema = createInsertSchema(quoteSenderMappings).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertQuoteSenderMapping = z.infer<typeof insertQuoteSenderMappingSchema>;
+export type QuoteSenderMapping = typeof quoteSenderMappings.$inferSelect;

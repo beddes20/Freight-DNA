@@ -32,6 +32,7 @@ import {
   classifyPartyType,
   type ResolvedCustomer,
 } from "./customerNameResolver";
+import { lookupMapping, bumpHit } from "./quoteSenderMappings";
 
 export interface ParsedQuoteFields {
   originCity: string;
@@ -475,9 +476,34 @@ export async function ingestQuoteFromEmail(
   }
   if (!parsed) return { status: "skipped_unparseable" };
 
-  const customerName = opts?.customerName ?? deriveCustomerName(message).name;
-  // Task #597 — pass the inbound from-email so brand-new rows get auto-classified.
-  const customerId = await findOrCreateCustomer(message.orgId, customerName, message.fromEmail ?? null);
+  // Customer Quotes #3 — sender-domain learning. Check the learned
+  // mappings table BEFORE the heuristic resolver. If a rep previously
+  // moved a quote out of Unknown into a real customer, every subsequent
+  // email from that sender (or that domain, for business senders) skips
+  // resolution and lands directly on the learned customer.
+  let customerId: string;
+  let customerName: string;
+  let learnedMappingId: string | null = null;
+  if (opts?.customerName) {
+    customerName = opts.customerName;
+    customerId = await findOrCreateCustomer(message.orgId, customerName, message.fromEmail ?? null);
+  } else {
+    const learned = await lookupMapping(message.orgId, message.fromEmail ?? null);
+    if (learned) {
+      customerId = learned.customerId;
+      learnedMappingId = learned.id;
+      // Pull the customer name for the audit event below — using the
+      // learned customer's row keeps "actor" honest even when the
+      // sender's display name doesn't match.
+      const [cust] = await db.select().from(quoteCustomers)
+        .where(eq(quoteCustomers.id, customerId)).limit(1);
+      customerName = cust?.name ?? deriveCustomerName(message).name;
+    } else {
+      customerName = deriveCustomerName(message).name;
+      // Task #597 — pass the inbound from-email so brand-new rows get auto-classified.
+      customerId = await findOrCreateCustomer(message.orgId, customerName, message.fromEmail ?? null);
+    }
+  }
   const repId = await findOrCreateRep(
     message.orgId,
     (message.toEmail ?? "").split(/[,;]/)[0]?.trim().toLowerCase() ?? "",
@@ -521,8 +547,18 @@ export async function ingestQuoteFromEmail(
       providerMessageId: message.providerMessageId,
       subject: message.subject,
       pickupDate: parsed.pickupDate ? parsed.pickupDate.toISOString() : null,
+      learnedMappingId: learnedMappingId ?? undefined,
     },
   });
+
+  // Customer Quotes #3 — bump the learned-mapping hit counter so the
+  // admin UI can show "last used" and sample volume. Fire-and-forget;
+  // a counter miss must NEVER fail the ingest.
+  if (learnedMappingId) {
+    bumpHit(learnedMappingId).catch((err) =>
+      console.error("[quote-sender-mappings] bumpHit failed", err),
+    );
+  }
 
   return { status: "ingested", quoteId: opp.id };
 }

@@ -4318,4 +4318,53 @@ export async function runMigrations() {
   } finally {
     clientRtSla.release();
   }
+
+  // ── Customer Quotes #3: quote_sender_mappings table ──────────────────────
+  // Sender-domain learning. EXACTLY ONE of (sender_email, sender_domain)
+  // is set per row; partial unique indexes enforce one mapping per scope.
+  // Idempotent.
+  const clientSenderMap = await pool.connect();
+  try {
+    await clientSenderMap.query(`
+      CREATE TABLE IF NOT EXISTS quote_sender_mappings (
+        id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        sender_domain   text,
+        sender_email    text,
+        customer_id     varchar NOT NULL REFERENCES quote_customers(id) ON DELETE CASCADE,
+        source          text    NOT NULL DEFAULT 'manual',
+        sample_count    integer NOT NULL DEFAULT 1,
+        last_used_at    timestamp NOT NULL DEFAULT NOW(),
+        created_at      timestamp NOT NULL DEFAULT NOW(),
+        updated_at      timestamp NOT NULL DEFAULT NOW(),
+        CONSTRAINT quote_sender_mappings_one_of_chk CHECK (
+          (sender_email IS NOT NULL AND sender_domain IS NULL)
+          OR (sender_email IS NULL AND sender_domain IS NOT NULL)
+        )
+      )
+    `);
+    await clientSenderMap.query(`
+      CREATE INDEX IF NOT EXISTS quote_sender_mappings_org_idx
+        ON quote_sender_mappings (organization_id)
+    `);
+    await clientSenderMap.query(`
+      CREATE INDEX IF NOT EXISTS quote_sender_mappings_customer_idx
+        ON quote_sender_mappings (customer_id)
+    `);
+    await clientSenderMap.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS quote_sender_mappings_org_email_uq
+        ON quote_sender_mappings (organization_id, sender_email)
+        WHERE sender_email IS NOT NULL
+    `);
+    await clientSenderMap.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS quote_sender_mappings_org_domain_uq
+        ON quote_sender_mappings (organization_id, sender_domain)
+        WHERE sender_domain IS NOT NULL
+    `);
+    console.log("[migrations] quote_sender_mappings table ensured (Customer Quotes #3)");
+  } catch (err) {
+    console.error("[migrations] quote_sender_mappings migration error:", err);
+  } finally {
+    clientSenderMap.release();
+  }
 }

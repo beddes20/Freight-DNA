@@ -10,6 +10,7 @@ import {
   type QuoteCarrier, type QuoteLaneGroup, type QuoteOutcomeReason, type QuoteSavedView,
 } from "@shared/schema";
 import { UNKNOWN_CUSTOMER_NAME, classifyPartyType } from "./customerNameResolver";
+import { learnFromReassign } from "./quoteSenderMappings";
 import type { QuotePartyType } from "@shared/schema";
 import { getStaleQuoteFollowUps } from "./staleQuoteFollowup";
 import { getActivePatternAlertsForOrg } from "./quotePatternShift";
@@ -961,9 +962,20 @@ export async function bulkReassignCustomerForQuotes(
         inArray(quoteOpportunities.id, eligible),
         inArray(quoteOpportunities.customerId, unknownIdList),
       ))
-      .returning({ id: quoteOpportunities.id });
+      .returning({ id: quoteOpportunities.id, sourceReference: quoteOpportunities.sourceReference });
     const writtenIds = new Set(written.map(w => w.id));
     const racedSkips = eligible.filter(id => !writtenIds.has(id));
+
+    // Customer Quotes #3 — sender-domain learning. For every row that
+    // actually moved out of Unknown into the chosen target, record the
+    // sender→customer mapping so future inbound emails skip the
+    // Unknown bucket. Run sequentially (not Promise.all) to keep DB
+    // load predictable for large batches; individual failures are
+    // swallowed by `learnFromReassign` and logged.
+    for (const row of written) {
+      await learnFromReassign(orgId, row.sourceReference, targetCustomerId);
+    }
+
     return {
       updated: written.length,
       skipped: [...skipped, ...racedSkips],
@@ -2091,6 +2103,26 @@ export async function updateQuote(orgId: string, actor: string, id: string, patc
         orgId, oppId: id, eventId: ev.id, eventType: ev.eventType,
         occurredAt: ev.occurredAt, fallbackUserId: actorUserId ?? null,
       });
+    }
+  }
+
+  // Customer Quotes #3 — sender-domain learning. When a rep manually
+  // moves a quote out of the Unknown bucket into a real customer, record
+  // a learned mapping so the next email from that sender lands directly
+  // on the resolved customer. Wrapped in try/catch — a learning miss
+  // must never fail the underlying reassign. We only fire this when the
+  // OLD customer was an Unknown bucket, matching the bulk-reassign rule
+  // and avoiding noisy writes from administrative cleanups between two
+  // real customers.
+  if (changes.customerId && updated.customerId) {
+    try {
+      const ctx = await loadContext(orgId);
+      const unknownIds = unknownCustomerIdsFromMap(ctx.customerMap);
+      if (unknownIds.has(existing.customerId)) {
+        await learnFromReassign(orgId, updated.sourceReference, updated.customerId);
+      }
+    } catch (err) {
+      console.error("[customer-quotes] sender-mapping learn failed", err);
     }
   }
 

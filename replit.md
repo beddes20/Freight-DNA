@@ -58,6 +58,30 @@ denormalized `company_name` column — it inherits cleaned values via
 ### Shared inbox / Microsoft Graph webhook (Task #549)
 Production inbound email is wired through Microsoft Graph change notification subscriptions on a shared M365 mailbox (`OUTLOOK_REPLY_EMAIL`). `OUTLOOK_WEBHOOK_SECRET` is a hard requirement in every environment — both the per-rep webhook (`server/routes/graphWebhook.ts`) and the shared-mailbox webhook (`server/routes/laneCarrierOutreach.ts`) refuse to process payloads without it, and `server/graphSubscriptionService.ts` refuses to register subscriptions without it. The Monitored Mailboxes admin page hosts a `ReadinessChecklistCard` backed by `GET /api/internal/admin/monitored-mailboxes/readiness` that surfaces 8 go-live gates (Azure creds, reply mailbox, APP_BASE_URL, webhook secret, Mail.Read consent, ≥1 enrolled mailbox, recent sync, no draining failures). End-to-end coverage lives in `tests/shared-inbox-webhook-e2e.test.ts` (registered as the `test:shared-inbox` validation command). IT setup is documented in `docs/shared-inbox-go-live-runbook.md`.
 
+### Customer Quotes Sender-Domain Learning (Customer Quotes #3)
+When a rep manually moves a quote out of the "Unknown — needs review"
+bucket into a real customer (single PATCH or bulk reassign), we record
+a sender→customer mapping in `quote_sender_mappings`. Business-domain
+senders create one row per (org, sender_domain); free-mail senders
+(gmail/yahoo/etc) create one row per (org, sender_email) so a personal
+gmail address doesn't route every other gmail user to the same
+customer. At ingest, `ingestQuoteFromEmail` calls `lookupMapping`
+BEFORE the heuristic resolver — email match wins over domain match,
+and free-mail senders never fall back to a domain match. Schema
+enforces "exactly one of email/domain" via CHECK + two partial unique
+indexes (one per scope). Service: `server/services/quoteSenderMappings.ts`
+(extractSenderInfo / lookupMapping / upsertManualMapping / bumpHit /
+listMappings / deleteMapping / learnFromReassign). Admin UI is
+`client/src/components/SenderMappingsDialog.tsx`, gated to
+admin/director/sales_director and reachable from the Customer Quotes
+header next to Margin Floors. Routes:
+`GET/DELETE /api/customer-quotes/sender-mappings[/:id]`. Learning
+failures NEVER roll back a reassign — every learn call is wrapped in
+try/catch and logged. Tests:
+`server/__tests__/quoteSenderMappings.test.ts` (17 cases covering
+parse, upsert, lookup, learnFromReassign, plus the gmail collision
+guard).
+
 ### Schema-Drift Guard (Task #574)
 After `runMigrations()` runs at boot, `assertNoSchemaDrift()` (in `server/checkSchemaDrift.ts`) compares every Drizzle pgTable in `shared/schema.ts` against `information_schema` and fails loudly when code declares a table or column the live DB does not have. In production this exits the boot with a clear list of what's missing, so a feature that adds columns to the schema without the matching ALTER in `server/runMigrations.ts` cannot reach users (the failure mode that took down the Conversations tab in Tasks #532 and #533). Dev logs the same report but allows boot to continue. The same check is exposed as a CLI for CI: `tsx scripts/check-schema-drift.ts` (exits 1 on drift). Extra tables/columns in the DB are intentionally NOT flagged — only the code → DB direction matters.
 
