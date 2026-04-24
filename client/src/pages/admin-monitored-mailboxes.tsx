@@ -615,6 +615,8 @@ export default function AdminMonitoredMailboxesPage() {
         </div>
       </div>
 
+      <ReadinessChecklistCard />
+
       <CoverageStatusCard onResultPanelOpen={() => undefined} />
 
       {enrollAllResult && (
@@ -852,6 +854,115 @@ export default function AdminMonitoredMailboxesPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Task #549 — Go-live readiness checklist card.
+//
+// Renders the eight production-readiness gates (Azure creds, reply mailbox,
+// APP_BASE_URL, webhook secret, Mail.Read consent, ≥1 enrolled mailbox,
+// recent successful sync, no draining failures). All status / hint copy
+// is computed server-side so the UI stays a pass-through renderer.
+// ----------------------------------------------------------------------------
+type ReadinessStatus = "ok" | "warn" | "error";
+interface ReadinessCheck {
+  id: string;
+  label: string;
+  status: ReadinessStatus;
+  hint: string;
+}
+type ReadinessResp = {
+  overall: ReadinessStatus;
+  checks: ReadinessCheck[];
+  summary: { ok: number; warn: number; error: number };
+};
+
+function ReadinessChecklistCard(): JSX.Element {
+  const { data, isLoading, refetch, isFetching } = useQuery<ReadinessResp>({
+    queryKey: ["/api/internal/admin/monitored-mailboxes/readiness"],
+    refetchOnWindowFocus: false,
+    refetchInterval: 60_000,
+  });
+
+  if (isLoading || !data) {
+    return (
+      <Card data-testid="card-readiness-loading">
+        <CardContent className="py-4 flex items-center gap-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Checking go-live readiness…
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const overallTone =
+    data.overall === "ok" ? "text-emerald-600 dark:text-emerald-400" :
+    data.overall === "warn" ? "text-amber-600 dark:text-amber-400" :
+    "text-red-600 dark:text-red-400";
+
+  const overallLabel =
+    data.overall === "ok" ? "Ready for go-live" :
+    data.overall === "warn" ? "Almost ready" :
+    "Not ready";
+
+  const Icon = ({ status }: { status: ReadinessStatus }) => {
+    if (status === "ok") return <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />;
+    if (status === "warn") return <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400" />;
+    return <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />;
+  };
+
+  return (
+    <Card data-testid="card-readiness-checklist">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4" />
+              Go-live readiness
+            </CardTitle>
+            <CardDescription className="mt-1" data-testid="text-readiness-overall">
+              <span className={overallTone}>{overallLabel}</span> · {data.summary.ok} ok ·{" "}
+              {data.summary.warn} warn · {data.summary.error} error
+            </CardDescription>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            data-testid="button-refresh-readiness"
+          >
+            {isFetching && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+            Re-check
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <ul className="space-y-2 text-sm">
+          {data.checks.map(c => (
+            <li
+              key={c.id}
+              className="flex items-start gap-2"
+              data-testid={`row-readiness-${c.id}`}
+            >
+              <span className="mt-0.5"><Icon status={c.status} /></span>
+              <div className="flex-1 min-w-0">
+                <div className="font-medium" data-testid={`text-readiness-label-${c.id}`}>
+                  {c.label}
+                </div>
+                <div
+                  className="text-xs text-muted-foreground"
+                  data-testid={`text-readiness-hint-${c.id}`}
+                >
+                  {c.hint}
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </CardContent>
+    </Card>
   );
 }
 

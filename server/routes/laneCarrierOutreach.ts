@@ -36,7 +36,8 @@ import { rankCarriersForLane, isHighFrequencyLane, buildHighFrequencyIndex, isHi
 import { runRecurringLaneEngineForOrg, LANE_CONFIG } from "../recurringLaneCapacityEngine";
 import { scoreAllEligibleLanes, scoreLane } from "../laneScoringService";
 import { getLaneCoverageProfile, shouldUseIncumbentFirstFlow } from "../laneCoverageService";
-import { insertCarrierSchema, insertLaneCarrierInterestSchema, carrierClaimedLanes, carrierOutreachLogs, recurringLanes, type InsertCarrier, type Carrier } from "@shared/schema";
+import { insertCarrierSchema, insertLaneCarrierInterestSchema, carrierClaimedLanes, carrierOutreachLogs, recurringLanes, type InsertCarrier, type Carrier, type EmailMessage, type EmailConversationThread } from "@shared/schema";
+import { applyMessageToThread } from "../services/conversationWaitingStateService";
 import { formatLaneDisplay, formatWeeklyLoadRange, normalizeEquipmentType, buildFallbackEmail as buildFallbackEmailHelper } from "../laneOutreachEmailBuilder";
 import { z } from "zod";
 import { inArray, eq, and, gte, lte, desc, isNull, or } from "drizzle-orm";
@@ -2731,6 +2732,12 @@ Rules for suggestions:
   // ── Outlook Reply Webhook — Task #182 ─────────────────────────────────────
   // Handles Microsoft Graph change notification handshakes and inbound reply events.
   // No auth required (Graph calls this endpoint directly); validated by clientState secret.
+  //
+  // Task #549 — the per-notification logic is extracted into the exported
+  // `processOutlookReplyNotifications` helper so the end-to-end test can
+  // exercise the full pipeline (clientState gate → Graph fetch → In-Reply-To
+  // match → recordOutreachReply → email_messages upsert) without spinning
+  // up Express.
 
   app.post("/api/webhooks/outlook-reply", async (req, res) => {
     // ── Graph validation handshake ──────────────────────────────────────────
@@ -2741,177 +2748,20 @@ Rules for suggestions:
     }
 
     try {
-      const notifications = req.body?.value;
-      if (!Array.isArray(notifications) || notifications.length === 0) {
-        return res.status(200).json({ received: 0 });
+      const result = await processOutlookReplyNotifications(req.body?.value);
+      if ("skipped" in result) {
+        return res.status(200).json(result);
       }
-
-      // In production, OUTLOOK_WEBHOOK_SECRET must be set to a strong unique value.
-      // Without it we refuse to process notifications to prevent unauthenticated replay.
-      if (!process.env.OUTLOOK_WEBHOOK_SECRET && process.env.NODE_ENV === "production") {
-        console.error("[outlook-webhook] OUTLOOK_WEBHOOK_SECRET is not set — refusing to process notifications in production. Set this secret to enable reply tracking.");
-        return res.status(200).json({ skipped: "OUTLOOK_WEBHOOK_SECRET not configured" });
-      }
-      // In development a predictable fallback is allowed so the subscription validation
-      // handshake and local testing can proceed without requiring a configured secret.
-      const expectedSecret = process.env.OUTLOOK_WEBHOOK_SECRET ?? "freight-dna-reply-tracker";
-      const replyMailbox = process.env.OUTLOOK_REPLY_EMAIL?.trim();
-      if (!replyMailbox) {
-        return res.status(200).json({ skipped: "OUTLOOK_REPLY_EMAIL not configured" });
-      }
-
-      // Resolve the org that owns this monitored mailbox for scoped subject matching
-      const mailboxUser = await storage.getUserByUsername(replyMailbox);
-      const replyMailboxOrgId = mailboxUser?.organizationId ?? null;
-
-      let processed = 0;
-
-      for (const notification of notifications) {
-        if (notification.clientState !== expectedSecret) {
-          console.warn("[outlook-webhook] clientState mismatch — skipping notification");
-          continue;
-        }
-
-        const resourceId = notification.resourceData?.id as string | undefined;
-        if (!resourceId) continue;
-
-        try {
-          const token = await getGraphAccessToken();
-          const msgUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(replyMailbox)}/messages/${resourceId}?$select=id,internetMessageId,internetMessageHeaders,subject,bodyPreview,body,from,conversationId,toRecipients,receivedDateTime`;
-          const msgRes = await fetch(msgUrl, {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-
-          if (!msgRes.ok) {
-            console.warn(`[outlook-webhook] Failed to fetch message ${resourceId}: ${msgRes.status}`);
-            continue;
-          }
-
-          const msg = await msgRes.json() as {
-            id: string;
-            internetMessageId?: string;
-            internetMessageHeaders?: Array<{ name: string; value: string }>;
-            subject?: string;
-            bodyPreview?: string;
-            body?: { content?: string; contentType?: string };
-            conversationId?: string;
-            receivedDateTime?: string;
-            from?: { emailAddress?: { address?: string; name?: string } };
-            toRecipients?: Array<{ emailAddress?: { address?: string; name?: string } }>;
-          };
-
-          const msgHeaders = msg.internetMessageHeaders ?? [];
-          const inReplyTo = msgHeaders.find(h => h.name.toLowerCase() === "in-reply-to")?.value?.trim();
-          const references = msgHeaders.find(h => h.name.toLowerCase() === "references")?.value?.trim();
-
-          const candidateIds: string[] = [];
-          if (inReplyTo) candidateIds.push(inReplyTo.replace(/[<>]/g, ""));
-          if (references) {
-            references.split(/\s+/).forEach(ref => {
-              const id = ref.replace(/[<>]/g, "").trim();
-              if (id) candidateIds.push(id);
-            });
-          }
-
-          let matchedLog = null;
-
-          // Primary: match by thread/message IDs from email headers.
-          // Deterministic order: prefer the exact In-Reply-To ID first (most direct
-          // indicator of the message being replied to), then fall back to any Reference
-          // chain IDs. Within each tier, prefer the most recently sent log.
-          if (candidateIds.length > 0) {
-            // Separate In-Reply-To (first candidate) from References (remaining)
-            const inReplyToId = inReplyTo ? inReplyTo.replace(/[<>]/g, "") : null;
-            const refIds = candidateIds.filter(id => id !== inReplyToId);
-
-            const tryLookup = async (ids: string[]) => {
-              if (!ids.length) return null;
-              if (replyMailboxOrgId) {
-                const matches = await storage.getCarrierOutreachLogsByOrgAndThreadIds(replyMailboxOrgId, ids);
-                // Sort by most recently sent to pick the best match when multiple logs match
-                return matches.sort((a, b) =>
-                  new Date(b.timestamp ?? 0).getTime() - new Date(a.timestamp ?? 0).getTime()
-                )[0] ?? null;
-              }
-              for (const tid of ids) {
-                const found = await storage.getCarrierOutreachLogByThreadId(tid);
-                if (found) return found;
-              }
-              return null;
-            };
-
-            // Try In-Reply-To first, then References
-            if (inReplyToId) matchedLog = await tryLookup([inReplyToId]);
-            if (!matchedLog && refIds.length > 0) matchedLog = await tryLookup(refIds);
-          }
-
-          // Fallback: subject-line correlation — strip "Re: " prefix and search
-          // within the last 30 days of outreach logs scoped to the mailbox owner's org.
-          // Note: subject fallback is only attempted when replyMailboxOrgId is resolved
-          // (i.e. OUTLOOK_REPLY_EMAIL maps to a platform user via getUserByUsername).
-          // For shared mailboxes not registered as platform users, thread-ID matching
-          // still works; only this secondary fallback is skipped.
-          if (!matchedLog && msg.subject && replyMailboxOrgId) {
-            const rawSubject = msg.subject.replace(/^(Re:\s*)+/i, "").trim().toLowerCase();
-            if (rawSubject) {
-              matchedLog = await storage.getCarrierOutreachLogBySubjectFallback(replyMailboxOrgId, rawSubject);
-            }
-          }
-
-          if (!matchedLog || matchedLog.replyReceivedAt) {
-            continue;
-          }
-
-          const snippet = (msg.bodyPreview ?? "").slice(0, 300);
-          const receivedAt = msg.receivedDateTime ? new Date(msg.receivedDateTime) : new Date();
-
-          await storage.recordOutreachReply(matchedLog.id, snippet, receivedAt);
-          processed++;
-          console.log(`[outlook-webhook] Reply recorded for outreach log ${matchedLog.id}`);
-
-          // ── Email Intelligence: queue inbound reply for signal extraction ───
-          // Use conversationId as threadId for consistent thread-level dedup;
-          // fall back to In-Reply-To message ID when conversationId is absent.
-          // Pass internetMessageId as providerMessageId for upsert idempotency
-          // so replayed Graph notifications don't create duplicate rows.
-          const emailThreadId = msg.conversationId
-            ?? (inReplyTo ? inReplyTo.replace(/[<>]/g, "") : null);
-          const providerMsgId = msg.internetMessageId
-            ? msg.internetMessageId.replace(/[<>]/g, "")
-            : null;
-          const carrierIds: string[] = Array.isArray(matchedLog.carrierIds)
-            ? (matchedLog.carrierIds as string[])
-            : [];
-          const firstCarrierId = carrierIds[0] ?? null;
-          logInboundCarrierEmail({
-            orgId: matchedLog.orgId,
-            providerMessageId: providerMsgId,
-            threadId: emailThreadId,
-            fromEmail: msg.from?.emailAddress?.address ?? null,
-            toEmail: msg.toRecipients?.[0]?.emailAddress?.address ?? null,
-            subject: msg.subject ?? null,
-            body: msg.body?.content ?? msg.bodyPreview ?? null,
-            linkedCarrierId: firstCarrierId,
-            linkedLaneId: matchedLog.laneId ?? null,
-            linkedOutreachLogId: matchedLog.id,
-          }).then(({ created }) => {
-            if (!created) {
-              console.log(`[emailIntelligence] skipped duplicate inbound message (providerMsgId=${providerMsgId})`);
-            }
-          }).catch(err =>
-            console.error("[emailIntelligence] inbound log error:", err)
-          );
-        } catch (innerErr) {
-          console.error(`[outlook-webhook] Error processing notification for resource ${resourceId}:`, innerErr);
-        }
-      }
-
-      res.status(200).json({ received: notifications.length, processed });
+      return res.status(200).json({ received: result.received, processed: result.processed });
     } catch (err) {
       console.error("[outlook-webhook] Unhandled error:", err);
-      res.status(200).json({ error: "Internal error" });
+      return res.status(200).json({ error: "Internal error" });
     }
   });
+
+  // ── (Task #549) The outlook-reply notification processor lives outside
+  // this function as `processOutlookReplyNotifications` so the end-to-end
+  // test can drive it directly. See bottom of file. ───────────────────────
 
   // ── Procurement Task Outreach Logs ────────────────────────────────────────
   // Returns carrier_outreach_logs records written by the procurement send flow
@@ -3208,3 +3058,253 @@ Rules for suggestions:
   });
 }
 
+
+// ── Outlook reply notification processor (Task #549) ────────────────────────
+// Extracted from the inline route handler so the end-to-end test can drive
+// the pipeline directly with stubbed storage + Graph fetch. Returns either
+// `{ skipped }` for configuration / empty-batch short-circuits or
+// `{ received, processed }` after a successful batch.
+//
+// All side effects (storage writes, email_messages upsert) flow through the
+// same code paths the production route uses — the test does not bypass any
+// matching, dedup or persistence logic.
+export async function processOutlookReplyNotifications(
+  notifications: unknown,
+  opts: {
+    fetchImpl?: typeof fetch;
+    accessTokenFn?: () => Promise<string>;
+  } = {},
+): Promise<
+  | { skipped: string; received: 0 }
+  | { received: number; processed: number }
+> {
+  if (!Array.isArray(notifications) || notifications.length === 0) {
+    return { received: 0, processed: 0 };
+  }
+
+  // Task #549 — OUTLOOK_WEBHOOK_SECRET is now a hard requirement in every
+  // environment. Without it any caller could POST forged carrier replies
+  // and trigger spurious lane status changes; the previous dev-only
+  // fallback ("freight-dna-reply-tracker") is removed.
+  const expectedSecret = process.env.OUTLOOK_WEBHOOK_SECRET?.trim();
+  if (!expectedSecret) {
+    console.error("[outlook-webhook] OUTLOOK_WEBHOOK_SECRET is not set — refusing to process notifications. Set this secret to enable reply tracking.");
+    return { skipped: "OUTLOOK_WEBHOOK_SECRET not configured", received: 0 };
+  }
+  const replyMailbox = process.env.OUTLOOK_REPLY_EMAIL?.trim();
+  if (!replyMailbox) {
+    return { skipped: "OUTLOOK_REPLY_EMAIL not configured", received: 0 };
+  }
+
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  const tokenFn = opts.accessTokenFn ?? getGraphAccessToken;
+
+  // Resolve the org that owns this monitored mailbox for scoped subject matching
+  const mailboxUser = await storage.getUserByUsername(replyMailbox);
+  const replyMailboxOrgId = mailboxUser?.organizationId ?? null;
+
+  let processed = 0;
+  for (const notification of notifications as Array<{
+    clientState?: string;
+    resourceData?: { id?: string };
+  }>) {
+    if (notification.clientState !== expectedSecret) {
+      console.warn("[outlook-webhook] clientState mismatch — skipping notification");
+      continue;
+    }
+    const handled = await processSingleOutlookReply(notification.resourceData?.id, {
+      expectedSecret,
+      replyMailbox,
+      replyMailboxOrgId,
+      fetchImpl,
+      tokenFn,
+    });
+    if (handled) processed++;
+  }
+
+  return { received: notifications.length, processed };
+}
+
+interface OutlookReplyDeps {
+  expectedSecret: string;
+  replyMailbox: string;
+  replyMailboxOrgId: string | null;
+  fetchImpl: typeof fetch;
+  tokenFn: () => Promise<string>;
+}
+
+async function processSingleOutlookReply(
+  resourceId: string | undefined,
+  deps: OutlookReplyDeps,
+): Promise<boolean> {
+  if (!resourceId) return false;
+
+  let processedOk = false;
+  try {
+    const token = await deps.tokenFn();
+    const msgUrl = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(deps.replyMailbox)}/messages/${resourceId}?$select=id,internetMessageId,internetMessageHeaders,subject,bodyPreview,body,from,conversationId,toRecipients,receivedDateTime`;
+    const msgRes = await deps.fetchImpl(msgUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    if (!msgRes.ok) {
+      console.warn(`[outlook-webhook] Failed to fetch message ${resourceId}: ${msgRes.status}`);
+      return false;
+    }
+
+    const msg = await msgRes.json() as {
+      id: string;
+      internetMessageId?: string;
+      internetMessageHeaders?: Array<{ name: string; value: string }>;
+      subject?: string;
+      bodyPreview?: string;
+      body?: { content?: string; contentType?: string };
+      conversationId?: string;
+      receivedDateTime?: string;
+      from?: { emailAddress?: { address?: string; name?: string } };
+      toRecipients?: Array<{ emailAddress?: { address?: string; name?: string } }>;
+    };
+
+    const msgHeaders = msg.internetMessageHeaders ?? [];
+    const inReplyTo = msgHeaders.find(h => h.name.toLowerCase() === "in-reply-to")?.value?.trim();
+    const references = msgHeaders.find(h => h.name.toLowerCase() === "references")?.value?.trim();
+
+    const candidateIds: string[] = [];
+    if (inReplyTo) candidateIds.push(inReplyTo.replace(/[<>]/g, ""));
+    if (references) {
+      references.split(/\s+/).forEach(ref => {
+        const id = ref.replace(/[<>]/g, "").trim();
+        if (id) candidateIds.push(id);
+      });
+    }
+
+    let matchedLog: Awaited<ReturnType<typeof storage.getCarrierOutreachLogByThreadId>> | null = null;
+
+    if (candidateIds.length > 0) {
+      const inReplyToId = inReplyTo ? inReplyTo.replace(/[<>]/g, "") : null;
+      const refIds = candidateIds.filter(id => id !== inReplyToId);
+
+      const tryLookup = async (ids: string[]) => {
+        if (!ids.length) return null;
+        if (deps.replyMailboxOrgId) {
+          const matches = await storage.getCarrierOutreachLogsByOrgAndThreadIds(deps.replyMailboxOrgId, ids);
+          return matches.sort((a, b) =>
+            new Date(b.timestamp ?? 0).getTime() - new Date(a.timestamp ?? 0).getTime()
+          )[0] ?? null;
+        }
+        for (const tid of ids) {
+          const found = await storage.getCarrierOutreachLogByThreadId(tid);
+          if (found) return found;
+        }
+        return null;
+      };
+
+      if (inReplyToId) matchedLog = await tryLookup([inReplyToId]);
+      if (!matchedLog && refIds.length > 0) matchedLog = await tryLookup(refIds);
+    }
+
+    if (!matchedLog && msg.subject && deps.replyMailboxOrgId) {
+      const rawSubject = msg.subject.replace(/^(Re:\s*)+/i, "").trim().toLowerCase();
+      if (rawSubject) {
+        matchedLog = await storage.getCarrierOutreachLogBySubjectFallback(deps.replyMailboxOrgId, rawSubject) ?? null;
+      }
+    }
+
+    if (!matchedLog || matchedLog.replyReceivedAt) {
+      return false;
+    }
+
+    const snippet = (msg.bodyPreview ?? "").slice(0, 300);
+    const receivedAt = msg.receivedDateTime ? new Date(msg.receivedDateTime) : new Date();
+
+    await storage.recordOutreachReply(matchedLog.id, snippet, receivedAt);
+    processedOk = true;
+    console.log(`[outlook-webhook] Reply recorded for outreach log ${matchedLog.id}`);
+
+    // ── Email Intelligence: queue inbound reply for signal extraction ───────
+    const emailThreadId = msg.conversationId
+      ?? (inReplyTo ? inReplyTo.replace(/[<>]/g, "") : null);
+    const providerMsgId = msg.internetMessageId
+      ? msg.internetMessageId.replace(/[<>]/g, "")
+      : null;
+    const carrierIds: string[] = Array.isArray(matchedLog.carrierIds)
+      ? (matchedLog.carrierIds as string[])
+      : [];
+    const firstCarrierId = carrierIds[0] ?? null;
+    let inboundMessage: EmailMessage | null = null;
+    try {
+      const result = await logInboundCarrierEmail({
+        orgId: matchedLog.orgId,
+        providerMessageId: providerMsgId,
+        threadId: emailThreadId,
+        fromEmail: msg.from?.emailAddress?.address ?? null,
+        toEmail: msg.toRecipients?.[0]?.emailAddress?.address ?? null,
+        subject: msg.subject ?? null,
+        body: msg.body?.content ?? msg.bodyPreview ?? null,
+        linkedCarrierId: firstCarrierId,
+        linkedLaneId: matchedLog.laneId ?? null,
+        linkedOutreachLogId: matchedLog.id,
+      });
+      inboundMessage = result.message;
+      if (!result.created) {
+        console.log(`[emailIntelligence] skipped duplicate inbound message (providerMsgId=${providerMsgId})`);
+      }
+    } catch (err) {
+      console.error("[emailIntelligence] inbound log error:", err);
+    }
+
+    // ── Task #549 — flip the conversation thread to waiting_on_us ────────────
+    // The per-rep Graph webhook in `graphWebhook.ts` already does this for
+    // monitored mailboxes; the shared-mailbox path (this function) was missing
+    // the equivalent thread upsert, which left the thread in "waiting_on_them"
+    // long after the carrier had already replied. Without this update, agent
+    // ownership / SLA dashboards keep showing stale "we're still waiting on
+    // the carrier" state for shared-inbox replies. The storage methods below
+    // are first-class members of `IStorage` — there is no duck-typing fallback
+    // and a thrown error is logged loudly rather than silently swallowed.
+    if (inboundMessage && emailThreadId && firstCarrierId) {
+      try {
+        const now = new Date();
+        const existing = await storage.getEmailConversationThreadByThreadId(
+          matchedLog.orgId,
+          emailThreadId,
+        );
+        const threadBase: EmailConversationThread = existing ?? {
+          id: "",
+          orgId: matchedLog.orgId,
+          threadId: emailThreadId,
+          linkedAccountId: null,
+          linkedCarrierId: firstCarrierId,
+          ownerUserId: null,
+          waitingState: "waiting_on_them",
+          responsePriority: "normal",
+          archivedAt: null,
+          lastMessageId: null,
+          lastIncomingAt: null,
+          lastOutgoingAt: null,
+          waitingSinceAt: null,
+          overdueAt: null,
+          createdAt: now,
+          updatedAt: now,
+        };
+        const update = applyMessageToThread(threadBase, inboundMessage, now);
+        await storage.upsertEmailConversationThread({
+          orgId: matchedLog.orgId,
+          threadId: emailThreadId,
+          linkedAccountId: null,
+          linkedCarrierId: firstCarrierId,
+          update,
+        });
+      } catch (convErr) {
+        console.error(
+          `[outlook-webhook] conversation thread upsert error (orgId=${matchedLog.orgId} threadId=${emailThreadId}):`,
+          convErr,
+        );
+      }
+    }
+  } catch (innerErr) {
+    console.error(`[outlook-webhook] Error processing notification for resource ${resourceId}:`, innerErr);
+  }
+
+  return processedOk;
+}

@@ -21,7 +21,9 @@ import {
   getMailReadConsentStatus,
   getMailReadConsentStatusAsync,
   refreshMailReadConsentStatus,
+  webhookSecretConfigured,
 } from "../graphSubscriptionService";
+import { azureCredentialsConfigured } from "../graphService";
 import { syncMailboxDelta, retryMailboxSyncFailure } from "../services/mailboxDeltaSyncService";
 import {
   runBackfillForMailbox,
@@ -712,6 +714,172 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       } catch (err) {
         console.error("[monitoredMailboxes] GET /quote-stats error:", err);
         res.status(500).json({ error: "Failed to load quote stats" });
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // Task #549 — Go-live readiness checklist.
+  //
+  // Aggregates the eight gates IT must clear before the shared-mailbox
+  // reply-tracking pipeline is safe to enable for an org:
+  //   1. Azure app-only credentials configured (tenant/client/secret env)
+  //   2. Shared reply mailbox configured (OUTLOOK_REPLY_EMAIL)
+  //   3. Public webhook URL configured (APP_BASE_URL)
+  //   4. Webhook clientState secret configured (OUTLOOK_WEBHOOK_SECRET)
+  //   5. Mail.Read tenant admin consent granted
+  //   6. At least one monitored mailbox enrolled
+  //   7. At least one mailbox has synced in the last 24 hours (proves the
+  //      Graph delta loop is alive end-to-end)
+  //   8. No mailboxes have unresolved sync failures piling up
+  //
+  // Returns one item per check with a stable `id`, an "ok" / "warn" /
+  // "error" status, and a short human-readable hint so the admin UI can
+  // render rows without re-deriving wording.
+  // -----------------------------------------------------------------------
+  app.get(
+    "/api/internal/admin/monitored-mailboxes/readiness",
+    requireAuth,
+    requireAdmin,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+        const azureOk = azureCredentialsConfigured();
+        const replyMailbox = process.env.OUTLOOK_REPLY_EMAIL?.trim() ?? null;
+        const appBaseUrl = process.env.APP_BASE_URL?.trim() ?? null;
+        const webhookSecret = webhookSecretConfigured();
+
+        const consent = await getMailReadConsentStatusAsync();
+        const mailboxes = await storage.getMonitoredMailboxes(user.organizationId);
+        const enabled = mailboxes.filter(m => m.enabled);
+
+        const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+        const recentlySyncedCount = enabled.filter(
+          m => m.lastSyncAt && m.lastSyncAt.getTime() > Date.now() - ONE_DAY_MS,
+        ).length;
+
+        // Org-wide unresolved-failure tally. We only care about mailboxes
+        // that are still actively trying — a disabled mailbox cannot be
+        // "draining" since the worker won't touch it.
+        let totalUnresolvedFailures = 0;
+        let mailboxesWithFailures = 0;
+        for (const m of enabled) {
+          const c = await storage.countUnresolvedMailboxSyncFailures(m.id).catch(() => 0);
+          if (c > 0) {
+            mailboxesWithFailures++;
+            totalUnresolvedFailures += c;
+          }
+        }
+
+        type Status = "ok" | "warn" | "error";
+        interface Check {
+          id: string;
+          label: string;
+          status: Status;
+          hint: string;
+        }
+
+        const checks: Check[] = [
+          {
+            id: "azure_credentials",
+            label: "Azure app-only credentials",
+            status: azureOk ? "ok" : "error",
+            hint: azureOk
+              ? "OUTLOOK_TENANT_ID / OUTLOOK_CLIENT_ID / OUTLOOK_CLIENT_SECRET are set."
+              : "Set OUTLOOK_TENANT_ID, OUTLOOK_CLIENT_ID and OUTLOOK_CLIENT_SECRET (Azure app registration).",
+          },
+          {
+            id: "reply_mailbox",
+            label: "Shared reply mailbox",
+            status: replyMailbox ? "ok" : "error",
+            hint: replyMailbox
+              ? `OUTLOOK_REPLY_EMAIL is ${replyMailbox}.`
+              : "Set OUTLOOK_REPLY_EMAIL to the shared M365 mailbox that receives carrier replies.",
+          },
+          {
+            id: "app_base_url",
+            label: "Public APP_BASE_URL",
+            status: appBaseUrl
+              ? (appBaseUrl.startsWith("https://") ? "ok" : "warn")
+              : "error",
+            hint: !appBaseUrl
+              ? "Set APP_BASE_URL to the public HTTPS URL Microsoft Graph will call."
+              : appBaseUrl.startsWith("https://")
+                ? `APP_BASE_URL is ${appBaseUrl}.`
+                : `APP_BASE_URL must be HTTPS for Graph subscriptions (currently ${appBaseUrl}).`,
+          },
+          {
+            id: "webhook_secret",
+            label: "Webhook clientState secret",
+            status: webhookSecret ? "ok" : "error",
+            hint: webhookSecret
+              ? "OUTLOOK_WEBHOOK_SECRET is set — webhook payloads are validated."
+              : "Set OUTLOOK_WEBHOOK_SECRET to a strong random string. Without it, all webhook payloads and subscription registrations are refused.",
+          },
+          {
+            id: "mail_read_consent",
+            label: "Mail.Read admin consent",
+            status: consent.status === "granted"
+              ? "ok"
+              : consent.status === "denied"
+                ? "error"
+                : "warn",
+            hint: consent.status === "granted"
+              ? `Mail.Read application permission granted${consent.lastCheckedAt ? ` (checked ${new Date(consent.lastCheckedAt).toLocaleString()})` : ""}.`
+              : consent.status === "denied"
+                ? "Mail.Read denied by Azure. Ask an Azure tenant admin to grant the Mail.Read application permission and consent for the tenant."
+                : "Mail.Read consent status not yet probed. Use 'Re-check Mail.Read' on the Email coverage card.",
+          },
+          {
+            id: "mailboxes_enrolled",
+            label: "At least one mailbox enrolled",
+            status: enabled.length > 0 ? "ok" : "error",
+            hint: enabled.length > 0
+              ? `${enabled.length} enabled mailbox${enabled.length === 1 ? "" : "es"} (of ${mailboxes.length} total).`
+              : "Enroll at least one team-member mailbox via 'Enroll all users' or 'Add Mailbox'.",
+          },
+          {
+            id: "recent_sync",
+            label: "Recent successful sync (last 24h)",
+            status: enabled.length === 0
+              ? "warn"
+              : recentlySyncedCount > 0
+                ? "ok"
+                : "error",
+            hint: enabled.length === 0
+              ? "No enabled mailboxes — enroll one and trigger a sync."
+              : recentlySyncedCount > 0
+                ? `${recentlySyncedCount} mailbox${recentlySyncedCount === 1 ? "" : "es"} synced within the last 24 hours.`
+                : "No mailbox has synced in the last 24 hours. Click the sync icon on a mailbox row to verify Graph connectivity.",
+          },
+          {
+            id: "no_draining_failures",
+            label: "No draining sync failures",
+            status: totalUnresolvedFailures === 0 ? "ok" : (totalUnresolvedFailures > 25 ? "error" : "warn"),
+            hint: totalUnresolvedFailures === 0
+              ? "All ingested messages persisted cleanly."
+              : `${totalUnresolvedFailures} unresolved failure${totalUnresolvedFailures === 1 ? "" : "s"} across ${mailboxesWithFailures} mailbox${mailboxesWithFailures === 1 ? "" : "es"}. Open each affected mailbox card to retry or dismiss.`,
+          },
+        ];
+
+        const errorCount = checks.filter(c => c.status === "error").length;
+        const warnCount = checks.filter(c => c.status === "warn").length;
+        const overall: Status = errorCount > 0 ? "error" : warnCount > 0 ? "warn" : "ok";
+
+        res.json({
+          overall,
+          checks,
+          summary: {
+            ok: checks.filter(c => c.status === "ok").length,
+            warn: warnCount,
+            error: errorCount,
+          },
+        });
+      } catch (err) {
+        console.error("[monitoredMailboxes] GET /readiness error:", err);
+        res.status(500).json({ error: "Failed to load readiness checklist" });
       }
     },
   );

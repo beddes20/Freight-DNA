@@ -211,6 +211,21 @@ export function replyTrackingEnabled(): boolean {
   return _mailReadGranted && !!_subscriptionId;
 }
 
+/**
+ * Task #549 — Production-readiness gate for the Graph webhook clientState
+ * secret. We refuse to register subscriptions or accept webhook payloads
+ * unless this value is configured. There is no insecure default fallback:
+ * an unauthenticated webhook would let anyone inject fake mailbox events.
+ */
+export function getWebhookClientState(): string | null {
+  const v = process.env.OUTLOOK_WEBHOOK_SECRET?.trim();
+  return v && v.length > 0 ? v : null;
+}
+
+export function webhookSecretConfigured(): boolean {
+  return getWebhookClientState() !== null;
+}
+
 export interface ReplyTrackingStatus {
   enabled: boolean;
   mailbox: string | null;
@@ -230,6 +245,13 @@ export function getReplyTrackingStatus(): ReplyTrackingStatus {
   if (!hasAzureCreds) missingPermissions.push("OUTLOOK_TENANT_ID / OUTLOOK_CLIENT_ID / OUTLOOK_CLIENT_SECRET");
   if (!mailbox) missingPermissions.push("OUTLOOK_REPLY_EMAIL");
   if (!baseUrl) missingPermissions.push("APP_BASE_URL");
+  // Task #549 — webhook secret is now a hard requirement. Without it the
+  // outlook-reply and graph/email handlers refuse to process notifications,
+  // and registerSubscription refuses to register, so reply tracking will
+  // not work at all.
+  if (!webhookSecretConfigured()) {
+    missingPermissions.push("OUTLOOK_WEBHOOK_SECRET");
+  }
   if (hasAzureCreds && mailbox && baseUrl && !_mailReadGranted) {
     missingPermissions.push("Mail.Read (Azure AD application permission — contact IT)");
   }
@@ -238,12 +260,8 @@ export function getReplyTrackingStatus(): ReplyTrackingStatus {
     warnings.push("Mail.Read granted but subscription is not active — check server logs");
   }
 
-  if (!process.env.OUTLOOK_WEBHOOK_SECRET) {
-    warnings.push("OUTLOOK_WEBHOOK_SECRET is not set — webhook validation uses an insecure default. Set this secret before deploying to production.");
-  }
-
   return {
-    enabled: _mailReadGranted && !!_subscriptionId,
+    enabled: _mailReadGranted && !!_subscriptionId && webhookSecretConfigured(),
     mailbox,
     subscriptionActive: !!_subscriptionId,
     missingPermissions,
@@ -296,6 +314,15 @@ async function findExistingSubscription(token: string, webhookUrl: string): Prom
 }
 
 async function registerSubscription(config: ReplyEmailConfig): Promise<string | null> {
+  // Task #549 — refuse to register without an explicit webhook secret. A
+  // subscription with an empty/predictable clientState would let any caller
+  // POST forged notifications to /api/webhooks/outlook-reply.
+  const clientState = getWebhookClientState();
+  if (!clientState) {
+    log("Refusing to register reply subscription — OUTLOOK_WEBHOOK_SECRET is not set. Configure the secret and restart the server.");
+    return null;
+  }
+
   try {
     const token = await getGraphAccessToken();
     const SUB_TTL_MS = 4200 * 60 * 1000;
@@ -320,7 +347,7 @@ async function registerSubscription(config: ReplyEmailConfig): Promise<string | 
       notificationUrl: config.webhookUrl,
       resource: `/users/${config.mailbox}/mailFolders/inbox/messages`,
       expirationDateTime: expiresAt,
-      clientState: process.env.OUTLOOK_WEBHOOK_SECRET ?? "freight-dna-reply-tracker",
+      clientState,
     };
 
     const res = await fetch("https://graph.microsoft.com/v1.0/subscriptions", {
@@ -468,6 +495,19 @@ export async function registerMailboxSubscription(mailboxEmail: string, mailboxI
   const baseUrl = process.env.APP_BASE_URL?.trim();
   if (!baseUrl) return null;
 
+  // Task #549 — refuse to register a per-rep webhook unless the clientState
+  // secret is set. Surface the reason on the mailbox row so admins see it
+  // immediately on the Monitored Mailboxes page.
+  const clientState = getWebhookClientState();
+  if (!clientState) {
+    log(`[user-mailbox] Refusing to register subscription for ${mailboxEmail} — OUTLOOK_WEBHOOK_SECRET is not set.`);
+    await storage.updateMonitoredMailbox(mailboxId, {
+      syncStatus: "error",
+      syncError: "OUTLOOK_WEBHOOK_SECRET is not configured. Set the secret in IT settings and try again.",
+    });
+    return null;
+  }
+
   const webhookUrl = `${baseUrl.replace(/\/$/, "")}/api/webhooks/graph/email`;
 
   try {
@@ -488,7 +528,7 @@ export async function registerMailboxSubscription(mailboxEmail: string, mailboxI
         notificationUrl: webhookUrl,
         resource,
         expirationDateTime: expiresAt,
-        clientState: process.env.OUTLOOK_WEBHOOK_SECRET ?? "freight-dna-reply-tracker",
+        clientState,
       };
 
       const res = await fetch("https://graph.microsoft.com/v1.0/subscriptions", {

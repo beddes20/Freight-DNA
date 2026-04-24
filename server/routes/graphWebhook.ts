@@ -689,15 +689,25 @@ async function processUserMailboxEmail(params: {
 export { processUserMailboxEmail as processUserMailboxEmailForDelta };
 
 export async function processGraphNotifications(body: unknown): Promise<void> {
-  const expectedClientState = process.env.OUTLOOK_WEBHOOK_SECRET ?? process.env.GRAPH_WEBHOOK_CLIENT_STATE ?? "";
+  // Task #549 — webhook clientState is a hard requirement. Without it we
+  // cannot tell forged notifications from real ones, so the only safe
+  // behavior is to drop the entire batch and log loudly. The legacy
+  // `GRAPH_WEBHOOK_CLIENT_STATE` fallback is intentionally removed so
+  // there is exactly one secret env var across the whole pipeline.
+  const expectedClientState = (process.env.OUTLOOK_WEBHOOK_SECRET ?? "").trim();
   const payload = body as GraphNotificationPayload | null | undefined;
   const notifications = payload?.value;
   if (!Array.isArray(notifications) || notifications.length === 0) {
     return;
   }
 
+  if (!expectedClientState) {
+    log(`Refusing to process ${notifications.length} Graph notification(s) — OUTLOOK_WEBHOOK_SECRET is not set. Configure the secret to enable email ingestion.`);
+    return;
+  }
+
   for (const notification of notifications) {
-    if (expectedClientState && notification.clientState !== expectedClientState) {
+    if (notification.clientState !== expectedClientState) {
       log(`Invalid clientState "${notification.clientState}" — ignoring notification`);
       continue;
     }
