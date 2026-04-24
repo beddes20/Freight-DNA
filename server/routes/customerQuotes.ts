@@ -307,9 +307,6 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      // Shared canonical schema (derived from insertQuoteOpportunitySchema)
-      // is exported from @shared/schema so the QuoteBuilder client form and
-      // this server route validate against the exact same contract.
       const parsed = spotQuoteCreateSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
@@ -326,9 +323,6 @@ export function registerCustomerQuoteRoutes(app: Express): void {
         }
       }
       const actor = (user.name && user.name.trim()) || user.username || user.id;
-      // Resolve the rep row attached to the acting user so the persisted
-      // quote_opportunities row carries the correct ownership attribution
-      // (mirrors the same lookup used elsewhere in createQuote callers).
       let resolvedRepId: string | null = null;
       try {
         const [rep] = await db.select().from(quoteReps).where(andSql(
@@ -381,9 +375,6 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const detail = await getQuoteDetail(user.organizationId, quoteId);
       if (!detail) return res.status(404).json({ error: "Quote not found" });
 
-      // Best-effort map of the quote's customer (by name) to a CRM company so
-      // the email can pull contact emails and recent context. Failures here
-      // degrade silently — the rep just gets a draft with no recipients.
       let accountId: string | undefined;
       let toEmails: string[] = [];
       if (detail.customer) {
@@ -410,8 +401,6 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const lane = `${detail.opp.originCity}, ${detail.opp.originState} → ${detail.opp.destCity}, ${detail.opp.destState}`;
       const quotedAmt = Number(detail.opp.quotedAmount ?? 0);
       const validStr = detail.opp.validThrough ? new Date(detail.opp.validThrough).toLocaleDateString() : "";
-      // Recommended rate defaults to the saved quote amount unless an explicit
-      // recommended rate (from spot guidance) is supplied by the client.
       const recRate = recommendedRate && recommendedRate > 0 ? recommendedRate : quotedAmt;
       const guidanceLine = (bandLow || bandMid || bandHigh)
         ? `Pricing guidance${bandSource ? ` (${bandSource})` : ""}: ` +

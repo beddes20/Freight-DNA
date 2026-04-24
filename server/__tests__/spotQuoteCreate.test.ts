@@ -83,4 +83,12 @@ describe("Margin guardrail math", () => {
   it("4% margin breaches the 5% guardrail", () => {
     expect(marginPct(2500, 2400)).toBeLessThan(5);
   });
+  it("exactly 5% margin clears the 5% guardrail (>= boundary)", () => {
+    expect(marginPct(2000, 1900)).toBeCloseTo(5, 6);
+    expect(marginPct(2000, 1900)).toBeGreaterThanOrEqual(5);
+  });
+  it("just below 5% margin (4.99…%) breaches the guardrail", () => {
+    const m = marginPct(2000, 1900.01);
+    expect(m).toBeLessThan(5);
+  });
 });

@@ -1698,11 +1698,8 @@ function CarrierOutreachList({ outreach }: { outreach: SpotResult["carrierOutrea
 // posts to /api/customer-quotes/spot/create then /spot/email-draft.
 const SPOT_BUILDER_GUARDRAIL_PCT = 5;
 
-// QuoteBuilder form contract is the canonical spotQuoteCreateSchema from
-// @shared/schema (which derives from insertQuoteOpportunitySchema). The
-// lane fields (pickup/delivery + equipment) are filled from the active
-// search query at submit-time, so the form itself only validates the
-// rep-editable subset.
+// Rep-editable subset of the shared spotQuoteCreateSchema; lane fields are
+// filled from the active search query at submit time.
 const quoteBuilderSchema = spotQuoteCreateSchema.pick({
   customerId: true,
   quotedAmount: true,
@@ -1731,7 +1728,6 @@ function QuoteBuilderCard({
   const suggestedLow = guidance.suggestedLow ?? guidance.benchmark ?? market?.band?.low ?? 0;
   const benchmark = guidance.benchmark ?? market?.band?.mid ?? null;
   const defaultQuoted = Math.round(suggestedHigh || benchmark || suggestedLow || 0);
-  // Cost fallback chain: TRAC mid-band first → lane-traffic carrier average.
   const tracMid = market?.band?.mid ?? null;
   const laneCarrierAvg = laneTraffic?.avgCostPerLoad && laneTraffic.avgCostPerLoad > 0
     ? laneTraffic.avgCostPerLoad
