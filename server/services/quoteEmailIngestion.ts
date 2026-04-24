@@ -17,7 +17,7 @@
  * the call is a no-op.
  */
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import OpenAI from "openai";
 import { db } from "../storage";
 import {
@@ -25,6 +25,12 @@ import {
   quoteOutcomeReasons, emailMessages,
   type EmailMessage, type QuoteOutcomeStatus,
 } from "@shared/schema";
+import {
+  resolveCustomerName,
+  UNKNOWN_CUSTOMER_NAME,
+  isLegacyFreeMailCustomerName,
+  type ResolvedCustomer,
+} from "./customerNameResolver";
 
 export interface ParsedQuoteFields {
   originCity: string;
@@ -371,12 +377,20 @@ export async function parseQuoteEmailAi(input: {
   };
 }
 
+/**
+ * Find an existing quote_customers row for the org with the given name, or
+ * insert a new one. Names are matched case-insensitively so a single
+ * "Unknown — needs review" / "Acme Logistics" row is shared across every
+ * email that resolves to the same customer.
+ */
 async function findOrCreateCustomer(orgId: string, name: string): Promise<string> {
-  const existing = await db.select().from(quoteCustomers)
-    .where(and(eq(quoteCustomers.organizationId, orgId), eq(quoteCustomers.name, name)))
-    .limit(1);
+  const trimmed = name.trim();
+  const existing = await db.select().from(quoteCustomers).where(and(
+    eq(quoteCustomers.organizationId, orgId),
+    sql`lower(${quoteCustomers.name}) = lower(${trimmed})`,
+  )).limit(1);
   if (existing.length > 0) return existing[0].id;
-  const [row] = await db.insert(quoteCustomers).values({ organizationId: orgId, name }).returning();
+  const [row] = await db.insert(quoteCustomers).values({ organizationId: orgId, name: trimmed }).returning();
   return row.id;
 }
 
@@ -391,15 +405,18 @@ async function findOrCreateRep(orgId: string, email: string): Promise<string | n
   return row.id;
 }
 
-function deriveCustomerName(message: EmailMessage): string {
-  const from = (message.fromEmail ?? "").trim();
-  if (!from) return "Unknown Customer";
-  const m = from.match(/^([^<]+)<([^>]+)>$/);
-  const addr = (m ? m[2] : from).toLowerCase();
-  const domain = addr.split("@")[1] ?? "";
-  if (!domain) return "Unknown Customer";
-  const root = domain.split(".").slice(0, -1).join(".") || domain;
-  return root.split(/[.\-_]/).map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(" ");
+/**
+ * Derive a customer display name from an inbound email message. Delegates
+ * to the shared {@link resolveCustomerName} resolver so every ingestion
+ * path (email, TMS sync, manual entry, backfill) produces the same name
+ * for the same input.
+ */
+function deriveCustomerName(message: EmailMessage): ResolvedCustomer {
+  return resolveCustomerName({
+    fromEmail: message.fromEmail,
+    subject: message.subject,
+    body: message.body,
+  });
 }
 
 export interface IngestionResult {
@@ -443,7 +460,7 @@ export async function ingestQuoteFromEmail(
   }
   if (!parsed) return { status: "skipped_unparseable" };
 
-  const customerName = opts?.customerName ?? deriveCustomerName(message);
+  const customerName = opts?.customerName ?? deriveCustomerName(message).name;
   const customerId = await findOrCreateCustomer(message.orgId, customerName);
   const repId = await findOrCreateRep(
     message.orgId,
@@ -780,6 +797,108 @@ export function getEmailBackfillStatus(orgId: string): EmailBackfillStatus | nul
  * Runs as a background task (fire-and-forget) so it never blocks request
  * latency. Progress is recorded in `_emailBackfillStatus` for observability.
  */
+export interface FreeMailBackfillSummary {
+  scanned: number;
+  relinked: number;
+  movedToUnknown: number;
+  unchanged: number;
+  customerRowsDeleted: number;
+}
+
+/**
+ * Backfill (Task #578): re-resolve customer names for any quote_opportunity
+ * whose linked customer row matches a legacy free-mail provider name
+ * ("Gmail", "Yahoo", "Outlook", "Mac", "Pm", …) — the output of the old
+ * domain-of-email logic.
+ *
+ * For each affected opportunity we re-look up the originating
+ * email_messages row, run the new resolver, then either:
+ *   - Re-link the opportunity to the correctly-named customer (extracted
+ *     from subject/body), or
+ *   - Re-link it to the single shared "Unknown — needs review" bucket when
+ *     no company name can be determined.
+ *
+ * After re-linking, any quote_customers row that previously held a bare
+ * provider name and has no remaining linked opportunities is deleted.
+ *
+ * Idempotent: re-running once everything has been migrated is a no-op
+ * because the legacy provider-name rows no longer exist.
+ */
+export async function backfillFreeMailCustomerNames(
+  orgId: string,
+): Promise<FreeMailBackfillSummary> {
+  const summary: FreeMailBackfillSummary = {
+    scanned: 0, relinked: 0, movedToUnknown: 0, unchanged: 0, customerRowsDeleted: 0,
+  };
+
+  const candidates = await db
+    .select({
+      oppId: quoteOpportunities.id,
+      customerId: quoteOpportunities.customerId,
+      customerName: quoteCustomers.name,
+      sourceReference: quoteOpportunities.sourceReference,
+      source: quoteOpportunities.source,
+    })
+    .from(quoteOpportunities)
+    .innerJoin(quoteCustomers, eq(quoteCustomers.id, quoteOpportunities.customerId))
+    .where(eq(quoteOpportunities.organizationId, orgId));
+
+  const affectedCustomerIds = new Set<string>();
+
+  for (const row of candidates) {
+    if (!isLegacyFreeMailCustomerName(row.customerName)) continue;
+    summary.scanned++;
+    affectedCustomerIds.add(row.customerId);
+
+    let resolvedName = UNKNOWN_CUSTOMER_NAME;
+    if (row.source === "email" && row.sourceReference) {
+      const msgRows = await db.select().from(emailMessages).where(and(
+        eq(emailMessages.orgId, orgId),
+        eq(emailMessages.providerMessageId, row.sourceReference),
+      )).limit(1);
+      const msg = msgRows[0]
+        ?? (await db.select().from(emailMessages).where(and(
+          eq(emailMessages.orgId, orgId),
+          eq(emailMessages.id, row.sourceReference),
+        )).limit(1))[0];
+      if (msg) {
+        resolvedName = resolveCustomerName({
+          fromEmail: msg.fromEmail,
+          subject: msg.subject,
+          body: msg.body,
+        }).name;
+      }
+    }
+
+    const newCustomerId = await findOrCreateCustomer(orgId, resolvedName);
+    if (newCustomerId === row.customerId) {
+      summary.unchanged++;
+      continue;
+    }
+    await db.update(quoteOpportunities)
+      .set({ customerId: newCustomerId })
+      .where(eq(quoteOpportunities.id, row.oppId));
+    if (resolvedName === UNKNOWN_CUSTOMER_NAME) summary.movedToUnknown++;
+    else summary.relinked++;
+  }
+
+  // Drop any legacy provider-name customer rows that now have zero linked
+  // opportunities. Safe because the only producer of these rows was the old
+  // ingestion path we just replaced.
+  for (const cid of affectedCustomerIds) {
+    const remaining = await db.select({ id: quoteOpportunities.id })
+      .from(quoteOpportunities)
+      .where(eq(quoteOpportunities.customerId, cid))
+      .limit(1);
+    if (remaining.length === 0) {
+      await db.delete(quoteCustomers).where(eq(quoteCustomers.id, cid));
+      summary.customerRowsDeleted++;
+    }
+  }
+
+  return summary;
+}
+
 export async function ensureEmailBackfill(orgId: string): Promise<void> {
   if (!orgId) return;
   if (_emailBackfillAttempted.has(orgId)) return;

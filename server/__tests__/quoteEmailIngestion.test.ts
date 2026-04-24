@@ -1,5 +1,20 @@
 import { describe, it, expect } from "vitest";
-import { parseQuoteEmail, decideLostReason } from "../services/quoteEmailIngestion";
+import { eq, inArray } from "drizzle-orm";
+import { parseQuoteEmail, decideLostReason, ingestQuoteFromEmail } from "../services/quoteEmailIngestion";
+import {
+  resolveCustomerName,
+  isFreeMailDomain,
+  isLegacyFreeMailCustomerName,
+  nameFromBusinessDomain,
+  extractCompanyFromText,
+  parseFromHeader,
+  UNKNOWN_CUSTOMER_NAME,
+  FREE_MAIL_PROVIDERS,
+} from "../services/customerNameResolver";
+import { db } from "../storage";
+import {
+  emailMessages, quoteOpportunities, quoteCustomers, quoteEvents, organizations,
+} from "@shared/schema";
 
 describe("parseQuoteEmail", () => {
   it("extracts a basic city,ST → city,ST lane", () => {
@@ -96,5 +111,340 @@ describe("decideLostReason (Task #482)", () => {
       const r = decideLostReason(phrase);
       expect(r.status).toBe(r.code);
     }
+  });
+});
+
+describe("resolveCustomerName (Task #578)", () => {
+  describe("parseFromHeader", () => {
+    it("parses bare email addresses", () => {
+      const h = parseFromHeader("ops@acme-logistics.com");
+      expect(h?.email).toBe("ops@acme-logistics.com");
+      expect(h?.localPart).toBe("ops");
+      expect(h?.domain).toBe("acme-logistics.com");
+      expect(h?.displayName).toBeNull();
+    });
+
+    it("parses Display Name <email> form", () => {
+      const h = parseFromHeader('"Jane Doe" <jane@gmail.com>');
+      expect(h?.displayName).toBe("Jane Doe");
+      expect(h?.email).toBe("jane@gmail.com");
+      expect(h?.domain).toBe("gmail.com");
+    });
+
+    it("returns null for unparseable input", () => {
+      expect(parseFromHeader("")).toBeNull();
+      expect(parseFromHeader(null)).toBeNull();
+      expect(parseFromHeader(undefined)).toBeNull();
+      expect(parseFromHeader("not-an-email")).toBeNull();
+      expect(parseFromHeader("trailing@")).toBeNull();
+    });
+  });
+
+  describe("isFreeMailDomain", () => {
+    it("flags every centralized provider", () => {
+      for (const d of FREE_MAIL_PROVIDERS) expect(isFreeMailDomain(d)).toBe(true);
+    });
+
+    it("is case-insensitive", () => {
+      expect(isFreeMailDomain("GMAIL.COM")).toBe(true);
+      expect(isFreeMailDomain("Yahoo.COM")).toBe(true);
+    });
+
+    it("does not flag business domains", () => {
+      expect(isFreeMailDomain("acme.com")).toBe(false);
+      expect(isFreeMailDomain("northwest-logistics.com")).toBe(false);
+      expect(isFreeMailDomain("uzbfreight.com")).toBe(false);
+    });
+
+    it("returns false for empty / null", () => {
+      expect(isFreeMailDomain(null)).toBe(false);
+      expect(isFreeMailDomain(undefined)).toBe(false);
+      expect(isFreeMailDomain("")).toBe(false);
+    });
+  });
+
+  describe("nameFromBusinessDomain", () => {
+    it("title-cases simple domains", () => {
+      expect(nameFromBusinessDomain("uzbfreight.com")).toBe("Uzbfreight");
+      expect(nameFromBusinessDomain("acme.com")).toBe("Acme");
+    });
+
+    it("splits hyphenated domains into words", () => {
+      expect(nameFromBusinessDomain("northwest-logistics.com")).toBe("Northwest Logistics");
+      expect(nameFromBusinessDomain("blue_ridge_freight.com")).toBe("Blue Ridge Freight");
+    });
+
+    it("preserves common acronyms", () => {
+      expect(nameFromBusinessDomain("acme-llc.com")).toBe("Acme LLC");
+      expect(nameFromBusinessDomain("foo-inc.com")).toBe("Foo Inc");
+      expect(nameFromBusinessDomain("usa-freight.com")).toBe("USA Freight");
+    });
+
+    it("strips ccTLD suffixes", () => {
+      expect(nameFromBusinessDomain("abc.co.uk")).toBe("Abc");
+      expect(nameFromBusinessDomain("foo-bar.com.au")).toBe("Foo Bar");
+    });
+  });
+
+  describe("extractCompanyFromText", () => {
+    it("pulls a company suffix pattern from a signature", () => {
+      const out = extractCompanyFromText(
+        "Quote: Atlanta to Dallas",
+        "Hi, please quote this lane.\n\nThanks,\nMarcus\nPatriot Haulers LLC\n555-1212",
+      );
+      expect(out).toBe("Patriot Haulers LLC");
+    });
+
+    it("recognizes 'on behalf of X'", () => {
+      const out = extractCompanyFromText(
+        "Spot rate request",
+        "I'm reaching out on behalf of Cascade Logistics for a Portland to Seattle quote.",
+      );
+      expect(out).toBe("Cascade Logistics");
+    });
+
+    it("rejects bare person-name signatures", () => {
+      const out = extractCompanyFromText(
+        "Quick rate",
+        "Need a rate Memphis to Chicago.\n\nThanks,\nSarah Williams\nsarah@gmail.com",
+      );
+      expect(out).toBeNull();
+    });
+
+    it("returns null when nothing matches", () => {
+      expect(extractCompanyFromText("Hello", "Hi, just checking in.")).toBeNull();
+      expect(extractCompanyFromText("", "")).toBeNull();
+      expect(extractCompanyFromText(null, null)).toBeNull();
+    });
+
+    it("strips HTML before scanning", () => {
+      const out = extractCompanyFromText(
+        "Quote",
+        "<div>Sent on behalf of <b>Heartland Express Inc</b></div>",
+      );
+      expect(out).toBe("Heartland Express Inc");
+    });
+  });
+
+  describe("resolveCustomerName", () => {
+    it("uses a business-domain root for non-free-mail senders", () => {
+      const r = resolveCustomerName({ fromEmail: "ops@uzbfreight.com" });
+      expect(r.name).toBe("Uzbfreight");
+      expect(r.confidence).toBe("high");
+    });
+
+    it("title-cases hyphenated business domains", () => {
+      const r = resolveCustomerName({ fromEmail: "dispatch@northwest-logistics.com" });
+      expect(r.name).toBe("Northwest Logistics");
+      expect(r.confidence).toBe("high");
+    });
+
+    it("never names a free-mail sender after the provider", () => {
+      const r = resolveCustomerName({
+        fromEmail: "someone@gmail.com",
+        subject: "Hello",
+        body: "Just checking in.",
+      });
+      expect(r.name).toBe(UNKNOWN_CUSTOMER_NAME);
+      expect(r.confidence).toBe("unknown");
+      // The legacy bug: must NOT return any provider name.
+      expect(r.name.toLowerCase()).not.toBe("gmail");
+    });
+
+    it("extracts company from body for free-mail senders", () => {
+      const r = resolveCustomerName({
+        fromEmail: "marcus@gmail.com",
+        subject: "Quote: ATL→CLT",
+        body: "Need a spot rate.\n\nThanks,\nMarcus Reed\nPatriot Haulers LLC",
+      });
+      expect(r.name).toBe("Patriot Haulers LLC");
+      expect(r.confidence).toBe("medium");
+    });
+
+    it("extracts 'on behalf of X' for free-mail senders", () => {
+      const r = resolveCustomerName({
+        fromEmail: "intern@gmail.com",
+        subject: "Lane request",
+        body: "I'm emailing on behalf of Cascade Logistics, can you quote?",
+      });
+      expect(r.name).toBe("Cascade Logistics");
+      expect(r.confidence).toBe("medium");
+    });
+
+    it("falls back to the From-header display name when no body match", () => {
+      const r = resolveCustomerName({
+        fromEmail: '"Acme Brokers" <ops@gmail.com>',
+        subject: "Rate?",
+        body: "Need a rate, thanks.",
+      });
+      expect(r.name).toBe("Acme Brokers");
+      expect(r.confidence).toBe("low");
+    });
+
+    it("ignores display names equal to the local part", () => {
+      const r = resolveCustomerName({
+        fromEmail: '"ops" <ops@gmail.com>',
+        subject: "Hi",
+        body: "Hi.",
+      });
+      expect(r.name).toBe(UNKNOWN_CUSTOMER_NAME);
+    });
+
+    it("ignores display names equal to the provider", () => {
+      const r = resolveCustomerName({
+        fromEmail: '"Gmail" <jane@gmail.com>',
+        subject: "Hi",
+        body: "Hi.",
+      });
+      expect(r.name).toBe(UNKNOWN_CUSTOMER_NAME);
+    });
+
+    it("ignores cross-provider display names (display = some OTHER free-mail provider)", () => {
+      // "Gmail" display on a yahoo.com sender — must not leak.
+      const r1 = resolveCustomerName({
+        fromEmail: '"Gmail" <user@yahoo.com>',
+        subject: "",
+        body: "",
+      });
+      expect(r1.name).toBe(UNKNOWN_CUSTOMER_NAME);
+
+      // "Yahoo" display on a gmail.com sender — must not leak.
+      const r2 = resolveCustomerName({
+        fromEmail: '"Yahoo" <user@gmail.com>',
+        subject: "",
+        body: "",
+      });
+      expect(r2.name).toBe(UNKNOWN_CUSTOMER_NAME);
+
+      // Same protection via the explicit fromName override path.
+      const r3 = resolveCustomerName({
+        fromEmail: "user@gmail.com",
+        fromName: "Outlook",
+        subject: "",
+        body: "",
+      });
+      expect(r3.name).toBe(UNKNOWN_CUSTOMER_NAME);
+
+      // And via every other provider in the centralized list.
+      for (const provider of ["Hotmail", "Aol", "Icloud", "Proton", "Gmx", "Zoho"]) {
+        const r = resolveCustomerName({
+          fromEmail: "user@yahoo.com",
+          fromName: provider,
+        });
+        expect(r.name, `display='${provider}' must not leak`).toBe(UNKNOWN_CUSTOMER_NAME);
+      }
+    });
+
+    it("ignores domain-form display names like 'gmail.com'", () => {
+      const r = resolveCustomerName({
+        fromEmail: '"gmail.com" <user@yahoo.com>',
+        subject: "",
+        body: "",
+      });
+      expect(r.name).toBe(UNKNOWN_CUSTOMER_NAME);
+    });
+
+    it("returns Unknown for empty / unparseable from-email", () => {
+      expect(resolveCustomerName({ fromEmail: "" }).name).toBe(UNKNOWN_CUSTOMER_NAME);
+      expect(resolveCustomerName({ fromEmail: null }).name).toBe(UNKNOWN_CUSTOMER_NAME);
+      expect(resolveCustomerName({ fromEmail: "garbage" }).name).toBe(UNKNOWN_CUSTOMER_NAME);
+    });
+
+    it("produces the same Unknown string every time (shared bucket key)", () => {
+      const a = resolveCustomerName({ fromEmail: "x@gmail.com", subject: "", body: "" });
+      const b = resolveCustomerName({ fromEmail: "y@yahoo.com", subject: "Hi", body: "Hi" });
+      const c = resolveCustomerName({ fromEmail: null });
+      expect(a.name).toBe(UNKNOWN_CUSTOMER_NAME);
+      expect(b.name).toBe(UNKNOWN_CUSTOMER_NAME);
+      expect(c.name).toBe(UNKNOWN_CUSTOMER_NAME);
+      expect(a.name === b.name && b.name === c.name).toBe(true);
+    });
+
+    it("respects an explicit fromName override", () => {
+      const r = resolveCustomerName({
+        fromEmail: "anon@gmail.com",
+        fromName: "Heartland Express",
+        subject: "",
+        body: "",
+      });
+      expect(r.name).toBe("Heartland Express");
+      expect(r.confidence).toBe("low");
+    });
+  });
+
+  /**
+   * DB-level lock-in for the "single shared Unknown bucket per org" rule.
+   * Ingest two free-mail emails with no extractable company name and assert
+   * both opportunities resolve to the SAME quote_customers row whose name
+   * is the canonical UNKNOWN_CUSTOMER_NAME.
+   */
+  describe("shared Unknown bucket (DB integration)", () => {
+    it("two free-mail ingestions with no extractable company share one quote_customers row per org", async () => {
+      const orgRow = await db.select({ id: organizations.id }).from(organizations).limit(1);
+      if (orgRow.length === 0) return; // No org in DB — skip silently in clean envs.
+      const orgId = orgRow[0].id;
+      const tag = `t578-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+      const messageIds: string[] = [];
+      const ingestedIds: string[] = [];
+      try {
+        for (const sender of ["alice@gmail.com", "bob@yahoo.com"]) {
+          const [row] = await db.insert(emailMessages).values({
+            orgId,
+            providerMessageId: `${tag}-${sender}`,
+            direction: "inbound",
+            fromEmail: sender,
+            toEmail: "ops@example.com",
+            subject: `${tag} Spot quote needed`,
+            body: "Need a rate from Chicago, IL to Atlanta, GA next Tuesday. Thanks.",
+          }).returning();
+          messageIds.push(row.id);
+        }
+
+        for (const id of messageIds) {
+          const [msg] = await db.select().from(emailMessages).where(eq(emailMessages.id, id)).limit(1);
+          const result = await ingestQuoteFromEmail(msg, { useAiFallback: false });
+          expect(result.status).toBe("ingested");
+          expect(result.quoteId).toBeTruthy();
+          ingestedIds.push(result.quoteId!);
+        }
+
+        const opps = await db.select({
+          id: quoteOpportunities.id,
+          customerId: quoteOpportunities.customerId,
+        }).from(quoteOpportunities).where(inArray(quoteOpportunities.id, ingestedIds));
+        expect(opps.length).toBe(2);
+        expect(opps[0].customerId).toBe(opps[1].customerId);
+
+        const [customer] = await db.select({ name: quoteCustomers.name }).from(quoteCustomers)
+          .where(eq(quoteCustomers.id, opps[0].customerId));
+        expect(customer.name).toBe(UNKNOWN_CUSTOMER_NAME);
+      } finally {
+        // Cleanup test artifacts (events FK first, then opps, then messages).
+        if (ingestedIds.length > 0) {
+          await db.delete(quoteEvents).where(inArray(quoteEvents.quoteId, ingestedIds));
+          await db.delete(quoteOpportunities).where(inArray(quoteOpportunities.id, ingestedIds));
+        }
+        if (messageIds.length > 0) {
+          await db.delete(emailMessages).where(inArray(emailMessages.id, messageIds));
+        }
+      }
+    }, 30_000);
+  });
+
+  describe("isLegacyFreeMailCustomerName", () => {
+    it("flags every legacy provider-root name", () => {
+      for (const name of ["Gmail", "gmail", "Yahoo", "Outlook", "Hotmail", "Live", "Aol", "Icloud", "Mac", "Me", "Pm", "Proton", "Protonmail", "Gmx", "Mail", "Zoho"]) {
+        expect(isLegacyFreeMailCustomerName(name)).toBe(true);
+      }
+    });
+
+    it("does not flag real business names", () => {
+      expect(isLegacyFreeMailCustomerName("Patriot Haulers LLC")).toBe(false);
+      expect(isLegacyFreeMailCustomerName("Cascade Logistics")).toBe(false);
+      expect(isLegacyFreeMailCustomerName(UNKNOWN_CUSTOMER_NAME)).toBe(false);
+      expect(isLegacyFreeMailCustomerName("")).toBe(false);
+      expect(isLegacyFreeMailCustomerName(null)).toBe(false);
+    });
   });
 });
