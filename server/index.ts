@@ -39,6 +39,8 @@ import { initGraphSubscriptionService } from "./graphSubscriptionService";
 import { initDeltaSyncScheduler } from "./services/mailboxDeltaSyncService";
 import { initWebexSyncScheduler } from "./routes/webex";
 import { runMigrations } from "./runMigrations";
+import { assertNoSchemaDrift } from "./checkSchemaDrift";
+import { Pool as SchemaCheckPool } from "pg";
 import { storage } from "./storage";
 import { WebhookHandlers } from "./webhookHandlers";
 import { setEmailLiveMode, EMAIL_LIVE_MODE_FLAG } from "./emailGate";
@@ -336,6 +338,22 @@ process.on("uncaughtException", (err) => {
   });
 
   await runMigrations();
+
+  // Schema-drift guard: after migrations run, verify the live DB has every
+  // table/column that `shared/schema.ts` declares. Catches the failure mode
+  // where a feature adds columns to the schema but forgets the matching
+  // ALTER in `runMigrations.ts` — which broke the Conversations tab in
+  // production twice (Tasks #532, #533, fixed reactively in #573).
+  // Production refuses to boot on drift; dev logs a loud warning.
+  const schemaDriftPool = new SchemaCheckPool({
+    connectionString: process.env.DATABASE_URL,
+  });
+  try {
+    await assertNoSchemaDrift(schemaDriftPool);
+  } finally {
+    await schemaDriftPool.end().catch(() => {});
+  }
+
   await storage.deleteEmptyFinancialUploads();
 
   // Load email live mode flag from DB and initialize the in-memory gate.
