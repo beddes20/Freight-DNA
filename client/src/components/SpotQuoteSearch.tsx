@@ -102,7 +102,52 @@ type SpotResult = {
     benchmark: number | null;
     benchmarkSource: string;
     confidence: string; message: string;
+    tierUsed?: MatchTier | null;
+    calibration?: {
+      suggestedLow: number | null; suggestedHigh: number | null;
+      source: string; tierUsed: MatchTier | null;
+      sample: number; note: string;
+    } | null;
   };
+  market: {
+    source: "trac";
+    band: { low: number; mid: number; high: number } | null;
+    rpm: { low: number | null; mid: number | null; high: number | null } | null;
+    contractRpm: number | null;
+    miles: number | null;
+    confidence: number | null;
+    loadCount: number | null;
+    avgRpm30d: number | null;
+    avgRpm90d: number | null;
+    forecast7dRpm: number | null;
+    originKma: string | null;
+    destKma: string | null;
+    equipment: "VAN" | "REEFER" | "FLATBED";
+    fetchedAt: number;
+  } | null;
+  marketStatus: { available: boolean; reason: string | null };
+  laneTraffic: {
+    totalLoads: number; loads30d: number; loads90d: number;
+    realized: number; available: number;
+    revenue: number; cost: number; margin: number; marginPct: number;
+    uniqueCarriers: number;
+    topCarriers: { name: string; loads: number; loads30d: number; loads90d: number; revenue: number; cost: number; margin: number; marginPct: number }[];
+  } | null;
+  carrierOutreach: {
+    carrierId: string | null; name: string;
+    fitScore: number; evidenceTier: string;
+    exactLaneRuns: number; nearbyRuns: number;
+    loads90d: number; marginPct: number;
+    performanceScore: number; tier: string;
+    doNotUse: boolean;
+    primaryEmail: string | null; phone: string | null;
+    inRolodex: boolean; reason: string | null;
+  }[];
+  corridorPattern: {
+    id: string; name: string; namedCorridor: string | null;
+    originRegion: string; destinationRegion: string;
+    description: string | null; isBaseline: boolean;
+  } | null;
   exactMatches: EnrichedQuote[];
   similarMatches: EnrichedQuote[];
   tieredMatches: TierGroup[];
@@ -989,6 +1034,21 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                 <AlertTriangle className="h-3 w-3" /> {data.alerts.length} alert{data.alerts.length === 1 ? "" : "s"}
               </button>
             )}
+            {data.corridorPattern && (
+              <span
+                className="text-[11px] px-1.5 py-0.5 rounded-[4px] bg-teal-500/10 text-teal-300 border border-teal-500/30 inline-flex items-center gap-1"
+                title={`${data.corridorPattern.originRegion} → ${data.corridorPattern.destinationRegion}${data.corridorPattern.description ? ` · ${data.corridorPattern.description}` : ""}`}
+                data-testid="chip-spot-corridor-pattern"
+              >
+                <MapPin className="h-3 w-3" />
+                {data.corridorPattern.namedCorridor || data.corridorPattern.name}
+              </span>
+            )}
+            {!data.marketStatus.available && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-[4px] bg-zinc-800 text-zinc-400 border border-zinc-700 inline-flex items-center gap-1" data-testid="chip-spot-market-unavailable">
+                <AlertTriangle className="h-3 w-3" /> Market data unavailable
+              </span>
+            )}
             <div className="ml-auto">
               <Button size="sm" variant="outline" onClick={() => onApplyLaneFilter(`${data.query.pickupCity} ${data.query.deliveryCity}`)}
                 className="h-7 border-zinc-700 hover:bg-zinc-800 text-[11px] px-2.5" data-testid="button-spot-apply-filter">
@@ -1012,40 +1072,16 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             <Kpi label="Last won" value={data.kpis.lastWonDays !== null ? `${data.kpis.lastWonDays}d` : "—"} />
           </div>
 
-          {/* 3. Pricing guidance — hero band */}
-          <div className="rounded-[4px] border border-amber-500/30 bg-gradient-to-br from-amber-500/[0.08] via-zinc-900 to-zinc-900 p-4" data-testid="spot-section-guidance">
-            <div className="flex items-start gap-6 flex-wrap">
-              <div className="flex flex-col">
-                <span className="text-[10px] uppercase tracking-wider text-amber-300/80 font-medium flex items-center gap-1">
-                  <Activity className="h-3 w-3" /> Suggested quote range
-                </span>
-                <span className="text-3xl font-bold text-amber-400 tabular-nums leading-tight mt-0.5" data-testid="text-spot-guidance-range">
-                  {data.guidance.suggestedLow !== null && data.guidance.suggestedHigh !== null
-                    ? `${fmtMoney(data.guidance.suggestedLow)} – ${fmtMoney(data.guidance.suggestedHigh)}`
-                    : "—"}
-                </span>
-                <span className="text-[10px] text-zinc-500 mt-0.5 capitalize">
-                  Source: {data.guidance.benchmarkSource.replace(/_/g, " ")}
-                </span>
-              </div>
-              {data.guidance.benchmark !== null && (
-                <div className="flex flex-col border-l border-zinc-800 pl-6">
-                  <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">SONAR benchmark</span>
-                  <span className="text-xl text-zinc-100 tabular-nums font-semibold mt-0.5">{fmtMoney(data.guidance.benchmark)}</span>
-                  <span className="text-[10px] text-zinc-500 mt-0.5">market reference</span>
-                </div>
-              )}
-              <div className="flex flex-col border-l border-zinc-800 pl-6">
-                <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Confidence</span>
-                <div className="mt-0.5">
-                  <KpiBadgeInline value={data.guidance.confidence} freshness={data.kpis.freshnessLabel} />
-                </div>
-              </div>
-              <div className="flex-1 min-w-[260px] text-[12px] text-zinc-300 leading-relaxed border-l border-zinc-800 pl-6">
-                {data.guidance.message}
-              </div>
-            </div>
-          </div>
+          {/* 3. Pricing guidance — hero band (Task #515: TRAC primary, internal calibration) */}
+          <PricingGuidanceBand
+            guidance={data.guidance}
+            market={data.market}
+            marketStatus={data.marketStatus}
+            freshnessLabel={data.kpis.freshnessLabel}
+          />
+
+          {/* Lane traffic (Task #515) — load_fact aggregates */}
+          {data.laneTraffic && <LaneTrafficCard traffic={data.laneTraffic} />}
 
           {/* 4. Tiered match history — Task #514 */}
           <TieredMatchSections
@@ -1122,28 +1158,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                 </div>
               )}
             </SectionCard>
-            <SectionCard title="Carrier / Buy History" icon={<Truck className="h-3.5 w-3.5 text-amber-400" />} testId="spot-section-carrier">
-              {data.carrierHistory.length === 0 ? (
-                <div className="text-zinc-500">No carrier purchase history.</div>
-              ) : (
-                <table className="w-full text-xs">
-                  <thead className="text-zinc-500 text-[10px] uppercase tracking-wider">
-                    <tr><th className="text-left">Carrier</th><th>Loads</th><th>Avg buy</th><th>Range</th><th>Last</th></tr>
-                  </thead>
-                  <tbody>
-                    {data.carrierHistory.map(c => (
-                      <tr key={c.name} className="border-t border-zinc-800/60" data-testid={`spot-carrier-${c.name}`}>
-                        <td className="py-1 text-zinc-100">{c.name}</td>
-                        <td className="text-center tabular-nums">{c.loads}</td>
-                        <td className="text-center tabular-nums">{fmtMoney(c.avgPaid)}</td>
-                        <td className="text-center tabular-nums text-zinc-400">{fmtMoney(c.lowPaid)} – {fmtMoney(c.highPaid)}</td>
-                        <td className="text-center tabular-nums text-zinc-400">{c.lastUsedDays !== null ? `${c.lastUsedDays}d` : "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </SectionCard>
+            <CarrierOutreachList outreach={data.carrierOutreach} />
           </div>
 
           {/* 9. Internal variance + 10. Attractiveness */}
@@ -1359,6 +1374,203 @@ function QuoteListSection({ title, icon, testId, emptyNode, quotes, onPickQuote,
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Task #515 — Pricing guidance band. Shows the TRAC market band as the
+ * primary suggested range when available, with the rep's internal
+ * P25-P75 won-quote band displayed underneath as a calibration line.
+ */
+function PricingGuidanceBand({ guidance, market, marketStatus, freshnessLabel }: {
+  guidance: SpotResult["guidance"];
+  market: SpotResult["market"];
+  marketStatus: SpotResult["marketStatus"];
+  freshnessLabel: string | null;
+}): JSX.Element {
+  const isTrac = guidance.benchmarkSource === "trac";
+  const cal = guidance.calibration ?? null;
+  return (
+    <div className="rounded-[4px] border border-amber-500/30 bg-gradient-to-br from-amber-500/[0.08] via-zinc-900 to-zinc-900 p-4" data-testid="spot-section-guidance">
+      <div className="flex items-start gap-6 flex-wrap">
+        <div className="flex flex-col">
+          <span className="text-[10px] uppercase tracking-wider text-amber-300/80 font-medium flex items-center gap-1">
+            <Activity className="h-3 w-3" /> Suggested quote range
+            {isTrac && (
+              <span className="ml-1 text-[9px] px-1 py-0.5 rounded-[3px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30" data-testid="badge-spot-band-trac">TRAC</span>
+            )}
+          </span>
+          <span className="text-3xl font-bold text-amber-400 tabular-nums leading-tight mt-0.5" data-testid="text-spot-guidance-range">
+            {guidance.suggestedLow !== null && guidance.suggestedHigh !== null
+              ? `${fmtMoney(guidance.suggestedLow)} – ${fmtMoney(guidance.suggestedHigh)}`
+              : "—"}
+          </span>
+          <span className="text-[10px] text-zinc-500 mt-0.5 capitalize">
+            Source: {guidance.benchmarkSource.replace(/_/g, " ")}
+          </span>
+        </div>
+        {guidance.benchmark !== null && (
+          <div className="flex flex-col border-l border-zinc-800 pl-6">
+            <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">{isTrac ? "TRAC mid" : "SONAR benchmark"}</span>
+            <span className="text-xl text-zinc-100 tabular-nums font-semibold mt-0.5">{fmtMoney(guidance.benchmark)}</span>
+            <span className="text-[10px] text-zinc-500 mt-0.5">market reference</span>
+          </div>
+        )}
+        <div className="flex flex-col border-l border-zinc-800 pl-6">
+          <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-medium">Confidence</span>
+          <div className="mt-0.5">
+            <KpiBadgeInline value={guidance.confidence} freshness={freshnessLabel} />
+          </div>
+        </div>
+        <div className="flex-1 min-w-[260px] text-[12px] text-zinc-300 leading-relaxed border-l border-zinc-800 pl-6">
+          {guidance.message}
+          {!marketStatus.available && marketStatus.reason && (
+            <div className="mt-1 text-[10px] text-zinc-500" data-testid="text-spot-market-reason">
+              Market data unavailable: {marketStatus.reason}
+            </div>
+          )}
+        </div>
+      </div>
+      {(cal || (isTrac && market)) && (
+        <div className="mt-3 pt-3 border-t border-zinc-800 grid grid-cols-1 md:grid-cols-3 gap-3 text-[11px]" data-testid="spot-section-calibration">
+          {cal && (
+            <div className="flex flex-col">
+              <span className="text-[10px] uppercase tracking-wider text-zinc-500">Internal calibration</span>
+              <span className="text-zinc-200 tabular-nums" data-testid="text-spot-calibration-band">
+                {cal.suggestedLow !== null && cal.suggestedHigh !== null
+                  ? `${fmtMoney(cal.suggestedLow)} – ${fmtMoney(cal.suggestedHigh)}`
+                  : "—"}
+              </span>
+              <span className="text-[10px] text-zinc-500">{cal.note}</span>
+            </div>
+          )}
+          {market?.rpm?.mid != null && (
+            <div className="flex flex-col">
+              <span className="text-[10px] uppercase tracking-wider text-zinc-500">TRAC RPM (low / mid / high)</span>
+              <span className="text-zinc-200 tabular-nums">
+                {market.rpm.low?.toFixed(2) ?? "—"} / {market.rpm.mid.toFixed(2)} / {market.rpm.high?.toFixed(2) ?? "—"}
+              </span>
+              <span className="text-[10px] text-zinc-500">
+                {market.miles ? `${market.miles.toLocaleString()} mi` : ""}{market.contractRpm != null ? ` · contract $${market.contractRpm.toFixed(2)}` : ""}
+              </span>
+            </div>
+          )}
+          {market && (market.avgRpm30d != null || market.forecast7dRpm != null) && (
+            <div className="flex flex-col">
+              <span className="text-[10px] uppercase tracking-wider text-zinc-500">Trend</span>
+              <span className="text-zinc-200 tabular-nums">
+                30d {market.avgRpm30d?.toFixed(2) ?? "—"} · 90d {market.avgRpm90d?.toFixed(2) ?? "—"}
+              </span>
+              <span className="text-[10px] text-zinc-500">
+                7d forecast: {market.forecast7dRpm?.toFixed(2) ?? "—"}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Task #515 — Lane Traffic card. Shows aggregate load_fact volume
+ * and the top carriers actually moving freight on this state-state lane.
+ */
+function LaneTrafficCard({ traffic }: { traffic: NonNullable<SpotResult["laneTraffic"]> }): JSX.Element {
+  return (
+    <SectionCard title="Lane Traffic" icon={<TrendingUp className="h-3.5 w-3.5 text-amber-400" />} testId="spot-section-lane-traffic">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-2">
+        <Kpi label="Loads (90d)" value={traffic.loads90d.toLocaleString()} sub={`${traffic.loads30d.toLocaleString()} in 30d`} />
+        <Kpi label="Realized" value={traffic.realized.toLocaleString()} sub={`${traffic.available.toLocaleString()} avail`} />
+        <Kpi label="Margin %" value={`${traffic.marginPct.toFixed(1)}%`} sub={fmtMoney(traffic.margin)} />
+        <Kpi label="Revenue" value={fmtMoney(traffic.revenue)} />
+        <Kpi label="Carriers" value={traffic.uniqueCarriers.toLocaleString()} />
+      </div>
+      {traffic.topCarriers.length === 0 ? (
+        <div className="text-zinc-500 text-xs">No realized loads on this lane in the last 90 days.</div>
+      ) : (
+        <table className="w-full text-xs">
+          <thead className="text-zinc-500 text-[10px] uppercase tracking-wider">
+            <tr>
+              <th className="text-left">Carrier</th>
+              <th className="text-right">Loads (90d / 30d)</th>
+              <th className="text-right">Revenue</th>
+              <th className="text-right">Margin %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {traffic.topCarriers.map((c, i) => (
+              <tr key={`${c.name}-${i}`} className="border-t border-zinc-800/60" data-testid={`row-spot-traffic-carrier-${i}`}>
+                <td className="py-1 text-zinc-100">{c.name}</td>
+                <td className="text-right tabular-nums text-zinc-300">{c.loads90d.toLocaleString()} / {c.loads30d.toLocaleString()}</td>
+                <td className="text-right tabular-nums text-zinc-300">{fmtMoney(c.revenue)}</td>
+                <td className="text-right tabular-nums text-zinc-300">{c.marginPct.toFixed(1)}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </SectionCard>
+  );
+}
+
+/**
+ * Task #515 — Carrier Outreach List. Replaces SpotCarrierHistory.
+ * Surfaces top 25 carriers from carrier_lane_fit ⨝ scorecard ⨝ rolodex,
+ * with a "call/email" affordance and an in-rolodex flag.
+ */
+function CarrierOutreachList({ outreach }: { outreach: SpotResult["carrierOutreach"] }): JSX.Element {
+  return (
+    <SectionCard title="Carriers to Call" icon={<Truck className="h-3.5 w-3.5 text-amber-400" />} testId="spot-section-carrier-outreach">
+      {outreach.length === 0 ? (
+        <div className="text-zinc-500">No fit carriers found for this lane.</div>
+      ) : (
+        <table className="w-full text-xs">
+          <thead className="text-zinc-500 text-[10px] uppercase tracking-wider">
+            <tr>
+              <th className="text-left">Carrier</th>
+              <th className="text-right">Fit</th>
+              <th className="text-right">90d / Exact</th>
+              <th className="text-right">Margin %</th>
+              <th className="text-left">Tier</th>
+              <th className="text-left">Contact</th>
+            </tr>
+          </thead>
+          <tbody>
+            {outreach.map((c, i) => (
+              <tr key={`${c.carrierId ?? c.name}-${i}`} className={`border-t border-zinc-800/60 ${c.doNotUse ? "opacity-50" : ""}`} data-testid={`row-spot-outreach-${i}`}>
+                <td className="py-1 text-zinc-100">
+                  <div className="flex items-center gap-1.5">
+                    <span>{c.name}</span>
+                    {c.inRolodex && (
+                      <span className="text-[9px] px-1 py-0.5 rounded-[3px] bg-blue-500/15 text-blue-300 border border-blue-500/30" title="In your rolodex">★</span>
+                    )}
+                    {c.doNotUse && (
+                      <span className="text-[9px] px-1 py-0.5 rounded-[3px] bg-red-500/15 text-red-300 border border-red-500/30" title="Do not use">DNU</span>
+                    )}
+                  </div>
+                </td>
+                <td className="text-right tabular-nums text-zinc-300">{c.fitScore.toFixed(0)}</td>
+                <td className="text-right tabular-nums text-zinc-300">{c.loads90d} / {c.exactLaneRuns}</td>
+                <td className="text-right tabular-nums text-zinc-300">{c.marginPct.toFixed(1)}%</td>
+                <td className="text-zinc-400 text-[10px] uppercase">{c.tier}</td>
+                <td className="text-zinc-400 text-[10px]">
+                  <div className="flex items-center gap-2">
+                    {c.primaryEmail && (
+                      <a href={`mailto:${c.primaryEmail}`} className="text-amber-300 hover:text-amber-200 underline" data-testid={`link-outreach-email-${i}`}>email</a>
+                    )}
+                    {c.phone && (
+                      <a href={`tel:${c.phone}`} className="text-amber-300 hover:text-amber-200 underline" data-testid={`link-outreach-phone-${i}`}>call</a>
+                    )}
+                    {!c.primaryEmail && !c.phone && <span className="text-zinc-600">—</span>}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </SectionCard>
   );
 }
 

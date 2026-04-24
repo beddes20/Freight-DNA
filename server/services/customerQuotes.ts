@@ -15,6 +15,10 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { getCityCoords, haversineDistanceMiles } from "../cityCoordinates";
 import { cityToKma } from "../kmaMapping";
+import {
+  getLaneMarket, getLaneTraffic, getLaneCarriers, getCorridorPattern,
+  type LaneMarket, type LaneTraffic, type CarrierOutreachItem, type CorridorPattern,
+} from "./spotMarketData";
 
 export type QuoteFilters = {
   customerId?: string;
@@ -1890,11 +1894,24 @@ export type SpotGuidance = {
   suggestedLow: number | null;
   suggestedHigh: number | null;
   benchmark: number | null;
-  benchmarkSource: PricingIntelligence["benchmarkSource"];
+  benchmarkSource: PricingIntelligence["benchmarkSource"] | "trac";
   confidence: PricingIntelligence["confidence"];
   message: string;
   /** Task #514 — which tier the guidance band was actually derived from. */
   tierUsed: MatchTier | null;
+  /**
+   * Task #515 — Internal won-quote band kept as a calibration reference
+   * when TRAC becomes the primary band. Lets reps compare the market
+   * benchmark against their own historical wins.
+   */
+  calibration?: {
+    suggestedLow: number | null;
+    suggestedHigh: number | null;
+    source: PricingIntelligence["benchmarkSource"];
+    tierUsed: MatchTier | null;
+    sample: number;
+    note: string;
+  } | null;
 };
 
 export type SpotAlert = {
@@ -1921,6 +1938,12 @@ export type SpotSearchResult = {
   internalVariance: SpotInternalVariance[];
   attractiveness: SpotAttractiveness;
   alerts: SpotAlert[];
+  /** Task #515 — External data layering. Each lookup degrades independently. */
+  market: LaneMarket | null;
+  marketStatus: { available: boolean; reason: string | null };
+  laneTraffic: LaneTraffic | null;
+  carrierOutreach: CarrierOutreachItem[];
+  corridorPattern: CorridorPattern | null;
 };
 
 function avg(nums: number[]): number {
@@ -2328,6 +2351,74 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
   const exactMatches = enrich(exactScoped.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
   const similarMatches = enrich(similarScoped.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
 
+  // Task #515 — External data layering. Run TRAC + load_fact + Carrier Hub
+  // outreach + corridor pattern in parallel; each degrades independently.
+  const [marketRes, laneTrafficRes, carrierOutreachRes, corridorRes] = await Promise.all([
+    getLaneMarket(input.pickupCity, input.pickupState, input.deliveryCity, input.deliveryState, equipment || null)
+      .catch(err => ({ ok: false as const, reason: (err as Error).message ?? "TRAC error" })),
+    getLaneTraffic(orgId, input.pickupState, input.deliveryState, equipment || null)
+      .catch(() => null),
+    getLaneCarriers(orgId, input.pickupState, input.deliveryState, equipment || null)
+      .catch(() => [] as CarrierOutreachItem[]),
+    getCorridorPattern(orgId, input.pickupState, input.deliveryState)
+      .catch(() => null),
+  ]);
+  const market: LaneMarket | null = marketRes.ok ? marketRes.market : null;
+  const marketStatus = marketRes.ok
+    ? { available: true, reason: null }
+    : { available: false, reason: marketRes.reason };
+  const laneTraffic: LaneTraffic | null = laneTrafficRes;
+  const carrierOutreach: CarrierOutreachItem[] = carrierOutreachRes ?? [];
+  const corridorPattern: CorridorPattern | null = corridorRes;
+
+  // Promote TRAC band as the primary pricing benchmark when present;
+  // demote the internal won-quote band to "calibration" so reps still
+  // see how their wins compare. Customer-scoped guidance is left
+  // untouched (it already merges TRAC via getPricingIntelligence).
+  if (!customerId && market && market.band) {
+    const internalLow = guidance.suggestedLow;
+    const internalHigh = guidance.suggestedHigh;
+    const internalSource = guidance.benchmarkSource;
+    const internalTier = guidance.tierUsed;
+    const internalSample = (() => {
+      if (!guidance.tierUsed) return 0;
+      // Lazy: re-derive from the won-by-tier counts via tierBucketsScoped.
+      return tierBucketsScoped[guidance.tierUsed].filter(r => isWon(r.outcomeStatus)).length;
+    })();
+    const tracMid = market.band.mid;
+    const calNote = internalLow != null && internalHigh != null
+      ? `Internal P25–P75 across ${internalSample} won quote(s)${internalTier ? ` at the ${TIER_LABEL[internalTier].toLowerCase()} tier` : ""}.`
+      : "No internal won-quote history to calibrate against.";
+    const calibration: NonNullable<SpotGuidance["calibration"]> = {
+      suggestedLow: internalLow,
+      suggestedHigh: internalHigh,
+      source: internalSource === "trac" ? "none" : internalSource,
+      tierUsed: internalTier,
+      sample: internalSample,
+      note: calNote,
+    };
+    const conf: SpotGuidance["confidence"] =
+      market.confidence != null && market.confidence >= 70 ? "high"
+      : market.confidence != null && market.confidence >= 40 ? "medium"
+      : "low";
+    guidance = {
+      suggestedLow: market.band.low,
+      suggestedHigh: market.band.high,
+      benchmark: tracMid,
+      benchmarkSource: "trac",
+      confidence: conf,
+      message: `TRAC market band ${market.originKma}→${market.destKma} (${market.equipment})${market.loadCount ? ` · ${market.loadCount} loads` : ""}${market.confidence != null ? ` · ${market.confidence}% confidence` : ""}.`,
+      tierUsed: internalTier,
+      calibration,
+    };
+  } else if (market && market.band && customerId) {
+    // Customer-scoped path: still expose TRAC as a benchmark line if
+    // pricingIntelligence didn't already populate one.
+    if (guidance.benchmark == null) {
+      guidance = { ...guidance, benchmark: market.band.mid };
+    }
+  }
+
   // Task #514 — per-tier KPIs so each tier card can stand alone.
   const nowMs = Date.now();
   const tieredMatches: SpotTierGroup[] = MATCH_TIERS
@@ -2379,6 +2470,11 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
     internalVariance,
     attractiveness,
     alerts,
+    market,
+    marketStatus,
+    laneTraffic,
+    carrierOutreach,
+    corridorPattern,
   };
 }
 

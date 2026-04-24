@@ -23,6 +23,7 @@ FreightDNA is built on a React frontend, an Express.js backend, and a PostgreSQL
 -   **AI-Powered Features**: AI-generated talking points, health score narratives, touchpoint summaries, proactive nudges, AI action execution (logging touchpoints, creating tasks), and AI email drafting using GPT-4o-mini.
 -   **Next Best Action (NBA)**: Recommendation engine based on freight data rules.
 -   **Lane Work Queue (LWQ)**: Assignable lane workflow with carrier outreach and email tracking.
+-   **Spot Quote Search External Layering**: TRAC market band promoted as primary pricing benchmark with internal won-quote band kept as calibration; load_fact lane traffic, Carrier Hub outreach list, and geographic corridor chip layered into search results via parallel, independently-degrading lookups; TRAC results cached 1hr per (lane,equipment).
 -   **Visibility Model**: Role and collaboration-based access control for managers and account collaborators.
 -   **Carrier Hub**: Centralized carrier intelligence, contact management, and Carrier Reliability Score.
 -   **Rate Intelligence & Rep Coaching**: SONAR-driven benchmarks and GPT-4o coaching cards.
