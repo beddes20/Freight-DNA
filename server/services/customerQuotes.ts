@@ -8,6 +8,7 @@ import {
   type QuoteOpportunity, type QuoteOutcomeStatus, type QuoteCustomer, type QuoteRep,
   type QuoteCarrier, type QuoteLaneGroup, type QuoteOutcomeReason, type QuoteSavedView,
 } from "@shared/schema";
+import { UNKNOWN_CUSTOMER_NAME } from "./customerNameResolver";
 import { getStaleQuoteFollowUps } from "./staleQuoteFollowup";
 import { getActivePatternAlertsForOrg } from "./quotePatternShift";
 import { normalizeEquipmentType } from "@shared/laneFormatters";
@@ -34,6 +35,11 @@ export type QuoteFilters = {
   activeOnly?: boolean;
   lostOnly?: boolean;
   expiringOnly?: boolean;
+  // Task #584 — restricts the result set to opportunities whose customer is
+  // the shared "Unknown — needs review" bucket created by the customer-name
+  // resolver (Task #578). Resolved server-side via `resolveUnknownCustomerIds`
+  // so the client doesn't need to know any specific customer ids.
+  needsReviewOnly?: boolean;
 };
 
 export type EnrichedQuote = QuoteOpportunity & {
@@ -109,6 +115,12 @@ export type Snapshot = {
     avgQuoted: number; avgCarrierCost: number;
     avgMarginDollar: number; avgMarginPct: number;
     avgResponseTime: number; pending: number; expiringSoon: number;
+    // Task #584 — count of opportunities sitting in the shared
+    // UNKNOWN_CUSTOMER_NAME bucket. Computed against the org's full quote
+    // set (independent of `needsReviewOnly`) so the dashboard chip can
+    // surface the open backlog even when reps are looking at a different
+    // slice.
+    needsReview: number;
     trend: { winRate: number; total: number; avgMargin: number; avgResponse: number };
   };
   customers: QuoteCustomer[];
@@ -477,7 +489,26 @@ export async function purgeDemoSeed(orgId?: string): Promise<DemoSeedPurgeSummar
   };
 }
 
-function applyFilters(rows: QuoteOpportunity[], f: QuoteFilters): QuoteOpportunity[] {
+/**
+ * Task #584 — collect the customer IDs in the org that represent the shared
+ * "Unknown — needs review" bucket. We match by name (case-insensitive) rather
+ * than a hard-coded id because seeded/legacy orgs may have more than one
+ * historical bucket row that needs draining.
+ */
+function unknownCustomerIdsFromMap(customerMap: Map<string, QuoteCustomer>): Set<string> {
+  const target = UNKNOWN_CUSTOMER_NAME.toLowerCase();
+  const out = new Set<string>();
+  customerMap.forEach((c, id) => {
+    if (c.name.trim().toLowerCase() === target) out.add(id);
+  });
+  return out;
+}
+
+function applyFilters(
+  rows: QuoteOpportunity[],
+  f: QuoteFilters,
+  unknownCustomerIds?: Set<string>,
+): QuoteOpportunity[] {
   return rows.filter((r) => {
     if (f.customerId && r.customerId !== f.customerId) return false;
     if (f.laneGroupId && r.laneGroupId !== f.laneGroupId) return false;
@@ -494,6 +525,11 @@ function applyFilters(rows: QuoteOpportunity[], f: QuoteFilters): QuoteOpportuni
       if (r.outcomeStatus !== "pending" || !r.validThrough) return false;
       const ms = r.validThrough.getTime() - Date.now();
       if (ms < 0 || ms > 3 * 24 * 3600 * 1000) return false;
+    }
+    if (f.needsReviewOnly) {
+      // No bucket exists yet for this org — nothing can match.
+      if (!unknownCustomerIds || unknownCustomerIds.size === 0) return false;
+      if (!unknownCustomerIds.has(r.customerId)) return false;
     }
     if (f.laneSearch) {
       const lane = `${r.originCity},${r.originState} ${r.destCity},${r.destState}`.toLowerCase();
@@ -546,7 +582,8 @@ export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: 
   const ctx = await loadContext(orgId);
   const all = await db.select().from(quoteOpportunities)
     .where(eq(quoteOpportunities.organizationId, orgId));
-  const filtered = applyFilters(all, filters);
+  const unknownIds = unknownCustomerIdsFromMap(ctx.customerMap);
+  const filtered = applyFilters(all, filters, unknownIds);
   const enriched = enrich(filtered, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
 
   const dir = sortDir === "asc" ? 1 : -1;
@@ -644,7 +681,8 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
     .where(eq(quoteOpportunities.organizationId, orgId))
     .orderBy(desc(quoteOpportunities.requestDate));
 
-  const filtered = applyFilters(allOpps, filters);
+  const unknownIds = unknownCustomerIdsFromMap(ctx.customerMap);
+  const filtered = applyFilters(allOpps, filters, unknownIds);
   const won = filtered.filter(r => isWon(r.outcomeStatus));
   const lost = filtered.filter(r => isLost(r.outcomeStatus));
   const pending = filtered.filter(r => r.outcomeStatus === "pending");
@@ -915,7 +953,17 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
 
   return {
     total,
-    kpis: { total, won: won.length, lost: lost.length, winRate, avgQuoted, avgCarrierCost, avgMarginDollar, avgMarginPct, avgResponseTime, pending: pending.length, expiringSoon, trend },
+    kpis: {
+      total, won: won.length, lost: lost.length, winRate, avgQuoted, avgCarrierCost,
+      avgMarginDollar, avgMarginPct, avgResponseTime, pending: pending.length, expiringSoon,
+      // Task #584 — count of *all* opps in the unknown bucket for this org
+      // (not just the current slice) so the chip surfaces the open backlog
+      // even when the user has narrowed the dashboard to a different view.
+      needsReview: unknownIds.size === 0
+        ? 0
+        : allOpps.reduce((n, r) => n + (unknownIds.has(r.customerId) ? 1 : 0), 0),
+      trend,
+    },
     customers: ctx.customers, reps: ctx.reps, reasons: ctx.reasons, laneGroups: ctx.laneGroups, carriers: ctx.carriers,
     customerPerformance, taxonomy: taxonomyCounts,
     validityWindow: { expiringList, agingBuckets, staleCount, activeCount, expiredCount },
@@ -1365,6 +1413,40 @@ export async function createManualQuote(
   });
 
   return created;
+}
+
+/**
+ * Task #584 — create (or fetch a case-insensitively matching existing)
+ * `quote_customers` row inside the org. Used by the Customer Quotes
+ * dashboard's inline reassign action so reps clearing the
+ * "Unknown — needs review" bucket can spin up a brand-new customer
+ * record without leaving the row.
+ *
+ * Idempotent on `lower(name)` — if a customer with the same name (modulo
+ * whitespace and case) already exists we return that row unchanged so the
+ * dashboard can't fork the same logical customer into two records.
+ */
+export async function createQuoteCustomer(
+  orgId: string,
+  rawName: string,
+  segment?: string | null,
+): Promise<QuoteCustomer> {
+  const name = rawName.trim().replace(/\s+/g, " ");
+  if (!name) throw new Error("Customer name is required");
+  if (name.length > 120) throw new Error("Customer name is too long");
+  const [existing] = await db.select().from(quoteCustomers).where(and(
+    eq(quoteCustomers.organizationId, orgId),
+    sql`lower(${quoteCustomers.name}) = lower(${name})`,
+  )).limit(1);
+  if (existing) return existing;
+  const [row] = await db.insert(quoteCustomers)
+    .values({
+      organizationId: orgId,
+      name,
+      segment: segment && segment.trim() ? segment.trim().slice(0, 80) : null,
+    })
+    .returning();
+  return row;
 }
 
 export async function listSavedViews(orgId: string): Promise<QuoteSavedView[]> {
@@ -1855,7 +1937,8 @@ export async function loadLostStreakAlertsForOrg(orgId: string, opts?: { thresho
 export async function exportCsv(orgId: string, filters: QuoteFilters): Promise<string> {
   const ctx = await loadContext(orgId);
   const all = await db.select().from(quoteOpportunities).where(eq(quoteOpportunities.organizationId, orgId));
-  const filtered = applyFilters(all, filters);
+  const unknownIds = unknownCustomerIdsFromMap(ctx.customerMap);
+  const filtered = applyFilters(all, filters, unknownIds);
   const enriched = enrich(filtered, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
   enriched.sort((a, b) => b.requestDate.getTime() - a.requestDate.getTime());
   return quotesToCsv(enriched);

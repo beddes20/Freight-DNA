@@ -112,6 +112,8 @@ type Snapshot = {
     avgQuoted: number; avgCarrierCost: number;
     avgMarginDollar: number; avgMarginPct: number;
     avgResponseTime: number; pending: number; expiringSoon: number;
+    // Task #584 — open count of opps in the shared "Unknown — needs review" bucket.
+    needsReview: number;
     trend: Trend;
   };
   customers: Customer[];
@@ -153,6 +155,8 @@ type Filters = {
   activeOnly?: boolean;
   lostOnly?: boolean;
   expiringOnly?: boolean;
+  // Task #584 — quick filter for the shared "Unknown — needs review" customer bucket.
+  needsReviewOnly?: boolean;
 };
 
 type SortKey =
@@ -225,6 +229,10 @@ const ATTRACT_COLORS: Record<AttractivenessLabel, string> = {
 const PIE_COLORS = ["#10b981", "#84cc16", "#ef4444", "#f97316", "#f59e0b", "#a855f7", "#71717a", "#525252", "#facc15"];
 const PAGE_SIZE = 50;
 const ROW_HEIGHT = 32;
+// Task #584 — must match server `UNKNOWN_CUSTOMER_NAME` exactly so the
+// dashboard can recognise the shared bucket and surface the inline
+// reassign action.
+const UNKNOWN_CUSTOMER_NAME = "Unknown — needs review";
 
 // ---------- Helpers ----------
 function fmtMoney(v: number | string | null | undefined, opts: { dash?: boolean } = {}): string {
@@ -256,6 +264,7 @@ function filtersFromUrl(search: string): Filters {
   if (p.get("activeOnly") === "true") f.activeOnly = true;
   if (p.get("lostOnly") === "true") f.lostOnly = true;
   if (p.get("expiringOnly") === "true") f.expiringOnly = true;
+  if (p.get("needsReviewOnly") === "true") f.needsReviewOnly = true;
   return f;
 }
 function trendIcon(v: number): JSX.Element {
@@ -458,6 +467,34 @@ export default function CustomerQuotesPage(): JSX.Element {
     onError: (err: Error) => toast({ title: "Update failed", description: err.message, variant: "destructive" }),
   });
 
+  // Task #584 — used by the inline reassign popover to spin up a fresh
+  // quote_customers row when the rep can't find a match in the existing list.
+  const createCustomerMutation = useMutation({
+    mutationFn: async (input: { name: string; segment?: string | null }): Promise<Customer> => {
+      const res = await apiRequest("POST", "/api/customer-quotes/customers", input);
+      return res.json() as Promise<Customer>;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/snapshot"] });
+    },
+    onError: (err: Error) => toast({ title: "Could not create customer", description: err.message, variant: "destructive" }),
+  });
+
+  // Task #584 — reassign a quote out of the "Unknown — needs review" bucket.
+  // Two paths: pick an existing customer (just patch the FK) or create a new
+  // one first (POST /customers, then patch). Both invalidate snapshot+list so
+  // the chip counter and table reflect the change immediately.
+  const reassignQuoteCustomer = async (quoteId: string, choice: { existingId: string } | { newName: string }): Promise<void> => {
+    let customerId: string;
+    if ("existingId" in choice) {
+      customerId = choice.existingId;
+    } else {
+      const created = await createCustomerMutation.mutateAsync({ name: choice.newName });
+      customerId = created.id;
+    }
+    await updateQuoteMutation.mutateAsync({ id: quoteId, patch: { customerId } });
+  };
+
   const updateFilter = (patch: Partial<Filters>): void => setFilters(f => ({ ...f, ...patch }));
   const clearAll = (): void => setFilters({});
   const removeFilter = (k: keyof Filters): void => setFilters(f => { const c = { ...f }; delete c[k]; return c; });
@@ -579,6 +616,29 @@ export default function CustomerQuotesPage(): JSX.Element {
           <FilterBox label="Active only">
             <div className="h-8 flex items-center"><Switch checked={!!filters.activeOnly} onCheckedChange={v => updateFilter({ activeOnly: v ? true : undefined })} data-testid="switch-active-only" /></div>
           </FilterBox>
+          {/* Task #584 — chip-style quick-filter for the shared "Unknown — needs review" bucket. */}
+          <FilterBox label="Triage">
+            <button
+              type="button"
+              onClick={() => updateFilter({ needsReviewOnly: filters.needsReviewOnly ? undefined : true })}
+              data-testid="chip-needs-review"
+              aria-pressed={!!filters.needsReviewOnly}
+              className={`h-8 inline-flex items-center gap-1.5 px-2.5 rounded-full border text-[11px] font-medium transition-colors ${
+                filters.needsReviewOnly
+                  ? "bg-amber-500/25 text-amber-800 dark:text-amber-200 border-amber-500/60"
+                  : "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 hover:bg-amber-500/20"
+              }`}
+            >
+              <AlertTriangle className="h-3 w-3" />
+              <span>Needs review</span>
+              <span
+                className="inline-flex items-center justify-center min-w-[18px] h-[16px] px-1 rounded-full bg-amber-600/90 text-white text-[10px] tabular-nums"
+                data-testid="badge-needs-review-count"
+              >
+                {data?.kpis.needsReview ?? 0}
+              </span>
+            </button>
+          </FilterBox>
           {hasFilters && (
             <>
               <Button size="sm" variant="ghost" onClick={clearAll} className="h-8 text-xs text-muted-foreground hover:text-foreground" data-testid="button-clear-filters">Clear all</Button>
@@ -600,6 +660,7 @@ export default function CustomerQuotesPage(): JSX.Element {
               if (k === "lostOnly") label = "Lost only";
               if (k === "activeOnly") label = "Active only";
               if (k === "expiringOnly") label = "Expiring <3d";
+              if (k === "needsReviewOnly") label = "Needs review";
               return (
                 <button key={k} onClick={() => removeFilter(k as keyof Filters)}
                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 hover:bg-amber-500/25"
@@ -727,6 +788,8 @@ export default function CustomerQuotesPage(): JSX.Element {
                         }
                       }}
                       pendingId={updateQuoteMutation.isPending ? (updateQuoteMutation.variables as { id: string } | undefined)?.id : undefined}
+                      customers={data.customers}
+                      onReassign={reassignQuoteCustomer}
                     />
                   </CardContent>
                 </Card>
@@ -988,12 +1051,128 @@ const COLUMNS: ColumnDef[] = [
   { key: "score", label: "Score", align: "right" },
 ];
 
-function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, reasons, onInlineOutcome, pendingId }: {
+/**
+ * Task #584 — inline reassign popover surfaced on rows whose customer is the
+ * shared "Unknown — needs review" bucket. Lets a rep either pick an existing
+ * customer or type in a new name (created on the fly via POST /customers)
+ * without leaving the dashboard.
+ */
+function ReassignCustomerControl({ quoteId, customers, onReassign }: {
+  quoteId: string;
+  customers: Customer[];
+  onReassign: (quoteId: string, choice: { existingId: string } | { newName: string }) => Promise<void>;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [busy, setBusy] = useState(false);
+  // Surface unknown-bucket entries in the menu would be misleading — strip them.
+  const matchable = useMemo(
+    () => customers.filter(c => c.name !== UNKNOWN_CUSTOMER_NAME),
+    [customers],
+  );
+  const trimmed = search.trim();
+  const lower = trimmed.toLowerCase();
+  const filtered = useMemo(
+    () => trimmed ? matchable.filter(c => c.name.toLowerCase().includes(lower)) : matchable.slice(0, 50),
+    [matchable, trimmed, lower],
+  );
+  const exactMatch = trimmed
+    ? matchable.find(c => c.name.toLowerCase() === lower) ?? null
+    : null;
+
+  const handlePick = async (existingId: string): Promise<void> => {
+    setBusy(true);
+    try {
+      await onReassign(quoteId, { existingId });
+      setOpen(false);
+      setSearch("");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const handleCreate = async (): Promise<void> => {
+    if (!trimmed) return;
+    setBusy(true);
+    try {
+      await onReassign(quoteId, { newName: trimmed });
+      setOpen(false);
+      setSearch("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setSearch(""); }}>
+      <PopoverTrigger asChild>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-5 px-1.5 text-[10px] font-medium border-amber-500/40 text-amber-700 hover:bg-amber-500/15 dark:text-amber-300"
+          data-testid={`button-reassign-${quoteId}`}
+          disabled={busy}
+        >
+          {busy ? "Saving…" : "Assign"}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[260px] p-0" align="start" data-testid={`popover-reassign-${quoteId}`}>
+        <Command shouldFilter={false}>
+          <CommandInput
+            placeholder="Search or type new name…"
+            value={search}
+            onValueChange={setSearch}
+            data-testid={`input-reassign-${quoteId}`}
+          />
+          <CommandList>
+            <CommandEmpty className="py-2 text-xs text-muted-foreground text-center">
+              No matching customers
+            </CommandEmpty>
+            {filtered.length > 0 && (
+              <CommandGroup heading="Existing">
+                {filtered.slice(0, 20).map(c => (
+                  <CommandItem
+                    key={c.id}
+                    value={c.id}
+                    onSelect={() => { void handlePick(c.id); }}
+                    disabled={busy}
+                    data-testid={`option-reassign-${quoteId}-${c.id}`}
+                  >
+                    <Check className="h-3 w-3 mr-2 opacity-0" />
+                    <span className="truncate">{c.name}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+            {trimmed && !exactMatch && (
+              <CommandGroup heading="Create new">
+                <CommandItem
+                  value={`__create__${trimmed}`}
+                  onSelect={() => { void handleCreate(); }}
+                  disabled={busy}
+                  data-testid={`option-reassign-create-${quoteId}`}
+                >
+                  <Plus className="h-3 w-3 mr-2" />
+                  <span className="truncate">Create &quot;{trimmed}&quot;</span>
+                </CommandItem>
+              </CommandGroup>
+            )}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, reasons, onInlineOutcome, pendingId, customers, onReassign }: {
   rows: Quote[]; sortKey: SortKey; sortDir: "asc" | "desc";
   onSort: (k: SortKey) => void; onRowClick: (id: string) => void; isLoading: boolean;
   reasons: Reason[];
   onInlineOutcome: (id: string, status: string, reasonId: string | null) => void;
   pendingId: string | undefined;
+  // Task #584 — passed in so the customer cell can render a reassign popover
+  // for rows linked to the shared "Unknown — needs review" bucket.
+  customers: Customer[];
+  onReassign: (quoteId: string, choice: { existingId: string } | { newName: string }) => Promise<void>;
 }): JSX.Element {
   const [scrollTop, setScrollTop] = useState(0);
   const viewportH = 600;
@@ -1040,7 +1219,23 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
                 style={{ height: ROW_HEIGHT }}
                 data-testid={`row-quote-${q.id}`}>
                 <td className="px-2 whitespace-nowrap text-foreground/90">{new Date(q.requestDate).toLocaleDateString()}</td>
-                <td className="px-2 whitespace-nowrap text-foreground font-medium">{formatCustomerName(q.customerName)}</td>
+                <td className="px-2 whitespace-nowrap text-foreground font-medium">
+                  {q.customerName === UNKNOWN_CUSTOMER_NAME ? (
+                    <span className="inline-flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300" title="Resolver could not match this opportunity to a customer">
+                        <AlertTriangle className="h-3 w-3" />
+                        {q.customerName}
+                      </span>
+                      <ReassignCustomerControl
+                        quoteId={q.id}
+                        customers={customers}
+                        onReassign={onReassign}
+                      />
+                    </span>
+                  ) : (
+                    formatCustomerName(q.customerName)
+                  )}
+                </td>
                 <td className="px-2 whitespace-nowrap text-foreground/90">{q.originCity}, {q.originState}</td>
                 <td className="px-2 whitespace-nowrap text-foreground/90">{q.destCity}, {q.destState}</td>
                 <td className="px-2 whitespace-nowrap text-muted-foreground">{q.equipment}</td>

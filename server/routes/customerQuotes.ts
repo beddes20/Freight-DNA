@@ -8,6 +8,7 @@ import {
   getPricingIntelligence,
   searchSpotQuote, laneAutocomplete,
   purgeDemoSeed,
+  createQuoteCustomer,
   type QuoteFilters, type ListSortKey,
 } from "../services/customerQuotes";
 import { syncQuoteOutcomesFromTms } from "../services/quoteTmsSync";
@@ -39,6 +40,8 @@ const filtersSchema = z.object({
   activeOnly: z.boolean().optional(),
   lostOnly: z.boolean().optional(),
   expiringOnly: z.boolean().optional(),
+  // Task #584 — quick filter for the shared "Unknown — needs review" bucket.
+  needsReviewOnly: z.boolean().optional(),
 }).strict();
 
 const queryFiltersSchema = filtersSchema.extend({
@@ -46,6 +49,7 @@ const queryFiltersSchema = filtersSchema.extend({
   activeOnly: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
   lostOnly: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
   expiringOnly: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
+  needsReviewOnly: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
 });
 
 const SORT_KEYS = [
@@ -80,6 +84,7 @@ function parseFilters(req: Request): QuoteFilters {
   if (d.activeOnly) f.activeOnly = true;
   if (d.lostOnly) f.lostOnly = true;
   if (d.expiringOnly) f.expiringOnly = true;
+  if (d.needsReviewOnly) f.needsReviewOnly = true;
   return f;
 }
 
@@ -180,6 +185,25 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Invalid input";
       console.error("[customer-quotes] update error:", err);
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // Task #584 — inline "Create new customer" used by the dashboard's
+  // Unknown-bucket reassign popover. Idempotent on case-insensitive name.
+  app.post("/api/customer-quotes/customers", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const data = z.object({
+        name: z.string().trim().min(1, "Name is required").max(120),
+        segment: z.string().trim().max(80).optional().nullable(),
+      }).parse(req.body);
+      const customer = await createQuoteCustomer(user.organizationId, data.name, data.segment ?? null);
+      res.json(customer);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Invalid input";
+      console.error("[customer-quotes] create customer error:", err);
       res.status(400).json({ error: msg });
     }
   });
