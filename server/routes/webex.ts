@@ -1850,6 +1850,20 @@ export function registerWebexRoutes(app: Express) {
       if (managerId) {
         const team = orgUsers.filter(u => u.managerId === managerId || u.id === managerId);
         scopedUserIds = new Set(team.map(u => u.id));
+      } else if (user.role === "director") {
+        // Task #525: a Director with no managerId filter used to see every
+        // rep's calls in the org. Default-scope to the director's own
+        // recursive reporting tree. Admin / Sales Director / NAM keep their
+        // existing org-wide-or-managerId-filtered behaviour.
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        scopedUserIds = new Set(teamIds);
+      }
+      // If the caller passed a managerId that isn't in the director's tree,
+      // collapse the visible set to the intersection so they can't pivot to
+      // another team's data via URL tampering.
+      if (managerId && user.role === "director") {
+        const teamIds = new Set(await storage.getTeamMemberIds(user.id, user.organizationId));
+        scopedUserIds = new Set(Array.from(scopedUserIds ?? new Set<string>()).filter(id => teamIds.has(id)));
       }
 
       // Pull all call touchpoints for the org once. Filtered downstream by
@@ -2050,6 +2064,14 @@ export function registerWebexRoutes(app: Express) {
       if (!rep) return res.status(404).json({ error: "Rep not found in this organization" });
       if (managerId && rep.managerId !== managerId && rep.id !== managerId) {
         return res.status(403).json({ error: "Rep is outside the selected team" });
+      }
+      // Task #525: Directors may only inspect call logs for reps within
+      // their own reporting tree, even if a target userId is guessed.
+      if (user.role === "director" && rep.id !== user.id) {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        if (!teamIds.includes(rep.id)) {
+          return res.status(403).json({ error: "Rep is outside your reporting tree" });
+        }
       }
 
       // Pull the rep's call-type touchpoints in the window. We use the

@@ -362,3 +362,43 @@ export async function canAccessCompany(user: User, companyId: string): Promise<b
   if (visibleIds === null) return true;
   return visibleIds.includes(companyId);
 }
+
+/**
+ * Returns the set of user IDs whose rep-level data the viewer is allowed to
+ * see across the platform. This is the canonical source of truth for any
+ * "which reps can this user see" question (touchpoint history, today list,
+ * company touchpoint summary, rep pickers, per-rep coaching/report URLs, …).
+ *
+ *   - Admin                      → null   (means "all users in org")
+ *   - Director / Sales Director  → recursive reporting tree (incl. self)
+ *   - National Account Manager   → recursive reporting tree (incl. self)
+ *   - Sales / Logistics Manager  → recursive reporting tree (incl. self)
+ *     (these roles often have direct reports too; team helper handles the
+ *     no-reports case correctly by returning [self])
+ *   - Everyone else              → [user.id]
+ *
+ * Use this with `canSeeRepUser(user, targetUserId)` to harden direct-fetch
+ * endpoints against ID guessing. For listing endpoints, intersect the set
+ * with the rows' owner/loggedBy field (null means no filter).
+ */
+export async function getVisibleRepUserIds(user: User): Promise<string[] | null> {
+  if (user.role === "admin") return null;
+  if (
+    user.role === "director" ||
+    user.role === "sales_director" ||
+    user.role === "national_account_manager" ||
+    user.role === "sales" ||
+    user.role === "logistics_manager"
+  ) {
+    return storage.getTeamMemberIds(user.id, user.organizationId);
+  }
+  return [user.id];
+}
+
+/** Convenience predicate built on top of `getVisibleRepUserIds`. */
+export async function canSeeRepUser(user: User, targetUserId: string): Promise<boolean> {
+  if (user.id === targetUserId) return true;
+  const visible = await getVisibleRepUserIds(user);
+  if (visible === null) return true;
+  return visible.includes(targetUserId);
+}

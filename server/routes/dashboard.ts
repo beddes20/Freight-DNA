@@ -358,7 +358,7 @@ export function registerDashboardRoutes(app: Express): void {
 
       const allUsers = await storage.getUsers(user.organizationId);
       let amIds: string[];
-      if (user.role === "admin" || user.role === "director") {
+      if (user.role === "admin") {
         const directorIdParam = typeof req.query.directorId === "string" ? req.query.directorId : null;
         if (directorIdParam) {
           // Scope to AMs whose manager (NAM) reports to the selected director
@@ -367,6 +367,15 @@ export function registerDashboardRoutes(app: Express): void {
         } else {
           amIds = allUsers.filter(u => u.role === "account_manager").map(u => u.id);
         }
+      } else if (user.role === "director") {
+        // Task #525: Directors used to see every AM in the org. Restrict to
+        // AMs whose NAM (or any descendant) is inside the director's
+        // reporting tree.
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        const teamSet = new Set(teamIds);
+        amIds = allUsers
+          .filter(u => u.role === "account_manager" && u.managerId && teamSet.has(u.managerId))
+          .map(u => u.id);
       } else {
         amIds = allUsers.filter(u => u.managerId === user.id && u.role === "account_manager").map(u => u.id);
       }

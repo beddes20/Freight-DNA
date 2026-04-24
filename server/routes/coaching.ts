@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { and, desc, eq, gte } from "drizzle-orm";
 import { storage, db } from "../storage";
-import { getCurrentUser, requireAuth } from "../auth";
+import { canSeeRepUser, getCurrentUser, requireAuth } from "../auth";
 import {
   buildCoachingCards,
   buildCoachingCardForRep,
@@ -17,6 +17,24 @@ import {
 
 const MANAGER_ROLES = new Set(["admin", "director", "sales_director", "national_account_manager"]);
 
+// Task #525: gate access to a coaching pair (manager + rep) by reporting tree.
+// Admin and Sales Director keep org-wide access. Anyone directly involved
+// (the manager or the rep on the session) keeps access regardless of role.
+// Every other viewer — including NAMs and Directors — gets access only when
+// every participant is inside the viewer's recursive reporting tree
+// (`canSeeRepUser`). This preserves prior NAM access to their AMs while
+// stopping cross-team viewing by Directors and other managers.
+async function canAccessCoachingPair(user: any, ...participantIds: Array<string | undefined | null>): Promise<boolean> {
+  const ids = participantIds.filter((v): v is string => typeof v === "string" && v.length > 0);
+  if (ids.length === 0) return false;
+  if (user.role === "admin" || user.role === "sales_director") return true;
+  if (ids.includes(user.id)) return true;
+  for (const id of ids) {
+    if (!(await canSeeRepUser(user, id))) return false;
+  }
+  return true;
+}
+
 export function registerCoachingRoutes(app: Express) {
   // ── 1-on-1 Sessions ────────────────────────────────────────────────────────
 
@@ -26,9 +44,9 @@ export function registerCoachingRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { managerId, repId } = req.query as { managerId?: string; repId?: string };
       if (!managerId || !repId) return res.status(400).json({ error: "managerId and repId required" });
-      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
-      const isInvolved = user.id === managerId || user.id === repId;
-      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      if (!(await canAccessCoachingPair(user, managerId, repId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const session = await storage.getOrCreateActiveSession(managerId, repId);
       const topics = await storage.getTopicsBySession(session.id);
       res.json({ session, topics });
@@ -122,9 +140,9 @@ export function registerCoachingRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { managerId, repId } = req.query as { managerId?: string; repId?: string };
       if (!managerId || !repId) return res.status(400).json({ error: "managerId and repId required" });
-      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
-      const isInvolved = user.id === managerId || user.id === repId;
-      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      if (!(await canAccessCoachingPair(user, managerId, repId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const sessions = await storage.getArchivedSessions(managerId, repId);
       const sessionsWithTopics = await Promise.all(
         sessions.map(async (s) => ({
@@ -145,9 +163,9 @@ export function registerCoachingRoutes(app: Express) {
       const { meetingDate } = req.body;
       const session = await storage.getSession((req.params.id as string));
       if (!session) return res.status(404).json({ error: "Session not found" });
-      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
-      const isInvolved = user.id === session.namId || user.id === session.amId;
-      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      if (!(await canAccessCoachingPair(user, session.namId, session.amId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const updated = await storage.updateSessionMeetingDate((req.params.id as string), meetingDate || null);
       if (!updated) return res.status(404).json({ error: "Session not found" });
       res.json(updated);
@@ -182,9 +200,9 @@ export function registerCoachingRoutes(app: Express) {
       }
       const session = await storage.getSession((req.params.id as string));
       if (!session) return res.status(404).json({ error: "Session not found" });
-      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
-      const isInvolved = user.id === session.namId || user.id === session.amId;
-      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      if (!(await canAccessCoachingPair(user, session.namId, session.amId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const updated = await storage.updateSessionMeetingLink((req.params.id as string), normalizedLink);
       if (!updated) return res.status(404).json({ error: "Session not found" });
       res.json(updated);
@@ -202,9 +220,9 @@ export function registerCoachingRoutes(app: Express) {
       const session = await storage.getSession((req.params.id as string));
       if (!session) return res.status(404).json({ error: "Session not found" });
       if (session.status !== "active") return res.status(400).json({ error: "Cannot update notes on an archived session" });
-      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
-      const isInvolved = user.id === session.namId || user.id === session.amId;
-      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      if (!(await canAccessCoachingPair(user, session.namId, session.amId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const updated = await storage.updateSessionNotes((req.params.id as string), notes);
       if (!updated) return res.status(404).json({ error: "Session not found" });
       res.json(updated);
@@ -219,9 +237,9 @@ export function registerCoachingRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { managerId, repId } = req.query as { managerId?: string; repId?: string };
       if (!managerId || !repId) return res.status(400).json({ error: "managerId and repId required" });
-      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
-      const isInvolved = user.id === managerId || user.id === repId;
-      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      if (!(await canAccessCoachingPair(user, managerId, repId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const actionItems = await storage.getActionItemsByPairing(managerId, repId);
       res.json(actionItems);
     } catch (error) {
@@ -235,9 +253,9 @@ export function registerCoachingRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { managerId } = req.query as { managerId?: string };
       if (!managerId) return res.status(400).json({ error: "managerId required" });
-      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
-      const isSelf = user.id === managerId;
-      if (!isAdmin && !isSelf) return res.status(403).json({ error: "Access denied" });
+      if (!(await canAccessCoachingPair(user, managerId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const activeSessions = await storage.getActiveSessionsForManager(managerId);
       const overview = await Promise.all(
         activeSessions.map(async (s) => {
@@ -275,9 +293,11 @@ export function registerCoachingRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { repId } = req.query as { repId?: string };
       if (!repId) return res.status(400).json({ error: "repId required" });
-      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director" || user.role === "national_account_manager";
-      const isSelf = user.id === repId;
-      if (!isAdmin && !isSelf) return res.status(403).json({ error: "Access denied" });
+      // Suggested topics are visible to the rep, their NAM, and any manager
+      // up the tree (Task #525 limits Director to their reporting tree).
+      if (!(await canAccessCoachingPair(user, repId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
 
       const suggestions: { type: string; text: string; account?: string }[] = [];
       const today = new Date();
@@ -342,9 +362,9 @@ export function registerCoachingRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { namId, amId } = req.query as { namId?: string; amId?: string };
       if (!namId || !amId) return res.status(400).json({ error: "namId and amId required" });
-      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
-      const isInvolved = user.id === namId || user.id === amId;
-      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      if (!(await canAccessCoachingPair(user, namId, amId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const record = await storage.getDevelopmentGoals(namId, amId);
       res.json({ content: record?.content ?? "", updatedAt: record?.updatedAt ?? null });
     } catch (error) {
@@ -358,9 +378,9 @@ export function registerCoachingRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { namId, amId } = req.query as { namId?: string; amId?: string };
       if (!namId || !amId) return res.status(400).json({ error: "namId and amId required" });
-      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
-      const isInvolved = user.id === namId || user.id === amId;
-      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      if (!(await canAccessCoachingPair(user, namId, amId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       const { content } = req.body;
       if (typeof content !== "string") return res.status(400).json({ error: "Content must be a string" });
       const record = await storage.upsertDevelopmentGoals(namId, amId, content, user.id);
@@ -480,13 +500,15 @@ export function registerCoachingRoutes(app: Express) {
       if (!lm) return res.status(404).json({ error: "User not found" });
       const managerId = lm.managerId;
       const isSelfOrManager = viewer.id === lmId || viewer.id === managerId;
-      const isAdminOrDirector = viewer.role === "admin" || viewer.role === "director" || viewer.role === "sales_director";
+      // Admin / Sales Director keep elevated access. Director must have the
+      // LM in their reporting tree (Task #525). Other managers/leads in the
+      // chain may also see the milestones if the LM is in their team.
+      const isOrgWide = viewer.role === "admin" || viewer.role === "sales_director";
       let isInChain = false;
-      if (!isSelfOrManager && !isAdminOrDirector) {
-        const teamIds = await storage.getTeamMemberIds(viewer.id, viewer.organizationId);
-        isInChain = teamIds.includes(lmId);
+      if (!isSelfOrManager && !isOrgWide) {
+        isInChain = await canSeeRepUser(viewer, lmId);
       }
-      if (!isSelfOrManager && !isAdminOrDirector && !isInChain) return res.status(403).json({ error: "Access denied" });
+      if (!isSelfOrManager && !isOrgWide && !isInChain) return res.status(403).json({ error: "Access denied" });
       if (!managerId) return res.json({ milestones: [] });
       const row = await storage.getDevelopmentGoals(managerId, lmId);
       if (!row) return res.json({ milestones: [] });
@@ -509,11 +531,15 @@ export function registerCoachingRoutes(app: Express) {
       const lm = await storage.getUser(lmId);
       if (!lm) return res.status(404).json({ error: "User not found" });
       const managerId = lm.managerId;
+      // Admin keeps blanket update authority. The LM and their direct
+      // manager always retain edit access. Anyone else (including a
+      // Director) must have the LM in their reporting tree (Task #525).
       const canUpdate =
         viewer.id === managerId ||
         viewer.role === "admin" ||
         viewer.id === lmId ||
-        viewer.role === "director";
+        (viewer.role === "sales_director")
+        || (await canSeeRepUser(viewer, lmId));
       if (!canUpdate) return res.status(403).json({ error: "Access denied" });
       if (!managerId) return res.status(400).json({ error: "LM has no manager assigned" });
       const { milestones } = req.body;
@@ -588,10 +614,11 @@ export function registerCoachingRoutes(app: Express) {
         return res.status(403).json({ error: "Manager or admin role required" });
       }
       const repId = req.params.repId as string;
-      // Permit: admin/director always; NAM/sales_director if rep is in their team chain
-      if (user.role !== "admin" && user.role !== "director") {
-        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
-        if (!teamIds.includes(repId)) {
+      // Task #525: admin / sales_director keep blanket access. Every other
+      // manager (including Director and NAM) must have the rep inside
+      // their own reporting tree.
+      if (user.role !== "admin" && user.role !== "sales_director") {
+        if (!(await canSeeRepUser(user, repId))) {
           return res.status(403).json({ error: "Rep is not in your team" });
         }
       }
@@ -693,8 +720,13 @@ export function registerCoachingRoutes(app: Express) {
       );
       if (!existing) return res.status(404).json({ error: "Note not found" });
       const isOwner = existing.managerId === user.id;
-      const isAdmin = user.role === "admin" || user.role === "director";
-      if (!isOwner && !isAdmin) return res.status(403).json({ error: "Access denied" });
+      // Admin keeps full delete authority. Director may delete a note only
+      // when the note's author is in their reporting tree (Task #525).
+      const isAdmin = user.role === "admin";
+      const isDirectorOverTeam = user.role === "director"
+        && existing.managerId
+        && (await canSeeRepUser(user, existing.managerId));
+      if (!isOwner && !isAdmin && !isDirectorOverTeam) return res.status(403).json({ error: "Access denied" });
       await db.delete(coachingNotes).where(eq(coachingNotes.id, noteId));
       res.status(204).send();
     } catch (err) {

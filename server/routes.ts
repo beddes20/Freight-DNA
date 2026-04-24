@@ -44,7 +44,7 @@ import multer from "multer";
 import XLSX from "xlsx";
 import bcrypt from "bcrypt";
 import { storage } from "./storage";
-import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
+import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany, getVisibleRepUserIds, canSeeRepUser } from "./auth";
 import { isAdmin, isLeadership, canEditOtherUsers, isAdminOrDirector } from "./lib/roles";
 import { projectNbaCard, collectProjectionIds } from "./lib/nbaCardProjection";
 import { geocodeCity, haversineDistance } from "./geocoding";
@@ -698,9 +698,15 @@ RULES FOR YOUR RESPONSES:
 
   app.get("/api/users/sales", requireAuth, async (req, res) => {
     try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const allUsers = await storage.getUsers(req.session.organizationId!);
+      // Scope by viewer's reporting tree so Directors only see sales reps in
+      // their team. Admin gets the full org list (visible === null).
+      const visible = await getVisibleRepUserIds(currentUser);
       const salesUsers = allUsers
         .filter(u => u.role === "sales" || u.role === "sales_director")
+        .filter(u => visible === null || visible.includes(u.id))
         .map(({ password, ...u }) => u);
       res.json(salesUsers);
     } catch (error) {
@@ -4750,8 +4756,9 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
       const { userId } = req.params as Record<string, string>;
       const period = (req.body?.period as string) === "monthly" ? "monthly" : "weekly";
-      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
-      if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
+      // Harden against ID-guessing: a Director may only email a report for a
+      // rep inside their reporting tree (Task #525). Admin can email anyone.
+      if (!(await canSeeRepUser(viewer, userId))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const { sendRepReportEmail } = await import("./repReportScheduler");
@@ -4849,8 +4856,9 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
       const { userId } = req.params as Record<string, string>;
       const period = (req.query.period as string) === "monthly" ? "monthly" : "weekly";
-      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
-      if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
+      // Harden against ID-guessing — viewer must have rep-visibility on the
+      // requested user (own ID, or in their reporting tree). Task #525.
+      if (!(await canSeeRepUser(viewer, userId))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const data = await storage.getRepReport(userId, period);
@@ -4866,8 +4874,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
       const { userId } = req.params as Record<string, string>;
-      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
-      if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
+      // Same per-rep visibility check as the read endpoint above (Task #525).
+      if (!(await canSeeRepUser(viewer, userId))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const period = (req.body?.period as string) === "monthly" ? "monthly" : "weekly";
@@ -4892,8 +4900,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
       const { userId } = req.params as Record<string, string>;
-      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
-      if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
+      // Same per-rep visibility check as the read/snapshot endpoints (Task #525).
+      if (!(await canSeeRepUser(viewer, userId))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const snapshots = await storage.getReportCardSnapshots(userId);
@@ -5078,26 +5086,18 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const contactMap = new Map(allContacts.map(c => [c.id, c]));
       const userMap = new Map(allUsers.map(u => [u.id, u]));
 
-      // Determine which user IDs are visible to this user based on role
-      let allowedUserIds: Set<string> | null = null;
-      const role = user.role;
-      if (role === "admin" || role === "sales" || role === "sales_director") {
-        allowedUserIds = null; // see all
-      } else if (role === "director") {
-        // see everyone in org (or scope by team — show all for now)
-        allowedUserIds = null;
-      } else if (role === "national_account_manager") {
-        // see their team (AMs under them) + themselves
-        const teamUsers = allUsers.filter(u => u.managerId === user.id || u.id === user.id);
-        allowedUserIds = new Set(teamUsers.map(u => u.id));
-      } else {
-        // AM, LM, LC — own only
-        allowedUserIds = new Set([user.id]);
-      }
+      // Single source of truth for "which reps' touchpoints am I allowed to
+      // see?" — admin sees everyone, all other managerial roles (director,
+      // sales_director, NAM, sales, LM) get their recursive reporting tree,
+      // everyone else sees just themselves. Replaces a long ad-hoc switch
+      // that accidentally let directors see the entire org (Task #525).
+      const visibleRepIds = await getVisibleRepUserIds(user);
+      const allowedUserIds: Set<string> | null =
+        visibleRepIds === null ? null : new Set(visibleRepIds);
 
       let filtered = allTps;
       if (allowedUserIds !== null) {
-        filtered = filtered.filter(tp => allowedUserIds!.has(tp.loggedById));
+        filtered = filtered.filter(tp => allowedUserIds.has(tp.loggedById));
       }
 
       const enriched = filtered.map(tp => {
@@ -5903,11 +5903,18 @@ Respond with valid JSON only:
         storage.getCompanies(user.organizationId),
       ]);
       const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
+      // Scope per-company touchpoint counts to the touchpoints logged by reps
+      // the viewer is allowed to see. Without this, Directors saw counts that
+      // included reps outside their reporting tree (Task #525).
+      const visibleRepIds = await getVisibleRepUserIds(user);
+      const visibleSet: Set<string> | null =
+        visibleRepIds === null ? null : new Set(visibleRepIds);
       const summary: Record<string, { week: number; month: number; lastType: string | null; lastDate: string | null; daysSince: number | null }> = {};
       // Track latest tp per company (sorted by date desc)
       const latestByCompany: Record<string, { type: string; date: string }> = {};
       for (const tp of all) {
         if (!orgCompanyIds.has(tp.companyId)) continue;
+        if (visibleSet !== null && (!tp.loggedById || !visibleSet.has(tp.loggedById))) continue;
         if (!summary[tp.companyId]) summary[tp.companyId] = { week: 0, month: 0, lastType: null, lastDate: null, daysSince: null };
         if (tp.date >= monthStr) summary[tp.companyId].month++;
         if (tp.date >= weekStr) summary[tp.companyId].week++;
@@ -5954,16 +5961,10 @@ Respond with valid JSON only:
 
       const allOrgTps = allTodayTps.filter(t => t.date === todayStr && t.loggedById && orgUserIds.has(t.loggedById) && orgCompanyIds.has(t.companyId));
 
-      let visibleUserIds: Set<string>;
-      if (isLeadership(user)) {
-        visibleUserIds = orgUserIds;
-      } else if (user.role === "national_account_manager" || user.role === "sales") {
-        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
-        visibleUserIds = new Set(teamIds);
-        visibleUserIds.add(user.id);
-      } else {
-        visibleUserIds = new Set([user.id]);
-      }
+      // Use the canonical helper so Directors only see today's touchpoints
+      // for reps in their reporting tree (Task #525). Admin still sees all.
+      const visibleRepIds = await getVisibleRepUserIds(user);
+      const visibleUserIds: Set<string> = visibleRepIds === null ? orgUserIds : new Set(visibleRepIds);
 
       const filteredTps = allOrgTps.filter(t => t.loggedById && visibleUserIds.has(t.loggedById));
 
@@ -6250,14 +6251,22 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      // Org-scoped fetch — admins/directors/sales_directors see every passoff
-      // in THEIR org (not all orgs as the prior `{all:true}` query did).
-      const passoffs = isLeadership(currentUser)
-        ? await storage.getPtoPassoffsByOrg(req.session.organizationId!)
-        : await storage.getPtoPassoffsByOrg(req.session.organizationId!, {
-            createdById: currentUser.id,
-            coveringUserId: currentUser.id,
-          });
+      // Admins see every passoff in THEIR org. Directors / Sales Directors /
+      // NAMs see passoffs created-by or covering anyone in their reporting
+      // tree (Task #525). Everyone else only sees passoffs they created or
+      // are covering.
+      const visibleRepIds = await getVisibleRepUserIds(currentUser);
+      let passoffs;
+      if (visibleRepIds === null) {
+        passoffs = await storage.getPtoPassoffsByOrg(req.session.organizationId!);
+      } else {
+        const all = await storage.getPtoPassoffsByOrg(req.session.organizationId!);
+        const visibleSet = new Set(visibleRepIds);
+        passoffs = all.filter(p =>
+          (p.createdById && visibleSet.has(p.createdById)) ||
+          (p.coveringUserId && visibleSet.has(p.coveringUserId))
+        );
+      }
       const allItems = await Promise.all(passoffs.map(p => storage.getPtoPassoffItems(p.id)));
       // Collect all unique companyIds across all items to batch-fetch names
       const allCompanyIds = [...new Set(allItems.flat().map(i => i.companyId).filter(Boolean) as string[])];

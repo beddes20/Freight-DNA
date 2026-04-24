@@ -26,7 +26,7 @@ import {
   users,
   InsertEmailConversationThread,
 } from "@shared/schema";
-import { requireAuth, getCurrentUser } from "../auth";
+import { requireAuth, getCurrentUser, canSeeRepUser } from "../auth";
 import { setWaitingState, setPriority } from "../services/conversationWaitingStateService";
 import { assignOwner } from "../services/conversationOwnershipService";
 import {
@@ -269,10 +269,23 @@ export function registerConversationsRoutes(app: Express): void {
       if (sort === "recency" || sort === "priority") filters.sort = sort;
 
       // Optional `team=<userId>` filter: returns threads owned by the given
-      // manager + every descendant in their managerId chain. Lets the UI
-      // show e.g. "Team Danny" / "Team Sam" without enforcing permissions.
+      // manager + every descendant in their managerId chain. Used by the UI
+      // to show e.g. "Team Danny" / "Team Sam".
+      // Task #525: a Director used to be able to pivot to *any* manager's
+      // team via this query (e.g. `?team=<other_director_id>`) and see the
+      // other team's conversations. Enforce that the requested team's root
+      // is inside the caller's reporting tree (admin / sales_director keep
+      // org-wide access; the caller can always look at their own team).
       const team = typeof req.query.team === "string" ? req.query.team.trim() : "";
       if (team) {
+        if (
+          user.role !== "admin"
+          && user.role !== "sales_director"
+          && team !== user.id
+          && !(await canSeeRepUser(user, team))
+        ) {
+          return res.status(403).json({ error: "Team is outside your reporting tree" });
+        }
         const teamMemberIds = await storage.getTeamMemberIds(team, orgId);
         const allowedOwnerIds = Array.from(new Set([team, ...teamMemberIds]));
         // Also pull in accounts whose salesperson is on the team so unowned
@@ -290,6 +303,29 @@ export function registerConversationsRoutes(app: Express): void {
             return res.json({ count: 0, threads: [], nextCursor: null });
           }
         } else {
+          filters.ownerUserIdIn = allowedOwnerIds;
+          if (teamAccountIds.length > 0) {
+            filters.teamAccountIdsIn = teamAccountIds;
+          }
+        }
+      } else if (user.role === "director") {
+        // Task #525: a Director with no `team` filter and no explicit owner
+        // used to see every thread in the org (the listing handler had no
+        // implicit scoping). Default-scope to the director's own reporting
+        // tree so they can only see conversations owned by their own reps
+        // (or unowned threads on accounts whose salesperson is on the team).
+        // Admin / Sales Director keep their org-wide visibility.
+        const teamMemberIds = await storage.getTeamMemberIds(user.id, orgId);
+        const allowedOwnerIds = Array.from(new Set([user.id, ...teamMemberIds]));
+        if (filters.ownerUserId) {
+          if (!allowedOwnerIds.includes(filters.ownerUserId)) {
+            return res.json({ count: 0, threads: [], nextCursor: null });
+          }
+        } else {
+          const allCompanies = await storage.getCompanies(orgId);
+          const teamAccountIds = allCompanies
+            .filter(c => c.salesPersonId && allowedOwnerIds.includes(c.salesPersonId))
+            .map(c => c.id);
           filters.ownerUserIdIn = allowedOwnerIds;
           if (teamAccountIds.length > 0) {
             filters.teamAccountIdsIn = teamAccountIds;

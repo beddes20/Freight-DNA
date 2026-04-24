@@ -217,9 +217,16 @@ export function registerAgentAnalyticsRoutes(app: Express) {
       const target = await storage.getUserInOrg(targetId, me.organizationId);
       if (!target) return res.status(404).json({ error: "User not found" });
 
+      // Task #525: Director (and other team-scoped managers) may only view
+      // copilot actions for reps inside their own reporting tree. Admin and
+      // Sales Director keep their broader visibility for analytics.
+      const { canSeeRepUser } = await import("../auth");
       const isSelf = me.id === targetId;
-      const elevated = isAnalyticsViewer(me.role);
-      if (!isSelf && !elevated) return res.status(403).json({ error: "Forbidden" });
+      const orgWideAnalytics = me.role === "admin" || me.role === "sales_director";
+      const inTree = !isSelf && !orgWideAnalytics ? await canSeeRepUser(me, targetId) : true;
+      if (!isSelf && !orgWideAnalytics && !inTree) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
 
       const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 25)));
       const rows = await agentAnalyticsStorage.getActionsByUser(me.organizationId, targetId, limit);

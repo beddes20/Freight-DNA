@@ -1592,6 +1592,34 @@ export async function computeIntelPayload(orgId: string, filterUserId?: string) 
 // ── Main route registration ───────────────────────────────────────────────────
 
 export function registerIntelRoutes(app: Express): void {
+  // Sentinel returned by `resolveFilterUserIdForIntel` when the requested
+  // ?userId is outside the viewer's reporting tree (Task #525).
+  const FORBIDDEN: unique symbol = Symbol("intel-forbidden");
+  type ResolvedFilterUserId = string | undefined | typeof FORBIDDEN;
+
+  async function resolveFilterUserIdForIntel(user: any, req: any): Promise<ResolvedFilterUserId> {
+    const requested = typeof req.query.userId === "string" && req.query.userId.trim()
+      ? req.query.userId.trim()
+      : undefined;
+    // Admin and Sales Director keep their existing org-wide visibility — no
+    // userId means "everyone", any userId is allowed (per task scope notes).
+    if (user.role === "admin" || user.role === "sales_director") {
+      return requested;
+    }
+    // Director: previously fell through to "everyone" when ?userId was
+    // omitted, leaking org-wide intel across other directors. Task #525
+    // tightens this to: a Director must either pick a specific rep within
+    // their own reporting tree, or get their own slice by default. Any
+    // ?userId outside the tree → 403.
+    if (user.role === "director") {
+      if (!requested) return user.id;
+      const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+      return teamIds.includes(requested) ? requested : FORBIDDEN;
+    }
+    // All other roles: self-scoped (any user-supplied ?userId is ignored).
+    return user.id;
+  }
+
   // ── GET /api/intel ──────────────────────────────────────────────────────────
   // Admins: full org-wide view, can filter by ?userId
   // account_manager / national_account_manager: self-scoped view (userId param ignored)
@@ -1603,16 +1631,11 @@ export function registerIntelRoutes(app: Express): void {
       if (!allowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized" });
 
       const orgId = req.session.organizationId!;
-      // Admins, directors, and sales_directors get org-wide view (can filter by ?userId)
-      // All other roles are scoped to their own data
-      let filterUserId: string | undefined;
-      if (["admin", "director", "sales_director"].includes(user.role)) {
-        filterUserId = typeof req.query.userId === "string" && req.query.userId.trim()
-          ? req.query.userId.trim()
-          : undefined;
-      } else {
-        filterUserId = user.id;
+      const resolved = await resolveFilterUserIdForIntel(user, req);
+      if (resolved === FORBIDDEN) {
+        return res.status(403).json({ error: "Access denied for requested userId" });
       }
+      const filterUserId = resolved as string | undefined;
 
       const payload = await computeIntelPayload(orgId, filterUserId);
       logIntel(`Intel payload generated — ${filterUserId ? `user ${filterUserId}` : "all reps"}`);
@@ -1626,15 +1649,6 @@ export function registerIntelRoutes(app: Express): void {
   // ── Per-section endpoints ──────────────────────────────────────────────────
   // The frontend fetches these in parallel and progressively renders each
   // section as soon as its slice arrives. All share the lanes/SONAR caches.
-  function resolveFilterUserId(user: any, req: any): string | undefined {
-    if (["admin", "director", "sales_director"].includes(user.role)) {
-      return typeof req.query.userId === "string" && req.query.userId.trim()
-        ? req.query.userId.trim()
-        : undefined;
-    }
-    return user.id;
-  }
-
   async function handleSection<T>(
     req: any, res: any,
     label: string,
@@ -1646,7 +1660,14 @@ export function registerIntelRoutes(app: Express): void {
       const allowedRoles = ["admin", "director", "sales_director", "account_manager", "national_account_manager"];
       if (!allowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized" });
       const orgId = req.session.organizationId!;
-      const filterUserId = resolveFilterUserId(user, req);
+      // Re-uses the same authorisation as /api/intel so a Director can't
+      // bypass team scoping by hitting the per-section endpoints directly
+      // with ?userId pointing at someone outside their tree (Task #525).
+      const resolved = await resolveFilterUserIdForIntel(user, req);
+      if (resolved === FORBIDDEN) {
+        return res.status(403).json({ error: "Access denied for requested userId" });
+      }
+      const filterUserId = resolved as string | undefined;
       const tStart = Date.now();
       const data = await compute(orgId, filterUserId);
       logIntel(`section ${label} (${filterUserId ? "rep " + filterUserId : "org"}) in ${Date.now() - tStart}ms`);
