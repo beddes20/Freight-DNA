@@ -847,16 +847,16 @@ export default function CustomerQuotesPage(): JSX.Element {
           </div>
         ) : (
           <>
-            {/* Customer Quotes #2 — Action Queue (top-of-page work board) */}
-            <ActionQueueCard onOpenQuote={(id) => setDrawerId(id)} />
-
-            {/* Task #505 — Sticky Spot Quote Search workflow (headline) */}
+            {/* Task #505/#616 — Spot Quote Search workflow (headline, top of body) */}
             <SpotQuoteSearch
               customers={data.customers.map(c => ({ id: c.id, name: c.name }))}
               onApplyLaneFilter={(laneSearch) => updateFilter({ laneSearch })}
               onPickQuote={(id) => setDrawerId(id)}
               onPickCustomer={(id) => updateFilter({ customerId: id })}
             />
+
+            {/* Customer Quotes #2 — Action Queue (work board, below Spot Quote Search) */}
+            <ActionQueueCard onOpenQuote={(id) => setDrawerId(id)} />
 
             {/* KPI strip */}
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-11 gap-2" data-testid="kpi-strip">
