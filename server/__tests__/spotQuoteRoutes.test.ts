@@ -168,7 +168,7 @@ const validBody = {
 };
 
 describe("POST /api/customer-quotes/spot/create", () => {
-  it("creates a quote with a healthy 20% margin", async () => {
+  it("creates a quote with a healthy 20% margin and returns a stable {id,...} shape", async () => {
     const app = buildApp();
     const srv = await listen(app);
     try {
@@ -177,9 +177,12 @@ describe("POST /api/customer-quotes/spot/create", () => {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(validBody),
       });
-      expect(res.status).toBeLessThan(300);
+      expect(res.status).toBe(201);
       const json = await res.json();
-      expect(json?.id || json?.quote?.id || json?.quoteId).toBeTruthy();
+      expect(typeof json).toBe("object");
+      expect(typeof json.id).toBe("string");
+      expect(json.id.length).toBeGreaterThan(0);
+      expect(createdQuotes.length).toBe(1);
     } finally {
       await srv.close();
     }
