@@ -31,6 +31,13 @@ import { and as andSql, eq as eqSql, sql as sqlExpr } from "drizzle-orm";
 import { gatherDataAnchors, generateDraft } from "./emailDrafting";
 import { getVoiceProfile } from "../voiceProfileService";
 import { listMappings, deleteMapping } from "../services/quoteSenderMappings";
+import multer from "multer";
+import {
+  parseQuoteIntakeFromText,
+  parseQuoteIntakeFromImage,
+  MAX_INTAKE_IMAGE_BYTES,
+  MAX_INTAKE_TEXT_BYTES,
+} from "../services/spotQuoteIntake";
 
 // Minimum margin % guardrail when estimatedCost is supplied. Env-tunable.
 const SPOT_MIN_MARGIN_PCT: number = (() => {
@@ -486,6 +493,76 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       res.status(500).json({ error: msg });
     }
   });
+
+  // Task #617 — Spot Quote Intake (drop a screenshot or paste an email)
+  // Accepts either a multipart upload (image or `.eml` file) or a JSON body
+  // with raw text/subject/body. Returns a normalized ParsedQuoteIntake the
+  // Spot Quote Search form can use to pre-fill its inputs.
+  const intakeUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: Math.max(MAX_INTAKE_IMAGE_BYTES, MAX_INTAKE_TEXT_BYTES) },
+  });
+  app.post(
+    "/api/customer-quotes/spot-intake",
+    requireAuth,
+    intakeUpload.single("file"),
+    async (req, res) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+        const file = (req as Request & { file?: Express.Multer.File }).file;
+        if (file) {
+          const mime = (file.mimetype || "").toLowerCase();
+          // Image branch — vision parse.
+          if (mime.startsWith("image/")) {
+            const result = await parseQuoteIntakeFromImage(file.buffer, mime);
+            return res.json(result);
+          }
+          // .eml or plain-text branch — treat as raw email content.
+          const isEmlName = (file.originalname || "").toLowerCase().endsWith(".eml");
+          if (mime === "message/rfc822" || mime === "text/plain" || isEmlName) {
+            if (file.buffer.byteLength > MAX_INTAKE_TEXT_BYTES) {
+              return res.status(413).json({ error: "Email is too large — please paste the body instead." });
+            }
+            const rawText = file.buffer.toString("utf8");
+            const result = await parseQuoteIntakeFromText({ rawText, source: "email" });
+            return res.json(result);
+          }
+          return res.status(415).json({
+            error: "Unsupported file type. Drop an image, an .eml file, or paste the email text.",
+          });
+        }
+
+        // JSON body branch.
+        const schema = z.object({
+          subject: z.string().max(500).optional(),
+          body: z.string().max(MAX_INTAKE_TEXT_BYTES).optional(),
+          rawText: z.string().max(MAX_INTAKE_TEXT_BYTES).optional(),
+        }).refine(d => (d.body && d.body.trim()) || (d.rawText && d.rawText.trim()) || (d.subject && d.subject.trim()), {
+          message: "Provide subject, body, or rawText.",
+        });
+        const parsed = schema.safeParse(req.body ?? {});
+        if (!parsed.success) {
+          return res.status(400).json({ error: "Invalid intake payload", issues: parsed.error.issues });
+        }
+        const result = await parseQuoteIntakeFromText({
+          subject: parsed.data.subject ?? null,
+          body: parsed.data.body ?? null,
+          rawText: parsed.data.rawText ?? null,
+          source: parsed.data.rawText ? "email" : "text",
+        });
+        res.json(result);
+      } catch (err) {
+        if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+          return res.status(413).json({ error: "File is too large — please upload under 8 MB." });
+        }
+        const msg = err instanceof Error ? err.message : "Internal error";
+        console.error("[customer-quotes] spot-intake error:", err);
+        res.status(500).json({ error: msg });
+      }
+    },
+  );
 
   app.get("/api/customer-quotes/lane-autocomplete", requireAuth, async (req, res) => {
     try {

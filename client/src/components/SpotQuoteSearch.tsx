@@ -26,7 +26,89 @@ import {
   Search, MapPin, Truck, Calendar, AlertTriangle, TrendingUp, TrendingDown, Minus, Award, Users,
   Clock, Activity, X, ChevronRight, ChevronDown, Copy, RefreshCw, SlidersHorizontal,
   DollarSign, Save, Phone, Mail, FileText, ChevronUp, ThumbsDown,
+  Upload, Loader2, Sparkles, FileImage, ClipboardPaste,
 } from "lucide-react";
+
+// Task #617 — shape returned by /api/customer-quotes/spot-intake.
+type ParsedQuoteIntake = {
+  pickupCity: string | null;
+  pickupState: string | null;
+  deliveryCity: string | null;
+  deliveryState: string | null;
+  equipment: string | null;
+  pickupDate: string | null;
+  customerHint: string | null;
+  rateHint: number | null;
+  confidence: number;
+  rawText: string;
+  source: "image" | "email" | "text";
+  notes: string[];
+};
+
+// Map the parser's equipment vocabulary to the search bar's dropdown options.
+function mapIntakeEquipment(eq: string | null): string | null {
+  if (!eq) return null;
+  const norm = eq.trim().toLowerCase();
+  if (norm.includes("dry van") || norm === "van") return "Van";
+  if (norm.includes("reefer") || norm.includes("refrig")) return "Reefer";
+  if (norm.includes("flat")) return "Flatbed";
+  return "Other";
+}
+
+// Lightweight customer fuzzy match (mirrors server matchCustomerByHint).
+function normaliseCustomerName(s: string): string {
+  return s.toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\b(inc|llc|ltd|co|corp|corporation|company|logistics|transport|trucking)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function matchCustomerHint(hint: string | null, customers: ReadonlyArray<{ id: string; name: string }>): string | null {
+  if (!hint || customers.length === 0) return null;
+  const target = normaliseCustomerName(hint);
+  if (!target) return null;
+  const exact = customers.find(c => normaliseCustomerName(c.name) === target);
+  if (exact) return exact.id;
+  const words = target.split(" ").filter(w => w.length >= 3);
+  if (words.length === 0) return null;
+  const tokenMatches = customers.filter(c => {
+    const n = normaliseCustomerName(c.name);
+    return words.every(w => n.includes(w));
+  });
+  if (tokenMatches.length === 1) return tokenMatches[0].id;
+  const containment = customers.filter(c => {
+    const n = normaliseCustomerName(c.name);
+    return n.includes(target) || target.includes(n);
+  });
+  if (containment.length === 1) return containment[0].id;
+  return null;
+}
+
+// Friendly label for the small "auto-filled" chips.
+const AUTOFILL_FIELD_LABELS: Record<string, string> = {
+  pickupCity: "Pickup city", pickupState: "Pickup state",
+  deliveryCity: "Delivery city", deliveryState: "Delivery state",
+  equipment: "Mode", pickupDate: "Pickup date", customerId: "Customer",
+};
+
+// Tiny accent chip rendered next to a field label when intake auto-filled it.
+function AutoFilledChip({ testId, source }: { testId: string; source: string | undefined }): JSX.Element {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className="ml-1 inline-flex items-center gap-0.5 px-1 py-0.5 rounded-[3px] bg-amber-400/15 border border-amber-400/40 text-amber-700 dark:text-amber-300 text-[9px] font-semibold normal-case tracking-normal"
+          data-testid={testId}
+        >
+          <Sparkles className="h-2.5 w-2.5" /> Auto-filled
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-xs max-w-[280px]">
+        From your dropped {source ?? "intake"}.
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 type Customer = { id: string; name: string };
 
@@ -274,7 +356,7 @@ function saveRecent(q: SpotSearchQuery): void {
 
 function LaneInput({
   label, value, onChange, kind, testIdCity, testIdState, autoOpen, setAutoOpen,
-  cityRef, stateRef, onAdvance,
+  cityRef, stateRef, onAdvance, autoFilledCity, autoFilledState, autoFilledSource,
 }: {
   label: string;
   value: { city: string; state: string };
@@ -287,6 +369,9 @@ function LaneInput({
   cityRef?: React.MutableRefObject<HTMLInputElement | null>;
   stateRef?: React.MutableRefObject<HTMLInputElement | null>;
   onAdvance?: () => void;
+  autoFilledCity?: boolean;
+  autoFilledState?: boolean;
+  autoFilledSource?: string;
 }): JSX.Element {
   const [q, setQ] = useState(value.city);
   const [debouncedQ, setDebouncedQ] = useState(value.city);
@@ -435,10 +520,28 @@ function LaneInput({
     }
   };
 
+  const cityAutoClass = autoFilledCity ? "border-amber-400/70 ring-1 ring-amber-400/30" : "";
+  const stateAutoClass = autoFilledState ? "border-amber-400/70 ring-1 ring-amber-400/30" : "";
+  const showAutoBadge = autoFilledCity || autoFilledState;
   return (
     <div className="flex flex-col gap-1 relative">
       <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1">
         <MapPin className="h-3 w-3" />{label}
+        {showAutoBadge && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className="ml-1 inline-flex items-center gap-0.5 px-1 py-0.5 rounded-[3px] bg-amber-400/15 border border-amber-400/40 text-amber-700 dark:text-amber-300 text-[9px] font-semibold normal-case tracking-normal"
+                data-testid={`badge-autofilled-${kind === "origin" ? "pickup" : "delivery"}`}
+              >
+                <Sparkles className="h-2.5 w-2.5" /> Auto-filled
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="text-xs max-w-[280px]">
+              From your dropped {autoFilledSource ?? "intake"}.
+            </TooltipContent>
+          </Tooltip>
+        )}
       </span>
       <div className="flex gap-1.5">
         <Input
@@ -461,7 +564,7 @@ function LaneInput({
             }
           }}
           placeholder="City"
-          className="h-10 w-[200px] bg-card border-border text-sm text-foreground placeholder:text-muted-foreground focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
+          className={`h-10 w-[200px] bg-card border-border text-sm text-foreground placeholder:text-muted-foreground focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60 ${cityAutoClass}`}
           data-testid={testIdCity}
           autoComplete="off"
         />
@@ -471,7 +574,7 @@ function LaneInput({
           onChange={e => onStateChange(e.target.value)}
           onBlur={onStateBlur}
           placeholder="ST"
-          className="h-10 w-[60px] bg-card border-border text-sm text-foreground placeholder:text-muted-foreground uppercase tracking-wider text-center focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
+          className={`h-10 w-[60px] bg-card border-border text-sm text-foreground placeholder:text-muted-foreground uppercase tracking-wider text-center focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60 ${stateAutoClass}`}
           maxLength={20}
           data-testid={testIdState}
           autoComplete="off"
@@ -594,6 +697,15 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
   const [openDest, setOpenDest] = useState(false);
   const { toast } = useToast();
 
+  // Task #617 — Spot Quote intake (drop a screenshot or paste an email)
+  const [autoFilled, setAutoFilled] = useState<Set<string>>(new Set());
+  const [intakeBusy, setIntakeBusy] = useState(false);
+  const [intakeError, setIntakeError] = useState<string | null>(null);
+  const [intakeResult, setIntakeResult] = useState<ParsedQuoteIntake | null>(null);
+  const [intakeWhatWeReadOpen, setIntakeWhatWeReadOpen] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const intakeFileInputRef = useRef<HTMLInputElement | null>(null);
+
   // Field focus chain: pickup-city → pickup-state → delivery-city → delivery-state → date → search
   const pickupCityRef = useRef<HTMLInputElement | null>(null);
   const pickupStateRef = useRef<HTMLInputElement | null>(null);
@@ -631,22 +743,38 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
     enabled: !!searchQs,
   });
 
-  const submit = (): void => {
-    if (!canSearch) return;
+  const buildQuery = (overrides?: {
+    pickup?: { city: string; state: string };
+    delivery?: { city: string; state: string };
+    equipment?: string;
+    pickupDate?: string;
+    customerId?: string;
+  }): SpotSearchQuery | null => {
+    const p = overrides?.pickup ?? pickup;
+    const d = overrides?.delivery ?? delivery;
+    const eq = overrides?.equipment ?? equipment;
+    const pd = overrides?.pickupDate ?? pickupDate;
+    const cid = overrides?.customerId ?? customerId;
+    if (!(p.city && p.state && d.city && d.state)) return null;
     const lb = parseInt(lookbackDays, 10);
-    const q: SpotSearchQuery = {
-      pickupCity: pickup.city.trim(),
-      pickupState: pickup.state.trim().toUpperCase(),
-      deliveryCity: delivery.city.trim(),
-      deliveryState: delivery.state.trim().toUpperCase(),
-      equipment: equipment === "Any" ? undefined : equipment,
-      pickupDate: pickupDate || undefined,
-      customerId: customerId || undefined,
+    return {
+      pickupCity: p.city.trim(),
+      pickupState: p.state.trim().toUpperCase(),
+      deliveryCity: d.city.trim(),
+      deliveryState: d.state.trim().toUpperCase(),
+      equipment: eq === "Any" ? undefined : eq,
+      pickupDate: pd || undefined,
+      customerId: cid || undefined,
       lookbackDays: lb > 0 ? lb : undefined,
       exactOnly: exactOnly || undefined,
       includeSimilar: !includeSimilar ? false : undefined,
       matchMode,
     };
+  };
+
+  const submit = (): void => {
+    const q = buildQuery();
+    if (!q) return;
     setActiveQuery(q);
     setSearchedAt(new Date());
     saveRecent(q);
@@ -666,7 +794,189 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
     setAdv({});
     setActiveQuery(null);
     setSearchedAt(null);
+    setAutoFilled(new Set());
+    setIntakeError(null);
+    setIntakeResult(null);
   };
+
+  // Task #617 — apply a parsed intake result to the form fields, mark which
+  // fields were auto-filled, and (when the lane is complete + confidence is
+  // high) auto-run the search. Returns the filled-field set so the caller
+  // can decide whether to surface a toast.
+  const applyIntakeResult = (r: ParsedQuoteIntake): Set<string> => {
+    const filled = new Set<string>();
+    let nextPickup = pickup;
+    let nextDelivery = delivery;
+    let nextEquipment = equipment;
+    let nextPickupDate = pickupDate;
+    let nextCustomerId = customerId;
+    if (r.pickupCity || r.pickupState) {
+      nextPickup = { city: r.pickupCity ?? "", state: (r.pickupState ?? "").toUpperCase() };
+      setPickup(nextPickup);
+      if (r.pickupCity) filled.add("pickupCity");
+      if (r.pickupState) filled.add("pickupState");
+    }
+    if (r.deliveryCity || r.deliveryState) {
+      nextDelivery = { city: r.deliveryCity ?? "", state: (r.deliveryState ?? "").toUpperCase() };
+      setDelivery(nextDelivery);
+      if (r.deliveryCity) filled.add("deliveryCity");
+      if (r.deliveryState) filled.add("deliveryState");
+    }
+    const mappedEq = mapIntakeEquipment(r.equipment);
+    if (mappedEq) {
+      nextEquipment = mappedEq;
+      setEquipment(mappedEq);
+      filled.add("equipment");
+    }
+    if (r.pickupDate) {
+      nextPickupDate = r.pickupDate;
+      setPickupDate(r.pickupDate);
+      filled.add("pickupDate");
+    }
+    if (r.customerHint) {
+      const matched = matchCustomerHint(r.customerHint, customers);
+      if (matched) {
+        nextCustomerId = matched;
+        setCustomerId(matched);
+        filled.add("customerId");
+      }
+    }
+    setAutoFilled(filled);
+
+    // Auto-run search when confidence is high AND we have a complete lane.
+    const haveLane = nextPickup.city && nextPickup.state && nextDelivery.city && nextDelivery.state;
+    if (r.confidence >= 0.8 && haveLane) {
+      const q = buildQuery({
+        pickup: nextPickup,
+        delivery: nextDelivery,
+        equipment: nextEquipment,
+        pickupDate: nextPickupDate,
+        customerId: nextCustomerId,
+      });
+      if (q) {
+        setActiveQuery(q);
+        setSearchedAt(new Date());
+        saveRecent(q);
+        setRecents(loadRecents());
+      }
+    }
+    return filled;
+  };
+
+  // Submit a file or pasted text/HTML to the intake endpoint and apply the
+  // result. Errors surface inline rather than via toast so the user keeps
+  // their context near the drop zone.
+  const runIntake = async (input: { file?: File; text?: string }): Promise<void> => {
+    setIntakeBusy(true);
+    setIntakeError(null);
+    setIntakeResult(null);
+    setAutoFilled(new Set());
+    try {
+      let res: Response;
+      if (input.file) {
+        const fd = new FormData();
+        fd.append("file", input.file);
+        res = await fetch("/api/customer-quotes/spot-intake", {
+          method: "POST",
+          credentials: "include",
+          body: fd,
+        });
+      } else if (input.text && input.text.trim()) {
+        res = await fetch("/api/customer-quotes/spot-intake", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rawText: input.text }),
+        });
+      } else {
+        setIntakeBusy(false);
+        return;
+      }
+      if (!res.ok) {
+        let msg = "We couldn't read this drop — try a clearer screenshot or paste the text.";
+        try {
+          const data = await res.json();
+          if (data && typeof data.error === "string") msg = data.error;
+        } catch {
+          /* ignore */
+        }
+        setIntakeError(msg);
+        return;
+      }
+      const result = (await res.json()) as ParsedQuoteIntake;
+      setIntakeResult(result);
+      const filled = applyIntakeResult(result);
+      if (filled.size === 0) {
+        // We got something back but couldn't fill anything — surface gently.
+        const note = result.notes?.[0] ?? "We couldn't pull a lane out of that drop. Try pasting the email body or use a clearer screenshot.";
+        setIntakeError(note);
+      }
+    } catch (err) {
+      console.warn("[spot-intake] error:", err);
+      setIntakeError("Something went wrong reading that drop. Please try again.");
+    } finally {
+      setIntakeBusy(false);
+    }
+  };
+
+  const handleIntakeFile = (file: File): void => {
+    void runIntake({ file });
+  };
+
+  // Drag handlers for the dropzone in the empty state.
+  const onIntakeDragOver = (e: React.DragEvent<HTMLDivElement>): void => {
+    if (intakeBusy) return;
+    e.preventDefault();
+    setIsDragging(true);
+  };
+  const onIntakeDragLeave = (): void => setIsDragging(false);
+  const onIntakeDrop = (e: React.DragEvent<HTMLDivElement>): void => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (intakeBusy) return;
+    const file = e.dataTransfer.files?.[0];
+    if (!file) {
+      // Drag of plain text from another window.
+      const txt = e.dataTransfer.getData("text/plain");
+      if (txt && txt.trim()) void runIntake({ text: txt });
+      return;
+    }
+    handleIntakeFile(file);
+  };
+
+  // Global paste handler — only active when the search form is empty (no
+  // active query yet). Catches both image blobs and text from the clipboard.
+  useEffect(() => {
+    if (activeQuery) return; // don't intercept paste once results are showing
+    const handler = (e: ClipboardEvent): void => {
+      // Don't hijack paste while the user is typing in inputs/textareas/contentEditables.
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable) return;
+      }
+      const cd = e.clipboardData;
+      if (!cd) return;
+      // Image first.
+      const item = Array.from(cd.items ?? []).find(it => it.kind === "file" && it.type.startsWith("image/"));
+      if (item) {
+        const file = item.getAsFile();
+        if (file) {
+          e.preventDefault();
+          handleIntakeFile(file);
+          return;
+        }
+      }
+      const text = cd.getData("text/plain");
+      if (text && text.trim().length >= 12) {
+        e.preventDefault();
+        void runIntake({ text });
+      }
+    };
+    document.addEventListener("paste", handler);
+    return () => document.removeEventListener("paste", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeQuery, customers, intakeBusy, pickup, delivery, equipment, pickupDate, customerId, lookbackDays, exactOnly, includeSimilar, matchMode]);
 
   const applyRecent = (r: Recent): void => {
     setPickup({ city: r.pickupCity, state: r.pickupState });
@@ -722,6 +1032,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
   const hasResults = !!activeQuery && (!!data || result.isFetching);
 
   return (
+    <TooltipProvider delayDuration={150}>
     <div className="space-y-4" data-testid="spot-quote-search-root">
       {/* Sticky search bar — full form OR compact pinned strip */}
       {hasResults ? (
@@ -809,31 +1120,46 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             testIdCity="input-spot-pickup-city" testIdState="input-spot-pickup-state"
             autoOpen={openOrigin} setAutoOpen={setOpenOrigin}
             cityRef={pickupCityRef} stateRef={pickupStateRef}
+            autoFilledCity={autoFilled.has("pickupCity")}
+            autoFilledState={autoFilled.has("pickupState")}
+            autoFilledSource={intakeResult?.source}
             onAdvance={() => deliveryCityRef.current?.focus()} />
           <LaneInput label="Delivery" value={delivery} onChange={setDelivery} kind="dest"
             testIdCity="input-spot-delivery-city" testIdState="input-spot-delivery-state"
             autoOpen={openDest} setAutoOpen={setOpenDest}
             cityRef={deliveryCityRef} stateRef={deliveryStateRef}
+            autoFilledCity={autoFilled.has("deliveryCity")}
+            autoFilledState={autoFilled.has("deliveryState")}
+            autoFilledSource={intakeResult?.source}
             onAdvance={() => dateRef.current?.focus()} />
           <div className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1"><Truck className="h-3 w-3" /> Mode</span>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1">
+              <Truck className="h-3 w-3" /> Mode
+              {autoFilled.has("equipment") && <AutoFilledChip testId="badge-autofilled-equipment" source={intakeResult?.source} />}
+            </span>
             <Select value={equipment} onValueChange={setEquipment}>
-              <SelectTrigger className="h-10 w-[130px] bg-card border-border text-sm text-foreground [&>span]:text-foreground" data-testid="select-spot-equipment"><SelectValue /></SelectTrigger>
+              <SelectTrigger className={`h-10 w-[130px] bg-card border-border text-sm text-foreground [&>span]:text-foreground ${autoFilled.has("equipment") ? "border-amber-400/70 ring-1 ring-amber-400/30" : ""}`} data-testid="select-spot-equipment"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {EQUIPMENT_OPTIONS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1"><Calendar className="h-3 w-3" /> Pickup date</span>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1">
+              <Calendar className="h-3 w-3" /> Pickup date
+              {autoFilled.has("pickupDate") && <AutoFilledChip testId="badge-autofilled-pickup-date" source={intakeResult?.source} />}
+            </span>
             <Input ref={dateRef} type="date" value={pickupDate} onChange={e => setPickupDate(e.target.value)}
-              className="h-10 w-[160px] bg-card border-border text-sm text-foreground placeholder:text-muted-foreground dark:[color-scheme:dark] focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
+              className={`h-10 w-[160px] bg-card border-border text-sm text-foreground placeholder:text-muted-foreground dark:[color-scheme:dark] focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60 ${autoFilled.has("pickupDate") ? "border-amber-400/70 ring-1 ring-amber-400/30" : ""}`}
               data-testid="input-spot-pickup-date" />
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1"><Users className="h-3 w-3" /> Customer (optional)</span>
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium flex items-center gap-1">
+              <Users className="h-3 w-3" /> Customer (optional)
+              {autoFilled.has("customerId") && <AutoFilledChip testId="badge-autofilled-customer" source={intakeResult?.source} />}
+            </span>
             <Select value={customerId || "_any"} onValueChange={v => setCustomerId(v === "_any" ? "" : v)}>
-              <SelectTrigger className="h-10 w-[220px] bg-card border-border text-sm text-foreground [&>span]:text-foreground data-[placeholder]:text-muted-foreground" data-testid="select-spot-customer"><SelectValue placeholder="Any customer" /></SelectTrigger>
+              <SelectTrigger className={`h-10 w-[220px] bg-card border-border text-sm text-foreground [&>span]:text-foreground data-[placeholder]:text-muted-foreground ${autoFilled.has("customerId") ? "border-amber-400/70 ring-1 ring-amber-400/30" : ""}`} data-testid="select-spot-customer"><SelectValue placeholder="Any customer" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="_any">Any customer</SelectItem>
                 {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
@@ -990,8 +1316,173 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             <div className="text-xs text-muted-foreground max-w-[480px] mx-auto leading-relaxed">
               Enter pickup and delivery to see exact-match history, similar lanes, customer signals, carrier buy-history, internal rep variance, freight attractiveness and pricing guidance — all in one view.
             </div>
+
+            {/* Task #617 — drop a screenshot or paste an email to auto-fill */}
+            <div className="max-w-[640px] mx-auto mt-6 text-left">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Or skip the typing</span>
+                <span className="flex-1 h-px bg-border" />
+              </div>
+              <div
+                className={`relative border-2 border-dashed rounded-[6px] p-5 transition-colors cursor-pointer text-center ${
+                  isDragging
+                    ? "border-amber-400 bg-amber-400/10"
+                    : intakeBusy
+                      ? "border-border bg-muted/30 cursor-progress"
+                      : "border-border hover:border-amber-400/60 hover:bg-amber-400/5"
+                }`}
+                onDragOver={onIntakeDragOver}
+                onDragLeave={onIntakeDragLeave}
+                onDrop={onIntakeDrop}
+                onClick={() => { if (!intakeBusy) intakeFileInputRef.current?.click(); }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if ((e.key === "Enter" || e.key === " ") && !intakeBusy) {
+                    e.preventDefault();
+                    intakeFileInputRef.current?.click();
+                  }
+                }}
+                data-testid="spot-intake-dropzone"
+              >
+                <input
+                  ref={intakeFileInputRef}
+                  type="file"
+                  accept="image/*,.eml,message/rfc822,text/plain"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleIntakeFile(f);
+                    e.target.value = "";
+                  }}
+                  data-testid="spot-intake-file-input"
+                />
+                {intakeBusy ? (
+                  <div className="flex flex-col items-center gap-2 py-2">
+                    <Loader2 className="h-6 w-6 animate-spin text-amber-400" />
+                    <div className="text-sm font-medium text-foreground">Reading your drop…</div>
+                    <div className="text-[11px] text-muted-foreground">We'll fill the lane fields automatically.</div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-2 py-1">
+                    <div className="flex items-center gap-3 text-amber-500/80">
+                      <FileImage className="h-5 w-5" />
+                      <Upload className="h-5 w-5" />
+                      <Mail className="h-5 w-5" />
+                      <ClipboardPaste className="h-5 w-5" />
+                    </div>
+                    <div className="text-sm font-semibold text-foreground">Drop a screenshot or email here</div>
+                    <div className="text-[11px] text-muted-foreground max-w-[420px] leading-relaxed">
+                      Drag an image or <span className="text-foreground">.eml</span>, paste a screenshot from your clipboard, or paste an email body. We'll auto-fill the lane and run the search.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); intakeFileInputRef.current?.click(); }}
+                      className="mt-1 inline-flex items-center gap-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-300 hover:underline"
+                      data-testid="button-spot-intake-browse"
+                    >
+                      <Upload className="h-3 w-3" /> Browse for a file
+                    </button>
+                  </div>
+                )}
+              </div>
+
+            </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* Task #617 — Intake summary / error: persists after auto-search so chips & "what we read" remain visible */}
+      {intakeError && (
+        <div
+          className="rounded-[4px] border border-red-500/40 bg-red-500/10 px-3 py-2 flex items-start gap-2"
+          data-testid="spot-intake-error"
+        >
+          <AlertTriangle className="h-4 w-4 text-red-700 dark:text-red-300 mt-0.5 shrink-0" />
+          <div className="text-xs text-red-700 dark:text-red-200 font-medium leading-snug flex-1">
+            {intakeError}
+          </div>
+          <button
+            type="button"
+            onClick={() => setIntakeError(null)}
+            className="text-red-700 dark:text-red-300 hover:text-red-900 dark:hover:text-red-100"
+            data-testid="button-spot-intake-error-dismiss"
+            aria-label="Dismiss"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
+      {intakeResult && (intakeResult.confidence > 0 || intakeResult.rawText) && (
+        <div className="rounded-[4px] border border-amber-400/40 bg-amber-400/5 px-3 py-2" data-testid="spot-intake-summary">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Sparkles className="h-3.5 w-3.5 text-amber-400" />
+            <span className="text-xs font-medium text-foreground">
+              {autoFilled.size > 0
+                ? `Auto-filled ${autoFilled.size} field${autoFilled.size === 1 ? "" : "s"} from your ${intakeResult.source === "image" ? "screenshot" : intakeResult.source === "email" ? "email" : "text"}`
+                : "Read your drop"}
+            </span>
+            <span className="text-[10px] text-muted-foreground tabular-nums">
+              · confidence {Math.round(intakeResult.confidence * 100)}%
+            </span>
+            {intakeResult.confidence >= 0.8 && autoFilled.size > 0 && activeQuery && (
+              <span className="text-[10px] text-emerald-700 dark:text-emerald-300">· auto-searched</span>
+            )}
+            {intakeResult.rateHint && (
+              <span className="text-[10px] text-muted-foreground">· suggested rate ${intakeResult.rateHint.toLocaleString()}</span>
+            )}
+            {intakeResult.customerHint && !autoFilled.has("customerId") && (
+              <span className="text-[10px] text-amber-700 dark:text-amber-300">· customer hint: {intakeResult.customerHint}</span>
+            )}
+            <button
+              type="button"
+              onClick={() => setIntakeWhatWeReadOpen(o => !o)}
+              className="ml-auto text-[10px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+              data-testid="button-spot-intake-what-we-read"
+            >
+              {intakeWhatWeReadOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+              What we read
+            </button>
+            <button
+              type="button"
+              onClick={() => { setIntakeResult(null); setAutoFilled(new Set()); setIntakeWhatWeReadOpen(false); }}
+              className="text-[10px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+              data-testid="button-spot-intake-summary-dismiss"
+              aria-label="Dismiss"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+          {autoFilled.size > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {Array.from(autoFilled).map(key => (
+                <span
+                  key={key}
+                  className="text-[10px] px-1.5 py-0.5 rounded-[3px] bg-amber-400/15 border border-amber-400/40 text-amber-700 dark:text-amber-300 font-medium"
+                  data-testid={`chip-spot-intake-${key}`}
+                >
+                  {AUTOFILL_FIELD_LABELS[key] ?? key}
+                </span>
+              ))}
+            </div>
+          )}
+          {intakeResult.notes.length > 0 && (
+            <ul className="mt-1.5 list-disc pl-4 space-y-0.5">
+              {intakeResult.notes.map((n, i) => (
+                <li key={i} className="text-[10px] text-muted-foreground" data-testid={`spot-intake-note-${i}`}>{n}</li>
+              ))}
+            </ul>
+          )}
+          {intakeWhatWeReadOpen && (
+            <pre
+              className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-[3px] bg-background border border-border p-2 text-[11px] text-foreground/80 font-mono leading-snug"
+              data-testid="spot-intake-raw-text"
+            >
+              {intakeResult.rawText || "(no readable text returned)"}
+            </pre>
+          )}
+        </div>
       )}
 
       {activeQuery && result.isError && !result.isLoading && (
@@ -1308,6 +1799,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
         </div>
       )}
     </div>
+    </TooltipProvider>
   );
 }
 
