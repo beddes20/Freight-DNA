@@ -16,6 +16,11 @@ import {
 import { QUOTE_PARTY_TYPES } from "@shared/schema";
 import { syncQuoteOutcomesFromTms } from "../services/quoteTmsSync";
 import { backfillQuotesFromEmails, ensureEmailBackfill, getEmailBackfillStatus } from "../services/quoteEmailIngestion";
+import {
+  getPricingRecommendation,
+  getMarginFloors,
+  setMarginFloors,
+} from "../services/quotePricingRecommendation";
 import { QUOTE_OUTCOME_STATUSES, QUOTE_SOURCES, companies, contacts, quoteReps, spotQuoteCreateSchema } from "@shared/schema";
 import { getStaleQuoteFollowUps, clearStaleFollowUpCache } from "../services/staleQuoteFollowup";
 import { db } from "../storage";
@@ -277,6 +282,55 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Internal error";
       console.error("[customer-quotes] pricing intel error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // 3-tier pricing recommendation for a specific quote (Aggressive /
+  // Balanced / Premium with per-tier estimated win-prob and floor flag).
+  app.get("/api/customer-quotes/quote/:id/recommendation", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const rec = await getPricingRecommendation(user.organizationId, String(req.params.id));
+      res.json(rec);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
+      console.error("[customer-quotes] recommendation error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Per-equipment $/mile margin floors (read).
+  app.get("/api/customer-quotes/pricing-floors", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const floors = await getMarginFloors(user.organizationId);
+      res.json({ floors });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
+      console.error("[customer-quotes] pricing-floors get error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Per-equipment $/mile margin floors (admin update). Replaces the full map.
+  app.patch("/api/customer-quotes/pricing-floors", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!["admin", "director", "sales_director"].includes(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const schema = z.object({ floors: z.record(z.string(), z.number().finite().nonnegative()) });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid input", issues: parsed.error.issues });
+      const saved = await setMarginFloors(user.organizationId, parsed.data.floors, user.id);
+      res.json({ floors: saved });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
+      console.error("[customer-quotes] pricing-floors patch error:", err);
       res.status(500).json({ error: msg });
     }
   });

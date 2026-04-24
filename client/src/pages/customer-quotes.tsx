@@ -30,6 +30,8 @@ import {
 } from "recharts";
 import { useToast } from "@/hooks/use-toast";
 import { PricingIntelligencePanel } from "@/components/PricingIntelligencePanel";
+import { PricingRecommendationCard } from "@/components/PricingRecommendationCard";
+import { MarginFloorsSettings } from "@/components/MarginFloorsSettings";
 import { SpotQuoteSearch } from "@/components/SpotQuoteSearch";
 import { EmailCoverageBanner } from "@/components/EmailCoverageBanner";
 
@@ -599,6 +601,7 @@ export default function CustomerQuotesPage(): JSX.Element {
             <Button size="sm" variant="outline" onClick={() => { snapshotQuery.refetch(); listQuery.refetch(); }} disabled={snapshotQuery.isFetching || listQuery.isFetching} className="border-border hover:bg-muted" data-testid="button-refresh">
               <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${snapshotQuery.isFetching || listQuery.isFetching ? "animate-spin" : ""}`} /> Refresh
             </Button>
+            <MarginFloorsSettings canEdit={canPurgeDemo} />
             {/* Task #597 — admin escape hatch to clear demo seed rows that
                 may have leaked into a live org (idempotent on the server). */}
             {canPurgeDemo && (
@@ -1876,17 +1879,20 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
               </div>
             )}
             {data.opp.outcomeStatus === "pending" && data.customer && (
-              <PricingIntelligencePanel
-                input={{
-                  customerId: data.opp.customerId,
-                  originCity: data.opp.originCity,
-                  originState: data.opp.originState,
-                  destCity: data.opp.destCity,
-                  destState: data.opp.destState,
-                  equipment: data.opp.equipment,
-                  laneGroupId: data.opp.laneGroupId ?? undefined,
-                }}
-              />
+              <>
+                <PricingRecommendationCard quoteId={data.opp.id} />
+                <PricingIntelligencePanel
+                  input={{
+                    customerId: data.opp.customerId,
+                    originCity: data.opp.originCity,
+                    originState: data.opp.originState,
+                    destCity: data.opp.destCity,
+                    destState: data.opp.destState,
+                    equipment: data.opp.equipment,
+                    laneGroupId: data.opp.laneGroupId ?? undefined,
+                  }}
+                />
+              </>
             )}
             <RelatedSection title="Same lane history" items={data.relatedSameLane} onPick={onPickRelated} testId="related-same-lane" />
             <RelatedSection title="Same customer history" items={data.relatedSameCustomer} onPick={onPickRelated} testId="related-same-customer" />

@@ -5057,6 +5057,20 @@ export const insertQuotePatternAlertSchema = createInsertSchema(quotePatternAler
 export type InsertQuotePatternAlert = z.infer<typeof insertQuotePatternAlertSchema>;
 export type QuotePatternAlert = typeof quotePatternAlerts.$inferSelect;
 
+// Per-org pricing settings — currently a per-equipment $/mile floor used
+// by the Pricing Recommendation card to flag tiers that drop below the
+// rate the org will accept. JSONB shape: { [equipment: string]: number }
+// where value is the minimum acceptable RPM. Empty object = no floors.
+export const quotePricingSettings = pgTable("quote_pricing_settings", {
+  organizationId: varchar("organization_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
+  marginFloorsRpm: jsonb("margin_floors_rpm").notNull().$type<Record<string, number>>().default({}),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  updatedById: varchar("updated_by_id").references(() => users.id, { onDelete: "set null" }),
+});
+export const insertQuotePricingSettingsSchema = createInsertSchema(quotePricingSettings).omit({ updatedAt: true });
+export type InsertQuotePricingSettings = z.infer<typeof insertQuotePricingSettingsSchema>;
+export type QuotePricingSettings = typeof quotePricingSettings.$inferSelect;
+
 // ─── Conversation Thread Smart Pane (Task #534) ──────────────────────────────
 // Three sibling tables that power the right-hand detail pane on the
 // Conversations page:

@@ -4277,4 +4277,24 @@ export async function runMigrations() {
   } finally {
     clientReadStates.release();
   }
+
+  // Customer Quotes upgrade #1 — per-org margin floors ($/mile per equipment).
+  // Backs the PricingRecommendationCard floor warnings and the admin
+  // "Margin floors" settings dialog. Idempotent.
+  const clientQuotePricing = await pool.connect();
+  try {
+    await clientQuotePricing.query(`
+      CREATE TABLE IF NOT EXISTS quote_pricing_settings (
+        organization_id    varchar PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+        margin_floors_rpm  jsonb NOT NULL DEFAULT '{}'::jsonb,
+        updated_at         timestamp NOT NULL DEFAULT NOW(),
+        updated_by_id      varchar REFERENCES users(id) ON DELETE SET NULL
+      )
+    `);
+    console.log("[migrations] quote_pricing_settings table ensured (Customer Quotes #1)");
+  } catch (err) {
+    console.error("[migrations] quote_pricing_settings migration error:", err);
+  } finally {
+    clientQuotePricing.release();
+  }
 }
