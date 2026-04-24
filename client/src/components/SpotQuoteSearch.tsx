@@ -1683,15 +1683,7 @@ function CarrierOutreachList({ outreach }: { outreach: SpotResult["carrierOutrea
                   {c.presence === "cold" && <span className="px-1.5 py-0.5 rounded-[3px] bg-zinc-800 text-zinc-500 border border-zinc-700 inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-zinc-500" />Cold</span>}
                 </td>
                 <td className="text-zinc-400 text-[10px]">
-                  <div className="flex items-center gap-2">
-                    {c.primaryEmail && (
-                      <a href={`mailto:${c.primaryEmail}`} className="text-amber-300 hover:text-amber-200 underline" data-testid={`link-outreach-email-${i}`}>email</a>
-                    )}
-                    {c.phone && (
-                      <a href={`tel:${c.phone}`} className="text-amber-300 hover:text-amber-200 underline" data-testid={`link-outreach-phone-${i}`}>call</a>
-                    )}
-                    {!c.primaryEmail && !c.phone && <span className="text-zinc-600">—</span>}
-                  </div>
+                  <CarrierActionLinks phone={c.phone} email={c.primaryEmail} idx={i} variant="links" />
                 </td>
               </tr>
             ))}
@@ -2015,6 +2007,52 @@ function QuoteBuilderCard({
   );
 }
 
+// Shared call/email action controls for any carrier surface (shortlist + full
+// outreach list). Webex click-to-call uses webextel://, matching the existing
+// pattern in contact-detail-sheet, contact-list, and pre-call-planner.
+function CarrierActionLinks({
+  phone, email, idx, variant = "icons",
+}: {
+  phone: string | null | undefined;
+  email: string | null | undefined;
+  idx: number;
+  variant?: "icons" | "links";
+}): JSX.Element {
+  const callHref = phone ? `webextel://${phone.replace(/[^0-9+]/g, "")}` : null;
+  const mailHref = email
+    ? `mailto:${email}?subject=${encodeURIComponent("RFQ: lane coverage")}&body=${encodeURIComponent("Hi,\n\nWe have a load looking for coverage. Can you bid on this lane?\n\nThanks,")}`
+    : null;
+  if (variant === "links") {
+    if (!mailHref && !callHref) return <span className="text-zinc-600">—</span>;
+    return (
+      <div className="flex items-center gap-2">
+        {mailHref && <a href={mailHref} className="text-amber-300 hover:text-amber-200 underline" data-testid={`link-outreach-email-${idx}`}>email</a>}
+        {callHref && <a href={callHref} className="text-amber-300 hover:text-amber-200 underline" data-testid={`link-outreach-phone-${idx}`}>call</a>}
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-1 shrink-0">
+      {callHref && (
+        <a href={callHref}
+          className="h-7 w-7 inline-flex items-center justify-center rounded-[4px] border border-zinc-700 hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-300"
+          title={`Webex call ${phone}`}
+          data-testid={`button-shortlist-call-${idx}`}>
+          <Phone className="h-3 w-3" />
+        </a>
+      )}
+      {mailHref && (
+        <a href={mailHref}
+          className="h-7 w-7 inline-flex items-center justify-center rounded-[4px] border border-zinc-700 hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-300"
+          title={`RFQ email ${email}`}
+          data-testid={`button-shortlist-email-${idx}`}>
+          <Mail className="h-3 w-3" />
+        </a>
+      )}
+    </div>
+  );
+}
+
 // Carrier Shortlist — top 5 outreach rows with click-to-call + mailto.
 function CarrierShortlistCard({
   outreach,
@@ -2068,25 +2106,7 @@ function CarrierShortlistCard({
                     {c.lastRatePaid != null && <><span>·</span><span>last ${c.lastRatePaid.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></>}
                   </div>
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  {c.phone && (
-                    <button type="button"
-                      onClick={() => window.open(`webextel://${c.phone!.replace(/[^0-9+]/g, "")}`, "_self")}
-                      className="h-7 w-7 inline-flex items-center justify-center rounded-[4px] border border-zinc-700 hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-300"
-                      title={`Webex call ${c.phone}`}
-                      data-testid={`button-shortlist-call-${i}`}>
-                      <Phone className="h-3 w-3" />
-                    </button>
-                  )}
-                  {c.primaryEmail && (
-                    <a href={`mailto:${c.primaryEmail}?subject=${encodeURIComponent("RFQ: lane coverage")}&body=${encodeURIComponent("Hi,\n\nWe have a load looking for coverage. Can you bid on this lane?\n\nThanks,")}`}
-                      className="h-7 w-7 inline-flex items-center justify-center rounded-[4px] border border-zinc-700 hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-300"
-                      title={`RFQ email ${c.primaryEmail}`}
-                      data-testid={`button-shortlist-email-${i}`}>
-                      <Mail className="h-3 w-3" />
-                    </a>
-                  )}
-                </div>
+                <CarrierActionLinks phone={c.phone} email={c.primaryEmail} idx={i} variant="icons" />
               </li>
             ))}
           </ul>
