@@ -817,7 +817,7 @@ function LaneRow({
               </span>
             )}
             {item.missingContactCount > 0 && (
-              <span className="text-[11px] text-amber-500">
+              <span className="text-[11px] font-medium text-amber-700 dark:text-amber-300">
                 {item.missingContactCount} missing email/phone
               </span>
             )}
