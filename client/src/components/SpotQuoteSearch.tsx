@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import {
+  getCityAutocompleteSuggestions,
+  getLaneLocationSuggestions,
+  normalizeStateAbbr,
+} from "@/lib/laneLocationNormalizer";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -89,7 +94,37 @@ type SpotResult = {
   alerts: { id: string; severity: "high" | "medium" | "low"; title: string; detail: string }[];
 };
 
-type AutoItem = { city: string; state: string; count: number };
+type AutoItem = { city: string; state: string; count: number; source?: "history" | "city" };
+
+// Try to parse "City, ST" or "City ST" (where ST may be a 2-letter code or full
+// state name) from a single string. Returns the split when both parts look
+// reasonable; otherwise null.
+function tryParseCityAndState(raw: string): { city: string; state: string } | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const commaIdx = trimmed.lastIndexOf(",");
+  if (commaIdx > 0) {
+    const cityPart = trimmed.slice(0, commaIdx).trim();
+    const statePart = trimmed.slice(commaIdx + 1).trim();
+    if (cityPart && statePart) {
+      const { abbr, valid } = normalizeStateAbbr(statePart);
+      if (valid && abbr && abbr.length === 2) {
+        return { city: cityPart, state: abbr };
+      }
+    }
+    return null;
+  }
+  // Try "City ST" — last whitespace-separated token is a 2-letter state code.
+  const m = trimmed.match(/^(.+?)\s+([A-Za-z]{2})$/);
+  if (m) {
+    const upper = m[2].toUpperCase();
+    const { abbr, valid } = normalizeStateAbbr(upper);
+    if (valid && abbr && abbr.length === 2) {
+      return { city: m[1].trim(), state: abbr };
+    }
+  }
+  return null;
+}
 
 const EQUIPMENT_OPTIONS = ["Any", "Van", "Reefer", "Flatbed", "Other"];
 const LOOKBACK_OPTIONS: { label: string; value: string }[] = [
@@ -172,8 +207,39 @@ function LaneInput({
     staleTime: 60_000,
   });
 
-  const list = items.data ?? [];
-  const visible = autoOpen && list.length > 0;
+  // Local fuzzy + prefix matches from the bundled US cities dataset. Renders
+  // immediately while the network request is in flight and supplements the
+  // server response with typo-tolerant suggestions.
+  const localMatches = useMemo<AutoItem[]>(() => {
+    if (debouncedQ.length < 2) return [];
+    const prefix = getCityAutocompleteSuggestions(debouncedQ, undefined, 8);
+    const fuzzy = prefix.length >= 4 ? [] : getLaneLocationSuggestions(debouncedQ, undefined, 8);
+    const merged: { city: string; state: string }[] = [...prefix];
+    for (const m of fuzzy) {
+      if (!merged.some(p => p.city === m.city && p.state === m.state)) merged.push(m);
+    }
+    return merged.slice(0, 10).map(m => ({ city: m.city, state: m.state, count: 0, source: "city" as const }));
+  }, [debouncedQ]);
+
+  const { historyList, cityList } = useMemo(() => {
+    const data = items.data ?? [];
+    const history = data.filter(d => d.source === "history" || (d.source === undefined && d.count > 0));
+    const cityFromServer = data.filter(d => d.source === "city");
+    const histKeys = new Set(history.map(h => `${h.city.toLowerCase()}|${h.state}`));
+    const seen = new Set<string>(histKeys);
+    const cities: AutoItem[] = [];
+    for (const it of [...cityFromServer, ...localMatches]) {
+      const key = `${it.city.toLowerCase()}|${it.state}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      cities.push(it);
+    }
+    return { historyList: history, cityList: cities.slice(0, 12) };
+  }, [items.data, localMatches]);
+
+  const flatList: AutoItem[] = useMemo(() => [...historyList, ...cityList], [historyList, cityList]);
+  const showNoMatches = autoOpen && debouncedQ.length >= 2 && !items.isFetching && flatList.length === 0;
+  const visible = autoOpen && (flatList.length > 0 || showNoMatches);
 
   const pick = (it: AutoItem): void => {
     onChange({ city: it.city, state: it.state });
@@ -184,40 +250,82 @@ function LaneInput({
     setTimeout(() => onAdvance?.(), 0);
   };
 
+  const handleCityChange = (raw: string): void => {
+    const parsed = tryParseCityAndState(raw);
+    if (parsed) {
+      setQ(parsed.city);
+      onChange({ city: parsed.city, state: parsed.state });
+      setAutoOpen(false);
+      setActiveIdx(-1);
+      setTimeout(() => onAdvance?.(), 0);
+      return;
+    }
+    setQ(raw);
+    onChange({ city: raw, state: value.state });
+    setAutoOpen(true);
+    setActiveIdx(-1);
+  };
+
   const onCityKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
-    if (visible) {
+    if (visible && flatList.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setActiveIdx(i => Math.min(list.length - 1, i + 1));
+        setActiveIdx(i => Math.min(flatList.length - 1, i + 1));
         return;
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         setActiveIdx(i => Math.max(-1, i - 1));
         return;
-      } else if (e.key === "Enter" && activeIdx >= 0 && activeIdx < list.length) {
+      } else if (e.key === "Enter" && activeIdx >= 0 && activeIdx < flatList.length) {
         e.preventDefault();
         e.stopPropagation();
-        pick(list[activeIdx]);
+        pick(flatList[activeIdx]);
         return;
       } else if (e.key === "Escape") {
+        e.preventDefault();
         e.stopPropagation();
         setAutoOpen(false);
         setActiveIdx(-1);
         return;
       }
     }
-    // Tab / Enter from city → jump to state if value present
+    if (e.key === "Escape") {
+      // Close the dropdown without clearing the field's value.
+      e.stopPropagation();
+      setAutoOpen(false);
+      setActiveIdx(-1);
+      return;
+    }
+    // Tab from city with text but no state → focus the State field.
     if (e.key === "Tab" && !e.shiftKey && q.trim() && !value.state) {
       e.preventDefault();
       stateEl.current?.focus();
     }
+    // Tab from a complete city+state pair → let the browser advance to the
+    // next focusable element (delivery city / mode), so no preventDefault.
   };
 
   const onStateChange = (raw: string): void => {
-    const v = raw.toUpperCase().slice(0, 2);
-    onChange({ city: value.city, state: v });
-    if (v.length === 2) {
-      setTimeout(() => onAdvance?.(), 0);
+    // Allow the rep to type a full state name (e.g. "Arizona") that we
+    // normalize to "AZ" on blur or once a valid 2-letter code lands.
+    const trimmed = raw.replace(/[^A-Za-z\s]/g, "");
+    const upper = trimmed.toUpperCase();
+    onChange({ city: value.city, state: upper });
+    if (upper.length === 2) {
+      const { abbr, valid } = normalizeStateAbbr(upper);
+      if (valid && abbr) {
+        onChange({ city: value.city, state: abbr });
+        setTimeout(() => onAdvance?.(), 0);
+      }
+    }
+  };
+
+  const onStateBlur = (): void => {
+    if (value.state.length > 2) {
+      const { abbr, valid } = normalizeStateAbbr(value.state);
+      if (valid && abbr) {
+        onChange({ city: value.city, state: abbr });
+      }
     }
   };
 
@@ -230,44 +338,98 @@ function LaneInput({
         <Input
           ref={cityEl}
           value={q}
-          onChange={e => { setQ(e.target.value); onChange({ city: e.target.value, state: value.state }); setAutoOpen(true); setActiveIdx(-1); }}
+          onChange={e => handleCityChange(e.target.value)}
           onFocus={() => setAutoOpen(true)}
           onBlur={() => setTimeout(() => setAutoOpen(false), 150)}
           onKeyDown={onCityKeyDown}
+          onPaste={e => {
+            const text = e.clipboardData.getData("text");
+            const parsed = tryParseCityAndState(text);
+            if (parsed) {
+              e.preventDefault();
+              setQ(parsed.city);
+              onChange({ city: parsed.city, state: parsed.state });
+              setAutoOpen(false);
+              setActiveIdx(-1);
+              setTimeout(() => onAdvance?.(), 0);
+            }
+          }}
           placeholder="City"
           className="h-10 w-[200px] bg-zinc-900 border-zinc-700 text-sm text-zinc-100 placeholder:text-zinc-500 focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
           data-testid={testIdCity}
+          autoComplete="off"
         />
         <Input
           ref={stateEl}
           value={value.state}
           onChange={e => onStateChange(e.target.value)}
+          onBlur={onStateBlur}
           placeholder="ST"
           className="h-10 w-[60px] bg-zinc-900 border-zinc-700 text-sm text-zinc-100 placeholder:text-zinc-500 uppercase tracking-wider text-center focus-visible:ring-amber-400/40 focus-visible:border-amber-400/60"
-          maxLength={2}
+          maxLength={20}
           data-testid={testIdState}
+          autoComplete="off"
         />
       </div>
       {visible && (
-        <div className="absolute top-full left-0 mt-1 z-30 w-[300px] rounded-[4px] border border-zinc-700 bg-zinc-950 shadow-2xl max-h-[280px] overflow-y-auto" data-testid={`autocomplete-${kind}`}>
-          <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-zinc-500 border-b border-zinc-800 bg-zinc-900">
-            {kind === "origin" ? "Pickup matches" : "Delivery matches"} · {list.length}
-          </div>
-          {list.map((it, i) => (
-            <button
-              key={`${it.city}|${it.state}`}
-              type="button"
-              onMouseDown={(e) => { e.preventDefault(); pick(it); }}
-              onMouseEnter={() => setActiveIdx(i)}
-              className={`w-full flex items-center justify-between px-3 py-2 text-left text-xs border-l-2 ${i === activeIdx ? "bg-zinc-800 border-amber-400" : "border-transparent hover:bg-zinc-900"}`}
-              data-testid={`autocomplete-item-${kind}-${it.city}-${it.state}`}
-            >
-              <span className="text-zinc-100 flex items-center gap-1.5">
-                <MapPin className="h-3 w-3 text-zinc-500" />{it.city}, <span className="text-zinc-400">{it.state}</span>
-              </span>
-              <span className="text-[10px] text-zinc-500 tabular-nums">{it.count} quote{it.count === 1 ? "" : "s"}</span>
-            </button>
-          ))}
+        <div className="absolute top-full left-0 mt-1 z-30 w-[300px] rounded-[4px] border border-zinc-700 bg-zinc-950 shadow-2xl max-h-[320px] overflow-y-auto" data-testid={`autocomplete-${kind}`}>
+          {historyList.length > 0 && (
+            <>
+              <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-amber-300/80 border-b border-zinc-800 bg-zinc-900">
+                Recent · {historyList.length}
+              </div>
+              {historyList.map((it, i) => {
+                const idx = i;
+                return (
+                  <button
+                    key={`h-${it.city}|${it.state}`}
+                    type="button"
+                    onMouseDown={(e) => { e.preventDefault(); pick(it); }}
+                    onMouseEnter={() => setActiveIdx(idx)}
+                    className={`w-full flex items-center justify-between px-3 py-2 text-left text-xs border-l-2 ${idx === activeIdx ? "bg-zinc-800 border-amber-400" : "border-transparent hover:bg-zinc-900"}`}
+                    data-testid={`autocomplete-item-${kind}-${it.city}-${it.state}`}
+                  >
+                    <span className="text-zinc-100 flex items-center gap-1.5">
+                      <MapPin className="h-3 w-3 text-amber-400/70" />{it.city}, <span className="text-zinc-400">{it.state}</span>
+                    </span>
+                    <span className="text-[10px] text-amber-300/80 tabular-nums">
+                      {it.count > 0 ? `${it.count} quote${it.count === 1 ? "" : "s"}` : "recent"}
+                    </span>
+                  </button>
+                );
+              })}
+            </>
+          )}
+          {cityList.length > 0 && (
+            <>
+              <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-zinc-500 border-y border-zinc-800 bg-zinc-900">
+                Cities · {cityList.length}
+              </div>
+              {cityList.map((it, i) => {
+                const idx = historyList.length + i;
+                return (
+                  <button
+                    key={`c-${it.city}|${it.state}`}
+                    type="button"
+                    onMouseDown={(e) => { e.preventDefault(); pick(it); }}
+                    onMouseEnter={() => setActiveIdx(idx)}
+                    className={`w-full flex items-center justify-between px-3 py-2 text-left text-xs border-l-2 ${idx === activeIdx ? "bg-zinc-800 border-amber-400" : "border-transparent hover:bg-zinc-900"}`}
+                    data-testid={`autocomplete-item-${kind}-${it.city}-${it.state}`}
+                  >
+                    <span className="text-zinc-100 flex items-center gap-1.5">
+                      <MapPin className="h-3 w-3 text-zinc-500" />{it.city}, <span className="text-zinc-400">{it.state}</span>
+                    </span>
+                    <span className="text-[10px] text-zinc-500 tabular-nums">city</span>
+                  </button>
+                );
+              })}
+            </>
+          )}
+          {showNoMatches && (
+            <div className="px-3 py-2.5 text-[11px] text-zinc-400" data-testid={`autocomplete-empty-${kind}`}>
+              No matches — press <kbd className="px-1 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-300 text-[9px] mx-0.5">Enter</kbd> to use as-is
+            </div>
+          )}
         </div>
       )}
     </div>

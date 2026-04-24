@@ -11,6 +11,8 @@ import {
 import { getStaleQuoteFollowUps } from "./staleQuoteFollowup";
 import { getActivePatternAlertsForOrg } from "./quotePatternShift";
 import { normalizeEquipmentType } from "@shared/laneFormatters";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 export type QuoteFilters = {
   customerId?: string;
@@ -2099,7 +2101,28 @@ export type LaneAutocompleteItem = {
   city: string;
   state: string;
   count: number;
+  // Task #510 — optional source tag so the client can render
+  // historical lane matches separately from generic US-city matches.
+  source?: "history" | "city";
 };
+
+interface UsCityRow { city: string; state: string; aliases: string[] }
+let US_CITIES_CACHE: UsCityRow[] | null = null;
+function getUsCitiesData(): UsCityRow[] {
+  if (US_CITIES_CACHE) return US_CITIES_CACHE;
+  try {
+    // Reuse the same bundled dataset the client uses for autocomplete.
+    const filePath = join(process.cwd(), "client", "src", "data", "usCities.json");
+    US_CITIES_CACHE = JSON.parse(readFileSync(filePath, "utf-8")) as UsCityRow[];
+  } catch (err) {
+    console.warn("[customer-quotes] failed to load usCities.json:", err);
+    US_CITIES_CACHE = [];
+  }
+  return US_CITIES_CACHE;
+}
+
+const HISTORY_LIMIT = 8;
+const CITY_LIMIT = 12;
 
 export async function laneAutocomplete(
   orgId: string, q: string, kind: "origin" | "dest",
@@ -2115,11 +2138,41 @@ export async function laneAutocomplete(
     const blob = `${city}, ${state}`.toLowerCase();
     if (!blob.includes(term)) continue;
     const key = `${city}|${state}`;
-    const cur = counts.get(key) ?? { city, state, count: 0 };
+    const cur = counts.get(key) ?? { city, state, count: 0, source: "history" as const };
     cur.count++;
     counts.set(key, cur);
   }
-  return Array.from(counts.values())
+  const history: LaneAutocompleteItem[] = Array.from(counts.values())
     .sort((a, b) => b.count - a.count)
-    .slice(0, 10);
+    .slice(0, HISTORY_LIMIT)
+    .map(h => ({ ...h, source: "history" }));
+
+  // Augment with prefix matches from the bundled US cities dataset so
+  // reps can find any city even if it has never been quoted before.
+  const seen = new Set(history.map(h => `${h.city.toLowerCase()}|${h.state}`));
+  const cityRows = getUsCitiesData();
+  const cityMatches: LaneAutocompleteItem[] = [];
+  for (const entry of cityRows) {
+    const names = [entry.city, ...entry.aliases];
+    let matched = false;
+    for (const n of names) {
+      const lower = n.toLowerCase();
+      if (lower.startsWith(term) || `${lower}, ${entry.state.toLowerCase()}`.startsWith(term)) {
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) continue;
+    const key = `${entry.city.toLowerCase()}|${entry.state}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cityMatches.push({ city: entry.city, state: entry.state, count: 0, source: "city" });
+    if (cityMatches.length >= CITY_LIMIT * 2) break;
+  }
+  // Prefer shorter city names (closer to the prefix) and stable alphabetical order.
+  cityMatches.sort((a, b) =>
+    a.city.length - b.city.length || a.city.localeCompare(b.city) || a.state.localeCompare(b.state),
+  );
+
+  return [...history, ...cityMatches.slice(0, CITY_LIMIT)];
 }
