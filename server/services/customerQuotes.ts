@@ -1954,13 +1954,16 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
   // and groups flatbed/step-deck under "open". "Other" matches the catch-all
   // family. "Any" / blank matches everything.
   const inputFamily = equipment && eqLower !== "any" ? equipmentFamily(equipment) : null;
-  // Task #514 — Strict mode preserves the legacy "today's behavior":
-  // exact equipment-string equality and only exact / same_state tiers.
-  // The "Exact matches only" lane toggle is also a way to force exact
-  // equipment regardless of mode. Relaxed mode (default) widens the
-  // historical pool to the equipment family (van/reefer/open/other).
+  // Task #514 — Equipment matching policy:
+  // - Default (and strict mode) preserves legacy behavior: family-level
+  //   matching (van groups dry van + box truck, open groups flatbed +
+  //   step-deck, etc).
+  // - The "Exact matches only" lane toggle (`exactOnly`) is the single
+  //   explicit knob a rep flips to force exact equipment-string equality.
+  // matchMode is intentionally NOT coupled to equipment matching so
+  // that strict mode is behaviorally identical to legacy on equipment.
   const matchModeEarly: "strict" | "relaxed" = input.matchMode === "strict" ? "strict" : "relaxed";
-  const forceExactEquipment = !!input.exactOnly || matchModeEarly === "strict";
+  const forceExactEquipment = !!input.exactOnly;
   const eqMatch = (r: QuoteOpportunity): boolean => {
     if (!inputFamily) return true;
     if (forceExactEquipment) {
