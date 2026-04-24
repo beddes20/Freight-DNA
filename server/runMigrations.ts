@@ -4199,4 +4199,82 @@ export async function runMigrations() {
   } finally {
     client466.release();
   }
+
+  // ── Task #533/#573: snooze fields on email_conversation_threads ──────────
+  // Task #533 added snooze support in shared/schema.ts (snoozedUntil,
+  // snoozedFromState, snoozedByUserId) but never wrote the supporting
+  // migration. Without these columns every query against the table fails
+  // (`column "snoozed_until" does not exist`), which 500s the Conversations
+  // tab and floods the wake-sweep scheduler with errors. This block adds the
+  // columns idempotently plus a partial index that keeps the wake-sweep query
+  // (waiting_state='snoozed' AND snoozed_until <= now()) cheap as snooze
+  // volume grows.
+  const clientSnooze = await pool.connect();
+  try {
+    await clientSnooze.query(`ALTER TABLE email_conversation_threads ADD COLUMN IF NOT EXISTS snoozed_until TIMESTAMP`);
+    await clientSnooze.query(`ALTER TABLE email_conversation_threads ADD COLUMN IF NOT EXISTS snoozed_from_state TEXT`);
+    await clientSnooze.query(`ALTER TABLE email_conversation_threads ADD COLUMN IF NOT EXISTS snoozed_by_user_id VARCHAR`);
+    // Add the FK in its own try block so any failure (e.g. legacy bad data
+    // in snoozed_by_user_id, or transient lock) doesn't prevent the wake
+    // index below from being created. The FK existence check is scoped by
+    // table OID to avoid false positives from same-named constraints on
+    // unrelated tables/schemas.
+    try {
+      const fkExists = await clientSnooze.query(`
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'email_conversation_threads_snoozed_by_user_id_fkey'
+          AND conrelid = 'public.email_conversation_threads'::regclass
+      `);
+      if (fkExists.rowCount === 0) {
+        await clientSnooze.query(`
+          ALTER TABLE email_conversation_threads
+          ADD CONSTRAINT email_conversation_threads_snoozed_by_user_id_fkey
+          FOREIGN KEY (snoozed_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+        `);
+      }
+    } catch (fkErr) {
+      console.error("[migrations] snooze FK add error (non-fatal, wake index will still be created):", fkErr);
+    }
+    await clientSnooze.query(`
+      CREATE INDEX IF NOT EXISTS idx_ect_snoozed_wake
+      ON email_conversation_threads (snoozed_until)
+      WHERE waiting_state = 'snoozed'
+    `);
+    console.log("[migrations] snooze columns + wake index added to email_conversation_threads (Task #533/#573)");
+  } catch (err) {
+    console.error("[migrations] snooze columns migration error:", err);
+  } finally {
+    clientSnooze.release();
+  }
+
+  // ── Task #532/#573: email_conversation_read_states table ─────────────────
+  // Task #532 added per-user thread read-state tracking in shared/schema.ts
+  // but never wrote the supporting migration. The Conversations endpoint
+  // (GET /api/internal/conversations) joins this table on every request to
+  // compute the unread badge, so without it the entire inbox 500s. Discovered
+  // while validating the Task #573 snooze fix — without this companion
+  // migration the Conversations tab still won't load. Idempotent.
+  const clientReadStates = await pool.connect();
+  try {
+    await clientReadStates.query(`
+      CREATE TABLE IF NOT EXISTS email_conversation_read_states (
+        id            varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id        varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id       varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        thread_id     text NOT NULL,
+        last_read_at  timestamp,
+        created_at    timestamp NOT NULL DEFAULT NOW(),
+        updated_at    timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientReadStates.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS email_conv_read_user_thread_uniq
+        ON email_conversation_read_states (user_id, thread_id)
+    `);
+    console.log("[migrations] email_conversation_read_states table ensured (Task #532/#573)");
+  } catch (err) {
+    console.error("[migrations] email_conversation_read_states migration error:", err);
+  } finally {
+    clientReadStates.release();
+  }
 }
