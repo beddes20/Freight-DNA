@@ -883,10 +883,14 @@ export async function runImportFromWorkbook(
         sourceFileName: fileName,
       };
       // Always rewrite sourceRef so the (possibly new) stableKey + fileName
-      // are recorded for tomorrow's vanish-pass.
+      // are recorded for tomorrow's vanish-pass. `orderId` is the real TMS
+      // Order # (column A). We persist it on every re-import so the
+      // load_fact mirror — and the Available Loads board — render the real
+      // Order # instead of the synthetic `freight_opp:<uuid>` fallback.
       (patch as Record<string, unknown>).sourceRef = {
         kind: "available_freight_import",
         stableKey: load.stableKey,
+        orderId: load.orderId,
         fileName,
         importedAt: new Date().toISOString(),
         ...(softMergedFrom ? { mergedFromStableKey: softMergedFrom.previousStableKey } : {}),
@@ -980,10 +984,55 @@ export async function runImportFromWorkbook(
       }
       updated++;
       // Mirror to load_fact so the Carrier Intelligence "Available Loads"
-      // tab sees the latest pickup window / status. Best-effort: failures
+      // tab sees the latest pickup window / status. Mirror from
+      // `updatedOpp` (NOT `existingOpp`) so the freshly written
+      // sourceRef.orderId — and any other patched fields — flow through to
+      // the load_fact mirror in this same import pass; otherwise legacy
+      // rows would keep their synthetic `freight_opp:<uuid>` orderId until
+      // the next full backfill. If the storage call returned no row
+      // (extremely rare) we fall back to a merged view of existingOpp +
+      // patch so we still mirror the new orderId. Best-effort: failures
       // are logged but never abort the importer.
       try {
-        await upsertLoadFact(freightOpportunityToInsert(existingOpp, company.name ?? null, load.ownerEmail ?? null));
+        const mirrorSource = updatedOpp ?? ({ ...existingOpp, ...patch } as FreightOpportunity);
+        // Synthetic→real load_fact.orderId rename. If a prior importer run
+        // (before sourceRef.orderId was persisted) mirrored this opp under
+        // the synthetic `freight_opp:<uuid>` key, rename that row in-place
+        // BEFORE the upsert so we don't end up with two parallel load_fact
+        // rows for the same load. NOT EXISTS guard makes it a safe no-op
+        // when the real-id row already exists or the synthetic row is
+        // absent. Same pattern as proactiveOpportunities cover endpoint.
+        const realOrderId = (() => {
+          const ref = mirrorSource.sourceRef as { orderId?: unknown } | null | undefined;
+          const candidate = ref?.orderId;
+          if (typeof candidate !== "string") return null;
+          const trimmed = candidate.trim();
+          if (!trimmed || trimmed.startsWith("freight_opp:")) return null;
+          return trimmed;
+        })();
+        if (realOrderId) {
+          const { db } = await import("./db");
+          const { loadFact } = await import("@shared/schema");
+          const { and, eq, sql: sqlOp } = await import("drizzle-orm");
+          try {
+            await db.update(loadFact)
+              .set({ orderId: realOrderId, lastChangedAt: new Date() })
+              .where(and(
+                eq(loadFact.orgId, orgId),
+                eq(loadFact.orderId, `freight_opp:${existingOpp.id}`),
+                sqlOp`NOT EXISTS (
+                  SELECT 1 FROM ${loadFact} lf2
+                   WHERE lf2.org_id = ${orgId}
+                     AND lf2.order_id = ${realOrderId}
+                )`,
+              ));
+          } catch (renameErr) {
+            console.warn(
+              `[available-freight] synthetic→real orderId rename failed for opp ${existingOpp.id}: ${renameErr instanceof Error ? renameErr.message : String(renameErr)}`,
+            );
+          }
+        }
+        await upsertLoadFact(freightOpportunityToInsert(mirrorSource, company.name ?? null, load.ownerEmail ?? null));
       } catch (e) {
         console.warn(`[available-freight] load_fact mirror (update) failed for opp ${existingOpp.id}: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -1005,6 +1054,10 @@ export async function runImportFromWorkbook(
       sourceRef: {
         kind: "available_freight_import",
         stableKey: load.stableKey,
+        // Real TMS Order # from column A — persisted so load_fact mirror
+        // and the Available Loads board can render it instead of the
+        // synthetic `freight_opp:<uuid>` fallback.
+        orderId: load.orderId,
         fileName,
         importedAt: new Date().toISOString(),
       },
@@ -1245,6 +1298,273 @@ export async function runImportFromWorkbook(
   });
 
   return summary;
+}
+
+// ── Legacy orderId recovery (Task #576) ─────────────────────────────────────
+
+/**
+ * Per-org in-memory dedupe so a burst of Available Loads requests doesn't
+ * stampede the OneDrive fetch. We track the most recent attempt's promise and
+ * timestamp; subsequent calls within the cooldown window resolve to the same
+ * promise (or short-circuit on success).
+ */
+const RECOVER_COOLDOWN_MS = 60_000;
+const recoverInFlight = new Map<string, Promise<RecoverLegacyOrderIdsResult>>();
+const recoverLastAttemptAt = new Map<string, number>();
+
+export interface RecoverLegacyOrderIdsResult {
+  attempted: boolean;
+  reason?: "no_legacy_rows" | "no_onedrive_configured" | "cooldown" | "ok" | "error";
+  fileName?: string;
+  oppsScanned?: number;
+  oppsUpdated?: number;
+  loadFactsRenamed?: number;
+  loadFactsCollided?: number;
+  errorMessage?: string;
+}
+
+/**
+ * Recover real TMS Order #s on freight_opportunity rows + their load_fact
+ * mirrors that predate the importer persisting orderId on sourceRef
+ * (Task #576). Idempotent and degrades gracefully:
+ *
+ *   • If the org has no legacy rows → no-op (cheap COUNT pre-flight).
+ *   • If OneDrive is not configured for the org → no-op (no error).
+ *   • If the workbook fetch / parse fails → logged + no-op.
+ *
+ * Uses a per-org in-memory mutex + cooldown so the lazy trigger from the
+ * Available Loads endpoint doesn't stampede the Graph API.
+ */
+export async function recoverLegacyAvailableLoadOrderIds(
+  orgId: string,
+): Promise<RecoverLegacyOrderIdsResult> {
+  const inflight = recoverInFlight.get(orgId);
+  if (inflight) return inflight;
+  const lastAt = recoverLastAttemptAt.get(orgId);
+  if (lastAt && Date.now() - lastAt < RECOVER_COOLDOWN_MS) {
+    return { attempted: false, reason: "cooldown" };
+  }
+
+  const promise = (async (): Promise<RecoverLegacyOrderIdsResult> => {
+    try {
+      const { db } = await import("./db");
+      const { freightOpportunities, loadFact } = await import("@shared/schema");
+      const { and, eq, sql } = await import("drizzle-orm");
+
+      // Pass A — opps that ALREADY have a real sourceRef.orderId but whose
+      // load_fact mirror is still keyed by the synthetic `freight_opp:<uuid>`.
+      // This covers the partial-deploy / racy-importer case where the
+      // freight_opp row was patched but the load_fact rename never happened
+      // (e.g., importer ran on the old code, then this code shipped).
+      // No OneDrive round-trip needed — the real Order # is already stored.
+      let strandedRenamed = 0;
+      let strandedCollided = 0;
+      try {
+        const stranded = await db.select().from(freightOpportunities)
+          .where(and(
+            eq(freightOpportunities.orgId, orgId),
+            sql`source_ref->>'kind' = 'available_freight_import'`,
+            sql`(source_ref->>'orderId') IS NOT NULL`,
+            sql`(source_ref->>'orderId') NOT LIKE 'freight_opp:%'`,
+            sql`EXISTS (
+              SELECT 1 FROM ${loadFact} lf
+               WHERE lf.org_id = ${orgId}
+                 AND lf.order_id = 'freight_opp:' || ${freightOpportunities.id}::text
+            )`,
+          ));
+        for (const opp of stranded) {
+          const ref = opp.sourceRef as { orderId?: unknown } | null | undefined;
+          const realOrderId = typeof ref?.orderId === "string" ? ref.orderId.trim() : "";
+          if (!realOrderId || realOrderId.startsWith("freight_opp:")) continue;
+          const synthetic = `freight_opp:${opp.id}`;
+          try {
+            const result = await db.update(loadFact)
+              .set({ orderId: realOrderId, lastChangedAt: new Date() })
+              .where(and(
+                eq(loadFact.orgId, orgId),
+                eq(loadFact.orderId, synthetic),
+                sql`NOT EXISTS (
+                  SELECT 1 FROM ${loadFact} lf2
+                   WHERE lf2.org_id = ${orgId}
+                     AND lf2.order_id = ${realOrderId}
+                )`,
+              ))
+              .returning({ id: loadFact.id });
+            if (result.length > 0) strandedRenamed += result.length;
+            else strandedCollided++;
+          } catch (e) {
+            console.warn(
+              `[available-freight-recover] stranded rename failed for opp ${opp.id}: ${e instanceof Error ? e.message : String(e)}`,
+            );
+          }
+        }
+      } catch (e) {
+        console.warn(
+          `[available-freight-recover] pass-A query failed for org ${orgId}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+
+      // Pass B — true legacy: opps that came from the Available Freight
+      // import but lack sourceRef.orderId. These need the OneDrive workbook
+      // to map stableKey → real Order #.
+      const legacyOpps = await db.select().from(freightOpportunities)
+        .where(and(
+          eq(freightOpportunities.orgId, orgId),
+          sql`source_ref->>'kind' = 'available_freight_import'`,
+          sql`(source_ref->>'orderId') IS NULL`,
+        ));
+      if (legacyOpps.length === 0) {
+        if (strandedRenamed + strandedCollided > 0) {
+          console.log(
+            `[available-freight-recover] org=${orgId} pass-A only: ` +
+            `stranded_renamed=${strandedRenamed} stranded_collided=${strandedCollided}`,
+          );
+          return {
+            attempted: true,
+            reason: "ok",
+            oppsScanned: 0,
+            oppsUpdated: 0,
+            loadFactsRenamed: strandedRenamed,
+            loadFactsCollided: strandedCollided,
+          };
+        }
+        return { attempted: false, reason: "no_legacy_rows" };
+      }
+
+      const filePath = await storage.getSetting(availableFreightSettingKey(orgId));
+      if (!filePath) {
+        if (strandedRenamed + strandedCollided > 0) {
+          return {
+            attempted: true,
+            reason: "ok",
+            oppsScanned: 0,
+            oppsUpdated: 0,
+            loadFactsRenamed: strandedRenamed,
+            loadFactsCollided: strandedCollided,
+          };
+        }
+        return { attempted: false, reason: "no_onedrive_configured" };
+      }
+
+      const fetched = await fetchWorkbookFromOneDrive(filePath);
+      const sheetPick = chooseDataSheetWithName(fetched.workbook);
+      const rawRows = sheetPick.rows;
+      const diagnostics: {
+        skippedWithCarrier: number;
+        historicalRuns: ParsedHistoricalRun[];
+        nonAvlRows: ParsedNonAvlRow[];
+      } = { skippedWithCarrier: 0, historicalRuns: [], nonAvlRows: [] };
+      const loads = parseSheetToLoads(rawRows, diagnostics);
+
+      // stableKey → real Order # map. Both AVL and historical (POD/DEL/etc.)
+      // rows are keyed by the same stableKey = sha1([orderId]), so we
+      // include both so any opp whose load has since been carried can still
+      // be recovered.
+      const byStableKey = new Map<string, string>();
+      for (const l of loads) byStableKey.set(l.stableKey, l.orderId);
+      for (const h of diagnostics.historicalRuns) byStableKey.set(h.rowKey, h.orderId);
+
+      let oppsUpdated = 0;
+      let loadFactsRenamed = 0;
+      let loadFactsCollided = 0;
+
+      for (const opp of legacyOpps) {
+        const ref = (opp.sourceRef as { stableKey?: unknown } | null | undefined) ?? null;
+        const stableKey = typeof ref?.stableKey === "string" ? ref.stableKey : null;
+        if (!stableKey) continue;
+        const realOrderId = byStableKey.get(stableKey);
+        if (!realOrderId) continue;
+
+        // 1) Patch the freight_opportunity sourceRef in place. We do a
+        // jsonb_set so we don't disturb other keys (importedAt, fileName).
+        try {
+          await db.update(freightOpportunities)
+            .set({
+              sourceRef: sql`jsonb_set(coalesce(source_ref, '{}'::jsonb), '{orderId}', to_jsonb(${realOrderId}::text), true)`,
+            })
+            .where(and(
+              eq(freightOpportunities.id, opp.id),
+              eq(freightOpportunities.orgId, orgId),
+            ));
+          oppsUpdated++;
+        } catch (e) {
+          console.warn(
+            `[available-freight-recover] opp ${opp.id} sourceRef patch failed:`,
+            e instanceof Error ? e.message : String(e),
+          );
+          continue;
+        }
+
+        // 2) Rename the load_fact mirror's orderId from the synthetic
+        // `freight_opp:<uuid>` to the real one — but only when no real-Order
+        // row already exists for this org (collision). We do not destructively
+        // remove the legacy row on collision; admins can reconcile via the
+        // backfill admin route.
+        const synthetic = `freight_opp:${opp.id}`;
+        try {
+          const result = await db.update(loadFact)
+            .set({ orderId: realOrderId, lastChangedAt: new Date() })
+            .where(and(
+              eq(loadFact.orgId, orgId),
+              eq(loadFact.orderId, synthetic),
+              sql`NOT EXISTS (
+                SELECT 1 FROM ${loadFact} lf2
+                 WHERE lf2.org_id = ${orgId}
+                   AND lf2.order_id = ${realOrderId}
+              )`,
+            ))
+            .returning({ id: loadFact.id });
+          if (result.length > 0) {
+            loadFactsRenamed += result.length;
+          } else {
+            // Either the mirror doesn't exist (cover hadn't run, importer
+            // hadn't mirrored yet) OR a real-orderId row already exists
+            // (collision). Distinguish for diagnostics.
+            const synth = await db.select({ id: loadFact.id }).from(loadFact)
+              .where(and(
+                eq(loadFact.orgId, orgId),
+                eq(loadFact.orderId, synthetic),
+              ))
+              .limit(1);
+            if (synth.length > 0) loadFactsCollided++;
+          }
+        } catch (e) {
+          console.warn(
+            `[available-freight-recover] load_fact rename failed for opp ${opp.id}:`,
+            e instanceof Error ? e.message : String(e),
+          );
+        }
+      }
+
+      console.log(
+        `[available-freight-recover] org=${orgId} file="${fetched.fileName}" ` +
+        `opps_scanned=${legacyOpps.length} opps_updated=${oppsUpdated} ` +
+        `load_fact_renamed=${loadFactsRenamed + strandedRenamed} ` +
+        `load_fact_collided=${loadFactsCollided + strandedCollided} ` +
+        `(stranded_renamed=${strandedRenamed} stranded_collided=${strandedCollided})`,
+      );
+
+      return {
+        attempted: true,
+        reason: "ok",
+        fileName: fetched.fileName,
+        oppsScanned: legacyOpps.length,
+        oppsUpdated,
+        loadFactsRenamed: loadFactsRenamed + strandedRenamed,
+        loadFactsCollided: loadFactsCollided + strandedCollided,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[available-freight-recover] org=${orgId} failed:`, msg);
+      return { attempted: true, reason: "error", errorMessage: msg };
+    } finally {
+      recoverLastAttemptAt.set(orgId, Date.now());
+      recoverInFlight.delete(orgId);
+    }
+  })();
+
+  recoverInFlight.set(orgId, promise);
+  return promise;
 }
 
 /**

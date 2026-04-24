@@ -16,6 +16,7 @@ import {
   colorForUrgency, colorForConfidence,
   fmtCurrency, fmtNum, fmtRpm, fmtDate, downloadCsv,
 } from "@/lib/carrier-intelligence";
+import { formatLaneLocation } from "@shared/laneFormatters";
 import { useToast } from "@/hooks/use-toast";
 
 interface RecRow {
@@ -25,6 +26,11 @@ interface RecRow {
 }
 interface LoadRow {
   id: string; orderId: string;
+  // Set when the underlying load_fact row was mirrored from a
+  // freight_opportunity. The "Open" link uses this — distinct from `orderId`
+  // — so legacy rows whose synthetic `freight_opp:<uuid>` orderId has been
+  // renamed to the real TMS Order # still resolve to the right detail page.
+  freightOpportunityId?: string | null;
   customerName: string | null;
   originCity: string | null; originState: string | null;
   destinationCity: string | null; destinationState: string | null;
@@ -133,7 +139,12 @@ export default function CarrierIntelligenceAvailableLoadsPage() {
         if (top !== urgency) return false;
       }
       if (q) {
-        const hay = [l.orderId, l.customerName, l.originCity, l.originState, l.destinationCity, l.destinationState]
+        // Search hay must reflect what's rendered in the cell so a search
+        // for "Winston-Salem" or "St. Louis" matches the same string the
+        // user sees on screen and in the CSV export.
+        const originDisplay = formatLaneLocation(l.originCity, l.originState);
+        const destDisplay = formatLaneLocation(l.destinationCity, l.destinationState);
+        const hay = [l.orderId, l.customerName, originDisplay, destDisplay]
           .filter(Boolean).join(" ").toLowerCase();
         if (!hay.includes(q)) return false;
       }
@@ -177,10 +188,14 @@ export default function CarrierIntelligenceAvailableLoadsPage() {
     downloadCsv(`available-loads-${new Date().toISOString().slice(0, 10)}.csv`, filtered.map((l) => ({
       OrderId: l.orderId,
       Customer: l.customerName ?? "",
-      Origin: `${l.originCity ?? ""}, ${l.originState ?? ""}`,
-      Destination: `${l.destinationCity ?? ""}, ${l.destinationState ?? ""}`,
+      // CSV must mirror the on-screen formatting so analysts pasting into
+      // sheets see the same City, ST string they read in the table cell
+      // (Title-Case city + uppercase state, hyphenated cities preserved).
+      Origin: formatLaneLocation(l.originCity, l.originState),
+      Destination: formatLaneLocation(l.destinationCity, l.destinationState),
       Mode: l.equipmentType ?? "",
       Pickup: l.pickupDate ?? "",
+      Delivery: l.deliveryDate ?? "",
       Miles: l.totalMiles ?? "",
       OpsUser: l.accountManager ?? "",
       Urgency: l.topRecommendations[0]?.coverageUrgency ?? "",
@@ -308,6 +323,7 @@ export default function CarrierIntelligenceAvailableLoadsPage() {
                     <TableHead>Lane</TableHead>
                     <TableHead>Customer</TableHead>
                     <TableHead>Pickup</TableHead>
+                    <TableHead>Delivery</TableHead>
                     <TableHead>Mode</TableHead>
                     <TableHead>Urgency</TableHead>
                     <TableHead>Suggested carriers</TableHead>
@@ -317,23 +333,31 @@ export default function CarrierIntelligenceAvailableLoadsPage() {
                 </TableHeader>
                 <TableBody>
                   {filtered.length === 0 ? (
-                    <TableRow><TableCell colSpan={9} className="text-center text-muted-foreground py-8" data-testid="text-no-rows">No open loads match these filters.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={10} className="text-center text-muted-foreground py-8" data-testid="text-no-rows">No open loads match these filters.</TableCell></TableRow>
                   ) : filtered.map((l) => {
                     const top = l.topRecommendations[0];
+                    // Title-Case city + uppercase state — matches CSV export
+                    // and the search hay so the cell, the search, and the
+                    // export all render the same canonical lane string.
+                    const originDisplay = formatLaneLocation(l.originCity, l.originState) || "—";
+                    const destDisplay = formatLaneLocation(l.destinationCity, l.destinationState) || "—";
                     return (
                       <TableRow key={l.id} className="hover-elevate" data-testid={`row-load-${l.id}`}>
-                        <TableCell className="font-mono text-xs">{l.orderId}</TableCell>
-                        <TableCell className="whitespace-nowrap">
+                        <TableCell className="font-mono text-xs" data-testid={`text-order-${l.id}`}>{l.orderId}</TableCell>
+                        <TableCell className="whitespace-nowrap" data-testid={`text-lane-${l.id}`}>
                           <span className="inline-flex items-center gap-1">
                             <MapPin className="h-3 w-3 text-muted-foreground" />
-                            {l.originCity ?? "—"}, {l.originState ?? ""}
+                            {originDisplay}
                             <ChevronRight className="h-3 w-3 mx-0.5 text-muted-foreground" />
-                            {l.destinationCity ?? "—"}, {l.destinationState ?? ""}
+                            {destDisplay}
                           </span>
                         </TableCell>
                         <TableCell className="max-w-[180px] truncate">{l.customerName ?? "—"}</TableCell>
                         <TableCell className="whitespace-nowrap text-sm">
                           <span className="inline-flex items-center gap-1"><Clock className="h-3 w-3 text-muted-foreground" />{fmtDate(l.pickupDate)}</span>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap text-sm" data-testid={`text-delivery-${l.id}`}>
+                          <span className="inline-flex items-center gap-1"><Clock className="h-3 w-3 text-muted-foreground" />{fmtDate(l.deliveryDate)}</span>
                         </TableCell>
                         <TableCell>{l.equipmentType ?? "—"}</TableCell>
                         <TableCell>
@@ -364,7 +388,15 @@ export default function CarrierIntelligenceAvailableLoadsPage() {
                           ) : "—"}
                         </TableCell>
                         <TableCell>
-                          <Link href={`/available-freight/${l.orderId}`} data-testid={`link-load-${l.id}`}>
+                          {/* Open link must use the freight_opportunity UUID
+                              (not the load_fact orderId) since the detail page
+                              is keyed on the opportunity. We fall back to
+                              orderId only when no UUID is available so the
+                              button still renders. */}
+                          <Link
+                            href={`/available-freight/${l.freightOpportunityId ?? l.orderId}`}
+                            data-testid={`link-load-${l.id}`}
+                          >
                             <Button size="sm" variant="ghost">Open</Button>
                           </Link>
                         </TableCell>

@@ -256,6 +256,23 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
   app.get("/api/carrier-intelligence/available-loads", requireAuth, async (req, res) => {
     try {
       const orgId = orgOf(req); if (!orgId) return res.status(401).json({ error: "Unauthorized" });
+
+      // Lazy back-fill of legacy synthetic Order #s. Cheap when there are no
+      // legacy rows or when OneDrive isn't configured (both no-op). Run
+      // before the SELECT so the response includes the recovered Order #s
+      // on first refresh after deploy. Per-org mutex + 60s cooldown lives
+      // inside `recoverLegacyAvailableLoadOrderIds`. Failures are swallowed
+      // — the board still renders with synthetic IDs as fallback.
+      try {
+        const { recoverLegacyAvailableLoadOrderIds } = await import("../availableFreightImporter");
+        await recoverLegacyAvailableLoadOrderIds(orgId);
+      } catch (recoverErr) {
+        console.warn(
+          "[carrier-intel/available-loads] legacy orderId recovery failed (non-fatal):",
+          recoverErr instanceof Error ? recoverErr.message : String(recoverErr),
+        );
+      }
+
       const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
       const loads = await db.select().from(loadFact)
         .where(and(eq(loadFact.orgId, orgId), sql`${loadFact.bucket} IN ('available','unknown')`))
@@ -271,9 +288,25 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
         if (list.length < 3) list.push(r);
         recsByLoad.set(r.loadFactId, list);
       }
+      // Surface freightOpportunityId separately from orderId so the UI's
+      // "Open" link still resolves to the freight_opportunity detail page
+      // even after a legacy synthetic orderId has been renamed to the real
+      // TMS Order #. Source: rawRow.id (the FreightOpportunity object the
+      // load_fact mirror was built from), with a fallback to parsing the
+      // synthetic `freight_opp:<uuid>` prefix for rows that haven't been
+      // re-mirrored yet.
+      const extractFreightOppId = (l: typeof loads[number]): string | null => {
+        const raw = l.rawRow as { id?: unknown } | null | undefined;
+        if (raw && typeof raw.id === "string" && raw.id) return raw.id;
+        if (typeof l.orderId === "string" && l.orderId.startsWith("freight_opp:")) {
+          return l.orderId.slice("freight_opp:".length);
+        }
+        return null;
+      };
       return res.json({
         loads: loads.map(l => ({
           ...l,
+          freightOpportunityId: extractFreightOppId(l),
           topRecommendations: recsByLoad.get(l.id) ?? [],
         })),
       });

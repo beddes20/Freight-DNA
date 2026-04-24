@@ -858,14 +858,56 @@ export function registerProactiveOpportunityRoutes(app: Express) {
 
       // Emit to load_fact so coaching / rate positioning sees the win.
       // Order id is deterministic so re-running cover (e.g. a follow-up
-      // edit) updates the same row instead of inserting duplicates.
+      // edit) updates the same row instead of inserting duplicates. We
+      // prefer the real TMS Order # captured by the importer on
+      // sourceRef.orderId so load_fact rows stay aligned with the rest of
+      // the carrier-intel surfaces (and the Available Loads board renders
+      // a real Order # rather than `freight_opp:<uuid>`).
       const { upsertLoadFact } = await import("../carrierIntelligenceService");
       const month = (opp.pickupWindowStart || new Date().toISOString()).slice(0, 7);
+      const sourceRefOrderId = (() => {
+        const ref = opp.sourceRef as { orderId?: unknown } | null | undefined;
+        const candidate = ref?.orderId;
+        if (typeof candidate !== "string") return null;
+        const trimmed = candidate.trim();
+        if (!trimmed || trimmed.startsWith("freight_opp:")) return null;
+        return trimmed;
+      })();
+      const loadFactOrderId = sourceRefOrderId ?? `freight_opp:${opp.id}`;
+      // If a load_fact row for this opp was already mirrored under the
+      // synthetic `freight_opp:<uuid>` orderId (importer wrote it before we
+      // started persisting the real Order # on sourceRef), rename it in-place
+      // before the upsert so we don't end up with two parallel rows for the
+      // same load. Idempotent: a no-op when the synthetic row is absent or
+      // when the real Order # is unchanged.
+      if (sourceRefOrderId) {
+        const { db } = await import("../db");
+        const { loadFact } = await import("@shared/schema");
+        const { and, eq, sql: sqlOp } = await import("drizzle-orm");
+        try {
+          await db.update(loadFact)
+            .set({ orderId: sourceRefOrderId, lastChangedAt: new Date() })
+            .where(and(
+              eq(loadFact.orgId, org),
+              eq(loadFact.orderId, `freight_opp:${opp.id}`),
+              sqlOp`NOT EXISTS (
+                SELECT 1 FROM ${loadFact} lf2
+                 WHERE lf2.org_id = ${org}
+                   AND lf2.order_id = ${sourceRefOrderId}
+              )`,
+            ));
+        } catch (e) {
+          console.warn(
+            `[freight-opps] cover synthetic→real orderId rename failed for opp ${opp.id}:`,
+            e instanceof Error ? e.message : String(e),
+          );
+        }
+      }
       let loadFactEmit: { inserted: boolean; updated: boolean; loadFactId?: string } | null = null;
       try {
         const out = await upsertLoadFact({
           orgId: org,
-          orderId: `freight_opp:${opp.id}`,
+          orderId: loadFactOrderId,
           companyId: opp.companyId,
           customerName,
           carrierName,

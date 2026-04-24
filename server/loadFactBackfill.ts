@@ -128,15 +128,40 @@ export async function backfillFromFinancialUploads(orgId: string, actorUserId: s
 
 // ── Freight opportunities (Available Freight imports) ──────────────────────
 
+/**
+ * Pull the real TMS Order # off a freight_opportunity if the importer wrote
+ * it onto `sourceRef.orderId`. Older opportunities (created before the
+ * importer started persisting the real Order #) return null and the caller
+ * falls back to the synthetic `freight_opp:<uuid>` key. The recovery helper
+ * `recoverLegacyAvailableLoadOrderIds` (server/availableFreightImporter.ts)
+ * back-fills `sourceRef.orderId` for legacy rows by re-reading the most
+ * recent Available Freight upload, after which subsequent mirrors land with
+ * the real Order # automatically.
+ */
+function realOrderIdFromSourceRef(opp: FreightOpportunity): string | null {
+  const ref = opp.sourceRef as { orderId?: unknown } | null | undefined;
+  const candidate = ref?.orderId;
+  if (typeof candidate !== "string") return null;
+  const trimmed = candidate.trim();
+  if (!trimmed) return null;
+  // Defensive: never accept the synthetic prefix here — that would defeat
+  // the whole point of the field.
+  if (trimmed.startsWith("freight_opp:")) return null;
+  return trimmed;
+}
+
 export function freightOpportunityToInsert(
   opp: FreightOpportunity,
   companyName: string | null,
   accountManager: string | null = null,
 ): InsertLoadFact {
   // Each freight_opportunity is a not-yet-realized load. We preserve it as
-  // an "available" load_fact with a synthetic order_id derived from its UUID
-  // (deterministic across runs).
-  const orderId = `freight_opp:${opp.id}`;
+  // an "available" load_fact keyed by the real TMS Order # (when the
+  // importer captured it on `sourceRef.orderId`). Legacy rows that predate
+  // the orderId capture fall back to a synthetic `freight_opp:<uuid>` key
+  // until `recoverLegacyAvailableLoadOrderIds` rewrites them.
+  const realOrderId = realOrderIdFromSourceRef(opp);
+  const orderId = realOrderId ?? `freight_opp:${opp.id}`;
   return {
     orgId: opp.orgId,
     orderId,

@@ -38,14 +38,22 @@ export function normalizeEquipmentType(raw: string | null | undefined): string {
  * Title-cases a city name and uppercases a state abbreviation.
  * Collapses duplicate state values embedded in the city string
  * (e.g. "Macon, GA" with state "GA" → "Macon, GA" not "Macon, GA, GA").
+ *
+ * Null-safe on the city argument: callers in the Available Loads board
+ * (and elsewhere) pass nullable load_fact / freight_opportunity columns
+ * directly. An empty / null / undefined / whitespace-only city returns
+ * either the bare uppercase state (when present) or "" so cells render
+ * cleanly without throwing.
  */
-export function formatLaneLocation(city: string, state: string | null | undefined): string {
+export function formatLaneLocation(city: string | null | undefined, state: string | null | undefined): string {
   const upperState = state ? state.trim().toUpperCase() : null;
+  if (city == null) return upperState ?? "";
 
   // Strip a trailing ", ST" from the raw city before title-casing so we don't
   // end up with "Macon, Ga" when the state was already embedded.
   // Pattern: optional comma + optional space + 2-letter state abbreviation at end.
   let rawCity = city.trim();
+  if (!rawCity) return upperState ?? "";
   if (upperState) {
     const trailingState = new RegExp(`,?\\s*${upperState}$`, "i");
     rawCity = rawCity.replace(trailingState, "").trim();
@@ -57,10 +65,26 @@ export function formatLaneLocation(city: string, state: string | null | undefine
     return rawCity.toUpperCase();
   }
 
+  // Title-case word-by-word. Words are split on whitespace AND hyphens so
+  // multi-part city names render correctly:
+  //   "knightdale"        → "Knightdale"
+  //   "cottage grove"     → "Cottage Grove"
+  //   "winston-salem"     → "Winston-Salem"
+  //   "st. louis"         → "St. Louis"
+  //   "mt. pleasant"      → "Mt. Pleasant"
+  //   "o'fallon"          → "O'Fallon"
+  // The split-and-rejoin preserves the original separator (space or hyphen)
+  // so we don't accidentally collapse "Winston-Salem" to "Winston Salem".
   const titledCity = rawCity
-    .split(" ")
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join(" ");
+    .split(/(\s+|-)/) // capture-group separators are kept in the array
+    .map(part => {
+      if (/^\s+$/.test(part) || part === "-") return part;
+      return part
+        .split("'")
+        .map(seg => seg.charAt(0).toUpperCase() + seg.slice(1).toLowerCase())
+        .join("'");
+    })
+    .join("");
 
   if (!upperState) return titledCity;
 

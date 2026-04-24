@@ -66,6 +66,32 @@ assertEqual(
 
 assert('result never contains "GA, GA"', !formatLaneLocation("Macon, GA", "GA").includes("GA, GA"));
 
+// Hyphenated city names — must preserve the hyphen and title-case both
+// segments. Common in NC, FL, MN. Pre-fix the formatter would emit
+// "Winston-salem" (only first char capitalized) or "Winston Salem" (hyphen
+// dropped). Both are wrong for the Available Loads board.
+assertEqual('hyphenated city — "winston-salem"', formatLaneLocation("winston-salem", "NC"), "Winston-Salem, NC");
+assertEqual('hyphenated city — "WINSTON-SALEM" uppercase', formatLaneLocation("WINSTON-SALEM", "NC"), "Winston-Salem, NC");
+assertEqual('hyphenated city — "wilkes-barre"', formatLaneLocation("wilkes-barre", "PA"), "Wilkes-Barre, PA");
+assertEqual('triple-segment hyphenated city', formatLaneLocation("port-au-prince", null), "Port-Au-Prince");
+
+// "St." / "Mt." abbreviations remain title-cased on the period segment.
+assertEqual('"st. louis" → "St. Louis"', formatLaneLocation("st. louis", "MO"), "St. Louis, MO");
+assertEqual('"mt. pleasant" → "Mt. Pleasant"', formatLaneLocation("mt. pleasant", "SC"), "Mt. Pleasant, SC");
+
+// Apostrophe handling — names like O'Fallon should capitalize after the
+// apostrophe rather than collapsing to "O'fallon".
+assertEqual('"o\'fallon" → "O\'Fallon"', formatLaneLocation("o'fallon", "MO"), "O'Fallon, MO");
+
+// Null-safety: callers pass nullable load_fact / freight_opportunity columns
+// directly. Must never throw — return the bare state (when present) or "".
+assertEqual('null city + state → bare state', formatLaneLocation(null, "GA"), "GA");
+assertEqual('undefined city + state → bare state', formatLaneLocation(undefined, "ga"), "GA");
+assertEqual('null city + null state → empty string', formatLaneLocation(null, null), "");
+assertEqual('empty city + state → bare state', formatLaneLocation("", "GA"), "GA");
+assertEqual('whitespace city + state → bare state', formatLaneLocation("   ", "GA"), "GA");
+assertEqual('whitespace city + null state → empty string', formatLaneLocation("   ", null), "");
+
 // ── formatLaneDisplay ─────────────────────────────────────────────────────────
 
 console.log("\n── formatLaneDisplay ────────────────────────────────────────────────\n");
