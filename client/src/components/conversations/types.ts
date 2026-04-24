@@ -6,7 +6,7 @@ export interface ConversationThread {
   linkedCarrierId: string | null;
   ownerUserId: string | null;
   ownerName: string | null;
-  waitingState: "waiting_on_us" | "waiting_on_them" | "resolved" | "archived";
+  waitingState: "waiting_on_us" | "waiting_on_them" | "resolved" | "archived" | "snoozed";
   responsePriority: "high" | "normal" | "low" | "urgent";
   lastMessageId: string | null;
   lastIncomingAt: string | null;
@@ -14,6 +14,9 @@ export interface ConversationThread {
   waitingSinceAt: string | null;
   overdueAt: string | null;
   archivedAt: string | null;
+  snoozedUntil?: string | null;
+  snoozedFromState?: string | null;
+  snoozedByUserId?: string | null;
   createdAt: string;
   updatedAt: string;
   signals?: string[];
@@ -46,6 +49,7 @@ export type ConversationBucket =
   | "quote_requests"
   | "high_priority"
   | "all"
+  | "snoozed"
   | "archived";
 
 const VALID_BUCKETS: ReadonlySet<ConversationBucket> = new Set([
@@ -54,8 +58,37 @@ const VALID_BUCKETS: ReadonlySet<ConversationBucket> = new Set([
   "quote_requests",
   "high_priority",
   "all",
+  "snoozed",
   "archived",
 ]);
+
+// ─── Saved Views (Task #533) ─────────────────────────────────────────────────
+export interface SavedViewFilters {
+  filterState?: string;
+  filterPriority?: string;
+  filterOverdue?: boolean;
+  filterRep?: string;
+}
+
+export interface SavedView {
+  id: string;
+  orgId: string;
+  userId: string;
+  name: string;
+  bucket: ConversationBucket;
+  filters: SavedViewFilters;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BulkActionResult {
+  action: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  results: Array<{ id: string; ok: boolean; error?: string }>;
+}
 
 // Coerce a raw URL param into a known bucket. Anything outside the whitelist
 // (typo, stale link, hand-rolled URL) falls back to "mine" so downstream code

@@ -1,6 +1,7 @@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { Inbox, CheckCircle2, Sparkles, AlertCircle, Mail, Archive, DollarSign } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Inbox, CheckCircle2, Sparkles, AlertCircle, Mail, Archive, DollarSign, Clock } from "lucide-react";
 import { ThreadRow } from "./thread-row";
 import type { ConversationBucket, ConversationDensity, ConversationThread } from "./types";
 
@@ -14,9 +15,14 @@ interface ThreadListProps {
   onAssignToMe: (id: string) => void;
   onChangeState: (id: string, state: ConversationThread["waitingState"]) => void;
   onArchive: (id: string) => void;
+  onSnooze?: (id: string, until: Date) => void | Promise<void>;
+  onUnsnooze?: (id: string) => void;
   hasMore: boolean;
   onLoadMore: () => void;
   isFetchingMore: boolean;
+  selectedIds?: Set<string>;
+  onToggleSelected?: (id: string, checked: boolean) => void;
+  onToggleAll?: (checked: boolean) => void;
 }
 
 const EMPTY_STATES: Record<ConversationBucket, { icon: typeof Inbox; title: string; subtitle: string }> = {
@@ -45,6 +51,11 @@ const EMPTY_STATES: Record<ConversationBucket, { icon: typeof Inbox; title: stri
     title: "No conversations yet",
     subtitle: "Email threads will appear here as they come in.",
   },
+  snoozed: {
+    icon: Clock,
+    title: "Nothing snoozed",
+    subtitle: "Threads you snooze will land here until they wake up.",
+  },
   archived: {
     icon: Archive,
     title: "Nothing archived",
@@ -62,10 +73,18 @@ export function ThreadList({
   onAssignToMe,
   onChangeState,
   onArchive,
+  onSnooze,
+  onUnsnooze,
   hasMore,
   onLoadMore,
   isFetchingMore,
+  selectedIds,
+  onToggleSelected,
+  onToggleAll,
 }: ThreadListProps) {
+  const selectionEnabled = !!onToggleSelected;
+  const allChecked = selectionEnabled && threads.length > 0 && threads.every(t => selectedIds?.has(t.id));
+  const someChecked = selectionEnabled && threads.some(t => selectedIds?.has(t.id));
   if (isLoading) {
     return (
       <div className="divide-y" data-testid="thread-list-loading">
@@ -99,6 +118,21 @@ export function ThreadList({
 
   return (
     <div className="flex flex-col" data-testid="thread-list">
+      {selectionEnabled && (
+        <div className="flex items-center gap-3 px-4 py-2 border-b bg-muted/20 text-xs text-muted-foreground">
+          <Checkbox
+            checked={allChecked ? true : someChecked ? "indeterminate" : false}
+            onCheckedChange={(v) => onToggleAll?.(v === true)}
+            aria-label="Select all visible conversations"
+            data-testid="checkbox-select-all"
+          />
+          <span data-testid="text-selection-summary">
+            {someChecked
+              ? `${threads.filter(t => selectedIds?.has(t.id)).length} selected`
+              : `Select all ${threads.length} visible`}
+          </span>
+        </div>
+      )}
       {threads.map(t => (
         <ThreadRow
           key={t.id}
@@ -109,6 +143,10 @@ export function ThreadList({
           onAssignToMe={onAssignToMe}
           onChangeState={onChangeState}
           onArchive={onArchive}
+          onSnooze={onSnooze}
+          onUnsnooze={onUnsnooze}
+          isChecked={selectedIds?.has(t.id)}
+          onToggleChecked={onToggleSelected}
         />
       ))}
       {hasMore && (

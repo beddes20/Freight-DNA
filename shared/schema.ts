@@ -1940,6 +1940,14 @@ export const emailConversationThreads = pgTable("email_conversation_threads", {
   waitingSinceAt: timestamp("waiting_since_at"),
   overdueAt: timestamp("overdue_at"),
   archivedAt: timestamp("archived_at"),
+  // ─── Snooze (Task #533) ───────────────────────────────────────────────────
+  // When a user snoozes a thread we set waitingState='snoozed', record the
+  // wake time in snoozedUntil, and remember the previous waitingState in
+  // snoozedFromState so the wake job can restore it. A scheduler runs every
+  // few minutes to flip expired snoozes back to their prior state.
+  snoozedUntil: timestamp("snoozed_until"),
+  snoozedFromState: text("snoozed_from_state"),
+  snoozedByUserId: varchar("snoozed_by_user_id").references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -1951,6 +1959,31 @@ export const insertEmailConversationThreadSchema = createInsertSchema(emailConve
 });
 export type InsertEmailConversationThread = z.infer<typeof insertEmailConversationThreadSchema>;
 export type EmailConversationThread = typeof emailConversationThreads.$inferSelect;
+
+// ─── Conversation Saved Views (Task #533) ────────────────────────────────────
+// Per-user saved combinations of (bucket + filters) so reps can recall a
+// frequently-used inbox slice (e.g. "My overdue quote requests") with one
+// click. Filters is a free-form JSON blob — the client owns the shape and
+// the server simply persists/returns it.
+export const conversationSavedViews = pgTable("conversation_saved_views", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  bucket: text("bucket").notNull(),
+  filters: jsonb("filters").notNull().default(sql`'{}'::jsonb`),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertConversationSavedViewSchema = createInsertSchema(conversationSavedViews).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertConversationSavedView = z.infer<typeof insertConversationSavedViewSchema>;
+export type ConversationSavedView = typeof conversationSavedViews.$inferSelect;
 
 // ─── Per-user read state for conversation threads (Task #532) ────────────────
 // Tracks the most recent moment a user "viewed" a thread so we can show

@@ -146,6 +146,83 @@ export async function setWaitingState(
   await storageInstance.updateEmailConversationThread(threadRecordId, orgId, update);
 }
 
+// ─── Snooze helpers (Task #533) ──────────────────────────────────────────────
+
+/**
+ * Snooze a thread until `until`. Stores the prior waitingState so the wake
+ * job can restore it. Clears overdueAt and waitingSinceAt while snoozed —
+ * a snoozed thread isn't waiting on anyone.
+ */
+export async function snoozeThread(
+  threadRecordId: string,
+  until: Date,
+  byUserId: string,
+  orgId: string,
+  storageInstance: Pick<IStorage, "updateEmailConversationThread" | "getEmailConversationThreadById">,
+): Promise<void> {
+  const thread = await storageInstance.getEmailConversationThreadById(threadRecordId);
+  if (!thread || thread.orgId !== orgId) return;
+
+  // If the thread is already snoozed, just update the wake time — don't lose
+  // the originally captured snoozedFromState.
+  const fromState =
+    thread.waitingState === "snoozed"
+      ? thread.snoozedFromState ?? "waiting_on_us"
+      : thread.waitingState;
+
+  await storageInstance.updateEmailConversationThread(threadRecordId, orgId, {
+    waitingState: "snoozed",
+    snoozedUntil: until,
+    snoozedFromState: fromState,
+    snoozedByUserId: byUserId,
+    waitingSinceAt: null,
+    overdueAt: null,
+  });
+}
+
+/**
+ * Wake a snoozed thread back to its prior state. If the prior state was
+ * waiting_on_us, recompute waitingSinceAt and overdueAt against the SLA.
+ */
+export async function wakeSnoozedThread(
+  threadRecordId: string,
+  orgId: string,
+  storageInstance: Pick<IStorage, "updateEmailConversationThread" | "getEmailConversationThreadById">,
+  now: Date = new Date(),
+): Promise<void> {
+  const thread = await storageInstance.getEmailConversationThreadById(threadRecordId);
+  if (!thread || thread.orgId !== orgId || thread.waitingState !== "snoozed") return;
+
+  const restoreState = (thread.snoozedFromState ?? "waiting_on_us") as
+    | "waiting_on_us"
+    | "waiting_on_them"
+    | "resolved";
+
+  const update: Partial<EmailConversationThread> = {
+    waitingState: restoreState,
+    snoozedUntil: null,
+    snoozedFromState: null,
+    snoozedByUserId: null,
+  };
+
+  if (restoreState === "waiting_on_us") {
+    // Re-arm waiting clocks based on the most recent inbound message we know
+    // about, falling back to the snooze wake time so the thread is at least
+    // not "instantly overdue" the moment it wakes.
+    const waitingSince = thread.lastIncomingAt ?? now;
+    update.waitingSinceAt = waitingSince;
+    const slaDurationMs = SLA_MS[thread.responsePriority];
+    if (slaDurationMs) {
+      const breach = new Date(waitingSince.getTime() + slaDurationMs);
+      update.overdueAt = breach <= now ? breach : null;
+    } else {
+      update.overdueAt = null;
+    }
+  }
+
+  await storageInstance.updateEmailConversationThread(threadRecordId, orgId, update);
+}
+
 export async function setPriority(
   threadRecordId: string,
   priority: "high" | "normal" | "low",

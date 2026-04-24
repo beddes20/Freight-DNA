@@ -27,7 +27,7 @@ import {
   InsertEmailConversationThread,
 } from "@shared/schema";
 import { requireAuth, getCurrentUser, canSeeRepUser, getVisibleRepUserIds } from "../auth";
-import { setWaitingState, setPriority } from "../services/conversationWaitingStateService";
+import { setWaitingState, setPriority, snoozeThread } from "../services/conversationWaitingStateService";
 import { assignOwner } from "../services/conversationOwnershipService";
 import {
   backfillMissingConversationThreads,
@@ -254,7 +254,7 @@ export function registerConversationsRoutes(app: Express): void {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
       const orgId = user.organizationId;
-      const { accountId, carrierId, ownerUserId, unowned, waitingState, responsePriority, overdue, threadId, archived, cursor, limit, search, dateFrom, dateTo, signal, sort } = req.query;
+      const { accountId, carrierId, ownerUserId, unowned, waitingState, responsePriority, overdue, threadId, archived, snoozed, cursor, limit, search, dateFrom, dateTo, signal, sort } = req.query;
 
       const filters: Parameters<typeof storage.listEmailConversationThreads>[1] = {};
 
@@ -272,6 +272,11 @@ export function registerConversationsRoutes(app: Express): void {
 
       if (archived === "true") {
         filters.archivedOnly = true;
+      }
+      // Task #533: snoozed bucket. snoozed=true → only currently-snoozed
+      // threads (the new "Snoozed" sidebar bucket).
+      if (snoozed === "true") {
+        filters.snoozedOnly = true;
       }
 
       if (cursor) filters.cursor = cursor as string;
@@ -513,6 +518,285 @@ export function registerConversationsRoutes(app: Express): void {
     } catch (err) {
       console.error("[conversations] POST /conversations/:id/archive error:", err);
       res.status(500).json({ error: "Failed to archive conversation" });
+    }
+  });
+
+  // ── POST /api/internal/conversations/:id/snooze (Task #533) ────────────────
+  // Snooze a thread until a specific wake time. Cleared by /unsnooze, by the
+  // wake scheduler when snoozed_until passes, or by an inbound message
+  // (handled in conversationWaitingStateService.applyMessageToThread —
+  // archived-thread reopen logic; snooze waking on inbound is intentionally
+  // left to the cron sweep so notifications fire reliably).
+  app.post("/api/internal/conversations/:id/snooze", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const schema = z.object({ snoozedUntil: z.string().datetime() });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      const until = new Date(parsed.data.snoozedUntil);
+      if (Number.isNaN(until.getTime()) || until.getTime() <= Date.now()) {
+        return res.status(400).json({ error: "snoozedUntil must be a future timestamp" });
+      }
+
+      const thread = await storage.getEmailConversationThreadById(req.params.id);
+      if (!thread || thread.orgId !== user.organizationId) {
+        return res.status(404).json({ error: "Conversation not found" });
+      }
+      if (!(await canAccessThread(user, thread))) {
+        return res.status(403).json({ error: "You do not have access to this conversation" });
+      }
+      if (thread.waitingState === "archived") {
+        return res.status(400).json({ error: "Archived conversations cannot be snoozed" });
+      }
+
+      await snoozeThread(req.params.id, until, user.id, user.organizationId, storage);
+      const updated = await storage.getEmailConversationThreadById(req.params.id);
+      res.json({ thread: updated });
+    } catch (err) {
+      console.error("[conversations] POST /conversations/:id/snooze error:", err);
+      res.status(500).json({ error: "Failed to snooze conversation" });
+    }
+  });
+
+  // ── POST /api/internal/conversations/:id/unsnooze (Task #533) ──────────────
+  // Wake a snoozed thread back to its prior state immediately. No-op for
+  // threads that aren't currently snoozed.
+  app.post("/api/internal/conversations/:id/unsnooze", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const thread = await storage.getEmailConversationThreadById(req.params.id);
+      if (!thread || thread.orgId !== user.organizationId) {
+        return res.status(404).json({ error: "Conversation not found" });
+      }
+      if (!(await canAccessThread(user, thread))) {
+        return res.status(403).json({ error: "You do not have access to this conversation" });
+      }
+
+      const { wakeSnoozedThread } = await import("../services/conversationWaitingStateService");
+      await wakeSnoozedThread(req.params.id, user.organizationId, storage);
+      const updated = await storage.getEmailConversationThreadById(req.params.id);
+      res.json({ thread: updated });
+    } catch (err) {
+      console.error("[conversations] POST /conversations/:id/unsnooze error:", err);
+      res.status(500).json({ error: "Failed to unsnooze conversation" });
+    }
+  });
+
+  // ── POST /api/internal/conversations/bulk (Task #533) ──────────────────────
+  // Apply a single action to many threads in one request and return per-id
+  // success/failure so the client can surface granular feedback. Each thread
+  // goes through the same access check the per-thread endpoints use, so a
+  // rep can't bulk-mutate threads outside their visible reporting tree.
+  //
+  // Supported actions: resolve, reopen, archive, assign, snooze, unsnooze.
+  app.post("/api/internal/conversations/bulk", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const schema = z.object({
+        action: z.enum(["resolve", "reopen", "archive", "assign", "snooze", "unsnooze"]),
+        threadIds: z.array(z.string().min(1)).min(1).max(200),
+        ownerUserId: z.string().nullable().optional(),
+        snoozedUntil: z.string().datetime().optional(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      const { action, threadIds } = parsed.data;
+
+      // Validate action-specific params up front so a malformed call fails
+      // fast instead of half-applying.
+      let snoozeUntilDate: Date | null = null;
+      if (action === "snooze") {
+        if (!parsed.data.snoozedUntil) {
+          return res.status(400).json({ error: "snoozedUntil is required for snooze" });
+        }
+        snoozeUntilDate = new Date(parsed.data.snoozedUntil);
+        if (Number.isNaN(snoozeUntilDate.getTime()) || snoozeUntilDate.getTime() <= Date.now()) {
+          return res.status(400).json({ error: "snoozedUntil must be a future timestamp" });
+        }
+      }
+      if (action === "assign" && parsed.data.ownerUserId === undefined) {
+        return res.status(400).json({ error: "ownerUserId is required for assign (use null to unassign)" });
+      }
+
+      const { wakeSnoozedThread } = await import("../services/conversationWaitingStateService");
+      const results: Array<{ id: string; ok: boolean; error?: string }> = [];
+
+      // Process sequentially so a single failing thread doesn't break
+      // updates to the others. The bulk size cap (200) keeps this safe.
+      for (const id of threadIds) {
+        try {
+          const thread = await storage.getEmailConversationThreadById(id);
+          if (!thread || thread.orgId !== user.organizationId) {
+            results.push({ id, ok: false, error: "Conversation not found" });
+            continue;
+          }
+          if (!(await canAccessThread(user, thread))) {
+            results.push({ id, ok: false, error: "Access denied" });
+            continue;
+          }
+
+          switch (action) {
+            case "resolve":
+              await setWaitingState(id, "resolved", user.organizationId, storage);
+              break;
+            case "reopen":
+              await setWaitingState(id, "waiting_on_us", user.organizationId, storage);
+              break;
+            case "archive": {
+              if (thread.waitingState !== "resolved") {
+                // Mirror the per-thread archive endpoint: archive only after
+                // the thread has been resolved. The bulk caller can chain
+                // resolve + archive if they want both.
+                results.push({ id, ok: false, error: "Only resolved conversations can be archived" });
+                continue;
+              }
+              const archiveUpdate: Partial<InsertEmailConversationThread> = {
+                waitingState: "archived",
+                archivedAt: new Date(),
+                waitingSinceAt: null,
+                overdueAt: null,
+              };
+              await storage.updateEmailConversationThread(id, user.organizationId, archiveUpdate);
+              break;
+            }
+            case "assign":
+              await assignOwner(id, parsed.data.ownerUserId ?? null, user.organizationId, storage);
+              break;
+            case "snooze":
+              if (thread.waitingState === "archived") {
+                results.push({ id, ok: false, error: "Archived conversations cannot be snoozed" });
+                continue;
+              }
+              await snoozeThread(id, snoozeUntilDate!, user.id, user.organizationId, storage);
+              break;
+            case "unsnooze":
+              await wakeSnoozedThread(id, user.organizationId, storage);
+              break;
+          }
+          results.push({ id, ok: true });
+        } catch (err) {
+          results.push({
+            id,
+            ok: false,
+            error: err instanceof Error ? err.message : "Unknown error",
+          });
+        }
+      }
+
+      const succeeded = results.filter(r => r.ok).length;
+      res.json({ action, total: results.length, succeeded, failed: results.length - succeeded, results });
+    } catch (err) {
+      console.error("[conversations] POST /conversations/bulk error:", err);
+      res.status(500).json({ error: "Bulk action failed" });
+    }
+  });
+
+  // ── Saved Views (Task #533) ────────────────────────────────────────────────
+  // Per-user saved combinations of (bucket + filters). All endpoints are
+  // implicitly scoped to the requesting user — no view sharing in v1.
+
+  app.get("/api/internal/conversations/saved-views", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const views = await storage.listConversationSavedViews(user.id);
+      res.json({ views });
+    } catch (err) {
+      console.error("[conversations] GET /conversations/saved-views error:", err);
+      res.status(500).json({ error: "Failed to fetch saved views" });
+    }
+  });
+
+  app.post("/api/internal/conversations/saved-views", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const schema = z.object({
+        name: z.string().trim().min(1).max(80),
+        bucket: z.string().trim().min(1).max(40),
+        filters: z.record(z.any()).optional(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      const view = await storage.createConversationSavedView({
+        orgId: user.organizationId,
+        userId: user.id,
+        name: parsed.data.name,
+        bucket: parsed.data.bucket,
+        filters: parsed.data.filters ?? {},
+      });
+      res.status(201).json({ view });
+    } catch (err) {
+      console.error("[conversations] POST /conversations/saved-views error:", err);
+      res.status(500).json({ error: "Failed to create saved view" });
+    }
+  });
+
+  app.patch("/api/internal/conversations/saved-views/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const schema = z.object({
+        name: z.string().trim().min(1).max(80).optional(),
+        bucket: z.string().trim().min(1).max(40).optional(),
+        filters: z.record(z.any()).optional(),
+        sortOrder: z.number().int().optional(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      const view = await storage.updateConversationSavedView(req.params.id, user.id, parsed.data);
+      if (!view) return res.status(404).json({ error: "Saved view not found" });
+      res.json({ view });
+    } catch (err) {
+      console.error("[conversations] PATCH /conversations/saved-views/:id error:", err);
+      res.status(500).json({ error: "Failed to update saved view" });
+    }
+  });
+
+  app.delete("/api/internal/conversations/saved-views/:id", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const ok = await storage.deleteConversationSavedView(req.params.id, user.id);
+      if (!ok) return res.status(404).json({ error: "Saved view not found" });
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[conversations] DELETE /conversations/saved-views/:id error:", err);
+      res.status(500).json({ error: "Failed to delete saved view" });
+    }
+  });
+
+  app.post("/api/internal/conversations/saved-views/reorder", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const schema = z.object({ orderedIds: z.array(z.string().min(1)).min(1) });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      await storage.reorderConversationSavedViews(user.id, parsed.data.orderedIds);
+      const views = await storage.listConversationSavedViews(user.id);
+      res.json({ views });
+    } catch (err) {
+      console.error("[conversations] POST /conversations/saved-views/reorder error:", err);
+      res.status(500).json({ error: "Failed to reorder saved views" });
     }
   });
 

@@ -2,10 +2,12 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Clock, User, Users, ChevronRight, Sparkles, Archive, DollarSign } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Clock, User, Users, ChevronRight, Sparkles, Archive, DollarSign, BellOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DraftEmailModal } from "@/components/DraftEmailModal";
 import { WaitingStateBadge, PriorityDot } from "./badges";
+import { SnoozePopover } from "./snooze-popover";
 import { stripHtmlToText, formatAgo } from "./utils";
 import { hasQuoteSignal } from "./types";
 import type { ConversationThread, EmailMessage, ConversationDensity } from "./types";
@@ -16,16 +18,24 @@ export function ThreadRow({
   onAssignToMe,
   onChangeState,
   onArchive,
+  onSnooze,
+  onUnsnooze,
   onSelect,
   isSelected,
+  isChecked,
+  onToggleChecked,
 }: {
   thread: ConversationThread;
   density: ConversationDensity;
   onAssignToMe: (id: string) => void;
   onChangeState: (id: string, state: ConversationThread["waitingState"]) => void;
   onArchive?: (id: string) => void;
+  onSnooze?: (id: string, until: Date) => void | Promise<void>;
+  onUnsnooze?: (id: string) => void;
   onSelect: (thread: ConversationThread) => void;
   isSelected: boolean;
+  isChecked?: boolean;
+  onToggleChecked?: (id: string, checked: boolean) => void;
 }) {
   const [showDraftEmail, setShowDraftEmail] = useState(false);
   const isOverdue = !!thread.overdueAt && thread.waitingState === "waiting_on_us";
@@ -69,6 +79,17 @@ export function ThreadRow({
           aria-hidden
           data-testid={`unread-indicator-${thread.id}`}
         />
+      )}
+
+      {onToggleChecked && (
+        <div className="pt-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+          <Checkbox
+            checked={!!isChecked}
+            onCheckedChange={(v) => onToggleChecked(thread.id, v === true)}
+            data-testid={`checkbox-thread-${thread.id}`}
+            aria-label="Select conversation"
+          />
+        </div>
       )}
 
       <div className="pt-1 shrink-0">
@@ -184,6 +205,35 @@ export function ThreadRow({
             <Archive className="w-3 h-3" />
             Archive
           </Button>
+        )}
+        {thread.waitingState === "snoozed" && onUnsnooze && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 text-xs gap-1"
+            onClick={() => onUnsnooze(thread.id)}
+            data-testid={`button-unsnooze-${thread.id}`}
+          >
+            <BellOff className="w-3 h-3" />
+            Wake now
+          </Button>
+        )}
+        {onSnooze && thread.waitingState !== "archived" && thread.waitingState !== "snoozed" && (
+          <SnoozePopover
+            onSnooze={(until) => onSnooze(thread.id, until)}
+            testId={`button-snooze-${thread.id}`}
+            trigger={
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs gap-1"
+                data-testid={`button-snooze-${thread.id}`}
+              >
+                <Clock className="w-3 h-3" />
+                Snooze
+              </Button>
+            }
+          />
         )}
         <Button
           size="sm"

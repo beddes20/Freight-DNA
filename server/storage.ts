@@ -177,6 +177,9 @@ import {
   type InsertEmailConversationThread,
   emailConversationReadStates,
   type EmailConversationReadState,
+  conversationSavedViews,
+  type ConversationSavedView,
+  type InsertConversationSavedView,
   geographicLanePatterns,
   type GeographicLanePattern,
   type InsertGeographicLanePattern,
@@ -1066,6 +1069,8 @@ export interface IStorage {
     cursor?: string;
     excludeArchived?: boolean;
     archivedOnly?: boolean;
+    snoozedOnly?: boolean;
+    includeSnoozed?: boolean;
     search?: string;
     dateFrom?: string;
     dateTo?: string;
@@ -1077,6 +1082,17 @@ export interface IStorage {
   getEmailConversationReadStates(userId: string, threadIds: string[]): Promise<Map<string, Date | null>>;
   markEmailConversationThreadRead(orgId: string, userId: string, threadId: string, when?: Date): Promise<void>;
   markEmailConversationThreadUnread(orgId: string, userId: string, threadId: string): Promise<void>;
+
+  // Per-user saved views (Task #533)
+  listConversationSavedViews(userId: string): Promise<ConversationSavedView[]>;
+  getConversationSavedView(id: string): Promise<ConversationSavedView | undefined>;
+  createConversationSavedView(data: InsertConversationSavedView): Promise<ConversationSavedView>;
+  updateConversationSavedView(id: string, userId: string, data: Partial<InsertConversationSavedView>): Promise<ConversationSavedView | undefined>;
+  deleteConversationSavedView(id: string, userId: string): Promise<boolean>;
+  reorderConversationSavedViews(userId: string, orderedIds: string[]): Promise<void>;
+
+  // Wake snoozed threads (Task #533)
+  findExpiredSnoozedThreads(now?: Date): Promise<EmailConversationThread[]>;
 
   // Carrier Intel Suggestions — accepted preference helpers (Task #195)
   // Used by ranking and NBA services to consume accepted intelligence.
@@ -7174,6 +7190,8 @@ export class DatabaseStorage implements IStorage {
     cursor?: string;
     excludeArchived?: boolean;
     archivedOnly?: boolean;
+    snoozedOnly?: boolean;
+    includeSnoozed?: boolean;
     search?: string;
     dateFrom?: string;
     dateTo?: string;
@@ -7185,6 +7203,19 @@ export class DatabaseStorage implements IStorage {
       conditions.push(isNotNull(emailConversationThreads.archivedAt));
     } else if (filters.excludeArchived !== false) {
       conditions.push(isNull(emailConversationThreads.archivedAt));
+    }
+
+    // ─── Snooze filtering (Task #533) ────────────────────────────────────────
+    // - snoozedOnly=true   → only threads currently snoozed (the "Snoozed" bucket)
+    // - includeSnoozed=true→ return everything including snoozed
+    // - default            → exclude snoozed threads from the active inbox
+    //   buckets so reps don't see threads they explicitly deferred. We also
+    //   skip this exclusion when the caller is filtering by a specific
+    //   threadId (deep-link lookup needs to find a snoozed thread).
+    if (filters.snoozedOnly) {
+      conditions.push(eq(emailConversationThreads.waitingState, "snoozed"));
+    } else if (!filters.includeSnoozed && !filters.threadId) {
+      conditions.push(sql`${emailConversationThreads.waitingState} != 'snoozed'`);
     }
 
     if (filters.unowned === true) {
@@ -7481,6 +7512,90 @@ export class DatabaseStorage implements IStorage {
         target: [emailConversationReadStates.userId, emailConversationReadStates.threadId],
         set: { lastReadAt: null, updatedAt: new Date() },
       });
+  }
+
+  // ─── Per-user saved views (Task #533) ──────────────────────────────────────
+
+  async listConversationSavedViews(userId: string): Promise<ConversationSavedView[]> {
+    if (!userId) return [];
+    return db.select().from(conversationSavedViews)
+      .where(eq(conversationSavedViews.userId, userId))
+      .orderBy(asc(conversationSavedViews.sortOrder), asc(conversationSavedViews.createdAt));
+  }
+
+  async getConversationSavedView(id: string): Promise<ConversationSavedView | undefined> {
+    const [row] = await db.select().from(conversationSavedViews)
+      .where(eq(conversationSavedViews.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async createConversationSavedView(data: InsertConversationSavedView): Promise<ConversationSavedView> {
+    // Append new views to the end of the user's list so they don't displace
+    // the existing ordering. We compute the next sortOrder atomically.
+    const [maxRow] = await db.select({ max: sql<number>`COALESCE(MAX(${conversationSavedViews.sortOrder}), -1)` })
+      .from(conversationSavedViews)
+      .where(eq(conversationSavedViews.userId, data.userId));
+    const nextSortOrder = (Number(maxRow?.max ?? -1)) + 1;
+    const [row] = await db.insert(conversationSavedViews)
+      .values({ ...data, sortOrder: data.sortOrder ?? nextSortOrder })
+      .returning();
+    return row;
+  }
+
+  async updateConversationSavedView(
+    id: string,
+    userId: string,
+    data: Partial<InsertConversationSavedView>,
+  ): Promise<ConversationSavedView | undefined> {
+    const [row] = await db.update(conversationSavedViews)
+      .set({ ...data, updatedAt: new Date() })
+      .where(and(
+        eq(conversationSavedViews.id, id),
+        eq(conversationSavedViews.userId, userId),
+      ))
+      .returning();
+    return row;
+  }
+
+  async deleteConversationSavedView(id: string, userId: string): Promise<boolean> {
+    const rows = await db.delete(conversationSavedViews)
+      .where(and(
+        eq(conversationSavedViews.id, id),
+        eq(conversationSavedViews.userId, userId),
+      ))
+      .returning({ id: conversationSavedViews.id });
+    return rows.length > 0;
+  }
+
+  async reorderConversationSavedViews(userId: string, orderedIds: string[]): Promise<void> {
+    if (!userId || orderedIds.length === 0) return;
+    // Update in a single round-trip using a CASE expression. Only views the
+    // user owns AND that appear in the requested order list are touched —
+    // anything else is left as-is so a stale client can't accidentally
+    // renumber another user's views (defence in depth alongside the userId
+    // predicate).
+    const cases = orderedIds.map((id, idx) => sql`WHEN ${id} THEN ${idx}`);
+    await db.update(conversationSavedViews)
+      .set({
+        sortOrder: sql`CASE ${conversationSavedViews.id} ${sql.join(cases, sql` `)} ELSE ${conversationSavedViews.sortOrder} END`,
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(conversationSavedViews.userId, userId),
+        inArray(conversationSavedViews.id, orderedIds),
+      ));
+  }
+
+  // ─── Wake snoozed threads (Task #533) ──────────────────────────────────────
+
+  async findExpiredSnoozedThreads(now: Date = new Date()): Promise<EmailConversationThread[]> {
+    return db.select().from(emailConversationThreads)
+      .where(and(
+        eq(emailConversationThreads.waitingState, "snoozed"),
+        isNotNull(emailConversationThreads.snoozedUntil),
+        lte(emailConversationThreads.snoozedUntil, now),
+      ));
   }
 
   // ─── Geographic Lane Patterns (Task #203) ──────────────────────────────────

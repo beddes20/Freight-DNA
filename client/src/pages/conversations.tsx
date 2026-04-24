@@ -31,11 +31,24 @@ import { ThreadList } from "@/components/conversations/thread-list";
 import { ThreadDetailPane, EmptyDetailPane } from "@/components/conversations/thread-detail-pane";
 import { RepFilterCombobox } from "@/components/conversations/rep-filter-combobox";
 import { CaptureAuditStatusPill } from "@/components/conversations/capture-audit-status-pill";
+import { BulkActionBar } from "@/components/conversations/bulk-action-bar";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Bookmark } from "lucide-react";
 import type {
   ConversationBucket,
   ConversationDensity,
   ConversationThread,
   ThreadsResponse,
+  SavedView,
+  BulkActionResult,
 } from "@/components/conversations/types";
 import { parseBucket } from "@/components/conversations/types";
 
@@ -76,6 +89,10 @@ export default function ConversationsPage() {
   function setBucket(b: ConversationBucket) {
     setAllThreads([]);
     setNextCursor(null);
+    // Switching buckets exits any active saved view — saved views always have
+    // a single specific bucket, so the moment the user picks a different one
+    // they're no longer "in" that view.
+    setActiveSavedViewId(null);
     // Clearing the selected thread on bucket switch keeps the URL sane and
     // avoids a stale detail pane referencing a thread that's no longer in
     // the visible list.
@@ -116,6 +133,18 @@ export default function ConversationsPage() {
   // Mobile drawer for the bucket sidebar (lg+ shows it as a real pane).
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
+  // ── Bulk selection state (Task #533) ──────────────────────────────────────
+  // Selection is keyed by thread record id (db UUID), not threadId, because
+  // bulk endpoints take db ids. Cleared when bucket / filters change so the
+  // user can't accidentally apply an action to threads that scrolled out of
+  // view.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // ── Saved views state (Task #533) ─────────────────────────────────────────
+  const [activeSavedViewId, setActiveSavedViewId] = useState<string | null>(null);
+  const [saveViewDialogOpen, setSaveViewDialogOpen] = useState(false);
+  const [saveViewName, setSaveViewName] = useState("");
+
   // ── Build the params for the active bucket + filters ──────────────────────
   function buildParams(cursorParam?: string): string {
     const p = new URLSearchParams();
@@ -136,6 +165,10 @@ export default function ConversationsPage() {
       if (debouncedSearch) p.set("search", debouncedSearch);
       if (archiveDateFrom) p.set("dateFrom", archiveDateFrom);
       if (archiveDateTo) p.set("dateTo", archiveDateTo);
+    } else if (bucket === "snoozed") {
+      // Show only currently-snoozed threads. Sorted by snooze wake time
+      // ascending on the server.
+      p.set("snoozed", "true");
     } else {
       // "all" — chronological firehose.
       p.set("sort", "recency");
@@ -286,6 +319,149 @@ export default function ConversationsPage() {
     onError: () => toast({ title: "Failed to archive conversation", variant: "destructive" }),
   });
 
+  const snoozeMutation = useMutation({
+    mutationFn: async ({ id, until }: { id: string; until: Date }) => {
+      return apiRequest("POST", `/api/internal/conversations/${id}/snooze`, {
+        snoozedUntil: until.toISOString(),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
+      toast({ title: "Conversation snoozed" });
+    },
+    onError: () => toast({ title: "Failed to snooze conversation", variant: "destructive" }),
+  });
+
+  const unsnoozeMutation = useMutation({
+    mutationFn: async (id: string) => {
+      return apiRequest("POST", `/api/internal/conversations/${id}/unsnooze`, {});
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
+      toast({ title: "Conversation woken" });
+    },
+    onError: () => toast({ title: "Failed to wake conversation", variant: "destructive" }),
+  });
+
+  // ── Bulk action mutation (Task #533) ──────────────────────────────────────
+  // Single endpoint accepts any of resolve/reopen/archive/assign/snooze. Toast
+  // surfaces a per-action success summary, including any per-thread failures
+  // so the user knows when (e.g.) an archive was rejected for an un-resolved
+  // thread.
+  const bulkMutation = useMutation({
+    mutationFn: async (body: {
+      action: "resolve" | "reopen" | "archive" | "assign" | "snooze";
+      threadIds: string[];
+      ownerUserId?: string | null;
+      snoozedUntil?: string;
+    }) => {
+      const res = await apiRequest("POST", "/api/internal/conversations/bulk", body);
+      return (await res.json()) as BulkActionResult;
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
+      setSelectedIds(new Set());
+      const failed = result.failed;
+      const verb =
+        result.action === "resolve" ? "resolved"
+        : result.action === "reopen" ? "reopened"
+        : result.action === "archive" ? "archived"
+        : result.action === "assign" ? "assigned"
+        : "snoozed";
+      toast({
+        title: `${result.succeeded} of ${result.total} conversations ${verb}`,
+        description: failed > 0 ? `${failed} could not be updated.` : undefined,
+        variant: failed > 0 && result.succeeded === 0 ? "destructive" : "default",
+      });
+    },
+    onError: () => toast({ title: "Bulk action failed", variant: "destructive" }),
+  });
+
+  // ── Saved views (Task #533) ───────────────────────────────────────────────
+  const { data: savedViewsData } = useQuery<{ views: SavedView[] }>({
+    queryKey: ["/api/internal/conversations/saved-views"],
+    queryFn: async () => {
+      const res = await fetch("/api/internal/conversations/saved-views");
+      if (!res.ok) throw new Error("");
+      return res.json();
+    },
+  });
+  const savedViews = savedViewsData?.views ?? [];
+
+  const createViewMutation = useMutation({
+    mutationFn: async (body: { name: string; bucket: ConversationBucket; filters: Record<string, any> }) => {
+      const res = await apiRequest("POST", "/api/internal/conversations/saved-views", body);
+      return (await res.json()) as { view: SavedView };
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations/saved-views"] });
+      setActiveSavedViewId(data.view.id);
+      toast({ title: "View saved" });
+    },
+    onError: () => toast({ title: "Failed to save view", variant: "destructive" }),
+  });
+
+  const updateViewMutation = useMutation({
+    mutationFn: async ({ id, ...patch }: { id: string; name?: string }) => {
+      return apiRequest("PATCH", `/api/internal/conversations/saved-views/${id}`, patch);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations/saved-views"] });
+    },
+    onError: () => toast({ title: "Failed to update view", variant: "destructive" }),
+  });
+
+  const deleteViewMutation = useMutation({
+    mutationFn: async (id: string) => {
+      return apiRequest("DELETE", `/api/internal/conversations/saved-views/${id}`);
+    },
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations/saved-views"] });
+      if (activeSavedViewId === id) setActiveSavedViewId(null);
+      toast({ title: "View deleted" });
+    },
+    onError: () => toast({ title: "Failed to delete view", variant: "destructive" }),
+  });
+
+  const reorderViewsMutation = useMutation({
+    mutationFn: async (orderedIds: string[]) => {
+      return apiRequest("POST", "/api/internal/conversations/saved-views/reorder", { orderedIds });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations/saved-views"] });
+    },
+    onError: () => toast({ title: "Failed to reorder views", variant: "destructive" }),
+  });
+
+  // Clear selection whenever the bucket or any filter that drives the visible
+  // list changes — selecting threads then changing the view shouldn't keep
+  // them in the bulk action queue.
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [bucket, filterState, filterPriority, filterOverdue, filterRep, debouncedSearch, archiveDateFrom, archiveDateTo]);
+
+  function applySavedView(view: SavedView) {
+    const f = view.filters ?? {};
+    setActiveSavedViewId(view.id);
+    setFilterState((f.filterState as string) ?? "all");
+    setFilterPriority((f.filterPriority as string) ?? "all");
+    setFilterOverdue(!!f.filterOverdue);
+    setFilterRep((f.filterRep as string) ?? "all");
+    setAllThreads([]);
+    setNextCursor(null);
+    updateUrl({ bucket: view.bucket === "mine" ? null : view.bucket, threadId: null });
+  }
+
+  function moveSavedView(id: string, direction: "up" | "down") {
+    const idx = savedViews.findIndex(v => v.id === id);
+    if (idx < 0) return;
+    const swapWith = direction === "up" ? idx - 1 : idx + 1;
+    if (swapWith < 0 || swapWith >= savedViews.length) return;
+    const next = [...savedViews];
+    [next[idx], next[swapWith]] = [next[swapWith], next[idx]];
+    reorderViewsMutation.mutate(next.map(v => v.id));
+  }
+
   // ── Thread sorting (mirrors the server's intent per bucket) ───────────────
   const sorted = useMemo(() => {
     const arr = [...allThreads];
@@ -361,6 +537,12 @@ export default function ConversationsPage() {
                 bucket={bucket}
                 onChange={(b) => { setBucket(b); setMobileNavOpen(false); }}
                 counts={counts}
+                savedViews={savedViews}
+                activeSavedViewId={activeSavedViewId}
+                onSelectSavedView={(v) => { applySavedView(v); setMobileNavOpen(false); }}
+                onRenameSavedView={(id, name) => updateViewMutation.mutate({ id, name })}
+                onDeleteSavedView={(id) => deleteViewMutation.mutate(id)}
+                onMoveSavedView={moveSavedView}
               />
             </SheetContent>
           </Sheet>
@@ -398,7 +580,17 @@ export default function ConversationsPage() {
       <div className="flex-1 flex min-h-0">
         {/* Left — bucket sidebar (desktop only) */}
         <aside className="hidden lg:flex w-60 shrink-0 border-r bg-muted/20 flex-col" data-testid="left-pane">
-          <BucketSidebar bucket={bucket} onChange={setBucket} counts={counts} />
+          <BucketSidebar
+            bucket={bucket}
+            onChange={setBucket}
+            counts={counts}
+            savedViews={savedViews}
+            activeSavedViewId={activeSavedViewId}
+            onSelectSavedView={applySavedView}
+            onRenameSavedView={(id, name) => updateViewMutation.mutate({ id, name })}
+            onDeleteSavedView={(id) => deleteViewMutation.mutate(id)}
+            onMoveSavedView={moveSavedView}
+          />
         </aside>
 
         {/* Middle — thread list */}
@@ -503,6 +695,46 @@ export default function ConversationsPage() {
             )}
           </div>
 
+          {/* Bulk action bar — sticky above the list when ≥1 thread is checked. */}
+          <BulkActionBar
+            count={selectedIds.size}
+            busy={bulkMutation.isPending}
+            onClear={() => setSelectedIds(new Set())}
+            onResolve={() => bulkMutation.mutate({ action: "resolve", threadIds: Array.from(selectedIds) })}
+            onReopen={() => bulkMutation.mutate({ action: "reopen", threadIds: Array.from(selectedIds) })}
+            onArchive={() => bulkMutation.mutate({ action: "archive", threadIds: Array.from(selectedIds) })}
+            onSnooze={(until) => bulkMutation.mutate({
+              action: "snooze",
+              threadIds: Array.from(selectedIds),
+              snoozedUntil: until.toISOString(),
+            })}
+            onAssign={(ownerUserId) => bulkMutation.mutate({
+              action: "assign",
+              threadIds: Array.from(selectedIds),
+              ownerUserId,
+            })}
+            reps={sortedReps}
+            currentUserId={user?.id}
+          />
+
+          {/* "Save as view" button — visible whenever the current bucket+filters
+              aren't already from a saved view. Lets the user freeze the
+              current screen for one-click access later. */}
+          {!activeSavedViewId && (
+            <div className="px-3 py-1.5 border-b shrink-0 flex items-center justify-end gap-2 bg-background">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs gap-1"
+                onClick={() => { setSaveViewName(""); setSaveViewDialogOpen(true); }}
+                data-testid="button-open-save-view"
+              >
+                <Bookmark className="w-3 h-3" />
+                Save as view
+              </Button>
+            </div>
+          )}
+
           {/* Scrollable thread list */}
           <div className="flex-1 overflow-y-auto" data-testid="thread-list-scroll">
             {isError ? (
@@ -521,9 +753,24 @@ export default function ConversationsPage() {
                 onAssignToMe={(id) => assignToMeMutation.mutate(id)}
                 onChangeState={(id, state) => changeStateMutation.mutate({ id, state })}
                 onArchive={(id) => archiveMutation.mutate(id)}
+                onSnooze={async (id, until) => { await snoozeMutation.mutateAsync({ id, until }); }}
+                onUnsnooze={(id) => unsnoozeMutation.mutate(id)}
                 hasMore={!!nextCursor}
                 onLoadMore={() => loadMoreMutation.mutate()}
                 isFetchingMore={loadMoreMutation.isPending}
+                selectedIds={selectedIds}
+                onToggleSelected={(id, checked) => {
+                  setSelectedIds(prev => {
+                    const next = new Set(prev);
+                    if (checked) next.add(id);
+                    else next.delete(id);
+                    return next;
+                  });
+                }}
+                onToggleAll={(checked) => {
+                  if (checked) setSelectedIds(new Set(sorted.map(t => t.id)));
+                  else setSelectedIds(new Set());
+                }}
               />
             )}
           </div>
@@ -551,6 +798,59 @@ export default function ConversationsPage() {
           )}
         </section>
       </div>
+
+      {/* Save view dialog (Task #533) */}
+      <Dialog open={saveViewDialogOpen} onOpenChange={setSaveViewDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Save current view</DialogTitle>
+            <DialogDescription>
+              Saves the active bucket and filters under a name in your sidebar.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="save-view-name">Name</Label>
+            <Input
+              id="save-view-name"
+              value={saveViewName}
+              onChange={(e) => setSaveViewName(e.target.value)}
+              placeholder="e.g. My overdue quotes"
+              autoFocus
+              data-testid="input-save-view-name"
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setSaveViewDialogOpen(false)}
+              data-testid="button-save-view-cancel"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                const name = saveViewName.trim();
+                if (!name) return;
+                createViewMutation.mutate({
+                  name,
+                  bucket,
+                  filters: {
+                    filterState,
+                    filterPriority,
+                    filterOverdue,
+                    filterRep,
+                  },
+                });
+                setSaveViewDialogOpen(false);
+              }}
+              disabled={!saveViewName.trim() || createViewMutation.isPending}
+              data-testid="button-save-view-confirm"
+            >
+              Save view
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
