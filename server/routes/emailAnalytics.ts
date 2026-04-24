@@ -12,16 +12,28 @@
 import type { Express, Request, Response } from "express";
 import { storage } from "../storage";
 import { requireAuth, getCurrentUser } from "../auth";
-import { cacheGet, cacheSet } from "../cache";
+import { cacheGet, cacheSet, cacheInvalidatePrefix } from "../cache";
 import {
   fetchResponsePairs,
   summarizeBucket,
   buildLeaderboard,
   buildSlowestThreads,
   buildTimeseries,
+  buildRightNow,
+  buildSlaCompliance,
+  buildAccountOutliers,
+  buildHeatmap,
+  buildDiagnostics,
+  getSyncFreshness,
+  DEFAULT_SLA_TARGETS,
   type Granularity,
   type ResponsePair,
+  type SlaTarget,
 } from "../services/emailResponseTimeAnalyticsService";
+import { db } from "../storage";
+import { emailResponseTimeSlaSettings, emailConversationThreads, users } from "@shared/schema";
+import { and, eq } from "drizzle-orm";
+import { z } from "zod";
 
 export function registerEmailAnalyticsRoutes(app: Express): void {
 
@@ -226,12 +238,219 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
       const filters = parseRtFilters(req, orgId);
       const pairs = await getCachedPairs(filters);
       const limit = Math.min(50, Math.max(5, Number(req.query.limit) || 25));
-      const rows = buildSlowestThreads(pairs, filters.businessHours, new Date(), limit);
+      const unattributedOnly = String(req.query.unattributedOnly ?? "false").toLowerCase() === "true";
+      const rows = buildSlowestThreads(pairs, filters.businessHours, new Date(), limit, { unattributedOnly });
 
       res.json({ businessHours: filters.businessHours, rows });
     } catch (err) {
       console.error("[email-response-time/slowest] error:", err);
       res.status(500).json({ error: "Failed to load slowest threads" });
+    }
+  });
+
+  // ── /right-now: live snapshot independent of the range filter ─────────────
+  // Always uses the current calendar window: oldest waiting customer email,
+  // age-bucket counts (>1h / >4h / >24h), and rep with the most overdue
+  // threads. We use a wide horizon (2 years back) so a multi-month-old
+  // unanswered email surfaces correctly — the strip's purpose is to expose
+  // backlog severity, not just recent traffic. The horizon is intentionally
+  // bounded to keep the query fast; threads older than this would already
+  // have been actioned or archived.
+  const RIGHT_NOW_LOOKBACK_MS = 2 * 365 * 24 * 60 * 60 * 1000;
+  app.get("/api/analytics/email-response-time/right-now", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const orgId = user.organizationId;
+
+      const uiFilters = parseRtFilters(req, orgId);
+      const now = new Date();
+      const filters = {
+        ...uiFilters,
+        start: new Date(now.getTime() - RIGHT_NOW_LOOKBACK_MS),
+        end: new Date(now.getTime() + 60_000),
+      };
+      const pairs = await getCachedPairs(filters);
+      const snapshot = buildRightNow(pairs, filters.businessHours, now);
+      res.json({ businessHours: filters.businessHours, ...snapshot });
+    } catch (err) {
+      console.error("[email-response-time/right-now] error:", err);
+      res.status(500).json({ error: "Failed to load right-now snapshot" });
+    }
+  });
+
+  // ── /freshness: "Data as of …" timestamp + stale flag ─────────────────────
+  app.get("/api/analytics/email-response-time/freshness", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      res.json(await getSyncFreshness(user.organizationId));
+    } catch (err) {
+      console.error("[email-response-time/freshness] error:", err);
+      res.status(500).json({ error: "Failed to load sync freshness" });
+    }
+  });
+
+  // ── /sla: GET targets, PUT (admin) overrides, plus compliance + outliers ──
+  const slaTargetSchema = z.object({
+    label: z.string().min(1).max(20),
+    ms: z.number().int().min(60_000).max(7 * 24 * 60 * 60 * 1000),
+    businessHours: z.boolean(),
+  });
+  const slaUpdateSchema = z.object({
+    targets: z.array(slaTargetSchema).min(1).max(6),
+  });
+
+  async function loadSlaTargets(orgId: string): Promise<SlaTarget[]> {
+    const rows = await db.select().from(emailResponseTimeSlaSettings)
+      .where(eq(emailResponseTimeSlaSettings.organizationId, orgId)).limit(1);
+    if (rows.length > 0 && Array.isArray(rows[0].targets) && rows[0].targets.length > 0) {
+      return rows[0].targets;
+    }
+    return DEFAULT_SLA_TARGETS;
+  }
+
+  app.get("/api/analytics/email-response-time/sla", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const orgId = user.organizationId;
+      const filters = parseRtFilters(req, orgId);
+      const [pairs, targets] = await Promise.all([
+        getCachedPairs(filters),
+        loadSlaTargets(orgId),
+      ]);
+      const compliance = buildSlaCompliance(pairs, targets);
+      const outliers = buildAccountOutliers(pairs, filters.businessHours);
+      res.json({
+        businessHours: filters.businessHours,
+        targets,
+        compliance,
+        outliers,
+      });
+    } catch (err) {
+      console.error("[email-response-time/sla] error:", err);
+      res.status(500).json({ error: "Failed to load SLA data" });
+    }
+  });
+
+  app.put("/api/analytics/email-response-time/sla", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!ALLOWED_ROLES.includes(user.role)) return res.status(403).json({ error: "Forbidden" });
+      const parsed = slaUpdateSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      await db.insert(emailResponseTimeSlaSettings).values({
+        organizationId: user.organizationId,
+        targets: parsed.data.targets,
+        updatedBy: user.id,
+      }).onConflictDoUpdate({
+        target: emailResponseTimeSlaSettings.organizationId,
+        set: { targets: parsed.data.targets, updatedBy: user.id, updatedAt: new Date() },
+      });
+      res.json({ ok: true, targets: parsed.data.targets });
+    } catch (err) {
+      console.error("[email-response-time/sla PUT] error:", err);
+      res.status(500).json({ error: "Failed to save SLA targets" });
+    }
+  });
+
+  // ── /heatmap: 7×24 ET grid of median response time ───────────────────────
+  app.get("/api/analytics/email-response-time/heatmap", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const filters = parseRtFilters(req, user.organizationId);
+      const pairs = await getCachedPairs(filters);
+      const cells = buildHeatmap(pairs, filters.businessHours);
+      res.json({ businessHours: filters.businessHours, cells });
+    } catch (err) {
+      console.error("[email-response-time/heatmap] error:", err);
+      res.status(500).json({ error: "Failed to load heatmap" });
+    }
+  });
+
+  // ── /diagnostics (admin/director only): attribution health summary ────────
+  app.get("/api/analytics/email-response-time/diagnostics", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!ALLOWED_ROLES.includes(user.role)) return res.status(403).json({ error: "Forbidden" });
+      const filters = parseRtFilters(req, user.organizationId);
+      const pairs = await getCachedPairs(filters);
+      const summary = await buildDiagnostics(pairs, user.organizationId);
+      res.json({
+        businessHours: filters.businessHours,
+        windowStart: filters.start.toISOString(),
+        windowEnd: filters.end.toISOString(),
+        ...summary,
+      });
+    } catch (err) {
+      console.error("[email-response-time/diagnostics] error:", err);
+      res.status(500).json({ error: "Failed to load diagnostics" });
+    }
+  });
+
+  // ── PUT /thread-owner/:threadId: quick "Assign to me" / "Reassign" ────────
+  // Lightweight wrapper around the conversation-thread owner update so the
+  // Slowest Threads list can flip ownership inline without first creating a
+  // synthetic conversation row. Writes directly to email_conversation_threads
+  // by (orgId, threadId) — only allowed for the requesting user's own org.
+  app.put("/api/analytics/email-response-time/thread-owner/:threadId", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const schema = z.object({ ownerUserId: z.string().nullable() });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid body" });
+
+      // Self-assign is always allowed; reassign-to-other requires admin role.
+      const isSelfAssign = parsed.data.ownerUserId === user.id;
+      if (!isSelfAssign && !ALLOWED_ROLES.includes(user.role)) {
+        return res.status(403).json({ error: "Only admins/directors can reassign to another user" });
+      }
+
+      // Org-boundary check on the assignee: if a user id is supplied and it is
+      // not the requester themselves, confirm that user belongs to the same
+      // organization. Without this, a privileged user could in theory assign
+      // a thread to someone outside their org by guessing/knowing an id.
+      if (parsed.data.ownerUserId && !isSelfAssign) {
+        const [assignee] = await db
+          .select({ id: users.id, organizationId: users.organizationId })
+          .from(users)
+          .where(eq(users.id, parsed.data.ownerUserId))
+          .limit(1);
+        if (!assignee || assignee.organizationId !== user.organizationId) {
+          return res.status(400).json({ error: "Assignee must belong to your organization" });
+        }
+      }
+
+      const threadIdParam = String(req.params.threadId);
+      const updated = await db.update(emailConversationThreads)
+        .set({ ownerUserId: parsed.data.ownerUserId, updatedAt: new Date() })
+        .where(and(
+          eq(emailConversationThreads.threadId, threadIdParam),
+          eq(emailConversationThreads.orgId, user.organizationId),
+        ))
+        .returning({ threadId: emailConversationThreads.threadId });
+      if (updated.length === 0) {
+        // No row was updated — the thread either doesn't exist in
+        // email_conversation_threads or belongs to another org. Surface
+        // this explicitly so the UI can avoid a misleading "assigned"
+        // toast on a write that had no effect.
+        return res.status(404).json({ error: "Thread not found in your organization" });
+      }
+      // Bust the org-scoped response-time pair cache so subsequent
+      // leaderboard/slowest/diagnostics calls reflect the new owner
+      // immediately. Without this, the 5-minute TTL would let the
+      // affected rows show stale ownership in analytics for up to 5
+      // minutes after assignment.
+      cacheInvalidatePrefix(`rt:pairs:${user.organizationId}:`);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[email-response-time/thread-owner] error:", err);
+      res.status(500).json({ error: "Failed to assign owner" });
     }
   });
 

@@ -4297,4 +4297,25 @@ export async function runMigrations() {
   } finally {
     clientQuotePricing.release();
   }
+
+  // ── Task #602: email_response_time_sla_settings table ────────────────────
+  // Per-org configurable Response Time SLA targets (default 1h/4h/24h business
+  // hours). Backs the new SLA section on the Email Intelligence > Response
+  // Time tab. Idempotent.
+  const clientRtSla = await pool.connect();
+  try {
+    await clientRtSla.query(`
+      CREATE TABLE IF NOT EXISTS email_response_time_sla_settings (
+        organization_id varchar PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+        targets jsonb NOT NULL DEFAULT '[]'::jsonb,
+        updated_at timestamp NOT NULL DEFAULT NOW(),
+        updated_by varchar REFERENCES users(id) ON DELETE SET NULL
+      )
+    `);
+    console.log("[migrations] email_response_time_sla_settings table ensured (Task #602)");
+  } catch (err) {
+    console.error("[migrations] email_response_time_sla_settings migration error:", err);
+  } finally {
+    clientRtSla.release();
+  }
 }

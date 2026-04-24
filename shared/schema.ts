@@ -5236,3 +5236,23 @@ export const insertConversationSuggestionFeedbackStatsSchema = createInsertSchem
 });
 export type InsertConversationSuggestionFeedbackStats = z.infer<typeof insertConversationSuggestionFeedbackStatsSchema>;
 export type ConversationSuggestionFeedbackStats = typeof conversationSuggestionFeedbackStats.$inferSelect;
+
+// ── Email Response Time SLA settings (Task #602) ──────────────────────────────
+// Per-org configurable response-time SLA targets shown on the Response Time
+// tab. Defaults: 1h / 4h / 24h business hours. Stored as an array of
+// { label, ms, businessHours } so admins can rename / add buckets without a
+// schema change. One row per organization.
+export const emailResponseTimeSlaSettings = pgTable(
+  "email_response_time_sla_settings",
+  {
+    organizationId: varchar("organization_id").primaryKey().references(() => organizations.id, { onDelete: "cascade" }),
+    targets: jsonb("targets").$type<Array<{ label: string; ms: number; businessHours: boolean }>>().notNull().default([]),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+    updatedBy: varchar("updated_by").references(() => users.id, { onDelete: "set null" }),
+  },
+);
+export const insertEmailResponseTimeSlaSettingsSchema = createInsertSchema(emailResponseTimeSlaSettings).omit({
+  updatedAt: true,
+});
+export type InsertEmailResponseTimeSlaSettings = z.infer<typeof insertEmailResponseTimeSlaSettingsSchema>;
+export type EmailResponseTimeSlaSettings = typeof emailResponseTimeSlaSettings.$inferSelect;

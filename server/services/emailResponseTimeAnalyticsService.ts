@@ -1,5 +1,5 @@
 /**
- * Email response time analytics (Task #414).
+ * Email response time analytics (Tasks #414 + #602).
  *
  * One row per rep "response event" plus one row per "still-waiting" thread.
  * A response event is a single outbound reply paired with the most recent
@@ -21,14 +21,22 @@
  * for the message; we fall back to created_at only when provider_sent_at
  * is missing (legacy rows).
  *
- * Sender attribution: the spec defines a response as the next outbound reply
- * *from the assigned rep*. email_messages has no sender_user_id, but
- * users.username is generally the rep's email address. We therefore match
- * outbound from_email (case-insensitive) against the thread owner's username
- * when that username is email-shaped (contains '@'). When it is not — e.g.
- * legacy non-email usernames — we fall back to "any outbound on the thread".
- * A future sender_user_id column on email_messages would let us drop the
- * fallback entirely.
+ * Sender attribution (Task #602): email_messages has no sender_user_id,
+ * so we resolve at query time using a per-org email→user index built
+ * from:
+ *   • users.username when email-shaped (case-insensitive)
+ *   • monitored_mailboxes.email rows owned by that user
+ *   • alias-stripped variants ("rep+something@x.com" → "rep@x.com")
+ * Replies are credited to the resolved sender. Only when no sender match is
+ * found do we fall back to the thread owner (the legacy behaviour). This
+ * captures replies sent from aliases, shared inboxes, and threads that were
+ * never assigned to an owner — without those, hundreds of replies were
+ * landing in org-wide totals but disappearing from the per-rep leaderboard.
+ *
+ * Replies that still cannot be attributed surface as a single "Unattributed"
+ * leaderboard row so leadership can drill in and assign owners. The waiting
+ * clear check uses the same resolution rule so a rep replying from an alias
+ * correctly stops the wait clock.
  */
 
 import { storage } from "../storage";
@@ -41,6 +49,10 @@ const PAIR_ROW_LIMIT = 100000;
 const BUSINESS_TZ = "America/New_York";
 const BIZ_START_HOUR = 8;
 const BIZ_END_HOUR = 18;
+
+// Sentinel id used to bucket replies whose from_email cannot be resolved to
+// any rep, in either the leaderboard or the slowest-threads list.
+export const UNATTRIBUTED_SENDER_ID = "__unattributed__";
 
 // ─── Timezone helpers ────────────────────────────────────────────────────────
 
@@ -126,6 +138,25 @@ export function businessHoursMs(startUtc: number, endUtc: number): number {
   return total;
 }
 
+/**
+ * Return the local ET day-of-week (0=Sun..6=Sat) and hour-of-day (0..23)
+ * for a UTC timestamp. Used for the response-time heatmap so DST handling
+ * lines up with the business-hours window above.
+ */
+export function etDayOfWeekHour(d: Date): { weekday: number; hour: number } {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: BUSINESS_TZ,
+    hour12: false,
+    weekday: "short",
+    hour: "2-digit",
+  }).formatToParts(d);
+  const wdMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const wd = wdMap[fmt.find((p) => p.type === "weekday")?.value ?? ""] ?? 0;
+  let hr = Number(fmt.find((p) => p.type === "hour")?.value ?? 0);
+  if (hr === 24) hr = 0;
+  return { weekday: wd, hour: hr };
+}
+
 // ─── Stats helpers ───────────────────────────────────────────────────────────
 
 function avg(nums: number[]): number | null {
@@ -138,6 +169,111 @@ function median(nums: number[]): number | null {
   const sorted = [...nums].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+// ─── Sender attribution index ────────────────────────────────────────────────
+
+export interface SenderUserDirectoryEntry {
+  userId: string;
+  name: string;
+  email: string;
+}
+
+export interface SenderUserDirectory {
+  /** lower-cased email → {userId, name, sourceEmail} */
+  byEmail: Map<string, SenderUserDirectoryEntry>;
+  /** lower-cased email with alias suffix stripped → entry */
+  byBaseEmail: Map<string, SenderUserDirectoryEntry>;
+  /** all known users in the org, for diagnostics */
+  users: Array<{ id: string; name: string; username: string }>;
+}
+
+/**
+ * Strip a "+suffix" alias from the local-part of an email.
+ *   "rep+invoices@example.com" → "rep@example.com"
+ *   "rep@example.com"          → "rep@example.com"
+ */
+export function stripEmailAlias(email: string): string {
+  const trimmed = email.trim().toLowerCase();
+  const at = trimmed.indexOf("@");
+  if (at <= 0) return trimmed;
+  const local = trimmed.slice(0, at);
+  const domain = trimmed.slice(at + 1);
+  const plus = local.indexOf("+");
+  return plus < 0 ? trimmed : `${local.slice(0, plus)}@${domain}`;
+}
+
+function isEmailShaped(value: string | null | undefined): value is string {
+  return !!value && value.includes("@");
+}
+
+/**
+ * Build the per-org email→user index used to attribute outbound replies.
+ * Pulls from users.username (when email-shaped) and monitored_mailboxes.
+ * Adds an alias-stripped variant of every entry so "rep+invoices@x" matches
+ * "rep@x".
+ */
+export async function buildSenderUserDirectory(orgId: string): Promise<SenderUserDirectory> {
+  const userResult = await storage.pool.query<{ id: string; name: string | null; username: string }>(
+    `SELECT id, name, username FROM users WHERE organization_id = $1`,
+    [orgId],
+  );
+  const mailboxResult = await storage.pool.query<{ user_id: string; email: string }>(
+    `SELECT user_id, email FROM monitored_mailboxes WHERE org_id = $1`,
+    [orgId],
+  );
+
+  const userById = new Map<string, { id: string; name: string; username: string }>();
+  for (const row of userResult.rows) {
+    userById.set(row.id, { id: row.id, name: row.name ?? row.username, username: row.username });
+  }
+
+  const byEmail = new Map<string, SenderUserDirectoryEntry>();
+  const byBaseEmail = new Map<string, SenderUserDirectoryEntry>();
+
+  function add(email: string, userId: string) {
+    const u = userById.get(userId);
+    if (!u) return;
+    const lower = email.trim().toLowerCase();
+    if (!lower.includes("@")) return;
+    const entry: SenderUserDirectoryEntry = { userId, name: u.name, email: lower };
+    if (!byEmail.has(lower)) byEmail.set(lower, entry);
+    const base = stripEmailAlias(lower);
+    if (!byBaseEmail.has(base)) byBaseEmail.set(base, entry);
+  }
+
+  for (const u of userResult.rows) {
+    if (isEmailShaped(u.username)) add(u.username, u.id);
+  }
+  for (const mb of mailboxResult.rows) {
+    add(mb.email, mb.user_id);
+  }
+
+  return {
+    byEmail,
+    byBaseEmail,
+    users: Array.from(userById.values()),
+  };
+}
+
+/**
+ * Resolve a rep's userId from an outbound from_email. Returns null when no
+ * match is found in the directory (the caller decides whether to fall back
+ * to the assigned thread owner).
+ */
+export function resolveSenderUserId(
+  fromEmail: string | null | undefined,
+  directory: SenderUserDirectory,
+): { userId: string; name: string } | null {
+  if (!fromEmail) return null;
+  const lower = fromEmail.trim().toLowerCase();
+  if (!lower.includes("@")) return null;
+  const exact = directory.byEmail.get(lower);
+  if (exact) return { userId: exact.userId, name: exact.name };
+  const base = stripEmailAlias(lower);
+  const aliased = directory.byBaseEmail.get(base);
+  if (aliased) return { userId: aliased.userId, name: aliased.name };
+  return null;
 }
 
 // ─── Filters ─────────────────────────────────────────────────────────────────
@@ -156,8 +292,12 @@ export interface ResponsePair {
   threadId: string;
   inboundAt: Date;
   outboundAt: Date | null; // null = still waiting
+  /** Thread's assigned owner (may be null for unassigned threads). */
   ownerUserId: string | null;
   ownerName: string | null;
+  /** Resolved sender of the outbound reply (preferred over ownerUserId). */
+  senderUserId: string | null;
+  senderName: string | null;
   accountId: string | null;
   accountName: string | null;
   subject: string | null;
@@ -168,6 +308,32 @@ export interface ResponsePair {
 
 // ─── Core query ──────────────────────────────────────────────────────────────
 
+interface RawReplyRow {
+  row_id: string;
+  thread_id: string;
+  outbound_at: string;
+  from_email: string | null;
+  subject: string | null;
+  account_id: string | null;
+  owner_user_id: string | null;
+  owner_name: string | null;
+  account_name: string | null;
+  inbound_at: string | null;
+}
+
+interface RawWaitingRow {
+  row_id: string;
+  thread_id: string;
+  org_id: string;
+  inbound_at: string;
+  from_email: string | null;
+  subject: string | null;
+  account_id: string | null;
+  owner_user_id: string | null;
+  owner_name: string | null;
+  account_name: string | null;
+}
+
 /**
  * Pulls two kinds of rows for the requested window, both keyed on
  * provider_sent_at (falling back to created_at):
@@ -175,10 +341,14 @@ export interface ResponsePair {
  *   1. RESPONSE EVENTS — one row per outbound reply that has at least one
  *      prior inbound on the same thread. inboundAt = the most recent
  *      inbound's send time; outboundAt = the outbound's send time.
+ *      Sender is resolved client-side via the email→user directory so a
+ *      reply from an alias still gets credited to the right rep.
  *
  *   2. WAITING THREADS — one row per thread whose latest message in the
  *      window is inbound (no subsequent outbound reply yet). outboundAt
- *      is null; inboundAt = the latest inbound's send time.
+ *      is null; inboundAt = the latest inbound's send time. The "latest
+ *      outbound clears the wait" check is performed in JS using the same
+ *      sender-resolution rule as the replies query.
  *
  * Both kinds are filtered by the same owner / account / carrier-exclusion
  * rules. Aggregations downstream treat outboundAt != null as "responded"
@@ -187,12 +357,9 @@ export interface ResponsePair {
 export async function fetchResponsePairs(filters: ResponseTimeFilters): Promise<ResponsePair[]> {
   const { orgId, start, end, repIds, accountId } = filters;
 
+  const directory = await buildSenderUserDirectory(orgId);
+
   const params: unknown[] = [orgId, start.toISOString(), end.toISOString()];
-  let repFilter = "";
-  if (repIds && repIds.length > 0) {
-    params.push(repIds);
-    repFilter = `AND ect.owner_user_id = ANY($${params.length}::varchar[])`;
-  }
   let accountFilter = "";
   if (accountId) {
     params.push(accountId);
@@ -203,6 +370,13 @@ export async function fetchResponsePairs(filters: ResponseTimeFilters): Promise<
   // We restrict the OUTBOUND's send time to [start, end). The matching prior
   // inbound can be older — that's fine, it just means the customer wrote
   // before the window opened and the rep replied inside the window.
+  //
+  // No SQL-side sender or rep filter — sender attribution is done in JS so
+  // alias / shared-inbox / unassigned-thread replies flow through. The
+  // optional `repIds` filter is also applied in JS against
+  // attributedSenderId(...) so a rep gets credit for replies they actually
+  // sent on threads owned by someone else (or unassigned), matching the
+  // leaderboard's attribution rules.
   const sqlReplies = `
     SELECT
       em.id            AS row_id,
@@ -236,24 +410,17 @@ export async function fetchResponsePairs(filters: ResponseTimeFilters): Promise<
       AND em.linked_carrier_id IS NULL
       AND (ect.linked_carrier_id IS NULL OR ect.id IS NULL)
       AND (COALESCE(ect.linked_account_id, em.linked_account_id) IS NOT NULL)
-      -- Restrict to outbound *from the assigned owner* when we have an
-      -- email-shaped username to match. Otherwise fall back to any outbound.
-      AND (
-        u.username IS NULL
-        OR u.username NOT LIKE '%@%'
-        OR LOWER(em.from_email) = LOWER(u.username)
-      )
-      ${repFilter}
       ${accountFilter}
     ORDER BY COALESCE(em.provider_sent_at, em.created_at) DESC
     LIMIT $${params.push(PAIR_ROW_LIMIT)}
   `;
 
-  // ── Part 2: waiting threads (latest message in window is inbound) ────────
-  // For each thread that received an inbound in [start, end), check whether
-  // there is any outbound on that thread with send_time > the latest inbound
-  // send_time. If not, it's still waiting. We surface ONE row per thread,
-  // keyed on the latest inbound message id.
+  // ── Part 2: latest inbound per thread in the window ──────────────────────
+  // We need to know whether ANY outbound after that inbound resolved the
+  // wait. The original "owner-username only" SQL filter dropped alias /
+  // shared-inbox replies and incorrectly left those threads stuck on
+  // waiting. We now load every outbound on each candidate thread that
+  // happened after the latest inbound and filter in JS using the directory.
   const waitingParams: unknown[] = [orgId, start.toISOString(), end.toISOString()];
   let repFilterW = "";
   if (repIds && repIds.length > 0) {
@@ -265,116 +432,173 @@ export async function fetchResponsePairs(filters: ResponseTimeFilters): Promise<
     waitingParams.push(accountId);
     accountFilterW = `AND COALESCE(ect.linked_account_id, inb.linked_account_id) = $${waitingParams.length}`;
   }
-  const sqlWaiting = `
-    WITH latest_inbound AS (
-      SELECT DISTINCT ON (inb.thread_id)
-        inb.id          AS row_id,
-        inb.thread_id   AS thread_id,
-        inb.org_id      AS org_id,
-        COALESCE(inb.provider_sent_at, inb.created_at) AS inbound_at,
-        inb.from_email  AS from_email,
-        inb.subject     AS subject,
-        COALESCE(ect.linked_account_id, inb.linked_account_id) AS account_id,
-        ect.owner_user_id AS owner_user_id,
-        u.name          AS owner_name,
-        c.name          AS account_name
-      FROM email_messages inb
-      LEFT JOIN email_conversation_threads ect
-        ON ect.org_id = inb.org_id AND ect.thread_id = inb.thread_id
-      LEFT JOIN users u ON u.id = ect.owner_user_id
-      LEFT JOIN companies c ON c.id = COALESCE(ect.linked_account_id, inb.linked_account_id)
-      WHERE inb.org_id = $1
-        AND inb.direction = 'inbound'
-        AND inb.thread_id IS NOT NULL
-        AND COALESCE(inb.provider_sent_at, inb.created_at) >= $2
-        AND COALESCE(inb.provider_sent_at, inb.created_at) < $3
-        AND inb.linked_carrier_id IS NULL
-        AND (ect.linked_carrier_id IS NULL OR ect.id IS NULL)
-        AND (COALESCE(ect.linked_account_id, inb.linked_account_id) IS NOT NULL)
-        ${repFilterW}
-        ${accountFilterW}
-      ORDER BY inb.thread_id, COALESCE(inb.provider_sent_at, inb.created_at) DESC
-    )
-    SELECT li.*
-    FROM latest_inbound li
-    LEFT JOIN users u2 ON u2.id = li.owner_user_id
-    WHERE NOT EXISTS (
-      -- Same sender-attribution rule as the replies query: an outbound only
-      -- "clears" the wait if it came from the assigned owner (when we have an
-      -- email-shaped username to match). Otherwise any outbound clears it.
-      SELECT 1 FROM email_messages outb
-      WHERE outb.org_id = li.org_id
-        AND outb.thread_id = li.thread_id
-        AND outb.direction = 'outbound'
-        AND COALESCE(outb.provider_sent_at, outb.created_at) > li.inbound_at
-        AND (
-          u2.username IS NULL
-          OR u2.username NOT LIKE '%@%'
-          OR LOWER(outb.from_email) = LOWER(u2.username)
-        )
-    )
+  const sqlLatestInbound = `
+    SELECT DISTINCT ON (inb.thread_id)
+      inb.id          AS row_id,
+      inb.thread_id   AS thread_id,
+      inb.org_id      AS org_id,
+      COALESCE(inb.provider_sent_at, inb.created_at) AS inbound_at,
+      inb.from_email  AS from_email,
+      inb.subject     AS subject,
+      COALESCE(ect.linked_account_id, inb.linked_account_id) AS account_id,
+      ect.owner_user_id AS owner_user_id,
+      u.name          AS owner_name,
+      c.name          AS account_name
+    FROM email_messages inb
+    LEFT JOIN email_conversation_threads ect
+      ON ect.org_id = inb.org_id AND ect.thread_id = inb.thread_id
+    LEFT JOIN users u ON u.id = ect.owner_user_id
+    LEFT JOIN companies c ON c.id = COALESCE(ect.linked_account_id, inb.linked_account_id)
+    WHERE inb.org_id = $1
+      AND inb.direction = 'inbound'
+      AND inb.thread_id IS NOT NULL
+      AND COALESCE(inb.provider_sent_at, inb.created_at) >= $2
+      AND COALESCE(inb.provider_sent_at, inb.created_at) < $3
+      AND inb.linked_carrier_id IS NULL
+      AND (ect.linked_carrier_id IS NULL OR ect.id IS NULL)
+      AND (COALESCE(ect.linked_account_id, inb.linked_account_id) IS NOT NULL)
+      ${repFilterW}
+      ${accountFilterW}
+    ORDER BY inb.thread_id, COALESCE(inb.provider_sent_at, inb.created_at) DESC
     LIMIT $${waitingParams.push(PAIR_ROW_LIMIT)}
   `;
 
-  const [repliesResult, waitingResult] = await Promise.all([
-    storage.pool.query(sqlReplies, params),
-    storage.pool.query(sqlWaiting, waitingParams),
+  const [repliesResult, latestInboundResult] = await Promise.all([
+    storage.pool.query<RawReplyRow>(sqlReplies, params),
+    storage.pool.query<RawWaitingRow>(sqlLatestInbound, waitingParams),
   ]);
-  if (repliesResult.rows.length >= PAIR_ROW_LIMIT || waitingResult.rows.length >= PAIR_ROW_LIMIT) {
+  if (repliesResult.rows.length >= PAIR_ROW_LIMIT || latestInboundResult.rows.length >= PAIR_ROW_LIMIT) {
     console.warn(
       `[email-response-time] hit row limit (${PAIR_ROW_LIMIT}) for org=${orgId} ` +
       `range=${start.toISOString()}..${end.toISOString()} — aggregates may be truncated`,
     );
   }
 
+  // ── Resolve waiting threads against any outbound after the latest inbound.
+  // We pull the outbounds for the candidate threads in one round-trip and
+  // check sender attribution in JS.
+  let stillWaiting: RawWaitingRow[] = latestInboundResult.rows;
+  if (latestInboundResult.rows.length > 0) {
+    const threadIds = latestInboundResult.rows.map((r) => r.thread_id);
+    const outboundResult = await storage.pool.query<{
+      thread_id: string; from_email: string | null; outbound_at: string;
+    }>(
+      `SELECT thread_id, from_email,
+              COALESCE(provider_sent_at, created_at) AS outbound_at
+         FROM email_messages
+        WHERE org_id = $1
+          AND direction = 'outbound'
+          AND thread_id = ANY($2::text[])
+          AND linked_carrier_id IS NULL
+          AND COALESCE(provider_sent_at, created_at) IS NOT NULL`,
+      [orgId, threadIds],
+    );
+    const outboundsByThread = new Map<string, Array<{ at: number; from: string | null }>>();
+    for (const r of outboundResult.rows) {
+      const arr = outboundsByThread.get(r.thread_id) ?? [];
+      arr.push({ at: new Date(r.outbound_at).getTime(), from: r.from_email });
+      outboundsByThread.set(r.thread_id, arr);
+    }
+    stillWaiting = latestInboundResult.rows.filter((row) => {
+      const inboundMs = new Date(row.inbound_at).getTime();
+      const outs = outboundsByThread.get(row.thread_id) ?? [];
+      // Any outbound after the latest inbound clears the wait. This matches
+      // the replies query (sqlReplies) which counts any post-inbound outbound
+      // as a reply event regardless of whether the sender resolves to a known
+      // user or whether the thread has an assigned owner. Without this
+      // parity, an unassigned thread whose reply came from an unattributed
+      // address ("alias+suffix@", shared mailbox, forwarder, etc.) would be
+      // double-counted: appearing both as a reply event and as still-waiting,
+      // inflating the waiting count and breaking the leaderboard reconcile.
+      return !outs.some((o) => o.at > inboundMs);
+    });
+  }
+
   const replies: ResponsePair[] = repliesResult.rows
-    .filter((r: Record<string, unknown>) => r.inbound_at != null)
-    .map((r: Record<string, unknown>) => {
+    .filter((r) => r.inbound_at != null)
+    .map((r) => {
       const inboundAt = new Date(r.inbound_at as string);
-      const outboundAt = new Date(r.outbound_at as string);
+      const outboundAt = new Date(r.outbound_at);
       const wallMs = outboundAt.getTime() - inboundAt.getTime();
       const bizMs = businessHoursMs(inboundAt.getTime(), outboundAt.getTime());
+      const sender = resolveSenderUserId(r.from_email, directory);
       return {
-        inboundId: r.row_id as string,
-        threadId: r.thread_id as string,
+        inboundId: r.row_id,
+        threadId: r.thread_id,
         inboundAt,
         outboundAt,
-        ownerUserId: (r.owner_user_id as string) ?? null,
-        ownerName: (r.owner_name as string) ?? null,
-        accountId: (r.account_id as string) ?? null,
-        accountName: (r.account_name as string) ?? null,
-        subject: (r.subject as string) ?? null,
-        fromEmail: (r.from_email as string) ?? null,
+        ownerUserId: r.owner_user_id ?? null,
+        ownerName: r.owner_name ?? null,
+        senderUserId: sender?.userId ?? null,
+        senderName: sender?.name ?? null,
+        accountId: r.account_id ?? null,
+        accountName: r.account_name ?? null,
+        subject: r.subject ?? null,
+        fromEmail: r.from_email ?? null,
         wallMs,
         bizMs,
-      };
+      } satisfies ResponsePair;
     });
 
-  const waiting: ResponsePair[] = waitingResult.rows.map((r: Record<string, unknown>) => {
-    const inboundAt = new Date(r.inbound_at as string);
+  const waiting: ResponsePair[] = stillWaiting.map((r) => {
+    const inboundAt = new Date(r.inbound_at);
     return {
-      inboundId: r.row_id as string,
-      threadId: r.thread_id as string,
+      inboundId: r.row_id,
+      threadId: r.thread_id,
       inboundAt,
       outboundAt: null,
-      ownerUserId: (r.owner_user_id as string) ?? null,
-      ownerName: (r.owner_name as string) ?? null,
-      accountId: (r.account_id as string) ?? null,
-      accountName: (r.account_name as string) ?? null,
-      subject: (r.subject as string) ?? null,
-      fromEmail: (r.from_email as string) ?? null,
+      ownerUserId: r.owner_user_id ?? null,
+      ownerName: r.owner_name ?? null,
+      senderUserId: null,
+      senderName: null,
+      accountId: r.account_id ?? null,
+      accountName: r.account_name ?? null,
+      subject: r.subject ?? null,
+      fromEmail: r.from_email ?? null,
       wallMs: null,
       bizMs: null,
-    };
+    } satisfies ResponsePair;
   });
 
-  return [...replies, ...waiting];
+  // Apply the rep filter on REPLIES using attribution (resolved sender,
+  // then owner, then unattributed) so a rep gets credit for replies they
+  // actually sent on threads owned by another rep or unassigned. Waiting
+  // rows have no sender, so we filter them by assigned owner only.
+  const repIdSet = repIds && repIds.length > 0 ? new Set(repIds) : null;
+  const filteredReplies = repIdSet
+    ? replies.filter((p) => {
+        const id = attributedSenderId(p);
+        return id !== UNATTRIBUTED_SENDER_ID && repIdSet.has(id);
+      })
+    : replies;
+  const filteredWaiting = repIdSet
+    ? waiting.filter((p) => p.ownerUserId !== null && repIdSet.has(p.ownerUserId))
+    : waiting;
+
+  return [...filteredReplies, ...filteredWaiting];
 }
 
 // ─── Aggregations ────────────────────────────────────────────────────────────
 
 function pickMs(p: ResponsePair, biz: boolean): number | null {
   return biz ? p.bizMs : p.wallMs;
+}
+
+/**
+ * The id we credit a reply against in the leaderboard. Prefer the resolved
+ * sender (when from_email matched a rep), then the assigned thread owner,
+ * then the unattributed sentinel.
+ */
+export function attributedSenderId(p: ResponsePair): string {
+  if (p.senderUserId) return p.senderUserId;
+  if (p.ownerUserId) return p.ownerUserId;
+  return UNATTRIBUTED_SENDER_ID;
+}
+
+export function attributedSenderName(p: ResponsePair): string {
+  if (p.senderUserId) return p.senderName ?? "Unknown";
+  if (p.ownerUserId) return p.ownerName ?? "Unknown";
+  return "Unattributed";
 }
 
 export interface KpiBucket {
@@ -409,30 +633,48 @@ export interface RepLeaderboardRow {
   waiting: number;
   avgMs: number | null;
   medianMs: number | null;
+  /** True for the synthetic "Unattributed" row. */
+  unattributed?: boolean;
 }
 
 export function buildLeaderboard(pairs: ResponsePair[], biz: boolean): RepLeaderboardRow[] {
   const byRep = new Map<string, ResponsePair[]>();
-  for (const p of pairs) {
-    if (!p.ownerUserId) continue;
-    const arr = byRep.get(p.ownerUserId) ?? [];
+  // Bucket replies by their attributed sender (real rep, or Unattributed).
+  for (const p of pairs.filter((p) => p.outboundAt != null)) {
+    const id = attributedSenderId(p);
+    const arr = byRep.get(id) ?? [];
     arr.push(p);
-    byRep.set(p.ownerUserId, arr);
+    byRep.set(id, arr);
   }
+  // Bucket waiting threads by their assigned owner only — waiting threads
+  // have no sender to resolve. Threads with no owner contribute to the
+  // unattributed waiting count so leadership can drill in and assign.
+  for (const p of pairs.filter((p) => p.outboundAt == null)) {
+    const id = p.ownerUserId ?? UNATTRIBUTED_SENDER_ID;
+    const arr = byRep.get(id) ?? [];
+    arr.push(p);
+    byRep.set(id, arr);
+  }
+
   const rows: RepLeaderboardRow[] = [];
-  for (const [ownerUserId, list] of Array.from(byRep.entries())) {
+  for (const [id, list] of Array.from(byRep.entries())) {
     const responded = list.filter((p) => p.outboundAt != null);
     const ms = responded.map((p) => pickMs(p, biz)).filter((v): v is number => v != null && v >= 0);
+    const namedSample = list.find((p) => attributedSenderId(p) === id);
     rows.push({
-      ownerUserId,
-      ownerName: list[0].ownerName ?? "Unknown",
+      ownerUserId: id,
+      ownerName: id === UNATTRIBUTED_SENDER_ID ? "Unattributed" : (namedSample ? attributedSenderName(namedSample) : "Unknown"),
       count: responded.length,
       waiting: list.length - responded.length,
       avgMs: avg(ms),
       medianMs: median(ms),
+      unattributed: id === UNATTRIBUTED_SENDER_ID,
     });
   }
   rows.sort((a, b) => {
+    // Unattributed always sorts last so it doesn't crowd out real reps.
+    if (a.unattributed && !b.unattributed) return 1;
+    if (!a.unattributed && b.unattributed) return -1;
     if (a.avgMs == null && b.avgMs == null) return 0;
     if (a.avgMs == null) return 1;
     if (b.avgMs == null) return -1;
@@ -450,10 +692,15 @@ export interface SlowestThreadRow {
   isWaiting: boolean;
   ownerName: string | null;
   ownerUserId: string | null;
+  /** Resolved sender of the outbound reply, when different from owner. */
+  senderName: string | null;
+  senderUserId: string | null;
   accountName: string | null;
   accountId: string | null;
   subject: string | null;
   fromEmail: string | null;
+  /** True when this row's reply could not be attributed to any rep. */
+  unattributed: boolean;
 }
 
 export function buildSlowestThreads(
@@ -461,8 +708,10 @@ export function buildSlowestThreads(
   biz: boolean,
   now: Date,
   limit = 25,
+  opts: { unattributedOnly?: boolean } = {},
 ): SlowestThreadRow[] {
   const rows: SlowestThreadRow[] = pairs.map((p) => {
+    const unattributed = attributedSenderId(p) === UNATTRIBUTED_SENDER_ID;
     if (p.outboundAt) {
       const ms = pickMs(p, biz) ?? 0;
       return {
@@ -474,10 +723,13 @@ export function buildSlowestThreads(
         isWaiting: false,
         ownerName: p.ownerName,
         ownerUserId: p.ownerUserId,
+        senderName: p.senderName,
+        senderUserId: p.senderUserId,
         accountName: p.accountName,
         accountId: p.accountId,
         subject: p.subject,
         fromEmail: p.fromEmail,
+        unattributed,
       };
     }
     const ms = biz
@@ -492,14 +744,18 @@ export function buildSlowestThreads(
       isWaiting: true,
       ownerName: p.ownerName,
       ownerUserId: p.ownerUserId,
+      senderName: null,
+      senderUserId: null,
       accountName: p.accountName,
       accountId: p.accountId,
       subject: p.subject,
       fromEmail: p.fromEmail,
+      unattributed: p.ownerUserId == null,
     };
   });
-  rows.sort((a, b) => b.ageMs - a.ageMs);
-  return rows.slice(0, limit);
+  const filtered = opts.unattributedOnly ? rows.filter((r) => r.unattributed) : rows;
+  filtered.sort((a, b) => b.ageMs - a.ageMs);
+  return filtered.slice(0, limit);
 }
 
 // ─── Time series bucketing ───────────────────────────────────────────────────
@@ -536,10 +792,6 @@ export function buildTimeseries(
     if (!p.outboundAt) continue;
     const ms = pickMs(p, biz);
     if (ms == null || ms < 0) continue;
-    // Bucket by outboundAt — under the new event model, replies are selected
-    // by outbound-in-window (the inbound that triggered them may predate the
-    // window). Bucketing on outboundAt keeps the trend chart aligned with
-    // the time the rep actually responded.
     const key = bucketKey(p.outboundAt, granularity);
     const arr = groups.get(key) ?? [];
     arr.push(ms);
@@ -554,4 +806,310 @@ export function buildTimeseries(
     }))
     .sort((a, b) => a.bucket.localeCompare(b.bucket));
   return points;
+}
+
+// ─── "Right now" snapshot ────────────────────────────────────────────────────
+// Surfaces the live state of the inbox, independent of the selected range:
+// oldest unanswered customer email, count of waiting threads in age buckets,
+// and the rep with the most overdue threads. Auto-refresh every 60s on the
+// frontend so reps can monitor without leaving the tab.
+
+export interface RightNowSnapshot {
+  oldestWaiting: SlowestThreadRow | null;
+  waitingTotal: number;
+  waitingOver1h: number;
+  waitingOver4h: number;
+  waitingOver24h: number;
+  topOverdueRep: { ownerUserId: string; ownerName: string; overdueCount: number } | null;
+  generatedAt: string;
+}
+
+export function buildRightNow(pairs: ResponsePair[], biz: boolean, now: Date): RightNowSnapshot {
+  // Derive waiting rows directly from pairs (filter outboundAt == null) rather
+  // than routing through buildSlowestThreads(...) with any limit. The previous
+  // implementation passed limit=10000 and then filtered for isWaiting, but
+  // buildSlowestThreads slices AFTER sorting mixed responded+waiting rows by
+  // ageMs — so in an org with thousands of slow responded threads, the
+  // waiting rows could fall off the cut and silently disappear from the
+  // strip, distorting the oldest-unanswered + overdue counts.
+  const waitingRows: SlowestThreadRow[] = pairs
+    .filter((p) => p.outboundAt === null)
+    .map((p) => {
+      const ms = biz
+        ? businessHoursMs(p.inboundAt.getTime(), now.getTime())
+        : now.getTime() - p.inboundAt.getTime();
+      return {
+        inboundId: p.inboundId,
+        threadId: p.threadId,
+        inboundAt: p.inboundAt,
+        outboundAt: null,
+        ageMs: ms,
+        isWaiting: true,
+        ownerName: p.ownerName,
+        ownerUserId: p.ownerUserId,
+        senderName: null,
+        senderUserId: null,
+        accountName: p.accountName,
+        accountId: p.accountId,
+        subject: p.subject,
+        fromEmail: p.fromEmail,
+        unattributed: p.ownerUserId == null,
+      };
+    });
+  const oldestWaiting = waitingRows.reduce<SlowestThreadRow | null>(
+    (max, r) => (max === null || r.ageMs > max.ageMs ? r : max),
+    null,
+  );
+  const HOUR_MS = 60 * 60 * 1000;
+
+  let over1 = 0, over4 = 0, over24 = 0;
+  const overdueByOwner = new Map<string, { name: string; count: number }>();
+  for (const w of waitingRows) {
+    if (w.ageMs > HOUR_MS) over1++;
+    if (w.ageMs > 4 * HOUR_MS) over4++;
+    if (w.ageMs > 24 * HOUR_MS) over24++;
+    if (w.ageMs > 4 * HOUR_MS && w.ownerUserId) {
+      const prev = overdueByOwner.get(w.ownerUserId) ?? { name: w.ownerName ?? "Unknown", count: 0 };
+      prev.count++;
+      overdueByOwner.set(w.ownerUserId, prev);
+    }
+  }
+  let topOwner: RightNowSnapshot["topOverdueRep"] = null;
+  for (const [id, v] of Array.from(overdueByOwner.entries())) {
+    if (!topOwner || v.count > topOwner.overdueCount) {
+      topOwner = { ownerUserId: id, ownerName: v.name, overdueCount: v.count };
+    }
+  }
+  return {
+    oldestWaiting,
+    waitingTotal: waitingRows.length,
+    waitingOver1h: over1,
+    waitingOver4h: over4,
+    waitingOver24h: over24,
+    topOverdueRep: topOwner,
+    generatedAt: now.toISOString(),
+  };
+}
+
+// ─── SLA compliance + per-account outliers ───────────────────────────────────
+
+export interface SlaTarget {
+  label: string;
+  ms: number;
+  /** True = use business-hours elapsed, false = wall-clock. */
+  businessHours: boolean;
+}
+
+export const DEFAULT_SLA_TARGETS: SlaTarget[] = [
+  { label: "1h", ms: 60 * 60 * 1000, businessHours: true },
+  { label: "4h", ms: 4 * 60 * 60 * 1000, businessHours: true },
+  { label: "24h", ms: 24 * 60 * 60 * 1000, businessHours: true },
+];
+
+export interface SlaTargetCompliance {
+  label: string;
+  ms: number;
+  businessHours: boolean;
+  total: number;
+  withinTarget: number;
+  pct: number;
+}
+
+export function buildSlaCompliance(pairs: ResponsePair[], targets: SlaTarget[]): SlaTargetCompliance[] {
+  const responded = pairs.filter((p) => p.outboundAt != null);
+  return targets.map((t) => {
+    const total = responded.length;
+    const within = responded.filter((p) => {
+      const ms = t.businessHours ? p.bizMs : p.wallMs;
+      return ms != null && ms >= 0 && ms <= t.ms;
+    }).length;
+    return {
+      label: t.label,
+      ms: t.ms,
+      businessHours: t.businessHours,
+      total,
+      withinTarget: within,
+      pct: total > 0 ? (within / total) * 100 : 0,
+    };
+  });
+}
+
+export interface AccountOutlier {
+  accountId: string;
+  accountName: string;
+  count: number;
+  medianMs: number;
+  orgMedianMs: number;
+  multiplier: number;
+}
+
+export function buildAccountOutliers(pairs: ResponsePair[], biz: boolean, threshold = 2): AccountOutlier[] {
+  const responded = pairs.filter((p) => p.outboundAt != null && p.accountId);
+  const allMs = responded
+    .map((p) => pickMs(p, biz))
+    .filter((v): v is number => v != null && v >= 0);
+  const orgMedian = median(allMs);
+  if (orgMedian == null || orgMedian <= 0) return [];
+  const byAccount = new Map<string, { name: string; values: number[] }>();
+  for (const p of responded) {
+    const ms = pickMs(p, biz);
+    if (ms == null || ms < 0) continue;
+    const cur = byAccount.get(p.accountId!) ?? { name: p.accountName ?? "Unknown account", values: [] };
+    cur.values.push(ms);
+    byAccount.set(p.accountId!, cur);
+  }
+  const outliers: AccountOutlier[] = [];
+  for (const [accountId, { name, values }] of Array.from(byAccount.entries())) {
+    if (values.length < 3) continue; // Avoid noisy single-reply accounts.
+    const m = median(values)!;
+    if (m >= orgMedian * threshold) {
+      outliers.push({
+        accountId,
+        accountName: name,
+        count: values.length,
+        medianMs: m,
+        orgMedianMs: orgMedian,
+        multiplier: m / orgMedian,
+      });
+    }
+  }
+  outliers.sort((a, b) => b.multiplier - a.multiplier);
+  return outliers;
+}
+
+// ─── Heatmap (DoW × hour, ET) ────────────────────────────────────────────────
+
+export interface HeatmapCell {
+  weekday: number; // 0=Sun..6=Sat
+  hour: number;    // 0..23 ET
+  count: number;
+  medianMs: number | null;
+}
+
+export function buildHeatmap(pairs: ResponsePair[], biz: boolean): HeatmapCell[] {
+  const buckets = new Map<string, number[]>();
+  for (const p of pairs) {
+    if (!p.outboundAt) continue;
+    const ms = pickMs(p, biz);
+    if (ms == null || ms < 0) continue;
+    // Bucket by the OUTBOUND's ET day-of-week × hour-of-day. Mapping the
+    // reply (rather than the inbound) onto the grid keeps the chart aligned
+    // with "when does the rep actually send", which is the question
+    // leadership asks of this view.
+    const { weekday, hour } = etDayOfWeekHour(p.outboundAt);
+    const key = `${weekday}:${hour}`;
+    const arr = buckets.get(key) ?? [];
+    arr.push(ms);
+    buckets.set(key, arr);
+  }
+  const cells: HeatmapCell[] = [];
+  for (let wd = 0; wd < 7; wd++) {
+    for (let h = 0; h < 24; h++) {
+      const arr = buckets.get(`${wd}:${h}`) ?? [];
+      cells.push({ weekday: wd, hour: h, count: arr.length, medianMs: median(arr) });
+    }
+  }
+  return cells;
+}
+
+// ─── Diagnostics summary ─────────────────────────────────────────────────────
+
+export interface DiagnosticsSummary {
+  totalReplies: number;
+  attributedToRep: number;
+  attributedToOwnerFallback: number;
+  unattributed: number;
+  threadsWithoutOwner: number;
+  usersInOrg: number;
+  usersWithoutEmailUsername: number;
+  topUnmatchedFromEmails: Array<{ fromEmail: string; count: number }>;
+}
+
+export async function buildDiagnostics(pairs: ResponsePair[], orgId: string): Promise<DiagnosticsSummary> {
+  const directory = await buildSenderUserDirectory(orgId);
+
+  const replies = pairs.filter((p) => p.outboundAt != null);
+  let attributedToRep = 0;
+  let attributedToOwner = 0;
+  let unattributed = 0;
+  const unmatched = new Map<string, number>();
+  for (const p of replies) {
+    if (p.senderUserId) {
+      attributedToRep++;
+    } else if (p.ownerUserId) {
+      attributedToOwner++;
+      if (p.fromEmail) unmatched.set(p.fromEmail.toLowerCase(), (unmatched.get(p.fromEmail.toLowerCase()) ?? 0) + 1);
+    } else {
+      unattributed++;
+      if (p.fromEmail) unmatched.set(p.fromEmail.toLowerCase(), (unmatched.get(p.fromEmail.toLowerCase()) ?? 0) + 1);
+    }
+  }
+
+  const threadsWithoutOwner = new Set<string>();
+  for (const p of pairs) {
+    if (!p.ownerUserId) threadsWithoutOwner.add(p.threadId);
+  }
+
+  const usersInOrg = directory.users.length;
+  const usersWithoutEmailUsername = directory.users.filter((u) => !isEmailShaped(u.username)).length;
+
+  const topUnmatched = Array.from(unmatched.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([fromEmail, count]) => ({ fromEmail, count }));
+
+  return {
+    totalReplies: replies.length,
+    attributedToRep,
+    attributedToOwnerFallback: attributedToOwner,
+    unattributed,
+    threadsWithoutOwner: threadsWithoutOwner.size,
+    usersInOrg,
+    usersWithoutEmailUsername,
+    topUnmatchedFromEmails: topUnmatched,
+  };
+}
+
+// ─── Sync freshness ──────────────────────────────────────────────────────────
+
+export interface SyncFreshness {
+  /** Most recent provider_sent_at across customer email_messages for this org. */
+  lastProviderSentAt: string | null;
+  /** Most recent monitored_mailboxes.last_sync_at for this org. */
+  lastMailboxSyncAt: string | null;
+  /** The greater of the two — what the UI actually shows as "Data as of". */
+  asOf: string | null;
+  /** ms behind "now"; null when both above are null. */
+  ageMs: number | null;
+  /** True when ageMs > 15min (or sync is missing entirely). */
+  stale: boolean;
+}
+
+export const STALE_THRESHOLD_MS = 15 * 60 * 1000;
+
+export async function getSyncFreshness(orgId: string): Promise<SyncFreshness> {
+  const result = await storage.pool.query<{ last_provider_sent_at: string | null; last_mailbox_sync_at: string | null }>(
+    `SELECT
+       (SELECT MAX(COALESCE(em.provider_sent_at, em.created_at))
+          FROM email_messages em
+         WHERE em.org_id = $1)                                   AS last_provider_sent_at,
+       (SELECT MAX(last_sync_at)
+          FROM monitored_mailboxes
+         WHERE org_id = $1 AND enabled = true)                   AS last_mailbox_sync_at`,
+    [orgId],
+  );
+  const row = result.rows[0] ?? { last_provider_sent_at: null, last_mailbox_sync_at: null };
+  const a = row.last_provider_sent_at ? new Date(row.last_provider_sent_at).getTime() : null;
+  const b = row.last_mailbox_sync_at ? new Date(row.last_mailbox_sync_at).getTime() : null;
+  const asOfMs = a == null ? b : (b == null ? a : Math.max(a, b));
+  const now = Date.now();
+  const ageMs = asOfMs == null ? null : now - asOfMs;
+  const stale = ageMs == null ? true : ageMs > STALE_THRESHOLD_MS;
+  return {
+    lastProviderSentAt: row.last_provider_sent_at,
+    lastMailboxSyncAt: row.last_mailbox_sync_at,
+    asOf: asOfMs == null ? null : new Date(asOfMs).toISOString(),
+    ageMs,
+    stale,
+  };
 }
