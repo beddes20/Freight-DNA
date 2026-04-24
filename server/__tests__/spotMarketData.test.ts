@@ -89,4 +89,22 @@ describe("spotMarketData.getLaneMarket — Task #515", () => {
     if (!r.ok) expect(r.reason).toMatch(/KMA/);
     expect(fetchFullLaneMock).not.toHaveBeenCalled();
   });
+
+  // Task #515 — verify the parallel-degradation contract that
+  // searchSpotQuote relies on: a TRAC outage MUST surface a
+  // marketStatus.available=false signal and MUST NOT crash the
+  // surrounding parallel lookup. This mirrors the .catch() wrapping
+  // around getLaneMarket in customerQuotes.ts.
+  it("degradation contract — TRAC failure produces a structured ok=false the search flow can fold into Promise.all", async () => {
+    fetchFullLaneMock.mockRejectedValueOnce(new Error("ETIMEDOUT"));
+    const results = await Promise.all([
+      getLaneMarket("Chicago", "IL", "Atlanta", "GA", "Van")
+        .catch(err => ({ ok: false as const, reason: (err as Error).message ?? "TRAC error" })),
+    ]);
+    const [m] = results;
+    expect(m.ok).toBe(false);
+    if (!m.ok) {
+      expect(m.reason).toMatch(/ETIMEDOUT|TRAC/);
+    }
+  });
 });

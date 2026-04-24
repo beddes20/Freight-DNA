@@ -168,9 +168,15 @@ function deriveCapacityOutlook(direction: "up" | "down" | "flat", forecast: numb
   if (forecast == null || baseline == null || baseline === 0) return null;
   const deltaPct = ((forecast - baseline) / baseline) * 100;
   const sign = deltaPct >= 0 ? "+" : "";
-  if (direction === "up") return `Tightening — 7d forecast ${sign}${deltaPct.toFixed(1)}% vs 30d`;
-  if (direction === "down") return `Loosening — 7d forecast ${sign}${deltaPct.toFixed(1)}% vs 30d`;
-  return `Stable — 7d forecast ${sign}${deltaPct.toFixed(1)}% vs 30d`;
+  // NOTE: Task #515 spec ideal source is FreightWaves OTRI/HAUL signals.
+  // The TRAC `/statistics` endpoint exposed via tracService.ts does not
+  // surface OTRI or HAUL fields today, so capacity outlook is derived from
+  // the next-7d forecast RPM vs 30d baseline RPM and explicitly annotated
+  // with that derivation source. If TRAC adds OTRI/HAUL the derivation
+  // can be swapped in here without changing the LaneMarket contract.
+  if (direction === "up") return `Tightening — 7d forecast ${sign}${deltaPct.toFixed(1)}% vs 30d (OTRI/HAUL not exposed by TRAC)`;
+  if (direction === "down") return `Loosening — 7d forecast ${sign}${deltaPct.toFixed(1)}% vs 30d (OTRI/HAUL not exposed by TRAC)`;
+  return `Stable — 7d forecast ${sign}${deltaPct.toFixed(1)}% vs 30d (OTRI/HAUL not exposed by TRAC)`;
 }
 
 /**
@@ -350,9 +356,10 @@ export async function getLaneTraffic(
       }
     }
 
+    // Task #515 spec — Lane Traffic surfaces top 3 carriers by load count.
     const sortedNames = Array.from(carrierAgg.entries())
       .sort((a, b) => b[1].loads - a[1].loads)
-      .slice(0, 5)
+      .slice(0, 3)
       .map(([n]) => n);
 
     // Reliability join — pull per-carrier scorecard rows for the equipment

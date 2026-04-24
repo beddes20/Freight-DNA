@@ -1054,9 +1054,18 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
               </button>
             )}
             {data.corridorPattern && (
-              <button
-                type="button"
-                onClick={() => onApplyLaneFilter(data.corridorPattern!.namedCorridor || data.corridorPattern!.name)}
+              // Renders as an anchor so it has real link semantics and a
+              // resolvable href (the customer-quotes page itself, scoped by
+              // ?corridor=<id>). Click also triggers the in-page lane
+              // filter for instant feedback. If a dedicated corridor
+              // detail route is later added, swap the href without
+              // changing this call site.
+              <a
+                href={`/customer-quotes?corridor=${encodeURIComponent(data.corridorPattern.id)}`}
+                onClick={e => {
+                  e.preventDefault();
+                  onApplyLaneFilter(data.corridorPattern!.namedCorridor || data.corridorPattern!.name);
+                }}
                 className="text-[11px] px-1.5 py-0.5 rounded-[4px] bg-teal-500/10 text-teal-300 border border-teal-500/30 inline-flex items-center gap-1 hover:bg-teal-500/20 cursor-pointer"
                 title={[
                   `${data.corridorPattern.originRegion} → ${data.corridorPattern.destinationRegion}`,
@@ -1082,7 +1091,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                     {data.corridorPattern.responsibleContact.contactName.split(/\s+/)[0]}
                   </span>
                 )}
-              </button>
+              </a>
             )}
             {!data.marketStatus.available && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-[4px] bg-zinc-800 text-zinc-400 border border-zinc-700 inline-flex items-center gap-1" data-testid="chip-spot-market-unavailable">

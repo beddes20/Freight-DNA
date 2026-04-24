@@ -1894,7 +1894,9 @@ export type SpotGuidance = {
   suggestedLow: number | null;
   suggestedHigh: number | null;
   benchmark: number | null;
-  benchmarkSource: PricingIntelligence["benchmarkSource"] | "trac";
+  /** Task #515 — Falls back to the tiered-matching tier label (e.g. "exact",
+   * "same_market") when neither TRAC nor a stored band is available. */
+  benchmarkSource: PricingIntelligence["benchmarkSource"] | "trac" | MatchTier;
   confidence: PricingIntelligence["confidence"];
   message: string;
   /** Task #514 — which tier the guidance band was actually derived from. */
@@ -2136,8 +2138,10 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
           : guidanceTier === "same_market"
           ? (series.length >= 12 ? "medium" : "low")
           : "low";
-      const benchmarkSource: PricingIntelligence["benchmarkSource"] =
-        guidanceTier === "exact" ? "none" : "similar_lanes";
+      // Task #515 — fall back to the tiered-matching tier label as the
+      // benchmark source so the UI can clearly show which tier produced
+      // the band when neither TRAC nor stored guidance is available.
+      const benchmarkSource: SpotGuidance["benchmarkSource"] = guidanceTier;
       guidance = {
         suggestedLow: Math.round(p25),
         suggestedHigh: Math.round(p75),
@@ -2399,7 +2403,13 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
     const calibration: NonNullable<SpotGuidance["calibration"]> = {
       suggestedLow: internalLow,
       suggestedHigh: internalHigh,
-      source: internalSource === "trac" ? "none" : internalSource,
+      source: internalSource === "trac"
+        ? "none"
+        : (internalSource === "stored_recent" || internalSource === "stored_avg" || internalSource === "similar_lanes" || internalSource === "none")
+        ? internalSource
+        // tier-label fallback collapses to "similar_lanes" semantics for the
+        // calibration channel which is shaped by PricingIntelligence.
+        : "similar_lanes",
       tierUsed: internalTier,
       sample: internalSample,
       note: calNote,
