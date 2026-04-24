@@ -36,12 +36,13 @@ import { and, eq, gte, sql } from "drizzle-orm";
 // Roles whose users get a mailbox auto-enrolled by enroll-all and are
 // counted as "eligible" for the coverage banner. Kept in one place so the
 // enroll-all handler and the coverage endpoint never drift apart.
-const ELIGIBLE_ROLES: ReadonlyArray<string> = [
+export const ELIGIBLE_ROLES: ReadonlyArray<string> = [
   "national_account_manager",
   "account_manager",
   "admin",
   "director",
   "sales_director",
+  "logistics_manager",
 ];
 
 function requireAdmin(req: Request, res: Response, next: () => void) {

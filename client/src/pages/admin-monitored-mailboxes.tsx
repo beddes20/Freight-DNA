@@ -455,7 +455,7 @@ export default function AdminMonitoredMailboxesPage() {
 
   const mailboxes = mailboxesQuery.data?.mailboxes ?? [];
   const orgUsers = (usersQuery.data ?? []).filter(u =>
-    ["national_account_manager", "account_manager", "admin", "director", "sales_director"].includes(u.role)
+    ["national_account_manager", "account_manager", "admin", "director", "sales_director", "logistics_manager"].includes(u.role)
   );
 
   if (!user || !["admin", "director", "sales_director"].includes(user.role)) {

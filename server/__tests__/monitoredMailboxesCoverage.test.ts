@@ -12,6 +12,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { getMailReadConsentStatus } from "../graphSubscriptionService";
+import { ELIGIBLE_ROLES } from "../routes/monitoredMailboxes";
 
 // Mirror the severity logic used inside the coverage handler. Keeping the
 // pure function here lets us unit-test classification without standing up
@@ -334,5 +335,65 @@ describe("enroll-all per-user result shape", () => {
     for (const r of results.filter(r => r.outcome === "error")) {
       expect(typeof r.error).toBe("string");
     }
+  });
+});
+
+describe("ELIGIBLE_ROLES (Task #523 — include LMs in Enroll All)", () => {
+  // The eligible-roles list drives BOTH enroll-all and the coverage
+  // banner denominator. Logistics Managers were silently skipped before
+  // Task #523 — locking them in here prevents accidental removal.
+  it("includes Logistics Manager alongside the existing eligible roles", () => {
+    expect(ELIGIBLE_ROLES).toContain("logistics_manager");
+    expect(ELIGIBLE_ROLES).toEqual(
+      expect.arrayContaining([
+        "national_account_manager",
+        "account_manager",
+        "admin",
+        "director",
+        "sales_director",
+        "logistics_manager",
+      ]),
+    );
+  });
+
+  it("does NOT include logistics_coordinator or sales (intentionally out of scope)", () => {
+    // Task #523 explicitly limits the addition to logistics_manager. If
+    // these ever flip to true, it must be a deliberate follow-up — not
+    // an accidental copy-paste.
+    expect(ELIGIBLE_ROLES).not.toContain("logistics_coordinator");
+    expect(ELIGIBLE_ROLES).not.toContain("sales");
+  });
+
+  it("LM with login email is enrolled by enroll-all and counted as eligible", () => {
+    // Mirrors the route's filter:
+    //   allUsers.filter(u => ELIGIBLE_ROLES.includes(u.role) && !!u.username)
+    // …and its companion filter for the no-login bucket.
+    interface OrgUser { id: string; role: string; username: string | null }
+    const allUsers: OrgUser[] = [
+      { id: "u-nam", role: "national_account_manager", username: "nam@x" },
+      { id: "u-am",  role: "account_manager",          username: "am@x" },
+      { id: "u-lm",  role: "logistics_manager",        username: "lm@x" },
+      { id: "u-lc",  role: "logistics_coordinator",    username: "lc@x" },     // not eligible
+      { id: "u-sales", role: "sales",                  username: "sales@x" },  // not eligible
+    ];
+    const eligibleUsers = allUsers.filter(
+      u => ELIGIBLE_ROLES.includes(u.role) && !!u.username,
+    );
+    expect(eligibleUsers.map(u => u.id)).toEqual(["u-nam", "u-am", "u-lm"]);
+    // Coverage banner denominator = eligibleUsers.length, so LM bumps it
+    // from 2 to 3 in this fixture.
+    expect(eligibleUsers.length).toBe(3);
+  });
+
+  it("LM without a login email is bucketed as skipped_no_mailbox (not silently dropped)", () => {
+    interface OrgUser { id: string; role: string; username: string | null }
+    const allUsers: OrgUser[] = [
+      { id: "u-lm-noemail", role: "logistics_manager", username: null },
+      { id: "u-lm-with",    role: "logistics_manager", username: "ok@x" },
+    ];
+    const noMailbox = allUsers.filter(
+      u => ELIGIBLE_ROLES.includes(u.role) && !u.username,
+    );
+    expect(noMailbox.map(u => u.id)).toEqual(["u-lm-noemail"]);
   });
 });
