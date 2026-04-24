@@ -382,11 +382,17 @@ async function processUserMailboxEmail(params: {
   providerMessageId: string;
   receivedAt: Date;
   mailboxEmail: string;
+  // Task #517 — which ingestion path produced this row. Used by the
+  // admin coverage UI to confirm the historical 30-day backfill is
+  // actually firing through this same code path. Defaults to "delta"
+  // (live webhook / delta sync) so existing callers don't change.
+  ingestedVia?: "delta" | "backfill" | "self_heal";
 }): Promise<void> {
   const {
     orgId, monitoredMailbox, fromEmail, fromName, toEmail, allToRecipients, subject,
     bodyPreview, bodyFull, conversationId, providerMessageId, receivedAt, mailboxEmail,
   } = params;
+  const ingestedVia = params.ingestedVia ?? "delta";
 
   const isFromMailboxOwner = fromEmail.toLowerCase() === mailboxEmail.toLowerCase();
   const direction = isFromMailboxOwner ? "outbound" : "inbound";
@@ -487,6 +493,8 @@ async function processUserMailboxEmail(params: {
     // display reflects when the message was actually sent (matters for
     // self-heal recoveries that may run hours after the fact).
     providerSentAt: receivedAt,
+    // Task #517 — record ingestion path for coverage diagnostics.
+    ingestedVia,
   });
 
   if (!created) {

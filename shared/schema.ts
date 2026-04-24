@@ -1852,6 +1852,13 @@ export const emailMessages = pgTable("email_messages", {
   // after the fact (via self-heal sweep) still display in the correct
   // chronological position rather than at ingestion time.
   providerSentAt: timestamp("provider_sent_at"),
+  // Task #517 — records which ingestion path produced this row so we can
+  // prove the historical 30-day backfill is actually firing through the
+  // same code path and producing spot quotes. Values: 'delta' (live
+  // webhook/delta sync), 'backfill' (mailbox 30-day historical run),
+  // 'self_heal' (reply-capture sweep), or null for legacy rows written
+  // before this column existed.
+  ingestedVia: text("ingested_via"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 export const insertEmailMessageSchema = createInsertSchema(emailMessages).omit({ id: true, createdAt: true });

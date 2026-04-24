@@ -15,13 +15,34 @@ import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import { storage } from "../storage";
 import { requireAuth, getCurrentUser } from "../auth";
-import { registerMailboxSubscription, removeMailboxSubscription } from "../graphSubscriptionService";
+import {
+  registerMailboxSubscription,
+  removeMailboxSubscription,
+  getMailReadConsentStatus,
+  getMailReadConsentStatusAsync,
+  refreshMailReadConsentStatus,
+} from "../graphSubscriptionService";
 import { syncMailboxDelta, retryMailboxSyncFailure } from "../services/mailboxDeltaSyncService";
 import {
   runBackfillForMailbox,
   runBackfillForAllEnabledMailboxes,
   triggerBackfillInBackground,
 } from "../services/mailboxHistoricalBackfillService";
+import { db } from "../storage";
+import { quoteOpportunities, emailMessages } from "@shared/schema";
+import { classifyCoverage } from "../services/coverageClassifier";
+import { and, eq, gte, sql } from "drizzle-orm";
+
+// Roles whose users get a mailbox auto-enrolled by enroll-all and are
+// counted as "eligible" for the coverage banner. Kept in one place so the
+// enroll-all handler and the coverage endpoint never drift apart.
+const ELIGIBLE_ROLES: ReadonlyArray<string> = [
+  "national_account_manager",
+  "account_manager",
+  "admin",
+  "director",
+  "sales_director",
+];
 
 function requireAdmin(req: Request, res: Response, next: () => void) {
   getCurrentUser(req).then(user => {
@@ -123,14 +144,6 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const ELIGIBLE_ROLES = [
-        "national_account_manager",
-        "account_manager",
-        "admin",
-        "director",
-        "sales_director",
-      ];
-
       const allUsers = await storage.getUsers(user.organizationId);
       const eligible = allUsers.filter(u => ELIGIBLE_ROLES.includes(u.role) && !!u.username);
 
@@ -138,16 +151,44 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       const existingEmails = new Set(existing.map(m => m.email.toLowerCase()));
       const existingUserIds = new Set(existing.map(m => m.userId));
 
+      // Task #517 — surface a per-user breakdown so the admin UI can show
+      // exactly who got enrolled, who was already enrolled, who has no
+      // mailbox, and who errored. Drives the "results panel" after the run.
+      type EnrollOutcome =
+        | "enrolled"
+        | "already_enrolled"
+        | "skipped_no_mailbox"
+        | "error";
+      interface EnrollResult {
+        userId: string;
+        userName: string;
+        email: string | null;
+        outcome: EnrollOutcome;
+        error?: string;
+      }
+      const results: EnrollResult[] = [];
       let added = 0;
       let skipped = 0;
       let failed = 0;
+      let skippedNoMailbox = 0;
       const created: typeof existing = [];
-      const failures: Array<{ userId: string; email: string; error: string }> = [];
+
+      // Capture users with no usable mailbox (no username/login email).
+      for (const u of allUsers.filter(u => ELIGIBLE_ROLES.includes(u.role) && !u.username)) {
+        skippedNoMailbox++;
+        results.push({
+          userId: u.id,
+          userName: u.name,
+          email: null,
+          outcome: "skipped_no_mailbox",
+        });
+      }
 
       for (const u of eligible) {
         const email = u.username.toLowerCase();
         if (existingUserIds.has(u.id) || existingEmails.has(email)) {
           skipped++;
+          results.push({ userId: u.id, userName: u.name, email, outcome: "already_enrolled" });
           continue;
         }
         try {
@@ -161,19 +202,31 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
           existingUserIds.add(u.id);
           created.push(mailbox);
           added++;
-        } catch (err: any) {
+          results.push({ userId: u.id, userName: u.name, email, outcome: "enrolled" });
+        } catch (err: unknown) {
           // Race-condition: unique index (orgId,email) tripped because
           // another request created the row concurrently. Treat as skip.
           // Postgres unique_violation = SQLSTATE 23505.
+          const errCode = err && typeof err === "object" && "code" in err
+            ? String((err as { code?: unknown }).code ?? "")
+            : "";
+          const errMsg = err instanceof Error ? err.message : "";
           const isUniqueViolation =
-            err?.code === "23505" ||
-            /duplicate key|unique constraint/i.test(err?.message ?? "");
+            errCode === "23505" ||
+            /duplicate key|unique constraint/i.test(errMsg);
           if (isUniqueViolation) {
             skipped++;
+            results.push({ userId: u.id, userName: u.name, email, outcome: "already_enrolled" });
           } else {
             console.error("[monitoredMailboxes] enroll-all create error:", err);
             failed++;
-            failures.push({ userId: u.id, email, error: err?.message ?? "Unknown error" });
+            results.push({
+              userId: u.id,
+              userName: u.name,
+              email,
+              outcome: "error",
+              error: errMsg || "Unknown error",
+            });
           }
         }
       }
@@ -181,6 +234,7 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       // Fire subscription registration in the background (mirrors POST path).
       // Task #508 — also auto-trigger the 30-day historical backfill so the
       // newly-enrolled mailbox immediately starts pulling its history.
+      // Subscription failures must NOT block enrollment of remaining users.
       for (const mailbox of created) {
         if (mailbox.enabled) {
           registerMailboxSubscription(mailbox.email, mailbox.id).catch(err => {
@@ -190,7 +244,22 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
         }
       }
 
-      res.json({ added, skipped, failed, eligible: eligible.length, failures });
+      // Backwards-compatible: keep `failures` as a flat list for callers
+      // that already use it. New consumers should prefer `results`.
+      const failures = results
+        .filter(r => r.outcome === "error")
+        .map(r => ({ userId: r.userId, email: r.email ?? "", error: r.error ?? "Unknown error" }));
+
+      res.json({
+        added,
+        skipped,
+        failed,
+        skippedNoMailbox,
+        eligible: eligible.length,
+        totalConsidered: eligible.length + skippedNoMailbox,
+        results,
+        failures,
+      });
     } catch (err) {
       console.error("[monitoredMailboxes] POST /enroll-all error:", err);
       res.status(500).json({ error: "Failed to enroll users" });
@@ -449,4 +518,200 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       res.status(500).json({ error: "Failed to dismiss sync failure" });
     }
   });
+
+  // -----------------------------------------------------------------------
+  // Task #517 — Email-traffic coverage summary.
+  //
+  // Drives the banner shown on Email Intelligence + Customer Quoting tabs
+  // so admins can see at a glance whether 30-day email ingestion is
+  // actually flowing for their org. Three failure modes surface here:
+  //   1. Zero mailboxes enrolled (eligible reps exist but nothing being read).
+  //   2. Mail.Read tenant consent missing (Azure permission not granted).
+  //   3. One or more mailbox backfills failed or never ran in the last 30d.
+  //
+  // The endpoint is read-only and safe for non-admin reps to call so the
+  // banner can render on shared dashboards. We don't expose Azure errors
+  // verbatim to non-admins to avoid leaking infra details.
+  // -----------------------------------------------------------------------
+  app.get(
+    "/api/internal/admin/monitored-mailboxes/coverage",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const isAdmin = ["admin", "director", "sales_director"].includes(user.role);
+
+        const allUsers = await storage.getUsers(user.organizationId);
+        const eligibleUsers = allUsers.filter(
+          u => ELIGIBLE_ROLES.includes(u.role) && !!u.username,
+        );
+        const mailboxes = await storage.getMonitoredMailboxes(user.organizationId);
+        const enabled = mailboxes.filter(m => m.enabled);
+
+        // Backfill state for each enabled mailbox — pull the latest run.
+        let failedBackfills = 0;
+        let neverBackfilled = 0;
+        let succeededBackfills = 0;
+        let totalSpotQuotesFromBackfill = 0;
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+        for (const m of enabled) {
+          const latest = await storage.getLatestMailboxHistoricalBackfill(m.id);
+          if (!latest) {
+            neverBackfilled++;
+            continue;
+          }
+          if (latest.status === "failed") {
+            failedBackfills++;
+          } else if (latest.status === "completed") {
+            succeededBackfills++;
+          }
+        }
+
+        // Org-aggregate count of spot-quote opportunities created from any
+        // ingested email in the last 30 days. Joined via providerMessageId
+        // → quoteOpportunities.sourceReference (the idempotency key set by
+        // ingestQuoteFromEmail).
+        try {
+          const rows = await db
+            .select({ n: sql<number>`count(*)::int` })
+            .from(quoteOpportunities)
+            .innerJoin(
+              emailMessages,
+              and(
+                eq(emailMessages.orgId, quoteOpportunities.organizationId),
+                eq(emailMessages.providerMessageId, quoteOpportunities.sourceReference),
+              ),
+            )
+            .where(
+              and(
+                eq(quoteOpportunities.organizationId, user.organizationId),
+                eq(quoteOpportunities.source, "email"),
+                gte(quoteOpportunities.createdAt, thirtyDaysAgo),
+                // Task #517 — only count quotes whose source email was
+                // written by the historical 30-day backfill path. Live
+                // delta-sync emails are tracked by other dashboards.
+                eq(emailMessages.ingestedVia, "backfill"),
+              ),
+            );
+          totalSpotQuotesFromBackfill = Number(rows[0]?.n ?? 0);
+        } catch (err) {
+          console.error("[monitoredMailboxes] coverage spot-quote count failed:", err);
+        }
+
+        // Use the DB-fresh accessor so a cold-start coverage call still
+        // reflects persisted Mail.Read consent — otherwise the very first
+        // request after a restart could falsely report "unknown" and
+        // surface a misleading mail_read_missing banner (Task #517).
+        const consent = await getMailReadConsentStatusAsync();
+        const safeConsent = isAdmin
+          ? consent
+          : { ...consent, lastError: consent.lastError ? "see admin" : null };
+
+        // Single severity classification so the UI doesn't have to re-derive.
+        // Single source of truth — see services/coverageClassifier so
+        // route + tests can never drift apart (Task #517).
+        const { severity, reasons } = classifyCoverage({
+          eligibleUsers: eligibleUsers.length,
+          enrolledMailboxes: enabled.length,
+          consentStatus: consent.status,
+          consentConfigured: consent.configured,
+          failedBackfills,
+          neverBackfilled,
+        });
+
+        res.json({
+          severity,
+          reasons,
+          eligibleUsers: eligibleUsers.length,
+          enrolledMailboxes: enabled.length,
+          totalMailboxes: mailboxes.length,
+          backfills: {
+            succeeded: succeededBackfills,
+            failed: failedBackfills,
+            neverRun: neverBackfilled,
+            windowDays: 30,
+          },
+          spotQuotesFromBackfill30d: totalSpotQuotesFromBackfill,
+          mailReadConsent: safeConsent,
+        });
+      } catch (err) {
+        console.error("[monitoredMailboxes] GET /coverage error:", err);
+        res.status(500).json({ error: "Failed to load coverage summary" });
+      }
+    },
+  );
+
+  // Admin-only: force a re-probe of Mail.Read tenant consent. Useful after
+  // an admin grants the permission in Azure and wants to clear the banner
+  // without waiting for the next mailbox sync.
+  app.post(
+    "/api/internal/admin/monitored-mailboxes/refresh-mail-read",
+    requireAuth,
+    requireAdmin,
+    async (_req: Request, res: Response) => {
+      try {
+        const status = await refreshMailReadConsentStatus();
+        res.json({ ok: true, mailReadConsent: status });
+      } catch (err) {
+        console.error("[monitoredMailboxes] refresh-mail-read error:", err);
+        res.status(500).json({ error: "Failed to refresh Mail.Read consent" });
+      }
+    },
+  );
+
+  // Per-mailbox spot-quote opportunities created from backfilled email in
+  // the last 30 days. Powers the "Spot quotes (30d)" column in the admin
+  // mailbox table so directors can see which reps' inboxes are actually
+  // generating opportunities vs. just being read.
+  app.get(
+    "/api/internal/admin/monitored-mailboxes/:id/quote-stats",
+    requireAuth,
+    requireAdmin,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const mailbox = await storage.getMonitoredMailbox(req.params.id);
+        if (!mailbox || mailbox.orgId !== user.organizationId) {
+          return res.status(404).json({ error: "Mailbox not found" });
+        }
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        // Quote opportunities whose source-reference matches an email
+        // message addressed to this mailbox. We match on toEmail because
+        // emailMessages doesn't carry a mailboxId column (delta sync writes
+        // are scoped by recipient address).
+        const rows = await db
+          .select({ n: sql<number>`count(*)::int` })
+          .from(quoteOpportunities)
+          .innerJoin(
+            emailMessages,
+            and(
+              eq(emailMessages.orgId, quoteOpportunities.organizationId),
+              eq(emailMessages.providerMessageId, quoteOpportunities.sourceReference),
+            ),
+          )
+          .where(
+            and(
+              eq(quoteOpportunities.organizationId, user.organizationId),
+              eq(quoteOpportunities.source, "email"),
+              eq(sql`lower(${emailMessages.toEmail})`, mailbox.email.toLowerCase()),
+              gte(quoteOpportunities.createdAt, thirtyDaysAgo),
+              // Task #517 — restrict to the historical-backfill ingestion path.
+              eq(emailMessages.ingestedVia, "backfill"),
+            ),
+          );
+        res.json({
+          mailboxId: mailbox.id,
+          email: mailbox.email,
+          spotQuotesFromBackfill30d: Number(rows[0]?.n ?? 0),
+          windowDays: 30,
+        });
+      } catch (err) {
+        console.error("[monitoredMailboxes] GET /quote-stats error:", err);
+        res.status(500).json({ error: "Failed to load quote stats" });
+      }
+    },
+  );
 }

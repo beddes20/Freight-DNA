@@ -336,18 +336,43 @@ export default function AdminMonitoredMailboxesPage() {
     },
   });
 
+  // Task #517 — preserve per-user results so the admin can audit exactly
+  // who got enrolled, who was already enrolled, and who errored, instead
+  // of relying solely on a toast that disappears.
+  type EnrollOutcome = "enrolled" | "already_enrolled" | "skipped_no_mailbox" | "error";
+  interface EnrollResultRow {
+    userId: string;
+    userName: string;
+    email: string | null;
+    outcome: EnrollOutcome;
+    error?: string;
+  }
+  interface EnrollAllResponse {
+    added: number;
+    skipped: number;
+    failed?: number;
+    skippedNoMailbox?: number;
+    eligible: number;
+    totalConsidered?: number;
+    results?: EnrollResultRow[];
+  }
+  const [enrollAllResult, setEnrollAllResult] = useState<EnrollAllResponse | null>(null);
+
   const enrollAllMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/internal/admin/monitored-mailboxes/enroll-all");
-      return res.json() as Promise<{ added: number; skipped: number; failed?: number; eligible: number }>;
+      return res.json() as Promise<EnrollAllResponse>;
     },
     onSuccess: (r) => {
       queryClient.invalidateQueries({ queryKey: ["/api/internal/admin/monitored-mailboxes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/admin/monitored-mailboxes/coverage"] });
       setEnrollAllOpen(false);
+      setEnrollAllResult(r);
       const failedPart = r.failed && r.failed > 0 ? `, ${r.failed} failed` : "";
+      const noMailbox = r.skippedNoMailbox && r.skippedNoMailbox > 0 ? `, ${r.skippedNoMailbox} no mailbox` : "";
       toast({
         title: r.failed && r.failed > 0 ? "Bulk enroll completed with errors" : "Bulk enroll complete",
-        description: `${r.added} added, ${r.skipped} already enrolled${failedPart}.`,
+        description: `${r.added} added, ${r.skipped} already enrolled${noMailbox}${failedPart}.`,
         variant: r.failed && r.failed > 0 ? "destructive" : "default",
       });
     },
@@ -590,6 +615,69 @@ export default function AdminMonitoredMailboxesPage() {
         </div>
       </div>
 
+      <CoverageStatusCard onResultPanelOpen={() => undefined} />
+
+      {enrollAllResult && (
+        <Card data-testid="card-enroll-all-results">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                <MailCheck className="h-4 w-4" /> Enrollment results
+              </CardTitle>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setEnrollAllResult(null)}
+                data-testid="button-dismiss-enroll-results"
+              >
+                <X className="h-3 w-3 mr-1" /> Dismiss
+              </Button>
+            </div>
+            <CardDescription data-testid="text-enroll-results-summary">
+              {enrollAllResult.added} enrolled · {enrollAllResult.skipped} already enrolled
+              {enrollAllResult.skippedNoMailbox ? ` · ${enrollAllResult.skippedNoMailbox} no login email` : ""}
+              {enrollAllResult.failed ? ` · ${enrollAllResult.failed} failed` : ""}
+            </CardDescription>
+          </CardHeader>
+          {enrollAllResult.results && enrollAllResult.results.length > 0 && (
+            <CardContent className="pt-0">
+              <div className="max-h-64 overflow-y-auto rounded-md border border-border">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted/50 sticky top-0">
+                    <tr>
+                      <th className="text-left px-3 py-2 font-medium">User</th>
+                      <th className="text-left px-3 py-2 font-medium">Mailbox</th>
+                      <th className="text-left px-3 py-2 font-medium">Outcome</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {enrollAllResult.results.map(r => {
+                      const tone =
+                        r.outcome === "enrolled" ? "text-emerald-600 dark:text-emerald-400" :
+                        r.outcome === "already_enrolled" ? "text-muted-foreground" :
+                        r.outcome === "error" ? "text-red-600 dark:text-red-400" :
+                        "text-amber-600 dark:text-amber-400";
+                      const label =
+                        r.outcome === "enrolled" ? "Enrolled" :
+                        r.outcome === "already_enrolled" ? "Already enrolled" :
+                        r.outcome === "skipped_no_mailbox" ? "Skipped — no login email" :
+                        `Error: ${r.error ?? "unknown"}`;
+                      return (
+                        <tr key={r.userId} className="border-t border-border" data-testid={`row-enroll-result-${r.userId}`}>
+                          <td className="px-3 py-1.5">{r.userName}</td>
+                          <td className="px-3 py-1.5 text-muted-foreground">{r.email ?? "—"}</td>
+                          <td className={`px-3 py-1.5 ${tone}`}>{label}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          )}
+        </Card>
+      )}
+
       {mailboxesQuery.isLoading ? (
         <div className="flex items-center justify-center py-12" data-testid="loading-mailboxes">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -619,6 +707,11 @@ export default function AdminMonitoredMailboxesPage() {
                       </div>
                       <SyncStatusBadge status={mb.syncStatus} error={mb.syncError} />
                       {mb.sentItemsHealth && <SentItemsHealthBadge health={mb.sentItemsHealth} mailboxId={mb.id} />}
+                      {/* Task #517 — Mail.Read consent is tenant-global
+                          (Azure app-only), so each row mirrors the same
+                          shared status. Surfacing it per-row makes the
+                          gate explicit on every mailbox card. */}
+                      <MailReadConsentDot mailboxId={mb.id} />
                     </div>
                     {mb.sentItemsHealth && mb.sentItemsHealth.sentItemsHealth !== "active" && (
                       <p className="text-xs text-amber-600 mt-1" data-testid={`text-sentitems-reason-${mb.id}`}>
@@ -630,6 +723,9 @@ export default function AdminMonitoredMailboxesPage() {
                         Last synced: {new Date(mb.lastSyncAt).toLocaleString()}
                       </p>
                     )}
+                    <div className="mt-1">
+                      <MailboxSpotQuoteCount mailboxId={mb.id} />
+                    </div>
                     {mb.syncError && (
                       <p className="text-xs text-red-500 mt-1" data-testid={`text-mailbox-error-${mb.id}`}>
                         {mb.syncError}
@@ -756,5 +852,171 @@ export default function AdminMonitoredMailboxesPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Task #517 — Coverage status card.
+//
+// Renders the org's email-coverage health (eligible vs. enrolled, Mail.Read
+// tenant consent, backfill state, 30-day spot-quote opportunity count) at
+// the top of the admin Monitored Mailboxes page. Includes a one-click
+// "re-check Mail.Read" action for after an admin grants the Azure permission.
+// ----------------------------------------------------------------------------
+type CoverageStatusResp = {
+  severity: "ok" | "info" | "warn" | "error";
+  reasons: string[];
+  eligibleUsers: number;
+  enrolledMailboxes: number;
+  totalMailboxes: number;
+  backfills: { succeeded: number; failed: number; neverRun: number; windowDays: number };
+  spotQuotesFromBackfill30d: number;
+  mailReadConsent: {
+    status: "granted" | "pending" | "denied" | "unknown";
+    lastCheckedAt: string | null;
+    lastError: string | null;
+    configured: boolean;
+    mailbox: string | null;
+  };
+};
+
+function CoverageStatusCard({ onResultPanelOpen: _ }: { onResultPanelOpen: () => void }): JSX.Element {
+  const { toast } = useToast();
+  const { data, isLoading } = useQuery<CoverageStatusResp>({
+    queryKey: ["/api/internal/admin/monitored-mailboxes/coverage"],
+    refetchOnWindowFocus: false,
+  });
+  const refresh = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/internal/admin/monitored-mailboxes/refresh-mail-read");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/admin/monitored-mailboxes/coverage"] });
+      toast({ title: "Mail.Read consent re-checked" });
+    },
+    onError: (err: Error) =>
+      toast({ title: "Re-check failed", description: err.message, variant: "destructive" }),
+  });
+
+  if (isLoading || !data) return <div data-testid="loading-coverage" />;
+
+  const c = data.mailReadConsent;
+  const consentTone =
+    c.status === "granted" ? "text-emerald-600 dark:text-emerald-400" :
+    c.status === "denied" ? "text-red-600 dark:text-red-400" :
+    "text-amber-600 dark:text-amber-400";
+  const consentLabel =
+    c.status === "granted" ? "granted" :
+    c.status === "denied" ? "denied" :
+    c.status === "pending" ? "pending" :
+    "unknown";
+
+  return (
+    <Card data-testid="card-coverage-status">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-base">Email coverage</CardTitle>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => refresh.mutate()}
+            disabled={refresh.isPending}
+            data-testid="button-recheck-mail-read"
+          >
+            {refresh.isPending && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+            Re-check Mail.Read
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-0 text-xs">
+        <div data-testid="text-coverage-enrolled">
+          <div className="text-muted-foreground">Enrolled</div>
+          <div className="text-base font-semibold">{data.enrolledMailboxes} / {data.eligibleUsers}</div>
+        </div>
+        <div data-testid="text-coverage-mail-read">
+          <div className="text-muted-foreground">Mail.Read consent</div>
+          <div className={`text-base font-semibold capitalize ${consentTone}`}>{consentLabel}</div>
+          {c.lastCheckedAt && (
+            <div className="text-[10px] text-muted-foreground mt-0.5">
+              checked {new Date(c.lastCheckedAt).toLocaleString()}
+            </div>
+          )}
+        </div>
+        <div data-testid="text-coverage-backfills">
+          <div className="text-muted-foreground">Backfills (30d)</div>
+          <div className="text-base font-semibold">
+            {data.backfills.succeeded} OK
+            {data.backfills.failed > 0 ? <span className="text-red-500"> · {data.backfills.failed} failed</span> : null}
+            {data.backfills.neverRun > 0 ? <span className="text-amber-500"> · {data.backfills.neverRun} pending</span> : null}
+          </div>
+        </div>
+        <div data-testid="text-coverage-spot-quotes">
+          <div className="text-muted-foreground">Spot quotes from backfill (30d)</div>
+          <div className="text-base font-semibold">{data.spotQuotesFromBackfill30d}</div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Per-mailbox spot-quote opportunity count (last 30 days). Shown inline in
+ * each mailbox card so directors can see which inboxes are actually
+ * generating quote opportunities from backfilled email.
+ */
+/**
+ * Task #517 — small consent indicator on every mailbox row. Mirrors the
+ * tenant-global Mail.Read state from the cached coverage query so each
+ * row makes the gate visible without repeating the org-wide explanation.
+ */
+function MailReadConsentDot({ mailboxId }: { mailboxId: string }): JSX.Element | null {
+  const { data } = useQuery<{
+    mailReadConsent: { status: "granted" | "pending" | "denied" | "unknown"; configured: boolean };
+  }>({
+    queryKey: ["/api/internal/admin/monitored-mailboxes/coverage"],
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+  });
+  if (!data?.mailReadConsent || !data.mailReadConsent.configured) return null;
+  const status = data.mailReadConsent.status;
+  const cfg: Record<string, { color: string; label: string }> = {
+    granted: { color: "bg-green-500", label: "Mail.Read granted" },
+    pending: { color: "bg-amber-500", label: "Mail.Read pending" },
+    denied:  { color: "bg-red-500",   label: "Mail.Read denied — ingestion blocked" },
+    unknown: { color: "bg-zinc-400",  label: "Mail.Read status unknown" },
+  };
+  const { color, label } = cfg[status] ?? cfg.unknown;
+  return (
+    <span
+      className={`inline-block w-2 h-2 rounded-full ${color}`}
+      data-testid={`dot-mailread-${mailboxId}`}
+      title={label}
+      aria-label={label}
+    />
+  );
+}
+
+export function MailboxSpotQuoteCount({ mailboxId }: { mailboxId: string }): JSX.Element {
+  const { data } = useQuery<{ spotQuotesFromBackfill30d: number; windowDays: number }>({
+    queryKey: ["/api/internal/admin/monitored-mailboxes", mailboxId, "quote-stats"],
+    queryFn: async () => {
+      const res = await fetch(`/api/internal/admin/monitored-mailboxes/${mailboxId}/quote-stats`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("failed");
+      return res.json();
+    },
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+  });
+  return (
+    <span
+      className="text-xs text-muted-foreground"
+      data-testid={`text-mailbox-spotquotes-${mailboxId}`}
+      title={`Spot-quote opportunities created from backfilled email in the last ${data?.windowDays ?? 30} days`}
+    >
+      {data ? `${data.spotQuotesFromBackfill30d} spot-quote opps (30d)` : "…"}
+    </span>
   );
 }

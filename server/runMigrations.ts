@@ -2646,6 +2646,26 @@ export async function runMigrations() {
     await clientMmb.query(`ALTER TABLE monitored_mailboxes ADD COLUMN IF NOT EXISTS sent_items_subscription_id TEXT`);
     await clientMmb.query(`ALTER TABLE monitored_mailboxes ADD COLUMN IF NOT EXISTS sent_delta_sync_token TEXT`);
     console.log("[migrations] monitored_mailboxes table ensured (Task #230)");
+    // Task #517 — durable Mail.Read tenant consent state. Single row per
+    // tenant (Azure app-only creds are tenant-global), but keyed on a
+    // string scope so we can extend per-org later without a migration.
+    await clientMmb.query(`
+      CREATE TABLE IF NOT EXISTS graph_tenant_consent (
+        scope TEXT PRIMARY KEY,
+        status TEXT NOT NULL,
+        last_checked_at TIMESTAMP,
+        last_error TEXT,
+        mailbox TEXT,
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    console.log("[migrations] graph_tenant_consent table ensured (Task #517)");
+    // Task #517 — ingestion-source marker on email_messages so spot-quote
+    // counters can prove which ones actually came through the historical
+    // 30-day backfill path (vs live delta sync or self-heal).
+    await clientMmb.query(`ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS ingested_via TEXT`);
+    await clientMmb.query(`CREATE INDEX IF NOT EXISTS email_messages_ingested_via_idx ON email_messages(ingested_via)`);
+    console.log("[migrations] email_messages.ingested_via column ensured (Task #517)");
   } catch (err) {
     console.error("[migrations] monitored_mailboxes error:", err);
   } finally {

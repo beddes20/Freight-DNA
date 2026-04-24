@@ -12,7 +12,8 @@
  */
 
 import { azureCredentialsConfigured, getGraphAccessToken } from "./graphService";
-import { storage } from "./storage";
+import { storage, db } from "./storage";
+import { sql } from "drizzle-orm";
 
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -28,6 +29,183 @@ let _subscriptionId: string | null = null;
 let _renewalTimer: ReturnType<typeof setInterval> | null = null;
 
 let _mailReadGranted = false;
+
+// Task #517 — persisted Mail.Read tenant consent state. The Azure
+// app-only credentials are global to one tenant, so a single in-memory
+// snapshot covers every org served by this process. Surfaced via the
+// admin API so the Email Intelligence + Customer Quoting coverage banners
+// can tell admins exactly why ingestion is dormant.
+type MailReadConsent = "granted" | "pending" | "denied" | "unknown";
+let _mailReadConsent: MailReadConsent = "unknown";
+let _mailReadLastCheckedAt: Date | null = null;
+let _mailReadLastError: string | null = null;
+let _mailReadLoadedFromDb = false;
+
+const CONSENT_SCOPE = "tenant";
+
+/**
+ * Lazy-load the persisted Mail.Read consent state on first access. We
+ * keep the in-memory snapshot as a write-through cache so reads are
+ * cheap; the DB is the durable source of truth across server restarts.
+ */
+interface PersistedConsentRow {
+  status: string;
+  last_checked_at: Date | string | null;
+  last_error: string | null;
+  mailbox: string | null;
+}
+
+/**
+ * Type guard for the persisted-consent row shape. Used to safely narrow
+ * the unknown rows pulled from raw SQL without resorting to `any`.
+ */
+function isPersistedConsentRow(value: unknown): value is PersistedConsentRow {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.status === "string"
+    && (v.last_checked_at === null || v.last_checked_at instanceof Date || typeof v.last_checked_at === "string")
+    && (v.last_error === null || typeof v.last_error === "string")
+    && (v.mailbox === null || typeof v.mailbox === "string");
+}
+
+function isValidConsentStatus(s: string): s is MailReadConsent {
+  return s === "granted" || s === "pending" || s === "denied" || s === "unknown";
+}
+
+async function loadConsentFromDbIfNeeded(): Promise<void> {
+  if (_mailReadLoadedFromDb) return;
+  try {
+    const result = await db.execute(sql`
+      SELECT status, last_checked_at, last_error, mailbox
+      FROM graph_tenant_consent WHERE scope = ${CONSENT_SCOPE} LIMIT 1
+    `);
+    // node-postgres drizzle.execute returns { rows: T[] }; some adapters
+    // return the array directly. Handle both shapes through unknown.
+    const raw: unknown = result;
+    let firstRow: unknown = undefined;
+    if (raw && typeof raw === "object" && "rows" in raw) {
+      const rows = (raw as { rows: unknown }).rows;
+      if (Array.isArray(rows)) firstRow = rows[0];
+    } else if (Array.isArray(raw)) {
+      firstRow = raw[0];
+    }
+    if (isPersistedConsentRow(firstRow)) {
+      if (isValidConsentStatus(firstRow.status)) {
+        _mailReadConsent = firstRow.status;
+        if (firstRow.status === "granted") _mailReadGranted = true;
+      }
+      _mailReadLastCheckedAt = firstRow.last_checked_at
+        ? new Date(firstRow.last_checked_at)
+        : null;
+      _mailReadLastError = firstRow.last_error;
+    }
+  } catch (err) {
+    log(`Failed to load persisted Mail.Read consent: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    _mailReadLoadedFromDb = true;
+  }
+}
+
+/**
+ * Persist current Mail.Read consent snapshot. Best-effort: a DB write
+ * failure should never break the live activation flow, so we log + move on.
+ */
+async function persistConsent(mailbox: string | null): Promise<void> {
+  try {
+    await db.execute(sql`
+      INSERT INTO graph_tenant_consent (scope, status, last_checked_at, last_error, mailbox, updated_at)
+      VALUES (${CONSENT_SCOPE}, ${_mailReadConsent}, ${_mailReadLastCheckedAt}, ${_mailReadLastError}, ${mailbox}, NOW())
+      ON CONFLICT (scope) DO UPDATE
+        SET status = EXCLUDED.status,
+            last_checked_at = EXCLUDED.last_checked_at,
+            last_error = EXCLUDED.last_error,
+            mailbox = EXCLUDED.mailbox,
+            updated_at = NOW()
+    `);
+  } catch (err) {
+    log(`Failed to persist Mail.Read consent: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+export interface MailReadConsentStatus {
+  status: MailReadConsent;
+  lastCheckedAt: string | null;
+  lastError: string | null;
+  configured: boolean;
+  mailbox: string | null;
+}
+
+/**
+ * Synchronous read of the in-memory consent snapshot. Triggers a
+ * non-blocking DB hydrate on first call so the live process eventually
+ * reflects what was persisted by a previous run, but doesn't await it
+ * (callers that need DB-fresh state should await getMailReadConsentStatusAsync).
+ */
+export function getMailReadConsentStatus(): MailReadConsentStatus {
+  if (!_mailReadLoadedFromDb) {
+    void loadConsentFromDbIfNeeded();
+  }
+  return {
+    status: _mailReadConsent,
+    lastCheckedAt: _mailReadLastCheckedAt ? _mailReadLastCheckedAt.toISOString() : null,
+    lastError: _mailReadLastError,
+    configured: azureCredentialsConfigured(),
+    mailbox: process.env.OUTLOOK_REPLY_EMAIL?.trim() ?? null,
+  };
+}
+
+/** DB-fresh variant used by the coverage endpoint on first request. */
+export async function getMailReadConsentStatusAsync(): Promise<MailReadConsentStatus> {
+  await loadConsentFromDbIfNeeded();
+  return getMailReadConsentStatus();
+}
+
+/**
+ * Run an on-demand Mail.Read tenant consent probe. Returns the latest
+ * status snapshot. Used by the admin coverage endpoint so a refresh
+ * shows the current truth instead of stale init-time state.
+ */
+export async function refreshMailReadConsentStatus(): Promise<MailReadConsentStatus> {
+  await loadConsentFromDbIfNeeded();
+  if (!azureCredentialsConfigured()) {
+    _mailReadConsent = "unknown";
+    _mailReadLastError = "Azure credentials not configured";
+    _mailReadLastCheckedAt = new Date();
+    await persistConsent(null);
+    return getMailReadConsentStatus();
+  }
+  // Probe target: the configured shared reply mailbox if present, else any
+  // enabled monitored mailbox in the system. Either path proves whether
+  // the Mail.Read application permission is granted in the tenant.
+  let probeMailbox = process.env.OUTLOOK_REPLY_EMAIL?.trim() ?? null;
+  if (!probeMailbox) {
+    try {
+      const enabled = await storage.getEnabledMonitoredMailboxes();
+      probeMailbox = enabled[0]?.email ?? null;
+    } catch {
+      probeMailbox = null;
+    }
+  }
+  if (!probeMailbox) {
+    _mailReadConsent = "pending";
+    _mailReadLastError = "No mailbox to probe — enroll a mailbox first";
+    _mailReadLastCheckedAt = new Date();
+    await persistConsent(null);
+    return getMailReadConsentStatus();
+  }
+  try {
+    const ok = await checkMailReadPermission(probeMailbox);
+    _mailReadConsent = ok ? "granted" : "denied";
+    _mailReadLastError = ok ? null : "Mail.Read application permission not granted in tenant";
+    if (ok) _mailReadGranted = true;
+  } catch (err) {
+    _mailReadConsent = "unknown";
+    _mailReadLastError = err instanceof Error ? err.message : String(err);
+  }
+  _mailReadLastCheckedAt = new Date();
+  await persistConsent(probeMailbox);
+  return getMailReadConsentStatus();
+}
 
 export function replyTrackingEnabled(): boolean {
   return _mailReadGranted && !!_subscriptionId;
@@ -204,9 +382,18 @@ async function tryActivate(config: { mailbox: string; webhookUrl: string }): Pro
   if (_subscriptionId) return true;
 
   const hasPermission = await checkMailReadPermission(config.mailbox);
-  if (!hasPermission) return false;
+  _mailReadLastCheckedAt = new Date();
+  if (!hasPermission) {
+    _mailReadConsent = "denied";
+    _mailReadLastError = "Mail.Read application permission not granted in tenant";
+    void persistConsent(config.mailbox);
+    return false;
+  }
 
   _mailReadGranted = true;
+  _mailReadConsent = "granted";
+  _mailReadLastError = null;
+  void persistConsent(config.mailbox);
   log(`Mail.Read confirmed. Registering webhook subscription → ${config.webhookUrl}`);
 
   const subId = await registerSubscription(config);

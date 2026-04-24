@@ -26,6 +26,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { PricingIntelligencePanel } from "@/components/PricingIntelligencePanel";
 import { SpotQuoteSearch } from "@/components/SpotQuoteSearch";
+import { EmailCoverageBanner } from "@/components/EmailCoverageBanner";
 
 // ---------- Types (mirror server contract) ----------
 type Quote = {
@@ -497,6 +498,9 @@ export default function CustomerQuotesPage(): JSX.Element {
           </div>
         </div>
       </div>
+
+      {/* Task #517 — coverage banner: dormant unless something needs attention */}
+      <EmailCoverageBanner />
 
       {/* Sticky filter bar */}
       <div className="sticky top-0 z-20 px-6 py-3 border-b border-border bg-background/95 backdrop-blur shrink-0" data-testid="filter-bar">

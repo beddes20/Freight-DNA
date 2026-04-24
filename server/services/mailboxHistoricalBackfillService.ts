@@ -176,6 +176,10 @@ async function ingestHistoricalMessage(
         ? new Date(msg.receivedDateTime)
         : new Date(),
     mailboxEmail: mailbox.email,
+    // Task #517 — tag every row written by the historical 30-day
+    // backfill so admins can audit how many spot quotes actually came
+    // from this path (vs live delta sync).
+    ingestedVia: "backfill",
   });
 
   return { created: !existing };
