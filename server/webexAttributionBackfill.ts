@@ -42,7 +42,7 @@ export interface BackfillResult {
 }
 
 const DEFAULT_DAYS_BACK = 90;
-const MAX_DAYS_BACK = 365;
+const MAX_DAYS_BACK = 395; // ~13 months — Webex CDR retention ceiling (Task #466).
 
 function buildLocalResolver(mappings: WebexUserMapping[]) {
   const byPerson = new Map<string, WebexUserMapping>();

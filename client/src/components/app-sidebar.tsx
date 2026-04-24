@@ -538,6 +538,16 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
+                {user?.role === "admin" && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/webex-health"} tooltip={navTooltip("Webex Health", "Scope coverage, backfill progress, and enrichment-job retry queue.")}>
+                      <Link href="/admin/webex-health" data-testid="link-admin-webex-health">
+                        <Activity className="h-4 w-4" />
+                        <span>Webex Health</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
                 {/* AI Center — single consolidated entry point for all AI management
                     (agents, approvals, pods, adapters, admin). Replaces the previous
                     four separate sidebar entries. ValueIQ stays its own rep workspace. */}

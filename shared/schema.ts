@@ -2895,6 +2895,7 @@ export const webexUserTokens = pgTable(
     lastRefreshAt: timestamp("last_refresh_at"),
     lastRefreshError: text("last_refresh_error"),
     scopes: text("scopes"),
+    scopeVersion: integer("scope_version").notNull().default(0),
     connectedAt: timestamp("connected_at").defaultNow().notNull(),
     disconnectedAt: timestamp("disconnected_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -4372,6 +4373,134 @@ export const insertWebexCallAnalyticsSchema = createInsertSchema(webexCallAnalyt
 });
 export type InsertWebexCallAnalytics = z.infer<typeof insertWebexCallAnalyticsSchema>;
 export type WebexCallAnalytics = typeof webexCallAnalytics.$inferSelect;
+
+// ─── Webex Full Coverage & Backfill (Task #466) ─────────────────────────────
+//
+// `webex_sync_state` tracks last-success / last-error / cursor / backfill
+// progress per (org, optional user, dataSource). Lets the admin Webex
+// Health panel surface "what's stale and why" without hitting Webex live,
+// and lets backfills resume after restarts.
+export const webexSyncState = pgTable(
+  "webex_sync_state",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }),
+    dataSource: text("data_source").notNull(),
+    lastSuccessAt: timestamp("last_success_at"),
+    lastAttemptAt: timestamp("last_attempt_at"),
+    lastErrorAt: timestamp("last_error_at"),
+    lastError: text("last_error"),
+    cursor: text("cursor"),
+    backfillStartedAt: timestamp("backfill_started_at"),
+    backfillCompletedAt: timestamp("backfill_completed_at"),
+    backfillTotalDays: integer("backfill_total_days").notNull().default(0),
+    backfillCompletedDays: integer("backfill_completed_days").notNull().default(0),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("webex_sync_state_unique_idx").on(table.orgId, table.userId, table.dataSource),
+    index("webex_sync_state_org_idx").on(table.orgId),
+  ],
+);
+export const insertWebexSyncStateSchema = createInsertSchema(webexSyncState).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertWebexSyncState = z.infer<typeof insertWebexSyncStateSchema>;
+export type WebexSyncState = typeof webexSyncState.$inferSelect;
+
+// Tracked per-call enrichment job queue. Replaces the prior fire-and-forget
+// fetchCallDetail chain so that 429s and transient 5xx are retried with
+// exponential backoff instead of silently dropping analytics.
+export const webexCallEnrichmentJobs = pgTable(
+  "webex_call_enrichment_jobs",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    callId: text("call_id").notNull(),
+    userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
+    status: text("status").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    nextRetryAt: timestamp("next_retry_at").defaultNow().notNull(),
+    lastError: text("last_error"),
+    completedAt: timestamp("completed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("webex_enrichment_org_call_idx").on(table.orgId, table.callId),
+    index("webex_enrichment_status_next_idx").on(table.status, table.nextRetryAt),
+  ],
+);
+export const insertWebexCallEnrichmentJobSchema = createInsertSchema(webexCallEnrichmentJobs).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertWebexCallEnrichmentJob = z.infer<typeof insertWebexCallEnrichmentJobSchema>;
+export type WebexCallEnrichmentJob = typeof webexCallEnrichmentJobs.$inferSelect;
+
+// Voicemail metadata + transcript cache. Audio bytes are not persisted; the
+// `audioCached` flag indicates whether audio was successfully fetched at
+// transcription time.
+export const webexVoicemails = pgTable(
+  "webex_voicemails",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
+    voicemailId: text("voicemail_id").notNull(),
+    callId: text("call_id"),
+    callerNumber: text("caller_number"),
+    callerName: text("caller_name"),
+    receivedAt: timestamp("received_at"),
+    durationSeconds: integer("duration_seconds").notNull().default(0),
+    read: boolean("read").notNull().default(false),
+    transcript: text("transcript"),
+    transcriptionStatus: text("transcription_status").notNull().default("pending"),
+    audioCached: boolean("audio_cached").notNull().default(false),
+    syncedAt: timestamp("synced_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("webex_voicemail_org_id_idx").on(table.orgId, table.voicemailId),
+    index("webex_voicemail_user_idx").on(table.userId),
+  ],
+);
+export const insertWebexVoicemailSchema = createInsertSchema(webexVoicemails).omit({
+  id: true,
+  syncedAt: true,
+});
+export type InsertWebexVoicemail = z.infer<typeof insertWebexVoicemailSchema>;
+export type WebexVoicemail = typeof webexVoicemails.$inferSelect;
+
+// Org-level inventory snapshots. Use a generic "kind" column so devices,
+// workspaces, locations, call queues, hunt groups all share one table —
+// each row is a JSONB blob keyed by (orgId, kind, externalId).
+export const webexInventory = pgTable(
+  "webex_inventory",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    externalId: text("external_id").notNull(),
+    name: text("name"),
+    payload: jsonb("payload"),
+    lastSeenAt: timestamp("last_seen_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("webex_inventory_org_kind_id_idx").on(table.orgId, table.kind, table.externalId),
+    index("webex_inventory_kind_idx").on(table.kind),
+  ],
+);
+export const insertWebexInventorySchema = createInsertSchema(webexInventory).omit({
+  id: true,
+  lastSeenAt: true,
+});
+export type InsertWebexInventory = z.infer<typeof insertWebexInventorySchema>;
+export type WebexInventory = typeof webexInventory.$inferSelect;
 
 // ─── Carrier Intelligence: Scoring & Pricing (Task #369) ────────────────────
 //

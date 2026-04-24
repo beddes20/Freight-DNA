@@ -43,6 +43,7 @@ import TermsPage from "@/pages/terms";
 import AdminUsers from "@/pages/admin-users";
 import AdminCopilotAnalyticsPage from "@/pages/admin-copilot-analytics";
 import AdminCarriers from "@/pages/admin-carriers";
+import AdminWebexHealth from "@/pages/admin-webex-health";
 import RepCustomers from "@/pages/rep-customers";
 import Financials from "@/pages/financials";
 import HistoricalData from "@/pages/historical-data";
@@ -184,6 +185,7 @@ function Router() {
       <Route path="/admin/sidebar-tooltips" component={AdminSidebarTooltipsPage} />
       <Route path="/admin/copilot-analytics" component={AdminCopilotAnalyticsPage} />
       <Route path="/admin/carriers" component={AdminCarriers} />
+      <Route path="/admin/webex-health" component={AdminWebexHealth} />
       <Route path="/admin/monitored-mailboxes" component={AdminMonitoredMailboxesPage} />
       <Route path="/admin/freight-outreach-templates" component={AdminFreightOutreachTemplatesPage} />
       <Route path="/admin/carrier-intelligence" component={AdminCarrierIntelligencePage} />

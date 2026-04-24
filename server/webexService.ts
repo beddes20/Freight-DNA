@@ -15,6 +15,117 @@ function log(msg: string) {
   console.log(`${t} [webex] ${msg}`);
 }
 
+/**
+ * Resilient Webex fetch wrapper (Task #466). Honors `Retry-After` on 429s,
+ * uses exponential backoff (250ms → 500ms → 1s → 2s capped at 10s) on
+ * transient 5xx, and surfaces a normalized result so callers can fail per
+ * record instead of breaking the whole sync loop.
+ *
+ * Returns `{ ok, status, data, error, retried }`. `data` is `null` if the
+ * response wasn't JSON. Auth (401) is treated as terminal — caller decides
+ * whether to mark a token as needs-reauth.
+ */
+export interface WebexFetchResult<T = any> {
+  ok: boolean;
+  status: number;
+  data: T | null;
+  error: string | null;
+  retried: number;
+  /** Raw response so callers can read pagination headers etc. */
+  response: Response | null;
+}
+
+export async function webexFetch<T = any>(
+  url: string,
+  init: RequestInit & { token?: string; maxRetries?: number } = {},
+): Promise<WebexFetchResult<T>> {
+  const { token, maxRetries = 4, headers, ...rest } = init;
+  const finalHeaders: Record<string, string> = {
+    ...(headers as Record<string, string> | undefined),
+  };
+  if (token && !finalHeaders.Authorization) {
+    finalHeaders.Authorization = `Bearer ${token}`;
+  }
+
+  let attempt = 0;
+  let lastError = "";
+  let lastStatus = 0;
+  let lastResponse: Response | null = null;
+  while (attempt <= maxRetries) {
+    let res: Response;
+    try {
+      res = await fetch(url, { ...rest, headers: finalHeaders });
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      lastStatus = 0;
+      const wait = Math.min(10_000, 250 * 2 ** attempt);
+      attempt++;
+      if (attempt > maxRetries) break;
+      await new Promise(r => setTimeout(r, wait));
+      continue;
+    }
+    lastResponse = res;
+    lastStatus = res.status;
+
+    if (res.ok) {
+      let data: T | null = null;
+      try {
+        const ct = res.headers.get("content-type") ?? "";
+        if (ct.includes("json")) data = (await res.json()) as T;
+      } catch {
+        data = null;
+      }
+      return { ok: true, status: res.status, data, error: null, retried: attempt, response: res };
+    }
+
+    // 401 is terminal — caller should refresh token / mark reauth.
+    if (res.status === 401 || res.status === 403) {
+      const text = await safeReadText(res);
+      return { ok: false, status: res.status, data: null, error: text || `HTTP ${res.status}`, retried: attempt, response: res };
+    }
+
+    // 429: honor Retry-After (seconds, optionally HTTP date).
+    if (res.status === 429) {
+      const retryAfter = res.headers.get("retry-after");
+      const waitMs = parseRetryAfter(retryAfter) ?? Math.min(30_000, 1_000 * 2 ** attempt);
+      lastError = `429 rate limited (retry-after ${retryAfter ?? "unknown"})`;
+      attempt++;
+      if (attempt > maxRetries) break;
+      await new Promise(r => setTimeout(r, waitMs));
+      continue;
+    }
+
+    // 5xx: exponential backoff.
+    if (res.status >= 500) {
+      lastError = `HTTP ${res.status}`;
+      const wait = Math.min(10_000, 250 * 2 ** attempt);
+      attempt++;
+      if (attempt > maxRetries) break;
+      await new Promise(r => setTimeout(r, wait));
+      continue;
+    }
+
+    // 4xx other than 401/403/429: terminal client error.
+    const text = await safeReadText(res);
+    return { ok: false, status: res.status, data: null, error: text || `HTTP ${res.status}`, retried: attempt, response: res };
+  }
+
+  return { ok: false, status: lastStatus, data: null, error: lastError || "fetch failed", retried: attempt, response: lastResponse };
+}
+
+async function safeReadText(res: Response): Promise<string> {
+  try { return (await res.text()).slice(0, 500); } catch { return ""; }
+}
+
+function parseRetryAfter(value: string | null): number | null {
+  if (!value) return null;
+  const sec = Number(value);
+  if (Number.isFinite(sec)) return Math.max(0, Math.min(60_000, sec * 1000));
+  const date = Date.parse(value);
+  if (!Number.isNaN(date)) return Math.max(0, Math.min(60_000, date - Date.now()));
+  return null;
+}
+
 export function webexCredentialsConfigured(): boolean {
   return !!(
     process.env.WEBEX_CLIENT_ID &&
@@ -128,7 +239,36 @@ function isInvalidGrantError(status: number, body: string): boolean {
   return false;
 }
 
-export const WEBEX_OAUTH_SCOPES = "spark:calls_read spark:people_read spark:calls_write";
+/**
+ * Bumped whenever WEBEX_OAUTH_SCOPES changes. Stored on each per-user token
+ * row so the boot reconciler can mark older grants as `needs_reauth` and
+ * force a one-time reconnect that grants the new analytics-enabled scopes.
+ */
+export const WEBEX_SCOPE_VERSION = 2;
+
+/**
+ * Full analytics-enabled scope set (Task #466). Personal tokens that lack
+ * admin grants will silently 403 on org-only endpoints — callers must
+ * degrade gracefully (handled inside webexFetch + sync_state.last_error).
+ *
+ * Scope reference: https://developer.webex.com/docs/integrations#scopes
+ */
+export const WEBEX_OAUTH_SCOPES = [
+  // Original (Task #261)
+  "spark:calls_read",
+  "spark:people_read",
+  "spark:calls_write",
+  // Analytics + admin telephony (Task #466)
+  "analytics:read_all",
+  "spark-admin:telephony_config_read",
+  "spark-admin:people_read",
+  "spark-admin:devices_read",
+  "spark-admin:workspaces_read",
+  "spark-admin:locations_read",
+  "spark:recordings_read",
+  "spark:voicemails_read",
+  "spark:voicemail_write",
+].join(" ");
 
 export function getWebexOAuthUrl(redirectUri: string, state?: string): string {
   const clientId = process.env.WEBEX_CLIENT_ID!.trim();
@@ -855,5 +995,94 @@ export function categorizeWebexCallDevice(record: {
 export function buildWebexCallDeepLink(phoneNumber: string): string {
   const cleaned = phoneNumber.replace(/[^0-9+]/g, "");
   return `webextel://${cleaned}`;
+}
+
+// ─── Webex Full Coverage (Task #466) — paginated org inventory pulls ────────
+
+/**
+ * Generic paginated GET — follows `Link: rel=next` headers, applies the
+ * resilient webexFetch retry policy, and yields each item back. Bails on
+ * the first terminal failure (returns whatever it accumulated so far).
+ */
+async function paginateWebex<T = any>(
+  initialUrl: string,
+  token: string,
+  itemsKey: string = "items",
+  max: number = 5_000,
+): Promise<{ items: T[]; lastError: string | null }> {
+  const out: T[] = [];
+  let url: string | null = initialUrl;
+  let lastError: string | null = null;
+  while (url && out.length < max) {
+    const r = await webexFetch<{ [k: string]: any }>(url, { token });
+    if (!r.ok || !r.data) {
+      lastError = r.error;
+      break;
+    }
+    const items = (r.data as any)?.[itemsKey] ?? [];
+    for (const it of items) {
+      if (out.length >= max) break;
+      out.push(it as T);
+    }
+    const link = r.response?.headers.get("link") ?? "";
+    const m = link.match(/<([^>]+)>;\s*rel="next"/);
+    url = m ? m[1] : null;
+  }
+  return { items: out, lastError };
+}
+
+export async function listWebexWorkspaces(maxResults = 1000, accessToken?: string): Promise<{ items: any[]; lastError: string | null }> {
+  const token = accessToken ?? (await getWebexAccessToken());
+  const orgId = process.env.WEBEX_ORG_ID!;
+  const url = `https://webexapis.com/v1/workspaces?orgId=${encodeURIComponent(orgId)}&max=100`;
+  return paginateWebex(url, token, "items", maxResults);
+}
+
+export async function listWebexLocations(maxResults = 1000, accessToken?: string): Promise<{ items: any[]; lastError: string | null }> {
+  const token = accessToken ?? (await getWebexAccessToken());
+  const orgId = process.env.WEBEX_ORG_ID!;
+  const url = `https://webexapis.com/v1/locations?orgId=${encodeURIComponent(orgId)}&max=100`;
+  return paginateWebex(url, token, "items", maxResults);
+}
+
+export async function listWebexCallQueues(maxResults = 1000, accessToken?: string): Promise<{ items: any[]; lastError: string | null }> {
+  const token = accessToken ?? (await getWebexAccessToken());
+  const orgId = process.env.WEBEX_ORG_ID!;
+  const url = `https://webexapis.com/v1/telephony/config/queues?orgId=${encodeURIComponent(orgId)}&max=100`;
+  return paginateWebex(url, token, "queues", maxResults);
+}
+
+export async function listWebexHuntGroups(maxResults = 1000, accessToken?: string): Promise<{ items: any[]; lastError: string | null }> {
+  const token = accessToken ?? (await getWebexAccessToken());
+  const orgId = process.env.WEBEX_ORG_ID!;
+  const url = `https://webexapis.com/v1/telephony/config/huntGroups?orgId=${encodeURIComponent(orgId)}&max=100`;
+  return paginateWebex(url, token, "huntGroups", maxResults);
+}
+
+/**
+ * List voicemails for a per-user token. Webex exposes voicemail under
+ * `/v1/telephony/voiceMessages` for the authenticated user; admin scopes
+ * surface org-wide voicemail summaries via reports.
+ */
+export async function listWebexVoicemails(accessToken: string, maxResults = 200): Promise<{ items: any[]; lastError: string | null }> {
+  const url = `https://webexapis.com/v1/telephony/voiceMessages?max=${Math.min(100, maxResults)}`;
+  return paginateWebex(url, accessToken, "items", maxResults);
+}
+
+/**
+ * Download voicemail audio bytes for a given voicemailId. Returns null on
+ * any failure so callers can mark transcription_status='failed' and move on.
+ */
+export async function downloadWebexVoicemailAudio(voicemailId: string, accessToken: string): Promise<Buffer | null> {
+  if (!voicemailId) return null;
+  const url = `https://webexapis.com/v1/telephony/voiceMessages/${encodeURIComponent(voicemailId)}/audio`;
+  const res = await webexFetch(url, { token: accessToken });
+  if (!res.ok || !res.response) return null;
+  try {
+    const ab = await res.response.arrayBuffer();
+    return Buffer.from(ab);
+  } catch {
+    return null;
+  }
 }
 

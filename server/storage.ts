@@ -204,6 +204,18 @@ import {
   webexCallAnalytics,
   type WebexCallAnalytics,
   type InsertWebexCallAnalytics,
+  webexSyncState,
+  type WebexSyncState,
+  type InsertWebexSyncState,
+  webexCallEnrichmentJobs,
+  type WebexCallEnrichmentJob,
+  type InsertWebexCallEnrichmentJob,
+  webexVoicemails,
+  type WebexVoicemail,
+  type InsertWebexVoicemail,
+  webexInventory,
+  type WebexInventory,
+  type InsertWebexInventory,
   apiResponseCache,
   type ApiResponseCache,
   accountReviews,
@@ -1177,7 +1189,30 @@ export interface IStorage {
 
   // Webex call-quality analytics (Task #315)
   upsertWebexCallAnalytics(data: InsertWebexCallAnalytics): Promise<WebexCallAnalytics>;
+  mergeWebexCallEnrichment(orgId: string, callId: string, metrics: {
+    talkTimeSeconds?: number;
+    holdTimeSeconds?: number;
+    silenceSeconds?: number;
+    ringTimeSeconds?: number;
+    mosScore?: string | null;
+    jitterMs?: string | null;
+    packetLossPct?: string | null;
+    qualityGrade?: string | null;
+  }): Promise<void>;
   getWebexCallAnalyticsByCallId(orgId: string, callId: string): Promise<WebexCallAnalytics | undefined>;
+
+  // Webex Full Coverage & Backfill (Task #466)
+  getWebexSyncState(orgId: string, dataSource: string, userId?: string | null): Promise<WebexSyncState | undefined>;
+  getWebexSyncStatesForOrg(orgId: string): Promise<WebexSyncState[]>;
+  upsertWebexSyncState(data: InsertWebexSyncState): Promise<WebexSyncState>;
+  enqueueWebexEnrichmentJob(data: InsertWebexCallEnrichmentJob): Promise<WebexCallEnrichmentJob>;
+  claimDueWebexEnrichmentJobs(limit: number): Promise<WebexCallEnrichmentJob[]>;
+  completeWebexEnrichmentJob(id: string): Promise<void>;
+  failWebexEnrichmentJob(id: string, attempts: number, nextRetryAt: Date | null, lastError: string, terminal: boolean): Promise<void>;
+  countWebexEnrichmentJobsByStatus(orgId: string): Promise<Record<string, number>>;
+  upsertWebexVoicemail(data: InsertWebexVoicemail): Promise<WebexVoicemail>;
+  upsertWebexInventoryItems(items: InsertWebexInventory[]): Promise<number>;
+  getWebexInventoryByKind(orgId: string, kind: string): Promise<WebexInventory[]>;
 
   // API cache methods (Task #231)
   getCachedApiResponse(key: string): Promise<ApiResponseCache | undefined>;
@@ -8033,6 +8068,167 @@ export class DatabaseStorage implements IStorage {
     }
     const [row] = await db.insert(webexCallAnalytics).values(data).returning();
     return row;
+  }
+
+  /**
+   * Task #466: merge enrichment-only metrics (talk/hold/silence/ring + MOS/jitter/loss
+   * + qualityGrade) into the analytics row WITHOUT clobbering inline-CDR fields like
+   * direction / remoteNumber / startTime / contactId. If no row exists yet (sync ran
+   * out of order), this is a no-op — the inline upsert always runs first in the sync
+   * loop, so a missing row means the call truly hasn't been seen yet and we'll catch
+   * it on the next sweep.
+   */
+  async mergeWebexCallEnrichment(orgId: string, callId: string, metrics: {
+    talkTimeSeconds?: number;
+    holdTimeSeconds?: number;
+    silenceSeconds?: number;
+    ringTimeSeconds?: number;
+    mosScore?: string | null;
+    jitterMs?: string | null;
+    packetLossPct?: string | null;
+    qualityGrade?: string | null;
+  }): Promise<void> {
+    const existing = await this.getWebexCallAnalyticsByCallId(orgId, callId);
+    if (!existing) return;
+    const patch: Record<string, unknown> = { updatedAt: new Date() };
+    if (metrics.talkTimeSeconds != null) patch.talkTimeSeconds = metrics.talkTimeSeconds;
+    if (metrics.holdTimeSeconds != null) patch.holdTimeSeconds = metrics.holdTimeSeconds;
+    if (metrics.silenceSeconds != null) patch.silenceSeconds = metrics.silenceSeconds;
+    if (metrics.ringTimeSeconds != null) patch.ringTimeSeconds = metrics.ringTimeSeconds;
+    if (metrics.mosScore !== undefined) patch.mosScore = metrics.mosScore;
+    if (metrics.jitterMs !== undefined) patch.jitterMs = metrics.jitterMs;
+    if (metrics.packetLossPct !== undefined) patch.packetLossPct = metrics.packetLossPct;
+    if (metrics.qualityGrade !== undefined) patch.qualityGrade = metrics.qualityGrade;
+    await db.update(webexCallAnalytics).set(patch).where(eq(webexCallAnalytics.id, existing.id));
+  }
+
+  // ── Webex Full Coverage & Backfill (Task #466) ──────────────────────────────
+
+  async getWebexSyncState(orgId: string, dataSource: string, userId?: string | null): Promise<WebexSyncState | undefined> {
+    const conds = [eq(webexSyncState.orgId, orgId), eq(webexSyncState.dataSource, dataSource)];
+    if (userId) conds.push(eq(webexSyncState.userId, userId));
+    else conds.push(sql`${webexSyncState.userId} IS NULL`);
+    const [row] = await db.select().from(webexSyncState).where(and(...conds)).limit(1);
+    return row;
+  }
+
+  async getWebexSyncStatesForOrg(orgId: string): Promise<WebexSyncState[]> {
+    return db.select().from(webexSyncState).where(eq(webexSyncState.orgId, orgId));
+  }
+
+  async upsertWebexSyncState(data: InsertWebexSyncState): Promise<WebexSyncState> {
+    const existing = await this.getWebexSyncState(data.orgId, data.dataSource, data.userId ?? null);
+    if (existing) {
+      const [row] = await db.update(webexSyncState)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(webexSyncState.id, existing.id))
+        .returning();
+      return row;
+    }
+    const [row] = await db.insert(webexSyncState).values(data).returning();
+    return row;
+  }
+
+  async enqueueWebexEnrichmentJob(data: InsertWebexCallEnrichmentJob): Promise<WebexCallEnrichmentJob> {
+    const [row] = await db.insert(webexCallEnrichmentJobs).values(data)
+      .onConflictDoNothing({ target: [webexCallEnrichmentJobs.orgId, webexCallEnrichmentJobs.callId] })
+      .returning();
+    if (row) return row;
+    const [existing] = await db.select().from(webexCallEnrichmentJobs)
+      .where(and(eq(webexCallEnrichmentJobs.orgId, data.orgId), eq(webexCallEnrichmentJobs.callId, data.callId)))
+      .limit(1);
+    return existing!;
+  }
+
+  async claimDueWebexEnrichmentJobs(limit: number): Promise<WebexCallEnrichmentJob[]> {
+    // Atomic claim — flip pending|failed (with nextRetryAt due) → running so a
+    // second worker can't double-process. Uses a CTE for postgres-native row locking.
+    const result = await db.execute(sql`
+      WITH due AS (
+        SELECT id FROM webex_call_enrichment_jobs
+        WHERE status IN ('pending','failed') AND next_retry_at <= NOW()
+        ORDER BY next_retry_at ASC
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE webex_call_enrichment_jobs j
+      SET status = 'running', updated_at = NOW()
+      FROM due
+      WHERE j.id = due.id
+      RETURNING j.*
+    `);
+    return (result.rows ?? []) as unknown as WebexCallEnrichmentJob[];
+  }
+
+  async completeWebexEnrichmentJob(id: string): Promise<void> {
+    await db.update(webexCallEnrichmentJobs)
+      .set({ status: "succeeded", completedAt: new Date(), lastError: null, updatedAt: new Date() })
+      .where(eq(webexCallEnrichmentJobs.id, id));
+  }
+
+  async failWebexEnrichmentJob(id: string, attempts: number, nextRetryAt: Date | null, lastError: string, terminal: boolean): Promise<void> {
+    await db.update(webexCallEnrichmentJobs)
+      .set({
+        status: terminal ? "dead_letter" : "failed",
+        attempts,
+        nextRetryAt: nextRetryAt ?? new Date(Date.now() + 60_000),
+        lastError: lastError.slice(0, 1000),
+        updatedAt: new Date(),
+      })
+      .where(eq(webexCallEnrichmentJobs.id, id));
+  }
+
+  async countWebexEnrichmentJobsByStatus(orgId: string): Promise<Record<string, number>> {
+    const rows = await db.execute(sql`
+      SELECT status, COUNT(*)::int AS n
+      FROM webex_call_enrichment_jobs
+      WHERE org_id = ${orgId}
+      GROUP BY status
+    `);
+    const out: Record<string, number> = {};
+    for (const r of (rows.rows ?? []) as Array<{ status: string; n: number }>) {
+      out[r.status] = r.n;
+    }
+    return out;
+  }
+
+  async upsertWebexVoicemail(data: InsertWebexVoicemail): Promise<WebexVoicemail> {
+    const [row] = await db.insert(webexVoicemails).values(data)
+      .onConflictDoUpdate({
+        target: [webexVoicemails.orgId, webexVoicemails.voicemailId],
+        set: {
+          callerNumber: data.callerNumber ?? null,
+          callerName: data.callerName ?? null,
+          receivedAt: data.receivedAt ?? null,
+          durationSeconds: data.durationSeconds ?? 0,
+          read: data.read ?? false,
+          transcript: data.transcript ?? null,
+          transcriptionStatus: data.transcriptionStatus ?? "pending",
+          audioCached: data.audioCached ?? false,
+          syncedAt: new Date(),
+        },
+      })
+      .returning();
+    return row;
+  }
+
+  async upsertWebexInventoryItems(items: InsertWebexInventory[]): Promise<number> {
+    if (items.length === 0) return 0;
+    let written = 0;
+    for (const item of items) {
+      await db.insert(webexInventory).values(item)
+        .onConflictDoUpdate({
+          target: [webexInventory.orgId, webexInventory.kind, webexInventory.externalId],
+          set: { name: item.name ?? null, payload: item.payload ?? null, lastSeenAt: new Date() },
+        });
+      written++;
+    }
+    return written;
+  }
+
+  async getWebexInventoryByKind(orgId: string, kind: string): Promise<WebexInventory[]> {
+    return db.select().from(webexInventory)
+      .where(and(eq(webexInventory.orgId, orgId), eq(webexInventory.kind, kind)));
   }
 
   // ── API Response Cache (Task #231) ──────────────────────────────────────────

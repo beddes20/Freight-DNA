@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useWebexConnectionStatus } from "@/hooks/use-webex";
+import { useWebexConnectionStatus, useWebexMyConnection } from "@/hooks/use-webex";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -8,6 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 
 export function WebexConnectionStatus() {
   const { data, isLoading } = useWebexConnectionStatus();
+  const { data: myConn } = useWebexMyConnection();
   const { toast } = useToast();
   const [copied, setCopied] = useState(false);
 
@@ -123,6 +124,35 @@ export function WebexConnectionStatus() {
           <p className="text-[11px] text-muted-foreground" data-testid="text-webex-token-expiry">
             Access token refreshes automatically — current token valid for ~{expiresInMin} min.
           </p>
+        )}
+
+        {myConn?.connected && (myConn.grantedScopes?.length ?? 0) > 0 && (
+          <div className="rounded-md border bg-muted/30 p-2.5 space-y-1.5" data-testid="block-webex-granted-scopes">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <p className="text-xs font-medium">Your granted Webex scopes</p>
+              <Badge variant="outline" className="text-[10px]" data-testid="badge-webex-scope-version">
+                scope v{myConn.scopeVersion ?? 0}
+                {myConn.scopeUpgradeAvailable ? ` → v${myConn.currentScopeVersion}` : ""}
+              </Badge>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {myConn.grantedScopes!.map((scope) => (
+                <code
+                  key={scope}
+                  className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-background border"
+                  data-testid={`scope-${scope}`}
+                >
+                  {scope}
+                </code>
+              ))}
+            </div>
+            {myConn.scopeUpgradeAvailable && (
+              <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                A scope upgrade is available — reconnect to grant the new analytics, voicemail, and admin
+                telephony scopes that unlock the full backfill.
+              </p>
+            )}
+          </div>
         )}
 
         {!configured && (

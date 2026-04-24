@@ -50,6 +50,8 @@ import {
   connectUserWebex,
   disconnectUserWebex,
 } from "../webexUserTokenService";
+import { enqueueEnrichmentJob, runEnrichmentSweep } from "../webexEnrichmentWorker";
+import { kickOffOrgBackfill, MAX_BACKFILL_DAYS } from "../webexBackfillOrchestrator";
 import { insertWebexUserMappingSchema, touchpoints } from "@shared/schema";
 import { and, eq, lte, inArray, sql } from "drizzle-orm";
 import OpenAI from "openai";
@@ -287,8 +289,12 @@ async function syncCallsForOrg(
         earlyAttributedUserId = defaultUserId;
       }
     }
-    // Fire-and-forget analytics upsert — don't block the main sync loop.
+    // Persist what we have inline (fast — uses fields already on the CDR), then
+    // enqueue a tracked enrichment job for the deeper /telephony/calls/{id}
+    // detail pull. The cron sweep retries 429s + transient 5xx with exponential
+    // backoff so analytics don't silently get dropped (Task #466).
     persistCallAnalytics(orgId, record, earlyAttributedUserId, earlyMatchedContact).catch(() => {});
+    void enqueueEnrichmentJob(orgId, record.id, earlyAttributedUserId);
 
     if (existingCallIds.has(record.id)) continue;
 
@@ -731,6 +737,28 @@ export function registerWebexRoutes(app: Express) {
     } catch (e) {
       log(`Reauth state init failed: ${e instanceof Error ? e.message : String(e)}`);
     }
+
+    // Task #466: bump every per-user token whose granted scope_version is
+    // behind the current set. They get prompted to reconnect once so the
+    // new analytics/admin scopes are granted; then everything lights up.
+    try {
+      const { WEBEX_SCOPE_VERSION } = await import("../webexService");
+      const result = await storage.pool.query(
+        `UPDATE webex_user_tokens
+           SET needs_reauth = TRUE,
+               reauth_reason = $1,
+               last_reauth_email_at = NULL,
+               updated_at = NOW()
+         WHERE COALESCE(scope_version, 0) < $2
+           AND needs_reauth = FALSE`,
+        ["scope_upgrade_v" + WEBEX_SCOPE_VERSION, WEBEX_SCOPE_VERSION],
+      );
+      if ((result.rowCount ?? 0) > 0) {
+        log(`Marked ${result.rowCount} per-user Webex tokens as needs-reauth (scope_version < ${WEBEX_SCOPE_VERSION})`);
+      }
+    } catch (e) {
+      log(`Scope-version reauth bump failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   async function saveRefreshToken(token: string) {
@@ -885,6 +913,9 @@ export function registerWebexRoutes(app: Express) {
         log(`Per-user OAuth complete for user ${u.id}`);
         // Auto-seed 90d history trendlines for this org (idempotent, async)
         void maybeAutoBackfillOnConnect(u.organizationId);
+        // Task #466: kick off the full 13-month / max-window backfill across
+        // CDRs + workspaces + locations + devices + queues + hunt groups.
+        kickOffOrgBackfill(u.organizationId, MAX_BACKFILL_DAYS);
         return res.send(`
           <html><body style="font-family:sans-serif;text-align:center;padding:60px">
             <h2>Your Webex account is connected!</h2>
@@ -904,6 +935,7 @@ export function registerWebexRoutes(app: Express) {
       const sessionUser = await getCurrentUser(req);
       if (sessionUser?.organizationId) {
         void maybeAutoBackfillOnConnect(sessionUser.organizationId);
+        kickOffOrgBackfill(sessionUser.organizationId, MAX_BACKFILL_DAYS);
       }
       res.send(`
         <html><body style="font-family:sans-serif;text-align:center;padding:60px">
@@ -978,10 +1010,14 @@ export function registerWebexRoutes(app: Express) {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const record = await storage.getWebexUserToken(user.id);
+      const { WEBEX_SCOPE_VERSION } = await import("../webexService");
+      const grantedScopes = (record?.scopes ?? "").split(/\s+/).filter(Boolean);
+      const scopeUpgradeAvailable = !!record && (record.scopeVersion ?? 0) < WEBEX_SCOPE_VERSION;
       res.json({
         configured: webexCredentialsConfigured(),
         connected: !!record && !record.needsReauth,
         needsReauth: !!record?.needsReauth,
+        reauthReason: record?.reauthReason ?? null,
         webexEmail: record?.webexEmail ?? null,
         webexDisplayName: record?.webexDisplayName ?? null,
         webexPersonId: record?.webexPersonId ?? null,
@@ -989,6 +1025,10 @@ export function registerWebexRoutes(app: Express) {
         accessTokenExpiresAt: record?.accessTokenExpiresAt ?? null,
         lastRefreshAt: record?.lastRefreshAt ?? null,
         lastRefreshError: record?.lastRefreshError ?? null,
+        grantedScopes,
+        scopeVersion: record?.scopeVersion ?? 0,
+        currentScopeVersion: WEBEX_SCOPE_VERSION,
+        scopeUpgradeAvailable,
       });
     } catch (err) {
       log(`my-connection error: ${err instanceof Error ? err.message : String(err)}`);
@@ -1006,6 +1046,138 @@ export function registerWebexRoutes(app: Express) {
     } catch (err) {
       log(`my-connection delete error: ${err instanceof Error ? err.message : String(err)}`);
       res.status(500).json({ error: "Failed to disconnect Webex" });
+    }
+  });
+
+  // Task #466: Admin Webex Health panel — surfaces per-user scope coverage,
+  // last-success per data source, backfill progress %, and recent enrichment
+  // failures in one view so admins can spot-check the integration.
+  app.get("/api/webex/health", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      if (!user.organizationId) return res.status(400).json({ error: "User has no organization" });
+
+      const { WEBEX_SCOPE_VERSION, WEBEX_OAUTH_SCOPES } = await import("../webexService");
+      const requiredScopes = WEBEX_OAUTH_SCOPES.split(/\s+/).filter(Boolean);
+
+      const [tokensResult, syncStatesResult, jobCountsResult, recentFailuresResult, inventoryCountsResult] = await Promise.all([
+        storage.pool.query(
+          `SELECT user_id, webex_email, webex_display_name, scopes,
+                  COALESCE(scope_version, 0) AS scope_version,
+                  needs_reauth, last_refresh_at, last_refresh_error,
+                  connected_at, access_token_expires_at
+             FROM webex_user_tokens
+            WHERE org_id = $1
+            ORDER BY connected_at DESC NULLS LAST`,
+          [user.organizationId],
+        ),
+        storage.pool.query(
+          `SELECT data_source, user_id, last_success_at, last_attempt_at,
+                  last_error, cursor,
+                  backfill_total_days, backfill_completed_days,
+                  backfill_started_at, backfill_completed_at
+             FROM webex_sync_state
+            WHERE org_id = $1
+            ORDER BY data_source, user_id NULLS FIRST`,
+          [user.organizationId],
+        ),
+        storage.pool.query(
+          `SELECT status, COUNT(*)::int AS count
+             FROM webex_call_enrichment_jobs
+            WHERE org_id = $1
+            GROUP BY status`,
+          [user.organizationId],
+        ),
+        storage.pool.query(
+          `SELECT call_id, attempts, last_error, next_retry_at, updated_at
+             FROM webex_call_enrichment_jobs
+            WHERE org_id = $1
+              AND status IN ('failed', 'dead_letter')
+            ORDER BY updated_at DESC
+            LIMIT 20`,
+          [user.organizationId],
+        ),
+        storage.pool.query(
+          `SELECT kind, COUNT(*)::int AS count, MAX(last_seen_at) AS last_updated_at
+             FROM webex_inventory
+            WHERE org_id = $1
+            GROUP BY kind`,
+          [user.organizationId],
+        ),
+      ]);
+
+      const users = tokensResult.rows.map((row: any) => {
+        const granted: string[] = (row.scopes ?? "").split(/\s+/).filter(Boolean);
+        const grantedSet = new Set(granted);
+        const missingScopes = requiredScopes.filter((s) => !grantedSet.has(s));
+        return {
+          userId: row.user_id,
+          webexEmail: row.webex_email,
+          webexDisplayName: row.webex_display_name,
+          scopeVersion: row.scope_version,
+          needsReauth: !!row.needs_reauth,
+          scopeUpgradeAvailable: row.scope_version < WEBEX_SCOPE_VERSION,
+          grantedScopes: granted,
+          missingScopes,
+          lastRefreshAt: row.last_refresh_at,
+          lastRefreshError: row.last_refresh_error,
+          connectedAt: row.connected_at,
+          accessTokenExpiresAt: row.access_token_expires_at,
+        };
+      });
+
+      const jobCounts: Record<string, number> = {
+        pending: 0, running: 0, succeeded: 0, failed: 0, dead_letter: 0,
+      };
+      for (const r of jobCountsResult.rows) jobCounts[r.status] = r.count;
+
+      const syncState = syncStatesResult.rows.map((row: any) => {
+        const target = Number(row.backfill_total_days ?? 0);
+        const done = Number(row.backfill_completed_days ?? 0);
+        return {
+          dataSource: row.data_source,
+          userId: row.user_id,
+          lastSuccessAt: row.last_success_at,
+          lastAttemptAt: row.last_attempt_at,
+          lastError: row.last_error,
+          cursor: row.cursor,
+          backfillTotalDays: target,
+          backfillCompletedDays: done,
+          backfillStartedAt: row.backfill_started_at,
+          backfillCompletedAt: row.backfill_completed_at,
+          progressPct: target > 0 ? Math.min(100, Math.round((done / target) * 100)) : null,
+        };
+      });
+
+      const inventory = inventoryCountsResult.rows.map((row: any) => ({
+        kind: row.kind,
+        count: row.count,
+        lastUpdatedAt: row.last_updated_at,
+      }));
+
+      res.json({
+        currentScopeVersion: WEBEX_SCOPE_VERSION,
+        requiredScopes,
+        maxBackfillDays: MAX_BACKFILL_DAYS,
+        users,
+        syncState,
+        enrichmentJobs: {
+          counts: jobCounts,
+          recentFailures: recentFailuresResult.rows.map((r: any) => ({
+            callId: r.call_id,
+            attempts: r.attempts,
+            lastError: r.last_error,
+            nextRetryAt: r.next_retry_at,
+            updatedAt: r.updated_at,
+          })),
+        },
+        inventory,
+      });
+    } catch (err) {
+      log(`webex health error: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: "Failed to load Webex health" });
     }
   });
 
@@ -1131,7 +1303,7 @@ export function registerWebexRoutes(app: Express) {
       }
       const daysBackRaw = Number(req.body?.daysBack);
       const daysBack = Number.isFinite(daysBackRaw) && daysBackRaw > 0
-        ? Math.min(365, Math.floor(daysBackRaw))
+        ? Math.min(395, Math.floor(daysBackRaw))
         : 90;
       const result = await runWebexHistoryBackfill(user.organizationId, daysBack);
       res.json(result);
@@ -2296,6 +2468,25 @@ export function initWebexSyncScheduler(): void {
   });
 
   log("Webex token auto-refresh scheduler started (every 5 minutes)");
+
+  // Task #466: enrichment job sweep — drains the webex_call_enrichment_jobs
+  // queue every 5 minutes. Honors per-job nextRetryAt so 429/5xx responses
+  // get exponential backoff instead of a tight retry loop.
+  cron.schedule("*/5 * * * *", async () => {
+    try {
+      const summary = await runEnrichmentSweep();
+      if (summary.processed > 0 || summary.failed > 0 || summary.deadLettered > 0) {
+        log(
+          `Enrichment sweep: processed=${summary.processed} ` +
+            `succeeded=${summary.succeeded} failed=${summary.failed} ` +
+            `deadLettered=${summary.deadLettered}`,
+        );
+      }
+    } catch (err) {
+      log(`Enrichment sweep error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+  log("Webex enrichment-job sweep scheduler started (every 5 minutes)");
 
   cron.schedule("*/30 * * * *", async () => {
     log("Background call sync starting...");

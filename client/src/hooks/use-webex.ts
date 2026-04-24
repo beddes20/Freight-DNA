@@ -25,6 +25,7 @@ export interface WebexMyConnectionResponse {
   configured: boolean;
   connected: boolean;
   needsReauth: boolean;
+  reauthReason?: string | null;
   webexEmail: string | null;
   webexDisplayName: string | null;
   webexPersonId: string | null;
@@ -32,6 +33,10 @@ export interface WebexMyConnectionResponse {
   accessTokenExpiresAt: string | null;
   lastRefreshAt: string | null;
   lastRefreshError: string | null;
+  grantedScopes?: string[];
+  scopeVersion?: number;
+  currentScopeVersion?: number;
+  scopeUpgradeAvailable?: boolean;
 }
 
 export function useWebexMyConnection() {
