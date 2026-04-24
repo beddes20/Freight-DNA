@@ -241,7 +241,7 @@ export function registerConversationsRoutes(app: Express): void {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
       const orgId = user.organizationId;
-      const { accountId, carrierId, ownerUserId, unowned, waitingState, responsePriority, overdue, threadId, archived, cursor, limit, search, dateFrom, dateTo, signal } = req.query;
+      const { accountId, carrierId, ownerUserId, unowned, waitingState, responsePriority, overdue, threadId, archived, cursor, limit, search, dateFrom, dateTo, signal, sort } = req.query;
 
       const filters: Parameters<typeof storage.listEmailConversationThreads>[1] = {};
 
@@ -266,6 +266,7 @@ export function registerConversationsRoutes(app: Express): void {
       if (search) filters.search = search as string;
       if (dateFrom) filters.dateFrom = dateFrom as string;
       if (dateTo) filters.dateTo = dateTo as string;
+      if (sort === "recency" || sort === "priority") filters.sort = sort;
 
       // Optional `team=<userId>` filter: returns threads owned by the given
       // manager + every descendant in their managerId chain. Lets the UI

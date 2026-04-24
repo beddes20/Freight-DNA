@@ -1095,6 +1095,12 @@ export default function ConversationsPage() {
       if (archiveDateFrom) p.set("dateFrom", archiveDateFrom);
       if (archiveDateTo) p.set("dateTo", archiveDateTo);
     } else {
+      // "All" tab: chronological firehose (newest first), unlike the triage
+      // tabs which sort by overdue + oldest waiting. Without this, recently
+      // updated threads can sit far below stale "waiting on us" threads, so
+      // users think email ingestion is broken when in fact the sort just
+      // buries new activity.
+      p.set("sort", "recency");
       if (filterState !== "all") p.set("waitingState", filterState);
       if (filterPriority !== "all") p.set("responsePriority", filterPriority);
       if (filterOverdue) p.set("overdue", "true");
@@ -1235,6 +1241,13 @@ export default function ConversationsPage() {
       const aDate = a.archivedAt ? new Date(a.archivedAt).getTime() : 0;
       const bDate = b.archivedAt ? new Date(b.archivedAt).getTime() : 0;
       return bDate - aDate;
+    }
+    // "All" tab: pure recency. Mirrors the server-side `sort=recency` order
+    // so paginated pages stay monotonic and recent threads aren't re-buried
+    // by client-side triage logic. Without this branch, the firehose sort
+    // is overridden client-side and the bug recurs.
+    if (activeTab === "all") {
+      return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
     }
     const aOverdue = !!a.overdueAt;
     const bOverdue = !!b.overdueAt;

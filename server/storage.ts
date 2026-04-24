@@ -1067,6 +1067,7 @@ export interface IStorage {
     search?: string;
     dateFrom?: string;
     dateTo?: string;
+    sort?: "priority" | "recency";
   }): Promise<{ threads: EmailConversationThread[]; nextCursor: string | null; totalCount: number }>;
   updateEmailConversationThread(id: string, orgId: string, data: Partial<InsertEmailConversationThread>): Promise<EmailConversationThread | undefined>;
 
@@ -7169,6 +7170,7 @@ export class DatabaseStorage implements IStorage {
     search?: string;
     dateFrom?: string;
     dateTo?: string;
+    sort?: "priority" | "recency";
   }): Promise<{ threads: EmailConversationThread[]; nextCursor: string | null; totalCount: number }> {
     const conditions: SQL[] = [eq(emailConversationThreads.orgId, orgId)];
 
@@ -7311,6 +7313,43 @@ export class DatabaseStorage implements IStorage {
         const last = threads[threads.length - 1];
         nextCursor = `${(last.archivedAt ?? last.updatedAt).toISOString()}|${last.id}`;
       }
+      return { threads, nextCursor, totalCount };
+    }
+
+    // Recency sort: simple "newest first" ordering by updated_at. Used by the
+    // "All" tab where users expect a chronological firehose, not a triage
+    // queue. Cursor format is "recency|<updatedAt>|<id>".
+    if (filters.sort === "recency") {
+      if (filters.cursor) {
+        const parts = filters.cursor.split('|');
+        if (parts.length === 3 && parts[0] === "recency") {
+          const cursorUpd = new Date(parts[1]);
+          const cursorId = parts[2];
+          conditions.push(
+            or(
+              sql`${emailConversationThreads.updatedAt} < ${cursorUpd}`,
+              and(
+                sql`${emailConversationThreads.updatedAt} = ${cursorUpd}`,
+                sql`${emailConversationThreads.id} < ${cursorId}`,
+              ),
+            )!,
+          );
+        }
+      }
+
+      const rows = await db.select().from(emailConversationThreads)
+        .where(and(...conditions))
+        .orderBy(desc(emailConversationThreads.updatedAt), desc(emailConversationThreads.id))
+        .limit(pageLimit + 1);
+
+      const hasMore = rows.length > pageLimit;
+      const threads = hasMore ? rows.slice(0, pageLimit) : rows;
+      let nextCursor: string | null = null;
+      if (hasMore && threads.length > 0) {
+        const last = threads[threads.length - 1];
+        nextCursor = `recency|${last.updatedAt.toISOString()}|${last.id}`;
+      }
+
       return { threads, nextCursor, totalCount };
     }
 
