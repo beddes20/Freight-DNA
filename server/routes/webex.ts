@@ -2065,9 +2065,14 @@ export function registerWebexRoutes(app: Express) {
       if (managerId && rep.managerId !== managerId && rep.id !== managerId) {
         return res.status(403).json({ error: "Rep is outside the selected team" });
       }
-      // Task #525: Directors may only inspect call logs for reps within
-      // their own reporting tree, even if a target userId is guessed.
-      if (user.role === "director" && rep.id !== user.id) {
+      // Task #525 / #538: Directors AND National Account Managers may only
+      // inspect call logs for reps within their own reporting tree, even
+      // when a target userId is guessed. Admin and Sales Director keep
+      // org-wide visibility for oversight.
+      if (
+        rep.id !== user.id &&
+        (user.role === "director" || user.role === "national_account_manager")
+      ) {
         const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
         if (!teamIds.includes(rep.id)) {
           return res.status(403).json({ error: "Rep is outside your reporting tree" });
