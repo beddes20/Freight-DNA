@@ -38,6 +38,23 @@ FreightDNA is built on a React frontend, an Express.js backend, and a PostgreSQL
 ### System Design Choices
 The database schema includes tables for `lane_summary_cache`, `account_contact_suggestions`, `geographic_lane_patterns`, `email_conversation_threads`, `proven_tactics`, `account_reviews`, and the Webex full-coverage tables `webex_sync_state`, `webex_call_enrichment_jobs`, `webex_voicemails`, and `webex_inventory` (one generic table for devices/workspaces/locations/queues/hunt-groups), among others. The "Available Freight" sheet is the canonical source for `freight_opportunities` and `load_fact`, with specific rules for status mapping and deduplication. Performance is optimized using dashboard query optimization, server-side caching, and in-memory caching. Key engineering patterns include visibility expansion for secure data access, a multi-layered caching strategy, keyset pagination, rate-limited external calls, background workers for scheduled tasks, and webhook-driven reactivity.
 
+### Customer-name backfill (Task #587)
+A one-time database backfill normalizes legacy TMS code-prefixed customer
+labels (e.g. "BLOOSACA - Bloom Energy", "VERTFOFL-Vertiv Mexico",
+"CTSI C/O Rheem WH 1827") into clean display names. Lives at
+`scripts/backfill-customer-names.ts` and rewrites `companies.name`,
+`recurring_lanes.company_name`, and `lane_summary_cache.company_name`
+through `formatCustomerName` from `shared/laneFormatters.ts`. Idempotent:
+re-running on a cleaned database is a no-op (logged as `updated=0`).
+Was executed against the dev database on 2026-04-24 (1,155 rows updated).
+Production has not yet been migrated. **Do not re-run unsupervised** — write
+operations should be done via `DATABASE_URL="$PRODUCTION_DATABASE_URL"
+npx tsx scripts/backfill-customer-names.ts` once per environment, after
+which the post-run audit confirms zero rows still match
+`^[A-Za-z0-9]{4,}\s+[-–—]\s+`. `freight_opportunities` has no
+denormalized `company_name` column — it inherits cleaned values via
+`company_id → companies.id`, and the script's audit cross-checks that join.
+
 ### Shared inbox / Microsoft Graph webhook (Task #549)
 Production inbound email is wired through Microsoft Graph change notification subscriptions on a shared M365 mailbox (`OUTLOOK_REPLY_EMAIL`). `OUTLOOK_WEBHOOK_SECRET` is a hard requirement in every environment — both the per-rep webhook (`server/routes/graphWebhook.ts`) and the shared-mailbox webhook (`server/routes/laneCarrierOutreach.ts`) refuse to process payloads without it, and `server/graphSubscriptionService.ts` refuses to register subscriptions without it. The Monitored Mailboxes admin page hosts a `ReadinessChecklistCard` backed by `GET /api/internal/admin/monitored-mailboxes/readiness` that surfaces 8 go-live gates (Azure creds, reply mailbox, APP_BASE_URL, webhook secret, Mail.Read consent, ≥1 enrolled mailbox, recent sync, no draining failures). End-to-end coverage lives in `tests/shared-inbox-webhook-e2e.test.ts` (registered as the `test:shared-inbox` validation command). IT setup is documented in `docs/shared-inbox-go-live-runbook.md`.
 
