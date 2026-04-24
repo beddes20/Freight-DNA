@@ -225,6 +225,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
         lookbackDays: z.coerce.number().int().min(1).max(3650).optional(),
         exactOnly: z.preprocess(v => v === "true" || v === true, z.boolean()).optional(),
         includeSimilar: z.preprocess(v => !(v === "false" || v === false), z.boolean()).optional(),
+        matchMode: z.enum(["strict", "relaxed"]).optional(),
       });
       const parsed = schema.safeParse(req.query);
       if (!parsed.success) return res.status(400).json({ error: "Invalid query", issues: parsed.error.issues });

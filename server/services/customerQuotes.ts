@@ -13,6 +13,8 @@ import { getActivePatternAlertsForOrg } from "./quotePatternShift";
 import { normalizeEquipmentType } from "@shared/laneFormatters";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { getCityCoords, haversineDistanceMiles } from "../cityCoordinates";
+import { cityToKma } from "../kmaMapping";
 
 export type QuoteFilters = {
   customerId?: string;
@@ -1635,11 +1637,173 @@ export type SpotSearchInput = {
   lookbackDays?: number | null;
   exactOnly?: boolean | null;
   includeSimilar?: boolean | null;
+  // Task #514 — Tiered Matching. "strict" preserves the legacy
+  // exact + same-state-pair behavior. "relaxed" (default) walks the
+  // full tier ladder: exact → same_market → same_state → reverse_lane → same_corridor.
+  matchMode?: "strict" | "relaxed" | null;
+};
+
+// Task #514 — Tiered Matching tier identifiers, ordered for display.
+export const MATCH_TIERS = [
+  "exact",
+  "same_market",
+  "same_state",
+  "reverse_lane",
+  "same_corridor",
+] as const;
+export type MatchTier = typeof MATCH_TIERS[number];
+
+export type EquipmentFamily = "van" | "reefer" | "open" | "other";
+
+/**
+ * Map an equipment string to a canonical family. "Van" covers dry van /
+ * box truck. "Reefer" covers refrigerated and multi-temp. "Open" covers
+ * flatbed / step-deck / RGN style equipment. Anything else falls into
+ * "other".
+ */
+export function equipmentFamily(raw: string | null | undefined): EquipmentFamily {
+  const u = (raw ?? "").trim().toLowerCase();
+  if (!u) return "other";
+  if (
+    u === "van" || u === "dry van" || u === "dryvan" ||
+    u === "box truck" || u === "box-truck" || u === "boxtruck" ||
+    u.includes("dry van") || u.includes("box truck")
+  ) return "van";
+  if (
+    u.includes("reefer") || u.includes("refrig") ||
+    u.includes("multi-temp") || u.includes("multi temp") ||
+    u === "refr"
+  ) return "reefer";
+  if (
+    u.includes("flat") || u.includes("step") || u.includes("rgn") ||
+    u.includes("rgon") || u.includes("double-drop") || u.includes("double drop") ||
+    u.includes("conestoga")
+  ) return "open";
+  return "other";
+}
+
+/**
+ * Same-market test for a single endpoint: equal city, OR within ~75 mi
+ * by haversine, OR sharing the same KMA. Keeps the rule lenient so it
+ * picks up neighboring origin/destination cities reps think of as "the
+ * same market" (Long Beach ↔ Compton, Phoenix ↔ Glendale AZ, etc).
+ */
+function endpointsSameMarket(
+  cityA: string, stateA: string, cityB: string, stateB: string,
+  withinMiles = 75,
+): boolean {
+  if (ciEq(cityA, cityB) && ciEq(stateA, stateB)) return true;
+  const a = getCityCoords(`${cityA}, ${stateA}`);
+  const b = getCityCoords(`${cityB}, ${stateB}`);
+  if (a && b) {
+    const d = haversineDistanceMiles(a[0], a[1], b[0], b[1]);
+    if (isFinite(d) && d <= withinMiles) return true;
+  }
+  // KMA fall-back catches market neighbors we don't have lat/lng for.
+  const kmaA = cityToKma(cityA, stateA);
+  const kmaB = cityToKma(cityB, stateB);
+  if (kmaA && kmaB && kmaA.kma === kmaB.kma) return true;
+  return false;
+}
+
+/**
+ * Classify a quote opportunity against the search lane. Each opportunity
+ * resolves to exactly one tier (or null if it doesn't qualify under any
+ * tier). Precedence order: exact → same_market → same_state → reverse_lane
+ * → same_corridor.
+ */
+export function classifyMatchTier(
+  input: { pickupCity: string; pickupState: string; deliveryCity: string; deliveryState: string },
+  r: { originCity: string; originState: string; destCity: string; destState: string },
+): MatchTier | null {
+  const exact =
+    ciEq(r.originCity, input.pickupCity) && ciEq(r.originState, input.pickupState) &&
+    ciEq(r.destCity, input.deliveryCity) && ciEq(r.destState, input.deliveryState);
+  if (exact) return "exact";
+
+  const originSameMarket = endpointsSameMarket(
+    r.originCity, r.originState, input.pickupCity, input.pickupState,
+  );
+  const destSameMarket = endpointsSameMarket(
+    r.destCity, r.destState, input.deliveryCity, input.deliveryState,
+  );
+  if (originSameMarket && destSameMarket) return "same_market";
+
+  if (
+    ciEq(r.originState, input.pickupState) && ciEq(r.destState, input.deliveryState)
+  ) return "same_state";
+
+  // Reverse: market-equal endpoints, but origin/destination roles flipped.
+  const reverseOriginMarket = endpointsSameMarket(
+    r.originCity, r.originState, input.deliveryCity, input.deliveryState,
+  );
+  const reverseDestMarket = endpointsSameMarket(
+    r.destCity, r.destState, input.pickupCity, input.pickupState,
+  );
+  if (reverseOriginMarket && reverseDestMarket) return "reverse_lane";
+
+  // Corridor: same KMA at both ends (catches in-corridor pairs the
+  // 75-mile rule misses).
+  const inOriginKma = cityToKma(input.pickupCity, input.pickupState);
+  const inDestKma = cityToKma(input.deliveryCity, input.deliveryState);
+  const rOriginKma = cityToKma(r.originCity, r.originState);
+  const rDestKma = cityToKma(r.destCity, r.destState);
+  if (
+    inOriginKma && inDestKma && rOriginKma && rDestKma &&
+    inOriginKma.kma === rOriginKma.kma && inDestKma.kma === rDestKma.kma
+  ) return "same_corridor";
+
+  return null;
+}
+
+/**
+ * Walk tier ladder picking the first non-empty tier whose won-quote
+ * count meets the minimum sample. Used by the guidance band so that
+ * sparse exact history can borrow from the closest non-empty tier.
+ */
+export function pickGuidanceTier(
+  buckets: Record<MatchTier, { won: number[] }>,
+  minSample = 4,
+): MatchTier | null {
+  for (const tier of MATCH_TIERS) {
+    if ((buckets[tier]?.won.length ?? 0) >= minSample) return tier;
+  }
+  return null;
+}
+
+const TIER_LABEL: Record<MatchTier, string> = {
+  exact: "Exact lane",
+  same_market: "Same market (~75 mi)",
+  same_state: "Same state pair",
+  reverse_lane: "Reverse direction",
+  same_corridor: "Same corridor (KMA)",
+};
+
+const TIER_RULE_TOOLTIP: Record<MatchTier, string> = {
+  exact: "Same origin and destination city + state.",
+  same_market: "Both endpoints within ~75 miles or share the same KMA.",
+  same_state: "Same origin state and destination state, different cities.",
+  reverse_lane: "Lane runs in the opposite direction (origin ↔ destination).",
+  same_corridor: "Same KMA pair — broader corridor match.",
+};
+
+export function tierLabel(tier: MatchTier): string { return TIER_LABEL[tier]; }
+export function tierTooltip(tier: MatchTier): string { return TIER_RULE_TOOLTIP[tier]; }
+
+
+export type SpotTierGroup = {
+  tier: MatchTier;
+  label: string;
+  rule: string;
+  count: number;
+  quotes: EnrichedQuote[];
 };
 
 export type SpotSearchKpis = {
   exactCount: number;
   similarCount: number;
+  // Task #514 — per-tier counts in display order.
+  tierCounts: Record<MatchTier, number>;
   customersOnLane: number;
   winRate: number;
   avgQuoted: number;
@@ -1720,6 +1884,10 @@ export type SpotSearchResult = {
   guidance: SpotGuidance;
   exactMatches: EnrichedQuote[];
   similarMatches: EnrichedQuote[];
+  // Task #514 — Tiered Matching: per-tier groups in display order. Empty
+  // tiers are omitted. exactMatches/similarMatches above remain populated
+  // for backwards compatibility with older clients.
+  tieredMatches: SpotTierGroup[];
   customerPanel: SpotCustomerStat[];
   outcomeBreakdown: SpotOutcomeReason[];
   carrierHistory: SpotCarrierHistory[];
@@ -1754,41 +1922,58 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
     : baseOpps;
 
   const equipment = (input.equipment ?? "").trim();
-  const STANDARD_EQ = ["van", "dry van", "reefer", "flatbed"];
+  const eqLower = equipment.toLowerCase();
+  // Family-based equipment match — keeps "van" loose (van + dry van + box truck)
+  // and groups flatbed/step-deck under "open". "Other" matches the catch-all
+  // family. "Any" / blank matches everything.
+  const inputFamily = equipment && eqLower !== "any" ? equipmentFamily(equipment) : null;
   const eqMatch = (r: QuoteOpportunity): boolean => {
-    if (!equipment || equipment === "Any") return true;
-    if (equipment.toLowerCase() === "other") {
-      return !STANDARD_EQ.includes((r.equipment ?? "").toLowerCase());
-    }
-    if (equipment.toLowerCase() === "van") {
-      return ["van", "dry van"].includes((r.equipment ?? "").toLowerCase());
-    }
-    return ciEq(r.equipment, equipment);
+    if (!inputFamily) return true;
+    if (inputFamily === "other") return equipmentFamily(r.equipment) === "other";
+    return equipmentFamily(r.equipment) === inputFamily;
   };
 
-  const exact = allOpps.filter(r =>
-    ciEq(r.originCity, input.pickupCity) &&
-    ciEq(r.originState, input.pickupState) &&
-    ciEq(r.destCity, input.deliveryCity) &&
-    ciEq(r.destState, input.deliveryState) &&
-    eqMatch(r),
-  );
-  // Similar: same state pair, different city; controlled by includeSimilar/exactOnly toggles
-  const includeSimilar = input.includeSimilar !== false && !input.exactOnly;
-  const similar = includeSimilar
-    ? allOpps.filter(r => {
-        if (exact.includes(r)) return false;
-        return (
-          ciEq(r.originState, input.pickupState) &&
-          ciEq(r.destState, input.deliveryState) &&
-          eqMatch(r)
-        );
-      })
-    : [];
+  // Task #514 — Tiered matching. Classify every (equipment-matched)
+  // opportunity into exactly one tier. matchMode "strict" only retains
+  // exact + same_state to mirror the legacy two-tier UI.
+  const matchMode: "strict" | "relaxed" = input.matchMode === "strict" ? "strict" : "relaxed";
+  const exactOnly = !!input.exactOnly;
+  const includeSimilar = input.includeSimilar !== false && !exactOnly;
+
+  const tierBuckets: Record<MatchTier, QuoteOpportunity[]> = {
+    exact: [], same_market: [], same_state: [], reverse_lane: [], same_corridor: [],
+  };
+  for (const r of allOpps) {
+    if (!eqMatch(r)) continue;
+    const tier = classifyMatchTier(input, r);
+    if (!tier) continue;
+    if (matchMode === "strict" && tier !== "exact" && tier !== "same_state") continue;
+    if (exactOnly && tier !== "exact") continue;
+    if (!includeSimilar && tier !== "exact") continue;
+    tierBuckets[tier].push(r);
+  }
+
+  const exact = tierBuckets.exact;
+  // Similar (legacy): union of every non-exact tier in display order.
+  const similar: QuoteOpportunity[] = [
+    ...tierBuckets.same_market,
+    ...tierBuckets.same_state,
+    ...tierBuckets.reverse_lane,
+    ...tierBuckets.same_corridor,
+  ];
 
   const customerId = input.customerId ?? null;
-  const exactScoped = customerId ? exact.filter(r => r.customerId === customerId) : exact;
-  const similarScoped = customerId ? similar.filter(r => r.customerId === customerId) : similar;
+  const scoped = (rs: QuoteOpportunity[]): QuoteOpportunity[] =>
+    customerId ? rs.filter(r => r.customerId === customerId) : rs;
+  const exactScoped = scoped(exact);
+  const similarScoped = scoped(similar);
+  const tierBucketsScoped: Record<MatchTier, QuoteOpportunity[]> = {
+    exact: exactScoped,
+    same_market: scoped(tierBuckets.same_market),
+    same_state: scoped(tierBuckets.same_state),
+    reverse_lane: scoped(tierBuckets.reverse_lane),
+    same_corridor: scoped(tierBuckets.same_corridor),
+  };
 
   const won = exactScoped.filter(r => isWon(r.outcomeStatus));
   const lost = exactScoped.filter(r => isLost(r.outcomeStatus));
@@ -1813,9 +1998,18 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
   else if (lastQuotedDays <= 60) freshnessLabel = "recent";
   else freshnessLabel = "stale";
 
+  const tierCounts: Record<MatchTier, number> = {
+    exact: tierBucketsScoped.exact.length,
+    same_market: tierBucketsScoped.same_market.length,
+    same_state: tierBucketsScoped.same_state.length,
+    reverse_lane: tierBucketsScoped.reverse_lane.length,
+    same_corridor: tierBucketsScoped.same_corridor.length,
+  };
+
   const kpis: SpotSearchKpis = {
     exactCount: exactScoped.length,
     similarCount: similarScoped.length,
+    tierCounts,
     customersOnLane: new Set(exact.map(r => r.customerId)).size,
     winRate: decided > 0 ? (won.length / decided) * 100 : 0,
     avgQuoted: avg(exactScoped.map(r => num(r.quotedAmount)).filter(v => v > 0)),
@@ -1850,46 +2044,57 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
       message: intel.message,
     };
   } else {
-    // Lane-wide: derive band from won quote distribution.
-    const wonAmounts = won.map(r => num(r.quotedAmount)).filter(v => v > 0).sort((a, b) => a - b);
-    if (wonAmounts.length >= 4) {
-      const p25 = wonAmounts[Math.floor(wonAmounts.length * 0.25)];
-      const p75 = wonAmounts[Math.floor(wonAmounts.length * 0.75)];
+    // Task #514 — Tier-aware guidance: walk the tier ladder and use
+    // the first tier with ≥4 won quotes. Confidence steps down as we
+    // move away from the exact lane.
+    const wonByTier: Record<MatchTier, number[]> = {
+      exact: [], same_market: [], same_state: [], reverse_lane: [], same_corridor: [],
+    };
+    for (const tier of MATCH_TIERS) {
+      wonByTier[tier] = tierBucketsScoped[tier]
+        .filter(r => isWon(r.outcomeStatus))
+        .map(r => num(r.quotedAmount))
+        .filter(v => v > 0)
+        .sort((a, b) => a - b);
+    }
+    const guidanceTier = pickGuidanceTier(
+      Object.fromEntries(MATCH_TIERS.map(t => [t, { won: wonByTier[t] }])) as Record<MatchTier, { won: number[] }>,
+      4,
+    );
+    if (guidanceTier) {
+      const series = wonByTier[guidanceTier];
+      const p25 = series[Math.floor(series.length * 0.25)];
+      const p75 = series[Math.floor(series.length * 0.75)];
+      const tierConfidence: PricingIntelligence["confidence"] =
+        guidanceTier === "exact"
+          ? (series.length >= 12 ? "high" : "medium")
+          : guidanceTier === "same_market"
+          ? (series.length >= 12 ? "medium" : "low")
+          : "low";
+      const benchmarkSource: PricingIntelligence["benchmarkSource"] =
+        guidanceTier === "exact" ? "none" : "similar_lanes";
       guidance = {
         suggestedLow: Math.round(p25),
         suggestedHigh: Math.round(p75),
         benchmark: null,
-        benchmarkSource: "none",
-        confidence: wonAmounts.length >= 12 ? "high" : "medium",
-        message: `Based on ${wonAmounts.length} won quotes on this lane (P25–P75 band).`,
+        benchmarkSource,
+        confidence: tierConfidence,
+        message: guidanceTier === "exact"
+          ? `Based on ${series.length} won quotes on this exact lane (P25–P75 band).`
+          : `Exact-lane history sparse — band derived from ${series.length} won quote(s) at the ${TIER_LABEL[guidanceTier].toLowerCase()} tier (P25–P75).`,
       };
     } else {
-      // Fallback: if exact is sparse, derive a wider band from similar lanes when allowed.
-      const simWon = similarScoped.filter(r => isWon(r.outcomeStatus));
-      const simWonAmounts = simWon.map(r => num(r.quotedAmount)).filter(v => v > 0).sort((a, b) => a - b);
-      if (simWonAmounts.length >= 4) {
-        const p25 = simWonAmounts[Math.floor(simWonAmounts.length * 0.25)];
-        const p75 = simWonAmounts[Math.floor(simWonAmounts.length * 0.75)];
-        guidance = {
-          suggestedLow: Math.round(p25),
-          suggestedHigh: Math.round(p75),
-          benchmark: null,
-          benchmarkSource: "similar_lanes",
-          confidence: "low",
-          message: `Exact-lane history sparse — band derived from ${simWonAmounts.length} similar-lane won quotes (P25–P75).`,
-        };
-      } else {
-        guidance = {
-          suggestedLow: null,
-          suggestedHigh: null,
-          benchmark: null,
-          benchmarkSource: "none",
-          confidence: "insufficient_history",
-          message: wonAmounts.length === 0
-            ? "No prior won quotes on this exact lane — try selecting a customer for tailored guidance."
-            : `Only ${wonAmounts.length} won quote(s) on this lane — too few for a reliable range.`,
-        };
-      }
+      const totalWon = MATCH_TIERS.reduce((s, t) => s + wonByTier[t].length, 0);
+      guidance = {
+        suggestedLow: null,
+        suggestedHigh: null,
+        benchmark: null,
+        benchmarkSource: "none",
+        confidence: "insufficient_history",
+        message: totalWon === 0
+          ? "No prior won quotes anywhere in the tier ladder — try selecting a customer for tailored guidance."
+          : `Only ${totalWon} won quote(s) across all tiers — too few for a reliable range.`,
+      };
     }
   }
 
@@ -2079,6 +2284,20 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
   const exactMatches = enrich(exactScoped.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
   const similarMatches = enrich(similarScoped.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
 
+  const tieredMatches: SpotTierGroup[] = MATCH_TIERS
+    .map(tier => {
+      const list = tierBucketsScoped[tier];
+      if (list.length === 0) return null;
+      return {
+        tier,
+        label: TIER_LABEL[tier],
+        rule: TIER_RULE_TOOLTIP[tier],
+        count: list.length,
+        quotes: enrich(list.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap),
+      } satisfies SpotTierGroup;
+    })
+    .filter((g): g is SpotTierGroup => g !== null);
+
   return {
     query: input,
     resolvedCustomer: customerId
@@ -2088,6 +2307,7 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
     guidance,
     exactMatches,
     similarMatches,
+    tieredMatches,
     customerPanel,
     outcomeBreakdown,
     carrierHistory,

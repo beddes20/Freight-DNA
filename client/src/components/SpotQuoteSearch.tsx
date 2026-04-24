@@ -32,7 +32,23 @@ export type SpotSearchQuery = {
   lookbackDays?: number;
   exactOnly?: boolean;
   includeSimilar?: boolean;
+  // Task #514 — Tiered Matching mode. "relaxed" walks the full
+  // exact → same_market → same_state → reverse_lane → same_corridor ladder.
+  // "strict" only returns exact + same_state pair (legacy behavior).
+  matchMode?: "strict" | "relaxed";
 };
+
+export type MatchTier = "exact" | "same_market" | "same_state" | "reverse_lane" | "same_corridor";
+
+const TIER_DISPLAY: { tier: MatchTier; label: string; rule: string; accent: TierAccent; icon: "award" | "map" | "users" | "truck" | "activity" }[] = [
+  { tier: "exact", label: "Exact lane", rule: "Same origin and destination city + state.", accent: "amber", icon: "award" },
+  { tier: "same_market", label: "Same market (~75 mi)", rule: "Both endpoints within ~75 miles or share the same KMA.", accent: "blue", icon: "map" },
+  { tier: "same_state", label: "Same state pair", rule: "Same origin state and destination state, different cities.", accent: "zinc", icon: "map" },
+  { tier: "reverse_lane", label: "Reverse direction", rule: "Lane runs in the opposite direction (origin ↔ destination).", accent: "purple", icon: "activity" },
+  { tier: "same_corridor", label: "Same corridor (KMA)", rule: "Same KMA pair — broader corridor match.", accent: "teal", icon: "truck" },
+];
+
+type TierAccent = "amber" | "blue" | "zinc" | "purple" | "teal";
 
 export type SpotAdvancedDetails = {
   weight?: string;
@@ -55,11 +71,21 @@ type EnrichedQuote = {
   requestDate: string; repName: string; carrierName: string | null;
 };
 
+type TierGroup = {
+  tier: MatchTier;
+  label: string;
+  rule: string;
+  count: number;
+  quotes: EnrichedQuote[];
+};
+
 type SpotResult = {
   query: SpotSearchQuery;
   resolvedCustomer: { id: string; name: string } | null;
   kpis: {
-    exactCount: number; similarCount: number; customersOnLane: number;
+    exactCount: number; similarCount: number;
+    tierCounts: Record<MatchTier, number>;
+    customersOnLane: number;
     winRate: number; avgQuoted: number; avgWonQuoted: number; avgCarrierPaid: number;
     avgMargin: number; avgMarginPct: number;
     lastQuotedDays: number | null; lastWonDays: number | null; pendingCount: number;
@@ -73,6 +99,7 @@ type SpotResult = {
   };
   exactMatches: EnrichedQuote[];
   similarMatches: EnrichedQuote[];
+  tieredMatches: TierGroup[];
   customerPanel: {
     customerId: string; customerName: string; quotes: number;
     wins: number; losses: number; winRate: number; avgQuoted: number;
@@ -476,6 +503,9 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
   const [lookbackDays, setLookbackDays] = useState<string>("0");
   const [exactOnly, setExactOnly] = useState(false);
   const [includeSimilar, setIncludeSimilar] = useState(true);
+  // Task #514 — Tiered Matching mode toggle. Default to relaxed so reps see
+  // the full ladder of nearby/state/reverse/corridor matches by default.
+  const [matchMode, setMatchMode] = useState<"strict" | "relaxed">("relaxed");
   const [adv, setAdv] = useState<SpotAdvancedDetails>({});
 
   const [recents, setRecents] = useState<Recent[]>(() => loadRecents());
@@ -508,6 +538,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
     if (activeQuery.lookbackDays && activeQuery.lookbackDays > 0) p.set("lookbackDays", String(activeQuery.lookbackDays));
     if (activeQuery.exactOnly) p.set("exactOnly", "true");
     if (activeQuery.includeSimilar === false) p.set("includeSimilar", "false");
+    if (activeQuery.matchMode) p.set("matchMode", activeQuery.matchMode);
     return p.toString();
   }, [activeQuery]);
 
@@ -535,6 +566,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
       lookbackDays: lb > 0 ? lb : undefined,
       exactOnly: exactOnly || undefined,
       includeSimilar: !includeSimilar ? false : undefined,
+      matchMode,
     };
     setActiveQuery(q);
     setSearchedAt(new Date());
@@ -551,6 +583,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
     setLookbackDays("0");
     setExactOnly(false);
     setIncludeSimilar(true);
+    setMatchMode("relaxed");
     setAdv({});
     setActiveQuery(null);
     setSearchedAt(null);
@@ -565,11 +598,13 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
     setLookbackDays(r.lookbackDays ? String(r.lookbackDays) : "0");
     setExactOnly(!!r.exactOnly);
     setIncludeSimilar(r.includeSimilar !== false);
+    setMatchMode(r.matchMode ?? "relaxed");
     setActiveQuery({
       pickupCity: r.pickupCity, pickupState: r.pickupState,
       deliveryCity: r.deliveryCity, deliveryState: r.deliveryState,
       equipment: r.equipment, pickupDate: r.pickupDate, customerId: r.customerId,
       lookbackDays: r.lookbackDays, exactOnly: r.exactOnly, includeSimilar: r.includeSimilar,
+      matchMode: r.matchMode ?? "relaxed",
     });
     setSearchedAt(new Date());
   };
@@ -770,6 +805,30 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                 <div className="flex items-center gap-2">
                   <Switch id="spot-include-similar" checked={includeSimilar} onCheckedChange={(v) => { setIncludeSimilar(v); if (v) setExactOnly(false); }} data-testid="switch-spot-include-similar" />
                   <Label htmlFor="spot-include-similar" className="text-xs text-zinc-300">Include similar lanes</Label>
+                </div>
+                {/* Task #514 — Tiered match-mode segmented toggle */}
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] uppercase tracking-wider text-zinc-500">Match mode</span>
+                  <div className="inline-flex rounded-[4px] border border-zinc-700 bg-zinc-900 overflow-hidden" role="group" data-testid="segmented-spot-match-mode">
+                    <button
+                      type="button"
+                      onClick={() => setMatchMode("relaxed")}
+                      className={`px-2.5 h-8 text-[11px] font-medium transition ${matchMode === "relaxed" ? "bg-amber-500/20 text-amber-200 border-r border-amber-500/30" : "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border-r border-zinc-700"}`}
+                      data-testid="button-spot-match-mode-relaxed"
+                      title="Walk the full ladder: exact → market → state → reverse → corridor"
+                    >
+                      Relaxed
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMatchMode("strict")}
+                      className={`px-2.5 h-8 text-[11px] font-medium transition ${matchMode === "strict" ? "bg-amber-500/20 text-amber-200" : "text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"}`}
+                      data-testid="button-spot-match-mode-strict"
+                      title="Only exact lane and same-state-pair matches"
+                    >
+                      Strict
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -982,58 +1041,18 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             </div>
           </div>
 
-          {/* 4-5. Exact + Similar lane history — visually differentiated */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            <QuoteListSection title="Exact Match History" icon={<Award className="h-3.5 w-3.5 text-amber-400" />}
-              testId="spot-section-exact" accent="amber"
-              emptyNode={
-                data.kpis.exactCount === 0 && data.kpis.similarCount > 0 ? (
-                  <div className="text-zinc-400 space-y-2">
-                    <div className="text-zinc-200 font-medium">No exact-lane quotes yet.</div>
-                    <div className="text-[11px] text-zinc-500">
-                      Found <span className="text-blue-300 font-semibold">{data.kpis.similarCount} similar lane{data.kpis.similarCount === 1 ? "" : "s"}</span> in the same state pair — see the panel on the right.
-                    </div>
-                    <div className="text-[11px] text-zinc-500">Try broadening:</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {data.query.pickupDate && (
-                        <button onClick={() => { setPickupDate(""); editSearch(); }}
-                          className="text-[10px] px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700"
-                          data-testid="button-spot-broaden-clear-date">
-                          Clear pickup date
-                        </button>
-                      )}
-                      {(!data.query.lookbackDays || data.query.lookbackDays < 365) && (
-                        <button onClick={() => { setLookbackDays("0"); editSearch(); }}
-                          className="text-[10px] px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700"
-                          data-testid="button-spot-broaden-lookback">
-                          Use all-time history
-                        </button>
-                      )}
-                      {data.query.equipment && (
-                        <button onClick={() => { setEquipment("Any"); editSearch(); }}
-                          className="text-[10px] px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700"
-                          data-testid="button-spot-broaden-equipment">
-                          Drop mode filter
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ) : data.kpis.exactCount === 0 ? (
-                  <div className="text-zinc-400 space-y-2">
-                    <div className="text-zinc-200 font-medium">No history on this lane.</div>
-                    <div className="text-[11px] text-zinc-500">
-                      This is a fresh opportunity — pricing will lean on SONAR / similar-lane benchmarks. Consider a wider lookback or check carrier capacity for this corridor.
-                    </div>
-                  </div>
-                ) : <div className="text-zinc-500">No prior quotes on this exact lane.</div>
-              }
-              quotes={data.exactMatches} onPickQuote={onPickQuote} />
-            <QuoteListSection title="Similar Lane History" icon={<MapPin className="h-3.5 w-3.5 text-blue-400" />}
-              testId="spot-section-similar" accent="blue"
-              subtitle="Same origin → destination state pair"
-              emptyNode={<div className="text-zinc-500">No similar-state-pair quotes.</div>}
-              quotes={data.similarMatches} onPickQuote={onPickQuote} />
-          </div>
+          {/* 4. Tiered match history — Task #514 */}
+          <TieredMatchSections
+            tieredMatches={data.tieredMatches ?? []}
+            tierCounts={data.kpis.tierCounts ?? { exact: data.kpis.exactCount, same_market: 0, same_state: data.kpis.similarCount, reverse_lane: 0, same_corridor: 0 }}
+            query={data.query}
+            matchMode={activeQuery!.matchMode ?? "relaxed"}
+            onPickQuote={onPickQuote}
+            onBroadenDate={() => { setPickupDate(""); editSearch(); }}
+            onBroadenLookback={() => { setLookbackDays("0"); editSearch(); }}
+            onBroadenEquipment={() => { setEquipment("Any"); editSearch(); }}
+            onSwitchToRelaxed={() => { setMatchMode("relaxed"); setActiveQuery(q => q ? { ...q, matchMode: "relaxed" } : q); }}
+          />
 
           {/* 6. Customer panel — highlight resolved customer */}
           <SectionCard title="Customer Signals on this Lane" icon={<Users className="h-3.5 w-3.5 text-amber-400" />} testId="spot-section-customer-panel"
@@ -1334,5 +1353,183 @@ function QuoteListSection({ title, icon, testId, emptyNode, quotes, onPickQuote,
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function TieredMatchSections({
+  tieredMatches, tierCounts, query, matchMode,
+  onPickQuote, onBroadenDate, onBroadenLookback, onBroadenEquipment, onSwitchToRelaxed,
+}: {
+  tieredMatches: TierGroup[];
+  tierCounts: Record<MatchTier, number>;
+  query: SpotSearchQuery;
+  matchMode: "strict" | "relaxed";
+  onPickQuote: (id: string) => void;
+  onBroadenDate: () => void;
+  onBroadenLookback: () => void;
+  onBroadenEquipment: () => void;
+  onSwitchToRelaxed: () => void;
+}): JSX.Element {
+  const accentMap: Record<TierAccent, { border: string; headerBg: string; count: string; iconColor: string }> = {
+    amber: { border: "border-amber-500/40 shadow-[0_0_0_1px_rgba(251,191,36,0.05)]", headerBg: "bg-amber-500/[0.04]", count: "text-amber-300", iconColor: "text-amber-400" },
+    blue: { border: "border-blue-500/30", headerBg: "bg-blue-500/[0.03]", count: "text-blue-300", iconColor: "text-blue-400" },
+    zinc: { border: "border-zinc-700", headerBg: "bg-zinc-800/30", count: "text-zinc-300", iconColor: "text-zinc-400" },
+    purple: { border: "border-purple-500/30", headerBg: "bg-purple-500/[0.04]", count: "text-purple-300", iconColor: "text-purple-400" },
+    teal: { border: "border-teal-500/30", headerBg: "bg-teal-500/[0.04]", count: "text-teal-300", iconColor: "text-teal-400" },
+  };
+  const iconFor = (key: "award" | "map" | "users" | "truck" | "activity", color: string): JSX.Element => {
+    const cls = `h-3.5 w-3.5 ${color}`;
+    if (key === "award") return <Award className={cls} />;
+    if (key === "map") return <MapPin className={cls} />;
+    if (key === "users") return <Users className={cls} />;
+    if (key === "truck") return <Truck className={cls} />;
+    return <Activity className={cls} />;
+  };
+
+  // Smart empty state: no exact match — point to first non-empty tier.
+  const exactGroup = tieredMatches.find(g => g.tier === "exact");
+  const firstNonEmptyOther = tieredMatches.find(g => g.tier !== "exact");
+
+  // Sections to render: always include the exact tier as its own card so
+  // the rep sees the "exact / no exact" answer at a glance, then render the
+  // remaining non-empty tiers in display order.
+  const sections: { meta: typeof TIER_DISPLAY[number]; group: TierGroup | null }[] = TIER_DISPLAY
+    .filter(meta => meta.tier === "exact" || tierCounts[meta.tier] > 0)
+    .map(meta => ({ meta, group: tieredMatches.find(g => g.tier === meta.tier) ?? null }));
+
+  return (
+    <div className="space-y-3" data-testid="spot-section-tiered-matches">
+      <div className="flex items-center gap-2 flex-wrap" data-testid="spot-tier-summary">
+        <span className="text-[10px] uppercase tracking-wider text-zinc-500">Tiered matches</span>
+        {TIER_DISPLAY.map(meta => {
+          const c = tierCounts[meta.tier] ?? 0;
+          const acc = accentMap[meta.accent];
+          return (
+            <span
+              key={meta.tier}
+              className={`text-[11px] px-1.5 py-0.5 rounded-[4px] border tabular-nums ${c > 0 ? `${acc.headerBg} ${acc.count} border-current/30` : "bg-zinc-900 text-zinc-600 border-zinc-800"}`}
+              title={meta.rule}
+              data-testid={`spot-tier-chip-${meta.tier}`}
+            >
+              {meta.label.split(" ")[0]} <span className="font-semibold">{c}</span>
+            </span>
+          );
+        })}
+        {matchMode === "strict" && (
+          <span className="text-[10px] text-zinc-500 italic">
+            Strict mode — only exact + same-state shown.
+          </span>
+        )}
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+        {sections.map(({ meta, group }) => {
+          const acc = accentMap[meta.accent];
+          const quotes = group?.quotes ?? [];
+          const isExact = meta.tier === "exact";
+          const empty = quotes.length === 0;
+          return (
+            <Card
+              key={meta.tier}
+              className={`bg-zinc-900 rounded-[4px] border ${acc.border}`}
+              data-testid={`spot-section-tier-${meta.tier}`}
+            >
+              <CardHeader className={`py-2.5 px-3 flex flex-row items-center justify-between border-b border-zinc-800 ${acc.headerBg}`}>
+                <div className="flex flex-col">
+                  <CardTitle className="text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5">
+                    {iconFor(meta.icon, acc.iconColor)}{meta.label}
+                  </CardTitle>
+                  <span className="text-[10px] text-zinc-500 mt-0.5" title={meta.rule}>{meta.rule}</span>
+                </div>
+                <span className={`text-[10px] font-semibold tabular-nums ${acc.count}`}>{quotes.length} shown</span>
+              </CardHeader>
+              <CardContent className="p-3 text-xs text-zinc-200">
+                {empty ? (
+                  isExact ? (
+                    <div className="text-zinc-400 space-y-2" data-testid="spot-tier-empty-exact">
+                      <div className="text-zinc-200 font-medium">No exact-lane quotes yet.</div>
+                      {firstNonEmptyOther ? (
+                        <div className="text-[11px] text-zinc-500">
+                          Closest tier:{" "}
+                          <span className="text-zinc-200 font-semibold">{firstNonEmptyOther.label}</span>
+                          {" "}with{" "}
+                          <span className="text-amber-300 font-semibold">{firstNonEmptyOther.count}</span>
+                          {" "}prior quote{firstNonEmptyOther.count === 1 ? "" : "s"} — see below.
+                        </div>
+                      ) : matchMode === "strict" ? (
+                        <div className="text-[11px] text-zinc-500">
+                          No same-state-pair quotes either. Try{" "}
+                          <button onClick={onSwitchToRelaxed} className="text-amber-300 hover:text-amber-200 underline" data-testid="button-spot-switch-relaxed">
+                            switching to Relaxed mode
+                          </button>
+                          {" "}to also include same-market, reverse, and corridor matches.
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-zinc-500">
+                          No prior quotes anywhere in the tier ladder — this is a fresh corridor for your team.
+                        </div>
+                      )}
+                      <div className="text-[11px] text-zinc-500">Try broadening:</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {query.pickupDate && (
+                          <button onClick={onBroadenDate}
+                            className="text-[10px] px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700"
+                            data-testid="button-spot-broaden-clear-date">
+                            Clear pickup date
+                          </button>
+                        )}
+                        {(!query.lookbackDays || query.lookbackDays < 365) && (
+                          <button onClick={onBroadenLookback}
+                            className="text-[10px] px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700"
+                            data-testid="button-spot-broaden-lookback">
+                            Use all-time history
+                          </button>
+                        )}
+                        {query.equipment && (
+                          <button onClick={onBroadenEquipment}
+                            className="text-[10px] px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700"
+                            data-testid="button-spot-broaden-equipment">
+                            Drop mode filter
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-zinc-500">No matches in this tier.</div>
+                  )
+                ) : (
+                  <div className="max-h-[280px] overflow-y-auto">
+                    <table className="w-full text-xs">
+                      <thead className="text-zinc-500 text-[10px] uppercase tracking-wider sticky top-0 bg-zinc-900">
+                        <tr><th className="text-left py-1">Date</th><th className="text-left">Customer</th><th className="text-left">Lane</th><th>Quoted</th><th>Buy</th><th>Status</th></tr>
+                      </thead>
+                      <tbody>
+                        {quotes.map(q => {
+                          const quoted = num(q.quotedAmount);
+                          const paid = num(q.carrierPaid);
+                          return (
+                            <tr key={q.id} onClick={() => onPickQuote(q.id)}
+                              className="border-t border-zinc-800/60 hover:bg-zinc-800/40 cursor-pointer"
+                              data-testid={`spot-quote-row-${q.id}`}>
+                              <td className="py-1 text-zinc-300 whitespace-nowrap">{new Date(q.requestDate).toLocaleDateString()}</td>
+                              <td className="text-zinc-100 truncate max-w-[120px]">{q.customerName}</td>
+                              <td className="text-zinc-400 truncate max-w-[140px] text-[10px]">
+                                {q.originCity}, {q.originState} → {q.destCity}, {q.destState}
+                              </td>
+                              <td className="text-center tabular-nums">{fmtMoney(quoted)}</td>
+                              <td className="text-center tabular-nums text-zinc-400">{paid ? fmtMoney(paid) : "—"}</td>
+                              <td className="text-center"><StatusChip status={q.outcomeStatus} /></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
   );
 }
