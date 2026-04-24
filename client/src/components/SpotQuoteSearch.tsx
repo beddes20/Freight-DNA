@@ -1140,6 +1140,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                 customerId={data.resolvedCustomer?.id ?? activeQuery!.customerId ?? null}
                 guidance={data.guidance}
                 market={data.market}
+                laneTraffic={data.laneTraffic}
               />
             </div>
             {/* Zone 2 — Carrier shortlist (top 5) */}
@@ -1728,13 +1729,14 @@ const quoteBuilderSchema = zod.object({
 type QuoteBuilderValues = zod.infer<typeof quoteBuilderSchema>;
 
 function QuoteBuilderCard({
-  query, customers, customerId, guidance, market, onSaved,
+  query, customers, customerId, guidance, market, laneTraffic, onSaved,
 }: {
   query: SpotSearchQuery;
   customers: Customer[];
   customerId: string | null;
   guidance: SpotResult["guidance"];
   market: SpotResult["market"];
+  laneTraffic: SpotResult["laneTraffic"];
   onSaved?: (quoteId: string) => void;
 }): JSX.Element {
   const { toast } = useToast();
@@ -1745,14 +1747,20 @@ function QuoteBuilderCard({
   const suggestedLow = guidance.suggestedLow ?? guidance.benchmark ?? market?.band?.low ?? 0;
   const benchmark = guidance.benchmark ?? market?.band?.mid ?? null;
   const defaultQuoted = Math.round(suggestedHigh || benchmark || suggestedLow || 0);
-  const defaultCost = market?.band?.mid ?? null;
+  // Cost fallback chain: TRAC mid-band first → lane-traffic carrier average.
+  const tracMid = market?.band?.mid ?? null;
+  const laneCarrierAvg = laneTraffic?.avgCostPerLoad && laneTraffic.avgCostPerLoad > 0
+    ? laneTraffic.avgCostPerLoad
+    : null;
+  const defaultCost = tracMid && tracMid > 0 ? tracMid : laneCarrierAvg;
+  const costSource: "trac" | "lane" | null = tracMid && tracMid > 0 ? "trac" : laneCarrierAvg ? "lane" : null;
 
   const form = useForm<QuoteBuilderValues>({
     resolver: zodResolver(quoteBuilderSchema),
     defaultValues: {
       customerId: customerId ?? "",
-      quotedAmount: defaultQuoted > 0 ? defaultQuoted : undefined as unknown as number,
-      estimatedCost: defaultCost && defaultCost > 0 ? Math.round(defaultCost) : undefined,
+      quotedAmount: defaultQuoted > 0 ? defaultQuoted : 0,
+      estimatedCost: defaultCost && defaultCost > 0 ? Math.round(defaultCost) : 0,
       validUntil: "",
       notes: "",
     },
@@ -1762,8 +1770,8 @@ function QuoteBuilderCard({
   useEffect(() => {
     form.reset({
       customerId: customerId ?? form.getValues("customerId") ?? "",
-      quotedAmount: defaultQuoted > 0 ? defaultQuoted : (form.getValues("quotedAmount") as number),
-      estimatedCost: defaultCost && defaultCost > 0 ? Math.round(defaultCost) : form.getValues("estimatedCost"),
+      quotedAmount: defaultQuoted > 0 ? defaultQuoted : (Number(form.getValues("quotedAmount")) || 0),
+      estimatedCost: defaultCost && defaultCost > 0 ? Math.round(defaultCost) : (Number(form.getValues("estimatedCost")) || 0),
       validUntil: form.getValues("validUntil") ?? "",
       notes: form.getValues("notes") ?? "",
     });
@@ -1811,7 +1819,15 @@ function QuoteBuilderCard({
 
   const draftMut = useMutation({
     mutationFn: async (quoteId: string) => {
-      const res = await apiRequest("POST", "/api/customer-quotes/spot/email-draft", { quoteId });
+      const payload = {
+        quoteId,
+        recommendedRate: defaultQuoted > 0 ? defaultQuoted : undefined,
+        bandLow: market?.band?.low ?? guidance.suggestedLow ?? undefined,
+        bandMid: market?.band?.mid ?? undefined,
+        bandHigh: market?.band?.high ?? guidance.suggestedHigh ?? undefined,
+        bandSource: market?.band ? "TRAC" : guidance.benchmark != null ? "internal" : undefined,
+      };
+      const res = await apiRequest("POST", "/api/customer-quotes/spot/email-draft", payload);
       return await res.json() as { subject: string; body: string; to: string[] };
     },
     onSuccess: (d) => {
@@ -1889,7 +1905,14 @@ function QuoteBuilderCard({
               )} />
               <FormField control={form.control} name="estimatedCost" render={({ field }) => (
                 <FormItem>
-                  <FormLabel className="text-[10px] uppercase tracking-wider text-zinc-500">Est. cost ($)</FormLabel>
+                  <FormLabel className="text-[10px] uppercase tracking-wider text-zinc-500 flex items-center gap-1">
+                    Est. cost ($)
+                    {costSource && (
+                      <span className="text-[9px] normal-case tracking-normal text-zinc-600" data-testid="text-builder-cost-source">
+                        from {costSource === "trac" ? "TRAC mid" : "lane avg"}
+                      </span>
+                    )}
+                  </FormLabel>
                   <FormControl>
                     <Input type="number" min={0} step={1} inputMode="decimal"
                       value={field.value ?? ""}
@@ -2042,24 +2065,35 @@ function CarrierShortlistCard({
                     {c.presence === "known" && <span className="h-1.5 w-1.5 rounded-full bg-blue-400" title="Known" />}
                     {c.presence === "cold" && <span className="h-1.5 w-1.5 rounded-full bg-zinc-500" title="Cold" />}
                   </div>
-                  <div className="text-[10px] text-zinc-500 tabular-nums">
-                    Rank {c.rankScore.toFixed(0)} · {c.loads90d} loads/90d · {c.marginPct.toFixed(0)}% margin
-                    {c.lastRatePaid != null && <> · last ${c.lastRatePaid.toLocaleString(undefined, { maximumFractionDigits: 0 })}</>}
+                  <div className="text-[10px] text-zinc-500 tabular-nums flex items-center gap-1.5 flex-wrap">
+                    <span title="Performance / reliability tier">{c.tier}</span>
+                    <span>·</span>
+                    <span data-testid={`text-shortlist-reliability-${i}`}>rel {c.performanceScore.toFixed(0)}</span>
+                    <span>·</span>
+                    <span data-testid={`text-shortlist-ontime-${i}`}>
+                      OT {c.onTimePct != null ? `${c.onTimePct.toFixed(0)}%` : "—"}
+                    </span>
+                    <span>·</span>
+                    <span>{c.loads90d}/90d</span>
+                    <span>·</span>
+                    <span>{c.marginPct.toFixed(0)}% mgn</span>
+                    {c.lastRatePaid != null && <><span>·</span><span>last ${c.lastRatePaid.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></>}
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   {c.phone && (
-                    <a href={`tel:${c.phone}`}
+                    <button type="button"
+                      onClick={() => window.open(`webextel://${c.phone!.replace(/[^0-9+]/g, "")}`, "_self")}
                       className="h-7 w-7 inline-flex items-center justify-center rounded-[4px] border border-zinc-700 hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-300"
-                      title={`Call ${c.phone}`}
+                      title={`Webex call ${c.phone}`}
                       data-testid={`button-shortlist-call-${i}`}>
                       <Phone className="h-3 w-3" />
-                    </a>
+                    </button>
                   )}
                   {c.primaryEmail && (
-                    <a href={`mailto:${c.primaryEmail}`}
+                    <a href={`mailto:${c.primaryEmail}?subject=${encodeURIComponent("RFQ: lane coverage")}&body=${encodeURIComponent("Hi,\n\nWe have a load looking for coverage. Can you bid on this lane?\n\nThanks,")}`}
                       className="h-7 w-7 inline-flex items-center justify-center rounded-[4px] border border-zinc-700 hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-300"
-                      title={`Email ${c.primaryEmail}`}
+                      title={`RFQ email ${c.primaryEmail}`}
                       data-testid={`button-shortlist-email-${i}`}>
                       <Mail className="h-3 w-3" />
                     </a>
@@ -2153,24 +2187,55 @@ function CustomerLaneTimelineCard({
  * outcomeReasonLabel and surfaces the top reason as a takeaway. Helps the
  * rep frame the new quote with awareness of why prior bids fell over.
  */
+type LossBucketKey = "price" | "service" | "timing" | "capacity" | "no_response" | "other";
+const LOSS_BUCKET_LABELS: Record<LossBucketKey, string> = {
+  price: "Price / rate",
+  service: "Service / quality",
+  timing: "Timing / scheduling",
+  capacity: "Capacity / equipment",
+  no_response: "No response / expired",
+  other: "Other / unknown",
+};
+function classifyLossReason(q: EnrichedQuote): LossBucketKey {
+  if (q.outcomeStatus === "no_response" || q.outcomeStatus === "expired") return "no_response";
+  const r = (q.outcomeReasonLabel ?? "").toLowerCase();
+  if (!r) return "other";
+  if (/(price|rate|cost|cheap|expensive|under(cut|bid)|too high|low.*bid)/.test(r)) return "price";
+  if (/(service|quality|perform|reliab|relationship|trust)/.test(r)) return "service";
+  if (/(time|sched|late|day|window|appointment|deadline|tight)/.test(r)) return "timing";
+  if (/(capac|equip|truck|driver|asset|coverage|avail)/.test(r)) return "capacity";
+  return "other";
+}
 function LossPatternCard({ tieredMatches }: { tieredMatches: TierGroup[] }): JSX.Element {
   const allQuotes: EnrichedQuote[] = tieredMatches.flatMap(g => g.items ?? g.quotes ?? []);
   const losses = allQuotes.filter(q =>
     q.outcomeStatus.startsWith("lost") || q.outcomeStatus === "no_response" || q.outcomeStatus === "expired"
   );
-  const grouped = new Map<string, { reason: string; count: number; sample: EnrichedQuote[] }>();
+  const grouped = new Map<LossBucketKey, { key: LossBucketKey; count: number; lostMargins: number[] }>();
   for (const q of losses) {
-    const reason = (q.outcomeReasonLabel ?? "Unknown reason").trim() || "Unknown reason";
-    const entry = grouped.get(reason) ?? { reason, count: 0, sample: [] };
+    const key = classifyLossReason(q);
+    const entry = grouped.get(key) ?? { key, count: 0, lostMargins: [] };
     entry.count += 1;
-    if (entry.sample.length < 3) entry.sample.push(q);
-    grouped.set(reason, entry);
+    const quoted = num(q.quotedAmount);
+    const paid = num(q.carrierPaid);
+    if (quoted > 0 && paid > 0) {
+      entry.lostMargins.push(((quoted - paid) / quoted) * 100);
+    }
+    grouped.set(key, entry);
   }
-  const buckets = Array.from(grouped.values()).sort((a, b) => b.count - a.count).slice(0, 4);
+  const buckets = Array.from(grouped.values())
+    .map(b => ({
+      ...b,
+      avgLostMarginPct: b.lostMargins.length > 0
+        ? b.lostMargins.reduce((s, v) => s + v, 0) / b.lostMargins.length
+        : null,
+    }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 6);
   const total = losses.length;
   const top = buckets[0] ?? null;
   const takeaway = top
-    ? `${Math.round((top.count / total) * 100)}% of losses on this lane cite "${top.reason}". Address it up front in your pitch.`
+    ? `${Math.round((top.count / total) * 100)}% of losses on this lane fall into "${LOSS_BUCKET_LABELS[top.key]}"${top.avgLostMarginPct !== null ? ` (avg margin gap ${top.avgLostMarginPct.toFixed(1)}%)` : ""}. Address it up front in your pitch.`
     : "No prior losses on this lane — clean slate.";
   return (
     <Card className="bg-zinc-900 rounded-[4px] border border-zinc-800" data-testid="spot-zone-loss-pattern">
@@ -2187,12 +2252,15 @@ function LossPatternCard({ tieredMatches }: { tieredMatches: TierGroup[] }): JSX
           <>
             <ul className="space-y-1.5">
               {buckets.map((b, i) => (
-                <li key={b.reason} className="flex items-center gap-2 text-xs" data-testid={`loss-bucket-${i}`}>
-                  <span className="text-zinc-200 flex-1 truncate">{b.reason}</span>
-                  <div className="w-20 h-1.5 bg-zinc-800 rounded-[4px] overflow-hidden">
+                <li key={b.key} className="flex items-center gap-2 text-xs" data-testid={`loss-bucket-${b.key}`}>
+                  <span className="text-zinc-200 flex-1 truncate">{LOSS_BUCKET_LABELS[b.key]}</span>
+                  <div className="w-16 h-1.5 bg-zinc-800 rounded-[4px] overflow-hidden">
                     <div className="h-full bg-red-400/70" style={{ width: `${Math.min(100, (b.count / total) * 100)}%` }} />
                   </div>
-                  <span className="text-zinc-400 tabular-nums w-10 text-right">{b.count}</span>
+                  <span className="text-zinc-400 tabular-nums w-8 text-right" data-testid={`loss-bucket-count-${b.key}`}>{b.count}</span>
+                  <span className="text-zinc-500 tabular-nums w-16 text-right text-[10px]" data-testid={`loss-bucket-avg-margin-${b.key}`}>
+                    {b.avgLostMarginPct !== null ? `${b.avgLostMarginPct.toFixed(1)}% mgn` : "—"}
+                  </span>
                 </li>
               ))}
             </ul>

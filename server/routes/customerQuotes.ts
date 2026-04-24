@@ -362,12 +362,19 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const schema = z.object({ quoteId: z.string().min(1) });
+      const schema = z.object({
+        quoteId: z.string().min(1),
+        recommendedRate: z.number().finite().positive().optional(),
+        bandLow: z.number().finite().positive().optional(),
+        bandMid: z.number().finite().positive().optional(),
+        bandHigh: z.number().finite().positive().optional(),
+        bandSource: z.string().max(40).optional(),
+      });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
       }
-      const { quoteId } = parsed.data;
+      const { quoteId, recommendedRate, bandLow, bandMid, bandHigh, bandSource } = parsed.data;
       const detail = await getQuoteDetail(user.organizationId, quoteId);
       if (!detail) return res.status(404).json({ error: "Quote not found" });
 
@@ -400,10 +407,23 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const lane = `${detail.opp.originCity}, ${detail.opp.originState} → ${detail.opp.destCity}, ${detail.opp.destState}`;
       const quotedAmt = Number(detail.opp.quotedAmount ?? 0);
       const validStr = detail.opp.validThrough ? new Date(detail.opp.validThrough).toLocaleDateString() : "";
+      // Recommended rate defaults to the saved quote amount unless an explicit
+      // recommended rate (from spot guidance) is supplied by the client.
+      const recRate = recommendedRate && recommendedRate > 0 ? recommendedRate : quotedAmt;
+      const guidanceLine = (bandLow || bandMid || bandHigh)
+        ? `Pricing guidance${bandSource ? ` (${bandSource})` : ""}: ` +
+          [
+            bandLow ? `low $${Math.round(bandLow).toLocaleString()}` : "",
+            bandMid ? `mid $${Math.round(bandMid).toLocaleString()}` : "",
+            bandHigh ? `high $${Math.round(bandHigh).toLocaleString()}` : "",
+          ].filter(Boolean).join(" / ")
+        : "";
       const dataContext = [
         `Spot quote: ${lane}`,
         `Equipment: ${detail.opp.equipment}`,
+        `Recommended rate: $${Math.round(recRate).toLocaleString()}`,
         `Quoted: $${quotedAmt.toLocaleString()}`,
+        guidanceLine,
         validStr ? `Valid through: ${validStr}` : "",
         detail.opp.notes ? `Internal notes: ${detail.opp.notes}` : "",
         dataResult.context,
@@ -413,7 +433,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
         voiceProfile,
         playType: "general",
         dataContext,
-        additionalContext: `Outreach for spot quote ${lane} at $${quotedAmt.toLocaleString()}.`,
+        additionalContext: `Outreach for spot quote ${lane}. Recommended rate $${Math.round(recRate).toLocaleString()}${guidanceLine ? `. ${guidanceLine}` : ""}.`,
       });
       const subject = `Spot Quote: ${lane}`;
       res.json({ subject, body, to: toEmails });
