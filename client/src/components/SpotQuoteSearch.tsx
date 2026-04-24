@@ -134,6 +134,10 @@ type SpotResult = {
     revenue: number; cost: number; margin: number; marginPct: number;
     uniqueCarriers: number;
     tierBreakdown: { exact: number; sameMarket: number; sameState: number };
+    lookbackDays: number;
+    avgRevenuePerLoad: number;
+    avgCostPerLoad: number;
+    avgMarginPerLoad: number;
     topCarriers: {
       name: string; loads: number; loads30d: number; loads90d: number;
       revenue: number; cost: number; margin: number; marginPct: number;
@@ -147,6 +151,9 @@ type SpotResult = {
     exactLaneRuns: number; nearbyRuns: number;
     loads90d: number; marginPct: number;
     performanceScore: number; tier: string;
+    onTimePct: number | null;
+    lastRatePaid: number | null;
+    lastRatePaidAt: number | null;
     doNotUse: boolean;
     primaryEmail: string | null; phone: string | null;
     inRolodex: boolean;
@@ -157,6 +164,8 @@ type SpotResult = {
     id: string; name: string; namedCorridor: string | null;
     originRegion: string; destinationRegion: string;
     description: string | null; isBaseline: boolean;
+    seasonalityNote: string | null;
+    responsibleContact: { contactId: string; contactName: string; status: string; confidenceScore: number } | null;
   } | null;
   exactMatches: EnrichedQuote[];
   similarMatches: EnrichedQuote[];
@@ -1047,11 +1056,29 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             {data.corridorPattern && (
               <span
                 className="text-[11px] px-1.5 py-0.5 rounded-[4px] bg-teal-500/10 text-teal-300 border border-teal-500/30 inline-flex items-center gap-1"
-                title={`${data.corridorPattern.originRegion} → ${data.corridorPattern.destinationRegion}${data.corridorPattern.description ? ` · ${data.corridorPattern.description}` : ""}`}
+                title={[
+                  `${data.corridorPattern.originRegion} → ${data.corridorPattern.destinationRegion}`,
+                  data.corridorPattern.description,
+                  data.corridorPattern.seasonalityNote ? `Seasonality: ${data.corridorPattern.seasonalityNote}` : null,
+                  data.corridorPattern.responsibleContact
+                    ? `Responsible: ${data.corridorPattern.responsibleContact.contactName} (${data.corridorPattern.responsibleContact.status})`
+                    : null,
+                ].filter(Boolean).join(" · ")}
                 data-testid="chip-spot-corridor-pattern"
               >
                 <MapPin className="h-3 w-3" />
                 {data.corridorPattern.namedCorridor || data.corridorPattern.name}
+                {data.corridorPattern.seasonalityNote && (
+                  <span className="ml-1 text-[10px] px-1 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30" data-testid="chip-spot-corridor-seasonality">seasonal</span>
+                )}
+                {data.corridorPattern.responsibleContact && (
+                  <span
+                    className="ml-1 text-[10px] px-1 rounded bg-zinc-800 text-zinc-300 border border-zinc-700"
+                    data-testid="chip-spot-corridor-responsible"
+                  >
+                    {data.corridorPattern.responsibleContact.contactName.split(/\s+/)[0]}
+                  </span>
+                )}
               </span>
             )}
             {!data.marketStatus.available && (
@@ -1498,11 +1525,14 @@ function LaneTrafficCard({ traffic }: { traffic: NonNullable<SpotResult["laneTra
   return (
     <SectionCard title="Lane Traffic" icon={<TrendingUp className="h-3.5 w-3.5 text-amber-400" />} testId="spot-section-lane-traffic">
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-2">
-        <Kpi label="Loads (90d)" value={traffic.loads90d.toLocaleString()} sub={`${traffic.loads30d.toLocaleString()} in 30d`} />
+        <Kpi label={`Loads (${traffic.lookbackDays}d)`} value={traffic.totalLoads.toLocaleString()} sub={`${traffic.loads30d.toLocaleString()} in 30d`} />
         <Kpi label="Realized" value={traffic.realized.toLocaleString()} sub={`${traffic.available.toLocaleString()} avail`} />
-        <Kpi label="Margin %" value={`${traffic.marginPct.toFixed(1)}%`} sub={fmtMoney(traffic.margin)} />
-        <Kpi label="Revenue" value={fmtMoney(traffic.revenue)} />
-        <Kpi label="Carriers" value={traffic.uniqueCarriers.toLocaleString()} />
+        <Kpi label="Margin %" value={`${traffic.marginPct.toFixed(1)}%`} sub={`avg ${fmtMoney(traffic.avgMarginPerLoad)}/load`} />
+        <Kpi label="Revenue" value={fmtMoney(traffic.revenue)} sub={`avg ${fmtMoney(traffic.avgRevenuePerLoad)}/load`} />
+        <Kpi label="Carriers" value={traffic.uniqueCarriers.toLocaleString()} sub={`avg cost ${fmtMoney(traffic.avgCostPerLoad)}`} />
+      </div>
+      <div className="text-[10px] text-zinc-500 mb-1" data-testid="spot-traffic-window">
+        Window: last {traffic.lookbackDays} days
       </div>
       <div className="flex items-center gap-2 text-[10px] text-zinc-500 mb-2" data-testid="spot-traffic-tier-breakdown">
         <span className="uppercase tracking-wider">Match tiers:</span>
@@ -1511,7 +1541,7 @@ function LaneTrafficCard({ traffic }: { traffic: NonNullable<SpotResult["laneTra
         <span className="px-1.5 py-0.5 rounded-[3px] bg-zinc-800 text-zinc-400 border border-zinc-700">Same state {tb.sameState}</span>
       </div>
       {traffic.topCarriers.length === 0 ? (
-        <div className="text-zinc-500 text-xs">No realized loads on this lane in the last 90 days.</div>
+        <div className="text-zinc-500 text-xs">No realized loads on this lane in the last {traffic.lookbackDays} days.</div>
       ) : (
         <table className="w-full text-xs">
           <thead className="text-zinc-500 text-[10px] uppercase tracking-wider">
@@ -1570,6 +1600,8 @@ function CarrierOutreachList({ outreach }: { outreach: SpotResult["carrierOutrea
               <th className="text-right">Rank (Fit / Reli)</th>
               <th className="text-right">90d / Exact</th>
               <th className="text-right">Margin %</th>
+              <th className="text-right">On-Time</th>
+              <th className="text-right">Last Paid</th>
               <th className="text-left">Presence</th>
               <th className="text-left">Contact</th>
             </tr>
@@ -1595,6 +1627,16 @@ function CarrierOutreachList({ outreach }: { outreach: SpotResult["carrierOutrea
                 </td>
                 <td className="text-right tabular-nums text-zinc-300">{c.loads90d} / {c.exactLaneRuns}</td>
                 <td className="text-right tabular-nums text-zinc-300">{c.marginPct.toFixed(1)}%</td>
+                <td className="text-right tabular-nums text-zinc-300" data-testid={`spot-outreach-ontime-${i}`}>
+                  {c.onTimePct != null ? `${c.onTimePct.toFixed(0)}%` : <span className="text-zinc-600">—</span>}
+                </td>
+                <td className="text-right tabular-nums text-zinc-300" data-testid={`spot-outreach-lastrate-${i}`}>
+                  {c.lastRatePaid != null ? (
+                    <span title={c.lastRatePaidAt ? new Date(c.lastRatePaidAt).toLocaleDateString() : undefined}>
+                      ${c.lastRatePaid.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    </span>
+                  ) : <span className="text-zinc-600">—</span>}
+                </td>
                 <td className="text-[10px]" data-testid={`spot-outreach-presence-${i}`}>
                   {c.presence === "active" && <span className="px-1.5 py-0.5 rounded-[3px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />Active</span>}
                   {c.presence === "known" && <span className="px-1.5 py-0.5 rounded-[3px] bg-blue-500/15 text-blue-300 border border-blue-500/30 inline-flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-blue-400" />Known</span>}

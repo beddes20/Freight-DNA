@@ -24,7 +24,18 @@ vi.mock("../tracService", () => ({
 // Mock storage so importing the module doesn't try to connect to a DB.
 vi.mock("../storage", () => ({ db: {} }));
 
-import { getLaneMarket, __resetTracCacheForTests } from "../services/spotMarketData";
+import { getLaneMarket, __resetTracCacheForTests, type CorridorPattern, type CarrierOutreachItem } from "../services/spotMarketData";
+
+// Compile-time guard for the Task #515 follow-up shape additions. If a future
+// edit removes any of these required fields, tsc fails this test file before
+// the runtime suite even starts.
+const _outreachShape: Pick<CarrierOutreachItem, "onTimePct" | "lastRatePaid" | "lastRatePaidAt"> = {
+  onTimePct: null, lastRatePaid: null, lastRatePaidAt: null,
+};
+const _corridorShape: Pick<CorridorPattern, "seasonalityNote" | "responsibleContact"> = {
+  seasonalityNote: null, responsibleContact: null,
+};
+void _outreachShape; void _corridorShape;
 
 describe("spotMarketData.getLaneMarket — Task #515", () => {
   beforeEach(() => {

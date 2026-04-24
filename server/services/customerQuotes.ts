@@ -1941,7 +1941,7 @@ export type SpotSearchResult = {
   /** Task #515 — External data layering. Each lookup degrades independently. */
   market: LaneMarket | null;
   marketStatus: { available: boolean; reason: string | null };
-  laneTraffic: LaneTraffic | null;
+  laneTraffic: (LaneTraffic & { lookbackDays: number; avgRevenuePerLoad: number; avgCostPerLoad: number; avgMarginPerLoad: number }) | null;
   carrierOutreach: CarrierOutreachItem[];
   corridorPattern: CorridorPattern | null;
 };
@@ -2356,8 +2356,15 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
   const [marketRes, laneTrafficRes, carrierOutreachRes, corridorRes] = await Promise.all([
     getLaneMarket(input.pickupCity, input.pickupState, input.deliveryCity, input.deliveryState, equipment || null)
       .catch(err => ({ ok: false as const, reason: (err as Error).message ?? "TRAC error" })),
-    getLaneTraffic(orgId, input.pickupCity, input.pickupState, input.deliveryCity, input.deliveryState, equipment || null)
-      .catch(() => null),
+    getLaneTraffic(
+      orgId,
+      input.pickupCity,
+      input.pickupState,
+      input.deliveryCity,
+      input.deliveryState,
+      equipment || null,
+      input.lookbackDays && input.lookbackDays > 0 ? input.lookbackDays : 90,
+    ).catch(() => null),
     getLaneCarriers(orgId, input.pickupState, input.deliveryState, equipment || null)
       .catch(() => [] as CarrierOutreachItem[]),
     getCorridorPattern(orgId, input.pickupState, input.deliveryState)
@@ -2367,7 +2374,7 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
   const marketStatus = marketRes.ok
     ? { available: true, reason: null }
     : { available: false, reason: marketRes.reason };
-  const laneTraffic: LaneTraffic | null = laneTrafficRes;
+  const laneTraffic: SpotSearchResult["laneTraffic"] = laneTrafficRes;
   const carrierOutreach: CarrierOutreachItem[] = carrierOutreachRes ?? [];
   const corridorPattern: CorridorPattern | null = corridorRes;
 

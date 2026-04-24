@@ -1,4 +1,4 @@
-import { and, eq, sql, desc, or } from "drizzle-orm";
+import { and, eq, sql, desc, or, gte } from "drizzle-orm";
 import { db } from "../storage";
 import {
   loadFact,
@@ -6,6 +6,8 @@ import {
   carrierLaneFit,
   carrierScorecardFact,
   geographicLanePatterns,
+  accountContactLanePatternResponsibilities,
+  contacts,
   type GeographicLanePattern,
 } from "@shared/schema";
 import { fetchFullLane } from "../tracService";
@@ -79,6 +81,11 @@ export type CarrierOutreachItem = {
   loads90d: number;
   marginPct: number;
   performanceScore: number;
+  /** Task #515 — On-time percentage from carrier_scorecard_fact. */
+  onTimePct: number | null;
+  /** Task #515 — Last per-load buy rate observed on this lane. */
+  lastRatePaid: number | null;
+  lastRatePaidAt: number | null;
   tier: string;
   doNotUse: boolean;
   primaryEmail: string | null;
@@ -97,6 +104,10 @@ export type CorridorPattern = {
   destinationRegion: string;
   description: string | null;
   isBaseline: boolean;
+  /** Task #515 — extracted seasonality note when present in description. */
+  seasonalityNote: string | null;
+  /** Task #515 — best confirmed/suggested responsible contact for this pattern. */
+  responsibleContact: { contactId: string; contactName: string; status: string; confidenceScore: number } | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -258,13 +269,17 @@ export async function getLaneTraffic(
   deliveryCity: string,
   deliveryState: string,
   equipmentRaw: string | null | undefined,
-): Promise<LaneTraffic | null> {
+  /** Task #515 — N-day window cap; defaults to 90. */
+  lookbackDays: number = 90,
+): Promise<(LaneTraffic & { lookbackDays: number; avgRevenuePerLoad: number; avgCostPerLoad: number; avgMarginPerLoad: number }) | null> {
   if (!pickupState || !deliveryState) return null;
   try {
+    const lookbackCutoff = new Date(Date.now() - Math.max(1, lookbackDays) * 86_400_000);
     const rows = await db.select().from(loadFact).where(and(
       eq(loadFact.orgId, orgId),
       eq(loadFact.originState, pickupState),
       eq(loadFact.destinationState, deliveryState),
+      gte(loadFact.lastSeenAt, lookbackCutoff),
     ));
     const eqFiltered = rows.filter(r => eqMatchesFamily(r.equipmentType, equipmentRaw));
     if (eqFiltered.length === 0) return null;
@@ -386,6 +401,10 @@ export async function getLaneTraffic(
       uniqueCarriers: carriersSet.size,
       tierBreakdown,
       topCarriers,
+      lookbackDays,
+      avgRevenuePerLoad: totalLoads > 0 ? revenue / totalLoads : 0,
+      avgCostPerLoad: totalLoads > 0 ? cost / totalLoads : 0,
+      avgMarginPerLoad: totalLoads > 0 ? margin / totalLoads : 0,
     };
   } catch (err) {
     console.warn("[spotMarketData] getLaneTraffic failed:", (err as Error).message);
@@ -419,7 +438,7 @@ export async function getLaneCarriers(
     if (fits.length === 0) return [];
 
     const names = Array.from(new Set(fits.map(f => f.carrierName).filter(Boolean)));
-    const [scoreRows, rolodex] = await Promise.all([
+    const [scoreRows, rolodex, lastRateRows] = await Promise.all([
       db.select().from(carrierScorecardFact).where(and(
         eq(carrierScorecardFact.orgId, orgId),
         sql`${carrierScorecardFact.carrierName} = ANY(${names})`,
@@ -429,7 +448,32 @@ export async function getLaneCarriers(
         eq(carriers.orgId, orgId),
         sql`LOWER(${carriers.name}) = ANY(${names.map(n => n.toLowerCase())})`,
       )),
+      // Last per-load buy rate for these carriers on the lane (state pair).
+      db.select({
+        carrierName: loadFact.carrierName,
+        cost: loadFact.cost,
+        loadCount: loadFact.loadCount,
+        lastSeenAt: loadFact.lastSeenAt,
+      }).from(loadFact).where(and(
+        eq(loadFact.orgId, orgId),
+        eq(loadFact.originState, originState),
+        eq(loadFact.destinationState, destState),
+        sql`${loadFact.carrierName} = ANY(${names})`,
+      )),
     ]);
+
+    // Reduce last-rate rows to most-recent per carrier.
+    const lastRateMap = new Map<string, { rate: number | null; at: number }>();
+    for (const r of lastRateRows) {
+      const cname = r.carrierName?.trim();
+      if (!cname) continue;
+      const t = r.lastSeenAt ? r.lastSeenAt.getTime() : 0;
+      const cAmt = num(r.cost);
+      const lc = r.loadCount ?? 1;
+      const rate = cAmt > 0 && lc > 0 ? cAmt / lc : null;
+      const prev = lastRateMap.get(cname);
+      if (rate != null && (!prev || t > prev.at)) lastRateMap.set(cname, { rate, at: t });
+    }
 
     const scoreMap = new Map<string, typeof scoreRows[number]>();
     for (const s of scoreRows) {
@@ -462,6 +506,7 @@ export async function getLaneCarriers(
         const presence: CarrierOutreachItem["presence"] = rod
           ? (perf >= 70 ? "active" : "known")
           : "cold";
+        const lastRate = lastRateMap.get(f.carrierName) ?? null;
         return {
           carrierId: rod?.id ?? null,
           name: f.carrierName,
@@ -473,6 +518,9 @@ export async function getLaneCarriers(
           loads90d: score?.loads90d ?? 0,
           marginPct: score ? num(score.marginPct) : 0,
           performanceScore: perf,
+          onTimePct: score?.onTimePct != null ? num(score.onTimePct) : null,
+          lastRatePaid: lastRate?.rate ?? null,
+          lastRatePaidAt: lastRate?.at ?? null,
           tier: score?.tier ?? "new",
           doNotUse: score?.doNotUse ?? rod?.status === "do_not_use",
           primaryEmail: rod?.primaryEmail ?? null,
@@ -537,6 +585,55 @@ export async function getCorridorPattern(
     if (matches.length === 0) return null;
     matches.sort((a, b) => b.score - a.score);
     const best = matches[0].row;
+
+    // Best responsible contact for this pattern (confirmed first, else
+    // highest-confidence suggested). Scoped by org.
+    let responsibleContact: CorridorPattern["responsibleContact"] = null;
+    try {
+      const respRows = await db.select({
+        id: accountContactLanePatternResponsibilities.id,
+        contactId: accountContactLanePatternResponsibilities.contactId,
+        status: accountContactLanePatternResponsibilities.status,
+        confidenceScore: accountContactLanePatternResponsibilities.confidenceScore,
+        contactName: contacts.name,
+      })
+        .from(accountContactLanePatternResponsibilities)
+        .leftJoin(contacts, eq(contacts.id, accountContactLanePatternResponsibilities.contactId))
+        .where(and(
+          eq(accountContactLanePatternResponsibilities.orgId, orgId),
+          eq(accountContactLanePatternResponsibilities.lanePatternId, best.id),
+          sql`${accountContactLanePatternResponsibilities.status} <> 'dismissed'`,
+        ))
+        .orderBy(
+          // Prefer confirmed over suggested, then highest confidence.
+          sql`CASE WHEN ${accountContactLanePatternResponsibilities.status} = 'confirmed' THEN 0 ELSE 1 END`,
+          desc(accountContactLanePatternResponsibilities.confidenceScore),
+        )
+        .limit(1);
+      const r = respRows[0];
+      if (r && r.contactId && r.contactName) {
+        responsibleContact = {
+          contactId: r.contactId,
+          contactName: r.contactName,
+          status: r.status,
+          confidenceScore: r.confidenceScore,
+        };
+      }
+    } catch {
+      responsibleContact = null;
+    }
+
+    // Seasonality note — extract a sentence from the description if it
+    // mentions seasonal/peak/holiday/produce keywords.
+    const seasonalityNote = (() => {
+      const desc = best.description ?? "";
+      if (!desc) return null;
+      const sentences = desc.split(/(?<=[.!?])\s+/);
+      const re = /\b(seasonal|season|peak|holiday|produce|harvest|winter|summer|spring|fall|autumn|q[1-4])\b/i;
+      const hit = sentences.find(s => re.test(s));
+      return hit?.trim() ?? null;
+    })();
+
     return {
       id: best.id,
       name: best.name,
@@ -545,6 +642,8 @@ export async function getCorridorPattern(
       destinationRegion: best.destinationRegion,
       description: best.description,
       isBaseline: best.isBaseline ?? false,
+      seasonalityNote,
+      responsibleContact,
     };
   } catch (err) {
     console.warn("[spotMarketData] getCorridorPattern failed:", (err as Error).message);
