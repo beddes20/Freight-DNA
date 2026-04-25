@@ -1143,7 +1143,7 @@ export async function rankCarriersForLane(
         if (b.carrierId) positiveOutcomeCarrierKeys.add(b.carrierId);
         positiveOutcomeCarrierKeys.add(normStr(b.carrierName));
         // 90-day positive-outcome window — prefer classifiedAt, fall back to updatedAt.
-        const tsRaw = (b as any).classifiedAt ?? b.updatedAt ?? null;
+        const tsRaw = b.classifiedAt ?? b.updatedAt ?? null;
         const ts = tsRaw ? new Date(tsRaw).getTime() : NaN;
         if (Number.isFinite(ts) && ts >= benchCutoff) {
           if (b.carrierId) bumpBenchKey(b.carrierId);

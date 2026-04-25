@@ -292,3 +292,61 @@ describe("bench tier-0 — sort comparator", () => {
     expect(computeBenchTier0Keys([flagged, exact]).size).toBe(0);
   });
 });
+
+describe("bench tier-0 — AF persisted shortlist preserves order under cap", () => {
+  // The proactive AF pipeline persists a capped shortlist to
+  // freight_opportunity_carriers. Before Task #632 it re-sorted by fitScore
+  // alone, which silently undid the ranker's bench tier-0 promotion and
+  // could drop bench carriers when fitScore was modest. This test locks
+  // the AF re-sort to the same bench-aware comparator the ranker uses.
+  beforeEach(() => {
+    mockedRank.mockReset();
+  });
+
+  it("keeps a low-fitScore bench carrier in the persisted top-N over a high-fitScore exact carrier", async () => {
+    // Cap = 1 → only one carrier survives. With the bug, exact-90 wins.
+    // With the fix, the bench carrier wins because it's in tier-0.
+    const benchLowScore = makeRanked({
+      carrierId: "bench-low",
+      carrierName: "Bench Low",
+      historyMatch: "region",
+      exactLaneLoads: 0,
+      loadsOnLane: 0,
+      fitScore: 55,
+      bench: true,
+      benchWins: 2,
+    });
+    const exactHighScore = makeRanked({
+      carrierId: "exact-high",
+      carrierName: "Exact High",
+      historyMatch: "exact",
+      exactLaneLoads: 12,
+      loadsOnLane: 12,
+      fitScore: 95,
+      bench: false,
+      benchWins: 0,
+      isIncumbent: true,
+      incumbentRank: 1,
+    });
+    mockedRank.mockResolvedValue([benchLowScore, exactHighScore]);
+
+    const storage: any = {
+      getRecurringLanes: vi.fn(async () => []),
+      getOrgWideBenchByLaneSignature: vi.fn(async () => []),
+      getLaneCarrierBench: vi.fn(),
+      getCarrier: vi.fn(async () => null),
+      getRecentlyContactedCarrierIds: vi.fn(async () => [] as string[]),
+      checkCarrierDailyBudget: vi.fn(async () => ({ allowed: true })),
+    };
+    const opp = makeOpp({ recurringLaneId: null });
+    const policy = makePolicy({ maxCarriersPerOpportunity: 1 });
+
+    const rows = await rankCarriersForOpportunity(storage, opp, policy);
+    const ranked1 = rows.find(r => r.rank === 1);
+    expect(ranked1?.carrier.id).toBe("bench-low");
+    // The exact-high carrier should be present but excluded as overflow.
+    const exactRow = rows.find(r => r.carrier.id === "exact-high");
+    expect(exactRow?.rank).toBe(null);
+    expect(exactRow?.excludedReason).toBe("rep_override");
+  });
+});

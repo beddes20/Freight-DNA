@@ -17,7 +17,13 @@
 
 import type { IStorage } from "./storage";
 import { CARRIER_DAILY_BUDGET_CONFIG } from "./storage";
-import { rankCarriersForLane, HIGH_FREQUENCY_CONFIG, type RankedCarrier } from "./carrierRankingService";
+import {
+  rankCarriersForLane,
+  HIGH_FREQUENCY_CONFIG,
+  computeBenchTier0Keys,
+  benchTier0KeyFor,
+  type RankedCarrier,
+} from "./carrierRankingService";
 import { getLaneCoverageProfile } from "./laneCoverageService";
 import type {
   Carrier,
@@ -449,9 +455,28 @@ export async function rankCarriersForOpportunity(
     rows.push({ carrier: carrierShape, ranked: r, bucket, excludedReason: null, rank: null });
   }
 
-  // Sort eligible rows by fitScore desc, then assign 1-based rank within the cap.
+  // Task #632 — Sort must mirror rankCarriersForLane so bench tier-0 carriers
+  // stay above `exact` history both in LWQ and in AF persisted shortlist.
+  // Without this, the AF cap could drop bench carriers that the ranker
+  // intentionally promoted.
   const eligible = rows.filter(r => r.bucket !== null);
-  eligible.sort((a, b) => (b.ranked.fitScore ?? 0) - (a.ranked.fitScore ?? 0));
+  const benchKeys = computeBenchTier0Keys(eligible.map(r => r.ranked));
+  const isBenchT0 = (r: RankedShortlistRow) => benchKeys.has(benchTier0KeyFor(r.ranked));
+  const matchRank: Record<string, number> = {
+    exact: 0, nearby: 1, state_pair: 2, region: 3, none: 4,
+  };
+  eligible.sort((a, b) => {
+    const aT0 = isBenchT0(a);
+    const bT0 = isBenchT0(b);
+    if (aT0 !== bT0) return aT0 ? -1 : 1;
+    if (aT0 && bT0) {
+      const winsDiff = (b.ranked.benchWins ?? 0) - (a.ranked.benchWins ?? 0);
+      if (winsDiff !== 0) return winsDiff;
+    }
+    const scoreDiff = (b.ranked.fitScore ?? 0) - (a.ranked.fitScore ?? 0);
+    if (scoreDiff !== 0) return scoreDiff;
+    return (matchRank[a.ranked.historyMatch] ?? 4) - (matchRank[b.ranked.historyMatch] ?? 4);
+  });
   const cap = Math.max(1, policy.maxCarriersPerOpportunity || PAFOE_DEFAULTS.policy.maxCarriersPerOpportunity);
   const capped = eligible.slice(0, cap);
   const overflowIds = new Set(eligible.slice(cap).map(r => r.carrier.id));
