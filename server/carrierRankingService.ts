@@ -520,10 +520,15 @@ export function buildRankReasons(
   if (benchWins > 0) {
     out.push(`Bench: ${benchWins} win${benchWins === 1 ? "" : "s"} (last 90d)`);
   }
-  for (const r of rawReasons) {
+  for (const raw of rawReasons) {
     if (out.length >= REASONS_DISPLAY_CAP) break;
-    if (!r || out.includes(r)) continue;
-    out.push(r);
+    if (!raw) continue;
+    // Trim each reason to suppress whitespace-only entries that would render
+    // as a blank bullet in the popover. We re-emit the trimmed copy so the UI
+    // never has to defensively trim again.
+    const trimmed = raw.trim();
+    if (!trimmed || out.includes(trimmed)) continue;
+    out.push(trimmed);
   }
   return out;
 }
