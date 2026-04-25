@@ -1,17 +1,15 @@
 /**
  * Task #639 — Today queue aggregator tests.
  *
- * Focuses on the pure ranking surface (the heart of the feature):
- *   - tier multiplier ordering
- *   - time-decay penalty
- *   - hot-reply floor (replies always float to top)
- *   - composite formula = customerTier × urgency × decay (+floor for replies)
- *   - source diversity (items from all four upstream surfaces survive ranking)
+ * Two layers of coverage:
+ *   1. Pure ranker (tier multiplier, time decay, hot-reply floor, sorting)
+ *   2. Composer integration (snooze hide/re-surface, source diversity,
+ *      end-to-end priority ordering, pagination) via composeTodayQueue
  *
- * The aggregator's per-source DB pulls (LWQ, freight_opps, threads, quote
- * SLA) are exercised in their respective surface tests; here we mock the
- * storage layer to a thin stub so importing the module doesn't open a
- * real DB connection, then drive `rankTodayItems` directly.
+ * The composer is the seam through which getTodayQueue assembles its result;
+ * exercising it with synthetic source pulls lets us verify the integration
+ * logic (snooze filter, tier lookup, ranking, pagination, bySource counts)
+ * without standing up a real DB.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -29,6 +27,7 @@ vi.mock("../storage", () => ({
 }));
 
 import {
+  composeTodayQueue,
   rankTodayItems,
   rankerScore,
   tierMultiplier,
@@ -36,16 +35,24 @@ import {
   type TodayQueueItem,
 } from "../services/todayQueue";
 
-// Minimal item-shape factory — every field the ranker reads is set; visual
-// fields (summary, deepLink, etc.) get cheap stubs.
-function makeItem(over: Partial<TodayQueueItem> & {
+// Test-local extension: the ranker reads `customerTier` off items but our
+// public TodayQueueItem shape doesn't carry it (it's joined in by the
+// composer). The factory below accepts it explicitly so we can test ranking
+// in isolation without `as any` casts.
+type RankerInputItem = TodayQueueItem & { customerTier?: string | null };
+
+interface MakeItemArgs {
   source: TodayQueueItem["source"];
   urgencyScore: number;
   ageMinutes: number | null;
   customerName?: string | null;
-}): TodayQueueItem & { customerTier?: string | null } {
+  customerTier?: string | null;
+  id?: string;
+}
+
+function makeItem(over: MakeItemArgs): RankerInputItem {
   return {
-    id: `${over.source}:${over.customerName ?? "x"}-${over.urgencyScore}-${over.ageMinutes}`,
+    id: over.id ?? `${over.source}:${over.customerName ?? "x"}-${over.urgencyScore}-${over.ageMinutes}`,
     source: over.source,
     sourceId: over.customerName ?? "x",
     summary: "stub",
@@ -58,7 +65,7 @@ function makeItem(over: Partial<TodayQueueItem> & {
     deepLink: "/x",
     customerName: over.customerName ?? null,
     ageMinutes: over.ageMinutes,
-    ...over,
+    customerTier: over.customerTier ?? null,
   };
 }
 
@@ -149,9 +156,9 @@ describe("rankerScore — composite formula", () => {
 describe("rankTodayItems — list sorting", () => {
   it("returns items sorted by descending priority", () => {
     const items = [
-      makeItem({ source: "lwq",         urgencyScore: 30, ageMinutes: 60 * 24, customerName: "C1", customerTier: "bronze"   } as any),
-      makeItem({ source: "freight_opp", urgencyScore: 80, ageMinutes: 0,        customerName: "C2", customerTier: "platinum" } as any),
-      makeItem({ source: "quote_sla",   urgencyScore: 90, ageMinutes: 30,       customerName: "C3", customerTier: null       } as any),
+      makeItem({ source: "lwq",         urgencyScore: 30, ageMinutes: 60 * 24, customerName: "C1", customerTier: "bronze"   }),
+      makeItem({ source: "freight_opp", urgencyScore: 80, ageMinutes: 0,        customerName: "C2", customerTier: "platinum" }),
+      makeItem({ source: "quote_sla",   urgencyScore: 90, ageMinutes: 30,       customerName: "C3", customerTier: null       }),
     ];
     const ranked = rankTodayItems(items);
     // Computed scores: freight_opp 80*1.30*1.0=104, quote_sla 90*1.0*1.0=90, lwq 30*0.95*0.6≈17
@@ -163,10 +170,10 @@ describe("rankTodayItems — list sorting", () => {
 
   it("floats hot replies above everything else, regardless of urgency", () => {
     const items = [
-      makeItem({ source: "freight_opp", urgencyScore: 100, ageMinutes: 0, customerName: "C1", customerTier: "platinum" } as any),
-      makeItem({ source: "quote_sla",   urgencyScore: 95,  ageMinutes: 0, customerName: "C2", customerTier: "platinum" } as any),
+      makeItem({ source: "freight_opp", urgencyScore: 100, ageMinutes: 0, customerName: "C1", customerTier: "platinum" }),
+      makeItem({ source: "quote_sla",   urgencyScore: 95,  ageMinutes: 0, customerName: "C2", customerTier: "platinum" }),
       // Even a "low" reply outranks both above due to the +1000 floor
-      makeItem({ source: "hot_reply",   urgencyScore: 30,  ageMinutes: 60 * 24 * 3, customerName: "C3", customerTier: "bronze" } as any),
+      makeItem({ source: "hot_reply",   urgencyScore: 30,  ageMinutes: 60 * 24 * 3, customerName: "C3", customerTier: "bronze" }),
     ];
     const ranked = rankTodayItems(items);
     expect(ranked[0].source).toBe("hot_reply");
@@ -175,10 +182,10 @@ describe("rankTodayItems — list sorting", () => {
 
   it("preserves all four sources after ranking (no source dropped)", () => {
     const items = [
-      makeItem({ source: "lwq",         urgencyScore: 60, ageMinutes: 0, customerName: "C1" } as any),
-      makeItem({ source: "freight_opp", urgencyScore: 60, ageMinutes: 0, customerName: "C2" } as any),
-      makeItem({ source: "hot_reply",   urgencyScore: 60, ageMinutes: 0, customerName: "C3" } as any),
-      makeItem({ source: "quote_sla",   urgencyScore: 60, ageMinutes: 0, customerName: "C4" } as any),
+      makeItem({ source: "lwq",         urgencyScore: 60, ageMinutes: 0, customerName: "C1" }),
+      makeItem({ source: "freight_opp", urgencyScore: 60, ageMinutes: 0, customerName: "C2" }),
+      makeItem({ source: "hot_reply",   urgencyScore: 60, ageMinutes: 0, customerName: "C3" }),
+      makeItem({ source: "quote_sla",   urgencyScore: 60, ageMinutes: 0, customerName: "C4" }),
     ];
     const ranked = rankTodayItems(items);
     expect(new Set(ranked.map(r => r.source))).toEqual(
@@ -190,9 +197,154 @@ describe("rankTodayItems — list sorting", () => {
   });
 
   it("breaks ties stably enough that two equal items keep both their priorities equal", () => {
-    const a = makeItem({ source: "lwq", urgencyScore: 50, ageMinutes: 0, customerName: "A" } as any);
-    const b = makeItem({ source: "lwq", urgencyScore: 50, ageMinutes: 0, customerName: "B" } as any);
+    const a = makeItem({ source: "lwq", urgencyScore: 50, ageMinutes: 0, customerName: "A" });
+    const b = makeItem({ source: "lwq", urgencyScore: 50, ageMinutes: 0, customerName: "B" });
     const ranked = rankTodayItems([a, b]);
     expect(ranked[0].priorityScore).toBe(ranked[1].priorityScore);
+  });
+});
+
+
+// ── Integration tests for composeTodayQueue ───────────────────────────────
+//
+// composeTodayQueue is the seam through which getTodayQueue assembles its
+// final response. By feeding it canned source pulls we can exercise the
+// snooze filter, tier joining, source-diversity ordering, and pagination
+// end-to-end without standing up a real DB.
+
+function emptySources() {
+  return { lwq: [] as TodayQueueItem[], freight_opp: [] as TodayQueueItem[], hot_reply: [] as TodayQueueItem[], quote_sla: [] as TodayQueueItem[] };
+}
+
+describe("composeTodayQueue — aggregator integration", () => {
+  it("merges items from all four sources and ranks them end-to-end", () => {
+    const sources = {
+      lwq:         [makeItem({ source: "lwq",         urgencyScore: 40, ageMinutes: 30,  customerName: "Acme" })],
+      freight_opp: [makeItem({ source: "freight_opp", urgencyScore: 80, ageMinutes: 10,  customerName: "Acme" })],
+      hot_reply:   [makeItem({ source: "hot_reply",   urgencyScore: 50, ageMinutes: 5,   customerName: "Beta" })],
+      quote_sla:   [makeItem({ source: "quote_sla",   urgencyScore: 90, ageMinutes: 120, customerName: "Gamma" })],
+    };
+    const tier = new Map([["Acme", "platinum"], ["Beta", "gold"], ["Gamma", null] as [string, string | null]]);
+
+    const out = composeTodayQueue({
+      sources,
+      snoozedIds: new Set(),
+      tierByCustomer: tier,
+      limit: 50,
+      cursor: 0,
+    });
+
+    expect(out.items).toHaveLength(4);
+    expect(out.totalBeforePagination).toBe(4);
+    // All four sources represented
+    expect(new Set(out.items.map(i => i.source))).toEqual(
+      new Set(["lwq", "freight_opp", "hot_reply", "quote_sla"]),
+    );
+    // Hot reply floats on top
+    expect(out.items[0].source).toBe("hot_reply");
+    // bySource count reflects the unsnoozed totals
+    expect(out.bySource).toEqual({ lwq: 1, freight_opp: 1, hot_reply: 1, quote_sla: 1 });
+    // Items carry priorityScore in descending order
+    for (let i = 1; i < out.items.length; i++) {
+      expect(out.items[i - 1].priorityScore).toBeGreaterThanOrEqual(out.items[i].priorityScore);
+    }
+  });
+
+  it("hides items whose ID is in the snooze set, and re-surfaces them when removed", () => {
+    const lwqRow = makeItem({ source: "lwq", urgencyScore: 70, ageMinutes: 0, customerName: "Acme", id: "lwq:lane-1" });
+    const oppRow = makeItem({ source: "freight_opp", urgencyScore: 70, ageMinutes: 0, customerName: "Acme", id: "freight_opp:opp-1" });
+    const sources = { ...emptySources(), lwq: [lwqRow], freight_opp: [oppRow] };
+    const tier = new Map<string, string | null>();
+
+    // First: lwq:lane-1 is snoozed → it disappears, freight_opp survives
+    const snoozed = composeTodayQueue({
+      sources,
+      snoozedIds: new Set(["lwq:lane-1"]),
+      tierByCustomer: tier,
+      limit: 50,
+      cursor: 0,
+    });
+    expect(snoozed.items.map(i => i.id)).toEqual(["freight_opp:opp-1"]);
+    expect(snoozed.totalBeforePagination).toBe(1);
+    expect(snoozed.bySource.lwq).toBe(0);
+
+    // After the snooze window expires, the snooze set is empty → row returns
+    const reSurfaced = composeTodayQueue({
+      sources,
+      snoozedIds: new Set(),
+      tierByCustomer: tier,
+      limit: 50,
+      cursor: 0,
+    });
+    expect(reSurfaced.items.map(i => i.id).sort()).toEqual(["freight_opp:opp-1", "lwq:lane-1"]);
+    expect(reSurfaced.totalBeforePagination).toBe(2);
+    expect(reSurfaced.bySource.lwq).toBe(1);
+  });
+
+  it("applies tier lookup so two equal-urgency items rank by their customer tier", () => {
+    const platinumRow = makeItem({ source: "freight_opp", urgencyScore: 60, ageMinutes: 0, customerName: "PlatCo" });
+    const bronzeRow   = makeItem({ source: "freight_opp", urgencyScore: 60, ageMinutes: 0, customerName: "BronzeCo" });
+    const sources = { ...emptySources(), freight_opp: [bronzeRow, platinumRow] };
+    const tier = new Map<string, string | null>([
+      ["PlatCo", "platinum"],
+      ["BronzeCo", "bronze"],
+    ]);
+
+    const out = composeTodayQueue({
+      sources,
+      snoozedIds: new Set(),
+      tierByCustomer: tier,
+      limit: 50,
+      cursor: 0,
+    });
+    expect(out.items.map(i => i.customerName)).toEqual(["PlatCo", "BronzeCo"]);
+    expect(out.items[0].priorityScore).toBeGreaterThan(out.items[1].priorityScore);
+  });
+
+  it("paginates the ranked list by limit/cursor and emits a nextCursor when more remain", () => {
+    const sources = { ...emptySources(), freight_opp: [
+      makeItem({ source: "freight_opp", urgencyScore: 90, ageMinutes: 0, customerName: "A", id: "freight_opp:a" }),
+      makeItem({ source: "freight_opp", urgencyScore: 80, ageMinutes: 0, customerName: "B", id: "freight_opp:b" }),
+      makeItem({ source: "freight_opp", urgencyScore: 70, ageMinutes: 0, customerName: "C", id: "freight_opp:c" }),
+    ] };
+
+    const page1 = composeTodayQueue({
+      sources,
+      snoozedIds: new Set(),
+      tierByCustomer: new Map(),
+      limit: 2,
+      cursor: 0,
+    });
+    expect(page1.items.map(i => i.id)).toEqual(["freight_opp:a", "freight_opp:b"]);
+    expect(page1.nextCursor).toBe("2");
+    expect(page1.totalBeforePagination).toBe(3);
+
+    const page2 = composeTodayQueue({
+      sources,
+      snoozedIds: new Set(),
+      tierByCustomer: new Map(),
+      limit: 2,
+      cursor: 2,
+    });
+    expect(page2.items.map(i => i.id)).toEqual(["freight_opp:c"]);
+    expect(page2.nextCursor).toBeNull();
+  });
+
+  it("returns an empty result with all-zero bySource when every item is snoozed", () => {
+    const sources = { ...emptySources(), quote_sla: [
+      makeItem({ source: "quote_sla", urgencyScore: 90, ageMinutes: 0, customerName: "A", id: "quote_sla:a" }),
+      makeItem({ source: "quote_sla", urgencyScore: 80, ageMinutes: 0, customerName: "B", id: "quote_sla:b" }),
+    ] };
+    const out = composeTodayQueue({
+      sources,
+      snoozedIds: new Set(["quote_sla:a", "quote_sla:b"]),
+      tierByCustomer: new Map(),
+      limit: 50,
+      cursor: 0,
+    });
+    expect(out.items).toHaveLength(0);
+    expect(out.totalBeforePagination).toBe(0);
+    expect(out.bySource).toEqual({ lwq: 0, freight_opp: 0, hot_reply: 0, quote_sla: 0 });
+    expect(out.nextCursor).toBeNull();
   });
 });

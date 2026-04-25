@@ -142,7 +142,10 @@ export function registerTodayQueueRoutes(app: Express): void {
       // Drizzle returns the boolean as a true/false; legacy rows (pre-migration)
       // resolve to true via the column default but we double-default here so
       // the client gets a deterministic value during the brief migration window.
-      const defaultToTodayQueue = (user as any).defaultToTodayQueue !== false;
+      // User row is typed via shared/schema; defaultToTodayQueue is non-null
+      // (column has NOT NULL DEFAULT TRUE), but legacy callers may still hit
+      // an unmigrated user, so we fall back to true to match the column default.
+      const defaultToTodayQueue = user.defaultToTodayQueue ?? true;
       return res.json({ defaultToTodayQueue });
     } catch (err) {
       console.error("[GET landing-preference] error:", err);
@@ -163,7 +166,7 @@ export function registerTodayQueueRoutes(app: Express): void {
 
       const updated = await storage.updateUser(user.id, user.organizationId, {
         defaultToTodayQueue: parsed.data.defaultToTodayQueue,
-      } as any);
+      });
       if (!updated) return res.status(404).json({ error: "User not found" });
       return res.json({ defaultToTodayQueue: parsed.data.defaultToTodayQueue });
     } catch (err) {

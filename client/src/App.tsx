@@ -155,9 +155,19 @@ function PipelineAnalyticsRedirect() {
 // The redirect runs only when the path is exactly "/" so that direct
 // links to /dashboard always show the dashboard regardless of the pref.
 function HomeLandingRouter(): JSX.Element {
-  const { user } = useAuth();
-  const prefersToday = (user as any)?.defaultToTodayQueue !== false;
-  return prefersToday ? <TodayQueuePage /> : <Dashboard />;
+  const { user, isLoading } = useAuth();
+  const [, navigate] = useLocation();
+  // While we don't yet know the user's preference, render the dashboard
+  // skeleton (the existing default) so we don't bounce visited reps off a
+  // page they didn't ask for. Once the user object resolves and signals a
+  // Today preference, we redirect to /today so the URL reflects the page.
+  const prefersToday = user?.defaultToTodayQueue === true;
+  useEffect(() => {
+    if (!isLoading && prefersToday) {
+      navigate("/today", { replace: true });
+    }
+  }, [isLoading, prefersToday, navigate]);
+  return <Dashboard />;
 }
 
 function Router() {

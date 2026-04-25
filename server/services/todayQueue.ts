@@ -434,6 +434,58 @@ export interface GetTodayQueueOptions {
 }
 
 /**
+ * Pure composer: takes already-pulled source items, the active snooze set,
+ * and a customerName → tier index, applies the snooze filter, ranks, and
+ * paginates. Exported so integration tests can exercise the composition
+ * (snooze hide/re-surface, source diversity, end-to-end priority ordering)
+ * without standing up the full DB layer.
+ */
+export function composeTodayQueue(input: {
+  sources: { lwq: TodayQueueItem[]; freight_opp: TodayQueueItem[]; hot_reply: TodayQueueItem[]; quote_sla: TodayQueueItem[] };
+  snoozedIds: Set<string>;
+  tierByCustomer: Map<string, string | null>;
+  limit: number;
+  cursor: number;
+}): TodayQueueResponse {
+  const { sources, snoozedIds, tierByCustomer, limit, cursor } = input;
+  const all = [
+    ...sources.lwq,
+    ...sources.freight_opp,
+    ...sources.hot_reply,
+    ...sources.quote_sla,
+  ].filter(it => !snoozedIds.has(it.id));
+
+  const rankedAll = rankTodayItems(all.map(it => ({
+    ...it,
+    customerTier: it.customerName ? tierByCustomer.get(it.customerName) ?? null : null,
+  })));
+
+  const finalItems: TodayQueueItem[] = rankedAll.map(({ priorityScore, ...rest }) => ({
+    ...rest,
+    priorityScore,
+  }));
+
+  const pageStart = cursor;
+  const page = finalItems.slice(pageStart, pageStart + limit);
+  const nextCursor = pageStart + page.length < finalItems.length
+    ? String(pageStart + page.length)
+    : null;
+
+  const bySource: TodayQueueResponse["bySource"] = {
+    lwq: 0, freight_opp: 0, hot_reply: 0, quote_sla: 0,
+  };
+  for (const it of finalItems) bySource[it.source]++;
+
+  return {
+    items: page,
+    nextCursor,
+    totalBeforePagination: finalItems.length,
+    generatedAt: new Date().toISOString(),
+    bySource,
+  };
+}
+
+/**
  * Aggregator entry point. Runs the four source-pulls in parallel, applies
  * the per-user snooze filter, ranks the unified list, and returns the
  * paginated page. `cursor` is a 1-based "page" cursor — small ints over
@@ -450,7 +502,7 @@ export async function getTodayQueue(
 
   const ctx: SourceContext = { orgId, userId, now };
 
-  const [lwq, opps, replies, quotes, snoozed] = await Promise.all([
+  const [lwq, opps, replies, quotes, snoozedIds] = await Promise.all([
     fetchLwqItems(ctx),
     fetchFreightOppItems(ctx),
     fetchHotReplyItems(ctx),
@@ -458,25 +510,15 @@ export async function getTodayQueue(
     loadActiveSnoozes(orgId, userId, now),
   ]);
 
-  const all = [...lwq, ...opps, ...replies, ...quotes].filter(it => !snoozed.has(it.id));
-
-  // Build a customerTier index from the freight-opp pull (which already did
-  // the company lookup) so the ranker can apply the tier multiplier without
-  // a second DB round-trip. LWQ rows reuse the same customer_name → tier
-  // mapping when the company appears in any source.
+  // Build customerName → tier from the union of pulled items; companies
+  // backing freight_opps are already loaded, but LWQ/hot_reply/quote_sla
+  // rows arrive without a tier so we resolve them with one batch query.
   const tierByCustomer = new Map<string, string | null>();
-  for (const it of all) {
+  for (const it of [...lwq, ...opps, ...replies, ...quotes]) {
     if (it.customerName && !tierByCustomer.has(it.customerName)) {
-      // Most rows only know the customer_name (string). The tier index is
-      // populated from the freight-opp pull which already loaded the
-      // company row; rows without a populated tier fall back to null
-      // (multiplier 1.0). This is intentionally cheap.
       tierByCustomer.set(it.customerName, null);
     }
   }
-
-  // Pull tiers via a single companies query keyed by name (cheap and fits
-  // on the hot path because the unified set is small).
   const customerNames = Array.from(tierByCustomer.keys());
   if (customerNames.length > 0) {
     const rows = await db.select({
@@ -489,41 +531,14 @@ export async function getTodayQueue(
     }
   }
 
-  const rankedAll = rankTodayItems(all.map(it => ({
-    ...it,
-    customerTier: it.customerName ? tierByCustomer.get(it.customerName) ?? null : null,
-  })));
-
-  // Apply the priorityScore back onto each item record so the client can
-  // surface it in tooltips (and the test suite can verify ordering).
-  const finalItems: TodayQueueItem[] = rankedAll.map(({ priorityScore, ...rest }) => ({
-    ...rest,
-    priorityScore,
-  }));
-
-  const pageStart = cursor;
-  const page = finalItems.slice(pageStart, pageStart + limit);
-  const nextCursor = pageStart + page.length < finalItems.length
-    ? String(pageStart + page.length)
-    : null;
-
-  // Suppress unused warnings for storage fields we don't end up reading.
-  void ne;
-
-  return {
-    items: page,
-    nextCursor,
-    totalBeforePagination: finalItems.length,
-    generatedAt: now.toISOString(),
-    bySource: {
-      lwq: lwq.filter(it => !snoozed.has(it.id)).length,
-      freight_opp: opps.filter(it => !snoozed.has(it.id)).length,
-      hot_reply: replies.filter(it => !snoozed.has(it.id)).length,
-      quote_sla: quotes.filter(it => !snoozed.has(it.id)).length,
-    },
-  };
+  return composeTodayQueue({
+    sources: { lwq, freight_opp: opps, hot_reply: replies, quote_sla: quotes },
+    snoozedIds,
+    tierByCustomer,
+    limit,
+    cursor,
+  });
 }
-
 
 // ── Snooze + unsnooze (used by the routes module) ──────────────────────────
 

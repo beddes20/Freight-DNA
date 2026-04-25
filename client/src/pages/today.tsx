@@ -8,6 +8,7 @@
 import { useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { List, type RowComponentProps } from "react-window";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -138,20 +139,94 @@ export default function TodayQueuePage(): JSX.Element {
           )}
 
           {!isLoading && items.length > 0 && (
-            <ul className="divide-y" data-testid="list-today-items">
-              {items.map(item => (
-                <TodayRow
-                  key={item.id}
-                  item={item}
-                  onSnoozed={() => queryClient.invalidateQueries({ queryKey: ["/api/today-queue"] })}
-                  onActivate={() => navigate(item.deepLink)}
-                  onError={(msg) => toast({ title: "Action failed", description: msg, variant: "destructive" })}
-                />
-              ))}
-            </ul>
+            <VirtualizedTodayList
+              items={items}
+              onSnoozed={() => queryClient.invalidateQueries({ queryKey: ["/api/today-queue"] })}
+              onActivate={(href) => navigate(href)}
+              onError={(msg) => toast({ title: "Action failed", description: msg, variant: "destructive" })}
+            />
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+
+// Virtualized list — react-window's `List` renders only the rows in view
+// (plus a small overscan buffer), so a 500-item Today queue costs the same
+// as a 50-item one. The component auto-sizes to its parent container; we
+// pin a `60vh` minimum so it doesn't collapse when the API returns one
+// page mid-scroll. Row height is fixed at 76px so summary + reason fit
+// without wrapping at typical column widths.
+const ROW_HEIGHT = 76;
+const VIRTUAL_THRESHOLD = 30;
+
+interface TodayRowProps {
+  items: TodayQueueItem[];
+  onSnoozed: () => void;
+  onActivate: (href: string) => void;
+  onError: (msg: string) => void;
+}
+
+function VirtualizedTodayRow({
+  index,
+  style,
+  items,
+  onSnoozed,
+  onActivate,
+  onError,
+}: RowComponentProps<TodayRowProps>): JSX.Element {
+  const item = items[index];
+  return (
+    <div style={style} className="border-b">
+      <TodayRow
+        item={item}
+        onSnoozed={onSnoozed}
+        onActivate={() => onActivate(item.deepLink)}
+        onError={onError}
+      />
+    </div>
+  );
+}
+
+function VirtualizedTodayList(props: {
+  items: TodayQueueItem[];
+  onSnoozed: () => void;
+  onActivate: (href: string) => void;
+  onError: (msg: string) => void;
+}): JSX.Element {
+  const { items, onSnoozed, onActivate, onError } = props;
+
+  // Below the threshold, virtualization adds overhead (extra wrapper divs +
+  // resize observer) for no win, so render the plain list. The threshold is
+  // chosen so the e2e and the typical "I'm caught up" state stay flat DOM.
+  if (items.length < VIRTUAL_THRESHOLD) {
+    return (
+      <ul className="divide-y" data-testid="list-today-items">
+        {items.map(item => (
+          <TodayRow
+            key={item.id}
+            item={item}
+            onSnoozed={onSnoozed}
+            onActivate={() => onActivate(item.deepLink)}
+            onError={onError}
+          />
+        ))}
+      </ul>
+    );
+  }
+
+  return (
+    <div className="h-[60vh] min-h-[320px]" data-testid="list-today-items">
+      <List
+        defaultHeight={560}
+        rowCount={items.length}
+        rowHeight={ROW_HEIGHT}
+        overscanCount={4}
+        rowComponent={VirtualizedTodayRow}
+        rowProps={{ items, onSnoozed, onActivate, onError }}
+      />
     </div>
   );
 }
