@@ -142,7 +142,7 @@ export async function recordCarrierOverride(
   // ON CONFLICT DO NOTHING: duplicate same-day click is a no-op. RETURNING
   // returns zero rows on conflict so the caller can tell idempotent hits
   // from fresh writes.
-  const inserted = await db.execute(sql`
+  const inserted = await db.execute<{ id: string }>(sql`
     INSERT INTO carrier_overrides (
       org_id, carrier_id, lane_signature,
       origin, origin_state, destination, destination_state, equipment_type,
@@ -159,8 +159,8 @@ export async function recordCarrierOverride(
       DO NOTHING
     RETURNING id
   `);
-  const rows = (inserted as any).rows ?? inserted;
-  return { recorded: Array.isArray(rows) && rows.length > 0 };
+  const rows = inserted.rows ?? [];
+  return { recorded: rows.length > 0 };
 }
 
 /**
@@ -187,7 +187,14 @@ export async function getCarrierOverridesForLane(
 ): Promise<Map<string, CarrierOverrideAggregate>> {
   if (!orgId || !laneSignature) return new Map();
 
-  const result = await db.execute(sql`
+  interface AggregateRow {
+    carrierId: string;
+    negativeCount: string | number;
+    positiveCount: string | number;
+    lastNegativeReason: string | null;
+    lastOccurredAt: string | Date | null;
+  }
+  const result = await db.execute<AggregateRow>(sql`
     SELECT
       carrier_id                                                 AS "carrierId",
       COUNT(*) FILTER (WHERE reason_code IN ('bad_service','out_of_equipment','wont_run_lane','other'))
@@ -208,13 +215,7 @@ export async function getCarrierOverridesForLane(
     GROUP BY carrier_id, org_id, lane_signature
   `);
 
-  const rows = ((result as any).rows ?? result) as Array<{
-    carrierId: string;
-    negativeCount: string | number;
-    positiveCount: string | number;
-    lastNegativeReason: string | null;
-    lastOccurredAt: string | Date | null;
-  }>;
+  const rows = result.rows ?? [];
 
   const out = new Map<string, CarrierOverrideAggregate>();
   for (const r of rows) {

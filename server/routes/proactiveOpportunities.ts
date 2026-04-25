@@ -28,11 +28,7 @@ import {
   type SendWaveOpts,
 } from "../freightOpportunityOutreachService";
 import { recordCarrierLaneOutcome } from "../services/carrierLaneOutcomes";
-import {
-  recordCarrierOverride,
-  isCarrierOverrideReasonCode,
-  isCarrierOverrideAction,
-} from "../services/carrierOverrides";
+import { recordCarrierOverride } from "../services/carrierOverrides";
 import { laneSig } from "../laneCrossLinkService";
 import {
   FREIGHT_OPPORTUNITY_MODES,
@@ -938,18 +934,19 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       const repId = userId(req);
       if (!repId) return res.status(401).json({ error: "Unauthorized" });
 
+      // Per Task #638 product spec, the same five-option reason picker is
+      // surfaced on both action paths, so the server intentionally accepts
+      // any (action, reasonCode) combination. The aggregate's positive vs
+      // negative split is driven by reasonCode alone, not by action — so
+      // a rep adding a carrier with reason 'bad_service' is recorded
+      // faithfully (rare, but preserves the learning signal). The 'action'
+      // column captures WHERE the override happened for downstream audit.
       const overrideSchema = z.object({
         carrierId: z.string().min(1),
-        action: z.string().refine(isCarrierOverrideAction, {
-          message: "action must be deselect_top3 or added_outside_topn",
-        }),
-        // Null is the explicit dismiss signal. Undefined = client forgot to
-        // send it; we coerce undefined → null so the schema is forgiving.
-        reasonCode: z.string().nullable().optional()
-          .transform(v => v ?? null)
-          .refine(v => v === null || isCarrierOverrideReasonCode(v), {
-            message: "reasonCode must be null or one of the documented codes",
-          }),
+        action: z.enum(["deselect_top3", "added_outside_topn"]),
+        // Null = explicit dismiss. Undefined coerced → null for forgiveness.
+        reasonCode: z.enum(["bad_service", "out_of_equipment", "wont_run_lane", "better_fit", "other"])
+          .nullable().optional().transform(v => v ?? null),
         // Lane parts — at least one of (origin/destination) required so
         // laneSig() never collapses to the empty signature.
         origin: z.string().nullable().optional(),
@@ -969,30 +966,6 @@ export function registerProactiveOpportunityRoutes(app: Express) {
         return res.status(400).json({ error: "origin or destination required to derive laneSignature" });
       }
 
-      // Cross-field guard: each action only allows a meaningful subset of
-      // reason codes. We accept null on either action (dismiss path).
-      //   deselect_top3 → negative reasons (bad_service / out_of_equipment /
-      //                   wont_run_lane / other) or null. "better_fit"
-      //                   would mean the rep deselected because someone
-      //                   else fit better — store that as an add_outside
-      //                   row instead, so we don't double-credit the boost.
-      //   added_outside_topn → "better_fit" (positive) or null. Anything
-      //                   else here would imply a rep added a carrier they
-      //                   simultaneously think is bad — refuse it.
-      if (body.reasonCode !== null) {
-        const action = body.action as ReturnType<typeof body.action.valueOf>;
-        if (action === "deselect_top3" && body.reasonCode === "better_fit") {
-          return res.status(400).json({
-            error: "reasonCode 'better_fit' is invalid for action 'deselect_top3' — record an 'added_outside_topn' row instead",
-          });
-        }
-        if (action === "added_outside_topn" && body.reasonCode !== "better_fit") {
-          return res.status(400).json({
-            error: "action 'added_outside_topn' only accepts reasonCode 'better_fit' or null",
-          });
-        }
-      }
-
       const result = await recordCarrierOverride({
         orgId: org,
         carrierId: body.carrierId,
@@ -1002,8 +975,8 @@ export function registerProactiveOpportunityRoutes(app: Express) {
         destination: body.destination ?? null,
         destinationState: body.destinationState ?? null,
         equipmentType: body.equipmentType ?? null,
-        reasonCode: body.reasonCode as any,
-        action: body.action as any,
+        reasonCode: body.reasonCode,
+        action: body.action,
         notes: body.notes ?? null,
       });
       res.json(result);

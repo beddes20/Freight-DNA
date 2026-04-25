@@ -109,15 +109,13 @@ export function CarrierOverrideReasonPicker({
     ? "We'll learn this carrier should rank higher on this lane."
     : "We'll learn this carrier should rank lower on this lane.";
 
-  // The server only accepts a meaningful subset of reason codes per action:
-  //   added_outside_topn → "better_fit" (positive) or null (dismiss).
-  //   deselect_top3      → any negative reason or null (dismiss).
-  // Reps who want to leave free-form context on an add can use the dismiss
-  // path (no labeled reason recorded) — the carrier still gets shown as
-  // manually added in downstream views.
-  const options: ReasonOption[] = isAdd
-    ? [POSITIVE_OPTION]
-    : NEGATIVE_OPTIONS;
+  // Per Task #638 product spec: the same five-option picker
+  // (Bad service / Out of equipment / Won't run lane / Better fit / Other)
+  // is offered for BOTH the deselect-top3 and added-outside-topn paths.
+  // The aggregate's positive vs negative split is driven by reasonCode
+  // alone; "Better fit" boosts, the four negative codes downweight,
+  // regardless of which action surfaced the picker.
+  const options: ReasonOption[] = [...NEGATIVE_OPTIONS.slice(0, 3), POSITIVE_OPTION, NEGATIVE_OPTIONS[3]];
 
   const submit = async (reasonCode: CarrierOverrideReasonCode | null, notes?: string) => {
     if (submittedRef.current) return;

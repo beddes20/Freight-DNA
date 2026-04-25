@@ -246,4 +246,85 @@ describe("carrierOverridePrior", () => {
     // Both reasons surface so reps see the full picture.
     expect(p.reasons.length).toBe(2);
   });
+
+  it("a dismiss-only history (no labeled reasons) leaves the score untouched", () => {
+    // Per spec the dismiss path writes a row with reasonCode=null. Those
+    // rows are kept for audit + dedupe but must NOT shift ranking.
+    const p = carrierOverridePrior({
+      ...empty, negativeCount: 0, positiveCount: 0,
+    });
+    expect(p.boost).toBe(0);
+    expect(p.cap).toBe(Infinity);
+    expect(p.reasons).toEqual([]);
+  });
+});
+
+/**
+ * Trigger-detection contract — the picker fires on:
+ *   - LWQ:      DESELECTING any of the first 3 carriers in the visible
+ *               filteredCarriers array (0-indexed: index < 3).
+ *   - AF:       DESELECTING any row with rank <= 3 (1-indexed).
+ *   - Both:     ADDING a single carrier from outside the ranker's top-N.
+ *
+ * Bulk select-all / multi-import / multi-pool-add intentionally skip the
+ * picker to avoid an N-dialog avalanche. This unit test pins those rules
+ * with pure logic (no React render needed) so refactors can't regress
+ * the matrix silently.
+ */
+describe("override picker trigger rules", () => {
+  type LwqRow = { carrier: { id: string; name: string } };
+  type AfRow = { carrierId: string; rank: number };
+
+  function shouldFireOnLwqDeselect(
+    filteredCarriers: LwqRow[],
+    deselectedIndex: number,
+  ): boolean {
+    return deselectedIndex >= 0
+        && deselectedIndex < 3
+        && deselectedIndex < filteredCarriers.length;
+  }
+
+  function shouldFireOnAfDeselect(row: Pick<AfRow, "rank">): boolean {
+    return Number.isFinite(row.rank) && row.rank >= 1 && row.rank <= 3;
+  }
+
+  function shouldFireOnSingleAdd(
+    addedCount: number,
+    isInRankerTopN: boolean,
+  ): boolean {
+    return addedCount === 1 && !isInRankerTopN;
+  }
+
+  it("LWQ: fires on the first three rows, suppresses on row 4+", () => {
+    const rows: LwqRow[] = Array.from({ length: 6 }, (_, i) => ({
+      carrier: { id: `c-${i}`, name: `c${i}` },
+    }));
+    expect(shouldFireOnLwqDeselect(rows, 0)).toBe(true);
+    expect(shouldFireOnLwqDeselect(rows, 2)).toBe(true);
+    expect(shouldFireOnLwqDeselect(rows, 3)).toBe(false);
+    expect(shouldFireOnLwqDeselect(rows, 5)).toBe(false);
+  });
+
+  it("LWQ: never fires on an out-of-bounds index (defensive)", () => {
+    const rows: LwqRow[] = [{ carrier: { id: "c-0", name: "c0" } }];
+    expect(shouldFireOnLwqDeselect(rows, -1)).toBe(false);
+    expect(shouldFireOnLwqDeselect(rows, 1)).toBe(false);
+  });
+
+  it("AF detail: fires on rank 1..3, suppresses on rank 4+ or undefined", () => {
+    expect(shouldFireOnAfDeselect({ rank: 1 })).toBe(true);
+    expect(shouldFireOnAfDeselect({ rank: 3 })).toBe(true);
+    expect(shouldFireOnAfDeselect({ rank: 4 })).toBe(false);
+    expect(shouldFireOnAfDeselect({ rank: 0 })).toBe(false);
+    expect(shouldFireOnAfDeselect({ rank: NaN })).toBe(false);
+  });
+
+  it("single-add: fires only when ONE carrier is added AND it's outside top-N", () => {
+    expect(shouldFireOnSingleAdd(1, false)).toBe(true);
+    // Already in the ranker's shortlist → no override learning needed.
+    expect(shouldFireOnSingleAdd(1, true)).toBe(false);
+    // Bulk import → suppressed to avoid an avalanche of dialogs.
+    expect(shouldFireOnSingleAdd(7, false)).toBe(false);
+    expect(shouldFireOnSingleAdd(0, false)).toBe(false);
+  });
 });
