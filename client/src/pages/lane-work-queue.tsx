@@ -1090,22 +1090,9 @@ function LaneRow({
   );
 }
 
-// ── Lazy LaneRow wrapper ──────────────────────────────────────────────────────
-//
-// Task #648 — keeps mounted-LaneRow count low on long buckets by deferring
-// the real `<LaneRow>` mount until its placeholder enters (or comes within
-// `LWQ_VIEWPORT_MARGIN_PX` of) the viewport. Off-screen rows render as
-// fixed-height placeholders sized to the last measured height for that
-// lane (see `lib/lwq-virtualization.ts`), so the document layout stays
-// stable as the user scrolls.
-//
-// Once mounted, a row stays mounted — opening the carrier panel and coming
-// back doesn't lose any in-row state (selection ✓, dialog form drafts ✓,
-// hover prefetch handlers ✓). All test ids on the inner LaneRow
-// (`work-queue-row-${id}`, `btn-assign-self-${id}`, etc.) only appear in
-// the DOM once the row is mounted, which is the explicit signal that
-// virtualization is working.
-
+// True windowing wrapper for LaneRow — mounts on viewport intersection,
+// unmounts on leaving. Off-screen rows render as cheap placeholder divs
+// sized to the lane's last measured height so layout stays stable.
 type LaneRowProps = {
   item: LaneItem;
   completionThreshold: number;
@@ -1125,12 +1112,10 @@ function LazyLaneRow(props: LaneRowProps) {
     () => getCachedRowHeight(item.laneId),
   );
 
-  // Lazy-mount on viewport intersection. We disconnect after the first
-  // intersect — a row that's been seen stays mounted for the rest of the
-  // page lifetime, which avoids flicker when users scroll back over a
-  // section they've already touched.
+  // Single observer toggles `visible` based on intersection — gives us
+  // proper mount/unmount cycling with a generous rootMargin so users
+  // never see a blank placeholder during fast scroll.
   useEffect(() => {
-    if (visible) return;
     const el = containerRef.current;
     if (!el) return;
     if (typeof IntersectionObserver === "undefined") {
@@ -1140,22 +1125,19 @@ function LazyLaneRow(props: LaneRowProps) {
     const io = new IntersectionObserver(
       entries => {
         for (const entry of entries) {
-          if (entry.isIntersecting) {
-            setVisible(true);
-            io.disconnect();
-            return;
-          }
+          setVisible(entry.isIntersecting);
         }
       },
       { rootMargin: `${LWQ_VIEWPORT_MARGIN_PX}px 0px` },
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [visible]);
+  }, []);
 
-  // Once mounted, observe size so future placeholders for this lane match
-  // exactly — important because LaneRow has variable height (badges wrap,
-  // optional progress bar, optional metrics line).
+  // While mounted, record the actual rendered height so when this row
+  // unmounts (or future placeholders for the same lane appear) the
+  // placeholder occupies exactly the right space. Guarded equality check
+  // avoids a ResizeObserver feedback loop.
   useEffect(() => {
     if (!visible) return;
     const el = containerRef.current;
