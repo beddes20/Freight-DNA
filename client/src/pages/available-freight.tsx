@@ -23,10 +23,16 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command, CommandEmpty, CommandInput, CommandItem, CommandList,
+} from "@/components/ui/command";
+import { cn } from "@/lib/utils";
 import {
   Truck, AlertCircle, RefreshCw, Search, Inbox, Upload,
   CheckCircle2, Clock, Bookmark, MoreHorizontal, ChevronDown,
   Send, AlarmClock, X, UserCheck, ClipboardCheck, Star,
+  ChevronsUpDown, Check,
 } from "lucide-react";
 import type { FreightOpportunity } from "@shared/schema";
 import { applyCockpitFilters } from "@/lib/cockpitFilters";
@@ -200,6 +206,101 @@ function freshnessPulseColor(min: number | null) {
   if (min < 60) return "bg-emerald-500 animate-pulse";
   if (min < 12 * 60) return "bg-amber-500";
   return "bg-red-500";
+}
+
+interface CarrierOption {
+  id: string;
+  name: string;
+  rank: number;
+  bench?: boolean;
+  benchWins?: number;
+}
+
+/**
+ * Task #636 — Combobox for selecting (or free-typing) the carrier name when
+ * marking an Available Freight opportunity covered. Suggestions come from the
+ * cockpit's per-opp ranked carrier chips so reps can one-tap the top-ranked
+ * carrier without retyping. Free-typed values are still accepted.
+ */
+function CarrierCombobox({
+  value,
+  onChange,
+  options,
+  testId,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: CarrierOption[];
+  testId: string;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="w-full justify-between font-normal"
+          data-testid={testId}
+        >
+          <span className="truncate text-left">
+            {value || placeholder || "Select or type carrier..."}
+          </span>
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+        <Command shouldFilter>
+          <CommandInput
+            placeholder="Type carrier name..."
+            value={value}
+            onValueChange={onChange}
+            data-testid={`${testId}-input`}
+          />
+          <CommandList>
+            <CommandEmpty>
+              {value.trim() ? `Use "${value.trim()}"` : "No suggestions yet — type a carrier name"}
+            </CommandEmpty>
+            {options.map((opt) => (
+              <CommandItem
+                key={opt.id}
+                value={opt.name}
+                onSelect={(v) => {
+                  onChange(v);
+                  setOpen(false);
+                }}
+                data-testid={`${testId}-option-${opt.id}`}
+              >
+                <Check
+                  className={cn(
+                    "mr-2 h-4 w-4",
+                    value.trim().toLowerCase() === opt.name.trim().toLowerCase()
+                      ? "opacity-100"
+                      : "opacity-0",
+                  )}
+                />
+                <div className="flex items-center gap-2">
+                  <span className="text-sm">{opt.name}</span>
+                  {opt.rank === 1 && (
+                    <Badge variant="secondary" className="text-[10px]">Top</Badge>
+                  )}
+                  {opt.bench && opt.benchWins ? (
+                    <Badge variant="outline" className="text-[10px]">
+                      Bench {opt.benchWins}w
+                    </Badge>
+                  ) : null}
+                </div>
+              </CommandItem>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 
@@ -406,6 +507,72 @@ export default function AvailableFreightPage() {
     [items, search, viewFilters, currentUser?.id],
   );
 
+  // Task #636 — carrier typeahead suggestions for the per-row outcome modal
+  // come from the targeted opp's ranked carrier chips. Top-ranked sits first.
+  const outcomeCarrierOptions = useMemo<CarrierOption[]>(() => {
+    if (!outcomeTargetId) return [];
+    const it = filtered.find(x => x.opportunity.id === outcomeTargetId);
+    if (!it) return [];
+    return [...it.chips]
+      .filter(c => c.carrierName)
+      .sort((a, b) => a.rank - b.rank)
+      .map(c => ({
+        id: c.carrierId,
+        name: c.carrierName,
+        rank: c.rank,
+        bench: c.bench,
+        benchWins: c.benchWins,
+      }));
+  }, [filtered, outcomeTargetId]);
+
+  // Task #636 — bulk-cover suggestions union of every selected opp's chips,
+  // de-duplicated by carrier id and minimum rank wins (so a top-ranked carrier
+  // on any opp surfaces as "Top").
+  const bulkCarrierOptions = useMemo<CarrierOption[]>(() => {
+    if (selected.size === 0) return [];
+    const byId = new Map<string, CarrierOption>();
+    filtered.forEach(it => {
+      if (!selected.has(it.opportunity.id)) return;
+      it.chips.forEach(c => {
+        if (!c.carrierName) return;
+        const prev = byId.get(c.carrierId);
+        if (!prev || c.rank < prev.rank) {
+          byId.set(c.carrierId, {
+            id: c.carrierId,
+            name: c.carrierName,
+            rank: c.rank,
+            bench: c.bench,
+            benchWins: c.benchWins,
+          });
+        }
+      });
+    });
+    return Array.from(byId.values()).sort((a, b) => a.rank - b.rank);
+  }, [filtered, selected]);
+
+  // Task #636 — when the rep opens the per-row outcome modal in "covered" mode
+  // and hasn't typed anything, prefill with the top-ranked carrier suggestion.
+  useEffect(() => {
+    if (!outcomeTargetId) return;
+    if (outcomeStatus !== "covered") return;
+    if (outcomeCarrier.trim()) return;
+    const top = outcomeCarrierOptions[0];
+    if (top) setOutcomeCarrier(top.name);
+    // Intentionally only watching modal open + status; we don't want to clobber
+    // a value the rep just edited.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outcomeTargetId, outcomeStatus]);
+
+  // Same prefill for bulk-cover modal — defaults to the top-ranked carrier
+  // across all selected opps.
+  useEffect(() => {
+    if (!bulkCoverOpen) return;
+    if (bulkCoverCarrier.trim()) return;
+    const top = bulkCarrierOptions[0];
+    if (top) setBulkCoverCarrier(top.name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bulkCoverOpen]);
+
   // Group items for display.
   const groups = useMemo(() => {
     if (grouping === "none") return [{ key: "all", label: "All", items: filtered }];
@@ -512,7 +679,7 @@ export default function AvailableFreightPage() {
           };
         };
       } | null;
-    } | unknown,
+    } | null,
     Error,
     {
       id: string;
@@ -527,8 +694,11 @@ export default function AvailableFreightPage() {
     }
   >({
     mutationFn: async ({ id, status, notes, carrierName, paidRate, customerRate, applyToBench, applyToRateBand, offerRecurringLane }) => {
+      // `apiRequest` returns the raw `Response`; parse JSON here so the
+      // success handler can read `loops.recurringLaneSuggestion`.
+      let res: Response;
       if (status === "covered") {
-        return apiRequest("POST", `/api/freight-opportunities/${id}/cover`, {
+        res = await apiRequest("POST", `/api/freight-opportunities/${id}/cover`, {
           carrierName,
           paidRate,
           customerRate,
@@ -537,13 +707,19 @@ export default function AvailableFreightPage() {
           applyToRateBand: applyToRateBand ?? true,
           offerRecurringLane: offerRecurringLane ?? true,
         });
+      } else {
+        res = await apiRequest("POST", "/api/freight-opportunities/bulk-action", {
+          action: "dismiss",
+          opportunityIds: [id],
+          notes: notes || undefined,
+          outcome: status,
+        });
       }
-      return apiRequest("POST", "/api/freight-opportunities/bulk-action", {
-        action: "dismiss",
-        opportunityIds: [id],
-        notes: notes || undefined,
-        outcome: status,
-      });
+      try {
+        return await res.json();
+      } catch {
+        return null;
+      }
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities/cockpit"] });
@@ -1414,7 +1590,18 @@ export default function AvailableFreightPage() {
               <>
                 <div className="space-y-1">
                   <Label htmlFor="outcome-carrier">Carrier name</Label>
-                  <Input id="outcome-carrier" value={outcomeCarrier} onChange={(e) => setOutcomeCarrier(e.target.value)} placeholder="e.g. Acme Logistics" data-testid="input-outcome-carrier" />
+                  <CarrierCombobox
+                    value={outcomeCarrier}
+                    onChange={setOutcomeCarrier}
+                    options={outcomeCarrierOptions}
+                    testId="input-outcome-carrier"
+                    placeholder="e.g. Acme Logistics"
+                  />
+                  {outcomeCarrierOptions.length > 0 && outcomeCarrierOptions[0].name === outcomeCarrier && (
+                    <div className="text-[11px] text-muted-foreground" data-testid="text-outcome-carrier-hint">
+                      Defaulted to top-ranked carrier — change if needed.
+                    </div>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
@@ -1521,7 +1708,18 @@ export default function AvailableFreightPage() {
           <div className="space-y-3">
             <div className="space-y-1">
               <Label htmlFor="bulk-cover-carrier">Carrier name</Label>
-              <Input id="bulk-cover-carrier" value={bulkCoverCarrier} onChange={(e) => setBulkCoverCarrier(e.target.value)} placeholder="e.g. Acme Logistics" data-testid="input-bulk-cover-carrier" />
+              <CarrierCombobox
+                value={bulkCoverCarrier}
+                onChange={setBulkCoverCarrier}
+                options={bulkCarrierOptions}
+                testId="input-bulk-cover-carrier"
+                placeholder="e.g. Acme Logistics"
+              />
+              {bulkCarrierOptions.length > 0 && bulkCarrierOptions[0].name === bulkCoverCarrier && (
+                <div className="text-[11px] text-muted-foreground" data-testid="text-bulk-cover-carrier-hint">
+                  Defaulted to top-ranked carrier across selected opps — change if needed.
+                </div>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">

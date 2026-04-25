@@ -746,12 +746,33 @@ export function registerFreightCockpitRoutes(app: Express) {
       if (!parsed.success) return res.status(400).json({ error: "Invalid bulk-action payload", issues: parsed.error.issues });
 
       const { opportunityIds, action } = parsed.data;
+      // Task #636 — `mark_covered` paths attach the canonical `loadFact` and
+      // capture-loop result so the client can surface "Set as recurring lane".
+      // Other actions leave these undefined.
       const results: Array<{
         opportunityId: string;
         ok: boolean;
         message?: string;
         sent?: number;
         blocked?: number;
+        loadFact?: { inserted: boolean; updated: boolean } | null;
+        loops?: {
+          bench?: { applied: boolean; reason: string; rows: Array<{ laneId: string; benchRowId: string }> };
+          rateBand?: { applied: boolean; reason: string };
+          recurringLaneSuggestion?: {
+            suggested: boolean;
+            reason: string;
+            suggestion?: {
+              origin: string;
+              originState: string | null;
+              destination: string;
+              destinationState: string | null;
+              equipmentType: string | null;
+              companyId: string | null;
+              companyName: string | null;
+            };
+          };
+        } | null;
       }> = [];
 
       for (const oppId of opportunityIds) {
