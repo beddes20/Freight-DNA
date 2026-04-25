@@ -132,26 +132,31 @@ export function LaneSwitchboard({ open, onOpenChange }: LaneSwitchboardProps) {
     handleClose();
     navigate(`/freight?lane=${encodeURIComponent(sig)}`);
   };
+  // Customer Quotes prefills via the page's `laneSearch` filter (a free-text
+  // origin/dest field; see filtersFromUrl in customer-quotes.tsx). The page
+  // expects "ORIGIN DEST" with a single space between cities — equipment is a
+  // separate filter param.
   const goCq = () => {
     if (parsed.status !== "ok" || !parsed.originCity || !parsed.destCity) return;
     handleClose();
     const params = new URLSearchParams();
-    params.set("pickupCity", parsed.originCity);
-    if (parsed.originState) params.set("pickupState", parsed.originState);
-    params.set("deliveryCity", parsed.destCity);
-    if (parsed.destState) params.set("deliveryState", parsed.destState);
+    params.set("laneSearch", `${parsed.originCity} ${parsed.destCity}`);
     if (parsed.equipment) params.set("equipment", parsed.equipment);
     navigate(`/customer-quotes?${params.toString()}`);
   };
   const goCqRow = (row: SwitchboardHistoricalRow) => {
     handleClose();
     const params = new URLSearchParams();
-    params.set("pickupCity", row.originCity);
-    params.set("pickupState", row.originState);
-    params.set("deliveryCity", row.destCity);
-    params.set("deliveryState", row.destState);
+    params.set("laneSearch", `${row.originCity} ${row.destCity}`);
     if (row.equipment) params.set("equipment", row.equipment);
     navigate(`/customer-quotes?${params.toString()}`);
+  };
+  // CTA in the unified no-results panel — same destination as goCq, used
+  // when nothing matched anywhere across the three columns.
+  const searchQuotesForLane = goCq;
+  const createLaneInLwq = () => {
+    handleClose();
+    navigate("/lanes/work-queue");
   };
 
   return (
@@ -204,21 +209,60 @@ export function LaneSwitchboard({ open, onOpenChange }: LaneSwitchboardProps) {
           )}
         </div>
 
+        {/*
+          Unified no-results state — when the parser succeeded but ALL three
+          columns came back empty, we collapse the per-column messaging into
+          one panel with the two task-specified CTAs. This keeps the rep
+          from staring at three separate "no results" tiles when the lane
+          is simply unknown to the system.
+        */}
+        {ready && data && !isFetching
+          && data.recurring.length === 0
+          && data.live.length === 0
+          && data.historical.length === 0
+          ? (
+            <div
+              className="border-t px-6 py-8 flex flex-col items-center text-center gap-3"
+              data-testid="empty-switchboard-no-results"
+            >
+              <div className="text-sm font-medium text-foreground">
+                No matches across recurring lanes, live freight, or quotes.
+              </div>
+              <div className="text-xs text-muted-foreground max-w-md">
+                This lane isn't tracked yet. Add it to the work queue to start
+                building carrier coverage, or jump into Customer Quotes to
+                check broader history.
+              </div>
+              <div className="flex items-center gap-2 mt-1">
+                <Button
+                  size="sm"
+                  variant="default"
+                  onClick={createLaneInLwq}
+                  data-testid="button-empty-create-lane-lwq"
+                >
+                  Create lane in LWQ
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={searchQuotesForLane}
+                  data-testid="button-empty-search-quotes"
+                >
+                  Search quotes for this lane
+                </Button>
+              </div>
+            </div>
+          )
+          : null}
+
         <div className="grid grid-cols-1 md:grid-cols-3 max-h-[60vh]">
           <Column
             title="Recurring Lanes"
             icon={<Truck className="h-4 w-4" />}
             isLoading={ready && isFetching && !data}
-            empty={
-              parsed && data && data.recurring.length === 0 ? (
-                <EmptyState
-                  message="No recurring lanes match."
-                  ctaLabel="Open Lane Work Queue"
-                  onCta={() => { handleClose(); navigate("/lanes/work-queue"); }}
-                  ctaTestId="button-empty-lwq"
-                />
-              ) : null
-            }
+            // Per-column "empty" is suppressed when the unified no-results
+            // panel above is showing — otherwise we'd double up the messaging.
+            empty={null}
             testId="column-switchboard-recurring"
           >
             {data?.recurring.map((r) => (
@@ -241,16 +285,7 @@ export function LaneSwitchboard({ open, onOpenChange }: LaneSwitchboardProps) {
             title="Live Freight"
             icon={<Radio className="h-4 w-4" />}
             isLoading={ready && isFetching && !data}
-            empty={
-              parsed && data && data.live.length === 0 ? (
-                <EmptyState
-                  message="No open opportunities on this lane."
-                  ctaLabel="Browse Available Freight"
-                  onCta={() => { handleClose(); navigate("/freight"); }}
-                  ctaTestId="button-empty-af"
-                />
-              ) : null
-            }
+            empty={null}
             testId="column-switchboard-live"
           >
             {data?.live.map((r) => (
@@ -277,20 +312,7 @@ export function LaneSwitchboard({ open, onOpenChange }: LaneSwitchboardProps) {
             title="Historical Quotes"
             icon={<FileText className="h-4 w-4" />}
             isLoading={ready && isFetching && !data}
-            empty={
-              parsed && data && data.historical.length === 0 ? (
-                <EmptyState
-                  message={
-                    parsed.originState && parsed.destState
-                      ? "No prior quotes on this lane."
-                      : "Add state codes (e.g. ATL, GA) to surface prior quotes."
-                  }
-                  ctaLabel="Open Customer Quotes"
-                  onCta={goCq}
-                  ctaTestId="button-empty-cq"
-                />
-              ) : null
-            }
+            empty={null}
             testId="column-switchboard-historical"
           >
             {data?.historical.map((r) => (
@@ -374,22 +396,6 @@ function Row({
       <div className="text-xs text-muted-foreground truncate">{secondary}</div>
       {tertiary && <div className="text-[11px] text-muted-foreground/80 truncate mt-0.5">{tertiary}</div>}
     </button>
-  );
-}
-
-function EmptyState({ message, ctaLabel, onCta, ctaTestId }: {
-  message: string;
-  ctaLabel: string;
-  onCta: () => void;
-  ctaTestId: string;
-}) {
-  return (
-    <div className="p-4 flex flex-col items-start gap-2">
-      <p className="text-xs text-muted-foreground">{message}</p>
-      <Button size="sm" variant="outline" onClick={onCta} data-testid={ctaTestId}>
-        {ctaLabel}
-      </Button>
-    </div>
   );
 }
 
