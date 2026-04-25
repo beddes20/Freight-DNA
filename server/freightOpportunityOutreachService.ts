@@ -224,6 +224,14 @@ export interface SendWaveOpts {
   wave?: number;
   /** Per-row subject/body overrides keyed by opportunityCarrierId (rep edits in UI). */
   overrides?: Record<string, { subject?: string; body?: string }>;
+  /**
+   * Identifies which send path produced this wave so the unified contact-lock
+   * helper (Task #631) can render correct suppression reasons. Defaults to
+   * "af_wave"; the auto-pilot scheduler must pass "auto_pilot" so other paths
+   * see "Contacted via auto-pilot" rather than misattributing the policy
+   * owner as the rep that sent.
+   */
+  sourceModule?: "af_wave" | "auto_pilot" | "single_carrier";
 }
 
 export async function sendOpportunityWave(
@@ -346,7 +354,22 @@ export async function sendOpportunityWave(
     const throttleHit = crossThrottled.get(row.carrierId);
     if (throttleHit) {
       const ageH = ((Date.now() - throttleHit.lastSentAt.getTime()) / 3600000).toFixed(1);
-      const message = `Skipped: contacted on this lane ${ageH}h ago (cross-module throttle, ${FREIGHT_CROSS_THROTTLE_HOURS}h window)`;
+      // Surface WHICH path / WHO contacted so reps see "via LWQ by Sara" not
+      // a faceless "throttled". Auto-pilot omits the actor name (it's the
+      // policy owner, not the sender — calling out "by Sara" would mislead).
+      const moduleLabel =
+        throttleHit.sourceModule === "lwq" ? "LWQ" :
+        throttleHit.sourceModule === "lwq_procurement" ? "LWQ procurement" :
+        throttleHit.sourceModule === "lwq_adhoc" ? "LWQ ad-hoc" :
+        throttleHit.sourceModule === "af_wave" ? "Available Freight" :
+        throttleHit.sourceModule === "auto_pilot" ? "auto-pilot" :
+        throttleHit.sourceModule === "single_carrier" ? "single-carrier email" :
+        "outreach";
+      const actorClause =
+        throttleHit.actorName && throttleHit.sourceModule !== "auto_pilot"
+          ? ` by ${throttleHit.actorName}`
+          : "";
+      const message = `Skipped: contacted on this lane ${ageH}h ago via ${moduleLabel}${actorClause} (cross-module throttle, ${FREIGHT_CROSS_THROTTLE_HOURS}h window)`;
       results.push({
         opportunityCarrierId: rowId,
         carrierId: row.carrierId,
@@ -369,6 +392,8 @@ export async function sendOpportunityWave(
           wave,
           lastSentAt: throttleHit.lastSentAt.toISOString(),
           throttleSource: throttleHit.source,
+          throttleSourceModule: throttleHit.sourceModule,
+          throttleActorName: throttleHit.actorName,
           windowHours: FREIGHT_CROSS_THROTTLE_HOURS,
         },
       });
@@ -484,7 +509,11 @@ export async function sendOpportunityWave(
       continue;
     }
 
-    // Persist outreach + thread linkage
+    // Persist outreach + thread linkage. Task #631 — also persist the
+    // canonical "Origin → Destination" label into procurement_lane and tag the
+    // source_module so the unified contact-lock helper finds these rows from
+    // LWQ lookups (synthetic-lane opps have no recurringLaneId; the company +
+    // lane label fallback is the only thing that links them).
     const log = await storage.createCarrierOutreachLog({
       orgId,
       laneId: opportunity.recurringLaneId ?? null,
@@ -495,6 +524,8 @@ export async function sendOpportunityWave(
       ownerUserId: null,
       overseerUserId: null,
       outreachMode: opportunity.mode === "exact_load" ? "immediate_plus_lane" : "lane_building",
+      procurementLane: laneLabel,
+      sourceModule: opts.sourceModule ?? "af_wave",
       emailDrafts: [{
         carrierId: row.carrierId,
         carrierName: carrier.name,

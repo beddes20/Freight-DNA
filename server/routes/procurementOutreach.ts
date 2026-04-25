@@ -676,6 +676,9 @@ House style — follow every rule:
         recipients: JSON.parse(JSON.stringify(results)),
         procurementTaskId: taskId,
         procurementLane: lane,
+        // Task #631 — tag the source so the unified contact-lock view shows
+        // "Contacted via LWQ procurement by Sara".
+        sourceModule: "lwq_procurement",
         // Store threadId so reply tracking can match inbound replies for procurement sends too
         threadId: primaryThreadId,
       });

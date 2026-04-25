@@ -1584,6 +1584,13 @@ export const carrierOutreachLogs = pgTable("carrier_outreach_logs", {
   matchedLaneId: varchar("matched_lane_id").references(() => recurringLanes.id, { onDelete: "set null" }),
   matchConfidence: varchar("match_confidence"),
   // exact | alternate_contact | ambiguous | unmatched
+
+  // Task #631 — unified contact-lock source classifier. Identifies which send
+  // path produced this row so the dedup helper can render
+  // "Contacted via LWQ by Rep B" / "Contacted via auto-pilot" reasons.
+  // Allowed values: lwq | lwq_procurement | lwq_adhoc | af_wave | auto_pilot |
+  // single_carrier | (NULL = legacy / pre-#631).
+  sourceModule: varchar("source_module"),
 }, (table) => ({
   // Index for HF dedup guard: efficient lookup of recent successful outreach per lane
   // Filters: WHERE lane_id = ? AND delivery_status IN ('sent','delivered','opened') AND sent_at > ?

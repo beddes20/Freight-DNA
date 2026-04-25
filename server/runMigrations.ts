@@ -4452,4 +4452,23 @@ export async function runMigrations() {
   } finally {
     clientReplyRegression.release();
   }
+
+  // ── Task #631: carrier_outreach_logs.source_module ────────────────────────
+  // Unified contact-lock view classifies which send path produced each row so
+  // dedup queries can surface "Contacted via LWQ by Rep B" / "via auto-pilot"
+  // suppression reasons. Nullable for legacy rows. Idempotent ADD COLUMN IF
+  // NOT EXISTS — safe to run on every boot. Required by the schema-drift guard
+  // in tandem with the corresponding column in shared/schema.ts.
+  const clientSourceModule = await pool.connect();
+  try {
+    await clientSourceModule.query(`
+      ALTER TABLE carrier_outreach_logs
+      ADD COLUMN IF NOT EXISTS source_module varchar
+    `);
+    console.log("[migrations] carrier_outreach_logs.source_module ensured (Task #631)");
+  } catch (err) {
+    console.error("[migrations] source_module migration error:", err);
+  } finally {
+    clientSourceModule.release();
+  }
 }

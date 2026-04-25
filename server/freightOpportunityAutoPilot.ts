@@ -135,6 +135,10 @@ export async function runAutoPilotTick(
           try {
             const { results } = await sendOpportunityWave(s, org.id, opp.id, actor, {
               carrierRowIds: candidates.map(c => c.id),
+              // Task #631 — tag the source so the unified contact-lock view
+              // surfaces "Contacted via auto-pilot" (and omits the rep name,
+              // which is the policy owner here, not the actual sender).
+              sourceModule: "auto_pilot",
             });
             const sent = results.filter(r => r.status === "sent" || r.status === "scheduled").length;
             const blocked = results.filter(r => r.status === "blocked").length;

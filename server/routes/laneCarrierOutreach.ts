@@ -48,6 +48,7 @@ import { sendOutlookEmail, outlookEnabled } from "../outlookService";
 import { getGraphAccessToken } from "../graphService";
 import { getReplyTrackingStatus } from "../graphSubscriptionService";
 import { logOutboundCarrierEmail, logInboundCarrierEmail } from "../emailIntelligenceService";
+import { findCarrierContactLocks, formatLockReason } from "../carrierContactLocks";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
@@ -2181,22 +2182,32 @@ Rules for suggestions:
     // ── Dedup guard ──────────────────────────────────────────────
     // For high-frequency lanes, block re-sending to a carrier that was already
     // SUCCESSFULLY contacted on this lane within outreachDedupWindowHours.
-    // Uses carrierOutreachLogs (deliveryStatus=sent) not bench timestamps — ensures
-    // transient provider failures do NOT trigger a 48h block.
-    // Non-HF lanes skip this check to preserve existing behavior.
+    // Task #631: read the unified contact-lock view so AF wave / auto-pilot
+    // sends on this same company+lane (even synthetic-lane opps without a
+    // recurringLaneId) suppress LWQ duplicates too. The view also returns the
+    // sender + age so the rep sees "Contacted 2h ago via Available Freight by
+    // Sara" instead of a faceless dedup message.
     const sendUploads = await storage.getFinancialUploadsForOrg(user.organizationId);
     const isHfLane = isHighFrequencyLane(lane, sendUploads);
-    const dedupWindowMs = HIGH_FREQUENCY_CONFIG.outreachDedupWindowHours * 60 * 60 * 1000;
     const dedupBlockedCarrierIds = new Set<string>();
+    const dedupReasonByCarrierId = new Map<string, string>();
 
     if (isHfLane) {
-      // Fetch carrier IDs that were SUCCESSFULLY contacted within the dedup window
-      const successfulIds = await storage.getRecentSuccessfulOutreachCarrierIds(
-        req.params.laneId,
-        dedupWindowMs,
-      );
-      for (const cid of successfulIds) {
-        dedupBlockedCarrierIds.add(cid);
+      const candidateCarrierIds = emailDrafts
+        .map(d => d.carrierId)
+        .filter((id): id is string => !!id);
+      if (candidateCarrierIds.length > 0) {
+        const locks = await findCarrierContactLocks({
+          orgId: user.organizationId,
+          carrierIds: candidateCarrierIds,
+          recurringLaneId: req.params.laneId,
+          companyId: lane.companyId ?? null,
+          laneLabel: formatLaneDisplay(lane.origin, lane.originState, lane.destination, lane.destinationState),
+        });
+        for (const [cid, lock] of locks) {
+          dedupBlockedCarrierIds.add(cid);
+          dedupReasonByCarrierId.set(cid, formatLockReason(lock));
+        }
       }
     }
 
@@ -2232,12 +2243,14 @@ Rules for suggestions:
       // Only triggers for HF lanes; only blocks on confirmed successful sends (not failures).
       if (isHfLane && dedupBlockedCarrierIds.size > 0 && draft.carrierId) {
         if (dedupBlockedCarrierIds.has(draft.carrierId)) {
+          const reason = dedupReasonByCarrierId.get(draft.carrierId)
+            ?? `Carrier already successfully contacted within ${HIGH_FREQUENCY_CONFIG.outreachDedupWindowHours}h dedup window`;
           results.push({
             carrierId: draft.carrierId,
             carrierName: draft.carrierName,
             email: null,
             status: "dedup_skipped",
-            error: `Carrier already successfully contacted within ${HIGH_FREQUENCY_CONFIG.outreachDedupWindowHours}h dedup window`,
+            error: reason,
             dedupBlocked: true,
           });
           continue;
@@ -2367,6 +2380,10 @@ Rules for suggestions:
         ownerUserId: lane.ownerUserId ?? null,
         overseerUserId: lane.overseerUserId ?? null,
         outreachMode,
+        // Task #631 — persist the canonical lane label + source so the unified
+        // contact-lock helper finds this row from AF wave / auto-pilot lookups.
+        procurementLane: formatLaneDisplay(lane.origin, lane.originState, lane.destination, lane.destinationState),
+        sourceModule: "lwq",
         emailDrafts: [JSON.parse(JSON.stringify(draft))],
         sentAt: result.status === "sent" ? now : null,
         deliveryStatus: perCarrierStatus,
@@ -2500,6 +2517,13 @@ Rules for suggestions:
       }
     }
 
+    // Task #631 — this endpoint records outreach that already happened (the
+    // rep manually logging that they contacted these carriers outside the
+    // built-in send flow). Mark it as sent / outbound so the unified
+    // contact-lock query actually surfaces these rows for AF / auto-pilot
+    // dedup. Without this the rows would have NULL sent_at + delivery_status
+    // 'draft' and silently fall through every dedup check.
+    const adhocSentAt = new Date();
     const log = await storage.createCarrierOutreachLog({
       orgId: user.organizationId,
       laneId: req.params.laneId,
@@ -2510,7 +2534,12 @@ Rules for suggestions:
       ownerUserId: ownerUserId ?? lane.ownerUserId ?? null,
       overseerUserId: overseerUserId ?? lane.overseerUserId ?? null,
       outreachMode: outreachMode ?? "lane_building",
+      procurementLane: formatLaneDisplay(lane.origin, lane.originState, lane.destination, lane.destinationState),
+      sourceModule: "lwq_adhoc",
       emailDrafts: emailDrafts ?? [],
+      sentAt: adhocSentAt,
+      deliveryStatus: "sent",
+      direction: "outbound",
     });
 
     // First upsert bench entries so the count reflects real distinct carriers contacted
