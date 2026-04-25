@@ -48,6 +48,10 @@ interface MakeItemArgs {
   customerName?: string | null;
   customerTier?: string | null;
   id?: string;
+  /** Default true for hot_reply rows (so the existing tests keep their
+   *  "replies always float" semantics); explicit false exercises the
+   *  non-hot reply codepath. */
+  isHotReply?: boolean;
 }
 
 function makeItem(over: MakeItemArgs): RankerInputItem {
@@ -66,6 +70,7 @@ function makeItem(over: MakeItemArgs): RankerInputItem {
     customerName: over.customerName ?? null,
     ageMinutes: over.ageMinutes,
     customerTier: over.customerTier ?? null,
+    isHotReply: over.isHotReply ?? (over.source === "hot_reply"),
   };
 }
 
@@ -121,12 +126,13 @@ describe("rankerScore — composite formula", () => {
     expect(score).toBeCloseTo(65, 5);
   });
 
-  it("adds the +1000 floor for hot replies so they always outrank others", () => {
+  it("adds the +1000 floor for high-priority hot replies so they always outrank others", () => {
     const reply = rankerScore({
       source: "hot_reply",
       urgencyScore: 30,           // even a "low" urgency reply
       customerTier: "bronze",     // even a low-tier customer
       ageMinutes: 60 * 24 * 5,    // even very stale
+      isHotReply: true,           // ← high-priority thread
     });
     const critical = rankerScore({
       source: "freight_opp",
@@ -137,6 +143,27 @@ describe("rankerScore — composite formula", () => {
     expect(reply).toBeGreaterThan(critical);
     // floor must be approximately +1000
     expect(reply).toBeGreaterThanOrEqual(1000);
+  });
+
+  it("does NOT apply the +1000 floor to normal/low-priority reply threads", () => {
+    // Normal-priority reply (isHotReply=false) ranks on the same scale as
+    // the other sources — a critical freight opp must outrank it.
+    const lukewarmReply = rankerScore({
+      source: "hot_reply",
+      urgencyScore: 50,
+      customerTier: "gold",
+      ageMinutes: 30,
+      isHotReply: false,
+    });
+    const criticalOpp = rankerScore({
+      source: "freight_opp",
+      urgencyScore: 100,
+      customerTier: "platinum",
+      ageMinutes: 0,
+    });
+    expect(criticalOpp).toBeGreaterThan(lukewarmReply);
+    // No floor was applied — score is the plain composite (well below 1000)
+    expect(lukewarmReply).toBeLessThan(200);
   });
 
   it("ranks platinum above bronze when urgency and decay are equal", () => {
@@ -168,16 +195,28 @@ describe("rankTodayItems — list sorting", () => {
     expect(ranked[1].priorityScore).toBeGreaterThan(ranked[2].priorityScore);
   });
 
-  it("floats hot replies above everything else, regardless of urgency", () => {
+  it("floats high-priority hot replies above everything else, regardless of urgency", () => {
     const items = [
       makeItem({ source: "freight_opp", urgencyScore: 100, ageMinutes: 0, customerName: "C1", customerTier: "platinum" }),
       makeItem({ source: "quote_sla",   urgencyScore: 95,  ageMinutes: 0, customerName: "C2", customerTier: "platinum" }),
       // Even a "low" reply outranks both above due to the +1000 floor
+      // (isHotReply defaults to true for hot_reply rows in the factory)
       makeItem({ source: "hot_reply",   urgencyScore: 30,  ageMinutes: 60 * 24 * 3, customerName: "C3", customerTier: "bronze" }),
     ];
     const ranked = rankTodayItems(items);
     expect(ranked[0].source).toBe("hot_reply");
     expect(ranked[0].priorityScore).toBeGreaterThan(ranked[1].priorityScore + 500);
+  });
+
+  it("does NOT float lukewarm (non-hot) reply threads — they rank by composite only", () => {
+    const items = [
+      makeItem({ source: "freight_opp", urgencyScore: 90, ageMinutes: 0, customerName: "C1", customerTier: "platinum" }),
+      // Reply present but isHotReply=false — should stay below the critical opp
+      makeItem({ source: "hot_reply",   urgencyScore: 40, ageMinutes: 30, customerName: "C2", customerTier: "gold", isHotReply: false }),
+    ];
+    const ranked = rankTodayItems(items);
+    expect(ranked[0].source).toBe("freight_opp");
+    expect(ranked[1].source).toBe("hot_reply");
   });
 
   it("preserves all four sources after ranking (no source dropped)", () => {

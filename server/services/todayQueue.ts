@@ -49,6 +49,12 @@ export interface TodayQueueItem {
   customerName: string | null;
   /** Minutes since the underlying surface flagged this item. */
   ageMinutes: number | null;
+  /**
+   * Set on hot_reply rows when the underlying thread is high-priority.
+   * Drives the +1000 ranker floor; normal/low-priority replies do NOT
+   * receive the floor and rank on the same scale as the other sources.
+   */
+  isHotReply?: boolean;
 }
 
 export interface TodayQueueResponse {
@@ -60,16 +66,21 @@ export interface TodayQueueResponse {
   bySource: Record<TodayQueueSource, number>;
 }
 
-// Hot replies always float to the top of the queue. We add a fixed floor
-// to their composite score so even a "low urgency" hot reply outranks a
-// "critical" non-reply item — replies are the only source where the
-// customer is actively waiting on us.
+// "Hot" replies (the customer is actively waiting on us AND the thread is
+// flagged high-priority) float to the top of the queue. We add a fixed
+// floor to their composite score so even a "low urgency" hot reply
+// outranks a "critical" non-reply item.
+//
+// Normal- and low-priority reply threads still appear in the queue but
+// are ranked normally (no floor) — the reviewer flagged that always
+// applying the floor over-floats lukewarm replies above genuinely
+// urgent freight ops, which is the wrong default.
 const HOT_REPLY_FLOOR = 1000;
 
 // ── Pure ranker (kept out of the SQL path so it can be tested in isolation) ─
 //
 // composite = customerTier × urgency × time-decay
-//   + HOT_REPLY_FLOOR if source === "hot_reply"
+//   + HOT_REPLY_FLOOR if source === "hot_reply" AND isHotReply === true
 //
 // Decisions on the constants:
 //   - tier multiplier: platinum 1.30, gold 1.15, silver 1.05, bronze 0.95,
@@ -101,17 +112,21 @@ export interface RankerInput {
   urgencyScore: number;
   customerTier: string | null;
   ageMinutes: number | null;
+  /** True only for hot_reply rows where the thread is high-priority. */
+  isHotReply?: boolean;
 }
 
 export function rankerScore(input: RankerInput): number {
   const base = input.urgencyScore *
     tierMultiplier(input.customerTier) *
     timeDecayMultiplier(input.ageMinutes);
-  return input.source === "hot_reply" ? base + HOT_REPLY_FLOOR : base;
+  return (input.source === "hot_reply" && input.isHotReply === true)
+    ? base + HOT_REPLY_FLOOR
+    : base;
 }
 
 export function rankTodayItems<T extends { source: TodayQueueSource; urgencyScore: number; ageMinutes: number | null; }>(
-  items: ReadonlyArray<T & { customerTier?: string | null }>,
+  items: ReadonlyArray<T & { customerTier?: string | null; isHotReply?: boolean }>,
 ): Array<T & { priorityScore: number }> {
   return items
     .map(item => ({
@@ -121,6 +136,7 @@ export function rankTodayItems<T extends { source: TodayQueueSource; urgencyScor
         urgencyScore: item.urgencyScore,
         customerTier: item.customerTier ?? null,
         ageMinutes: item.ageMinutes,
+        isHotReply: item.isHotReply,
       }),
     }))
     .sort((a, b) => b.priorityScore - a.priorityScore);
@@ -340,6 +356,9 @@ async function fetchHotReplyItems(ctx: SourceContext): Promise<TodayQueueItem[]>
         deepLink: `/conversations?threadId=${encodeURIComponent(t.threadId)}`,
         customerName: co?.name ?? null,
         ageMinutes: ageMin,
+        // Floor only applies to high-priority threads; normal/low replies
+        // are still surfaced but ranked alongside freight ops + LWQ.
+        isHotReply: isHigh,
       };
     });
   } catch (err) {

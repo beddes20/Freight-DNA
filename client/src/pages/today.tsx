@@ -7,7 +7,7 @@
 // "Done for now" snooze affordance.
 import { useMemo, useState } from "react";
 import { Link, useLocation } from "wouter";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useQueries, useMutation } from "@tanstack/react-query";
 import { List, type RowComponentProps } from "react-window";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -74,13 +74,55 @@ function fmtAge(ageMin: number | null): string {
 export default function TodayQueuePage(): JSX.Element {
   const [, navigate] = useLocation();
   const { toast } = useToast();
-  const { data, isLoading } = useQuery<TodayQueueResponse>({
-    queryKey: ["/api/today-queue"],
-    refetchInterval: 60_000,
-    staleTime: 30_000,
+  // Cursor-based pagination: the first page is fetched on mount; "Load
+  // more" appends subsequent pages so very large queues (>50) stop being
+  // truncated. Each page lives at its own queryKey so a snooze on one
+  // page doesn't blow away the others (the parent invalidate-all path
+  // still works for explicit refresh).
+  const [cursors, setCursors] = useState<string[]>([""]);
+  const pageQueries = useQueries({
+    queries: cursors.map(cursor => ({
+      queryKey: ["/api/today-queue", cursor || "first"] as const,
+      queryFn: async ({ signal }: { signal?: AbortSignal }) => {
+        const url = cursor
+          ? `/api/today-queue?cursor=${encodeURIComponent(cursor)}`
+          : "/api/today-queue";
+        const res = await fetch(url, { credentials: "include", signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<TodayQueueResponse>;
+      },
+      refetchInterval: 60_000,
+      staleTime: 30_000,
+    })),
   });
 
-  const items = data?.items ?? [];
+  const isLoading = pageQueries[0]?.isLoading ?? true;
+  const data = pageQueries[0]?.data;
+  // Concat items from every loaded page, dedup by id (defensive — the
+  // server cursor is monotonic so duplicates shouldn't occur, but a
+  // stale page in cache during refetch could overlap).
+  const items: TodayQueueItem[] = useMemo(() => {
+    const seen = new Set<string>();
+    const out: TodayQueueItem[] = [];
+    for (const q of pageQueries) {
+      for (const it of q.data?.items ?? []) {
+        if (!seen.has(it.id)) { seen.add(it.id); out.push(it); }
+      }
+    }
+    return out;
+  }, [pageQueries]);
+
+  const lastPage = pageQueries[pageQueries.length - 1]?.data;
+  const hasMore = !!lastPage?.nextCursor;
+  const isLoadingMore = pageQueries[pageQueries.length - 1]?.isLoading
+    && pageQueries.length > 1;
+
+  const invalidateAll = () => queryClient.invalidateQueries({ queryKey: ["/api/today-queue"] });
+  const loadMore = () => {
+    if (lastPage?.nextCursor && !cursors.includes(lastPage.nextCursor)) {
+      setCursors(prev => [...prev, lastPage.nextCursor!]);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-4 sm:gap-6 p-3 sm:p-6" data-testid="page-today-queue">
@@ -118,7 +160,7 @@ export default function TodayQueuePage(): JSX.Element {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => queryClient.invalidateQueries({ queryKey: ["/api/today-queue"] })}
+              onClick={invalidateAll}
               data-testid="button-refresh-today"
             >
               Refresh
@@ -139,12 +181,27 @@ export default function TodayQueuePage(): JSX.Element {
           )}
 
           {!isLoading && items.length > 0 && (
-            <VirtualizedTodayList
-              items={items}
-              onSnoozed={() => queryClient.invalidateQueries({ queryKey: ["/api/today-queue"] })}
-              onActivate={(href) => navigate(href)}
-              onError={(msg) => toast({ title: "Action failed", description: msg, variant: "destructive" })}
-            />
+            <>
+              <VirtualizedTodayList
+                items={items}
+                onSnoozed={invalidateAll}
+                onActivate={(href) => navigate(href)}
+                onError={(msg) => toast({ title: "Action failed", description: msg, variant: "destructive" })}
+              />
+              {hasMore && (
+                <div className="flex justify-center p-3 border-t">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={loadMore}
+                    disabled={isLoadingMore}
+                    data-testid="button-load-more"
+                  >
+                    {isLoadingMore ? "Loading…" : "Load more"}
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>
