@@ -18,6 +18,19 @@
  * webhook deliveries, replayed audit rows, and re-runs of the backfill
  * therefore never double-count.
  *
+ * Reply-count semantics (intentional design):
+ *   The "reply" counter is per-pipeline-event, NOT per unique inbound
+ *   message. Each producer (Graph webhook, PAFOE classifier, email_signals
+ *   replay) emits its own eventKey namespace (`webhook:*`, `pafoe-reply:*`,
+ *   `email-signal:*`), so a single inbound email that traverses both the
+ *   webhook and the classifier will bump `reply_count` twice — once per
+ *   pipeline. This matches downstream KPI usage where reply_count proxies
+ *   "engagement signal volume across our pipelines on this lane," not
+ *   "distinct human responses." Cross-source dedupe is intentionally NOT
+ *   implemented; any future change to per-message semantics should
+ *   normalize the eventKey across producers (e.g. provider message-id) so
+ *   the existing dedupe ledger continues to be the single point of truth.
+ *
  * Timestamp semantics: `first_event_at = LEAST(existing, incoming)` and
  * `last_event_at = GREATEST(existing, incoming)` so out-of-order or
  * back-dated events maintain correct first/last bookends.
