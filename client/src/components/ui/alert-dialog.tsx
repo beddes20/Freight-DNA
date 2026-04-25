@@ -25,11 +25,16 @@ const AlertDialogOverlay = React.forwardRef<
 ))
 AlertDialogOverlay.displayName = AlertDialogPrimitive.Overlay.displayName
 
+// Task #650 — accept an optional `container` prop forwarded to the
+// Radix Portal so consumers can render alert content inside their own
+// themed subtree. Backward compatible: omitted → defaults to body.
 const AlertDialogContent = React.forwardRef<
   React.ElementRef<typeof AlertDialogPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content>
->(({ className, ...props }, ref) => (
-  <AlertDialogPortal>
+  React.ComponentPropsWithoutRef<typeof AlertDialogPrimitive.Content> & {
+    container?: HTMLElement | null;
+  }
+>(({ className, container, ...props }, ref) => (
+  <AlertDialogPortal container={container ?? undefined}>
     <AlertDialogOverlay />
     <AlertDialogPrimitive.Content
       ref={ref}

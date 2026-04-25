@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { useCqOverlayPortal } from "@/lib/customer-quotes-portal";
 
 type TierName = "aggressive" | "balanced" | "premium";
 
@@ -54,6 +55,7 @@ const TIER_TONES: Record<TierName, string> = {
 };
 
 export function PricingRecommendationCard({ quoteId }: { quoteId: string }) {
+  const overlayPortal = useCqOverlayPortal();
   const { toast } = useToast();
   const [activeTier, setActiveTier] = useState<RecommendationTier | null>(null);
   const [draft, setDraft] = useState<DraftDTO | null>(null);
@@ -203,7 +205,7 @@ export function PricingRecommendationCard({ quoteId }: { quoteId: string }) {
       </div>
 
       <Dialog open={!!draft} onOpenChange={(o) => { if (!o) { setDraft(null); setActiveTier(null); setCopyOk(false); } }}>
-        <DialogContent className="max-w-xl bg-background border-border" data-testid="dialog-pricing-draft">
+        <DialogContent container={overlayPortal} className="max-w-xl bg-background border-border" data-testid="dialog-pricing-draft">
           <DialogHeader>
             <DialogTitle className="text-foreground">
               Draft email — {activeTier ? TIER_LABELS[activeTier.name] : ""} {activeTier ? fmt$(activeTier.rate) : ""}

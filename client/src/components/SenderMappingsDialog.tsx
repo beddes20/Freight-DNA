@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useCqOverlayPortal } from "@/lib/customer-quotes-portal";
 
 interface Mapping {
   id: string;
@@ -47,6 +48,7 @@ function formatRelative(iso: string | null): string {
 }
 
 export function SenderMappingsDialog({ canEdit }: { canEdit: boolean }) {
+  const overlayPortal = useCqOverlayPortal();
   const { toast } = useToast();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -92,7 +94,7 @@ export function SenderMappingsDialog({ canEdit }: { canEdit: boolean }) {
           <Mailbox className="h-3.5 w-3.5 mr-1.5" /> Sender mappings
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-3xl">
+      <DialogContent container={overlayPortal} className="max-w-3xl">
         <DialogHeader>
           <DialogTitle>Learned sender mappings</DialogTitle>
           <DialogDescription>

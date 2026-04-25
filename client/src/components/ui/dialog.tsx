@@ -29,11 +29,17 @@ const DialogOverlay = React.forwardRef<
 ))
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 
+// Task #650 — accept an optional `container` prop and forward it to the
+// Radix Portal so consumers can render dialog content inside their own
+// themed subtree (e.g. page-scoped Customer Quotes light/dark wrapper).
+// Backward compatible: when omitted, Radix defaults to `document.body`.
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
-  <DialogPortal>
+  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
+    container?: HTMLElement | null;
+  }
+>(({ className, children, container, ...props }, ref) => (
+  <DialogPortal container={container ?? undefined}>
     <DialogOverlay />
     <DialogPrimitive.Content
       ref={ref}

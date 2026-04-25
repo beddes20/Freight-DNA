@@ -178,4 +178,92 @@ test.describe('Customer Quotes theme is page-scoped (Task #650)', () => {
     // Sanity: Customer Quotes wrapper is gone.
     await expect(page.getByTestId('page-customer-quotes')).toHaveCount(0);
   });
+
+  test('CSS scoping: wrapper light vars override inherited <html>.dark vars', async ({ page }) => {
+    // Force <html> to dark globally; force the page to light. The wrapper
+    // must re-assert the light --background variable so child elements get
+    // the light color, even though they live inside <html class="dark">.
+    await page.addInitScript(() => {
+      try {
+        window.localStorage.setItem('theme', 'dark');
+        window.localStorage.setItem('cq-theme', 'light');
+      } catch (_e) { /* ignore */ }
+    });
+
+    // Bring up the global dark mode first.
+    await page.goto('/dashboard');
+    await page.waitForLoadState('domcontentloaded');
+    await expect
+      .poll(async () => page.evaluate(() =>
+        document.documentElement.classList.contains('dark'),
+      ), { timeout: 10_000 })
+      .toBe(true);
+
+    await page.goto('/customer-quotes');
+    const wrapper = page.getByTestId('page-customer-quotes');
+    await expect(wrapper).toBeVisible({ timeout: 15_000 });
+    await expect(wrapper).toHaveAttribute('data-cq-theme', 'light');
+
+    // The wrapper's resolved --background must equal the light value
+    // (the same value an isolated wrapper outside .dark would resolve to),
+    // proving the cascade was broken by `.light` re-asserting :root vars.
+    const bgInsideWrapper = await wrapper.evaluate((el) =>
+      getComputedStyle(el).getPropertyValue('--background').trim(),
+    );
+    const bgOnHtml = await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue('--background').trim(),
+    );
+    expect(bgInsideWrapper).not.toBe('');
+    expect(bgInsideWrapper).not.toBe(bgOnHtml);
+  });
+
+  test('overlays portal into the page wrapper, not document.body', async ({ page }) => {
+    // Seed page=dark + global=light to maximize the visual delta between
+    // an unscoped portal (would inherit body/light) and a scoped portal
+    // (must inherit wrapper/dark).
+    await page.addInitScript(() => {
+      try { window.localStorage.setItem('cq-theme', 'dark'); } catch (_e) { /* ignore */ }
+    });
+
+    await page.goto('/customer-quotes');
+    const wrapper = page.getByTestId('page-customer-quotes');
+    await expect(wrapper).toBeVisible({ timeout: 15_000 });
+    await expect(wrapper).toHaveAttribute('data-cq-theme', 'dark');
+
+    // Open the customer combobox (Popover) — its content must portal into
+    // [data-testid="cq-overlay-portal"], which is a child of the wrapper.
+    await page.getByTestId('combobox-customer').click();
+
+    // Radix uses [role="listbox"] / [data-radix-popper-content-wrapper].
+    // We assert the portal target hosts the popper wrapper.
+    const portalHostsPopper = await page.evaluate(() => {
+      const portal = document.querySelector('[data-testid="cq-overlay-portal"]');
+      if (!portal) return false;
+      // Any popper-content-wrapper rendered by Radix should now live inside.
+      return !!portal.querySelector('[data-radix-popper-content-wrapper]');
+    });
+    expect(portalHostsPopper).toBe(true);
+
+    // Now also exercise a Dialog from an imported child component
+    // (MarginFloorsSettings) — the architect flagged these as a leak
+    // vector if the portal target wasn't shared via the exported context.
+    // Close the popover by pressing Escape so it doesn't intercept clicks.
+    await page.keyboard.press('Escape');
+    await page.getByTestId('button-open-margin-floors').click();
+    const dialogInsidePortal = await page.evaluate(() => {
+      const portal = document.querySelector('[data-testid="cq-overlay-portal"]');
+      if (!portal) return false;
+      return !!portal.querySelector('[data-testid="dialog-margin-floors"]');
+    });
+    expect(dialogInsidePortal).toBe(true);
+
+    // And the body should NOT host that popper wrapper anywhere outside
+    // the page wrapper subtree (i.e. nothing leaked to document.body root).
+    const leakedToBodyRoot = await page.evaluate(() => {
+      const wrapperEl = document.querySelector('[data-testid="page-customer-quotes"]');
+      const all = Array.from(document.querySelectorAll('[data-radix-popper-content-wrapper]'));
+      return all.some(n => !wrapperEl?.contains(n));
+    });
+    expect(leakedToBodyRoot).toBe(false);
+  });
 });

@@ -22,6 +22,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
+import { useCqOverlayPortal } from "@/lib/customer-quotes-portal";
 import {
   Search, MapPin, Truck, Calendar, AlertTriangle, TrendingUp, TrendingDown, Minus, Award, Users,
   Clock, Activity, X, ChevronRight, ChevronDown, Copy, RefreshCw, SlidersHorizontal,
@@ -675,6 +676,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
   onPickQuote: (id: string) => void;
   onPickCustomer: (id: string) => void;
 }): JSX.Element {
+  const overlayPortal = useCqOverlayPortal();
   const [pickup, setPickup] = useState({ city: "", state: "" });
   const [delivery, setDelivery] = useState({ city: "", state: "" });
   const [equipment, setEquipment] = useState<string>("Any");
@@ -1139,7 +1141,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             </span>
             <Select value={equipment} onValueChange={setEquipment}>
               <SelectTrigger className={`h-10 w-[130px] bg-card border-border text-sm text-foreground [&>span]:text-foreground ${autoFilled.has("equipment") ? "border-amber-400/70 ring-1 ring-amber-400/30" : ""}`} data-testid="select-spot-equipment"><SelectValue /></SelectTrigger>
-              <SelectContent>
+              <SelectContent container={overlayPortal}>
                 {EQUIPMENT_OPTIONS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
               </SelectContent>
             </Select>
@@ -1160,7 +1162,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
             </span>
             <Select value={customerId || "_any"} onValueChange={v => setCustomerId(v === "_any" ? "" : v)}>
               <SelectTrigger className={`h-10 w-[220px] bg-card border-border text-sm text-foreground [&>span]:text-foreground data-[placeholder]:text-muted-foreground ${autoFilled.has("customerId") ? "border-amber-400/70 ring-1 ring-amber-400/30" : ""}`} data-testid="select-spot-customer"><SelectValue placeholder="Any customer" /></SelectTrigger>
-              <SelectContent>
+              <SelectContent container={overlayPortal}>
                 <SelectItem value="_any">Any customer</SelectItem>
                 {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
               </SelectContent>
@@ -1198,7 +1200,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                   <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Lookback</span>
                   <Select value={lookbackDays} onValueChange={setLookbackDays}>
                     <SelectTrigger className="h-8 w-[150px] bg-card border-border text-xs text-foreground [&>span]:text-foreground" data-testid="select-spot-lookback"><SelectValue /></SelectTrigger>
-                    <SelectContent>
+                    <SelectContent container={overlayPortal}>
                       {LOOKBACK_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
                     </SelectContent>
                   </Select>
@@ -1254,7 +1256,7 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                 <AdvField label="TL type">
                   <Select value={adv.truckloadType ?? "_unset"} onValueChange={v => setAdv(a => ({ ...a, truckloadType: v === "_unset" ? undefined : v }))}>
                     <SelectTrigger className="h-8 bg-card border-border text-xs text-foreground placeholder:text-muted-foreground" data-testid="select-spot-tl-type"><SelectValue placeholder="Select" /></SelectTrigger>
-                    <SelectContent>
+                    <SelectContent container={overlayPortal}>
                       <SelectItem value="_unset">—</SelectItem>
                       {TRUCKLOAD_OPTIONS.map(o => <SelectItem key={o} value={o}>{o}</SelectItem>)}
                     </SelectContent>
@@ -2212,6 +2214,7 @@ function QuoteBuilderCard({
   laneTraffic: SpotResult["laneTraffic"];
   onSaved?: (quoteId: string) => void;
 }): JSX.Element {
+  const overlayPortal = useCqOverlayPortal();
   const { toast } = useToast();
   const [savedQuoteId, setSavedQuoteId] = useState<string | null>(null);
   const [draft, setDraft] = useState<{ subject: string; body: string; to: string[] } | null>(null);
@@ -2356,7 +2359,7 @@ function QuoteBuilderCard({
                         <SelectValue placeholder="Select customer" />
                       </SelectTrigger>
                     </FormControl>
-                    <SelectContent>
+                    <SelectContent container={overlayPortal}>
                       {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
                     </SelectContent>
                   </Select>

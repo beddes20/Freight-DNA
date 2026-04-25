@@ -7,12 +7,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { useCqOverlayPortal } from "@/lib/customer-quotes-portal";
 
 interface FloorsResponse { floors: Record<string, number> }
 
 const COMMON_EQUIPMENT = ["Van", "Reefer", "Flatbed", "Stepdeck", "Power Only"];
 
 export function MarginFloorsSettings({ canEdit }: { canEdit: boolean }) {
+  const overlayPortal = useCqOverlayPortal();
   const { toast } = useToast();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -71,7 +73,7 @@ export function MarginFloorsSettings({ canEdit }: { canEdit: boolean }) {
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-md bg-background border-border" data-testid="dialog-margin-floors">
+        <DialogContent container={overlayPortal} className="max-w-md bg-background border-border" data-testid="dialog-margin-floors">
           <DialogHeader>
             <DialogTitle className="text-foreground">Per-equipment margin floors</DialogTitle>
             <DialogDescription className="text-muted-foreground text-xs">

@@ -13,6 +13,9 @@ const SheetTrigger = SheetPrimitive.Trigger
 
 const SheetClose = SheetPrimitive.Close
 
+// Task #650 — re-export Radix Portal directly so callers (and the
+// SheetContent below) can pass an optional `container` prop to render
+// inside their own themed subtree.
 const SheetPortal = SheetPrimitive.Portal
 
 const SheetOverlay = React.forwardRef<
@@ -51,13 +54,16 @@ const sheetVariants = cva(
 
 interface SheetContentProps
   extends React.ComponentPropsWithoutRef<typeof SheetPrimitive.Content>,
-    VariantProps<typeof sheetVariants> {}
+    VariantProps<typeof sheetVariants> {
+  // Task #650 — optional Portal target for page-scoped theming.
+  container?: HTMLElement | null;
+}
 
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof SheetPrimitive.Content>,
   SheetContentProps
->(({ side = "right", className, children, ...props }, ref) => (
-  <SheetPortal>
+>(({ side = "right", className, children, container, ...props }, ref) => (
+  <SheetPortal container={container ?? undefined}>
     <SheetOverlay />
     <SheetPrimitive.Content
       ref={ref}

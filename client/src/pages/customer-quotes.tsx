@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { CustomerQuotesPortalContext, useCqOverlayPortal } from "@/lib/customer-quotes-portal";
 import { formatCustomerName } from "@shared/laneFormatters";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -680,18 +681,34 @@ function CustomerQuotesPageInner(): JSX.Element {
   const allSelectedAreUnknown = selectedQuotes.length > 0
     && selectedQuotes.every(q => unknownCustomerIds.has(q.customerId));
 
+  // Task #650 — Portal target for overlays opened on this page (Sheet,
+  // Dialog, AlertDialog, Popover, Select). Anchoring the portal inside
+  // the themed wrapper means the portaled content inherits the page's
+  // light/dark CSS variables instead of the global `<html>` theme. We
+  // use state (not a ref) so React re-renders the overlays once the
+  // div is mounted and the container is no longer null.
+  const [overlayPortal, setOverlayPortal] = useState<HTMLDivElement | null>(null);
+
   return (
-    // Task #650 — `dark` class lives on this page-root wrapper so the
-    // theme cascades only to descendants (charts, badges, in-page popovers,
-    // Recharts tooltips). The global `<html>` class is never touched, so
-    // navigating in or out of this page no longer flickers the rest of the
-    // app. data-cq-theme exposes the current value for tests.
+    // Task #650 — explicit `light` or `dark` class lives on this page-root
+    // wrapper so the theme cascades only to descendants. The wrapper class
+    // unconditionally re-asserts the appropriate token set (see
+    // `:root, .light` and `.dark` in index.css), which means a Customer
+    // Quotes "light" preference still renders light even when the global
+    // `<html>` already has `dark` applied — CSS variable inheritance from
+    // the ancestor is broken by the explicit class on this element.
     <div
-      className={`flex flex-col h-full bg-background text-foreground ${theme === "dark" ? "dark" : ""}`}
+      className={`flex flex-col h-full bg-background text-foreground ${theme === "dark" ? "dark" : "light"}`}
       style={{ fontFamily: "Inter, sans-serif" }}
       data-cq-theme={theme}
       data-testid="page-customer-quotes"
     >
+      {/* Task #650 — overlay portal target. Lives inside the themed
+          wrapper so portaled Sheet/Dialog/Popover/Select content inherits
+          the page-scoped CSS variables. The Provider exposes the same
+          DOM node to descendant helper components via context. */}
+      <div ref={setOverlayPortal} data-testid="cq-overlay-portal" />
+      <CustomerQuotesPortalContext.Provider value={overlayPortal}>
       {/* Header */}
       <div className="px-6 py-4 border-b border-border bg-background shrink-0" data-testid="header-customer-quotes">
         <div className="flex items-start justify-between gap-4">
@@ -764,7 +781,7 @@ function CustomerQuotesPageInner(): JSX.Element {
           <FilterBox label="Equipment">
             <Select value={filters.equipment ?? "_all"} onValueChange={v => updateFilter({ equipment: v === "_all" ? undefined : v })}>
               <SelectTrigger className="h-8 w-[120px] bg-card border-border text-xs" data-testid="select-equipment"><SelectValue placeholder="All" /></SelectTrigger>
-              <SelectContent>
+              <SelectContent container={overlayPortal}>
                 <SelectItem value="_all">All</SelectItem>
                 {EQUIPMENTS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
               </SelectContent>
@@ -773,7 +790,7 @@ function CustomerQuotesPageInner(): JSX.Element {
           <FilterBox label="Rep">
             <Select value={filters.repId ?? "_all"} onValueChange={v => updateFilter({ repId: v === "_all" ? undefined : v })}>
               <SelectTrigger className="h-8 w-[140px] bg-card border-border text-xs" data-testid="select-rep"><SelectValue placeholder="All reps" /></SelectTrigger>
-              <SelectContent>
+              <SelectContent container={overlayPortal}>
                 <SelectItem value="_all">All reps</SelectItem>
                 {data?.reps.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
               </SelectContent>
@@ -782,7 +799,7 @@ function CustomerQuotesPageInner(): JSX.Element {
           <FilterBox label="Outcome">
             <Select value={filters.outcomeStatus ?? "_all"} onValueChange={v => updateFilter({ outcomeStatus: v === "_all" ? undefined : v })}>
               <SelectTrigger className="h-8 w-[140px] bg-card border-border text-xs" data-testid="select-outcome"><SelectValue placeholder="All" /></SelectTrigger>
-              <SelectContent>
+              <SelectContent container={overlayPortal}>
                 <SelectItem value="_all">All</SelectItem>
                 {ALL_STATUSES.map(s => <SelectItem key={s} value={s}>{STATUS_LABELS[s]}</SelectItem>)}
               </SelectContent>
@@ -791,7 +808,7 @@ function CustomerQuotesPageInner(): JSX.Element {
           <FilterBox label="Reason">
             <Select value={filters.outcomeReasonId ?? "_all"} onValueChange={v => updateFilter({ outcomeReasonId: v === "_all" ? undefined : v })}>
               <SelectTrigger className="h-8 w-[160px] bg-card border-border text-xs" data-testid="select-reason"><SelectValue placeholder="All reasons" /></SelectTrigger>
-              <SelectContent>
+              <SelectContent container={overlayPortal}>
                 <SelectItem value="_all">All reasons</SelectItem>
                 {data?.reasons.map(r => <SelectItem key={r.id} value={r.id}>{r.label}</SelectItem>)}
               </SelectContent>
@@ -1096,7 +1113,7 @@ function CustomerQuotesPageInner(): JSX.Element {
       )}
 
       <Dialog open={saveDialogOpen} onOpenChange={setSaveDialogOpen}>
-        <DialogContent className="bg-card border-border text-foreground">
+        <DialogContent container={overlayPortal} className="bg-card border-border text-foreground">
           <DialogHeader><DialogTitle>Save current view</DialogTitle></DialogHeader>
           <Label htmlFor="view-name" className="text-xs">Name</Label>
           <Input id="view-name" value={newViewName} onChange={e => setNewViewName(e.target.value)} placeholder="e.g. Aurora Foods — wins this month" data-testid="input-view-name" />
@@ -1177,7 +1194,7 @@ function CustomerQuotesPageInner(): JSX.Element {
           deletes only canonical demo records (EMAIL/TMS/CRM/MANUAL-1xxx
           source refs); real customer data is untouched. */}
       <AlertDialog open={purgeDemoOpen} onOpenChange={setPurgeDemoOpen}>
-        <AlertDialogContent data-testid="dialog-purge-demo">
+        <AlertDialogContent container={overlayPortal} data-testid="dialog-purge-demo">
           <AlertDialogHeader>
             <AlertDialogTitle>Purge demo data?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -1199,6 +1216,7 @@ function CustomerQuotesPageInner(): JSX.Element {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      </CustomerQuotesPortalContext.Provider>
     </div>
   );
 }
@@ -1214,6 +1232,7 @@ function FilterBox({ label, children }: { label: string; children: React.ReactNo
 }
 
 function CustomerCombobox({ customers, value, onChange }: { customers: Customer[]; value: string | undefined; onChange: (v: string | undefined) => void }): JSX.Element {
+  const overlayPortal = useCqOverlayPortal();
   const [open, setOpen] = useState(false);
   const selected = value ? customers.find(c => c.id === value) : undefined;
   return (
@@ -1230,7 +1249,7 @@ function CustomerCombobox({ customers, value, onChange }: { customers: Customer[
           <ChevronsUpDown className="ml-1 h-3.5 w-3.5 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[260px] p-0 bg-card border-border">
+      <PopoverContent container={overlayPortal} className="w-[260px] p-0 bg-card border-border">
         <Command className="bg-card">
           <CommandInput placeholder="Search customers..." className="h-9 text-xs" data-testid="combobox-customer-input" />
           <CommandList>
@@ -1272,6 +1291,7 @@ function BulkActionBar({
   onMarkIgnored: () => void;
   isPending: boolean;
 }): JSX.Element | null {
+  const overlayPortal = useCqOverlayPortal();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [search, setSearch] = useState("");
   if (selectedCount === 0) return null;
@@ -1305,7 +1325,7 @@ function BulkActionBar({
               Reassign to…
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-[280px] p-0" align="center" data-testid="popover-bulk-reassign">
+          <PopoverContent container={overlayPortal} className="w-[280px] p-0" align="center" data-testid="popover-bulk-reassign">
             <Command shouldFilter={false}>
               <CommandInput
                 placeholder="Search customer…"
@@ -1427,6 +1447,7 @@ function ReassignCustomerControl({ quoteId, customers, onReassign }: {
   customers: Customer[];
   onReassign: (quoteId: string, choice: { existingId: string } | { newName: string }) => Promise<void>;
 }): JSX.Element {
+  const overlayPortal = useCqOverlayPortal();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1480,7 +1501,7 @@ function ReassignCustomerControl({ quoteId, customers, onReassign }: {
           {busy ? "Saving…" : "Assign"}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[260px] p-0" align="start" data-testid={`popover-reassign-${quoteId}`}>
+      <PopoverContent container={overlayPortal} className="w-[260px] p-0" align="start" data-testid={`popover-reassign-${quoteId}`}>
         <Command shouldFilter={false}>
           <CommandInput
             placeholder="Search or type new name…"
@@ -2047,6 +2068,7 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
   onSave: (id: string, patch: Record<string, unknown>) => void;
   isSaving: boolean;
 }): JSX.Element {
+  const overlayPortal = useCqOverlayPortal();
   const [editMode, setEditMode] = useState(false);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   useEffect(() => { setEditMode(false); setDraft({}); }, [quoteId]);
@@ -2064,7 +2086,7 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
 
   return (
     <Sheet open={!!quoteId} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <SheetContent side="right" className="w-full sm:max-w-[520px] bg-background border-l border-border text-foreground overflow-y-auto" data-testid="quote-detail-drawer">
+      <SheetContent container={overlayPortal} side="right" className="w-full sm:max-w-[520px] bg-background border-l border-border text-foreground overflow-y-auto" data-testid="quote-detail-drawer">
         <SheetHeader className="flex-row items-center justify-between space-y-0">
           <SheetTitle className="text-foreground">Quote Detail</SheetTitle>
           {!detailQuery.isLoading && data && !editMode && (
@@ -2230,6 +2252,7 @@ function InlineOutcome({ quote, reasons, onChange, pending }: {
   onChange: (id: string, status: string, reasonId: string | null) => void;
   pending: boolean;
 }): JSX.Element {
+  const overlayPortal = useCqOverlayPortal();
   const [open, setOpen] = useState(false);
   const eligibleReasons = useMemo(() => {
     const cat = quote.outcomeStatus.startsWith("won") ? "won"
@@ -2245,7 +2268,7 @@ function InlineOutcome({ quote, reasons, onChange, pending }: {
           <StatusPill status={quote.outcomeStatus} />
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-[220px] p-2 bg-card border-border" align="start">
+      <PopoverContent container={overlayPortal} className="w-[220px] p-2 bg-card border-border" align="start">
         <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 px-1">Set outcome</div>
         <div className="space-y-0.5">
           {Object.keys(STATUS_LABELS).map(s => (
@@ -2280,6 +2303,7 @@ function QuoteEditForm({ quote, customers, reps, carriers, reasons, draft, onCha
   draft: Record<string, unknown>; onChange: (d: Record<string, unknown>) => void;
   onCancel: () => void; onSave: () => void; isSaving: boolean;
 }): JSX.Element {
+  const overlayPortal = useCqOverlayPortal();
   const get = <T,>(k: string, fallback: T): T => (k in draft ? draft[k] as T : fallback);
   const set = (k: string, v: unknown): void => onChange({ ...draft, [k]: v });
   const status = get("outcomeStatus", quote.outcomeStatus);
@@ -2298,13 +2322,13 @@ function QuoteEditForm({ quote, customers, reps, carriers, reasons, draft, onCha
         <FormCol label="Customer">
           <Select value={get("customerId", quote.customerId)} onValueChange={(v) => set("customerId", v)}>
             <SelectTrigger className="h-8 bg-background border-border text-xs" data-testid="edit-customer"><SelectValue /></SelectTrigger>
-            <SelectContent>{customers.map(c => <SelectItem key={c.id} value={c.id}>{formatCustomerName(c.name)}</SelectItem>)}</SelectContent>
+            <SelectContent container={overlayPortal}>{customers.map(c => <SelectItem key={c.id} value={c.id}>{formatCustomerName(c.name)}</SelectItem>)}</SelectContent>
           </Select>
         </FormCol>
         <FormCol label="Rep">
           <Select value={get("repId", quote.repId ?? "_none") as string} onValueChange={(v) => set("repId", v === "_none" ? null : v)}>
             <SelectTrigger className="h-8 bg-background border-border text-xs" data-testid="edit-rep"><SelectValue /></SelectTrigger>
-            <SelectContent>
+            <SelectContent container={overlayPortal}>
               <SelectItem value="_none">— Unassigned —</SelectItem>
               {reps.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
             </SelectContent>
@@ -2325,13 +2349,13 @@ function QuoteEditForm({ quote, customers, reps, carriers, reasons, draft, onCha
         <FormCol label="Equipment">
           <Select value={get("equipment", quote.equipment)} onValueChange={(v) => set("equipment", v)}>
             <SelectTrigger className="h-8 bg-background border-border text-xs" data-testid="edit-equipment"><SelectValue /></SelectTrigger>
-            <SelectContent>{EQUIPMENTS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}</SelectContent>
+            <SelectContent container={overlayPortal}>{EQUIPMENTS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}</SelectContent>
           </Select>
         </FormCol>
         <FormCol label="Source">
           <Select value={get("source", quote.source)} onValueChange={(v) => set("source", v)}>
             <SelectTrigger className="h-8 bg-background border-border text-xs" data-testid="edit-source"><SelectValue /></SelectTrigger>
-            <SelectContent>{SOURCES.map(s => <SelectItem key={s} value={s}>{s.toUpperCase()}</SelectItem>)}</SelectContent>
+            <SelectContent container={overlayPortal}>{SOURCES.map(s => <SelectItem key={s} value={s}>{s.toUpperCase()}</SelectItem>)}</SelectContent>
           </Select>
         </FormCol>
         <FormCol label="Quoted $">
@@ -2343,7 +2367,7 @@ function QuoteEditForm({ quote, customers, reps, carriers, reasons, draft, onCha
         <FormCol label="Carrier">
           <Select value={get("carrierId", quote.carrierId ?? "_none") as string} onValueChange={(v) => set("carrierId", v === "_none" ? null : v)}>
             <SelectTrigger className="h-8 bg-background border-border text-xs" data-testid="edit-carrier"><SelectValue /></SelectTrigger>
-            <SelectContent>
+            <SelectContent container={overlayPortal}>
               <SelectItem value="_none">— None —</SelectItem>
               {carriers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
             </SelectContent>
@@ -2355,13 +2379,13 @@ function QuoteEditForm({ quote, customers, reps, carriers, reasons, draft, onCha
         <FormCol label="Outcome">
           <Select value={status as string} onValueChange={(v) => set("outcomeStatus", v)}>
             <SelectTrigger className="h-8 bg-background border-border text-xs" data-testid="edit-outcome"><SelectValue /></SelectTrigger>
-            <SelectContent>{Object.keys(STATUS_LABELS).map(s => <SelectItem key={s} value={s}>{STATUS_LABELS[s]}</SelectItem>)}</SelectContent>
+            <SelectContent container={overlayPortal}>{Object.keys(STATUS_LABELS).map(s => <SelectItem key={s} value={s}>{STATUS_LABELS[s]}</SelectItem>)}</SelectContent>
           </Select>
         </FormCol>
         <FormCol label="Reason">
           <Select value={(get("outcomeReasonId", quote.outcomeReasonId ?? "_none") as string) || "_none"} onValueChange={(v) => set("outcomeReasonId", v === "_none" ? null : v)}>
             <SelectTrigger className="h-8 bg-background border-border text-xs" data-testid="edit-reason"><SelectValue /></SelectTrigger>
-            <SelectContent>
+            <SelectContent container={overlayPortal}>
               <SelectItem value="_none">— None —</SelectItem>
               {eligibleReasons.map(r => <SelectItem key={r.id} value={r.id}>{r.label}</SelectItem>)}
             </SelectContent>
@@ -2398,6 +2422,7 @@ function NewQuoteDialog({ open, onOpenChange, customers, reps, onSubmit, isSubmi
   customers: Customer[]; reps: Rep[];
   onSubmit: (payload: Record<string, unknown>) => void; isSubmitting: boolean;
 }): JSX.Element {
+  const overlayPortal = useCqOverlayPortal();
   const [form, setForm] = useState({
     customerId: "", repId: "_none",
     originCity: "", originState: "",
@@ -2440,19 +2465,19 @@ function NewQuoteDialog({ open, onOpenChange, customers, reps, onSubmit, isSubmi
   };
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-card border-border text-foreground max-w-[640px]" data-testid="new-quote-dialog">
+      <DialogContent container={overlayPortal} className="bg-card border-border text-foreground max-w-[640px]" data-testid="new-quote-dialog">
         <DialogHeader><DialogTitle>Log a new quote request</DialogTitle></DialogHeader>
         <div className="grid grid-cols-2 gap-3 mt-2">
           <FormCol label="Customer *">
             <Select value={form.customerId} onValueChange={(v) => upd("customerId", v)}>
               <SelectTrigger className="h-9 bg-background border-border" data-testid="new-customer"><SelectValue placeholder="Select customer" /></SelectTrigger>
-              <SelectContent>{customers.map(c => <SelectItem key={c.id} value={c.id}>{formatCustomerName(c.name)}</SelectItem>)}</SelectContent>
+              <SelectContent container={overlayPortal}>{customers.map(c => <SelectItem key={c.id} value={c.id}>{formatCustomerName(c.name)}</SelectItem>)}</SelectContent>
             </Select>
           </FormCol>
           <FormCol label="Rep">
             <Select value={form.repId} onValueChange={(v) => upd("repId", v)}>
               <SelectTrigger className="h-9 bg-background border-border" data-testid="new-rep"><SelectValue /></SelectTrigger>
-              <SelectContent>
+              <SelectContent container={overlayPortal}>
                 <SelectItem value="_none">— Unassigned —</SelectItem>
                 {reps.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
               </SelectContent>
@@ -2473,7 +2498,7 @@ function NewQuoteDialog({ open, onOpenChange, customers, reps, onSubmit, isSubmi
           <FormCol label="Equipment">
             <Select value={form.equipment} onValueChange={(v) => upd("equipment", v)}>
               <SelectTrigger className="h-9 bg-background border-border" data-testid="new-equipment"><SelectValue /></SelectTrigger>
-              <SelectContent>{EQUIPMENTS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}</SelectContent>
+              <SelectContent container={overlayPortal}>{EQUIPMENTS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}</SelectContent>
             </Select>
           </FormCol>
           <FormCol label="Quoted amount $">
@@ -2485,7 +2510,7 @@ function NewQuoteDialog({ open, onOpenChange, customers, reps, onSubmit, isSubmi
           <FormCol label="Source">
             <Select value={form.source} onValueChange={(v) => upd("source", v)}>
               <SelectTrigger className="h-9 bg-background border-border" data-testid="new-source"><SelectValue /></SelectTrigger>
-              <SelectContent>{SOURCES.map(s => <SelectItem key={s} value={s}>{s.toUpperCase()}</SelectItem>)}</SelectContent>
+              <SelectContent container={overlayPortal}>{SOURCES.map(s => <SelectItem key={s} value={s}>{s.toUpperCase()}</SelectItem>)}</SelectContent>
             </Select>
           </FormCol>
           <FormCol label="Source reference">
@@ -2537,12 +2562,13 @@ function WinOutcomeDialog({ state, onCancel, onConfirm, isSaving }: {
   onConfirm: (skipLwqHandoff: boolean) => void;
   isSaving: boolean;
 }): JSX.Element {
+  const overlayPortal = useCqOverlayPortal();
   const [createLane, setCreateLane] = useState(true);
   useEffect(() => { if (state) setCreateLane(true); }, [state]);
   const isLowMargin = state?.status === "won_low_margin";
   return (
     <Dialog open={!!state} onOpenChange={(o) => { if (!o) onCancel(); }}>
-      <DialogContent className="bg-card border-border text-foreground sm:max-w-[440px]" data-testid="win-outcome-dialog">
+      <DialogContent container={overlayPortal} className="bg-card border-border text-foreground sm:max-w-[440px]" data-testid="win-outcome-dialog">
         <DialogHeader>
           <DialogTitle>Mark quote as {isLowMargin ? "won (low margin)" : "won"}</DialogTitle>
         </DialogHeader>
