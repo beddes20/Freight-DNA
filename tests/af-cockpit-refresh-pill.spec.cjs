@@ -220,6 +220,42 @@ test.describe('AF cockpit stable sort + refresh pill (Task #649)', () => {
       .toBe(beforeCount + 1);
   });
 
+  test('changing sort while hovering applies immediately (no pill gating)', async ({ page }) => {
+    await page.goto('/available-freight');
+
+    const container = page.getByTestId('cockpit-feed-container');
+    await expect(container).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid^="row-opportunity-"]').first()).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // Pin pointer inside the list — interaction is ON.
+    const box = await container.boundingBox();
+    await page.mouse.move(box.x + 40, box.y + 40);
+    await page.mouse.move(box.x + 40, box.y + 60);
+
+    // Insert a third opp so the sort change actually fetches new data,
+    // then change the sort dropdown. The new payload's queryKey differs
+    // from the previous one, so the buffering path must be skipped and
+    // the list must update immediately — pill stays hidden.
+    await insertOpp('sort-change');
+
+    const sortSelect = page.getByTestId('select-sort');
+    await sortSelect.click();
+    // Pick a sort that's definitely different from the default ("urgency").
+    await page.getByRole('option', { name: /pickup soonest/i }).click();
+
+    // Wait for the row to reflect the new payload (3 rows visible).
+    await expect
+      .poll(async () => page.locator('[data-testid^="row-opportunity-"]').count(), {
+        timeout: 10_000,
+      })
+      .toBeGreaterThanOrEqual(3);
+
+    // Pill must NOT have appeared — user-driven sort changes bypass buffering.
+    await expect(page.getByTestId('cockpit-refresh-pill')).toHaveCount(0);
+  });
+
   test('carrier-replies toast still fires when refetch lands while hovering', async ({ page }) => {
     // Seed a carrier and a freight_opportunity_carriers row tied to one of
     // the existing opps. Start with NO response, so the page-load refetch

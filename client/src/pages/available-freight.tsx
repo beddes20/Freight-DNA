@@ -559,10 +559,19 @@ export default function AvailableFreightPage() {
     };
   }, [applyPending]);
 
+  // Task #649 — only buffer SAME-QUERY refetches (focus/window/staleTime).
+  // When the rep changes sort, grouping, status, customer, lane, or saved
+  // view, the queryKey changes and the resulting payload must apply
+  // immediately so the list reflects their action without pill gating.
+  const prevFeedKeyRef = useRef<string | null>(null);
+  const feedKeyString = JSON.stringify(feedKey);
   useEffect(() => {
     if (!serverFeed) return;
     const prev = displayedRef.current;
-    if (!prev) {
+    const lastKey = prevFeedKeyRef.current;
+    prevFeedKeyRef.current = feedKeyString;
+    const keyChanged = lastKey !== null && lastKey !== feedKeyString;
+    if (!prev || keyChanged) {
       setDisplayedFeed(serverFeed);
       setPendingFeed(null);
       setPendingDelta(0);
@@ -577,7 +586,7 @@ export default function AvailableFreightPage() {
       setPendingDelta(0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverFeed]);
+  }, [serverFeed, feedKeyString]);
 
   const feed = displayedFeed;
 
