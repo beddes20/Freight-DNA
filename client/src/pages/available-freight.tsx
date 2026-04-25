@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
+import { useLaneSignals, laneSigKey } from "@/hooks/useLaneSignals";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -638,6 +639,23 @@ export default function AvailableFreightPage() {
     () => applyCockpitFilters(items, search, viewFilters, currentUser?.id ?? null, Date.now()),
     [items, search, viewFilters, currentUser?.id],
   );
+
+  // Task #651 — warm the shared lane-signal cache for every visible
+  // opportunity. Per-lane react-query keys mean LWQ and Customer Quotes
+  // immediately reuse the result when they show the same lane.
+  const visibleLaneSigs = useMemo<string[]>(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const it of filtered) {
+      const o = it.opportunity.origin;
+      const d = it.opportunity.destination;
+      if (!o || !d) continue;
+      const sig = laneSigKey(o, d);
+      if (!seen.has(sig)) { seen.add(sig); out.push(sig); }
+    }
+    return out;
+  }, [filtered]);
+  useLaneSignals(visibleLaneSigs);
 
   // Task #636 — carrier typeahead suggestions for the per-row outcome modal
   // come from the targeted opp's ranked carrier chips. Top-ranked sits first.

@@ -93,6 +93,12 @@ import {
   setCachedRowHeight,
   LWQ_VIEWPORT_MARGIN_PX,
 } from "@/lib/lwq-virtualization";
+import {
+  useLaneSignals,
+  useCachedLaneSignals,
+  laneSigKey,
+  type LaneSignalResult,
+} from "@/hooks/useLaneSignals";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -352,9 +358,33 @@ function CoverageStatusBadge({
   );
 }
 
-/** Sort items — high-frequency first, then by laneScore descending */
-function sortItems(items: LaneItem[]): LaneItem[] {
+/**
+ * Sort items — high-frequency first, then by laneScore descending.
+ *
+ * Task #651 — when a `votriByLane` snapshot is supplied, lane-signal
+ * priority becomes the highest tier so the parent's signal-tiered order
+ * (see `sortedUnassigned`) is preserved through `BucketSection`. Without
+ * this tier the load-frequency comparator below would silently cancel
+ * the signal ordering.
+ */
+function sortItems(
+  items: LaneItem[],
+  votriByLane?: Map<string, Pick<LaneSignalResult, "signal" | "isStale">>,
+): LaneItem[] {
+  const SIGNAL_PRIORITY: Record<string, number> = {
+    hot: 3, warm: 2, stable: 1, cool: 1, stale: 0,
+  };
+  const signalTier = (it: LaneItem): number => {
+    if (!votriByLane || !it.origin || !it.destination) return 0;
+    const v = votriByLane.get(`${it.origin}|${it.destination}`);
+    if (!v) return 0;
+    if (v.isStale) return SIGNAL_PRIORITY.stale;
+    return v.signal ? (SIGNAL_PRIORITY[v.signal] ?? 0) : 0;
+  };
   return [...items].sort((a, b) => {
+    const aSig = signalTier(a);
+    const bSig = signalTier(b);
+    if (bSig !== aSig) return bSig - aSig;
     const aFreq = avgLoadsNum(a.avgLoadsPerWeek);
     const bFreq = avgLoadsNum(b.avgLoadsPerWeek);
     if (bFreq !== aFreq) return bFreq - aFreq;
@@ -517,7 +547,10 @@ function AssignToDropdown({
 
 const MANAGER_ROLES = ["admin", "director", "national_account_manager", "logistics_manager"];
 
-type LaneVotriData = { votri: number | null; votriWoW: number | null; signal: "hot" | "warm" | "stable" | "cool" | null; isStale: boolean };
+// Backward-compatible alias — see Task #651. Lane signals are now sourced
+// from the shared `useLaneSignals` hook, whose richer `LaneSignalResult`
+// shape is structurally a superset of the fields LaneRow needs.
+type LaneVotriData = Pick<LaneSignalResult, "votri" | "votriWoW" | "signal" | "isStale">;
 
 function LaneRow({
   item,
@@ -1112,6 +1145,26 @@ function LazyLaneRow(props: LaneRowProps) {
     () => getCachedRowHeight(item.laneId),
   );
 
+  // Task #651 — only request the lane signal once this row has scrolled
+  // within the IntersectionObserver lookahead margin. The shared hook
+  // batches everything queued in the current frame into one fetch and
+  // shares the cache with Available Freight + Customer Quotes.
+  const sigList = useMemo<string[]>(() => {
+    if (!visible || !item.origin || !item.destination) return [];
+    return [laneSigKey(item.origin, item.destination)];
+  }, [visible, item.origin, item.destination]);
+  const { signals: liveSignals } = useLaneSignals(sigList);
+  const liveVotri = sigList.length > 0 ? liveSignals.get(sigList[0]) : null;
+  const votriData: LaneVotriData | undefined = props.votriData
+    ?? (liveVotri
+      ? {
+          votri: liveVotri.votri,
+          votriWoW: liveVotri.votriWoW,
+          signal: liveVotri.signal,
+          isStale: liveVotri.isStale,
+        }
+      : undefined);
+
   // Single observer toggles `visible` based on intersection — gives us
   // proper mount/unmount cycling with a generous rootMargin so users
   // never see a blank placeholder during fast scroll.
@@ -1297,9 +1350,12 @@ function BucketSection({
   const [allCustomersExpanded, setAllCustomersExpanded] = useState(false);
 
   const visibleItems = useMemo(() => {
-    const sorted = sortItems(items);
+    // Task #651 — pass the shared lane-signal snapshot so signal priority
+    // is the highest sort tier and the parent's signal-tiered ordering
+    // (see `sortedUnassigned`) survives this re-sort.
+    const sorted = sortItems(items, votriByLane);
     return highFreqOnly ? sorted.filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD) : sorted;
-  }, [items, highFreqOnly]);
+  }, [items, highFreqOnly, votriByLane]);
 
   const hiddenCount = items.length - visibleItems.length;
 
@@ -1912,55 +1968,14 @@ export default function LaneWorkQueuePage() {
     staleTime: 60_000,
   });
 
-  // Collect all unique origin+destination pairs across all queue buckets for a single batched VOTRI fetch
-  const allLanePairs = useMemo(() => {
-    if (!queue) return [];
-    const seen = new Set<string>();
-    const pairs: Array<{ origin: string; destination: string }> = [];
-    const allItems = [
-      ...(queue.unassigned ?? []),
-      ...(queue.noContactable ?? []),
-      ...(queue.assignedUntouched ?? []),
-      ...(queue.inProgress ?? []),
-    ];
-    for (const item of allItems) {
-      if (item.origin && item.destination) {
-        const key = `${item.origin}|${item.destination}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          pairs.push({ origin: item.origin, destination: item.destination });
-        }
-      }
-    }
-    return pairs;
-  }, [queue]);
-
-  type LaneVotriResult = { origin: string; destination: string; qualifier: string; votri: number | null; votriWoW: number | null; signal: "hot" | "warm" | "stable" | "cool" | null; timestamp: string; isStale: boolean };
-
-  // Pairs are semicolon-separated (not comma) so city names containing commas (e.g. "Los Angeles, CA") parse correctly.
-  const lanesParam = allLanePairs.map(p => `${p.origin}|${p.destination}`).join(";");
-
-  const { data: batchVotriData } = useQuery<{ signals: LaneVotriResult[] }>({
-    queryKey: ["/api/sonar/lane-signals", lanesParam],
-    queryFn: () =>
-      fetch(`/api/sonar/lane-signals?lanes=${encodeURIComponent(lanesParam)}`, {
-        credentials: "include",
-      }).then(r => r.ok ? r.json() : { signals: [] }),
-    enabled: allLanePairs.length > 0,
-    staleTime: 4 * 60 * 60 * 1000,
-    refetchOnWindowFocus: false,
-  });
-
-  // Build a Map<"origin|destination", LaneVotriResult> for O(1) lookup in lane rows
-  const votriByLane = useMemo(() => {
-    const map = new Map<string, LaneVotriResult>();
-    if (batchVotriData?.signals) {
-      for (const r of batchVotriData.signals) {
-        map.set(`${r.origin}|${r.destination}`, r);
-      }
-    }
-    return map;
-  }, [batchVotriData]);
+  // Task #651 — lane signals are now fetched lazily by each `LazyLaneRow`
+  // through the shared `useLaneSignals` hook (per-lane react-query cache,
+  // 4-hour staleTime, batched coalescer). The page no longer pre-fetches
+  // every bucket up front; only the rows currently inside (or within the
+  // IntersectionObserver lookahead margin of) the viewport request data.
+  // `votriByLane` is now a read-only snapshot of the shared cache used for
+  // sort-by-signal — it auto-updates as new signals fill in.
+  const votriByLane = useCachedLaneSignals();
 
   // Helper to apply customer + high-freq + manual filters to a bucket
   const filterBucket = (items: LaneItem[]) => {
@@ -2017,13 +2032,15 @@ export default function LaneWorkQueuePage() {
   // Sort unassigned: hot-market lanes (VOTRI signal = "hot") are elevated to the top,
   // then warm, then cool, then stale/unknown — within each signal tier, sort by avgLoadsPerWeek desc.
   const sortedUnassigned = useMemo(() => {
-    const SIGNAL_PRIORITY = { hot: 3, warm: 2, cool: 1, stale: 0 } as const;
+    const SIGNAL_PRIORITY: Record<string, number> = {
+      hot: 3, warm: 2, stable: 1, cool: 1, stale: 0,
+    };
     const lanePriority = (origin?: string | null, destination?: string | null): number => {
       if (!origin || !destination) return 0;
       const v = votriByLane?.get(`${origin}|${destination}`);
       if (!v) return 0;
       if (v.isStale) return SIGNAL_PRIORITY.stale;
-      return SIGNAL_PRIORITY[v.signal] ?? 0;
+      return v.signal ? (SIGNAL_PRIORITY[v.signal] ?? 0) : 0;
     };
     return [...(filteredQueue?.unassigned ?? [])].sort((a, b) => {
       const aSig = lanePriority(a.origin, a.destination);

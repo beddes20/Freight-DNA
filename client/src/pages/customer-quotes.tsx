@@ -31,6 +31,7 @@ import {
   LineChart, Line, CartesianGrid,
 } from "recharts";
 import { useToast } from "@/hooks/use-toast";
+import { useLaneSignals, laneSigKey } from "@/hooks/useLaneSignals";
 import { PricingIntelligencePanel } from "@/components/PricingIntelligencePanel";
 import { PricingRecommendationCard } from "@/components/PricingRecommendationCard";
 import { MarginFloorsSettings } from "@/components/MarginFloorsSettings";
@@ -649,6 +650,20 @@ function CustomerQuotesPageInner(): JSX.Element {
   const data = snapshotQuery.data;
   const list = listQuery.data;
   const totalPages = list ? Math.max(1, Math.ceil(list.total / PAGE_SIZE)) : 1;
+
+  // Task #651 — warm the shared lane-signal cache for the rows on the
+  // current page so LWQ + Available Freight see them populated for free.
+  const visibleLaneSigs = useMemo<string[]>(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of list?.rows ?? []) {
+      if (!r.originCity || !r.destCity) continue;
+      const sig = laneSigKey(r.originCity, r.destCity);
+      if (!seen.has(sig)) { seen.add(sig); out.push(sig); }
+    }
+    return out;
+  }, [list?.rows]);
+  useLaneSignals(visibleLaneSigs);
 
   // Customer Quotes #2 — IDs of any quote_customer rows that map to the
   // shared "Unknown — needs review" bucket. Drives the bulk action bar's
