@@ -1649,7 +1649,7 @@ function CockpitRowView(props: {
                     data-testid={`chip-bench-${opp.id}-${chip.carrierId}`}
                     title={`replied yes ${benchWins}x in last 90d`}
                   >
-                    Bench {benchWins}x
+                    Bench ({benchWins} wins)
                   </Badge>
                 )}
               </span>
