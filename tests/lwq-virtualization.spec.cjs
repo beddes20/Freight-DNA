@@ -93,19 +93,25 @@ test.describe('LWQ virtualization (Task #648)', () => {
   });
 
   test.afterAll(async () => {
-    if (seededLaneIds.length) {
-      await pool.query(
-        `DELETE FROM recurring_lanes WHERE id = ANY($1::text[])`,
-        [seededLaneIds],
-      ).catch(() => {});
+    // recurring_lanes.id and companies.id are both varchar in this schema,
+    // so a text[] cast is correct. Errors here are surfaced (no swallow)
+    // so leftover seed rows don't accumulate silently across test runs.
+    try {
+      if (seededLaneIds.length) {
+        await pool.query(
+          `DELETE FROM recurring_lanes WHERE id = ANY($1::text[])`,
+          [seededLaneIds],
+        );
+      }
+      if (seededCompanyIds.length) {
+        await pool.query(
+          `DELETE FROM companies WHERE id = ANY($1::text[])`,
+          [seededCompanyIds],
+        );
+      }
+    } finally {
+      await pool.end();
     }
-    if (seededCompanyIds.length) {
-      await pool.query(
-        `DELETE FROM companies WHERE id = ANY($1::text[])`,
-        [seededCompanyIds],
-      ).catch(() => {});
-    }
-    await pool.end();
   });
 
   test('only a windowed slice of LaneRows is mounted at a time', async ({ page }) => {

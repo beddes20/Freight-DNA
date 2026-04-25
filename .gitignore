@@ -7,3 +7,5 @@ vite.config.ts.*
 # Runtime cache directory written by services like the intel route's
 # biweekly timestamp tracker. Not part of the source tree.
 .data/
+test-results/
+playwright-report/
