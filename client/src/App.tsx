@@ -18,6 +18,7 @@ import { useInactivityTimeout } from "@/hooks/use-inactivity-timeout";
 import { ClerkProvider, useClerk } from "@clerk/clerk-react";
 import { dark } from "@clerk/themes";
 import { GlobalLogTouchButton, GlobalLogTouchDialog } from "@/components/global-log-touch-button";
+import { LaneSwitchboard } from "@/components/lane-switchboard";
 import { LogTouchFab, useKeyboardShortcut } from "@/components/log-touch-fab";
 import { LogTouchProvider } from "@/context/log-touch-context";
 import { MobileBottomNav } from "@/components/mobile-bottom-nav";
@@ -338,7 +339,7 @@ function AuthenticatedApp() {
   return <AuthenticatedAppInner />;
 }
 
-function useGlobalKeyboardShortcuts() {
+function useGlobalKeyboardShortcuts(openSwitchboard: () => void) {
   const [, navigate] = useLocation();
 
   useEffect(() => {
@@ -348,7 +349,16 @@ function useGlobalKeyboardShortcuts() {
         tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" ||
         (e.target as HTMLElement).isContentEditable;
 
-      if (e.key === "/" && !isEditable && !e.metaKey && !e.ctrlKey) {
+      // `?` (Shift+/) — open Lane Switchboard. Checked BEFORE the `/`
+      // handler because Shift+/ produces "?" on most US layouts; we
+      // explicitly require shiftKey so a bare "/" still focuses search.
+      if (e.key === "?" && e.shiftKey && !isEditable && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        openSwitchboard();
+        return;
+      }
+
+      if (e.key === "/" && !isEditable && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
         e.preventDefault();
         const input = document.querySelector<HTMLInputElement>("[data-testid='input-global-search']");
         if (input) { input.focus(); input.select(); }
@@ -371,7 +381,7 @@ function useGlobalKeyboardShortcuts() {
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [navigate]);
+  }, [navigate, openSwitchboard]);
 }
 
 function AuthenticatedAppContent({ user, isLoading, handleInactivityLogout }: {
@@ -379,7 +389,9 @@ function AuthenticatedAppContent({ user, isLoading, handleInactivityLogout }: {
   isLoading: boolean;
   handleInactivityLogout: () => void;
 }) {
-  useGlobalKeyboardShortcuts();
+  const [switchboardOpen, setSwitchboardOpen] = useState(false);
+  const openSwitchboard = useCallback(() => setSwitchboardOpen(true), []);
+  useGlobalKeyboardShortcuts(openSwitchboard);
 
   const { warningVisible, secondsLeft, staySignedIn } = useInactivityTimeout(
     user ? handleInactivityLogout : () => {}
@@ -524,6 +536,7 @@ function AuthenticatedAppContent({ user, isLoading, handleInactivityLogout }: {
       <LogTouchFabWithShortcut />
       <CrmChatbot />
       <NotificationToasts />
+      <LaneSwitchboard open={switchboardOpen} onOpenChange={setSwitchboardOpen} />
     </>
   );
 }
