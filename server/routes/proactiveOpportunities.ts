@@ -786,6 +786,11 @@ export function registerProactiveOpportunityRoutes(app: Express) {
     paidRate: z.number().positive().max(999999),
     customerRate: z.number().positive().max(999999),
     notes: z.string().max(2000).nullable().optional(),
+    // Task #636 — per-cover opt-out flags for the three downstream
+    // capture loops (bench, lane rate band, recurring-lane suggestion).
+    applyToBench: z.boolean().optional(),
+    applyToRateBand: z.boolean().optional(),
+    offerRecurringLane: z.boolean().optional(),
   }).refine(d => d.carrierId || d.carrierName, {
     message: "carrierId or carrierName is required",
   });
@@ -820,12 +825,21 @@ export function registerProactiveOpportunityRoutes(app: Express) {
           paidRate: parsed.data.paidRate,
           customerRate: parsed.data.customerRate,
           notes: parsed.data.notes ?? null,
+          loops: {
+            applyToBench: parsed.data.applyToBench ?? true,
+            applyToRateBand: parsed.data.applyToRateBand ?? true,
+            offerRecurringLane: parsed.data.offerRecurringLane ?? true,
+          },
         },
       });
       if (!outcome.ok) {
         return res.status(outcome.status).json({ error: outcome.error });
       }
-      return res.json({ opportunity: outcome.opportunity, loadFact: outcome.loadFact });
+      return res.json({
+        opportunity: outcome.opportunity,
+        loadFact: outcome.loadFact,
+        loops: outcome.loops,
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("[freight-opps] cover failed:", msg);

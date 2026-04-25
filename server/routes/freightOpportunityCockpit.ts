@@ -175,6 +175,11 @@ const bulkActionSchema = z.object({
   carrierName: z.string().min(1).max(200).optional(),
   paidRate: z.number().positive().max(999999).optional(),
   customerRate: z.number().positive().max(999999).optional(),
+  // Task #636 — per-cover opt-out flags for the three downstream
+  // capture loops (bench, lane rate band, recurring-lane suggestion).
+  applyToBench: z.boolean().optional(),
+  applyToRateBand: z.boolean().optional(),
+  offerRecurringLane: z.boolean().optional(),
 }).refine(
   (d) => d.action !== "mark_covered" || ((d.carrierId || d.carrierName) && d.paidRate != null && d.customerRate != null),
   { message: "mark_covered requires carrierId|carrierName, paidRate, and customerRate" },
@@ -815,6 +820,11 @@ export function registerFreightCockpitRoutes(app: Express) {
                 paidRate: parsed.data.paidRate!,
                 customerRate: parsed.data.customerRate!,
                 notes: parsed.data.notes ?? null,
+                loops: {
+                  applyToBench: parsed.data.applyToBench ?? true,
+                  applyToRateBand: parsed.data.applyToRateBand ?? true,
+                  offerRecurringLane: parsed.data.offerRecurringLane ?? true,
+                },
               },
             });
             if (outcome.ok) {
@@ -822,6 +832,7 @@ export function registerFreightCockpitRoutes(app: Express) {
                 opportunityId: oppId,
                 ok: true,
                 loadFact: outcome.loadFact ? { inserted: outcome.loadFact.inserted, updated: outcome.loadFact.updated } : null,
+                loops: outcome.loops,
               });
             } else {
               results.push({ opportunityId: oppId, ok: false, message: outcome.error });

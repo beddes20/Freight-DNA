@@ -1,6 +1,11 @@
 import type { FreightOpportunity, User } from "@shared/schema";
 import { storage } from "../storage";
 import { upsertLoadFact } from "../carrierIntelligenceService";
+import {
+  applyCoverCaptureLoops,
+  type CoverCaptureLoopsResult,
+  type CoverLoopOptions,
+} from "./coverCaptureLoops";
 
 export interface CoverPayload {
   carrierId?: string | null;
@@ -8,12 +13,20 @@ export interface CoverPayload {
   paidRate: number;
   customerRate: number;
   notes?: string | null;
+  /**
+   * Per-cover opt-out flags for the three downstream capture loops
+   * (bench, lane rate band, recurring-lane suggestion). Default to true
+   * for each loop when omitted, matching the previous behaviour for any
+   * caller that hasn't been updated.
+   */
+  loops?: Partial<CoverLoopOptions>;
 }
 
 export interface CoverResult {
   ok: true;
   opportunity: FreightOpportunity;
   loadFact: { inserted: boolean; updated: boolean; loadFactId?: string } | null;
+  loops: CoverCaptureLoopsResult | null;
 }
 
 export interface CoverError {
@@ -82,6 +95,9 @@ export async function coverFreightOpportunity(args: {
     { status: "covered", awaitingApprovalSince: null },
     { allowCoveredTransition: true },
   );
+  if (!updated) {
+    return { ok: false, status: 500, error: "Failed to update opportunity status" };
+  }
 
   await storage.appendFreightOpportunityAudit({
     opportunityId: opp.id,
@@ -198,5 +214,42 @@ export async function coverFreightOpportunity(args: {
     });
   }
 
-  return { ok: true, opportunity: updated, loadFact: loadFactEmit };
+  // Capture loops — bench, rate band, recurring-lane suggestion. Each
+  // loop honours its opt-out flag from `payload.loops` and never throws;
+  // failures are absorbed so the cover write is never blocked.
+  let loopsResult: CoverCaptureLoopsResult | null = null;
+  try {
+    loopsResult = await applyCoverCaptureLoops(
+      {
+        org,
+        opp,
+        carrierId: payload.carrierId ?? null,
+        carrierName,
+        paidRate: payload.paidRate,
+        customerRate: payload.customerRate,
+        options: payload.loops,
+      },
+      { storage },
+    );
+    await storage.appendFreightOpportunityAudit({
+      opportunityId: opp.id,
+      eventType: "cover_loops_applied",
+      actorUserId: rep.id,
+      payload: {
+        bench: loopsResult.bench,
+        rateBand: loopsResult.rateBand,
+        recurringLaneSuggestion: loopsResult.recurringLaneSuggestion,
+      },
+    });
+  } catch (loopErr) {
+    console.warn("[freight-opps] cover capture loops failed:", loopErr);
+    await storage.appendFreightOpportunityAudit({
+      opportunityId: opp.id,
+      eventType: "cover_loops_failed",
+      actorUserId: rep.id,
+      payload: { error: loopErr instanceof Error ? loopErr.message : String(loopErr) },
+    });
+  }
+
+  return { ok: true, opportunity: updated, loadFact: loadFactEmit, loops: loopsResult };
 }

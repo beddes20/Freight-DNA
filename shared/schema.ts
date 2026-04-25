@@ -3871,6 +3871,11 @@ export const FREIGHT_OPPORTUNITY_AUDIT_EVENTS = [
   "cancelled",
   "sla_nudged",
   "sla_escalated",
+  // Cover writeback events emitted by `coverFreightOpportunity` (Tasks #631+, #636).
+  "load_fact_emitted",
+  "load_fact_emit_failed",
+  "cover_loops_applied",
+  "cover_loops_failed",
 ] as const;
 export type FreightOpportunityAuditEvent = typeof FREIGHT_OPPORTUNITY_AUDIT_EVENTS[number];
 

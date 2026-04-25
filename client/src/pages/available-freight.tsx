@@ -246,6 +246,11 @@ export default function AvailableFreightPage() {
   const [bulkCoverPaidRate, setBulkCoverPaidRate] = useState("");
   const [bulkCoverCustomerRate, setBulkCoverCustomerRate] = useState("");
   const [bulkCoverNotes, setBulkCoverNotes] = useState("");
+  // Task #636 — per-cover opt-out flags. Default to true; rep can untick
+  // any of the three downstream loops before submitting.
+  const [bulkCoverApplyToBench, setBulkCoverApplyToBench] = useState(true);
+  const [bulkCoverApplyToRateBand, setBulkCoverApplyToRateBand] = useState(true);
+  const [bulkCoverOfferRecurringLane, setBulkCoverOfferRecurringLane] = useState(true);
   const [reassignTargetIds, setReassignTargetIds] = useState<string[] | null>(null);
   const [reassignToUserId, setReassignToUserId] = useState<string>("");
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -256,6 +261,10 @@ export default function AvailableFreightPage() {
   const [outcomeCarrier, setOutcomeCarrier] = useState<string>("");
   const [outcomePaidRate, setOutcomePaidRate] = useState<string>("");
   const [outcomeCustomerRate, setOutcomeCustomerRate] = useState<string>("");
+  // Task #636 — per-cover opt-out flags for the per-row outcome modal.
+  const [outcomeApplyToBench, setOutcomeApplyToBench] = useState(true);
+  const [outcomeApplyToRateBand, setOutcomeApplyToRateBand] = useState(true);
+  const [outcomeOfferRecurringLane, setOutcomeOfferRecurringLane] = useState(true);
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
   const [lastSeenAt, setLastSeenAt] = useState<string | null>(() => {
     try { return localStorage.getItem("cockpit:lastSeenAt"); } catch { return null; }
@@ -485,7 +494,25 @@ export default function AvailableFreightPage() {
   }, [toggleAutoPilotMutation]);
 
   const logOutcomeMutation = useMutation<
-    unknown,
+    {
+      loops?: {
+        bench?: { applied: boolean; reason: string; rows: Array<{ laneId: string; benchRowId: string }> };
+        rateBand?: { applied: boolean; reason: string };
+        recurringLaneSuggestion?: {
+          suggested: boolean;
+          reason: string;
+          suggestion?: {
+            origin: string;
+            originState: string | null;
+            destination: string;
+            destinationState: string | null;
+            equipmentType: string | null;
+            companyId: string | null;
+            companyName: string | null;
+          };
+        };
+      } | null;
+    } | unknown,
     Error,
     {
       id: string;
@@ -494,15 +521,21 @@ export default function AvailableFreightPage() {
       carrierName?: string;
       paidRate?: number;
       customerRate?: number;
+      applyToBench?: boolean;
+      applyToRateBand?: boolean;
+      offerRecurringLane?: boolean;
     }
   >({
-    mutationFn: async ({ id, status, notes, carrierName, paidRate, customerRate }) => {
+    mutationFn: async ({ id, status, notes, carrierName, paidRate, customerRate, applyToBench, applyToRateBand, offerRecurringLane }) => {
       if (status === "covered") {
         return apiRequest("POST", `/api/freight-opportunities/${id}/cover`, {
           carrierName,
           paidRate,
           customerRate,
           notes: notes || undefined,
+          applyToBench: applyToBench ?? true,
+          applyToRateBand: applyToRateBand ?? true,
+          offerRecurringLane: offerRecurringLane ?? true,
         });
       }
       return apiRequest("POST", "/api/freight-opportunities/bulk-action", {
@@ -512,17 +545,82 @@ export default function AvailableFreightPage() {
         outcome: status,
       });
     },
-    onSuccess: () => {
+    onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities/cockpit"] });
+      const targetCockpitItem = filtered.find(it => it.opportunity.id === variables.id);
+      const companyName = targetCockpitItem?.customer?.name ?? null;
       setOutcomeTargetId(null);
       setOutcomeNotes("");
       setOutcomeCarrier("");
       setOutcomePaidRate("");
       setOutcomeCustomerRate("");
       setOutcomeStatus("covered");
-      toast({ title: "Outcome logged" });
+      setOutcomeApplyToBench(true);
+      setOutcomeApplyToRateBand(true);
+      setOutcomeOfferRecurringLane(true);
+      const loops = (data as { loops?: { recurringLaneSuggestion?: { suggested: boolean; suggestion?: { origin: string; originState: string | null; destination: string; destinationState: string | null; equipmentType: string | null; companyName: string | null } } } } | null | undefined)?.loops;
+      const sugg = loops?.recurringLaneSuggestion;
+      if (sugg?.suggested && sugg.suggestion) {
+        // One-tap CTA: convert this lane into a recurring lane so future
+        // opps inherit the cover carrier on the bench and the new rate
+        // band moves with them.
+        const s = sugg.suggestion;
+        toast({
+          title: "Outcome logged",
+          description: `Set ${s.origin} → ${s.destination}${s.equipmentType ? ` · ${s.equipmentType}` : ""} as a recurring lane?`,
+          action: (
+            <Button
+              size="sm"
+              variant="default"
+              data-testid="button-toast-set-recurring"
+              onClick={() => {
+                createRecurringLaneFromSuggestion.mutate({
+                  origin: s.origin,
+                  originState: s.originState,
+                  destination: s.destination,
+                  destinationState: s.destinationState,
+                  equipmentType: s.equipmentType,
+                  companyName: s.companyName ?? companyName,
+                });
+              }}
+            >Set as recurring</Button>
+          ),
+        });
+      } else {
+        toast({ title: "Outcome logged" });
+      }
     },
     onError: (err) => toast({ title: "Couldn't log outcome", description: String(err?.message ?? err), variant: "destructive" }),
+  });
+
+  const createRecurringLaneFromSuggestion = useMutation<
+    unknown,
+    Error,
+    {
+      origin: string;
+      originState: string | null;
+      destination: string;
+      destinationState: string | null;
+      equipmentType: string | null;
+      companyName: string | null;
+    }
+  >({
+    mutationFn: async (vars) => {
+      return apiRequest("POST", "/api/lanes/manual", {
+        origin: vars.origin,
+        originState: vars.originState ?? "",
+        destination: vars.destination,
+        destinationState: vars.destinationState ?? "",
+        equipmentType: vars.equipmentType ?? "",
+        companyName: vars.companyName ?? "",
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities/cockpit"] });
+      toast({ title: "Recurring lane created" });
+    },
+    onError: (err) => toast({ title: "Couldn't create recurring lane", description: String(err?.message ?? err), variant: "destructive" }),
   });
 
   const onKey = useCallback((e: KeyboardEvent) => {
@@ -1288,6 +1386,9 @@ export default function AvailableFreightPage() {
           setOutcomeCarrier("");
           setOutcomePaidRate("");
           setOutcomeCustomerRate("");
+          setOutcomeApplyToBench(true);
+          setOutcomeApplyToRateBand(true);
+          setOutcomeOfferRecurringLane(true);
         }
       }}>
         <DialogContent>
@@ -1325,6 +1426,33 @@ export default function AvailableFreightPage() {
                     <Input id="outcome-customer-rate" type="number" inputMode="decimal" min="0" step="0.01" value={outcomeCustomerRate} onChange={(e) => setOutcomeCustomerRate(e.target.value)} placeholder="2500" data-testid="input-outcome-customer-rate" />
                   </div>
                 </div>
+                <div className="space-y-2 rounded-md border p-3">
+                  <div className="text-xs font-medium text-muted-foreground">Capture loops</div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={outcomeApplyToBench}
+                      onCheckedChange={(v) => setOutcomeApplyToBench(v === true)}
+                      data-testid="checkbox-outcome-apply-bench"
+                    />
+                    <span>Add carrier to lane bench</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={outcomeApplyToRateBand}
+                      onCheckedChange={(v) => setOutcomeApplyToRateBand(v === true)}
+                      data-testid="checkbox-outcome-apply-rateband"
+                    />
+                    <span>Update lane rate band</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={outcomeOfferRecurringLane}
+                      onCheckedChange={(v) => setOutcomeOfferRecurringLane(v === true)}
+                      data-testid="checkbox-outcome-offer-recurring"
+                    />
+                    <span>Offer "Set as recurring lane" if no match</span>
+                  </label>
+                </div>
               </>
             )}
             <div className="space-y-1">
@@ -1356,6 +1484,10 @@ export default function AvailableFreightPage() {
                     carrierName: outcomeCarrier.trim(),
                     paidRate: parseFloat(outcomePaidRate),
                     customerRate: parseFloat(outcomeCustomerRate),
+                    // Task #636 — propagate per-cover loop opt-outs.
+                    applyToBench: outcomeApplyToBench,
+                    applyToRateBand: outcomeApplyToRateBand,
+                    offerRecurringLane: outcomeOfferRecurringLane,
                   } : {}),
                 });
               }}
@@ -1374,6 +1506,9 @@ export default function AvailableFreightPage() {
           setBulkCoverPaidRate("");
           setBulkCoverCustomerRate("");
           setBulkCoverNotes("");
+          setBulkCoverApplyToBench(true);
+          setBulkCoverApplyToRateBand(true);
+          setBulkCoverOfferRecurringLane(true);
         }
       }}>
         <DialogContent data-testid="dialog-bulk-cover">
@@ -1402,6 +1537,33 @@ export default function AvailableFreightPage() {
               <Label htmlFor="bulk-cover-notes">Notes (optional)</Label>
               <Input id="bulk-cover-notes" value={bulkCoverNotes} onChange={(e) => setBulkCoverNotes(e.target.value)} placeholder="Why, lane context, etc." data-testid="input-bulk-cover-notes" />
             </div>
+            <div className="space-y-2 rounded-md border p-3">
+              <div className="text-xs font-medium text-muted-foreground">Capture loops (per cover)</div>
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={bulkCoverApplyToBench}
+                  onCheckedChange={(v) => setBulkCoverApplyToBench(v === true)}
+                  data-testid="checkbox-bulk-cover-apply-bench"
+                />
+                <span>Add carrier to lane bench for each opp</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={bulkCoverApplyToRateBand}
+                  onCheckedChange={(v) => setBulkCoverApplyToRateBand(v === true)}
+                  data-testid="checkbox-bulk-cover-apply-rateband"
+                />
+                <span>Update lane rate band for each opp</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={bulkCoverOfferRecurringLane}
+                  onCheckedChange={(v) => setBulkCoverOfferRecurringLane(v === true)}
+                  data-testid="checkbox-bulk-cover-offer-recurring"
+                />
+                <span>Surface recurring-lane suggestions when no match</span>
+              </label>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => {
@@ -1410,6 +1572,9 @@ export default function AvailableFreightPage() {
               setBulkCoverPaidRate("");
               setBulkCoverCustomerRate("");
               setBulkCoverNotes("");
+              setBulkCoverApplyToBench(true);
+              setBulkCoverApplyToRateBand(true);
+              setBulkCoverOfferRecurringLane(true);
             }} data-testid="button-bulk-cover-cancel">Cancel</Button>
             <Button
               disabled={
@@ -1427,12 +1592,18 @@ export default function AvailableFreightPage() {
                   paidRate: parseFloat(bulkCoverPaidRate),
                   customerRate: parseFloat(bulkCoverCustomerRate),
                   notes: bulkCoverNotes || undefined,
+                  applyToBench: bulkCoverApplyToBench,
+                  applyToRateBand: bulkCoverApplyToRateBand,
+                  offerRecurringLane: bulkCoverOfferRecurringLane,
                 });
                 setBulkCoverOpen(false);
                 setBulkCoverCarrier("");
                 setBulkCoverPaidRate("");
                 setBulkCoverCustomerRate("");
                 setBulkCoverNotes("");
+                setBulkCoverApplyToBench(true);
+                setBulkCoverApplyToRateBand(true);
+                setBulkCoverOfferRecurringLane(true);
               }}
               data-testid="button-bulk-cover-confirm"
             >
