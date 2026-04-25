@@ -121,7 +121,14 @@ export function useLaneSignals(laneSigs: ReadonlyArray<LaneSig>): {
   isLoading: boolean;
   isFetching: boolean;
 } {
-  const sigs = useMemo(() => dedupeSigs(laneSigs), [laneSigs.join(",")]);
+  // U+001F (Unit Separator) is reserved for delimiter use and cannot
+  // appear in real lane signatures, so this dependency key is collision-
+  // proof regardless of city-name content (e.g. "Los Angeles, CA").
+  const sigs = useMemo(
+    () => dedupeSigs(laneSigs),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [laneSigs.length, laneSigs.join("\u001f")],
+  );
 
   const queries = useQueries({
     queries: sigs.map(sig => ({
