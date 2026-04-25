@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, serial, decimal, jsonb, boolean, timestamp, date, uniqueIndex, index, customType } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, serial, decimal, jsonb, boolean, timestamp, date, uniqueIndex, index, customType, primaryKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -4958,6 +4958,25 @@ export const insertCarrierLaneOutcomeSchema = createInsertSchema(carrierLaneOutc
   .omit({ id: true, firstEventAt: true, lastEventAt: true });
 export type InsertCarrierLaneOutcome = z.infer<typeof insertCarrierLaneOutcomeSchema>;
 export type CarrierLaneOutcome = typeof carrierLaneOutcomes.$inferSelect;
+
+/**
+ * Event-level dedupe ledger for `carrier_lane_outcomes`.
+ *
+ * Callers of `recordCarrierLaneOutcome` may pass an `eventKey` derived from
+ * the source-of-truth row (e.g. `outreach:<logId>:sent`). The helper
+ * inserts that key here first with `ON CONFLICT DO NOTHING`; the counter
+ * upsert only runs when a fresh row was produced. This makes duplicate
+ * webhook deliveries, replayed audit rows, and re-runs of the backfill
+ * script counter-safe.
+ */
+export const carrierLaneOutcomeEventKeys = pgTable("carrier_lane_outcome_event_keys", {
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  eventKey: varchar("event_key").notNull(),
+  recordedAt: timestamp("recorded_at").notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.orgId, t.eventKey] }),
+}));
+export type CarrierLaneOutcomeEventKey = typeof carrierLaneOutcomeEventKeys.$inferSelect;
 
 /**
  * Recommendation snapshot per Available load. One row per (loadFactId, carrier

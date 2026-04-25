@@ -97,8 +97,7 @@ async function backfillOutreachLogs(orgFilter: string | null, counts: BackfillCo
     WHERE l.matched_carrier_id IS NOT NULL
       AND (${orgFilter}::text IS NULL OR l.org_id = ${orgFilter})
   `);
-  const list = (rows as unknown as { rows?: any[] }).rows ?? (rows as unknown as any[]);
-  for (const r of list ?? []) {
+  for (const r of rows.rows) {
     const lane = {
       origin: r.origin,
       originState: r.origin_state,
@@ -156,8 +155,7 @@ async function backfillLaneCarrierInterest(orgFilter: string | null, counts: Bac
     WHERE lci.carrier_id IS NOT NULL
       AND (${orgFilter}::text IS NULL OR rl.org_id = ${orgFilter})
   `);
-  const list = (rows as unknown as { rows?: any[] }).rows ?? (rows as unknown as any[]);
-  for (const r of list ?? []) {
+  for (const r of rows.rows) {
     const lane = {
       origin: r.origin,
       originState: r.origin_state,
@@ -205,8 +203,7 @@ async function backfillFreightOpportunityResponses(orgFilter: string | null, cou
     JOIN freight_opportunities fo ON fo.id = foc.opportunity_id
     WHERE (${orgFilter}::text IS NULL OR fo.org_id = ${orgFilter})
   `);
-  const list = (rows as unknown as { rows?: any[] }).rows ?? (rows as unknown as any[]);
-  for (const r of list ?? []) {
+  for (const r of rows.rows) {
     const lane = {
       origin: r.origin,
       originState: r.origin_state,
@@ -263,9 +260,8 @@ async function backfillCovers(orgFilter: string | null, counts: BackfillCounts):
       AND a.payload->>'kind' = 'covered'
       AND (${orgFilter}::text IS NULL OR fo.org_id = ${orgFilter})
   `);
-  const list = (rows as unknown as { rows?: any[] }).rows ?? (rows as unknown as any[]);
-  for (const r of list ?? []) {
-    const carrierId = r.payload?.carrierId;
+  for (const r of rows.rows) {
+    const carrierId = (r.payload as { carrierId?: unknown } | null)?.carrierId;
     if (typeof carrierId !== "string" || !carrierId) continue;
     await recordCarrierLaneOutcome({
       orgId: r.org_id,
@@ -288,8 +284,7 @@ async function clearScope(orgFilter: string | null): Promise<number> {
     WHERE (${orgFilter}::text IS NULL OR org_id = ${orgFilter})
     RETURNING id
   `);
-  const list = (result as unknown as { rows?: any[] }).rows ?? (result as unknown as any[]);
-  return Array.isArray(list) ? list.length : 0;
+  return result.rows.length;
 }
 
 /**

@@ -609,6 +609,8 @@ export async function sendOpportunityWave(
 
     // Task #637 — bump rolling outcome counter so the ranker sees this
     // carrier picked up a fresh "sent" against this lane signature.
+    // eventKey ties the bump to the underlying outreach log row so any
+    // retry of this code path is counter-safe.
     await recordCarrierLaneOutcome({
       orgId,
       carrierId: row.carrierId,
@@ -625,6 +627,7 @@ export async function sendOpportunityWave(
       destinationState: opportunity.destinationState,
       equipmentType: opportunity.equipmentType,
       event: "sent",
+      eventKey: `pafoe-outreach:${log.id}:sent`,
     });
 
     results.push({
@@ -1033,12 +1036,15 @@ export async function classifyOpportunityReply(
         destinationState: opp.destinationState,
         equipmentType: opp.equipmentType,
       };
+      // Each event tagged with the response.id so the same inbound
+      // classified twice (e.g. webhook re-delivery) does not double-count.
       await recordCarrierLaneOutcome({
         orgId,
         carrierId: oppCarrier.carrierId,
         laneSignature: sig,
         ...laneParts,
         event: "reply",
+        eventKey: `pafoe-reply:${response.id}:reply`,
       });
       if (POSITIVE_SET.has(cls.outcome)) {
         await recordCarrierLaneOutcome({
@@ -1047,6 +1053,7 @@ export async function classifyOpportunityReply(
           laneSignature: sig,
           ...laneParts,
           event: "yes",
+          eventKey: `pafoe-reply:${response.id}:yes`,
         });
       } else if (NEGATIVE_SET.has(cls.outcome)) {
         await recordCarrierLaneOutcome({
@@ -1055,6 +1062,7 @@ export async function classifyOpportunityReply(
           laneSignature: sig,
           ...laneParts,
           event: "loss",
+          eventKey: `pafoe-reply:${response.id}:loss`,
         });
       }
     }

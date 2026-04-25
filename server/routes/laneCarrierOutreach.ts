@@ -45,6 +45,7 @@ import { inArray, eq, and, gte, lte, desc, isNull, or } from "drizzle-orm";
 import { sendEmail } from "../emailService";
 import { setEmailLiveMode, EMAIL_LIVE_MODE_FLAG } from "../emailGate";
 import { buildOpenOppContextByLaneSig, laneSig, type OpenOppLaneContext } from "../laneCrossLinkService";
+import { recordCarrierLaneOutcome } from "../services/carrierLaneOutcomes";
 import { sendOutlookEmail, outlookEnabled } from "../outlookService";
 import { getGraphAccessToken } from "../graphService";
 import { getReplyTrackingStatus } from "../graphSubscriptionService";
@@ -1934,6 +1935,32 @@ House style — follow every rule:
       });
     }
 
+    // Task #637 — manual interest update is a substantive signal: a rep
+    // explicitly classified this carrier on this lane. Mirror the email-
+    // classifier wiring (reply + yes/loss) so the ranker prior reflects
+    // rep judgement immediately, not just inbound emails. eventKey ties
+    // each bump to (interest record id × interestStatus) so a second
+    // submission that doesn't change the status stays a no-op.
+    if (carrierId && interestStatus) {
+      const POSITIVE = new Set(["available_now", "available_next_week", "future_interest"]);
+      const NEGATIVE = new Set(["not_fit"]);
+      const sig = laneSig(lane.origin, lane.originState, lane.destination, lane.destinationState, lane.equipmentType);
+      const laneParts = {
+        origin: lane.origin,
+        originState: lane.originState,
+        destination: lane.destination,
+        destinationState: lane.destinationState,
+        equipmentType: lane.equipmentType,
+      };
+      const k = (kind: string) => `lwq-interest:${record.id}:${interestStatus}:${kind}`;
+      await recordCarrierLaneOutcome({ orgId: user.organizationId, carrierId, laneSignature: sig, ...laneParts, event: "reply", eventKey: k("reply") });
+      if (POSITIVE.has(interestStatus)) {
+        await recordCarrierLaneOutcome({ orgId: user.organizationId, carrierId, laneSignature: sig, ...laneParts, event: "yes", eventKey: k("yes") });
+      } else if (NEGATIVE.has(interestStatus)) {
+        await recordCarrierLaneOutcome({ orgId: user.organizationId, carrierId, laneSignature: sig, ...laneParts, event: "loss", eventKey: k("loss") });
+      }
+    }
+
     res.json(record);
   });
 
@@ -2001,6 +2028,7 @@ Respond with ONLY the status label (one of the 5 above), nothing else.
 
     // Upsert the interest record
     const now = new Date().toISOString();
+    let outcomeRecordId: string | null = null;
     if (interestId) {
       // Cross-record safety: verify the interest record belongs to this lane before updating
       const existingInterest = await storage.getLaneCarrierInterestById(interestId);
@@ -2013,8 +2041,9 @@ Respond with ONLY the status label (one of the 5 above), nothing else.
         lastReplySnippet: replyText.slice(0, 500),
         classifiedAt: now,
       });
+      outcomeRecordId = interestId;
     } else {
-      await storage.upsertLaneCarrierInterest({
+      const upserted = await storage.upsertLaneCarrierInterest({
         laneId: req.params.laneId,
         carrierId: carrierId ?? null,
         carrierName,
@@ -2023,6 +2052,7 @@ Respond with ONLY the status label (one of the 5 above), nothing else.
         lastReplySnippet: replyText.slice(0, 500),
         classifiedAt: now,
       });
+      outcomeRecordId = upserted?.id ?? null;
     }
 
     // If classified as hot and we have a resolved carrierId, ensure a follow-up task exists.
@@ -2033,6 +2063,31 @@ Respond with ONLY the status label (one of the 5 above), nothing else.
         replySnippet: replyText.slice(0, 500),
         eventId: interestId ? `interest:${interestId}` : null,
       });
+    }
+
+    // Task #637 — every classify-reply is an inbound carrier reply on this
+    // lane: bump reply_count, and yes/loss based on classification. Same
+    // POSITIVE / NEGATIVE buckets as the manual interest path. eventKey is
+    // (interest record id × classification) so a reclassify of the same
+    // reply text counts as one new event per distinct outcome.
+    if (carrierId && outcomeRecordId) {
+      const POSITIVE = new Set(["available_now", "available_next_week", "future_interest"]);
+      const NEGATIVE = new Set(["not_fit"]);
+      const sig = laneSig(lane.origin, lane.originState, lane.destination, lane.destinationState, lane.equipmentType);
+      const laneParts = {
+        origin: lane.origin,
+        originState: lane.originState,
+        destination: lane.destination,
+        destinationState: lane.destinationState,
+        equipmentType: lane.equipmentType,
+      };
+      const k = (kind: string) => `lwq-classify:${outcomeRecordId}:${classification}:${kind}`;
+      await recordCarrierLaneOutcome({ orgId: user.organizationId, carrierId, laneSignature: sig, ...laneParts, event: "reply", eventKey: k("reply") });
+      if (POSITIVE.has(classification)) {
+        await recordCarrierLaneOutcome({ orgId: user.organizationId, carrierId, laneSignature: sig, ...laneParts, event: "yes", eventKey: k("yes") });
+      } else if (NEGATIVE.has(classification)) {
+        await recordCarrierLaneOutcome({ orgId: user.organizationId, carrierId, laneSignature: sig, ...laneParts, event: "loss", eventKey: k("loss") });
+      }
     }
 
     res.json({ classification, confidence, replyText: replyText.slice(0, 500) });
@@ -2417,6 +2472,27 @@ Rules for suggestions:
         bodyPreview: draft.body ? draft.body.replace(/<[^>]+>/g, "").slice(0, 255) : null,
       });
       logs.push(log);
+
+      // Task #637 — bump sent_count on the (carrier, lane) prior so the
+      // ranker sees this carrier was actually contacted on this lane.
+      // Only successfully sent rows count; throttled / failed / dedup_skipped
+      // attempts do not (the carrier never received a touch). carrierId-less
+      // drafts (rep typed in a brand new carrier name) are skipped — the
+      // table is keyed on carriers.id.
+      if (result.status === "sent" && draft.carrierId) {
+        await recordCarrierLaneOutcome({
+          orgId: user.organizationId,
+          carrierId: draft.carrierId,
+          laneSignature: laneSig(lane.origin, lane.originState, lane.destination, lane.destinationState, lane.equipmentType),
+          origin: lane.origin,
+          originState: lane.originState,
+          destination: lane.destination,
+          destinationState: lane.destinationState,
+          equipmentType: lane.equipmentType,
+          event: "sent",
+          eventKey: `lwq-send:${log.id}:sent`,
+        });
+      }
     }
 
     // ── Email Intelligence: log outbound email messages ────────────────────────

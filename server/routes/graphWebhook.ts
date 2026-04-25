@@ -334,6 +334,37 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
   });
   log(`Carrier inbound logged: from=${fromEmail} confidence=${carrierMatch.confidence} laneId=${laneId ?? "none"} msgId=${providerMessageId}`);
 
+  // Task #637 — when an inbound webhook delivery matches both a known
+  // carrier and a recurring lane, bump reply_count on the (carrier, lane)
+  // prior so the ranker reflects "this carrier responded to us on this
+  // lane" on the next ranking pass. We deliberately do NOT classify here
+  // (yes/loss/quote come from the LWQ classify-reply route or the PAFOE
+  // classifier below). eventKey is keyed on providerMessageId so Graph
+  // webhook re-deliveries of the exact same email cannot double-count.
+  if (carrierMatch.carrierId && laneId && providerMessageId) {
+    try {
+      const lane = await storage.getRecurringLane(laneId);
+      if (lane && lane.orgId === orgId) {
+        const { laneSig } = await import("../laneCrossLinkService");
+        const { recordCarrierLaneOutcome } = await import("../services/carrierLaneOutcomes");
+        await recordCarrierLaneOutcome({
+          orgId,
+          carrierId: carrierMatch.carrierId,
+          laneSignature: laneSig(lane.origin, lane.originState, lane.destination, lane.destinationState, lane.equipmentType),
+          origin: lane.origin,
+          originState: lane.originState,
+          destination: lane.destination,
+          destinationState: lane.destinationState,
+          equipmentType: lane.equipmentType,
+          event: "reply",
+          eventKey: `lwq-webhook:${providerMessageId}:reply`,
+        });
+      }
+    } catch (e) {
+      log(`[carrier-lane-outcome] webhook reply bump error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   if (accountMatch) {
     // Use upsert (ON CONFLICT DO NOTHING on org_id, provider_message_id)
     // so retried Graph webhook deliveries can never create duplicate

@@ -762,15 +762,18 @@ export function registerProactiveOpportunityRoutes(app: Express) {
           destinationState: opp.destinationState,
           equipmentType: opp.equipmentType,
         };
-        await recordCarrierLaneOutcome({ orgId: org, carrierId: row.carrierId, laneSignature: sig, ...laneParts, event: "reply" });
+        // Tag every event with response.id so re-submissions of the same
+        // manual outcome (double-click, retry) cannot double-count.
+        const k = (kind: string) => `manual-outcome:${response.id}:${kind}`;
+        await recordCarrierLaneOutcome({ orgId: org, carrierId: row.carrierId, laneSignature: sig, ...laneParts, event: "reply", eventKey: k("reply") });
         if (POSITIVE_OUTCOMES.has(parsed.data.outcome)) {
-          await recordCarrierLaneOutcome({ orgId: org, carrierId: row.carrierId, laneSignature: sig, ...laneParts, event: "yes" });
+          await recordCarrierLaneOutcome({ orgId: org, carrierId: row.carrierId, laneSignature: sig, ...laneParts, event: "yes", eventKey: k("yes") });
         } else if (NEGATIVE_OUTCOMES.has(parsed.data.outcome)) {
-          await recordCarrierLaneOutcome({ orgId: org, carrierId: row.carrierId, laneSignature: sig, ...laneParts, event: "loss" });
+          await recordCarrierLaneOutcome({ orgId: org, carrierId: row.carrierId, laneSignature: sig, ...laneParts, event: "loss", eventKey: k("loss") });
         }
         // Quote captured manually — record once.
         if (parsed.data.quotedRate) {
-          await recordCarrierLaneOutcome({ orgId: org, carrierId: row.carrierId, laneSignature: sig, ...laneParts, event: "quote" });
+          await recordCarrierLaneOutcome({ orgId: org, carrierId: row.carrierId, laneSignature: sig, ...laneParts, event: "quote", eventKey: k("quote") });
         }
       }
 

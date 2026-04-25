@@ -23,7 +23,7 @@ import { loadFact } from "@shared/schema";
 import { and, eq, isNull, ne, or, sql as sqlOp } from "drizzle-orm";
 import { findCarrierContactLocks, formatLockReason, type ContactLock } from "./carrierContactLocks";
 import { formatLaneDisplay } from "./laneOutreachEmailBuilder";
-import { getCarrierLaneOutcomesForLane, summarizeCarrierLaneOutcome } from "./services/carrierLaneOutcomes";
+import { getCarrierLaneOutcomesForLane, carrierLaneOutcomePrior } from "./services/carrierLaneOutcomes";
 import { laneSig as buildLaneSig } from "./laneCrossLinkService";
 
 /** Carriers whose historical origin AND destination are within this radius count as "nearby". */
@@ -1531,20 +1531,9 @@ export async function rankCarriersForLane(
     // (no positive engagement at all) -4. The summary line goes into
     // reasons so the "why this carrier" popover surfaces it.
     const laneOutcome = carrierLaneOutcomesByCarrierId.get(carrier.id);
-    if (laneOutcome) {
-      if (laneOutcome.coverCount > 0) fitScore += 15;
-      else if (laneOutcome.yesCount > 0 || laneOutcome.quoteCount > 0) fitScore += 6;
-      else if (
-        laneOutcome.lossCount > 0
-        && laneOutcome.yesCount === 0
-        && laneOutcome.coverCount === 0
-        && laneOutcome.quoteCount === 0
-      ) {
-        fitScore -= 4;
-      }
-      const summary = summarizeCarrierLaneOutcome(laneOutcome);
-      if (summary) reasons.push(summary);
-    }
+    const prior = carrierLaneOutcomePrior(laneOutcome);
+    if (prior.delta !== 0) fitScore += prior.delta;
+    if (prior.reason) reasons.push(prior.reason);
 
     // Clamp score to [0, 100] — negative raw scores are possible after staleness penalty;
     // clamp before display so the UI never shows negative numbers.

@@ -118,3 +118,52 @@ describe("backfill carrier_lane_outcomes — idempotence contract", () => {
     expect(secondRunCount).toBe(firstRunCount);
   });
 });
+
+describe("backfill carrier_lane_outcomes — backfill ≡ live parity", () => {
+  // For each row a legacy source returns, the backfill must emit the same
+  // set of `event` bumps that the live producer for that same source row
+  // would emit. This guards the contract "wipe + backfill leaves the
+  // ranker prior in the same shape as live wiring would produce".
+  //
+  // Producer mappings under test (mirrors of the live wiring in
+  // freightOpportunityOutreachService / coverFreightOpportunity /
+  // laneCarrierOutreach):
+  //   - carrier_outreach_logs row:           { sent_at, reply_received_at } → ["sent","reply"]
+  //   - lane_carrier_interest available_now: → ["yes"]
+  //   - freight_opportunity_responses interested_now + quoted_rate:
+  //                                          → ["reply","yes","quote"]
+  //   - freight_opportunity_audit covered:   → ["cover"]
+  it("emits the exact set of event types live producers would for the same source rows", async () => {
+    const { runBackfill } = await import("../../scripts/backfillCarrierLaneOutcomes");
+    await runBackfill(null);
+
+    const events = recordMock.mock.calls.map(c => {
+      const a = c[0] as { orgId: string; carrierId: string; event: string };
+      return { orgId: a.orgId, carrierId: a.carrierId, event: a.event };
+    }).sort((a, b) => a.event.localeCompare(b.event));
+
+    expect(events).toEqual([
+      // outreach_logs.sent_at + reply_received_at
+      { orgId: "org-1", carrierId: "car-1", event: "sent" },
+      { orgId: "org-1", carrierId: "car-1", event: "reply" },
+      // lane_carrier_interest interest_status=available_now
+      { orgId: "org-1", carrierId: "car-1", event: "yes" },
+      // PAFOE response interested_now + quoted_rate
+      { orgId: "org-1", carrierId: "car-1", event: "reply" },
+      { orgId: "org-1", carrierId: "car-1", event: "yes" },
+      { orgId: "org-1", carrierId: "car-1", event: "quote" },
+      // freight_opportunity_audit kind=covered
+      { orgId: "org-1", carrierId: "car-1", event: "cover" },
+    ].sort((a, b) => a.event.localeCompare(b.event)));
+  });
+
+  it("never emits an open or unknown event type the live producers don't emit", async () => {
+    const { runBackfill } = await import("../../scripts/backfillCarrierLaneOutcomes");
+    await runBackfill(null);
+    const ALLOWED = new Set(["sent", "reply", "yes", "quote", "cover", "loss"]);
+    for (const c of recordMock.mock.calls) {
+      const ev = (c[0] as { event: string }).event;
+      expect(ALLOWED.has(ev)).toBe(true);
+    }
+  });
+});

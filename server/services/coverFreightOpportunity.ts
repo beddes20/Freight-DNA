@@ -140,6 +140,9 @@ export async function coverFreightOpportunity(args: {
       destinationState: opp.destinationState,
       equipmentType: opp.equipmentType,
       event: "cover",
+      // (opportunityId, carrierId) is unique per cover capture — replays
+      // of the cover route from the same UI / API caller are no-ops.
+      eventKey: `cover:${opp.id}:${payload.carrierId}`,
     });
   }
 

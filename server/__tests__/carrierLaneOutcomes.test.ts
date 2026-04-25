@@ -162,8 +162,11 @@ describe("getCarrierLaneOutcomesForLane", () => {
   });
 });
 
+import { carrierLaneOutcomePrior } from "../services/carrierLaneOutcomes";
+import type { CarrierLaneOutcome } from "@shared/schema";
+
 describe("summarizeCarrierLaneOutcome", () => {
-  function row(overrides: Record<string, number> = {}) {
+  function row(overrides: Partial<CarrierLaneOutcome> = {}): CarrierLaneOutcome {
     return {
       id: "x",
       orgId: "org-1",
@@ -184,7 +187,7 @@ describe("summarizeCarrierLaneOutcome", () => {
       firstEventAt: new Date(),
       lastEventAt: new Date(),
       ...overrides,
-    } as any;
+    };
   }
 
   it("returns null when no material counters are set", () => {
@@ -211,5 +214,79 @@ describe("summarizeCarrierLaneOutcome", () => {
       .toBe("Lane history: 2 prior losses");
     expect(summarizeCarrierLaneOutcome(row({ sentCount: 3 })))
       .toBe("Lane history: 3 prior touches (no reply)");
+  });
+});
+
+describe("carrierLaneOutcomePrior (Task #637 ranker contribution)", () => {
+  function row(overrides: Partial<CarrierLaneOutcome> = {}): CarrierLaneOutcome {
+    return {
+      id: "x",
+      orgId: "org-1",
+      carrierId: "car-1",
+      laneSignature: "sig",
+      origin: null,
+      originState: null,
+      destination: null,
+      destinationState: null,
+      equipmentType: null,
+      sentCount: 0,
+      openCount: 0,
+      replyCount: 0,
+      yesCount: 0,
+      quoteCount: 0,
+      coverCount: 0,
+      lossCount: 0,
+      firstEventAt: new Date(),
+      lastEventAt: new Date(),
+      ...overrides,
+    };
+  }
+
+  it("returns zero delta and null reason when no row exists", () => {
+    expect(carrierLaneOutcomePrior(undefined)).toEqual({ delta: 0, reason: null });
+    expect(carrierLaneOutcomePrior(null)).toEqual({ delta: 0, reason: null });
+  });
+
+  it("a single cover boosts the carrier by +15 (strongest possible signal)", () => {
+    const r = carrierLaneOutcomePrior(row({ coverCount: 1 }));
+    expect(r.delta).toBe(15);
+    expect(r.reason).toBe("Lane history: 1 cover");
+  });
+
+  it("covers dominate even when losses also exist on the lane", () => {
+    expect(carrierLaneOutcomePrior(row({ coverCount: 2, lossCount: 5 })).delta).toBe(15);
+  });
+
+  it("a yes (without a cover) boosts +6", () => {
+    expect(carrierLaneOutcomePrior(row({ yesCount: 1 })).delta).toBe(6);
+  });
+
+  it("a quote (without a cover or yes) also boosts +6", () => {
+    expect(carrierLaneOutcomePrior(row({ quoteCount: 1 })).delta).toBe(6);
+  });
+
+  it("a yes + quote without a cover does not double-boost (still +6)", () => {
+    expect(carrierLaneOutcomePrior(row({ yesCount: 2, quoteCount: 3 })).delta).toBe(6);
+  });
+
+  it("a lone loss (no positive engagement at all) penalizes -4", () => {
+    const r = carrierLaneOutcomePrior(row({ lossCount: 1 }));
+    expect(r.delta).toBe(-4);
+    expect(r.reason).toBe("Lane history: 1 prior loss");
+  });
+
+  it("a loss alongside any positive signal cancels the penalty (cover wins)", () => {
+    expect(carrierLaneOutcomePrior(row({ coverCount: 1, lossCount: 2 })).delta).toBe(15);
+    expect(carrierLaneOutcomePrior(row({ yesCount: 1, lossCount: 2 })).delta).toBe(6);
+    expect(carrierLaneOutcomePrior(row({ quoteCount: 1, lossCount: 2 })).delta).toBe(6);
+  });
+
+  it("a sent or reply with no outcome stays neutral (delta = 0) but still emits a reason", () => {
+    const sentOnly = carrierLaneOutcomePrior(row({ sentCount: 4 }));
+    expect(sentOnly.delta).toBe(0);
+    expect(sentOnly.reason).toBe("Lane history: 4 prior touches (no reply)");
+    const replyOnly = carrierLaneOutcomePrior(row({ replyCount: 2 }));
+    expect(replyOnly.delta).toBe(0);
+    expect(replyOnly.reason).toBe("Lane history: 2 replies");
   });
 });

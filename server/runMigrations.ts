@@ -4521,4 +4521,24 @@ export async function runMigrations() {
   } finally {
     clientCarrierLaneOutcomes.release();
   }
+
+  // Task #637 — event-level dedupe ledger. Caller-supplied event keys
+  // (e.g. `outreach:<logId>:sent`) land here first; the helper bumps the
+  // counter row only when the dedupe insert produced a fresh row.
+  const clientCarrierLaneOutcomeEventKeys = await pool.connect();
+  try {
+    await clientCarrierLaneOutcomeEventKeys.query(`
+      CREATE TABLE IF NOT EXISTS carrier_lane_outcome_event_keys (
+        org_id      varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        event_key   varchar NOT NULL,
+        recorded_at timestamp NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (org_id, event_key)
+      )
+    `);
+    console.log("[migrations] carrier_lane_outcome_event_keys ensured (Task #637)");
+  } catch (err) {
+    console.error("[migrations] carrier_lane_outcome_event_keys migration error:", err);
+  } finally {
+    clientCarrierLaneOutcomeEventKeys.release();
+  }
 }
