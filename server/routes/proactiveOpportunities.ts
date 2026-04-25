@@ -945,9 +945,10 @@ export function registerProactiveOpportunityRoutes(app: Express) {
         return res.status(400).json({ error: "Invalid payload", details: parsed.error.flatten() });
       }
       const body = parsed.data;
-      if (!body.origin && !body.destination) {
-        return res.status(400).json({ error: "origin or destination required to derive laneSignature" });
-      }
+      // Lane signature derivation is delegated to recordCarrierOverride —
+      // it rejects all-separator signatures, so any combination of
+      // origin/destination/state/equipment that yields a non-empty key
+      // is accepted (e.g., state+equipment-only signals).
 
       const result = await recordCarrierOverride({
         orgId: org,
