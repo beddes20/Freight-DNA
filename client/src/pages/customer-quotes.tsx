@@ -323,23 +323,23 @@ function KpiCard({ label, value, sub, trend, onClick, testId }: {
 // previous global state is restored when the page unmounts so other pages
 // aren't affected.
 const CQ_THEME_KEY = "cq-theme";
+// Task #650 — page-scoped theme. We DELIBERATELY do NOT touch
+// `document.documentElement.classList` here. The previous implementation
+// flipped the global `dark` class on mount and restored it on unmount,
+// which produced a visible flicker on every navigation in or out of the
+// page (the rest of the app briefly re-rendered in the wrong mode). The
+// page now applies its preferred theme via a wrapper class on the page
+// root (see the page render below). CSS variables in `index.css` are
+// defined on both `:root` and `.dark`, both of which match a wrapper
+// element, so the cascade scopes correctly to the page subtree without
+// mutating any global state. The `cq-theme` localStorage key is
+// preserved so existing per-rep preferences continue to work.
 function useCustomerQuotesTheme(): { theme: "light" | "dark"; toggle: () => void } {
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     if (typeof window === "undefined") return "light";
     const saved = window.localStorage.getItem(CQ_THEME_KEY);
     return saved === "dark" ? "dark" : "light";
   });
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const root = document.documentElement;
-    const wasDark = root.classList.contains("dark");
-    if (theme === "dark") root.classList.add("dark");
-    else root.classList.remove("dark");
-    return () => {
-      if (wasDark) root.classList.add("dark");
-      else root.classList.remove("dark");
-    };
-  }, [theme]);
   const toggle = (): void => {
     setTheme(t => {
       const next = t === "dark" ? "light" : "dark";
@@ -681,7 +681,17 @@ function CustomerQuotesPageInner(): JSX.Element {
     && selectedQuotes.every(q => unknownCustomerIds.has(q.customerId));
 
   return (
-    <div className="flex flex-col h-full bg-background text-foreground" style={{ fontFamily: "Inter, sans-serif" }}>
+    // Task #650 — `dark` class lives on this page-root wrapper so the
+    // theme cascades only to descendants (charts, badges, in-page popovers,
+    // Recharts tooltips). The global `<html>` class is never touched, so
+    // navigating in or out of this page no longer flickers the rest of the
+    // app. data-cq-theme exposes the current value for tests.
+    <div
+      className={`flex flex-col h-full bg-background text-foreground ${theme === "dark" ? "dark" : ""}`}
+      style={{ fontFamily: "Inter, sans-serif" }}
+      data-cq-theme={theme}
+      data-testid="page-customer-quotes"
+    >
       {/* Header */}
       <div className="px-6 py-4 border-b border-border bg-background shrink-0" data-testid="header-customer-quotes">
         <div className="flex items-start justify-between gap-4">
