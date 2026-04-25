@@ -111,6 +111,29 @@ try/catch and logged. Tests:
 parse, upsert, lookup, learnFromReassign, plus the gmail collision
 guard).
 
+### Unified Carrier Outreach Dedup (Task #631)
+First in the sequenced #631–#641 plan to merge LWQ + Available Freight (AF)
+workflows. `server/carrierContactLocks.ts` is the single source of truth for
+"has this carrier been contacted on this lane recently?" Every outreach path —
+LWQ bulk, LWQ ad-hoc, LWQ procurement, AF wave, AF auto-pilot, single-carrier —
+both writes a `source_module`-tagged row to `carrier_outreach_logs` and reads
+back via `findCarrierContactLocks` before sending. The 48h dedup window mirrors
+`HIGH_FREQUENCY_CONFIG.outreachDedupWindowHours`. Match strategies are the
+recurring `lane_id` (precise) and the `(company_id, LOWER(procurement_lane))`
+pair (fuzzier, used when LWQ writes use a label and AF writes also have one).
+Suppression chips on every surface render via `formatLockReason()` —
+"Contacted 2h ago via Available Freight by Sara" — instead of opaque "48h
+dedup". The catalog-carrier portion of `rankCarriersForLane` (carrierRankingService)
+calls the helper once and prefers the rich reason over the legacy 14-day bench
+"Recently contacted (X days ago)" string. Partial-row safety: when a procurement
+batch row has `delivery_status='partial'`, only carriers whose per-recipient
+status in `recipients` jsonb is a success ('sent','scheduled','delivered','opened')
+get locked — failed sends in the same batch row do NOT lock the carrier.
+`SendWaveOpts.sourceModule` is plumbed through `sendOpportunityWave` and the
+`/api/freight-opportunities/:oppId/send` route auto-infers `"single_carrier"`
+when `carrierRowIds.length === 1`. Tests:
+`server/__tests__/carrierContactLocks.test.ts` (14 cases).
+
 ### Schema-Drift Guard (Task #574)
 After `runMigrations()` runs at boot, `assertNoSchemaDrift()` (in `server/checkSchemaDrift.ts`) compares every Drizzle pgTable in `shared/schema.ts` against `information_schema` and fails loudly when code declares a table or column the live DB does not have. In production this exits the boot with a clear list of what's missing, so a feature that adds columns to the schema without the matching ALTER in `server/runMigrations.ts` cannot reach users (the failure mode that took down the Conversations tab in Tasks #532 and #533). Dev logs the same report but allows boot to continue. The same check is exposed as a CLI for CI: `tsx scripts/check-schema-drift.ts` (exits 1 on drift). Extra tables/columns in the DB are intentionally NOT flagged — only the code → DB direction matters.
 

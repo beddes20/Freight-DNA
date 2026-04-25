@@ -25,6 +25,7 @@ import {
   feedbackToCarrierIntel,
   getOrSeedTemplate,
   sendOpportunityWave,
+  type SendWaveOpts,
 } from "../freightOpportunityOutreachService";
 import {
   FREIGHT_OPPORTUNITY_MODES,
@@ -671,6 +672,10 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       subject: z.string().max(500).optional(),
       body: z.string().max(20_000).optional(),
     })).optional(),
+    // Task #631 — accept the source path so a single-carrier UX (sending to
+    // exactly one carrier from a non-AF surface) can carry true attribution
+    // through to the outreach log instead of being mis-tagged as af_wave.
+    sourceModule: z.enum(["af_wave", "single_carrier"]).optional(),
   });
   app.post("/api/freight-opportunities/:oppId/send", requireAuth, async (req, res) => {
     try {
@@ -683,7 +688,16 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       if (!parsed.success) {
         return res.status(400).json({ error: "Invalid send payload", details: parsed.error.flatten() });
       }
-      const out = await sendOpportunityWave(storage, org, String(req.params.oppId), rep, parsed.data);
+      // Task #631 — when the rep sends to a single carrier and the client did
+      // not specify a source, infer "single_carrier" so suppression chips on
+      // other surfaces show the correct attribution.
+      const inferredSource: SendWaveOpts["sourceModule"] =
+        parsed.data.sourceModule
+        ?? (parsed.data.carrierRowIds.length === 1 ? "single_carrier" : "af_wave");
+      const out = await sendOpportunityWave(storage, org, String(req.params.oppId), rep, {
+        ...parsed.data,
+        sourceModule: inferredSource,
+      });
       res.json(out);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

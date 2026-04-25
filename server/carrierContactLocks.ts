@@ -21,10 +21,15 @@
 
 import { db } from "./storage";
 import { sql } from "drizzle-orm";
-import { HIGH_FREQUENCY_CONFIG } from "./carrierRankingService";
 
-/** Reuse the LWQ canonical per-carrier dedup window. Single source of truth. */
-export const CONTACT_LOCK_WINDOW_HOURS = HIGH_FREQUENCY_CONFIG.outreachDedupWindowHours;
+/**
+ * Per-carrier dedup window. Inlined (NOT imported from carrierRankingService)
+ * to avoid a circular import: carrierRankingService now imports the lock
+ * helper to render rich suppression reasons in chips, so the helper cannot
+ * depend on the ranker. The value mirrors
+ * `HIGH_FREQUENCY_CONFIG.outreachDedupWindowHours` (48h) — keep them in sync.
+ */
+export const CONTACT_LOCK_WINDOW_HOURS = 48;
 
 export type ContactLockSource =
   | "lwq"
@@ -115,6 +120,13 @@ export async function findCarrierContactLocks(
   // Single SQL query union'ing both match strategies in one round-trip. The
   // CASE WHEN populates `matched_by` so callers can show whether the lock came
   // from a precise lane-id match or a fuzzier company+label match.
+  //
+  // 'partial' rows are admitted so procurement batch sends that succeeded for
+  // SOME carriers still lock those carriers — but the outer EXISTS check on
+  // jsonb_array_elements(recipients) ensures we ONLY lock the specific carrier
+  // IDs whose per-recipient status is also a success. That avoids the
+  // false-positive where a carrier whose individual send failed (in the same
+  // batch row as a successful send) gets erroneously locked out for 48h.
   const r = await db.execute(sql`
     WITH locks AS (
       SELECT
@@ -123,6 +135,8 @@ export async function findCarrierContactLocks(
         col.sent_at       AS sent_at,
         col.source_module AS source_module,
         col.actor_user_id AS actor_user_id,
+        col.delivery_status AS delivery_status,
+        col.recipients    AS recipients,
         u.name            AS actor_name,
         CASE
           WHEN ${q.recurringLaneId}::varchar IS NOT NULL
@@ -134,10 +148,6 @@ export async function findCarrierContactLocks(
       LEFT JOIN users u ON u.id = col.actor_user_id
       WHERE col.org_id = ${q.orgId}
         AND col.direction = 'outbound'
-        -- 'partial' is included so procurement batch rows where SOME carriers
-        -- succeeded still lock those carriers. The false-positive risk (failed
-        -- carriers in the same row also lock) is the safer side of the trade
-        -- — over-locking is recoverable; over-sending burns rep credibility.
         AND col.delivery_status IN ('sent','delivered','opened','partial')
         AND col.sent_at IS NOT NULL
         AND col.sent_at > NOW() - (${windowHours} || ' hours')::interval
@@ -159,6 +169,15 @@ export async function findCarrierContactLocks(
     SELECT log_id, carrier_id, sent_at, source_module, actor_user_id, actor_name, matched_by
     FROM locks
     WHERE carrier_id = ANY(${q.carrierIds}::text[])
+      AND (
+        delivery_status <> 'partial'
+        OR EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements(COALESCE(recipients, '[]'::jsonb)) AS r
+          WHERE r->>'carrierId' = carrier_id
+            AND r->>'status' IN ('sent','scheduled','delivered','opened')
+        )
+      )
     ORDER BY sent_at DESC
   `);
 

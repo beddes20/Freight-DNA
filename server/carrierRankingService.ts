@@ -21,6 +21,8 @@ import { cityDistanceMiles } from "./cityCoordinates";
 import { db } from "./storage";
 import { loadFact } from "@shared/schema";
 import { and, eq, isNull, ne, or, sql as sqlOp } from "drizzle-orm";
+import { findCarrierContactLocks, formatLockReason, type ContactLock } from "./carrierContactLocks";
+import { formatLaneDisplay } from "./laneOutreachEmailBuilder";
 
 /** Carriers whose historical origin AND destination are within this radius count as "nearby". */
 const NEARBY_RADIUS_MILES = 75;
@@ -1108,6 +1110,33 @@ export async function rankCarriersForLane(
     }
   }
 
+  // Task #631 — fetch the unified contact-lock view ONCE per ranking call.
+  // The window here is 48h (HIGH_FREQUENCY_CONFIG.outreachDedupWindowHours)
+  // — strictly tighter than the 14-day "recently contacted" window above.
+  // When a carrier appears in both, we surface the richer 48h reason
+  // ("Contacted 2h ago via Available Freight by Sara") instead of the
+  // generic "Recently contacted (X days ago)" so reps know exactly which
+  // module + rep already burned the touchpoint and stop second-guessing
+  // the suppression. Only catalog carriers have IDs to match against;
+  // history-only (TMS) carriers fall back to the legacy bench message.
+  const contactLockByCarrierId = new Map<string, ContactLock>();
+  const catalogCarrierIds = catalogCarriers.map(c => c.id);
+  if (catalogCarrierIds.length > 0) {
+    try {
+      const locks = await findCarrierContactLocks({
+        orgId: lane.orgId,
+        carrierIds: catalogCarrierIds,
+        recurringLaneId: lane.id ?? null,
+        companyId: lane.companyId ?? null,
+        laneLabel: formatLaneDisplay(lane.origin, lane.originState, lane.destination, lane.destinationState),
+      });
+      for (const [cid, lock] of locks) contactLockByCarrierId.set(cid, lock);
+    } catch (err) {
+      // Lock lookup is informational — never fail the rank on a query error.
+      console.warn("[carrier-ranker] contact-lock lookup failed (non-fatal):", err instanceof Error ? err.message : err);
+    }
+  }
+
   // Build carrier history from BOTH financial uploads and load_fact, then
   // merge. Most orgs have one or the other (or strongly skewed weights),
   // and the prior implementation only read uploads — so an org with rich
@@ -1384,8 +1413,15 @@ export async function rankCarriersForLane(
     if (!carrier.primaryEmail && !carrier.backupEmail) {
       suppressionReasons.push("No email on file");
     }
-    const isRecentlyContacted = recentlyContactedKeys.has(carrier.id) || recentlyContactedKeys.has(carrierNorm);
-    if (isRecentlyContacted) {
+    // Task #631 — when a 48h cross-module lock exists, prefer that rich reason
+    // ("Contacted 2h ago via Available Freight by Sara") over the legacy
+    // 14-day bench message. Falls through to bench when no lock exists yet
+    // the carrier was contacted within the wider window.
+    const lock = contactLockByCarrierId.get(carrier.id);
+    const isRecentlyContacted = !!lock || recentlyContactedKeys.has(carrier.id) || recentlyContactedKeys.has(carrierNorm);
+    if (lock) {
+      suppressionReasons.push(formatLockReason(lock));
+    } else if (isRecentlyContacted) {
       const benchEntry = bench?.find(b =>
         (b.carrierId === carrier.id || normStr(b.carrierName) === carrierNorm) && b.outreachSentAt
       );
