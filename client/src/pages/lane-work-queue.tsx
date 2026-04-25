@@ -11,7 +11,7 @@
  * Clicking a row opens CarrierOutreachPanel for immediate action.
  */
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -88,6 +88,11 @@ import {
 } from "@/lib/laneLocationNormalizer";
 import { LaneLocationFeedback as LocationFeedback, EMPTY_NORM_STATE, type FieldNormState } from "@/components/lane-location-feedback";
 import { CityAutocompleteInput } from "@/components/city-autocomplete-input";
+import {
+  getCachedRowHeight,
+  setCachedRowHeight,
+  LWQ_VIEWPORT_MARGIN_PX,
+} from "@/lib/lwq-virtualization";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1085,6 +1090,101 @@ function LaneRow({
   );
 }
 
+// ── Lazy LaneRow wrapper ──────────────────────────────────────────────────────
+//
+// Task #648 — keeps mounted-LaneRow count low on long buckets by deferring
+// the real `<LaneRow>` mount until its placeholder enters (or comes within
+// `LWQ_VIEWPORT_MARGIN_PX` of) the viewport. Off-screen rows render as
+// fixed-height placeholders sized to the last measured height for that
+// lane (see `lib/lwq-virtualization.ts`), so the document layout stays
+// stable as the user scrolls.
+//
+// Once mounted, a row stays mounted — opening the carrier panel and coming
+// back doesn't lose any in-row state (selection ✓, dialog form drafts ✓,
+// hover prefetch handlers ✓). All test ids on the inner LaneRow
+// (`work-queue-row-${id}`, `btn-assign-self-${id}`, etc.) only appear in
+// the DOM once the row is mounted, which is the explicit signal that
+// virtualization is working.
+
+type LaneRowProps = {
+  item: LaneItem;
+  completionThreshold: number;
+  onOpen: (laneId: string) => void;
+  bucket: keyof WorkQueue;
+  teamMembers: TeamMember[];
+  selected?: boolean;
+  onToggleSelect?: (laneId: string) => void;
+  votriData?: LaneVotriData;
+};
+
+function LazyLaneRow(props: LaneRowProps) {
+  const { item } = props;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  const [placeholderHeight, setPlaceholderHeight] = useState<number>(
+    () => getCachedRowHeight(item.laneId),
+  );
+
+  // Lazy-mount on viewport intersection. We disconnect after the first
+  // intersect — a row that's been seen stays mounted for the rest of the
+  // page lifetime, which avoids flicker when users scroll back over a
+  // section they've already touched.
+  useEffect(() => {
+    if (visible) return;
+    const el = containerRef.current;
+    if (!el) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+    const io = new IntersectionObserver(
+      entries => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            setVisible(true);
+            io.disconnect();
+            return;
+          }
+        }
+      },
+      { rootMargin: `${LWQ_VIEWPORT_MARGIN_PX}px 0px` },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [visible]);
+
+  // Once mounted, observe size so future placeholders for this lane match
+  // exactly — important because LaneRow has variable height (badges wrap,
+  // optional progress bar, optional metrics line).
+  useEffect(() => {
+    if (!visible) return;
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        const h = entry.contentRect.height;
+        if (h > 0) {
+          setCachedRowHeight(item.laneId, h);
+          setPlaceholderHeight(prev => (prev !== h ? h : prev));
+        }
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [visible, item.laneId]);
+
+  return (
+    <div
+      ref={containerRef}
+      style={visible ? undefined : { minHeight: placeholderHeight }}
+      data-testid={`lwq-lazy-row-${item.laneId}`}
+      data-state={visible ? "mounted" : "placeholder"}
+    >
+      {visible && <LaneRow {...props} />}
+    </div>
+  );
+}
+
 // ── Customer Group ─────────────────────────────────────────────────────────────
 
 function CustomerGroup({
@@ -1153,11 +1253,14 @@ function CustomerGroup({
         </div>
       </button>
 
-      {/* Lane rows — shown only when expanded */}
+      {/* Lane rows — shown only when expanded.
+          Each row is wrapped in `LazyLaneRow` so off-screen LaneRow
+          instances stay as cheap placeholders until the user scrolls
+          near them (Task #648). */}
       {expanded && (
         <div className="flex flex-col gap-1 px-2 pb-2 pt-0 border-t border-border/50 bg-muted/10">
           {items.map(item => (
-            <LaneRow
+            <LazyLaneRow
               key={item.laneId}
               item={item}
               completionThreshold={completionThreshold}
