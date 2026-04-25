@@ -44,6 +44,7 @@ import { z } from "zod";
 import { inArray, eq, and, gte, lte, desc, isNull, or } from "drizzle-orm";
 import { sendEmail } from "../emailService";
 import { setEmailLiveMode, EMAIL_LIVE_MODE_FLAG } from "../emailGate";
+import { buildOpenOppContextByLaneSig, laneSig, type OpenOppLaneContext } from "../laneCrossLinkService";
 import { sendOutlookEmail, outlookEnabled } from "../outlookService";
 import { getGraphAccessToken } from "../graphService";
 import { getReplyTrackingStatus } from "../graphSubscriptionService";
@@ -857,13 +858,32 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       const auPaged = applyPagination(buckets.assignedUntouched);
       const ipPaged = applyPagination(buckets.inProgress);
 
+      // Task #635 — Cross-link map: how many OPEN freight opportunities exist
+      // today for each lane signature, joined onto the rendered LWQ rows.
+      // Computed once per request and merged in O(rows).
+      let openOppByLaneSig: Map<string, OpenOppLaneContext> = new Map();
+      try {
+        openOppByLaneSig = await buildOpenOppContextByLaneSig(db, user.organizationId);
+      } catch (err) {
+        console.error("[work-queue] open-opp context build error:", err);
+      }
+      const stampLiveOpps = (rows: LeanItem[]): Array<LeanItem & { liveOpps: (OpenOppLaneContext & { laneSignature: string }) | null }> =>
+        rows.map(r => {
+          const sig = laneSig(r.origin, r.originState, r.destination, r.destinationState, r.equipmentType);
+          const ctx = openOppByLaneSig.get(sig);
+          return {
+            ...r,
+            liveOpps: ctx ? { ...ctx, laneSignature: sig } : null,
+          };
+        });
+
       const source = leanQueue ? "cache" : "full";
       console.log(`[work-queue] org=${user.organizationId} source=${source} scope=${scopeLabel} buckets=${JSON.stringify(totals)} limit=${limit} cursor=${cursor ?? "none"} requestedBy=${user.id}(${user.role})`);
       res.json({
-        unassigned: uPaged.items,
-        noContactable: ncPaged.items,
-        assignedUntouched: auPaged.items,
-        inProgress: ipPaged.items,
+        unassigned: stampLiveOpps(uPaged.items),
+        noContactable: stampLiveOpps(ncPaged.items),
+        assignedUntouched: stampLiveOpps(auPaged.items),
+        inProgress: stampLiveOpps(ipPaged.items),
         scopeLabel,
         customers,
         meta: {

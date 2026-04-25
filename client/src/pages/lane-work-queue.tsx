@@ -74,6 +74,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { CarrierOutreachPanel } from "@/components/CarrierOutreachPanel";
+import { LiveOppsChip } from "@/components/freight/lane-cross-link-chip";
 import { AccountSharingDialog } from "@/components/lane-work-queue/AccountSharingDialog";
 import { SendReplyAuditPanel } from "@/components/lane-work-queue/SendReplyAuditPanel";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -138,6 +139,14 @@ interface LaneItem {
   missingContactCount: number;
   isHighFrequency?: boolean;
   isManual?: boolean;
+  /** Task #635 — joined from server in the same payload (no per-row N+1). */
+  liveOpps?: {
+    laneSignature: string;
+    count: number;
+    totalLoads: number;
+    nextPickupAt: string | null;
+    sampleOppId: string | null;
+  } | null;
 }
 
 interface WorkQueue {
@@ -696,6 +705,14 @@ function LaneRow({
           {/* Lane label + badges */}
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-semibold text-foreground">{laneLabel(item)}</span>
+            {/* Task #635 — Live AF opportunities chip; deep-links into the
+                Available Freight cockpit filtered to this lane signature. */}
+            {item.liveOpps && item.liveOpps.count > 0 && (
+              <LiveOppsChip
+                data={item.liveOpps}
+                testId={`chip-live-opps-${item.laneId}`}
+              />
+            )}
             {/* Frequency badge — prominent, always first */}
             <FrequencyBadge val={item.avgLoadsPerWeek} />
             {/* High-frequency lane badge (Task #188): shown when ≥2 loads/week */}

@@ -32,6 +32,7 @@ import type { FreightOpportunity } from "@shared/schema";
 import { applyCockpitFilters } from "@/lib/cockpitFilters";
 import { CarrierReasonsPopover } from "@/components/CarrierReasonsPopover";
 import { AutoPilotPreviewDrawer } from "@/components/freight/auto-pilot-preview-drawer";
+import { LwqContextChip, type LwqContextChipData } from "@/components/freight/lane-cross-link-chip";
 
 
 interface CockpitChip {
@@ -90,6 +91,9 @@ interface CockpitItem {
   owner: { id: string; name: string } | null;
   sla: { level: "green" | "yellow" | "red" | null; ageMinutes: number | null };
   laneScore: number | null;
+  /** Task #635 — joined from server in the same payload (no per-row N+1). */
+  lwqContext?: LwqContextChipData | null;
+  laneSignature?: string;
 }
 
 interface BulkActionResult {
@@ -202,6 +206,13 @@ function freshnessPulseColor(min: number | null) {
 export default function AvailableFreightPage() {
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState<string>("all");
+  // Task #635 — `?lane=<sig>` deep-link from LWQ filters the cockpit to a
+  // single lane signature so the rep lands directly on those opportunities.
+  const [laneFilter, setLaneFilter] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const v = new URLSearchParams(window.location.search).get("lane");
+    return v && v.length > 0 ? v : null;
+  });
   const [statusFilter, setStatusFilter] = useState<string>("active");
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [grouping, setGrouping] = useState<CockpitPrefs["grouping"]>("none");
@@ -310,7 +321,7 @@ export default function AvailableFreightPage() {
       ? ""
       : statusFilter;
 
-  const feedKey = ["/api/freight-opportunities/cockpit", { status: statusParam, sort, grouping, companyId: companyFilter }];
+  const feedKey = ["/api/freight-opportunities/cockpit", { status: statusParam, sort, grouping, companyId: companyFilter, lane: laneFilter }];
   const { data: feed, isLoading, isError, refetch, isFetching } = useQuery<CockpitResponse>({
     queryKey: feedKey,
     queryFn: async () => {
@@ -319,6 +330,7 @@ export default function AvailableFreightPage() {
       params.set("sort", sort);
       params.set("grouping", grouping);
       if (companyFilter !== "all") params.set("companyId", companyFilter);
+      if (laneFilter) params.set("lane", laneFilter);
       params.set("limit", "200");
       const res = await fetch(`/api/freight-opportunities/cockpit?${params.toString()}`, { credentials: "include" });
       if (!res.ok) throw new Error(`${res.status}`);
@@ -714,6 +726,32 @@ export default function AvailableFreightPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Task #635 — Lane deep-link banner (clearable) */}
+      {laneFilter && (
+        <div
+          className="flex items-center justify-between gap-2 rounded-md border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-xs text-blue-700 dark:text-blue-300"
+          data-testid="banner-lane-filter"
+        >
+          <span>
+            Showing only opportunities for the selected LWQ lane.
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 text-[11px]"
+            onClick={() => {
+              setLaneFilter(null);
+              const url = new URL(window.location.href);
+              url.searchParams.delete("lane");
+              window.history.replaceState({}, "", url.toString());
+            }}
+            data-testid="button-clear-lane-filter"
+          >
+            <X className="h-3 w-3 mr-1" /> Clear lane filter
+          </Button>
+        </div>
+      )}
 
       {/* Filters & view controls */}
       <Card>
@@ -1569,6 +1607,12 @@ function CockpitRowView(props: {
           {fmtLane(opp.origin, opp.originState, opp.destination, opp.destinationState)}
         </Link>
         {opp.equipmentType && <span className="text-xs text-muted-foreground">{opp.equipmentType}</span>}
+        {item.lwqContext && (
+          <LwqContextChip
+            data={item.lwqContext}
+            testId={`chip-lwq-context-${opp.id}`}
+          />
+        )}
         {item.customer && (
           <span className="flex items-center gap-1 text-xs">
             <span className="text-muted-foreground" data-testid={`text-customer-${opp.id}`}>{item.customer.name}</span>

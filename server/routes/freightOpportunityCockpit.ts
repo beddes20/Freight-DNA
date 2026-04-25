@@ -25,6 +25,12 @@ import {
   buildSkipNextRunPolicyUpsert,
   buildDisableAutoSendPolicyUpsert,
 } from "../freightOpportunityAutoPilot";
+import {
+  buildLwqContextByLaneSig,
+  laneSig,
+  type LwqLaneContext,
+} from "../laneCrossLinkService";
+import { db } from "../storage";
 
 function orgId(req: Express.Request): string {
   return (req as any).session?.organizationId as string;
@@ -449,7 +455,8 @@ export function registerFreightCockpitRoutes(app: Express) {
       const org = orgId(req);
       if (!org) return res.status(400).json({ error: "No organization" });
 
-      const { companyId, status, limit = "100", grouping = "none", sort = "urgency" } = req.query as Record<string, string>;
+      const user = await getCurrentUser(req);
+      const { companyId, status, limit = "100", grouping = "none", sort = "urgency", lane: laneFilter } = req.query as Record<string, string>;
       const statusList = (status ?? "")
         .split(",")
         .map(s => s.trim())
@@ -480,7 +487,37 @@ export function registerFreightCockpitRoutes(app: Express) {
         lanes: new Map<string, RecurringLane | null>(),
         users: new Map<string, User | null>(),
       };
-      const items = await Promise.all(visibleRows.map(opp => buildCockpitRow(org, opp, { now, caches })));
+      const baseItems = await Promise.all(visibleRows.map(opp => buildCockpitRow(org, opp, { now, caches })));
+
+      // Task #635 — Cross-link map: which AF rows match a lane in the rep's
+      // LWQ. Computed in a single pass per request (no per-row N+1).
+      let lwqByLaneSig: Map<string, LwqLaneContext> = new Map();
+      if (user) {
+        try {
+          const { visibleUserIds, canSeeUnassigned } = await storage.resolveVisibleUserIds(
+            user.id, org, user.role,
+          );
+          lwqByLaneSig = await buildLwqContextByLaneSig(db, org, visibleUserIds, canSeeUnassigned);
+        } catch (err) {
+          console.error("[freight-cockpit] lwq context build error:", err);
+        }
+      }
+      const enriched = baseItems.map(i => {
+        const sig = laneSig(
+          i.opportunity.origin,
+          i.opportunity.originState,
+          i.opportunity.destination,
+          i.opportunity.destinationState,
+          i.opportunity.equipmentType,
+        );
+        const lwqContext = lwqByLaneSig.get(sig) ?? null;
+        return { ...i, lwqContext, laneSignature: sig };
+      });
+
+      // Optional `?lane=<sig>` deep-link filter — used by LWQ chip → AF.
+      const items = laneFilter
+        ? enriched.filter(i => i.laneSignature === laneFilter)
+        : enriched;
 
       // Re-sort per request (the storage layer already sorts by urgencyScore desc;
       // the cockpit's "urgency" sort uses the just-recomputed score).

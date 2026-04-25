@@ -1,0 +1,289 @@
+// Task #635 — Lane Cross-Link service.
+//
+// Computes, in a single pass, the data needed to render reciprocal chips
+// between the Available Freight (AF) cockpit and the Lane Work Queue (LWQ).
+//
+//   • LWQ-context-for-AF — for an AF row keyed by lane signature, what is
+//     the matching LWQ lane (id, owner, last-touch, contacted count, reply
+//     count). Powers the chip "In your LWQ — last touched 2hr ago · 4
+//     carriers contacted · 1 reply" rendered on each AF row.
+//
+//   • AF-context-for-LWQ — for an LWQ lane keyed by lane signature, how
+//     many OPEN freight opportunities exist for that signature today.
+//     Powers the chip "3 live opps today · 5 loads · pickup MMM DD"
+//     rendered on each LWQ row.
+//
+// Both helpers issue a small constant number of queries per request (no
+// per-row N+1) and return a Map keyed by the canonical lane signature.
+
+import { and, eq, inArray, gte, sql } from "drizzle-orm";
+import {
+  recurringLanes,
+  carrierOutreachLogs,
+  laneCarrierInterest,
+  freightOpportunities,
+} from "@shared/schema";
+
+const HOT_REPLY_STATUSES = ["available_now", "available_next_week"] as const;
+
+const OPEN_OPP_STATUSES = [
+  "new",
+  "ready_to_send",
+  "sent",
+  "awaiting_carrier_reply",
+  "awaiting_customer_confirm",
+  "partially_covered",
+] as const;
+
+/**
+ * Canonical lane signature shared by AF + LWQ cross-link surfaces.
+ *
+ * Mirrors the equality check used elsewhere (proactiveOpportunityService
+ * resolvedLane lookup, storage.getOrgWideBenchByLaneSignature): trim,
+ * lowercase, fall back to empty string for missing parts.
+ */
+export function laneSig(
+  origin: string | null | undefined,
+  originState: string | null | undefined,
+  destination: string | null | undefined,
+  destinationState: string | null | undefined,
+  equipmentType: string | null | undefined,
+): string {
+  const norm = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
+  return [
+    norm(origin),
+    norm(originState),
+    norm(destination),
+    norm(destinationState),
+    norm(equipmentType),
+  ].join("|");
+}
+
+export interface LwqLaneContext {
+  laneId: string;
+  ownerUserId: string | null;
+  contactedCount: number;
+  lastTouchAt: string | null;
+  replyCount: number;
+  hotReplyCount: number;
+}
+
+export interface OpenOppLaneContext {
+  count: number;
+  totalLoads: number;
+  nextPickupAt: string | null;
+  sampleOppId: string | null;
+}
+
+type DrizzleLikeDb = {
+  select: (...args: any[]) => any;
+};
+
+/**
+ * Build the LWQ-context map for the AF cockpit feed.
+ *
+ * Visibility: only includes lanes the current rep can see in their LWQ
+ * (mirrors `resolveVisibleUserIds` semantics — pass the same visibleUserIds
+ * + canSeeUnassigned the LWQ endpoint uses).
+ */
+export async function buildLwqContextByLaneSig(
+  db: DrizzleLikeDb,
+  orgId: string,
+  visibleUserIds: string[],
+  canSeeUnassigned: boolean,
+): Promise<Map<string, LwqLaneContext>> {
+  const out = new Map<string, LwqLaneContext>();
+
+  const lanes = await db
+    .select({
+      id: recurringLanes.id,
+      origin: recurringLanes.origin,
+      originState: recurringLanes.originState,
+      destination: recurringLanes.destination,
+      destinationState: recurringLanes.destinationState,
+      equipmentType: recurringLanes.equipmentType,
+      ownerUserId: recurringLanes.ownerUserId,
+      carriersContactedCount: recurringLanes.carriersContactedCount,
+    })
+    .from(recurringLanes)
+    .where(eq(recurringLanes.orgId, orgId));
+
+  const visibleSet = new Set(visibleUserIds);
+  const inScope = (lanes as Array<{
+    id: string;
+    origin: string;
+    originState: string | null;
+    destination: string;
+    destinationState: string | null;
+    equipmentType: string | null;
+    ownerUserId: string | null;
+    carriersContactedCount: number | null;
+  }>).filter(l =>
+    l.ownerUserId ? visibleSet.has(l.ownerUserId) : canSeeUnassigned,
+  );
+
+  if (inScope.length === 0) return out;
+
+  const laneIds = inScope.map(l => l.id);
+
+  // Last-touch per lane — most recent successful outreach.
+  const touchRows = (await db
+    .select({
+      laneId: carrierOutreachLogs.laneId,
+      lastTouchAt: sql<Date | null>`MAX(${carrierOutreachLogs.sentAt})`.as("last_touch_at"),
+    })
+    .from(carrierOutreachLogs)
+    .where(and(
+      inArray(carrierOutreachLogs.laneId, laneIds),
+      inArray(carrierOutreachLogs.deliveryStatus, ["sent", "delivered", "opened", "partial"]),
+    ))
+    .groupBy(carrierOutreachLogs.laneId)) as Array<{ laneId: string | null; lastTouchAt: Date | null }>;
+
+  const touchByLane = new Map<string, Date | null>();
+  for (const r of touchRows) {
+    if (r.laneId) touchByLane.set(r.laneId, r.lastTouchAt);
+  }
+
+  // Reply counts per lane (any reply + hot replies).
+  const replyRows = (await db
+    .select({
+      laneId: laneCarrierInterest.laneId,
+      interestStatus: laneCarrierInterest.interestStatus,
+      replyCount: sql<number>`COUNT(*)`.as("reply_count"),
+    })
+    .from(laneCarrierInterest)
+    .where(inArray(laneCarrierInterest.laneId, laneIds))
+    .groupBy(laneCarrierInterest.laneId, laneCarrierInterest.interestStatus)) as Array<{
+      laneId: string;
+      interestStatus: string;
+      replyCount: number | string;
+    }>;
+
+  const replyByLane = new Map<string, { total: number; hot: number }>();
+  for (const r of replyRows) {
+    const n = typeof r.replyCount === "string" ? parseInt(r.replyCount, 10) : r.replyCount;
+    if (!Number.isFinite(n) || n <= 0) continue;
+    const acc = replyByLane.get(r.laneId) ?? { total: 0, hot: 0 };
+    // "Reply" = any classified interest record other than the seeded
+    // needs_follow_up placeholder (which is created when a carrier is added
+    // to the bench but hasn't actually responded yet).
+    if (r.interestStatus !== "needs_follow_up") acc.total += n;
+    if ((HOT_REPLY_STATUSES as readonly string[]).includes(r.interestStatus)) acc.hot += n;
+    replyByLane.set(r.laneId, acc);
+  }
+
+  for (const lane of inScope) {
+    const sig = laneSig(
+      lane.origin,
+      lane.originState,
+      lane.destination,
+      lane.destinationState,
+      lane.equipmentType,
+    );
+    const replies = replyByLane.get(lane.id) ?? { total: 0, hot: 0 };
+    const last = touchByLane.get(lane.id) ?? null;
+    // First lane wins on signature collision so the chip routes to a
+    // deterministic destination. (Two recurring_lanes rows for the same
+    // signature is a data-integrity edge case — pick the lower id which
+    // matches default ordering.)
+    if (out.has(sig)) continue;
+    out.set(sig, {
+      laneId: lane.id,
+      ownerUserId: lane.ownerUserId,
+      contactedCount: lane.carriersContactedCount ?? 0,
+      lastTouchAt: last ? last.toISOString() : null,
+      replyCount: replies.total,
+      hotReplyCount: replies.hot,
+    });
+  }
+
+  return out;
+}
+
+/**
+ * Build the open-opportunity context map for the LWQ feed.
+ *
+ * "Today" = freight opportunities generated since the start of the local UTC
+ * day OR with a pickup window in the future, in an OPEN status. Closed
+ * statuses (covered, cancelled, expired) are excluded so the chip reflects
+ * actionable freight.
+ */
+export async function buildOpenOppContextByLaneSig(
+  db: DrizzleLikeDb,
+  orgId: string,
+  opts: { now?: Date } = {},
+): Promise<Map<string, OpenOppLaneContext>> {
+  const out = new Map<string, OpenOppLaneContext>();
+  const now = opts.now ?? new Date();
+  const startOfDay = new Date(now);
+  startOfDay.setUTCHours(0, 0, 0, 0);
+
+  const rows = (await db
+    .select({
+      id: freightOpportunities.id,
+      origin: freightOpportunities.origin,
+      originState: freightOpportunities.originState,
+      destination: freightOpportunities.destination,
+      destinationState: freightOpportunities.destinationState,
+      equipmentType: freightOpportunities.equipmentType,
+      pickupWindowStart: freightOpportunities.pickupWindowStart,
+      loadCount: freightOpportunities.loadCount,
+      generatedAt: freightOpportunities.generatedAt,
+      status: freightOpportunities.status,
+    })
+    .from(freightOpportunities)
+    .where(and(
+      eq(freightOpportunities.orgId, orgId),
+      inArray(freightOpportunities.status, OPEN_OPP_STATUSES as unknown as string[]),
+      gte(freightOpportunities.generatedAt, startOfDay),
+    ))) as Array<{
+      id: string;
+      origin: string;
+      originState: string | null;
+      destination: string;
+      destinationState: string | null;
+      equipmentType: string | null;
+      pickupWindowStart: string | null;
+      loadCount: number | null;
+      generatedAt: Date | string | null;
+      status: string;
+    }>;
+
+  for (const r of rows) {
+    const sig = laneSig(
+      r.origin,
+      r.originState,
+      r.destination,
+      r.destinationState,
+      r.equipmentType,
+    );
+    const acc = out.get(sig) ?? { count: 0, totalLoads: 0, nextPickupAt: null, sampleOppId: null };
+    acc.count += 1;
+    acc.totalLoads += r.loadCount ?? 1;
+    if (!acc.sampleOppId) acc.sampleOppId = r.id;
+    // Earliest pickup wins so "next" reflects the soonest actionable load.
+    const pickup = r.pickupWindowStart;
+    if (pickup) {
+      if (!acc.nextPickupAt || pickup < acc.nextPickupAt) acc.nextPickupAt = pickup;
+    }
+    out.set(sig, acc);
+  }
+
+  return out;
+}
+
+/**
+ * Round-trippable lane query string for AF deep-links from the LWQ.
+ * The AF page reads `?lane=<sig>` and hides anything that doesn't match.
+ */
+export function buildAfLaneQueryParam(sig: string): string {
+  return `lane=${encodeURIComponent(sig)}`;
+}
+
+/**
+ * Round-trippable LWQ deep-link query string for AF rows that match a
+ * lane in the rep's LWQ.
+ */
+export function buildLwqLaneQueryParam(laneId: string): string {
+  return `laneId=${encodeURIComponent(laneId)}`;
+}
