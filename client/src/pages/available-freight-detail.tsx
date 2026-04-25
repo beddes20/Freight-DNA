@@ -18,6 +18,12 @@ import {
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import {
+  CarrierOverrideReasonPicker,
+  type CarrierOverrideAction,
+  type CarrierOverridePickerCarrier,
+  type CarrierOverridePickerLane,
+} from "@/components/CarrierOverrideReasonPicker";
 import type {
   Company, Carrier, FreightOpportunity, FreightOpportunityCarrier,
   FreightOpportunityAudit, FreightOpportunityBucket,
@@ -1260,12 +1266,42 @@ export default function AvailableFreightDetailPage() {
     return winRow ? { name: carrierById.get(winRow.carrierId)?.name ?? "carrier", rate: null as number | null } : null;
   }, [opp, carriers, carrierById]);
 
+  // Task #638 — Reason picker state. Single-action only; bulk paths
+  // (Clear, Send wave, etc.) deliberately do NOT enqueue pickers because
+  // the rep is in a power flow, not a per-carrier judgment.
+  const [overridePicker, setOverridePicker] = useState<{
+    carrier: CarrierOverridePickerCarrier;
+    lane: CarrierOverridePickerLane;
+    action: CarrierOverrideAction;
+  } | null>(null);
+
+  const pickerLane = (): CarrierOverridePickerLane => ({
+    origin: opp?.origin ?? null,
+    originState: opp?.originState ?? null,
+    destination: opp?.destination ?? null,
+    destinationState: opp?.destinationState ?? null,
+    equipmentType: opp?.equipmentType ?? null,
+  });
+
   const onSelectChange = (rowId: string, sel: boolean) => {
     setSelected(prev => {
       const n = new Set(prev);
       if (sel) n.add(rowId); else n.delete(rowId);
       return n;
     });
+    // Task #638 — Top-3 deselect on the wave fires the reason picker. Rank
+    // is read off the persisted row so it stays stable across re-fetches.
+    if (!sel) {
+      const row = carriers.find(c => c.id === rowId);
+      if (row && row.carrierId && typeof row.rank === "number" && row.rank >= 1 && row.rank <= 3) {
+        const carrier = carrierById.get(row.carrierId);
+        setOverridePicker({
+          carrier: { carrierId: row.carrierId, carrierName: carrier?.name ?? "carrier" },
+          lane: pickerLane(),
+          action: "deselect_top3",
+        });
+      }
+    }
   };
 
   const onLogOutcomeQuick = (rowId: string, outcome: string, _rate: string) => {
@@ -1584,8 +1620,9 @@ export default function AvailableFreightDetailPage() {
                 onClick={async () => {
                   // Materialize any pool selections as shortlist rows first.
                   if (selectedPool.size > 0) {
+                    const poolIds = Array.from(selectedPool);
                     try {
-                      const promoted = await promoteFromPoolMutation.mutateAsync(Array.from(selectedPool));
+                      const promoted = await promoteFromPoolMutation.mutateAsync(poolIds);
                       // Merge the new row IDs into selected, then re-fetch detail so
                       // the buckets show the new rep_added rows.
                       const newRowIds = Object.values(promoted.rowIdsByCarrierId);
@@ -1597,6 +1634,20 @@ export default function AvailableFreightDetailPage() {
                       setSelectedPool(new Set());
                       await queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities", id] });
                       await queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities", id, "carrier-pool"] });
+                      // Task #638 — Single pool-add is the canonical "added
+                      // outside top-N" signal. Multi-add stays picker-free
+                      // to avoid an N-dialog avalanche on bulk power moves.
+                      if (poolIds.length === 1) {
+                        const cid = poolIds[0];
+                        const carrier = carrierById.get(cid);
+                        if (carrier) {
+                          setOverridePicker({
+                            carrier: { carrierId: cid, carrierName: carrier.name },
+                            lane: pickerLane(),
+                            action: "added_outside_topn",
+                          });
+                        }
+                      }
                     } catch (err: any) {
                       toast({ title: "Couldn't add pool carriers", description: err?.message ?? "Try again.", variant: "destructive" });
                       return;
@@ -1697,6 +1748,14 @@ export default function AvailableFreightDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* Task #638 — One-tap reason picker for top-3 deselect / outside-top-N add. */}
+      <CarrierOverrideReasonPicker
+        open={!!overridePicker}
+        onOpenChange={(o) => { if (!o) setOverridePicker(null); }}
+        carrier={overridePicker?.carrier ?? null}
+        lane={overridePicker?.lane ?? {}}
+        action={overridePicker?.action ?? "deselect_top3"}
+      />
     </div>
   );
 }

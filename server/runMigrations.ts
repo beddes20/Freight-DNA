@@ -4541,4 +4541,52 @@ export async function runMigrations() {
   } finally {
     clientCarrierLaneOutcomeEventKeys.release();
   }
+
+  // ── Task #638: carrier_overrides ──────────────────────────────────────────
+  // Per-(rep, carrier, lane) override ledger. Written by the rep override
+  // reason picker on LWQ + Available Freight wave UIs and read by the carrier
+  // ranker as a "rep correction" prior. The unique index on
+  // (org_id, carrier_id, lane_signature, rep_id, occurred_at_day) makes
+  // duplicate clicks within the same UTC day a no-op via ON CONFLICT DO
+  // NOTHING. Idempotent CREATE IF NOT EXISTS — required by the schema-drift
+  // guard alongside the Drizzle table in shared/schema.ts.
+  const clientCarrierOverrides = await pool.connect();
+  try {
+    await clientCarrierOverrides.query(`
+      CREATE TABLE IF NOT EXISTS carrier_overrides (
+        id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id          varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        carrier_id      varchar NOT NULL REFERENCES carriers(id) ON DELETE CASCADE,
+        lane_signature  text NOT NULL,
+        origin              text,
+        origin_state        text,
+        destination         text,
+        destination_state   text,
+        equipment_type      text,
+        reason_code     text,
+        action          text NOT NULL,
+        notes           text,
+        rep_id          varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        occurred_at     timestamp NOT NULL DEFAULT NOW(),
+        occurred_at_day varchar(10) NOT NULL
+      )
+    `);
+    await clientCarrierOverrides.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS carrier_overrides_uq
+        ON carrier_overrides (org_id, carrier_id, lane_signature, rep_id, occurred_at_day)
+    `);
+    await clientCarrierOverrides.query(`
+      CREATE INDEX IF NOT EXISTS carrier_overrides_org_lane_idx
+        ON carrier_overrides (org_id, lane_signature)
+    `);
+    await clientCarrierOverrides.query(`
+      CREATE INDEX IF NOT EXISTS carrier_overrides_org_carrier_idx
+        ON carrier_overrides (org_id, carrier_id)
+    `);
+    console.log("[migrations] carrier_overrides ensured (Task #638)");
+  } catch (err) {
+    console.error("[migrations] carrier_overrides migration error:", err);
+  } finally {
+    clientCarrierOverrides.release();
+  }
 }

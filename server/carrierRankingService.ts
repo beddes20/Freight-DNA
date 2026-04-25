@@ -24,6 +24,7 @@ import { and, eq, isNull, ne, or, sql as sqlOp } from "drizzle-orm";
 import { findCarrierContactLocks, formatLockReason, type ContactLock } from "./carrierContactLocks";
 import { formatLaneDisplay } from "./laneOutreachEmailBuilder";
 import { getCarrierLaneOutcomesForLane, carrierLaneOutcomePrior } from "./services/carrierLaneOutcomes";
+import { getCarrierOverridesForLane, carrierOverridePrior } from "./services/carrierOverrides";
 import { laneSig as buildLaneSig } from "./laneCrossLinkService";
 
 /** Carriers whose historical origin AND destination are within this radius count as "nearby". */
@@ -1264,6 +1265,13 @@ export async function rankCarriersForLane(
     lane.orgId,
     laneSignature,
   );
+  // Task #638 — Per-(carrier, lane) override prior. Same lane signature, same
+  // soft-fail contract: a missing table or transient pool error returns an
+  // empty map and the rank proceeds without rep correction signal.
+  const carrierOverridesByCarrierId = await getCarrierOverridesForLane(
+    lane.orgId,
+    laneSignature,
+  );
 
   // Build carrier history from BOTH financial uploads and load_fact, then
   // merge. Most orgs have one or the other (or strongly skewed weights),
@@ -1535,6 +1543,18 @@ export async function rankCarriersForLane(
     if (prior.delta !== 0) fitScore += prior.delta;
     if (prior.reason) reasons.push(prior.reason);
 
+    // Task #638 — Apply rep override prior. Positive boost is added BEFORE the
+    // negative cap so a strong negative signal always wins ties. The reasons
+    // surface in the carrier chip's reasons[] array so reps can see why a
+    // carrier got bumped up or pushed down.
+    const overrideAgg = carrierOverridesByCarrierId.get(carrier.id);
+    if (overrideAgg) {
+      const ov = carrierOverridePrior(overrideAgg);
+      if (ov.boost !== 0) fitScore += ov.boost;
+      if (Number.isFinite(ov.cap)) fitScore = Math.min(fitScore, ov.cap);
+      for (const r of ov.reasons) reasons.push(r);
+    }
+
     // Clamp score to [0, 100] — negative raw scores are possible after staleness penalty;
     // clamp before display so the UI never shows negative numbers.
     fitScore = Math.max(0, Math.min(100, fitScore));
@@ -1759,6 +1779,14 @@ export async function rankCarriersForLane(
       fitScore = Math.min(100, fitScore + 12);
       reasons.push("Showed availability in prior outreach");
     }
+
+    // Task #638 — Apply rep override prior on history-only (TMS) carriers too.
+    // History-only carriers have no carrierId so the only key the override
+    // map could match on would be carrierName-derived; we deliberately do
+    // NOT match here — overrides are keyed by carriers.id and TMS-only
+    // carriers don't have a catalog row to override. Left as a no-op slot
+    // so the cap/boost logic can extend cleanly when TMS-only carriers gain
+    // canonical identifiers in a future task.
 
     // Suppression reasons for history-only carriers
     const suppressionReasons: string[] = [];

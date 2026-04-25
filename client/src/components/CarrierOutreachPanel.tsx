@@ -16,6 +16,12 @@ import { apiRequest } from "@/lib/queryClient";
 import { formatLaneDisplay, formatLaneLocation, formatWeeklyLoadRange } from "@shared/laneFormatters";
 import { CarrierReasonsPopover } from "@/components/CarrierReasonsPopover";
 import {
+  CarrierOverrideReasonPicker,
+  type CarrierOverrideAction,
+  type CarrierOverridePickerCarrier,
+  type CarrierOverridePickerLane,
+} from "@/components/CarrierOverrideReasonPicker";
+import {
   OUTREACH_TEMPLATES,
   DEFAULT_TEMPLATE_ID,
   applyLaneVars,
@@ -766,6 +772,20 @@ export function CarrierOutreachPanel({
           ? `${data.batch.matchedCount} already in catalog. All ${data.results.length} added to bench.`
           : `All added to bench.`,
       });
+      // Task #638 — Single-carrier imports are the prototypical "added
+      // outside top-N" signal. Multi-carrier paste-ins are typically
+      // bulk catalog seeding, not a per-carrier preference, so we skip
+      // the picker for those to avoid an N-dialog avalanche.
+      if (data.results.length === 1) {
+        const r = data.results[0];
+        if (r?.carrier?.id) {
+          setOverridePicker({
+            carrier: { carrierId: r.carrier.id, carrierName: r.carrier.name },
+            lane: pickerLane(),
+            action: "added_outside_topn",
+          });
+        }
+      }
     },
     onError: () => {
       toast({ title: "Import failed", description: "Could not import carriers. Please try again.", variant: "destructive" });
@@ -792,14 +812,48 @@ export function CarrierOutreachPanel({
   const historicalCarriers = filteredCarriers.filter(c => c.carrierId === null && c.historyMatch === "exact");
   const catalogCarriersWithExactHistory = filteredCarriers.filter(c => c.carrierId !== null && c.historyMatch === "exact");
 
+  // Task #638 — Reason picker state. We capture only single-carrier actions
+  // here so a "Select all" / "Top 30" power move never spams reps with N
+  // dialogs. Lane fields come from the lane query above.
+  const [overridePicker, setOverridePicker] = useState<{
+    carrier: CarrierOverridePickerCarrier;
+    lane: CarrierOverridePickerLane;
+    action: CarrierOverrideAction;
+  } | null>(null);
+
+  function pickerLane(): CarrierOverridePickerLane {
+    return {
+      origin: lane?.origin ?? null,
+      originState: lane?.originState ?? null,
+      destination: lane?.destination ?? null,
+      destinationState: lane?.destinationState ?? null,
+      equipmentType: lane?.equipmentType ?? null,
+    };
+  }
+
   function toggleCarrier(c: RankedCarrier) {
+    const key = c.carrierId ?? c.carrierName;
+    const wasSelected = selectedCarriers.has(key);
     setSelectedCarriers(prev => {
       const next = new Set(prev);
-      const key = c.carrierId ?? c.carrierName;
       if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
     });
+    // Task #638 — Top-3 deselect signals "ranker got this wrong". Only fire
+    // for catalog carriers (carrierId !== null) so the override row has a
+    // valid FK target. The rank used here is the carrier's index in the
+    // current sort order, which mirrors what the rep sees on screen.
+    if (wasSelected && c.carrierId) {
+      const rankIdx = filteredCarriers.findIndex(rc => (rc.carrierId ?? rc.carrierName) === key);
+      if (rankIdx >= 0 && rankIdx < 3) {
+        setOverridePicker({
+          carrier: { carrierId: c.carrierId, carrierName: c.carrierName },
+          lane: pickerLane(),
+          action: "deselect_top3",
+        });
+      }
+    }
   }
 
   function selectAllFiltered() {
@@ -3223,6 +3277,15 @@ export function CarrierOutreachPanel({
           </div>
         )}
       </SheetContent>
+      {/* Task #638 — Carrier override reason picker. Lives outside the sheet so
+          its dismiss path (overlay click / Esc) doesn't tear down panel state. */}
+      <CarrierOverrideReasonPicker
+        open={!!overridePicker}
+        onOpenChange={(o) => { if (!o) setOverridePicker(null); }}
+        carrier={overridePicker?.carrier ?? null}
+        lane={overridePicker?.lane ?? {}}
+        action={overridePicker?.action ?? "deselect_top3"}
+      />
     </Sheet>
   );
 }

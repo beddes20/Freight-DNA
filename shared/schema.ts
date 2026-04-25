@@ -4979,6 +4979,75 @@ export const carrierLaneOutcomeEventKeys = pgTable("carrier_lane_outcome_event_k
 export type CarrierLaneOutcomeEventKey = typeof carrierLaneOutcomeEventKeys.$inferSelect;
 
 /**
+ * Task #638 — Per-(rep, carrier, lane) override ledger.
+ *
+ * Captures the most valuable training signal we can collect: when a rep
+ * deselects a top-3 ranked carrier from a wave, or hand-adds a carrier the
+ * ranker didn't shortlist, we ask "why" and persist the answer here. The
+ * carrier ranker reads aggregates per (carrier, lane) on the next pass,
+ * downweighting carriers reps consistently skip and boosting carriers reps
+ * consistently prefer.
+ *
+ * reasonCode is nullable: the picker is non-blocking, so a rep who dismisses
+ * still produces a row (with reasonCode=null) that counts as a "skip" signal
+ * but contributes no labeled reason text.
+ *
+ * Idempotency: the (orgId, carrierId, laneSignature, repId, occurredAtDay)
+ * unique index makes duplicate clicks within the same UTC day a no-op via
+ * INSERT ... ON CONFLICT DO NOTHING. occurredAtDay is denormalized as a
+ * stored varchar 'YYYY-MM-DD' (UTC) so the unique-index match is exact.
+ *
+ * laneSignature mirrors the canonical `laneSig()` helper in
+ * server/laneCrossLinkService.ts.
+ */
+export const carrierOverrideReasonCodes = [
+  "bad_service",
+  "out_of_equipment",
+  "wont_run_lane",
+  "better_fit",
+  "other",
+] as const;
+export type CarrierOverrideReasonCode = (typeof carrierOverrideReasonCodes)[number];
+
+export const carrierOverrideActions = [
+  "deselect_top3",
+  "added_outside_topn",
+] as const;
+export type CarrierOverrideAction = (typeof carrierOverrideActions)[number];
+
+export const carrierOverrides = pgTable("carrier_overrides", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  carrierId: varchar("carrier_id").notNull().references(() => carriers.id, { onDelete: "cascade" }),
+  laneSignature: text("lane_signature").notNull(),
+  // Denormalized lane parts for ad-hoc inspection — ranker keys solely off laneSignature.
+  origin: text("origin"),
+  originState: text("origin_state"),
+  destination: text("destination"),
+  destinationState: text("destination_state"),
+  equipmentType: text("equipment_type"),
+  // Null when rep dismissed the picker without choosing a reason.
+  reasonCode: text("reason_code"),
+  // Which UI surface fired the picker — informational only, drives no math.
+  action: text("action").notNull(),
+  // Free-text "Other" notes; capped server-side. Null otherwise.
+  notes: text("notes"),
+  repId: varchar("rep_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  occurredAt: timestamp("occurred_at").notNull().defaultNow(),
+  // 'YYYY-MM-DD' (UTC) — stored alongside occurredAt so the dedupe unique
+  // index is a pure equality match, no PG date_trunc dependency.
+  occurredAtDay: varchar("occurred_at_day", { length: 10 }).notNull(),
+}, (t) => ({
+  uq: uniqueIndex("carrier_overrides_uq").on(t.orgId, t.carrierId, t.laneSignature, t.repId, t.occurredAtDay),
+  orgLaneIdx: index("carrier_overrides_org_lane_idx").on(t.orgId, t.laneSignature),
+  orgCarrierIdx: index("carrier_overrides_org_carrier_idx").on(t.orgId, t.carrierId),
+}));
+export const insertCarrierOverrideSchema = createInsertSchema(carrierOverrides)
+  .omit({ id: true, occurredAt: true });
+export type InsertCarrierOverride = z.infer<typeof insertCarrierOverrideSchema>;
+export type CarrierOverride = typeof carrierOverrides.$inferSelect;
+
+/**
  * Recommendation snapshot per Available load. One row per (loadFactId, carrier
  * candidate). Rebuilt whenever the recommendation engine runs for a load —
  * keyed by load_fact_id so deletions cascade with the source load.
