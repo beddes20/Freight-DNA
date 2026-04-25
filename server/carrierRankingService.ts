@@ -431,6 +431,16 @@ export interface RankedCarrier {
   marginContribution: number | null;   // derived from financial rows margin field if available
   customerHistoryLoads: number;        // loads this carrier hauled for the same customer
   priorOutcomeBoost: boolean;          // true if prior bench outcome was positive (available_now/next_week)
+  // ── Bench tier-0 (Task #632) ──────────────────────────────────────────────
+  /**
+   * True when this carrier has at least one positive bench outcome
+   * (available_now / available_next_week) on this lane in the last 90 days.
+   * Carriers flagged `bench` are eligible for tier-0 placement (above `exact`)
+   * up to BENCH_TIER0_CAP. Survives JSON wire transfer to AF cockpit + LWQ.
+   */
+  bench: boolean;
+  /** Count of positive bench outcomes on this lane in the last 90d. */
+  benchWins: number;
   sourceChannel: string | null;        // where this carrier was originally sourced from
   suppressionReasons: string[];        // human-readable negative flags (no email, recently contacted, flagged, etc.)
   equipmentMatch: boolean;             // carrier equipment overlaps with lane equipment
@@ -462,6 +472,38 @@ export interface RankedCarrier {
 
 function normStr(s: string): string {
   return (s ?? "").toString().trim().toLowerCase();
+}
+
+/**
+ * Task #632 — Bench tier-0 selection helpers (exported for tests).
+ *
+ * `computeBenchTier0Keys` selects up to BENCH_TIER0_CAP carriers from a
+ * RankedCarrier array — the ones with `bench=true`, ordered by
+ * (benchWins desc, fitScore desc) — and returns the set of stable keys
+ * the rank-time sort comparator uses to decide who gets tier-0 placement.
+ *
+ * Kept separate from the inline sort so unit tests can validate
+ * "1 bench win on a `region` carrier outranks an `exact` carrier with 0
+ *  bench wins" without spinning up the full ranker pipeline.
+ */
+export const BENCH_TIER0_CAP = 5;
+
+export function benchTier0KeyFor(c: Pick<RankedCarrier, "carrierId" | "carrierName">): string {
+  return c.carrierId ?? `name:${normStr(c.carrierName)}`;
+}
+
+export function computeBenchTier0Keys(carriers: RankedCarrier[]): Set<string> {
+  return new Set<string>(
+    carriers
+      .filter(c => c.bench)
+      .sort((a, b) => {
+        const winsDiff = b.benchWins - a.benchWins;
+        if (winsDiff !== 0) return winsDiff;
+        return b.fitScore - a.fitScore;
+      })
+      .slice(0, BENCH_TIER0_CAP)
+      .map(benchTier0KeyFor),
+  );
 }
 
 function toTitleCase(s: string): string {
@@ -1086,14 +1128,37 @@ export async function rankCarriersForLane(
   // Build a set of carrier names/ids that had positive prior outcomes on this bench
   const positiveOutcomeStatuses = new Set(["available_now", "available_next_week"]);
   const positiveOutcomeCarrierKeys = new Set<string>();
+  // Task #632 — Bench tier-0: count positive bench outcomes within the last 90 days.
+  // Keyed by both carrierId (when present) and normStr(carrierName) for catalog +
+  // history-only carriers. Carriers in this map become bench-tier eligible.
+  const benchWindowMs = 90 * 24 * 60 * 60 * 1000;
+  const benchCutoff = Date.now() - benchWindowMs;
+  const benchWinsByKey = new Map<string, number>();
+  const bumpBenchKey = (key: string) => {
+    benchWinsByKey.set(key, (benchWinsByKey.get(key) ?? 0) + 1);
+  };
   if (bench) {
     for (const b of bench) {
       if (positiveOutcomeStatuses.has(b.interestStatus ?? "")) {
         if (b.carrierId) positiveOutcomeCarrierKeys.add(b.carrierId);
         positiveOutcomeCarrierKeys.add(normStr(b.carrierName));
+        // 90-day positive-outcome window — prefer classifiedAt, fall back to updatedAt.
+        const tsRaw = (b as any).classifiedAt ?? b.updatedAt ?? null;
+        const ts = tsRaw ? new Date(tsRaw).getTime() : NaN;
+        if (Number.isFinite(ts) && ts >= benchCutoff) {
+          if (b.carrierId) bumpBenchKey(b.carrierId);
+          bumpBenchKey(normStr(b.carrierName));
+        }
       }
     }
   }
+  const benchWinsForCarrier = (id: string | null, name: string): number => {
+    // De-dup: when both id-keyed and name-keyed counters fire for the same row
+    // they count the SAME wins twice. Take the max — never the sum.
+    const byId = id ? (benchWinsByKey.get(id) ?? 0) : 0;
+    const byName = benchWinsByKey.get(normStr(name)) ?? 0;
+    return Math.max(byId, byName);
+  };
 
   // Build set of recently-contacted carrier keys (last 14 days)
   const recentlyContactedKeys = new Set<string>();
@@ -1495,6 +1560,8 @@ export async function rankCarriersForLane(
       marginContribution: hist?.totalMargin ?? null,
       customerHistoryLoads: custLoads,
       priorOutcomeBoost: hadPositiveOutcome,
+      bench: hadPositiveOutcome && benchWinsForCarrier(carrier.id, carrier.name) > 0,
+      benchWins: benchWinsForCarrier(carrier.id, carrier.name),
       sourceChannel: (carrier as any).sourceChannel ?? null,
       suppressionReasons,
       equipmentMatch,
@@ -1673,6 +1740,8 @@ export async function rankCarriersForLane(
       marginContribution: hist.totalMargin,
       customerHistoryLoads: custLoadsHist,
       priorOutcomeBoost: hadPositiveOutcomeHist,
+      bench: hadPositiveOutcomeHist && benchWinsForCarrier(null, carrierNorm) > 0,
+      benchWins: benchWinsForCarrier(null, carrierNorm),
       sourceChannel: null,
       suppressionReasons,
       equipmentMatch: false,
@@ -1803,10 +1872,24 @@ export async function rankCarriersForLane(
     }));
   }
 
+  // ── Task #632 — Bench tier-0 selection ──────────────────────────────────────
+  // Carriers who replied "yes" on this lane within the last 90 days outrank
+  // even `exact`-tier history. Cap the promoted set at BENCH_TIER0_CAP so a
+  // long bench can't drown out genuine TMS history.
+  const benchTier0Keys = computeBenchTier0Keys(ranked);
+  const isBenchTier0 = (c: RankedCarrier) => benchTier0Keys.has(benchTier0KeyFor(c));
+
   // Sort by fitScore descending — scores encode history quality + recency + all signals.
   // historyMatch is a secondary tiebreaker only when scores are exactly equal.
-  // Tier order: exact > nearby > state_pair > region > none
+  // Tier order: bench (top N wins) > exact > nearby > state_pair > region > none
   ranked.sort((a, b) => {
+    const aBench = isBenchTier0(a);
+    const bBench = isBenchTier0(b);
+    if (aBench !== bBench) return aBench ? -1 : 1;
+    if (aBench && bBench) {
+      const winsDiff = b.benchWins - a.benchWins;
+      if (winsDiff !== 0) return winsDiff;
+    }
     const scoreDiff = b.fitScore - a.fitScore;
     if (scoreDiff !== 0) return scoreDiff;
     const matchRank: Record<string, number> = {
@@ -1886,6 +1969,15 @@ Respond ONLY with JSON array: [{"name": "<carrier name>", "reason": "<1 sentence
   // avgLoadsPerWeek (fast) and TMS upload history (accurate when avg is stale).
   if (isHfLane) {
     const hfSort = (a: RankedCarrier, b: RankedCarrier) => {
+      // Bench tier-0 outranks everything (Task #632) — same cap as the
+      // regular path; benchTier0Keys is computed once above.
+      const aBench = isBenchTier0(a);
+      const bBench = isBenchTier0(b);
+      if (aBench !== bBench) return aBench ? -1 : 1;
+      if (aBench && bBench) {
+        const winsDiff = b.benchWins - a.benchWins;
+        if (winsDiff !== 0) return winsDiff;
+      }
       const scoreDiff = b.fitScore - a.fitScore;
       if (scoreDiff !== 0) return scoreDiff;
       const matchRank: Record<string, number> = { exact: 0, nearby: 1, state_pair: 2, region: 3, none: 4 };

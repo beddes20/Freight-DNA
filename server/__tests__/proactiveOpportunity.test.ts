@@ -74,6 +74,8 @@ function makeRanked(overrides: Partial<RankedCarrier> = {}): RankedCarrier {
     marginContribution: null,
     customerHistoryLoads: 0,
     priorOutcomeBoost: false,
+    bench: false,
+    benchWins: 0,
     sourceChannel: null,
     suppressionReasons: [],
     equipmentMatch: true,

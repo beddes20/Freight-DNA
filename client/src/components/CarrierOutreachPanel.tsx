@@ -156,6 +156,9 @@ interface RankedCarrier {
   hasMarketNbaBoost?: boolean;
   whyThisCarrier?: WhyThisCarrier;
   carrierFitExplanation?: CarrierFitExplanation | null;
+  // Task #632 — Bench tier-0: positive lane outcomes within 90d.
+  bench?: boolean;
+  benchWins?: number;
 }
 
 interface SuggestionsResponse {
@@ -1877,6 +1880,18 @@ export function CarrierOutreachPanel({
                                 </div>
                                 {/* Tier badge + signals */}
                                 <div className="flex items-center gap-1.5 flex-wrap">
+                                  {/* Task #632 — Bench tier-0 outranks even `exact`; render
+                                      the bench badge BEFORE the history-tier badge so reps
+                                      see "Bench Nx wins" first. Tooltip explains the source. */}
+                                  {c.bench && (c.benchWins ?? 0) > 0 && (
+                                    <span
+                                      className="text-[9px] px-1.5 py-0.5 rounded border font-medium bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/40"
+                                      title={`replied yes ${c.benchWins}x in last 90d`}
+                                      data-testid={`badge-bench-${idx}`}
+                                    >
+                                      Bench ({c.benchWins}x wins)
+                                    </span>
+                                  )}
                                   <span className={`text-[9px] px-1.5 py-0.5 rounded border font-medium ${tier.color}`}>
                                     {tier.label}
                                   </span>

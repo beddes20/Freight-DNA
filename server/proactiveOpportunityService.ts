@@ -400,6 +400,23 @@ export async function rankCarriersForOpportunity(
     } catch (e) {
       console.warn(`[pafoe] coverage profile lookup failed for lane ${resolvedLane.id}:`, (e as Error)?.message ?? e);
     }
+  } else {
+    // Task #632 — synthetic AF opportunities have no RecurringLane to anchor
+    // bench against. Resolve bench by lane signature so any prior positive
+    // outcome from a matching org-wide RecurringLane still promotes carriers
+    // to bench tier-0 in the ranker.
+    try {
+      bench = await storage.getOrgWideBenchByLaneSignature(
+        opportunity.orgId,
+        opportunity.origin,
+        opportunity.originState ?? null,
+        opportunity.destination,
+        opportunity.destinationState ?? null,
+        opportunity.equipmentType ?? null,
+      );
+    } catch (e) {
+      console.warn(`[pafoe] org-wide bench signature lookup failed for opp ${opportunity.id}:`, (e as Error)?.message ?? e);
+    }
   }
 
   const ranked = await rankCarriersForLane(syntheticLane, storage, bench, coverageProfile, coverageCarriers);
@@ -611,6 +628,10 @@ export async function generateOpportunitiesForCompany(
         suppressionReasons: row.ranked.suppressionReasons ?? [],
         loadsOnLane: row.ranked.loadsOnLane,
         priorOutcomeBoost: row.ranked.priorOutcomeBoost,
+        // Task #632 — bench tier-0: persist on JSONB so the AF cockpit chip
+        // surface can render "Bench Nx wins" without a schema migration.
+        bench: row.ranked.bench,
+        benchWins: row.ranked.benchWins,
       },
       excludedReason: row.excludedReason,
       outreachLogId: null,
@@ -707,6 +728,10 @@ export async function ensureShortlistRanked(
       suppressionReasons: row.ranked.suppressionReasons ?? [],
       loadsOnLane: row.ranked.loadsOnLane,
       priorOutcomeBoost: row.ranked.priorOutcomeBoost,
+      // Task #632 — bench tier-0: persist on JSONB so the AF cockpit chip
+      // surface can render "Bench Nx wins" without a schema migration.
+      bench: row.ranked.bench,
+      benchWins: row.ranked.benchWins,
     },
     excludedReason: row.excludedReason,
     outreachLogId: null,

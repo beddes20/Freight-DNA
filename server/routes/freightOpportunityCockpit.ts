@@ -251,6 +251,13 @@ export async function buildCockpitRow(
         carrier = (await storage.getCarrier(row.carrierId)) ?? null;
         caches.carriers?.set(row.carrierId, carrier);
       }
+      // Task #632 — bench tier-0 chip data is stamped on `responsivenessSnapshot`
+      // at rank-time (proactiveOpportunityService). Snapshot is JSONB so cast
+      // through `unknown` to read it safely without expanding the column type.
+      const snap = (row.responsivenessSnapshot ?? {}) as {
+        bench?: boolean;
+        benchWins?: number;
+      };
       return {
         opportunityCarrierId: row.id,
         carrierId: row.carrierId,
@@ -266,6 +273,8 @@ export async function buildCockpitRow(
         // truthy proxy so the chip shows the "responded" check when a response
         // exists (`lastResponseId`). If sentAt is null fall back to createdAt.
         respondedAt: row.lastResponseId ? (row.sentAt ?? row.createdAt) : null,
+        bench: !!snap.bench,
+        benchWins: typeof snap.benchWins === "number" ? snap.benchWins : 0,
       };
     }),
   );

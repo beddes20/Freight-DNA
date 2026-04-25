@@ -42,6 +42,10 @@ interface CockpitChip {
   explanation?: string | null;
   sentAt: string | null;
   respondedAt: string | null;
+  /** Task #632 — true when carrier has positive bench outcomes on this lane in last 90d */
+  bench?: boolean;
+  /** Count of positive bench outcomes used for the "Bench Nx wins" chip label */
+  benchWins?: number;
 }
 
 interface CockpitItem {
@@ -1624,18 +1628,31 @@ function CockpitRowView(props: {
                   ? "sent, awaiting reply"
                   : "queued",
             ].filter(Boolean).join(" · ");
+            const benchWins = chip.benchWins ?? 0;
+            const showBench = !!chip.bench && benchWins > 0;
             return (
-              <Badge
-                key={chip.opportunityCarrierId}
-                variant="outline"
-                className={bucketTone(chip.bucket)}
-                data-testid={`chip-carrier-${opp.id}-${chip.carrierId}`}
-                title={tip}
-              >
-                #{chip.rank} {chip.carrierName}
-                {chip.respondedAt && <CheckCircle2 className="h-3 w-3 ml-1" />}
-                {!chip.respondedAt && chip.sentAt && <Send className="h-3 w-3 ml-1" />}
-              </Badge>
+              <span key={chip.opportunityCarrierId} className="inline-flex items-center gap-1">
+                <Badge
+                  variant="outline"
+                  className={bucketTone(chip.bucket)}
+                  data-testid={`chip-carrier-${opp.id}-${chip.carrierId}`}
+                  title={tip}
+                >
+                  #{chip.rank} {chip.carrierName}
+                  {chip.respondedAt && <CheckCircle2 className="h-3 w-3 ml-1" />}
+                  {!chip.respondedAt && chip.sentAt && <Send className="h-3 w-3 ml-1" />}
+                </Badge>
+                {showBench && (
+                  <Badge
+                    variant="outline"
+                    className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/40 text-[10px] py-0 px-1.5"
+                    data-testid={`chip-bench-${opp.id}-${chip.carrierId}`}
+                    title={`replied yes ${benchWins}x in last 90d`}
+                  >
+                    Bench {benchWins}x
+                  </Badge>
+                )}
+              </span>
             );
           })
         )}

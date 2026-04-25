@@ -879,6 +879,20 @@ export interface IStorage {
 
   // Lane Carrier Outreach v1 — Carrier Bench (laneCarrierInterest)
   getLaneCarrierBench(laneId: string): Promise<LaneCarrierInterest[]>;
+  /**
+   * Org-wide bench lookup by lane signature (origin city/state, dest city/state, equipment).
+   * Used by the proactive opportunity service when a synthetic AF opportunity has no
+   * RecurringLane to anchor `getLaneCarrierBench` to — so bench-tier-0 promotion still
+   * works for AF opps that mirror an org's recurring corridor.
+   */
+  getOrgWideBenchByLaneSignature(
+    orgId: string,
+    origin: string,
+    originState: string | null,
+    destination: string | null,
+    destinationState: string | null,
+    equipment: string | null,
+  ): Promise<LaneCarrierInterest[]>;
   getLaneCarrierInterestById(id: string): Promise<LaneCarrierInterest | undefined>;
   upsertLaneCarrierInterest(data: InsertLaneCarrierInterest): Promise<LaneCarrierInterest>;
   updateLaneCarrierInterest(id: string, data: Partial<InsertLaneCarrierInterest>): Promise<LaneCarrierInterest | undefined>;
@@ -5284,6 +5298,35 @@ export class DatabaseStorage implements IStorage {
 
   async getLaneCarrierBench(laneId: string): Promise<LaneCarrierInterest[]> {
     return db.select().from(laneCarrierInterest).where(eq(laneCarrierInterest.laneId, laneId)).orderBy(desc(laneCarrierInterest.fitScore));
+  }
+
+  async getOrgWideBenchByLaneSignature(
+    orgId: string,
+    origin: string,
+    originState: string | null,
+    destination: string | null,
+    destinationState: string | null,
+    equipment: string | null,
+  ): Promise<LaneCarrierInterest[]> {
+    // Aggregate bench rows from any RecurringLane in the org whose
+    // (origin, originState, destination, destinationState, equipment) match
+    // the requested signature (case-insensitive). NULL state/equipment values
+    // are normalized to '' on both sides so they compare equal.
+    const norm = (s: string | null | undefined) => (s ?? "").toString().trim().toLowerCase();
+    const conds: SQL[] = [
+      eq(recurringLanes.orgId, orgId),
+      sql`lower(trim(${recurringLanes.origin})) = ${norm(origin)}`,
+      sql`coalesce(lower(trim(${recurringLanes.originState})), '') = ${norm(originState)}`,
+      sql`lower(trim(${recurringLanes.destination})) = ${norm(destination)}`,
+      sql`coalesce(lower(trim(${recurringLanes.destinationState})), '') = ${norm(destinationState)}`,
+      sql`coalesce(lower(trim(${recurringLanes.equipmentType})), '') = ${norm(equipment)}`,
+    ];
+    const rows = await db
+      .select({ b: laneCarrierInterest })
+      .from(laneCarrierInterest)
+      .innerJoin(recurringLanes, eq(recurringLanes.id, laneCarrierInterest.laneId))
+      .where(and(...conds));
+    return rows.map(r => r.b);
   }
 
   async getLaneCarrierInterestById(id: string): Promise<LaneCarrierInterest | undefined> {
