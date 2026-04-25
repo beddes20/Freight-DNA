@@ -881,6 +881,41 @@ interface ClassifierResult {
   outcome: FreightOpportunityResponseOutcome;
   confidence: number;
   reasoning: string;
+  /**
+   * Carrier-quoted rate extracted from the reply body, when present. Drives
+   * the `quote` event into carrier_lane_outcomes (Task #637) and is persisted
+   * onto the freight_opportunity_responses row. Null when no parseable
+   * dollar amount appears.
+   */
+  quotedRate: number | null;
+}
+
+/**
+ * Heuristic rate extractor for carrier reply bodies. Looks for a `$X,XXX(.XX)?`
+ * dollar amount or a bare 3–5 digit number near rate-related keywords
+ * ("rate", "all in", "do it for", "quote", "price", "will run"). Returns
+ * the first plausible match (rounded to nearest dollar) or null.
+ *
+ * Exported for unit tests — kept side-effect-free.
+ */
+export function extractQuotedRate(body: string): number | null {
+  if (!body) return null;
+  const text = body.replace(/\s+/g, " ");
+  // Strict: $X[,XXX](.XX)? — most reliable.
+  const dollar = text.match(/\$\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{3,6})(?:\.[0-9]{1,2})?/);
+  if (dollar) {
+    const n = Number(dollar[1].replace(/,/g, ""));
+    if (Number.isFinite(n) && n >= 100 && n <= 100000) return Math.round(n);
+  }
+  // Looser: rate/quote/all-in keyword followed shortly by a 3-5 digit number.
+  const kw = text.match(
+    /\b(?:rate|quote|price|all[\s-]?in|will\s+(?:run|do)|do\s+it\s+for|can\s+do)\b[^0-9]{0,40}([0-9]{3,5}(?:\.[0-9]{1,2})?)/i,
+  );
+  if (kw) {
+    const n = Number(kw[1]);
+    if (Number.isFinite(n) && n >= 100 && n <= 100000) return Math.round(n);
+  }
+  return null;
 }
 
 async function classifyReplyWithLLM(
@@ -899,7 +934,8 @@ async function classifyReplyWithLLM(
 - no_response: out-of-office, unrelated, auto-acknowledgment, or non-substantive
 - booked: explicitly confirms they are booking the load
 - do_not_contact_lane: asks to be removed from this lane / unsubscribe / stop emailing
-Return strict JSON: { "outcome": "...", "confidence": 0-100, "reasoning": "1 sentence" }.`;
+Also extract any carrier-quoted dollar rate (numeric, no $ or commas; null if absent).
+Return strict JSON: { "outcome": "...", "confidence": 0-100, "reasoning": "1 sentence", "quotedRate": number|null }.`;
   const usr = `OUTREACH TYPE: ${templateKind}
 ORIGINAL OUTREACH (truncated):
 ${outboundSnippet.slice(0, 500)}
@@ -927,34 +963,49 @@ ${inboundBody.slice(0, 1800)}`;
       "booked", "do_not_contact_lane",
     ]);
     const outcome = (valid.has(parsed.outcome) ? parsed.outcome : "no_response") as FreightOpportunityResponseOutcome;
+    // Trust the LLM extraction first, then fall back to the regex helper.
+    // The regex catches cases where the LLM returns null but the body
+    // clearly contains a "$2,500" / "rate is 2500" pattern.
+    let quotedRate: number | null = null;
+    const llmRate = Number(parsed.quotedRate);
+    if (Number.isFinite(llmRate) && llmRate >= 100 && llmRate <= 100000) {
+      quotedRate = Math.round(llmRate);
+    } else {
+      quotedRate = extractQuotedRate(inboundBody);
+    }
     return {
       outcome,
       confidence: Math.max(0, Math.min(100, Number(parsed.confidence ?? 50))),
       reasoning: String(parsed.reasoning ?? "").slice(0, 320),
+      quotedRate,
     };
   } catch {
-    // Heuristic fallback — keyword-based
+    // Heuristic fallback — keyword-based + regex rate extraction.
     const b = inboundBody.toLowerCase();
     const s = inboundSubject.toLowerCase();
+    const quotedRate = extractQuotedRate(inboundBody);
     if (s.includes("out of office") || s.includes("automatic reply")) {
-      return { outcome: "no_response", confidence: 70, reasoning: "Auto-reply detected (heuristic)" };
+      return { outcome: "no_response", confidence: 70, reasoning: "Auto-reply detected (heuristic)", quotedRate: null };
     }
     if (/\b(unsubscribe|remove me|do not (contact|email)|stop emailing)\b/.test(b)) {
-      return { outcome: "do_not_contact_lane", confidence: 80, reasoning: "Opt-out language (heuristic)" };
+      return { outcome: "do_not_contact_lane", confidence: 80, reasoning: "Opt-out language (heuristic)", quotedRate: null };
     }
     if (/\b(book(ed)?\s+it|send (the )?rate\s*con|covered)\b/.test(b)) {
-      return { outcome: "booked", confidence: 65, reasoning: "Booking language (heuristic)" };
+      return { outcome: "booked", confidence: 65, reasoning: "Booking language (heuristic)", quotedRate };
     }
     if (/\b(yes|interested|sounds good|let's talk|i can cover)\b/.test(b)) {
-      return { outcome: "interested_now", confidence: 55, reasoning: "Acceptance language (heuristic)" };
+      return { outcome: "interested_now", confidence: 55, reasoning: "Acceptance language (heuristic)", quotedRate };
     }
     if (/\b(next week|few days)\b/.test(b)) {
-      return { outcome: "interested_next_week", confidence: 50, reasoning: "Timing keyword (heuristic)" };
+      return { outcome: "interested_next_week", confidence: 50, reasoning: "Timing keyword (heuristic)", quotedRate };
     }
     if (/\b(no thanks|not interested|pass|too low|cannot|can't run)\b/.test(b)) {
-      return { outcome: "declined", confidence: 55, reasoning: "Decline language (heuristic)" };
+      // A decline with a counter-rate ("would need $3,200 to run it") still
+      // counts as a quote signal on the lane, so preserve the extracted
+      // rate even on the negative path.
+      return { outcome: "declined", confidence: 55, reasoning: "Decline language (heuristic)", quotedRate };
     }
-    return { outcome: "no_response", confidence: 40, reasoning: "Inconclusive (heuristic)" };
+    return { outcome: "no_response", confidence: 40, reasoning: "Inconclusive (heuristic)", quotedRate: null };
   }
 }
 
@@ -996,7 +1047,10 @@ export async function classifyOpportunityReply(
       emailMessageId: params.emailMessageId ?? null,
       notes: cls.reasoning,
       recordedById: null,
-      quotedRate: null,
+      // Task #637 — persist any quoted rate the classifier or fallback
+      // regex extracted from the reply body so the same number drives
+      // both the response row and the carrier_lane_outcomes quote bump.
+      quotedRate: cls.quotedRate !== null ? String(cls.quotedRate) : null,
     });
 
     await storage.updateFreightOpportunityCarrier(oppCarrier.id, {
@@ -1063,6 +1117,18 @@ export async function classifyOpportunityReply(
           ...laneParts,
           event: "loss",
           eventKey: `pafoe-reply:${response.id}:loss`,
+        });
+      }
+      // Independent of yes/loss: any reply that includes a parseable
+      // dollar amount counts as a carrier quote on this lane.
+      if (cls.quotedRate !== null) {
+        await recordCarrierLaneOutcome({
+          orgId,
+          carrierId: oppCarrier.carrierId,
+          laneSignature: sig,
+          ...laneParts,
+          event: "quote",
+          eventKey: `pafoe-reply:${response.id}:quote`,
         });
       }
     }

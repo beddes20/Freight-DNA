@@ -5420,6 +5420,37 @@ export class DatabaseStorage implements IStorage {
 
   async updateCarrierOutreachLog(id: string, fields: Partial<InsertCarrierOutreachLog>): Promise<CarrierOutreachLog> {
     const [row] = await db.update(carrierOutreachLogs).set(fields).where(eq(carrierOutreachLogs.id, id)).returning();
+    // Task #637 — when an external open-tracking signal flips delivery_status
+    // to 'opened' and we have a matched carrier + recurring lane on the row,
+    // bump the open counter for (org, carrier, laneSig). Idempotent via
+    // eventKey so duplicate webhook deliveries collapse.
+    if (
+      row
+      && fields.deliveryStatus === "opened"
+      && row.matchedCarrierId
+      && row.matchedLaneId
+    ) {
+      try {
+        const [lane] = await db.select().from(recurringLanes)
+          .where(eq(recurringLanes.id, row.matchedLaneId)).limit(1);
+        if (lane) {
+          const { recordCarrierLaneOutcome } = await import("./services/carrierLaneOutcomes");
+          await recordCarrierLaneOutcome({
+            orgId: row.orgId,
+            carrierId: row.matchedCarrierId,
+            origin: lane.origin,
+            originState: lane.originState,
+            destination: lane.destination,
+            destinationState: lane.destinationState,
+            equipmentType: lane.equipmentType,
+            event: "open",
+            eventKey: `outreach-log:${row.id}:open`,
+          });
+        }
+      } catch (err) {
+        console.warn("[carrier-lane-outcomes] open wiring failed (non-fatal):", err instanceof Error ? err.message : err);
+      }
+    }
     return row;
   }
 

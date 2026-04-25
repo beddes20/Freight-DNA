@@ -55,12 +55,26 @@ beforeEach(() => {
     }
     if (text.includes("from carrier_outreach_logs")) {
       return { rows: [{
+        id: "log-1",
         org_id: "org-1", matched_carrier_id: "car-1",
         origin: "Chicago", origin_state: "IL",
         destination: "Dallas", destination_state: "TX",
         equipment_type: "Dry Van",
         sent_at: new Date("2026-01-01T00:00:00Z"),
         reply_received_at: new Date("2026-01-02T00:00:00Z"),
+        delivery_status: "opened",
+      }] };
+    }
+    if (text.includes("from email_signals")) {
+      return { rows: [{
+        id: "sig-1",
+        org_id: "org-1",
+        intent_type: "lane_decline",
+        linked_carrier_id: "car-1",
+        created_at: new Date("2026-01-06T00:00:00Z"),
+        origin: "Chicago", origin_state: "IL",
+        destination: "Dallas", destination_state: "TX",
+        equipment_type: "Dry Van",
       }] };
     }
     if (text.includes("from lane_carrier_interest")) {
@@ -99,10 +113,20 @@ beforeEach(() => {
 });
 
 describe("backfill carrier_lane_outcomes — idempotence contract", () => {
-  it("emits a DELETE before any source SELECT (clear-then-rebuild)", async () => {
+  it("clears the event-key ledger AND the outcomes table before any source SELECT", async () => {
+    // Both DELETEs must run before sources, in either order, otherwise
+    // the dedupe ledger left over from a previous run silently
+    // suppresses every keyed re-insert during the rebuild.
     const { runBackfill } = await import("../../scripts/backfillCarrierLaneOutcomes");
     await runBackfill(null);
-    expect(lastSqlText(0)).toContain("delete from carrier_lane_outcomes");
+    const firstTwoSql = [lastSqlText(0), lastSqlText(1)].join(" || ");
+    expect(firstTwoSql).toContain("delete from carrier_lane_outcomes");
+    expect(firstTwoSql).toContain("delete from carrier_lane_outcome_event_keys");
+
+    // After the two DELETEs, the next call should be a SELECT (a source),
+    // not another DELETE — confirms we don't accidentally clear anything
+    // mid-replay.
+    expect(lastSqlText(2)).toContain("select");
   });
 
   it("produces identical helper-call counts across two consecutive runs", async () => {
@@ -128,11 +152,14 @@ describe("backfill carrier_lane_outcomes — backfill ≡ live parity", () => {
   // Producer mappings under test (mirrors of the live wiring in
   // freightOpportunityOutreachService / coverFreightOpportunity /
   // laneCarrierOutreach):
-  //   - carrier_outreach_logs row:           { sent_at, reply_received_at } → ["sent","reply"]
-  //   - lane_carrier_interest available_now: → ["yes"]
+  //   - carrier_outreach_logs row:                    { sent_at, reply_received_at,
+  //                                                     delivery_status='opened' } → ["sent","reply","open"]
+  //   - lane_carrier_interest available_now:          → ["yes"]
   //   - freight_opportunity_responses interested_now + quoted_rate:
-  //                                          → ["reply","yes","quote"]
-  //   - freight_opportunity_audit covered:   → ["cover"]
+  //                                                   → ["reply","yes","quote"]
+  //   - freight_opportunity_audit covered:            → ["cover"]
+  //   - email_signals lane_decline (carrier+lane linked, inbound):
+  //                                                   → ["reply","loss"]
   it("emits the exact set of event types live producers would for the same source rows", async () => {
     const { runBackfill } = await import("../../scripts/backfillCarrierLaneOutcomes");
     await runBackfill(null);
@@ -143,9 +170,10 @@ describe("backfill carrier_lane_outcomes — backfill ≡ live parity", () => {
     }).sort((a, b) => a.event.localeCompare(b.event));
 
     expect(events).toEqual([
-      // outreach_logs.sent_at + reply_received_at
+      // outreach_logs.sent_at + reply_received_at + delivery_status='opened'
       { orgId: "org-1", carrierId: "car-1", event: "sent" },
       { orgId: "org-1", carrierId: "car-1", event: "reply" },
+      { orgId: "org-1", carrierId: "car-1", event: "open" },
       // lane_carrier_interest interest_status=available_now
       { orgId: "org-1", carrierId: "car-1", event: "yes" },
       // PAFOE response interested_now + quoted_rate
@@ -154,16 +182,42 @@ describe("backfill carrier_lane_outcomes — backfill ≡ live parity", () => {
       { orgId: "org-1", carrierId: "car-1", event: "quote" },
       // freight_opportunity_audit kind=covered
       { orgId: "org-1", carrierId: "car-1", event: "cover" },
+      // email_signals lane_decline → reply + loss
+      { orgId: "org-1", carrierId: "car-1", event: "reply" },
+      { orgId: "org-1", carrierId: "car-1", event: "loss" },
     ].sort((a, b) => a.event.localeCompare(b.event)));
   });
 
-  it("never emits an open or unknown event type the live producers don't emit", async () => {
+  it("only emits known event types defined in CarrierLaneOutcomeEventType", async () => {
     const { runBackfill } = await import("../../scripts/backfillCarrierLaneOutcomes");
     await runBackfill(null);
-    const ALLOWED = new Set(["sent", "reply", "yes", "quote", "cover", "loss"]);
+    const ALLOWED = new Set(["sent", "open", "reply", "yes", "quote", "cover", "loss"]);
     for (const c of recordMock.mock.calls) {
       const ev = (c[0] as { event: string }).event;
       expect(ALLOWED.has(ev)).toBe(true);
     }
+  });
+
+  it("emits an open event for outreach logs with delivery_status='opened'", async () => {
+    const { runBackfill } = await import("../../scripts/backfillCarrierLaneOutcomes");
+    await runBackfill(null);
+    const opens = recordMock.mock.calls.filter(c => (c[0] as { event: string }).event === "open");
+    expect(opens.length).toBe(1);
+    expect((opens[0][0] as { eventKey?: string }).eventKey).toBe("outreach-log:log-1:open");
+  });
+
+  it("replays an inbound email signal as a reply event keyed by signal id", async () => {
+    const { runBackfill } = await import("../../scripts/backfillCarrierLaneOutcomes");
+    await runBackfill(null);
+    const sigReplies = recordMock.mock.calls.filter(c => {
+      const a = c[0] as { event: string; eventKey?: string };
+      return a.event === "reply" && a.eventKey === "email-signal:sig-1:reply";
+    });
+    expect(sigReplies.length).toBe(1);
+    const sigLosses = recordMock.mock.calls.filter(c => {
+      const a = c[0] as { event: string; eventKey?: string };
+      return a.event === "loss" && a.eventKey === "email-signal:sig-1:loss";
+    });
+    expect(sigLosses.length).toBe(1);
   });
 });

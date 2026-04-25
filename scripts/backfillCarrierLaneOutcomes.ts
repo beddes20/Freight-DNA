@@ -6,8 +6,9 @@
  * Sources (idempotent — additive INSERT ... ON CONFLICT DO UPDATE):
  *   1. carrier_outreach_logs (matched_carrier_id, lane_id → recurring_lanes)
  *      → sent_count + reply_count + open_count
- *      sent_at present       → sent
- *      reply_received_at     → reply (legacy direct-reply tracking)
+ *      sent_at present                       → sent
+ *      reply_received_at                     → reply (legacy direct-reply tracking)
+ *      delivery_status = 'opened'            → open  (email-tracking telemetry)
  *   2. lane_carrier_interest (laneId → recurring_lanes, carrierId)
  *      interestStatus available_now/available_next_week → yes
  *      interestStatus not_fit                           → loss
@@ -15,6 +16,10 @@
  *      response.outcome positive (interested_*, booked) → yes / quote when quotedRate set
  *      response.outcome negative (declined, not_qualified, do_not_contact_lane) → loss
  *   4. freight_opportunities.status = 'covered' (audit kind=covered) → cover
+ *   5. email_signals (intent_type, linked_carrier_id, linked_lane_id → recurring_lanes)
+ *      every linked carrier+lane signal           → reply
+ *      capacity_available / *_commitment / lane_offer → yes
+ *      lane_decline / capacity_unavailable / closed_lost_indicator → loss
  *
  * Idempotence: the script first DELETEs every `carrier_lane_outcomes`
  * row in scope (single org if `--org-id=` is set, otherwise all orgs)
@@ -72,6 +77,7 @@ async function backfillOutreachLogs(orgFilter: string | null, counts: BackfillCo
   // recurring lane we can read lane parts from. Direct lane-less sends are
   // skipped — we have no lane signature to attribute them to.
   const rows = await db.execute<{
+    id: string;
     org_id: string;
     matched_carrier_id: string;
     origin: string | null;
@@ -81,8 +87,10 @@ async function backfillOutreachLogs(orgFilter: string | null, counts: BackfillCo
     equipment_type: string | null;
     sent_at: Date | null;
     reply_received_at: Date | null;
+    delivery_status: string | null;
   }>(sql`
     SELECT
+      l.id,
       l.org_id,
       l.matched_carrier_id,
       rl.origin,
@@ -91,7 +99,8 @@ async function backfillOutreachLogs(orgFilter: string | null, counts: BackfillCo
       rl.destination_state,
       rl.equipment_type,
       l.sent_at,
-      l.reply_received_at
+      l.reply_received_at,
+      l.delivery_status
     FROM carrier_outreach_logs l
     JOIN recurring_lanes rl ON rl.id = l.lane_id
     WHERE l.matched_carrier_id IS NOT NULL
@@ -112,6 +121,7 @@ async function backfillOutreachLogs(orgFilter: string | null, counts: BackfillCo
         ...lane,
         event: "sent",
         eventAt: new Date(r.sent_at),
+        eventKey: `outreach-log:${r.id}:sent`,
       });
       counts.sent++;
     }
@@ -122,8 +132,26 @@ async function backfillOutreachLogs(orgFilter: string | null, counts: BackfillCo
         ...lane,
         event: "reply",
         eventAt: new Date(r.reply_received_at),
+        eventKey: `outreach-log:${r.id}:reply`,
       });
       counts.reply++;
+    }
+    // delivery_status='opened' is the only legacy signal we have for opens
+    // (Microsoft Graph open-reporting webhook flips this column). The
+    // sent_at timestamp doubles as the open timestamp here — we don't
+    // record a separate openedAt in carrier_outreach_logs today.
+    if (r.delivery_status === "opened") {
+      await recordCarrierLaneOutcome({
+        orgId: r.org_id,
+        carrierId: r.matched_carrier_id,
+        ...lane,
+        event: "open",
+        eventAt: r.sent_at ? new Date(r.sent_at) : undefined,
+        eventKey: `outreach-log:${r.id}:open`,
+      });
+      // counts.open is not a tracked field on BackfillCounts; we surface
+      // open totals via reply_count's neighbouring open_count column on
+      // the outcomes table itself.
     }
   }
 }
@@ -231,6 +259,96 @@ async function backfillFreightOpportunityResponses(orgFilter: string | null, cou
   }
 }
 
+// Intent buckets for email_signals replay. Mirrors the live producer in
+// emailIntelligenceService — any inbound carrier signal counts as a reply,
+// positive intents bump yes, negative intents bump loss.
+const POSITIVE_INTENTS = new Set([
+  "capacity_available", "soft_commitment", "hard_commitment", "lane_offer",
+  "new_opportunity",
+]);
+const NEGATIVE_INTENTS = new Set([
+  "lane_decline", "capacity_unavailable", "closed_lost_indicator",
+  "service_complaint",
+]);
+
+async function backfillEmailSignals(orgFilter: string | null, counts: BackfillCounts): Promise<void> {
+  // email_signals carries the intent classification per inbound message.
+  // Only signals with BOTH a linked carrier and a linked recurring lane are
+  // attributable to a (carrierId, laneSig) pair — others are skipped.
+  const rows = await db.execute<{
+    id: string;
+    org_id: string;
+    intent_type: string;
+    linked_carrier_id: string;
+    created_at: Date;
+    origin: string;
+    origin_state: string | null;
+    destination: string;
+    destination_state: string | null;
+    equipment_type: string | null;
+  }>(sql`
+    SELECT
+      s.id,
+      m.org_id,
+      s.intent_type,
+      s.linked_carrier_id,
+      s.created_at,
+      rl.origin,
+      rl.origin_state,
+      rl.destination,
+      rl.destination_state,
+      rl.equipment_type
+    FROM email_signals s
+    JOIN email_messages m  ON m.id  = s.message_id
+    JOIN recurring_lanes rl ON rl.id = s.linked_lane_id
+    WHERE s.linked_carrier_id IS NOT NULL
+      AND s.linked_lane_id    IS NOT NULL
+      AND m.direction = 'inbound'
+      AND (${orgFilter}::text IS NULL OR m.org_id = ${orgFilter})
+  `);
+  for (const r of rows.rows) {
+    const lane = {
+      origin: r.origin,
+      originState: r.origin_state,
+      destination: r.destination,
+      destinationState: r.destination_state,
+      equipmentType: r.equipment_type,
+    };
+    const at = r.created_at ? new Date(r.created_at) : undefined;
+    // Every linked carrier signal counts as a substantive reply.
+    await recordCarrierLaneOutcome({
+      orgId: r.org_id,
+      carrierId: r.linked_carrier_id,
+      ...lane,
+      event: "reply",
+      eventAt: at,
+      eventKey: `email-signal:${r.id}:reply`,
+    });
+    counts.reply++;
+    if (POSITIVE_INTENTS.has(r.intent_type)) {
+      await recordCarrierLaneOutcome({
+        orgId: r.org_id,
+        carrierId: r.linked_carrier_id,
+        ...lane,
+        event: "yes",
+        eventAt: at,
+        eventKey: `email-signal:${r.id}:yes`,
+      });
+      counts.yes++;
+    } else if (NEGATIVE_INTENTS.has(r.intent_type)) {
+      await recordCarrierLaneOutcome({
+        orgId: r.org_id,
+        carrierId: r.linked_carrier_id,
+        ...lane,
+        event: "loss",
+        eventAt: at,
+        eventKey: `email-signal:${r.id}:loss`,
+      });
+      counts.loss++;
+    }
+  }
+}
+
 async function backfillCovers(orgFilter: string | null, counts: BackfillCounts): Promise<void> {
   // Cover events live on the audit log (eventType=status_changed,
   // payload.kind='covered'). The carrierId is stored inside the JSON
@@ -279,6 +397,16 @@ async function backfillCovers(orgFilter: string | null, counts: BackfillCounts):
 }
 
 async function clearScope(orgFilter: string | null): Promise<number> {
+  // Wipe both the counter rows AND the per-event-key dedupe ledger in
+  // scope. Failing to clear the ledger would silently suppress every
+  // keyed re-insert during a rebuild (the dedupe CTE inside
+  // recordCarrierLaneOutcome would short-circuit because the ledger
+  // already contains the source-event key from the previous run).
+  // Both tables are org-scoped, so the same orgFilter applies.
+  await db.execute(sql`
+    DELETE FROM carrier_lane_outcome_event_keys
+    WHERE (${orgFilter}::text IS NULL OR org_id = ${orgFilter})
+  `);
   const result = await db.execute<{ id: string }>(sql`
     DELETE FROM carrier_lane_outcomes
     WHERE (${orgFilter}::text IS NULL OR org_id = ${orgFilter})
@@ -312,6 +440,9 @@ export async function runBackfill(orgFilter: string | null = null): Promise<Back
 
   console.log("  → freight_opportunity_audit (covers) …");
   await backfillCovers(orgFilter, counts);
+
+  console.log("  → email_signals …");
+  await backfillEmailSignals(orgFilter, counts);
 
   console.log("[backfill-carrier-lane-outcomes] done", counts);
   // Touch laneSig to keep the import live in tree-shake checks. The helper
