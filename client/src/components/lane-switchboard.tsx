@@ -9,7 +9,7 @@
 // state suggests CTAs to keep the operator productive when nothing
 // matches.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -32,6 +32,7 @@ interface SwitchboardRecurringRow {
   ownerUserId: string | null;
   carriersContactedCount: number | null;
   laneScore: number | null;
+  lastTouchAt: string | null;
 }
 interface SwitchboardLiveRow {
   opportunityId: string;
@@ -130,7 +131,10 @@ export function LaneSwitchboard({ open, onOpenChange }: LaneSwitchboardProps) {
   };
   const goAf = (sig: string) => {
     handleClose();
-    navigate(`/freight?lane=${encodeURIComponent(sig)}`);
+    // Available Freight cockpit lives at /available-freight (see App.tsx
+    // route registration). It consumes ?lane=<sig> to filter; the same
+    // contract LWQ "AF live" cross-link chips already use.
+    navigate(`/available-freight?lane=${encodeURIComponent(sig)}`);
   };
   // Customer Quotes deep-link. We emit the documented lane contract
   // (originCity/originState/destCity/destState/equipment — the keys the
@@ -364,11 +368,11 @@ function Column({
   title, icon, isLoading, empty, testId, children,
 }: {
   title: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
   isLoading: boolean;
-  empty: React.ReactNode;
+  empty: ReactNode;
   testId: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <div className="border-r last:border-r-0 flex flex-col min-h-[220px] max-h-[60vh] overflow-hidden" data-testid={testId}>

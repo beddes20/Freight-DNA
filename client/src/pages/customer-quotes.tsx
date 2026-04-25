@@ -283,6 +283,18 @@ function filtersFromUrl(search: string): Filters {
   if (p.get("activeOnly") === "true") f.activeOnly = true;
   if (p.get("lostOnly") === "true") f.lostOnly = true;
   if (p.get("expiringOnly") === "true") f.expiringOnly = true;
+
+  // Task #652 — Lane Switchboard deep-link contract. The switchboard
+  // sends explicit lane fields (originCity / originState / destCity /
+  // destState) per the documented contract. If laneSearch wasn't already
+  // supplied, synthesize one so the lane is visibly prefilled. We use
+  // "ORIGIN DEST" — the same shape this page's lane chips emit and the
+  // shape the page's free-text input matches against.
+  if (!f.laneSearch) {
+    const oc = p.get("originCity");
+    const dc = p.get("destCity");
+    if (oc && dc) f.laneSearch = `${oc} ${dc}`;
+  }
   return f;
 }
 function trendIcon(v: number): JSX.Element {
