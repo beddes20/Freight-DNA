@@ -4582,4 +4582,58 @@ export async function runMigrations() {
   } finally {
     clientCarrierOverrides.release();
   }
+
+  // ── Task #639: Today queue — landing pref column + snooze table ────────────
+  // `users.default_to_today_queue` drives the "/" → "/today" redirect at the
+  // top of <Router/>; defaults to TRUE so the new queue becomes the new home,
+  // and reps can opt back to the classic dashboard via the in-app toggle.
+  // Idempotent ADD COLUMN IF NOT EXISTS — required by the schema-drift guard
+  // alongside the column declaration in shared/schema.ts.
+  const clientTodayLandingCol = await pool.connect();
+  try {
+    await clientTodayLandingCol.query(`
+      ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS default_to_today_queue BOOLEAN NOT NULL DEFAULT true
+    `);
+    console.log("[migrations] users.default_to_today_queue ensured (Task #639)");
+  } catch (err) {
+    console.error("[migrations] users.default_to_today_queue migration error:", err);
+  } finally {
+    clientTodayLandingCol.release();
+  }
+
+  // `today_queue_snoozes` — per-user, per-source-item "Done for now" rows used
+  // by the unified Today queue aggregator to filter out items the rep has
+  // explicitly parked. Composite uniqueness on (user_id, source, source_id)
+  // means re-snoozing the same row is an upsert (extends the wake time).
+  // Required by the schema-drift guard alongside the Drizzle table in
+  // shared/schema.ts.
+  const clientTodaySnoozes = await pool.connect();
+  try {
+    await clientTodaySnoozes.query(`
+      CREATE TABLE IF NOT EXISTS today_queue_snoozes (
+        id            varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id        varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id       varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        source        text NOT NULL,
+        source_id     text NOT NULL,
+        snoozed_until timestamp NOT NULL,
+        reason        text,
+        created_at    timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientTodaySnoozes.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS today_queue_snoozes_user_item_uniq
+        ON today_queue_snoozes (user_id, source, source_id)
+    `);
+    await clientTodaySnoozes.query(`
+      CREATE INDEX IF NOT EXISTS today_queue_snoozes_org_user_idx
+        ON today_queue_snoozes (org_id, user_id)
+    `);
+    console.log("[migrations] today_queue_snoozes ensured (Task #639)");
+  } catch (err) {
+    console.error("[migrations] today_queue_snoozes migration error:", err);
+  } finally {
+    clientTodaySnoozes.release();
+  }
 }

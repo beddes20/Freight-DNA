@@ -195,6 +195,10 @@ export const users = pgTable("users", {
   emailSignature: text("email_signature"),
   clerkUserId: text("clerk_user_id").unique(),
   valueiqLandingDisabled: boolean("valueiq_landing_disabled").notNull().default(false),
+  // Task #639 — Today queue is the new default landing page. Reps can opt
+  // back to the classic dashboard via a per-user toggle; this flag drives
+  // the "/" → "/today" redirect at the top of <Router/>.
+  defaultToTodayQueue: boolean("default_to_today_queue").notNull().default(true),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({
@@ -5547,3 +5551,36 @@ export const insertQuoteSenderMappingSchema = createInsertSchema(quoteSenderMapp
 });
 export type InsertQuoteSenderMapping = z.infer<typeof insertQuoteSenderMappingSchema>;
 export type QuoteSenderMapping = typeof quoteSenderMappings.$inferSelect;
+
+// ── Today Queue Snoozes (Task #639) ───────────────────────────────────────────
+// Per-user, per-source-item "Done for now" snoozes for the unified Today queue.
+// `source` mirrors the TodayQueueSource union ("lwq" | "freight_opp" | "hot_reply"
+// | "quote_sla"); `sourceId` is the underlying item id from that surface
+// (lane id, opp id, thread id, quote id). Composite uniqueness on
+// (org, user, source, source_id) lets us upsert by re-snoozing the same row.
+export const TODAY_QUEUE_SOURCES = ["lwq", "freight_opp", "hot_reply", "quote_sla"] as const;
+export type TodayQueueSource = typeof TODAY_QUEUE_SOURCES[number];
+
+export const todayQueueSnoozes = pgTable(
+  "today_queue_snoozes",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    source: text("source").notNull(),
+    sourceId: text("source_id").notNull(),
+    snoozedUntil: timestamp("snoozed_until").notNull(),
+    reason: text("reason"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    uniqUserItem: uniqueIndex("today_queue_snoozes_user_item_uniq").on(t.userId, t.source, t.sourceId),
+    orgUserIdx: index("today_queue_snoozes_org_user_idx").on(t.orgId, t.userId),
+  }),
+);
+export const insertTodayQueueSnoozeSchema = createInsertSchema(todayQueueSnoozes).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertTodayQueueSnooze = z.infer<typeof insertTodayQueueSnoozeSchema>;
+export type TodayQueueSnooze = typeof todayQueueSnoozes.$inferSelect;

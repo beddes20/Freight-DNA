@@ -862,6 +862,9 @@ export default function Dashboard() {
   return (
     <div className="flex flex-col gap-4 sm:gap-6 p-3 sm:p-6">
 
+      {/* Task #639 — Today queue invitation banner */}
+      <TryTodayQueueBanner />
+
       {/* Daily Briefing Popup — hidden for management roles via skip flag */}
       {!briefingDismissed && briefingData && !briefingData.skip && (
         <div className="flex items-start gap-3 rounded-lg border border-indigo-200 bg-indigo-50 dark:border-indigo-800 dark:bg-indigo-950/40 p-4" data-testid="banner-daily-briefing">
@@ -2656,6 +2659,63 @@ export default function Dashboard() {
         prefill={forcedFocusPrefill}
       />
 
+    </div>
+  );
+}
+
+// Task #639 — invitation banner shown on the classic dashboard. Lets reps
+// switch their landing page to the new Today queue without leaving the page.
+function TryTodayQueueBanner(): JSX.Element | null {
+  const { data, isLoading } = useQuery<{ defaultToTodayQueue: boolean }>({
+    queryKey: ["/api/users/me/landing-preference"],
+    staleTime: 60_000,
+  });
+  const { toast } = useToast();
+  const [, navigate] = useLocation();
+
+  const setPref = useMutation({
+    mutationFn: async (next: boolean) =>
+      apiRequest("PATCH", "/api/users/me/landing-preference", { defaultToTodayQueue: next }),
+    onSuccess: (_d, next) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users/me/landing-preference"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      toast({
+        title: next ? "Today is now your home" : "Classic dashboard restored",
+      });
+      if (next) navigate("/today");
+    },
+  });
+
+  if (isLoading || !data) return null;
+  // Don't nag reps who have already opted in — they only see this banner
+  // when they're on the classic dashboard with the old preference.
+  if (data.defaultToTodayQueue === true) return null;
+
+  return (
+    <div
+      className="flex items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/40 px-4 py-2.5"
+      data-testid="banner-try-today-queue"
+    >
+      <div className="flex items-center gap-2 text-sm">
+        <span className="font-medium text-amber-900 dark:text-amber-100">Try the new Today queue</span>
+        <span className="text-xs text-amber-800/80 dark:text-amber-200/80">
+          One prioritized list — replies, hot LWQ lanes, urgent freight, SLA quotes.
+        </span>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <Link href="/today" className="text-xs underline text-amber-900 dark:text-amber-100" data-testid="link-preview-today">
+          Preview
+        </Link>
+        <Button
+          size="sm"
+          variant="default"
+          onClick={() => setPref.mutate(true)}
+          disabled={setPref.isPending}
+          data-testid="button-make-today-home"
+        >
+          Make Today my home
+        </Button>
+      </div>
     </div>
   );
 }

@@ -69,6 +69,7 @@ import RepScorecardPage from "@/pages/rep-scorecard";
 import LmCheckinHistoryPage from "@/pages/lm-checkin-history";
 import { PortletErrorBoundary } from "@/components/portlet-error-boundary";
 import LaneWorkQueuePage from "@/pages/lane-work-queue";
+import TodayQueuePage from "@/pages/today";
 import MyProcurementPage from "@/pages/my-procurement";
 import ConversationsPage from "@/pages/conversations";
 import ContactSuggestionsPage from "@/pages/contact-suggestions";
@@ -144,10 +145,27 @@ function PipelineAnalyticsRedirect() {
   return null;
 }
 
+// Task #639 — landing redirect.
+//
+// New default for "/" is the Today queue, but each user can opt back to
+// the classic dashboard via PATCH /api/users/me/landing-preference. The
+// flag rides on the cached /api/auth/me payload so we don't add an extra
+// round-trip; the toggle invalidates that key after a write.
+//
+// The redirect runs only when the path is exactly "/" so that direct
+// links to /dashboard always show the dashboard regardless of the pref.
+function HomeLandingRouter(): JSX.Element {
+  const { user } = useAuth();
+  const prefersToday = (user as any)?.defaultToTodayQueue !== false;
+  return prefersToday ? <TodayQueuePage /> : <Dashboard />;
+}
+
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={Dashboard} />
+      <Route path="/" component={HomeLandingRouter} />
+      <Route path="/today" component={TodayQueuePage} />
+      <Route path="/dashboard" component={Dashboard} />
       <Route path="/customers" component={Customers} />
       <Route path="/customer-quotes" component={CustomerQuotesPage} />
       <Route path="/companies/:id" component={CompanyDetail} />
