@@ -67,9 +67,6 @@ const SelectScrollDownButton = React.forwardRef<
 SelectScrollDownButton.displayName =
   SelectPrimitive.ScrollDownButton.displayName
 
-// Task #650 — accept optional `container` prop forwarded to the Radix
-// Portal so consumers can render select content inside their own themed
-// subtree. Backward compatible: omitted → defaults to body.
 const SelectContent = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Content> & {

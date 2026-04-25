@@ -318,23 +318,10 @@ function KpiCard({ label, value, sub, trend, onClick, testId }: {
 }
 
 // ---------- Page-scoped theme toggle ----------
-// Defaults to "light" on first visit; restores the rep's last choice on
-// subsequent visits via localStorage. Toggling flips the global `dark` class
-// on <html> (matching tailwind's `darkMode: ["class"]` setup), and the
-// previous global state is restored when the page unmounts so other pages
-// aren't affected.
+// Persists the rep's choice via the `cq-theme` localStorage key. The
+// theme is applied as a `light`/`dark` class on the page-root wrapper
+// only, so the rest of the app is never affected.
 const CQ_THEME_KEY = "cq-theme";
-// Task #650 — page-scoped theme. We DELIBERATELY do NOT touch
-// `document.documentElement.classList` here. The previous implementation
-// flipped the global `dark` class on mount and restored it on unmount,
-// which produced a visible flicker on every navigation in or out of the
-// page (the rest of the app briefly re-rendered in the wrong mode). The
-// page now applies its preferred theme via a wrapper class on the page
-// root (see the page render below). CSS variables in `index.css` are
-// defined on both `:root` and `.dark`, both of which match a wrapper
-// element, so the cascade scopes correctly to the page subtree without
-// mutating any global state. The `cq-theme` localStorage key is
-// preserved so existing per-rep preferences continue to work.
 function useCustomerQuotesTheme(): { theme: "light" | "dark"; toggle: () => void } {
   const [theme, setTheme] = useState<"light" | "dark">(() => {
     if (typeof window === "undefined") return "light";
@@ -681,32 +668,17 @@ function CustomerQuotesPageInner(): JSX.Element {
   const allSelectedAreUnknown = selectedQuotes.length > 0
     && selectedQuotes.every(q => unknownCustomerIds.has(q.customerId));
 
-  // Task #650 — Portal target for overlays opened on this page (Sheet,
-  // Dialog, AlertDialog, Popover, Select). Anchoring the portal inside
-  // the themed wrapper means the portaled content inherits the page's
-  // light/dark CSS variables instead of the global `<html>` theme. We
-  // use state (not a ref) so React re-renders the overlays once the
-  // div is mounted and the container is no longer null.
+  // Portal target for Radix overlays opened on this page. Stored in
+  // state so consumers re-render once the div mounts.
   const [overlayPortal, setOverlayPortal] = useState<HTMLDivElement | null>(null);
 
   return (
-    // Task #650 — explicit `light` or `dark` class lives on this page-root
-    // wrapper so the theme cascades only to descendants. The wrapper class
-    // unconditionally re-asserts the appropriate token set (see
-    // `:root, .light` and `.dark` in index.css), which means a Customer
-    // Quotes "light" preference still renders light even when the global
-    // `<html>` already has `dark` applied — CSS variable inheritance from
-    // the ancestor is broken by the explicit class on this element.
     <div
       className={`flex flex-col h-full bg-background text-foreground ${theme === "dark" ? "dark" : "light"}`}
       style={{ fontFamily: "Inter, sans-serif" }}
       data-cq-theme={theme}
       data-testid="page-customer-quotes"
     >
-      {/* Task #650 — overlay portal target. Lives inside the themed
-          wrapper so portaled Sheet/Dialog/Popover/Select content inherits
-          the page-scoped CSS variables. The Provider exposes the same
-          DOM node to descendant helper components via context. */}
       <div ref={setOverlayPortal} data-testid="cq-overlay-portal" />
       <CustomerQuotesPortalContext.Provider value={overlayPortal}>
       {/* Header */}

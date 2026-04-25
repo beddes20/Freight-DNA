@@ -3,12 +3,8 @@
 @tailwind utilities;
 
 /* LIGHT MODE - Professional blue-gray CRM theme.
-   `:root` defines the base palette; the `.light` class re-asserts the same
-   values so a subtree wrapper can FORCE light tokens even when an ancestor
-   has `.dark` applied (Task #650 — page-scoped Customer Quotes theme that
-   must override the global theme without mutating <html>). Custom-property
-   inheritance means a wrapper without any class inherits ancestor values;
-   the explicit `.light` selector breaks that inheritance. */
+   `.light` re-asserts the same tokens so a subtree wrapper can force
+   light vars even when an ancestor has `.dark` applied. */
 :root, .light {
   --button-outline: rgba(0,0,0, .10);
   --badge-outline: rgba(0,0,0, .05);
