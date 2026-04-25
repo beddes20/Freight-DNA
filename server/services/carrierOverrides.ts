@@ -185,7 +185,8 @@ export async function getCarrierOverridesForLane(
   orgId: string,
   laneSignature: string,
 ): Promise<Map<string, CarrierOverrideAggregate>> {
-  if (!orgId || !laneSignature) return new Map();
+  const out = new Map<string, CarrierOverrideAggregate>();
+  if (!orgId || !laneSignature) return out;
 
   interface AggregateRow {
     carrierId: string;
@@ -194,41 +195,49 @@ export async function getCarrierOverridesForLane(
     lastNegativeReason: string | null;
     lastOccurredAt: string | Date | null;
   }
-  const result = await db.execute<AggregateRow>(sql`
-    SELECT
-      carrier_id                                                 AS "carrierId",
-      COUNT(*) FILTER (WHERE reason_code IN ('bad_service','out_of_equipment','wont_run_lane','other'))
-                                                                 AS "negativeCount",
-      COUNT(*) FILTER (WHERE reason_code = 'better_fit')         AS "positiveCount",
-      (
-        SELECT reason_code FROM carrier_overrides co2
-        WHERE  co2.org_id = co.org_id
-          AND  co2.carrier_id = co.carrier_id
-          AND  co2.lane_signature = co.lane_signature
-          AND  co2.reason_code IN ('bad_service','out_of_equipment','wont_run_lane','other')
-        ORDER BY co2.occurred_at DESC
-        LIMIT 1
-      )                                                          AS "lastNegativeReason",
-      MAX(occurred_at)                                           AS "lastOccurredAt"
-    FROM carrier_overrides co
-    WHERE org_id = ${orgId} AND lane_signature = ${laneSignature}
-    GROUP BY carrier_id, org_id, lane_signature
-  `);
+  // Soft-fail by design: the ranker is on the hot path and a transient
+  // DB hiccup on this read should degrade to "no override prior" rather
+  // than break the whole rank pass. Mirrors the resilience pattern in
+  // getCarrierLaneOutcomesForLane().
+  try {
+    const result = await db.execute<AggregateRow>(sql`
+      SELECT
+        carrier_id                                                 AS "carrierId",
+        COUNT(*) FILTER (WHERE reason_code IN ('bad_service','out_of_equipment','wont_run_lane','other'))
+                                                                   AS "negativeCount",
+        COUNT(*) FILTER (WHERE reason_code = 'better_fit')         AS "positiveCount",
+        (
+          SELECT reason_code FROM carrier_overrides co2
+          WHERE  co2.org_id = co.org_id
+            AND  co2.carrier_id = co.carrier_id
+            AND  co2.lane_signature = co.lane_signature
+            AND  co2.reason_code IN ('bad_service','out_of_equipment','wont_run_lane','other')
+          ORDER BY co2.occurred_at DESC
+          LIMIT 1
+        )                                                          AS "lastNegativeReason",
+        MAX(occurred_at)                                           AS "lastOccurredAt"
+      FROM carrier_overrides co
+      WHERE org_id = ${orgId} AND lane_signature = ${laneSignature}
+      GROUP BY carrier_id, org_id, lane_signature
+    `);
 
-  const rows = result.rows ?? [];
-
-  const out = new Map<string, CarrierOverrideAggregate>();
-  for (const r of rows) {
-    out.set(r.carrierId, {
-      carrierId: r.carrierId,
-      laneSignature,
-      negativeCount: Number(r.negativeCount) || 0,
-      positiveCount: Number(r.positiveCount) || 0,
-      lastNegativeReason: isCarrierOverrideReasonCode(r.lastNegativeReason)
-        ? (r.lastNegativeReason as CarrierOverrideReasonCode)
-        : null,
-      lastOccurredAt: r.lastOccurredAt ? new Date(r.lastOccurredAt) : null,
-    });
+    for (const r of result.rows ?? []) {
+      out.set(r.carrierId, {
+        carrierId: r.carrierId,
+        laneSignature,
+        negativeCount: Number(r.negativeCount) || 0,
+        positiveCount: Number(r.positiveCount) || 0,
+        lastNegativeReason: isCarrierOverrideReasonCode(r.lastNegativeReason)
+          ? (r.lastNegativeReason as CarrierOverrideReasonCode)
+          : null,
+        lastOccurredAt: r.lastOccurredAt ? new Date(r.lastOccurredAt) : null,
+      });
+    }
+  } catch (err) {
+    console.warn(
+      "[carrier-overrides] read failed (non-fatal):",
+      err instanceof Error ? err.message : err,
+    );
   }
   return out;
 }
