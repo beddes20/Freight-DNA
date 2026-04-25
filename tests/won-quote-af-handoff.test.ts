@@ -415,6 +415,34 @@ async function main(): Promise<void> {
     assert(opps[0].companyId === companyRes.rows[0].id, `AF opp companyId should match the auto-created company`);
   });
 
+  // (h) Create-time-won path: a quote can be POSTed already in a "won" state
+  //     (e.g. manual rep entry of a closed deal, CSV backfill). The AF
+  //     handoff must run from createQuote too — not only from updateQuote
+  //     — so the create-path behavior contract is preserved.
+  await runTest("Quote created already in 'won' state with same-day pickup also produces an AF row", async () => {
+    const fix = await createCustomerAndCompany(orgId);
+    const requestDate = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+    const { status, json } = await apiPost("/api/customer-quotes/quote", cookie, {
+      customerId: fix.customerId,
+      originCity: "Chicago", originState: "IL",
+      destCity: "Dallas", destState: "TX",
+      equipment: "Dry Van",
+      quotedAmount: 3100,
+      carrierPaid: 2400,
+      outcomeStatus: "won", // ← created already won
+      source: "manual",
+      requestDate,
+    });
+    assert(status === 201, `Create-as-won failed: ${status}`);
+    const quoteId: string | undefined = json?.opp?.id ?? json?.id ?? json?.quote?.id;
+    assert(!!quoteId, `No quote id in create-as-won response`);
+    track("quote_opportunities", quoteId!);
+    const opps = await afOppsForQuote(orgId, quoteId!);
+    assert(opps.length === 1, `Expected 1 AF opp from create-as-won path, got ${opps.length}`);
+    assert(opps[0].sourceRef?.type === "won_quote", `sourceRef.type should be won_quote`);
+    assert(opps[0].companyId === fix.companyId, `companyId should match the resolved CRM company`);
+  });
+
   // (e) Org setting OFF → handoff is short-circuited.
   await runTest("Org setting auto_won_quote_af_handoff = false short-circuits the AF handoff", async () => {
     const toggleOff = await apiPut("/api/customer-quotes/settings/auto-af-handoff", cookie, { enabled: false });
