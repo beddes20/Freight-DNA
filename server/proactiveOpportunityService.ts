@@ -661,6 +661,10 @@ export async function generateOpportunitiesForCompany(
         // pattern as bench so we can hydrate the chip popover without adding
         // a column.
         reasons: row.ranked.reasons ?? [],
+        // Cross-tab UX (option C) — carrier-asserted lane preference. Persisted
+        // on JSONB (mirrors bench/reasons) so the AF cockpit chip can render a
+        // "claimed" pill without a schema migration.
+        claimed: row.ranked.claimed,
       },
       excludedReason: row.excludedReason,
       outreachLogId: null,
@@ -765,6 +769,8 @@ export async function ensureShortlistRanked(
       // pattern as bench so we can hydrate the chip popover without adding
       // a column.
       reasons: row.ranked.reasons ?? [],
+      // Cross-tab UX (option C) — see ranker comment.
+      claimed: row.ranked.claimed,
     },
     excludedReason: row.excludedReason,
     outreachLogId: null,

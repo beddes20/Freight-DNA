@@ -2,9 +2,16 @@
 //
 // Two render modes share one component so the visual treatment, hover,
 // and deep-link behavior stay in sync between surfaces.
+//
+// Cross-tab UX (option F) — every chip is wrapped in a Tooltip that
+// previews its top context fields on hover, so a rep can decide whether
+// the navigation is worth it without paying the click+route cost. The
+// data shown comes entirely from props the chip already receives — no
+// extra fetch.
 
 import { Link } from "wouter";
 import { Inbox, Truck } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 export interface LwqContextChipData {
   laneId: string;
@@ -69,17 +76,49 @@ export function LwqContextChip({
   if (data.replyCount > 0) {
     parts.push(`${data.replyCount} repl${data.replyCount === 1 ? "y" : "ies"}`);
   }
-  return (
+  const link = (
     <Link
       href={`/lanes/work-queue?laneId=${encodeURIComponent(data.laneId)}`}
       onClick={e => e.stopPropagation()}
       className="inline-flex items-center gap-1 text-[10px] py-0.5 px-2 rounded-full border border-blue-500/40 bg-blue-500/10 text-blue-400 hover:border-blue-500 hover:bg-blue-500/20 transition-colors"
       data-testid={testId ?? "chip-lwq-context"}
-      title="Open this lane in the Lane Work Queue"
     >
       <Inbox className="w-3 h-3 shrink-0" />
       <span className="truncate">In your LWQ — {parts.join(" · ")}</span>
     </Link>
+  );
+  return (
+    <TooltipProvider delayDuration={200}>
+      <Tooltip>
+        <TooltipTrigger asChild>{link}</TooltipTrigger>
+        <TooltipContent
+          side="top"
+          align="start"
+          className="max-w-xs"
+          data-testid={`${testId ?? "chip-lwq-context"}-hover`}
+        >
+          <div className="space-y-1 text-xs">
+            <div className="font-semibold text-foreground">In your Lane Work Queue</div>
+            <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-0.5 text-muted-foreground">
+              <span>Carriers contacted</span>
+              <span className="text-foreground" data-testid="hover-lwq-contacted">
+                {data.contactedCount}
+              </span>
+              <span>Replies</span>
+              <span className="text-foreground" data-testid="hover-lwq-replies">
+                {data.replyCount}
+                {data.hotReplyCount > 0 ? ` (${data.hotReplyCount} hot)` : ""}
+              </span>
+              <span>Last touch</span>
+              <span className="text-foreground" data-testid="hover-lwq-last-touch">
+                {age ?? "—"}
+              </span>
+            </div>
+            <div className="pt-1 text-[10px] text-muted-foreground">Click to open in LWQ</div>
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 
@@ -97,16 +136,51 @@ export function LiveOppsChip({
   if (revenue) parts.push(`${revenue} combined`);
   if (data.totalLoads !== data.count) parts.push(`${data.totalLoads} loads`);
   if (pickup) parts.push(`pickup ${pickup}`);
-  return (
+  const link = (
     <Link
       href={`/available-freight?lane=${encodeURIComponent(data.laneSignature)}`}
       onClick={e => e.stopPropagation()}
       className="inline-flex items-center gap-1 text-[10px] py-0.5 px-2 rounded-full border border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:border-emerald-500 hover:bg-emerald-500/20 transition-colors"
       data-testid={testId ?? "chip-live-opps"}
-      title="Open these opportunities in Available Freight"
     >
       <Truck className="w-3 h-3 shrink-0" />
       <span className="truncate">{parts.join(" · ")}</span>
     </Link>
+  );
+  return (
+    <TooltipProvider delayDuration={200}>
+      <Tooltip>
+        <TooltipTrigger asChild>{link}</TooltipTrigger>
+        <TooltipContent
+          side="top"
+          align="start"
+          className="max-w-xs"
+          data-testid={`${testId ?? "chip-live-opps"}-hover`}
+        >
+          <div className="space-y-1 text-xs">
+            <div className="font-semibold text-foreground">Live in Available Freight</div>
+            <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-0.5 text-muted-foreground">
+              <span>Open opps</span>
+              <span className="text-foreground" data-testid="hover-af-count">
+                {data.count}
+              </span>
+              <span>Total loads</span>
+              <span className="text-foreground" data-testid="hover-af-totalloads">
+                {data.totalLoads}
+              </span>
+              <span>Combined revenue</span>
+              <span className="text-foreground" data-testid="hover-af-revenue">
+                {revenue ?? "—"}
+              </span>
+              <span>Next pickup</span>
+              <span className="text-foreground" data-testid="hover-af-pickup">
+                {pickup ?? "—"}
+              </span>
+            </div>
+            <div className="pt-1 text-[10px] text-muted-foreground">Click to open in Available Freight</div>
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }

@@ -32,6 +32,7 @@ import multer from "multer";
 import XLSX from "xlsx";
 import { storage, db, CARRIER_DAILY_BUDGET_CONFIG } from "../storage";
 import { requireAuth, getCurrentUser } from "../auth";
+import { publish as publishLiveSync } from "../services/liveSync";
 import { rankCarriersForLane, isHighFrequencyLane, buildHighFrequencyIndex, isHighFrequencyLaneFromIndex, HIGH_FREQUENCY_CONFIG } from "../carrierRankingService";
 import { runRecurringLaneEngineForOrg, LANE_CONFIG } from "../recurringLaneCapacityEngine";
 import { scoreAllEligibleLanes, scoreLane } from "../laneScoringService";
@@ -1192,6 +1193,11 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     }
 
     const updated = await storage.updateRecurringLane(req.params.id, updates);
+
+    // Cross-tab UX (option A) — owner/preferred-program changes affect the
+    // LWQ work queue and (for resolved lanes) NBA dashboards. Notify other
+    // tabs so they refetch without waiting for window focus.
+    publishLiveSync(user.organizationId, "recurring_lane", req.params.id);
 
     // Resolve linked NBA cards so they leave users' dashboards
     if (preferredProgramToggled) {
@@ -2637,6 +2643,11 @@ Rules for suggestions:
       deliveryStatus: "sent",
       direction: "outbound",
     });
+
+    // Cross-tab UX (option A) — manual outreach logging changes the LWQ
+    // contact-lock status and the per-carrier activity tab. Hint both.
+    publishLiveSync(user.organizationId, "carrier_outreach", req.params.laneId);
+    publishLiveSync(user.organizationId, "recurring_lane", req.params.laneId);
 
     // First upsert bench entries so the count reflects real distinct carriers contacted
     const now = new Date().toISOString();

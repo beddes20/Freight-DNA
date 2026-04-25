@@ -30,7 +30,9 @@ import {
   laneSig,
   type LwqLaneContext,
 } from "../laneCrossLinkService";
+import { getCarrierCoverableLanes } from "../services/carrierCoverableLanes";
 import { db } from "../storage";
+import { publish as publishLiveSync } from "../services/liveSync";
 
 function orgId(req: Express.Request): string {
   return (req as any).session?.organizationId as string;
@@ -277,6 +279,7 @@ export async function buildCockpitRow(
         benchWins?: number;
         reasons?: string[];
         suppressionReasons?: string[];
+        claimed?: boolean;
       };
       return {
         opportunityCarrierId: row.id,
@@ -299,6 +302,9 @@ export async function buildCockpitRow(
         // the cockpit chip popover. Both are bounded plain-string arrays.
         reasons: Array.isArray(snap.reasons) ? snap.reasons : [],
         suppressionReasons: Array.isArray(snap.suppressionReasons) ? snap.suppressionReasons : [],
+        // Cross-tab UX (option C) — carrier-asserted lane preference. Drives
+        // the small "claimed" pill rendered next to the carrier badge.
+        claimed: !!snap.claimed,
       };
     }),
   );
@@ -461,7 +467,7 @@ export function registerFreightCockpitRoutes(app: Express) {
       if (!org) return res.status(400).json({ error: "No organization" });
 
       const user = await getCurrentUser(req);
-      const { companyId, status, limit = "100", grouping = "none", sort = "urgency", lane: laneFilter } = req.query as Record<string, string>;
+      const { companyId, status, limit = "100", grouping = "none", sort = "urgency", lane: laneFilter, carrierId: carrierFilter } = req.query as Record<string, string>;
       const statusList = (status ?? "")
         .split(",")
         .map(s => s.trim())
@@ -520,9 +526,31 @@ export function registerFreightCockpitRoutes(app: Express) {
       });
 
       // Optional `?lane=<sig>` deep-link filter — used by LWQ chip → AF.
-      const items = laneFilter
+      let items = laneFilter
         ? enriched.filter(i => i.laneSignature === laneFilter)
         : enriched;
+
+      // Optional `?carrierId=<id>` deep-link filter — Carrier Hub → AF.
+      // Keeps only opportunities the carrier "could cover" (claimed lanes
+      // OR historical load_fact lanes). Falls through silently if the
+      // carrier was not found so the URL never produces a confusing
+      // empty cockpit because of a typo'd ID.
+      if (carrierFilter) {
+        try {
+          const lookup = await getCarrierCoverableLanes(org, carrierFilter);
+          if (lookup) {
+            items = items.filter(i => lookup.matches({
+              origin: i.opportunity.origin,
+              originState: i.opportunity.originState,
+              destination: i.opportunity.destination,
+              destinationState: i.opportunity.destinationState,
+              equipmentType: i.opportunity.equipmentType,
+            }));
+          }
+        } catch (err) {
+          console.error("[freight-cockpit] carrier coverable filter error:", err);
+        }
+      }
 
       // Re-sort per request (the storage layer already sorts by urgencyScore desc;
       // the cockpit's "urgency" sort uses the just-recomputed score).
@@ -890,6 +918,11 @@ export function registerFreightCockpitRoutes(app: Express) {
         }
       }
 
+      // Cross-tab UX (option A) — bulk-action mutates one or more opps;
+      // a single org-wide hint is enough to nudge open AF tabs to refetch.
+      // Per-opp keys are intentionally omitted (the UI invalidates the list
+      // query, not individual rows).
+      if (results.some(r => r.ok)) publishLiveSync(org, "freight_opportunity");
       res.json({ action, results });
     } catch (err) {
       console.error("[freight-cockpit] bulk error:", err);

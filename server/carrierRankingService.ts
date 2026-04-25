@@ -19,8 +19,8 @@ import type { IStorage } from "./storage";
 import { COVERAGE_THRESHOLDS, shouldUseIncumbentFirstFlow } from "./laneCoverageService";
 import { cityDistanceMiles } from "./cityCoordinates";
 import { db } from "./storage";
-import { loadFact } from "@shared/schema";
-import { and, eq, isNull, ne, or, sql as sqlOp } from "drizzle-orm";
+import { loadFact, carrierClaimedLanes } from "@shared/schema";
+import { and, eq, inArray, isNull, ne, or, sql as sqlOp } from "drizzle-orm";
 import { findCarrierContactLocks, formatLockReason, type ContactLock } from "./carrierContactLocks";
 import { formatLaneDisplay } from "./laneOutreachEmailBuilder";
 import { getCarrierLaneOutcomesForLane, carrierLaneOutcomePrior } from "./services/carrierLaneOutcomes";
@@ -460,6 +460,14 @@ export interface RankedCarrier {
   isIncumbent: boolean;                // true if this carrier is an incumbent for a stable lane
   incumbentRank: number | null;        // 1-based rank among incumbents (null if not incumbent)
   isDoNotUse: boolean;                 // true if carrier status is do_not_use or tags include do_not_use/no_use
+  /**
+   * Cross-tab UX (option C) — true when the carrier has a `carrier_claimed_lanes`
+   * row whose state-pair (and equipment, if specified) matches this lane and the
+   * `lane_type` is NOT `avoid`. Carrier-asserted preference outranks plain
+   * regional fit because it represents the carrier explicitly saying "we want
+   * loads on this corridor". Surfaces as a "claimed" pill on AF cockpit chips.
+   */
+  claimed: boolean;
   // ── Ranking transparency ──────────────────────────────────────────────────
   exactLaneLoads: number;              // loads on exact city pair
   nearbyLaneLoads: number;             // loads within NEARBY_RADIUS_MILES of both lane endpoints
@@ -1657,6 +1665,7 @@ export async function rankCarriersForLane(
       isIncumbent,
       incumbentRank,
       isDoNotUse,
+      claimed: false, // populated below by claimed-lane lookup pass (option C)
       exactLaneLoads: hist?.exactLoads ?? 0,
       nearbyLaneLoads: hist?.nearbyLoads ?? 0,
       statePairLoads: hist?.statePairLoads ?? 0,
@@ -1841,6 +1850,9 @@ export async function rankCarriersForLane(
       isIncumbent: isIncumbentHist,
       incumbentRank: incumbentRankHist,
       isDoNotUse: false,
+      // History-only carriers have no carrierId so they can't be in
+      // carrier_claimed_lanes — claimed flag stays false.
+      claimed: false,
       exactLaneLoads: hist.exactLoads,
       nearbyLaneLoads: hist.nearbyLoads,
       statePairLoads: hist.statePairLoads,
@@ -1964,6 +1976,72 @@ export async function rankCarriersForLane(
     }));
   }
 
+  // ── Cross-tab UX (option C) — Claimed-lane boost ────────────────────────────
+  // Carriers can self-declare lanes they want to run via Carrier Hub
+  // (`carrier_claimed_lanes`, `lane_type='prefer'`). When a candidate's claim
+  // matches this lane's state-pair (and equipment, if specified on the claim),
+  // we (a) bump fitScore by CLAIMED_LANE_BOOST, (b) flip `claimed=true` so the
+  // AF cockpit chip can render a "claimed" pill, and (c) inject a plain-language
+  // reason. The boost is small enough that strong history still wins, but it
+  // breaks ties in favor of the carrier the customer-facing rep already knows
+  // wants this freight.
+  const CLAIMED_LANE_BOOST = 8;
+  const catalogCarrierIdsForClaim = ranked.flatMap(r => r.carrierId ? [r.carrierId] : []);
+  if (catalogCarrierIdsForClaim.length > 0) {
+    try {
+      const claimRows = await db
+        .select({
+          carrierId: carrierClaimedLanes.carrierId,
+          originState: carrierClaimedLanes.originState,
+          destState: carrierClaimedLanes.destState,
+          equipment: carrierClaimedLanes.equipment,
+          laneType: carrierClaimedLanes.laneType,
+        })
+        .from(carrierClaimedLanes)
+        .where(inArray(carrierClaimedLanes.carrierId, catalogCarrierIdsForClaim));
+
+      const laneOriginStateNorm = normStr(lane.originState ?? "");
+      const laneDestStateNorm = normStr(lane.destinationState ?? "");
+      const laneEquipNorm = normStr(lane.equipmentType ?? "");
+      const claimedCarrierIds = new Set<string>();
+      for (const row of claimRows) {
+        if (normStr(row.laneType ?? "") === "avoid") continue;
+        const oState = normStr(row.originState ?? "");
+        const dState = normStr(row.destState ?? "");
+        // State-pair must match (we don't loosen further — state coverage is
+        // the carrier-asserted unit of preference). Equipment is optional on
+        // the claim row; when present it must match the lane's equipment.
+        if (!oState || !dState) continue;
+        if (laneOriginStateNorm && oState !== laneOriginStateNorm) continue;
+        if (laneDestStateNorm && dState !== laneDestStateNorm) continue;
+        const claimEquip = normStr(row.equipment ?? "");
+        if (claimEquip && laneEquipNorm && claimEquip !== laneEquipNorm) continue;
+        claimedCarrierIds.add(row.carrierId);
+      }
+
+      if (claimedCarrierIds.size > 0) {
+        for (const c of ranked) {
+          if (!c.carrierId || !claimedCarrierIds.has(c.carrierId)) continue;
+          c.claimed = true;
+          c.fitScore = Math.min(100, c.fitScore + CLAIMED_LANE_BOOST);
+          const claimReason = "Carrier claimed this lane in Carrier Hub";
+          if (!c.reasons.includes(claimReason)) {
+            // Lead the reasons list — claim is a strong, rep-actionable signal.
+            c.reasons = [claimReason, ...c.reasons].slice(0, 6);
+          }
+        }
+      }
+    } catch (err) {
+      // Claimed-lane lookup is purely additive — never fail a rank on it.
+      console.warn(JSON.stringify({
+        event: "claimedLaneBoostError",
+        laneId: lane.id ?? null,
+        orgId: lane.orgId,
+        error: err instanceof Error ? err.message : String(err),
+      }));
+    }
+  }
+
   // ── Task #632 — Bench tier-0 selection ──────────────────────────────────────
   // Carriers who replied "yes" on this lane within the last 90 days outrank
   // even `exact`-tier history. Cap the promoted set at BENCH_TIER0_CAP so a
@@ -1982,6 +2060,9 @@ export async function rankCarriersForLane(
       const winsDiff = b.benchWins - a.benchWins;
       if (winsDiff !== 0) return winsDiff;
     }
+    // Cross-tab UX (option C) — claimed-lane carriers outrank non-claimed
+    // peers at the same fitScore band, but never override bench tier-0 above.
+    if (a.claimed !== b.claimed) return a.claimed ? -1 : 1;
     const scoreDiff = b.fitScore - a.fitScore;
     if (scoreDiff !== 0) return scoreDiff;
     const matchRank: Record<string, number> = {
@@ -2070,6 +2151,9 @@ Respond ONLY with JSON array: [{"name": "<carrier name>", "reason": "<1 sentence
         const winsDiff = b.benchWins - a.benchWins;
         if (winsDiff !== 0) return winsDiff;
       }
+      // Cross-tab UX (option C) — same claimed-lane preference as the regular
+      // sort path; keeps the two pipelines consistent for HF lanes too.
+      if (a.claimed !== b.claimed) return a.claimed ? -1 : 1;
       const scoreDiff = b.fitScore - a.fitScore;
       if (scoreDiff !== 0) return scoreDiff;
       const matchRank: Record<string, number> = { exact: 0, nearby: 1, state_pair: 2, region: 3, none: 4 };

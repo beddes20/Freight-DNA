@@ -28,6 +28,7 @@ import {
 } from "../services/quotePricingRecommendation";
 import { QUOTE_OUTCOME_STATUSES, QUOTE_SOURCES, companies, contacts, quoteReps, spotQuoteCreateSchema } from "@shared/schema";
 import { getStaleQuoteFollowUps, clearStaleFollowUpCache } from "../services/staleQuoteFollowup";
+import { publish as publishLiveSync } from "../services/liveSync";
 import { db } from "../storage";
 import { and as andSql, eq as eqSql, sql as sqlExpr } from "drizzle-orm";
 import { gatherDataAnchors, generateDraft } from "./emailDrafting";
@@ -206,6 +207,11 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const data = updateQuoteSchema.parse(req.body);
       const opp = await updateQuote(user.organizationId, actorName(user), String(req.params.id), data, user.id);
       const detail = await getQuoteDetail(user.organizationId, opp.id);
+      // Cross-tab UX (option A) — quote outcome/status edits affect the
+      // snapshot KPIs, the list view, and the action queue. One topic
+      // event covers all three (the client maps the topic to all three
+      // query keys).
+      publishLiveSync(user.organizationId, "customer_quote", opp.id);
       res.json(detail);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Invalid input";
@@ -496,6 +502,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
         parsed.data.quoteIds,
         parsed.data.status,
       );
+      // Cross-tab UX (option A) — bulk flip mutates many rows; one
+      // org-wide hint is enough to refresh the list / snapshot / queue.
+      publishLiveSync(user.organizationId, "customer_quote");
       res.json(result);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Invalid input";

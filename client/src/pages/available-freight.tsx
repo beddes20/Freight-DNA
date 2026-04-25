@@ -336,13 +336,23 @@ export default function AvailableFreightPage() {
     const v = new URLSearchParams(window.location.search).get("lane");
     return v && v.length > 0 ? v : null;
   });
-  // Re-sync laneFilter whenever the URL changes (so navigating in-place from
-  // an LWQ deep link or back/forward updates the filtered cockpit view).
+  // Cross-tab UX (option B) — `?carrierId=<id>` deep-link from Carrier Hub
+  // narrows the cockpit to opps the carrier "could cover".
+  const [carrierIdFilter, setCarrierIdFilter] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const v = new URLSearchParams(window.location.search).get("carrierId");
+    return v && v.length > 0 ? v : null;
+  });
+  // Re-sync deep-link filters whenever the URL changes (so navigating in-place
+  // from a chip or back/forward updates the filtered cockpit view).
   useEffect(() => {
     if (typeof window === "undefined") return;
     const sync = () => {
-      const v = new URLSearchParams(window.location.search).get("lane");
-      setLaneFilter(v && v.length > 0 ? v : null);
+      const params = new URLSearchParams(window.location.search);
+      const lane = params.get("lane");
+      const cid = params.get("carrierId");
+      setLaneFilter(lane && lane.length > 0 ? lane : null);
+      setCarrierIdFilter(cid && cid.length > 0 ? cid : null);
     };
     window.addEventListener("popstate", sync);
     return () => window.removeEventListener("popstate", sync);
@@ -464,7 +474,7 @@ export default function AvailableFreightPage() {
       ? ""
       : statusFilter;
 
-  const feedKey = ["/api/freight-opportunities/cockpit", { status: statusParam, sort, grouping, companyId: companyFilter, lane: laneFilter }];
+  const feedKey = ["/api/freight-opportunities/cockpit", { status: statusParam, sort, grouping, companyId: companyFilter, lane: laneFilter, carrierId: carrierIdFilter }];
   const { data: serverFeed, isLoading, isError, refetch, isFetching } = useQuery<CockpitResponse>({
     queryKey: feedKey,
     queryFn: async () => {
@@ -474,6 +484,7 @@ export default function AvailableFreightPage() {
       params.set("grouping", grouping);
       if (companyFilter !== "all") params.set("companyId", companyFilter);
       if (laneFilter) params.set("lane", laneFilter);
+      if (carrierIdFilter) params.set("carrierId", carrierIdFilter);
       params.set("limit", "200");
       const res = await fetch(`/api/freight-opportunities/cockpit?${params.toString()}`, { credentials: "include" });
       if (!res.ok) throw new Error(`${res.status}`);
@@ -483,6 +494,30 @@ export default function AvailableFreightPage() {
     // Refetch on focus so a tab-switch back from Excel/email surfaces fresh imports.
     refetchOnWindowFocus: true,
   });
+
+  // Cross-tab UX (option B) — fetch carrier name for the "filtered to loads X
+  // could cover" banner. Cheap; reuses the carrier-hub detail endpoint and
+  // only runs when the deep-link is active.
+  const { data: carrierFilterMeta } = useQuery<{ carrier: { id: string; name: string } } | null>({
+    queryKey: ["/api/carrier-hub", carrierIdFilter],
+    queryFn: async () => {
+      if (!carrierIdFilter) return null;
+      const r = await fetch(`/api/carrier-hub/${carrierIdFilter}`, { credentials: "include" });
+      if (!r.ok) return null;
+      return r.json();
+    },
+    enabled: !!carrierIdFilter,
+    staleTime: 60_000,
+  });
+
+  function clearCarrierFilter() {
+    setCarrierIdFilter(null);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("carrierId");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }
 
   // Task #649 — buffer fresh server data into a "pending" slot whenever the
   // rep is mid-interaction with the feed (pointer over the list or keyboard
@@ -1095,6 +1130,36 @@ export default function AvailableFreightPage() {
         open={autoPilotDrawerOpen}
         onOpenChange={setAutoPilotDrawerOpen}
       />
+
+      {/* Cross-tab UX (option B) — banner shown when arriving from Carrier Hub
+          via `?carrierId=<id>`. Explains the filter and offers a one-click
+          dismiss back to the unfiltered cockpit. */}
+      {carrierIdFilter && (
+        <div
+          className="flex items-center justify-between gap-3 rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-sm"
+          data-testid="banner-carrier-filter"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <Truck className="h-4 w-4 shrink-0 text-blue-400" />
+            <span className="truncate">
+              Filtered to loads{" "}
+              <span className="font-semibold" data-testid="text-carrier-filter-name">
+                {carrierFilterMeta?.carrier?.name ?? "this carrier"}
+              </span>{" "}
+              could cover (claimed lanes + history)
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7"
+            onClick={clearCarrierFilter}
+            data-testid="button-clear-carrier-filter"
+          >
+            <X className="h-3.5 w-3.5 mr-1" /> Clear
+          </Button>
+        </div>
+      )}
 
       {/* KPI strip — Task #601 contract semantics */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
@@ -2355,6 +2420,20 @@ function CockpitRowView(props: {
                     title={`replied yes ${benchWins}x in last 90d`}
                   >
                     Bench ({benchWins} wins)
+                  </Badge>
+                )}
+                {/* Cross-tab UX (option C) — surface carrier-asserted lane
+                    preference so reps can immediately tell the carrier WANTS
+                    this freight (vs. just being a regional fit). Stamped by
+                    the ranker on the chip's `responsivenessSnapshot`. */}
+                {chip.claimed && (
+                  <Badge
+                    variant="outline"
+                    className="bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/40 text-[10px] py-0 px-1.5"
+                    data-testid={`chip-claimed-${opp.id}-${chip.carrierId}`}
+                    title="Carrier claimed this lane in Carrier Hub"
+                  >
+                    Claimed
                   </Badge>
                 )}
               </span>

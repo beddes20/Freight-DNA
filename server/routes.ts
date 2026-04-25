@@ -42,6 +42,8 @@ import { registerPodIntakeRoutes } from "./routes/podIntake";
 import { registerWebexRoutes } from "./routes/webex";
 import { registerCallTrendlineRoutes } from "./routes/callTrendlines";
 import { registerCustomerQuoteRoutes } from "./routes/customerQuotes";
+import { registerLiveSyncRoutes } from "./routes/liveSync";
+import { registerLaneInboxRoutes } from "./routes/laneInbox";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
@@ -3246,6 +3248,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerWebexRoutes(app);
   registerCallTrendlineRoutes(app);
   registerCustomerQuoteRoutes(app);
+  registerLiveSyncRoutes(app);
+  registerLaneInboxRoutes(app);
   // Task #478 — periodic lost-streak alerts for customers and lane groups.
   {
     const { initQuoteLostStreakScheduler } = await import("./quoteLostStreakScheduler");

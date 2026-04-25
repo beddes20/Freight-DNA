@@ -30,6 +30,7 @@ import {
 import { recordCarrierLaneOutcome } from "../services/carrierLaneOutcomes";
 import { recordCarrierOverride } from "../services/carrierOverrides";
 import { laneSig } from "../laneCrossLinkService";
+import { publish as publishLiveSync } from "../services/liveSync";
 import {
   FREIGHT_OPPORTUNITY_MODES,
   FREIGHT_OPPORTUNITY_RESPONSE_OUTCOMES,
@@ -867,6 +868,15 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       });
       if (!outcome.ok) {
         return res.status(outcome.status).json({ error: outcome.error });
+      }
+      // Cross-tab UX (option A) — covering an opp changes its status, the
+      // owning carrier's pipeline, and (sometimes) the recurring-lane queue.
+      // Hint to other tabs to refetch.
+      publishLiveSync(org, "freight_opportunity", outcome.opportunity?.id ?? opp.id);
+      const coveredCarrierId = parsed.data.carrierId ?? null;
+      if (coveredCarrierId) publishLiveSync(org, "carrier", coveredCarrierId);
+      if (outcome.loops?.recurringLaneSuggestion?.suggested) {
+        publishLiveSync(org, "recurring_lane");
       }
       return res.json({
         opportunity: outcome.opportunity,

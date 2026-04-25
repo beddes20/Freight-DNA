@@ -1024,6 +1024,21 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
             </div>
           </div>
           <div className="flex gap-1.5 shrink-0">
+            {/* Cross-tab UX (option B) — jump to AF cockpit pre-filtered to
+                the loads this carrier could plausibly cover. */}
+            <Button
+              asChild
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1.5 border-blue-500/40 text-blue-600 dark:text-blue-400 hover:bg-blue-500/10"
+              data-testid="btn-find-loads-for-carrier"
+              title="Open Available Freight filtered to this carrier's claimed lanes + history"
+            >
+              <Link href={`/available-freight?carrierId=${encodeURIComponent(carrier.id)}`}>
+                <Truck className="w-3.5 h-3.5" />
+                <span>Find loads</span>
+              </Link>
+            </Button>
             <Select value={carrier.status} onValueChange={v => updateCarrier.mutate({ status: v })}>
               <SelectTrigger className="h-7 text-xs w-32" data-testid="select-carrier-status">
                 <SelectValue />

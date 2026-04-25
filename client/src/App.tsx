@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Loader2, UserX, Clock } from "lucide-react";
 import React, { useEffect, useCallback, useState } from "react";
 import { useInactivityTimeout } from "@/hooks/use-inactivity-timeout";
+import { useLiveSync } from "@/hooks/useLiveSync";
 import { ClerkProvider, useClerk } from "@clerk/clerk-react";
 import { dark } from "@clerk/themes";
 import { GlobalLogTouchButton, GlobalLogTouchDialog } from "@/components/global-log-touch-button";
@@ -70,6 +71,7 @@ import RepScorecardPage from "@/pages/rep-scorecard";
 import LmCheckinHistoryPage from "@/pages/lm-checkin-history";
 import { PortletErrorBoundary } from "@/components/portlet-error-boundary";
 import LaneWorkQueuePage from "@/pages/lane-work-queue";
+import LaneInboxPage from "@/pages/lane-inbox";
 import TodayQueuePage from "@/pages/today";
 import MyProcurementPage from "@/pages/my-procurement";
 import ConversationsPage from "@/pages/conversations";
@@ -231,6 +233,7 @@ function Router() {
         </PortletErrorBoundary>
       </Route>
       <Route path="/lanes/work-queue" component={LaneWorkQueuePage} />
+      <Route path="/lane-inbox" component={LaneInboxPage} />
       <Route path="/available-freight" component={AvailableFreightPage} />
       <Route path="/available-freight/:id" component={AvailableFreightDetailPage} />
       <Route path="/admin/available-freight/imports" component={AdminAvailableFreightImports} />
@@ -396,6 +399,11 @@ function AuthenticatedAppContent({ user, isLoading, handleInactivityLogout }: {
   const { warningVisible, secondsLeft, staySignedIn } = useInactivityTimeout(
     user ? handleInactivityLogout : () => {}
   );
+
+  // Cross-tab UX (option A) — single SSE connection per tab. Mounts here
+  // (inside the authed shell) so the stream only opens for signed-in users
+  // and tears down automatically on logout when this component unmounts.
+  useLiveSync();
 
   const minutesLeft = Math.floor(secondsLeft / 60);
   const secs = secondsLeft % 60;

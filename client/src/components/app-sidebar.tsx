@@ -113,6 +113,7 @@ const carrierFacingItems: NavItem[] = [
   { title: "Lane Intelligence",  url: "/research-tasks",  icon: ClipboardList, description: "Research lanes and gather pricing intelligence." },
   { title: "My Procurement",     url: "/my-procurement",  icon: Briefcase,     description: "Lanes you're actively procuring carriers for." },
   { title: "Lane Work Queue",    url: "/lanes/work-queue",icon: ListFilter,    description: "Lanes awaiting your reply or next action." },
+  { title: "Lane Inbox",         url: "/lane-inbox",      icon: Inbox,         description: "Cross-surface activity feed — AF, LWQ, Customer Quotes, Carrier Hub." },
   { title: "My PODs",            url: "/my-pods",         icon: MailCheck,
     description: "Proofs of delivery received for loads you cover or own." },
   { title: "Available Freight",  url: "/available-freight", icon: Truck,
