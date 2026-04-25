@@ -1209,12 +1209,16 @@ export interface IStorage {
   getMonitoredMailboxByAnySubscriptionId(subscriptionId: string): Promise<MonitoredMailbox | undefined>;
 
   // Task #589 — POD intake (getpaid@valuetruckaz.com AR mailbox).
+  // Task #614 — adds delivery filter, per-user listing, per-load listing.
   upsertPodIntakeEmail(data: InsertPodIntakeEmail): Promise<PodIntakeEmail>;
   getPodIntakeEmail(orgId: string, id: string): Promise<PodIntakeEmail | undefined>;
   listPodIntakeEmails(orgId: string, opts: {
-    bucket: "forwarded" | "unmatched" | "not_pod" | "pending" | "all";
+    bucket: "forwarded" | "unmatched" | "not_pod" | "pending" | "delivered_in_app" | "all";
+    delivery?: "email" | "in_app" | "all";
     limit?: number;
   }): Promise<PodIntakeEmail[]>;
+  listPodIntakeEmailsForUser(userId: string, orgId: string, opts?: { limit?: number }): Promise<PodIntakeEmail[]>;
+  listPodIntakeEmailsByOrderId(orgId: string, orderId: string, opts?: { limit?: number }): Promise<PodIntakeEmail[]>;
   updatePodIntakeEmail(orgId: string, id: string, patch: Partial<InsertPodIntakeEmail>): Promise<PodIntakeEmail | undefined>;
   getPodIntakeSettings(orgId: string): Promise<PodIntakeSettings | undefined>;
   upsertPodIntakeSettings(data: InsertPodIntakeSettings): Promise<PodIntakeSettings>;
@@ -8923,6 +8927,9 @@ export class DatabaseStorage implements IStorage {
           forwardedAt: data.forwardedAt ?? null,
           forwardedTo: data.forwardedTo as never,
           forwardError: data.forwardError ?? null,
+          deliveryMethod: data.deliveryMethod ?? null,
+          dispatcherUserId: data.dispatcherUserId ?? null,
+          accountOwnerUserId: data.accountOwnerUserId ?? null,
           updatedAt: new Date(),
         },
       })
@@ -8940,7 +8947,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async listPodIntakeEmails(orgId: string, opts: {
-    bucket: "forwarded" | "unmatched" | "not_pod" | "pending" | "all";
+    bucket: "forwarded" | "unmatched" | "not_pod" | "pending" | "delivered_in_app" | "all";
+    delivery?: "email" | "in_app" | "all";
     limit?: number;
   }): Promise<PodIntakeEmail[]> {
     const limit = Math.min(opts.limit ?? 100, 500);
@@ -8948,16 +8956,71 @@ export class DatabaseStorage implements IStorage {
     if (opts.bucket === "not_pod") {
       conds.push(eq(podIntakeEmails.classification, "not_pod"));
     } else if (opts.bucket === "forwarded") {
-      conds.push(eq(podIntakeEmails.forwardStatus, "forwarded"));
+      // "Forwarded" bucket spans both email-forwarded and in-app-only
+      // matched PODs; the delivery filter narrows it further.
+      conds.push(
+        or(
+          eq(podIntakeEmails.forwardStatus, "forwarded"),
+          eq(podIntakeEmails.forwardStatus, "delivered_in_app"),
+        )!,
+      );
+    } else if (opts.bucket === "delivered_in_app") {
+      conds.push(eq(podIntakeEmails.forwardStatus, "delivered_in_app"));
     } else if (opts.bucket === "unmatched") {
       conds.push(eq(podIntakeEmails.forwardStatus, "unmatched"));
     } else if (opts.bucket === "pending") {
       conds.push(eq(podIntakeEmails.forwardStatus, "pending"));
     }
+    if (opts.delivery === "email") {
+      conds.push(eq(podIntakeEmails.deliveryMethod, "email"));
+    } else if (opts.delivery === "in_app") {
+      conds.push(eq(podIntakeEmails.deliveryMethod, "in_app"));
+    }
     return db
       .select()
       .from(podIntakeEmails)
       .where(and(...conds))
+      .orderBy(desc(podIntakeEmails.receivedAt))
+      .limit(limit);
+  }
+
+  async listPodIntakeEmailsForUser(
+    userId: string,
+    orgId: string,
+    opts?: { limit?: number },
+  ): Promise<PodIntakeEmail[]> {
+    const limit = Math.min(opts?.limit ?? 200, 500);
+    return db
+      .select()
+      .from(podIntakeEmails)
+      .where(
+        and(
+          eq(podIntakeEmails.orgId, orgId),
+          or(
+            eq(podIntakeEmails.dispatcherUserId, userId),
+            eq(podIntakeEmails.accountOwnerUserId, userId),
+          )!,
+        ),
+      )
+      .orderBy(desc(podIntakeEmails.receivedAt))
+      .limit(limit);
+  }
+
+  async listPodIntakeEmailsByOrderId(
+    orgId: string,
+    orderId: string,
+    opts?: { limit?: number },
+  ): Promise<PodIntakeEmail[]> {
+    const limit = Math.min(opts?.limit ?? 50, 200);
+    return db
+      .select()
+      .from(podIntakeEmails)
+      .where(
+        and(
+          eq(podIntakeEmails.orgId, orgId),
+          eq(podIntakeEmails.matchedOrderId, orderId),
+        ),
+      )
       .orderBy(desc(podIntakeEmails.receivedAt))
       .limit(limit);
   }
@@ -8995,6 +9058,7 @@ export class DatabaseStorage implements IStorage {
           teamFallbackEmail: data.teamFallbackEmail ?? null,
           enabled: data.enabled ?? false,
           useAiFallback: data.useAiFallback ?? true,
+          autoForwardEmail: data.autoForwardEmail ?? true,
           updatedAt: new Date(),
         },
       })

@@ -27,6 +27,7 @@ import { Loader2, Mail, Send, RefreshCw, Link2 } from "lucide-react";
 import { format } from "date-fns";
 
 type Bucket = "forwarded" | "unmatched" | "not_pod";
+type DeliveryFilter = "all" | "email" | "in_app";
 
 interface PodIntakeRow {
   id: string;
@@ -57,11 +58,15 @@ interface PodIntakeRow {
     sizeBytes: number;
     isPodCandidate: boolean;
   }> | null;
+  deliveryMethod: "email" | "in_app" | null;
+  dispatcherUserId: string | null;
+  accountOwnerUserId: string | null;
   bucket: Bucket | "pending";
 }
 
 interface PodIntakeListResponse {
   bucket: Bucket;
+  delivery: DeliveryFilter;
   count: number;
   rows: PodIntakeRow[];
 }
@@ -72,6 +77,7 @@ interface PodIntakeSettings {
   teamFallbackEmail: string | null;
   enabled: boolean;
   useAiFallback: boolean;
+  autoForwardEmail: boolean;
 }
 
 interface MonitoredMailbox {
@@ -86,6 +92,12 @@ const BUCKET_LABELS: Record<Bucket, string> = {
   not_pod: "Not a POD",
 };
 
+const DELIVERY_LABELS: Record<DeliveryFilter, string> = {
+  all: "All",
+  email: "Email-forwarded",
+  in_app: "In-app only",
+};
+
 function fmtBytes(n: number) {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -95,6 +107,7 @@ function fmtBytes(n: number) {
 export default function AdminPodIntakePage() {
   const { toast } = useToast();
   const [bucket, setBucket] = useState<Bucket>("forwarded");
+  const [delivery, setDelivery] = useState<DeliveryFilter>("all");
   const [openRowId, setOpenRowId] = useState<string | null>(null);
   const [linkOrderId, setLinkOrderId] = useState("");
 
@@ -102,12 +115,12 @@ export default function AdminPodIntakePage() {
   // hit the detail handler at `/api/admin/pod-intake/<bucket>`. The bucket
   // is a query-string filter, so build the URL explicitly here.
   const listQuery = useQuery<PodIntakeListResponse>({
-    queryKey: ["/api/admin/pod-intake", { bucket }],
+    queryKey: ["/api/admin/pod-intake", { bucket, delivery }],
     queryFn: async () => {
-      const res = await fetch(
-        `/api/admin/pod-intake?bucket=${encodeURIComponent(bucket)}`,
-        { credentials: "include" },
-      );
+      const params = new URLSearchParams({ bucket, delivery });
+      const res = await fetch(`/api/admin/pod-intake?${params.toString()}`, {
+        credentials: "include",
+      });
       if (!res.ok) {
         throw new Error(`${res.status}: ${(await res.text()) || res.statusText}`);
       }
@@ -186,6 +199,8 @@ export default function AdminPodIntakePage() {
       draftSettings.teamFallbackEmail ?? settings?.teamFallbackEmail ?? "",
     useAiFallback:
       draftSettings.useAiFallback ?? settings?.useAiFallback ?? true,
+    autoForwardEmail:
+      draftSettings.autoForwardEmail ?? settings?.autoForwardEmail ?? true,
   };
 
   return (
@@ -239,6 +254,26 @@ export default function AdminPodIntakePage() {
               checked={merged.useAiFallback ?? true}
               onCheckedChange={(v) =>
                 setDraftSettings((s) => ({ ...s, useAiFallback: v }))
+              }
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <Label htmlFor="auto-forward-toggle">Auto-forward via Outlook</Label>
+              <p className="text-xs text-muted-foreground">
+                When on, matched PODs are also emailed to the dispatcher and
+                account owner from the AR mailbox. When off, PODs stay fully
+                in-app — reps see them in My PODs and on the load detail
+                page, with no Outlook send.
+              </p>
+            </div>
+            <Switch
+              id="auto-forward-toggle"
+              data-testid="switch-pod-intake-auto-forward"
+              checked={merged.autoForwardEmail ?? true}
+              onCheckedChange={(v) =>
+                setDraftSettings((s) => ({ ...s, autoForwardEmail: v }))
               }
             />
           </div>
@@ -311,10 +346,33 @@ export default function AdminPodIntakePage() {
         <CardHeader>
           <CardTitle>Recent intake</CardTitle>
           <CardDescription>
-            Forwarded — sent to dispatcher + account owner. Unmatched — POD detected but no load_fact match. Not a POD — non-POD mail filed for review.
+            Forwarded — delivered to dispatcher + account owner (via email or
+            in-app). Unmatched — POD detected but no load_fact match. Not a POD
+            — non-POD mail filed for review.
           </CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <div className="text-xs text-muted-foreground">Delivery</div>
+            <Select
+              value={delivery}
+              onValueChange={(v) => setDelivery(v as DeliveryFilter)}
+            >
+              <SelectTrigger
+                className="w-[200px]"
+                data-testid="select-pod-intake-delivery"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(DELIVERY_LABELS) as DeliveryFilter[]).map((k) => (
+                  <SelectItem key={k} value={k}>
+                    {DELIVERY_LABELS[k]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <Tabs value={bucket} onValueChange={(v) => setBucket(v as Bucket)}>
             <TabsList data-testid="tabs-pod-intake-buckets">
               <TabsTrigger value="forwarded" data-testid="tab-forwarded">
@@ -367,16 +425,34 @@ export default function AdminPodIntakePage() {
                                 variant={
                                   row.forwardStatus === "forwarded"
                                     ? "default"
-                                    : row.forwardStatus === "unmatched"
-                                      ? "secondary"
-                                      : row.forwardStatus === "failed"
-                                        ? "destructive"
-                                        : "outline"
+                                    : row.forwardStatus === "delivered_in_app"
+                                      ? "default"
+                                      : row.forwardStatus === "unmatched"
+                                        ? "secondary"
+                                        : row.forwardStatus === "failed"
+                                          ? "destructive"
+                                          : "outline"
                                 }
-                                className="shrink-0"
+                                className={
+                                  row.forwardStatus === "delivered_in_app"
+                                    ? "shrink-0 bg-emerald-600 hover:bg-emerald-600"
+                                    : "shrink-0"
+                                }
+                                data-testid={`badge-status-${row.id}`}
                               >
-                                {row.forwardStatus}
+                                {row.forwardStatus === "delivered_in_app"
+                                  ? "in-app"
+                                  : row.forwardStatus}
                               </Badge>
+                              {row.deliveryMethod && row.forwardStatus === "forwarded" && (
+                                <Badge
+                                  variant="outline"
+                                  className="shrink-0 text-[10px]"
+                                  data-testid={`badge-delivery-${row.id}`}
+                                >
+                                  via {row.deliveryMethod === "email" ? "email" : "in-app"}
+                                </Badge>
+                              )}
                             </div>
                             <div className="text-xs text-muted-foreground mt-1 truncate">
                               {row.fromName || row.fromEmail || "(unknown)"}
@@ -468,6 +544,27 @@ export default function AdminPodIntakePage() {
                     ) : (
                       <span className="text-muted-foreground text-xs">
                         no match
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <Label className="text-xs uppercase text-muted-foreground">
+                    Delivery method
+                  </Label>
+                  <div data-testid="text-delivery-method">
+                    {detailRow.deliveryMethod === "email" && (
+                      <Badge variant="outline">Email (Outlook send)</Badge>
+                    )}
+                    {detailRow.deliveryMethod === "in_app" && (
+                      <Badge className="bg-emerald-600 hover:bg-emerald-600">
+                        In-app only
+                      </Badge>
+                    )}
+                    {!detailRow.deliveryMethod && (
+                      <span className="text-muted-foreground text-xs">
+                        not delivered yet
                       </span>
                     )}
                   </div>

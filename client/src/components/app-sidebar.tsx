@@ -113,6 +113,8 @@ const carrierFacingItems: NavItem[] = [
   { title: "Lane Intelligence",  url: "/research-tasks",  icon: ClipboardList, description: "Research lanes and gather pricing intelligence." },
   { title: "My Procurement",     url: "/my-procurement",  icon: Briefcase,     description: "Lanes you're actively procuring carriers for." },
   { title: "Lane Work Queue",    url: "/lanes/work-queue",icon: ListFilter,    description: "Lanes awaiting your reply or next action." },
+  { title: "My PODs",            url: "/my-pods",         icon: MailCheck,
+    description: "Proofs of delivery received for loads you cover or own." },
   { title: "Available Freight",  url: "/available-freight", icon: Truck,
     description: "Freight loads currently available to cover.",
     roles: ["admin", "director", "national_account_manager", "sales_director", "logistics_manager", "account_manager", "sales"] },
@@ -287,7 +289,7 @@ function usePendingIntelCount() {
 export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout } = useAuth();
-  const { taskCount, suggestionCount } = useNotificationCounts();
+  const { taskCount, suggestionCount, podCount } = useNotificationCounts();
   const unactionedReplyCount = useUnactionedReplyCount();
   const conversationsWaitingCount = useConversationsWaitingCount();
   const pendingIntelCount = usePendingIntelCount();
@@ -468,7 +470,9 @@ export function AppSidebar() {
                         ? conversationsWaitingCount
                         : item.title === "Carrier Hub"
                           ? pendingIntelCount
-                          : undefined
+                          : item.title === "My PODs"
+                            ? podCount
+                            : undefined
                   }
                   badgeColor={item.title === "Conversations" ? "red" : item.title === "Carrier Hub" ? "red" : "green"}
                 />

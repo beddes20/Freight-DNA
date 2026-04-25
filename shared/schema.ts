@@ -2903,7 +2903,7 @@ export const podIntakeEmails = pgTable(
     matchedLoadFactId: varchar("matched_load_fact_id"),
     matchedCompanyId: varchar("matched_company_id"),
     forwardStatus: text("forward_status").notNull().default("pending"),
-    // pending | forwarded | unmatched | not_pod | failed
+    // pending | forwarded | unmatched | not_pod | failed | delivered_in_app
     forwardedAt: timestamp("forwarded_at"),
     forwardedTo: jsonb("forwarded_to").$type<{
       dispatcher?: { email: string; name?: string } | null;
@@ -2911,6 +2911,15 @@ export const podIntakeEmails = pgTable(
       teamFallback?: { email: string } | null;
     }>(),
     forwardError: text("forward_error"),
+    // How the matched POD was delivered to the rep:
+    //   'email'   — forwarded via Outlook (auto-forward toggle ON)
+    //   'in_app'  — only persisted + notified in-app (toggle OFF)
+    //   null      — not delivered (unmatched / not_pod / pending)
+    deliveryMethod: text("delivery_method"),
+    // Resolved user IDs at ingest time so the rep "My PODs" view can scope
+    // efficiently and we don't re-resolve on every read.
+    dispatcherUserId: varchar("dispatcher_user_id").references(() => users.id, { onDelete: "set null" }),
+    accountOwnerUserId: varchar("account_owner_user_id").references(() => users.id, { onDelete: "set null" }),
     manualLinkedByUserId: varchar("manual_linked_by_user_id").references(() => users.id, { onDelete: "set null" }),
     manualLinkedAt: timestamp("manual_linked_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -2949,6 +2958,12 @@ export const podIntakeSettings = pgTable(
     teamFallbackEmail: text("team_fallback_email"),
     enabled: boolean("enabled").notNull().default(false),
     useAiFallback: boolean("use_ai_fallback").notNull().default(true),
+    // When true, classified PODs are forwarded out via Outlook to dispatcher /
+    // account owner / team fallback. When false ("fully in DNA" mode), the
+    // pipeline still classifies, matches, persists, and creates in-app
+    // notifications — but no Outlook send is made. Defaults ON for backwards
+    // compatibility with the original Task #589 behaviour.
+    autoForwardEmail: boolean("auto_forward_email").notNull().default(true),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },

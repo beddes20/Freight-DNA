@@ -23,6 +23,7 @@ import {
   companies,
   users,
   podIntakeSettings,
+  freightOpportunities,
   type PodIntakeEmail,
 } from "@shared/schema";
 
@@ -57,8 +58,8 @@ export interface PodClassificationResult {
 }
 
 export interface ResolvedRecipients {
-  dispatcher: { email: string; name?: string } | null;
-  accountOwner: { email: string; name?: string } | null;
+  dispatcher: { email: string; name?: string; userId?: string } | null;
+  accountOwner: { email: string; name?: string; userId?: string } | null;
   teamFallback: { email: string } | null;
 }
 
@@ -404,7 +405,7 @@ export async function resolveRecipients(
   // share the name we deliberately don't guess.
   if (match.dispatcher) {
     const dispatcherUsers = await db
-      .select({ username: users.username, name: users.name })
+      .select({ id: users.id, username: users.username, name: users.name })
       .from(users)
       .where(
         and(
@@ -417,6 +418,7 @@ export async function resolveRecipients(
       result.dispatcher = {
         email: dispatcherUsers[0].username,
         name: dispatcherUsers[0].name || match.dispatcher,
+        userId: dispatcherUsers[0].id,
       };
     }
   }
@@ -431,7 +433,7 @@ export async function resolveRecipients(
     const ownerUserId = companyRow[0]?.assignedTo || companyRow[0]?.salesPersonId || null;
     if (ownerUserId) {
       const ownerRow = await db
-        .select({ username: users.username, name: users.name })
+        .select({ id: users.id, username: users.username, name: users.name })
         .from(users)
         .where(and(eq(users.id, ownerUserId), eq(users.organizationId, orgId)))
         .limit(1);
@@ -439,6 +441,7 @@ export async function resolveRecipients(
         result.accountOwner = {
           email: ownerRow[0].username,
           name: ownerRow[0].name || undefined,
+          userId: ownerRow[0].id,
         };
       }
     }
@@ -449,10 +452,15 @@ export async function resolveRecipients(
 
 /**
  * Build the bucket label surfaced in the admin UI from a row's status.
+ *
+ * "delivered_in_app" is grouped under the "forwarded" bucket so reps and
+ * admins still see all matched-and-delivered PODs together; the
+ * `deliveryMethod` column distinguishes how the rep was actually notified.
  */
 export function bucketForRow(row: PodIntakeEmail): "forwarded" | "unmatched" | "not_pod" | "pending" {
   if (row.classification === "not_pod") return "not_pod";
   if (row.forwardStatus === "forwarded") return "forwarded";
+  if (row.forwardStatus === "delivered_in_app") return "forwarded";
   if (row.forwardStatus === "unmatched") return "unmatched";
   return "pending";
 }
@@ -666,13 +674,17 @@ export async function ingestPodEmail(
   const forwardFn = deps.forwardPod ?? forwardPod;
   const { storage } = await import("../storage");
 
-  // Look up settings to know whether AI fallback is on for this org.
+  // Look up settings to know whether AI fallback is on for this org and
+  // whether auto-forward email is enabled (Task #614 — when off, the row
+  // is still classified, matched, persisted, and reps are notified
+  // in-app; only the Outlook send is skipped).
   const settingsRow = await db
     .select()
     .from(podIntakeSettings)
     .where(eq(podIntakeSettings.orgId, input.orgId))
     .limit(1);
   const useAiFallback = settingsRow[0]?.useAiFallback ?? true;
+  const autoForwardEmail = settingsRow[0]?.autoForwardEmail ?? true;
 
   // Fetch attachments unless already provided.
   let attachments: PodCandidateAttachment[];
@@ -706,7 +718,14 @@ export async function ingestPodEmail(
     teamFallback: null,
   };
   let forwardResult: ForwardPodResult | null = null;
-  let forwardStatus: "forwarded" | "unmatched" | "not_pod" | "failed" | "pending" = "pending";
+  let forwardStatus:
+    | "forwarded"
+    | "unmatched"
+    | "not_pod"
+    | "failed"
+    | "pending"
+    | "delivered_in_app" = "pending";
+  let deliveryMethod: "email" | "in_app" | null = null;
 
   const isPod =
     classification.classification === "pod_keyword" ||
@@ -718,18 +737,31 @@ export async function ingestPodEmail(
     match = await matchFn(input.orgId, orderIds);
     recipients = await resolveFn(input.orgId, match);
 
-    forwardResult = await forwardFn({
-      fromMailbox: input.mailboxAddress,
-      recipients,
-      match,
-      msg: candidate,
-      attachments,
-    });
+    if (autoForwardEmail) {
+      forwardResult = await forwardFn({
+        fromMailbox: input.mailboxAddress,
+        recipients,
+        match,
+        msg: candidate,
+        attachments,
+      });
 
-    if (forwardResult.ok) {
-      forwardStatus = match ? "forwarded" : "unmatched";
+      if (forwardResult.ok) {
+        forwardStatus = match ? "forwarded" : "unmatched";
+        if (match) deliveryMethod = "email";
+      } else {
+        forwardStatus = "failed";
+      }
     } else {
-      forwardStatus = "failed";
+      // Fully in-DNA mode: skip Outlook send. Matched PODs are still
+      // persisted + reps notified in-app. Unmatched PODs still need
+      // operator triage so they land in the "unmatched" bucket.
+      if (match) {
+        forwardStatus = "delivered_in_app";
+        deliveryMethod = "in_app";
+      } else {
+        forwardStatus = "unmatched";
+      }
     }
   }
 
@@ -761,16 +793,99 @@ export async function ingestPodEmail(
     matchedLoadFactId: match?.loadFactId ?? null,
     matchedCompanyId: match?.companyId ?? null,
     forwardStatus,
-    forwardedAt: forwardResult?.ok ? new Date() : null,
-    forwardedTo: forwardResult?.ok
-      ? {
-          dispatcher: recipients.dispatcher,
-          accountOwner: recipients.accountOwner,
-          teamFallback: recipients.teamFallback,
-        }
-      : null,
+    forwardedAt: forwardResult?.ok || forwardStatus === "delivered_in_app" ? new Date() : null,
+    forwardedTo:
+      forwardResult?.ok || forwardStatus === "delivered_in_app"
+        ? {
+            dispatcher: recipients.dispatcher
+              ? { email: recipients.dispatcher.email, name: recipients.dispatcher.name }
+              : null,
+            accountOwner: recipients.accountOwner
+              ? { email: recipients.accountOwner.email, name: recipients.accountOwner.name }
+              : null,
+            teamFallback: recipients.teamFallback,
+          }
+        : null,
     forwardError: forwardResult && !forwardResult.ok ? forwardResult.error || "send failed" : null,
+    deliveryMethod,
+    dispatcherUserId: recipients.dispatcher?.userId ?? null,
+    accountOwnerUserId: recipients.accountOwner?.userId ?? null,
   });
+
+  // ── In-app notifications ──────────────────────────────────────────────
+  // Fire notifications for the resolved dispatcher + account owner whenever
+  // we successfully matched a POD email to a load. This is independent of
+  // the auto-forward toggle and of Outlook send success — if the POD was
+  // matched, the rep needs to know, even if the upstream Outlook send later
+  // failed (the row is still visible on /my-pods and the load detail page).
+  // We still skip not_pod / unmatched rows — those land in the admin queue
+  // for operator triage.
+  if (isPod && match) {
+    const orderLabel = match?.orderId ?? "POD";
+    const customerLabel = match?.customerName ?? "(unknown customer)";
+
+    // Deep-link the notification to the matched load on the available-freight
+    // detail page when we can resolve a freight opportunity for this orderId.
+    // Otherwise fall back to the rep "My PODs" page so the link is always usable.
+    let link = "/my-pods";
+    if (match?.orderId) {
+      try {
+        const oppRows = await db
+          .select({ id: freightOpportunities.id })
+          .from(freightOpportunities)
+          .where(
+            and(
+              eq(freightOpportunities.orgId, input.orgId),
+              sql`${freightOpportunities.sourceRef}->>'orderId' = ${match.orderId}`,
+            ),
+          )
+          .orderBy(desc(freightOpportunities.generatedAt))
+          .limit(1);
+        if (oppRows[0]?.id) {
+          link = `/available-freight/${oppRows[0].id}`;
+        }
+      } catch (err) {
+        console.warn(
+          `[pod-intake] FO lookup for deep-link failed (orderId=${match.orderId}): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+
+    const notified = new Set<string>();
+    const targets: Array<{ userId: string; role: "dispatcher" | "account_owner" }> = [];
+    if (recipients.dispatcher?.userId) {
+      targets.push({ userId: recipients.dispatcher.userId, role: "dispatcher" });
+    }
+    if (recipients.accountOwner?.userId) {
+      targets.push({ userId: recipients.accountOwner.userId, role: "account_owner" });
+    }
+    for (const t of targets) {
+      if (notified.has(t.userId)) continue;
+      notified.add(t.userId);
+      try {
+        await storage.createNotification({
+          userId: t.userId,
+          type: "pod_received",
+          title: `POD received — Order ${orderLabel}`,
+          body: `Proof of delivery for ${customerLabel}${
+            input.fromName || input.fromEmail
+              ? ` from ${input.fromName || input.fromEmail}`
+              : ""
+          }.`,
+          link,
+          relatedId: row.id,
+        });
+      } catch (err) {
+        console.warn(
+          `[pod-intake] notification create failed for user ${t.userId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+  }
 
   return {
     rowId: row.id,

@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   ArrowLeft, AlertTriangle, ShieldAlert, Truck, Calendar,
   Search, Send, Mail, MessageSquare, Phone, Info, Activity,
@@ -951,6 +951,141 @@ function SendModalBody({
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// PROOF OF DELIVERY (Task #614)
+// ────────────────────────────────────────────────────────────────────────────
+// Surfaces matched POD emails on the load detail page. Empty states are
+// hidden when there's no orderId on the FO so we don't litter older loads
+// with an "(no PODs yet)" panel that has no actionable meaning.
+interface PodAttachmentMeta {
+  id: string;
+  name: string;
+  contentType: string;
+  sizeBytes: number;
+  isPodCandidate: boolean;
+}
+interface LoadPodRow {
+  id: string;
+  receivedAt: string;
+  fromEmail: string | null;
+  fromName: string | null;
+  subject: string | null;
+  bodyPreview: string | null;
+  matchedOrderId: string | null;
+  forwardStatus: string;
+  deliveryMethod: "email" | "in_app" | null;
+  hasAttachments: boolean;
+  attachmentMeta: PodAttachmentMeta[] | null;
+}
+interface LoadPodsResponse {
+  orderId: string;
+  count: number;
+  rows: LoadPodRow[];
+}
+
+function fmtPodBytes(n: number) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function ProofOfDeliverySection({ orderId }: { orderId: string | null }) {
+  const { data, isLoading } = useQuery<LoadPodsResponse>({
+    queryKey: ["/api/loads/by-order-id", orderId, "pods"],
+    enabled: !!orderId,
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/loads/by-order-id/${encodeURIComponent(orderId!)}/pods`,
+        { credentials: "include" },
+      );
+      if (!res.ok) throw new Error(`${res.status}`);
+      return res.json();
+    },
+  });
+
+  if (!orderId) return null;
+
+  return (
+    <Card data-testid="card-proof-of-delivery">
+      <CardHeader>
+        <CardTitle className="text-base">Proof of Delivery</CardTitle>
+        <CardDescription>
+          POD emails matched to order <strong>{orderId}</strong>.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isLoading && (
+          <div className="text-xs text-muted-foreground">Loading…</div>
+        )}
+        {!isLoading && (data?.count ?? 0) === 0 && (
+          <p
+            className="text-xs text-muted-foreground py-4 text-center"
+            data-testid="text-pod-empty"
+          >
+            No PODs received yet for this load.
+          </p>
+        )}
+        {!isLoading && (data?.count ?? 0) > 0 && (
+          <ul className="space-y-2">
+            {data!.rows.map((r) => (
+              <li
+                key={r.id}
+                className="border rounded-md p-3"
+                data-testid={`row-load-pod-${r.id}`}
+              >
+                <div className="flex items-center gap-2 flex-wrap text-sm">
+                  <span className="font-medium truncate">
+                    {r.subject || "(no subject)"}
+                  </span>
+                  {r.deliveryMethod && (
+                    <Badge variant="outline" className="text-[10px]">
+                      {r.deliveryMethod === "email" ? "via email" : "in-app"}
+                    </Badge>
+                  )}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  {r.fromName || r.fromEmail || "(unknown)"}
+                  {" · "}
+                  {fmtWindow(r.receivedAt)}
+                </div>
+                {r.attachmentMeta && r.attachmentMeta.length > 0 && (
+                  <ul className="mt-2 space-y-1">
+                    {r.attachmentMeta.map((a) => (
+                      <li
+                        key={a.id}
+                        className="flex items-center justify-between gap-2 text-xs"
+                      >
+                        <div className="min-w-0 flex-1 truncate">
+                          <span className="font-mono">{a.name}</span>
+                          <span className="text-muted-foreground ml-2">
+                            {fmtPodBytes(a.sizeBytes)}
+                          </span>
+                        </div>
+                        <a
+                          href={`/api/pods/${r.id}/attachments/${a.id}/download`}
+                          data-testid={`button-load-pod-download-${a.id}`}
+                        >
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2"
+                          >
+                            Download
+                          </Button>
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // MAIN PAGE
 // ────────────────────────────────────────────────────────────────────────────
 export default function AvailableFreightDetailPage() {
@@ -1408,6 +1543,12 @@ export default function AvailableFreightDetailPage() {
             )}
           </div>
         )}
+
+        <ProofOfDeliverySection
+          orderId={
+            ((opp.sourceRef as { orderId?: unknown } | null | undefined)?.orderId as string | undefined) ?? null
+          }
+        />
 
         <div className="h-12" />
       </div>

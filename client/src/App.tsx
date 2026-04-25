@@ -81,6 +81,7 @@ import AIIntelligencePage from "@/pages/ai-intelligence";
 import ValueIQPage from "@/pages/valueiq";
 import AdminMonitoredMailboxesPage from "@/pages/admin-monitored-mailboxes";
 import AdminPodIntakePage from "@/pages/admin-pod-intake";
+import MyPodsPage from "@/pages/my-pods";
 import AdminFreightOutreachTemplatesPage from "@/pages/admin-freight-outreach-templates";
 import AdminCarrierIntelligencePage from "@/pages/admin-carrier-intelligence";
 import AdminCarrierIntelligenceScoringPage from "@/pages/admin-carrier-intelligence-scoring";
@@ -162,6 +163,7 @@ function Router() {
       <Route path="/admin/webex-health" component={AdminWebexHealth} />
       <Route path="/admin/monitored-mailboxes" component={AdminMonitoredMailboxesPage} />
       <Route path="/admin/pod-intake" component={AdminPodIntakePage} />
+      <Route path="/my-pods" component={MyPodsPage} />
       <Route path="/admin/freight-outreach-templates" component={AdminFreightOutreachTemplatesPage} />
       <Route path="/admin/carrier-intelligence" component={AdminCarrierIntelligencePage} />
       <Route path="/admin/carrier-intelligence/scoring" component={AdminCarrierIntelligenceScoringPage} />
