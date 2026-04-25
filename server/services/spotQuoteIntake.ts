@@ -135,6 +135,12 @@ export async function parseQuoteIntakeFromText(input: {
   body?: string | null;
   rawText?: string | null;
   source?: IntakeSource;
+  /**
+   * Anchor for relative pickup-date phrases like "tomorrow" or
+   * "next Tuesday". Defaults to "now" — callers ingesting from a stored
+   * email should pass the message's send time.
+   */
+  referenceDate?: Date | null;
 }): Promise<ParsedQuoteIntake> {
   const source: IntakeSource = input.source ?? (input.rawText ? "email" : "text");
   let subject = (input.subject ?? "").trim();
@@ -154,7 +160,11 @@ export async function parseQuoteIntakeFromText(input: {
 
   // Heuristic first; AI fallback only when the heuristic returned null AND
   // the text looks like a quote candidate. This mirrors `ingestQuoteFromEmail`.
-  let parsed: ParsedQuoteFields | null = parseQuoteEmail({ subject, body });
+  let parsed: ParsedQuoteFields | null = parseQuoteEmail({
+    subject,
+    body,
+    referenceDate: input.referenceDate ?? null,
+  });
   let usedAi = false;
   if (!parsed) {
     const ai = await parseQuoteEmailAi({ subject, body });

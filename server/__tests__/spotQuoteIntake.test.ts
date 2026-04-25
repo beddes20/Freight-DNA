@@ -224,6 +224,122 @@ describe("parseQuoteIntakeFromText — messy real-world emails", () => {
   });
 });
 
+// ─── Relative pickup-date phrasing (Task #626) ─────────────────────────────
+//
+// The dropzone parser used to recognise only numeric dates ("4/30"), so real
+// customer emails ("pickup tomorrow", "load Tuesday", "needed next Monday")
+// left `pickupDate` null and forced the rep to type the date manually. The
+// suite below locks in the relative-date resolver: each case anchors on a
+// known reference date and verifies the resolved ISO date.
+//
+// Reference date used throughout: Wednesday, April 22, 2026 (DOW = 3).
+
+describe("parseQuoteIntakeFromText — relative pickup dates", () => {
+  const referenceDate = new Date(2026, 3, 22); // Wed, Apr 22, 2026 (local time)
+
+  it("resolves 'tomorrow' to reference + 1 day", async () => {
+    const out = await parseQuoteIntakeFromText({
+      subject: "RFQ",
+      body: "Memphis, TN to St Louis, MO — reefer pickup tomorrow AM.",
+      referenceDate,
+    });
+    expect(out.pickupDate).toBe("2026-04-23");
+  });
+
+  it("resolves 'today' to the reference date", async () => {
+    const out = await parseQuoteIntakeFromText({
+      subject: "Spot quote",
+      body: "Chicago, IL → Atlanta, GA pickup today, dry van.",
+      referenceDate,
+    });
+    expect(out.pickupDate).toBe("2026-04-22");
+  });
+
+  it("resolves a bare weekday to the upcoming named day (Wed → Tue is 6 days)", async () => {
+    const out = await parseQuoteIntakeFromText({
+      subject: "Spot quote",
+      body: "Chicago, IL → Atlanta, GA pickup Tuesday.",
+      referenceDate,
+    });
+    expect(out.pickupDate).toBe("2026-04-28");
+  });
+
+  it("resolves a bare 3-letter weekday abbreviation ('Mon')", async () => {
+    // Wed → Mon: (1 - 3 + 7) % 7 = 5 days → Apr 27
+    const out = await parseQuoteIntakeFromText({
+      subject: "Spot quote",
+      body: "Chicago, IL → Atlanta, GA load Mon AM.",
+      referenceDate,
+    });
+    expect(out.pickupDate).toBe("2026-04-27");
+  });
+
+  it("resolves 'next <weekday>' to the named day in the FOLLOWING week", async () => {
+    // Wed → next Mon: bare delta 5 + 7 = 12 days → May 4 (Mon)
+    const out = await parseQuoteIntakeFromText({
+      subject: "Spot quote",
+      body: "Chicago, IL → Atlanta, GA needed next Monday.",
+      referenceDate,
+    });
+    expect(out.pickupDate).toBe("2026-05-04");
+  });
+
+  it("resolves 'next Tuesday' even when bare 'Tuesday' is also present", async () => {
+    // Wed → next Tue: bare delta 6 + 7 = 13 days → May 5 (Tue)
+    const out = await parseQuoteIntakeFromText({
+      subject: "Fwd: Quote from Acme Logistics — CHI to ATL",
+      body: "Need a rate Chicago, IL → Atlanta, GA next Tuesday.",
+      referenceDate,
+    });
+    expect(out.pickupDate).toBe("2026-05-05");
+  });
+
+  it("prefers an explicit numeric date over a relative phrase", async () => {
+    const out = await parseQuoteIntakeFromText({
+      subject: "Spot quote",
+      body: "Chicago, IL → Atlanta, GA pickup 4/30/2026 — tomorrow if possible.",
+      referenceDate,
+    });
+    // The numeric "4/30/2026" must win over the relative "tomorrow".
+    expect(out.pickupDate).toBe("2026-04-30");
+  });
+
+  it("ignores weekday tokens inside forwarded 'Date:' / 'From:' headers", async () => {
+    const out = await parseQuoteIntakeFromText({
+      subject: "FYI",
+      body: [
+        "From: Pat Customer <pat@bigshipper.com>",
+        "Date: Thu, Apr 23, 2026 at 9:00 AM",
+        "Subject: Quote needed",
+        "",
+        "Need a rate Chicago, IL → Atlanta, GA pickup Tuesday.",
+      ].join("\n"),
+      referenceDate,
+    });
+    // "Thu" in the Date: header must NOT win — "Tuesday" in the body should.
+    expect(out.pickupDate).toBe("2026-04-28");
+  });
+
+  it("resolves 'TOMORROW' inside an ALL-CAPS uppercase blob lane", async () => {
+    const out = await parseQuoteIntakeFromText({
+      subject: "FW: SPOT QUOTE NEEDED",
+      body: "DALLAS TX MIAMI FL DRY VAN PICKUP TOMORROW",
+      referenceDate,
+    });
+    expect(out.pickupCity).toBe("Dallas");
+    expect(out.pickupDate).toBe("2026-04-23");
+  });
+
+  it("returns null pickupDate when no relative or numeric date is present", async () => {
+    const out = await parseQuoteIntakeFromText({
+      subject: "Spot quote",
+      body: "Chicago, IL → Atlanta, GA dry van — please send rate.",
+      referenceDate,
+    });
+    expect(out.pickupDate).toBeNull();
+  });
+});
+
 // ─── Image intake — vision-mocked screenshot ────────────────────────────────
 
 describe("parseQuoteIntakeFromImage — vision-mocked screenshot", () => {

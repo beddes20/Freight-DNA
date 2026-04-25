@@ -114,6 +114,94 @@ const LANE_RE_BARE = new RegExp(
 const RATE_RE = /\$\s*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]{3,6}(?:\.[0-9]{1,2})?)/;
 const DATE_RE = /\b(\d{1,2}[\/\-]\d{1,2}(?:[\/\-]\d{2,4})?)\b/;
 
+// ─── Relative date resolver (Task #626) ─────────────────────────────────────
+// Real customer emails almost never carry a numeric "4/30" date. They say
+// "pickup tomorrow", "load Tuesday", "needed next Monday". We anchor those
+// phrases on a reference date (the email's send time, or "now" for live
+// pasted text) so the dropzone can pre-fill `pickupDate` instead of leaving
+// the rep to type it manually.
+
+const WEEKDAY_NAMES_RE =
+  "sun(?:day)?|mon(?:day)?|tue(?:sday|s)?|wed(?:nesday)?|thu(?:rsday|rs|r)?|fri(?:day)?|sat(?:urday)?";
+const NEXT_WEEKDAY_RE = new RegExp(`\\bnext\\s+(${WEEKDAY_NAMES_RE})\\b`, "i");
+const BARE_WEEKDAY_RE = new RegExp(`\\b(${WEEKDAY_NAMES_RE})\\b`, "i");
+const TODAY_RE = /\btoday\b/i;
+const TOMORROW_RE = /\btomorrow\b/i;
+
+const WEEKDAY_LOOKUP: Readonly<Record<string, number>> = {
+  sun: 0, sunday: 0,
+  mon: 1, monday: 1,
+  tue: 2, tues: 2, tuesday: 2,
+  wed: 3, wednesday: 3,
+  thu: 4, thur: 4, thurs: 4, thursday: 4,
+  fri: 5, friday: 5,
+  sat: 6, saturday: 6,
+};
+
+function startOfDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function addDays(d: Date, n: number): Date {
+  const r = new Date(d.getTime());
+  r.setDate(r.getDate() + n);
+  return r;
+}
+
+/**
+ * Resolve a relative pickup-date phrase against a reference date.
+ *
+ * Recognises:
+ *   - "today"          → reference date (start of day)
+ *   - "tomorrow"       → reference + 1 day
+ *   - bare weekday     → next occurrence within 0..6 days (today counts when
+ *                         the named day matches the reference's weekday)
+ *   - "next <weekday>" → that weekday in the *following* week
+ *                         (always 7..13 days from the reference)
+ *
+ * Header lines that often carry weekday tokens unrelated to pickup
+ * (forwarded `From:` / `Date:` / `Sent:` / `To:` / `Cc:` / `Bcc:`) are
+ * stripped first so a "Date: Thu, Apr 23" stamp can't poison the result.
+ *
+ * Returns null when no relative phrase is present.
+ */
+export function parseRelativeDate(rawText: string, referenceDate: Date): Date | null {
+  if (!rawText) return null;
+  if (isNaN(referenceDate.getTime())) return null;
+
+  const cleaned = rawText.replace(
+    /^[ \t]*(?:Date|From|Sent|To|Cc|Bcc):[^\n\r]*$/gim,
+    "",
+  );
+
+  const today = startOfDay(referenceDate);
+
+  const nextM = cleaned.match(NEXT_WEEKDAY_RE);
+  if (nextM) {
+    const wd = WEEKDAY_LOOKUP[nextM[1].toLowerCase()];
+    if (wd !== undefined) {
+      const cur = today.getDay();
+      const delta = ((wd - cur + 7) % 7) + 7;
+      return addDays(today, delta);
+    }
+  }
+
+  if (TOMORROW_RE.test(cleaned)) return addDays(today, 1);
+  if (TODAY_RE.test(cleaned)) return today;
+
+  const bareM = cleaned.match(BARE_WEEKDAY_RE);
+  if (bareM) {
+    const wd = WEEKDAY_LOOKUP[bareM[1].toLowerCase()];
+    if (wd !== undefined) {
+      const cur = today.getDay();
+      const delta = (wd - cur + 7) % 7;
+      return addDays(today, delta);
+    }
+  }
+
+  return null;
+}
+
 function normalizeCity(city: string): string {
   // Title-case "EL PASO" → "El Paso"; preserve mixed-case input as-is.
   const cleaned = city.trim().replace(/\s+/g, " ");
@@ -134,12 +222,17 @@ function parseRate(s: string): number | null {
   return Math.round(n);
 }
 
-function parseDate(s: string | null): Date | null {
+function parseDate(s: string | null, referenceDate?: Date | null): Date | null {
   if (!s) return null;
   const m = s.match(DATE_RE);
-  if (!m) return null;
-  const d = new Date(m[1]);
-  return isNaN(d.getTime()) ? null : d;
+  if (m) {
+    const d = new Date(m[1]);
+    if (!isNaN(d.getTime())) return d;
+  }
+  // Fall back to relative-date phrasing ("tomorrow", "next Tuesday", ...)
+  // anchored on the reference date (the email's send time, or "now" when
+  // the caller didn't supply one).
+  return parseRelativeDate(s, referenceDate ?? new Date());
 }
 
 // ─── HTML scrubbing ─────────────────────────────────────────────────────────
@@ -223,7 +316,16 @@ function tryStateNamePattern(text: string): {
  * body first so the parser only sees prose. Returns null when no usable
  * lane is found.
  */
-export function parseQuoteEmail(input: { subject?: string | null; body?: string | null }): ParsedQuoteFields | null {
+export function parseQuoteEmail(input: {
+  subject?: string | null;
+  body?: string | null;
+  /**
+   * Anchor for relative pickup-date phrases like "tomorrow" or
+   * "next Tuesday". Defaults to "now" when the caller doesn't supply
+   * the email's send time. See {@link parseRelativeDate}.
+   */
+  referenceDate?: Date | null;
+}): ParsedQuoteFields | null {
   const subject = (input.subject ?? "").trim();
   const cleanBody = stripHtml(input.body ?? "");
 
@@ -254,7 +356,7 @@ export function parseQuoteEmail(input: { subject?: string | null; body?: string 
 
   const rateMatch = fullText.match(RATE_RE);
   const quotedAmount = rateMatch ? parseRate(rateMatch[1]) : null;
-  const pickupDate = parseDate(fullText);
+  const pickupDate = parseDate(fullText, input.referenceDate ?? null);
 
   return {
     originCity: normalizeCity(lane.oCity),
@@ -474,8 +576,17 @@ export async function ingestQuoteFromEmail(
   )).limit(1);
   if (dup.length > 0) return { status: "skipped_duplicate", quoteId: dup[0].id };
 
+  // Anchor relative pickup-date phrases ("tomorrow", "next Tuesday") on the
+  // email's send time. Falls back to createdAt / now when missing so the
+  // resolver always has a real reference.
+  const referenceDate = message.providerSentAt ?? message.createdAt ?? new Date();
+
   const fromExtracted = mergeExtractedFields(opts?.extractedData ?? null);
-  const fromHeuristic = parseQuoteEmail({ subject: message.subject, body: message.body });
+  const fromHeuristic = parseQuoteEmail({
+    subject: message.subject,
+    body: message.body,
+    referenceDate,
+  });
   let parsed = fromExtracted ?? fromHeuristic;
   if (!parsed && opts?.useAiFallback !== false) {
     parsed = await parseQuoteEmailAi({ subject: message.subject, body: message.body });
