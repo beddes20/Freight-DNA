@@ -353,6 +353,68 @@ async function main(): Promise<void> {
     assert(opps.length === 1, `Expected 1 AF opp (new path), got ${opps.length}`);
   });
 
+  // (f) Re-saving an already-won quote (no status transition) updates the
+  //     existing AF row in place rather than creating a duplicate. This is
+  //     the "rep edits buy/sell after winning" path — the AF cockpit needs
+  //     to see those edits without spawning a second opp.
+  await runTest("Re-saving an already-won quote (no status change) updates the existing AF row in place", async () => {
+    const fix = await createCustomerAndCompany(orgId);
+    const quoteId = await createPendingQuote(cookie, fix.customerId, {
+      pickupHoursFromNow: 24,
+      quotedAmount: 2000,
+      carrierPaid: 1500,
+    });
+    const r1 = await apiPatch(`/api/customer-quotes/quote/${quoteId}`, cookie, { outcomeStatus: "won" });
+    assert(r1.status === 200, `Initial PATCH won failed: ${r1.status}`);
+    const before = await afOppsForQuote(orgId, quoteId);
+    assert(before.length === 1, `Expected 1 AF opp after initial win, got ${before.length}`);
+    const oppId = before[0].id;
+    assert(String(before[0].sourceRef?.sell) === "2000.00" || String(before[0].sourceRef?.sell) === "2000",
+      `Initial sell should be 2000, got ${before[0].sourceRef?.sell}`);
+
+    // Re-save WITHOUT changing outcomeStatus — only edit the buy rate.
+    // Should update the AF row's sourceRef.buy in place, not duplicate.
+    const r2 = await apiPatch(`/api/customer-quotes/quote/${quoteId}`, cookie, { carrierPaid: 1750 });
+    assert(r2.status === 200, `Re-save without status change failed: ${r2.status}`);
+    const after = await afOppsForQuote(orgId, quoteId);
+    assert(after.length === 1, `Expected still 1 AF opp after re-save, got ${after.length}`);
+    assert(after[0].id === oppId, `AF opp id should be unchanged across re-save (got ${after[0].id} vs ${oppId})`);
+    assert(String(after[0].sourceRef?.buy) === "1750.00" || String(after[0].sourceRef?.buy) === "1750",
+      `Updated buy should be 1750, got ${after[0].sourceRef?.buy}`);
+  });
+
+  // (g) Won quote whose customer name has no matching CRM company → handoff
+  //     auto-creates a minimal company so the AF row still lands. Without
+  //     this, a valid won quote for a brand-new customer would silently
+  //     drop on the floor.
+  await runTest("Won quote with no matching CRM company auto-creates one and still produces an AF row", async () => {
+    const customerId = uid();
+    const customerName = `AfHandoffTest NoCompany ${customerId.slice(0, 8)}`;
+    await q(
+      `INSERT INTO quote_customers (id, organization_id, name, created_at) VALUES ($1, $2, $3, NOW())`,
+      [customerId, orgId, customerName]
+    );
+    track("quote_customers", customerId);
+
+    const quoteId = await createPendingQuote(cookie, customerId, { pickupHoursFromNow: 24 });
+    const { status } = await apiPatch(`/api/customer-quotes/quote/${quoteId}`, cookie, {
+      outcomeStatus: "won",
+    });
+    assert(status === 200, `PATCH won failed: ${status}`);
+
+    const opps = await afOppsForQuote(orgId, quoteId);
+    assert(opps.length === 1, `Expected 1 AF opp after auto-create, got ${opps.length}`);
+    // Verify a CRM company was created for this name in this org and the
+    // AF row points at it.
+    const companyRes = await q(
+      `SELECT id FROM companies WHERE organization_id = $1 AND LOWER(name) = LOWER($2)`,
+      [orgId, customerName]
+    );
+    assert(companyRes.rows.length === 1, `Expected 1 auto-created company, got ${companyRes.rows.length}`);
+    track("companies", companyRes.rows[0].id);
+    assert(opps[0].companyId === companyRes.rows[0].id, `AF opp companyId should match the auto-created company`);
+  });
+
   // (e) Org setting OFF → handoff is short-circuited.
   await runTest("Org setting auto_won_quote_af_handoff = false short-circuits the AF handoff", async () => {
     const toggleOff = await apiPut("/api/customer-quotes/settings/auto-af-handoff", cookie, { enabled: false });

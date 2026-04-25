@@ -1919,15 +1919,17 @@ export async function setAutoWonQuoteAfHandoffEnabled(orgId: string, enabled: bo
  * render the "From won quote" badge. Re-saving the same won quote updates
  * the existing AF row in place rather than creating a duplicate.
  *
- * Returns the AF opportunity id on success, `null` on any skip-or-fail path.
- * Every outcome is logged with a `[customer-quotes] AF handoff …` prefix so
- * the audit trail is grep-able.
+ * Returns `{ id, created }` on success — `created=true` only on the very
+ * first hand-off so callers can distinguish a brand-new AF row (worth
+ * logging an event/touchpoint) from an idempotent re-save update — and
+ * `null` on any skip-or-fail path. Every outcome is logged with a
+ * `[customer-quotes] AF handoff …` prefix so the audit trail is grep-able.
  */
 async function createFreightOpportunityFromWonQuote(
   orgId: string,
   opp: QuoteOpportunity,
   actorUserId: string | null,
-): Promise<string | null> {
+): Promise<{ id: string; created: boolean } | null> {
   try {
     // 1. Org-level setting gate.
     const enabled = await getAutoWonQuoteAfHandoffEnabled(orgId);
@@ -1963,14 +1965,30 @@ async function createFreightOpportunityFromWonQuote(
       console.log(`[customer-quotes] AF handoff skipped (no customer) quote=${opp.id}`);
       return null;
     }
+    let companyId: string;
     const [matched] = await db.select({ id: companies.id }).from(companies)
       .where(and(eq(companies.organizationId, orgId), sql`LOWER(${companies.name}) = LOWER(${customerName})`))
       .limit(1);
-    if (!matched) {
-      console.log(`[customer-quotes] AF handoff skipped (no company match for "${customerName}") quote=${opp.id}`);
-      return null;
+    if (matched) {
+      companyId = matched.id;
+    } else {
+      // No CRM company exists for this customer name yet. freight_opportunities
+      // requires a non-null companyId, and silently dropping the handoff would
+      // mean valid won quotes for new customers never land in the AF cockpit.
+      // Auto-create a minimal company tied to this org so the handoff always
+      // succeeds for a valid won quote — the rep can enrich the company
+      // record later from the CRM.
+      const [created] = await db.insert(companies).values({
+        organizationId: orgId,
+        name: customerName,
+      }).returning({ id: companies.id });
+      if (!created) {
+        console.log(`[customer-quotes] AF handoff skipped (failed to auto-create company "${customerName}") quote=${opp.id}`);
+        return null;
+      }
+      companyId = created.id;
+      console.log(`[customer-quotes] AF handoff auto-created company id=${companyId} name="${customerName}" quote=${opp.id}`);
     }
-    const companyId = matched.id;
 
     // Owner: prefer the quote rep's user mapping, like the LWQ handoff.
     let ownerUserId: string | null = null;
@@ -2027,7 +2045,7 @@ async function createFreightOpportunityFromWonQuote(
           eq(freightOpportunities.orgId, orgId),
         ));
         console.log(`[customer-quotes] AF handoff updated existing opp=${existing.id} quote=${opp.id}`);
-        return existing.id;
+        return { id: existing.id, created: false };
       }
 
       const insert: InsertFreightOpportunity = {
@@ -2049,10 +2067,10 @@ async function createFreightOpportunityFromWonQuote(
         ownerUserId,
         notes: opp.notes,
       };
-      const [created] = await tx.insert(freightOpportunities).values(insert)
+      const [createdRow] = await tx.insert(freightOpportunities).values(insert)
         .returning({ id: freightOpportunities.id });
-      console.log(`[customer-quotes] AF handoff created opp=${created?.id} quote=${opp.id} pickup=${pickupDay}`);
-      return created?.id ?? null;
+      console.log(`[customer-quotes] AF handoff created opp=${createdRow?.id} quote=${opp.id} pickup=${pickupDay}`);
+      return createdRow ? { id: createdRow.id, created: true } : null;
     });
   } catch (err) {
     console.error(`[customer-quotes] AF handoff failed quote=${opp.id}:`, err);
@@ -2315,14 +2333,18 @@ export async function updateQuote(orgId: string, actor: string, id: string, patc
   // Task #654 — Same-day cover handoff. When pickup is within 72h, also push
   // the won quote into the Available Freight cockpit so it lands on the
   // spot-dispatch surface alongside any LWQ lane that was created above.
-  // Runs unconditionally on outcomeStatus → won; the helper itself short-
-  // circuits on org setting / window / dedupe.
-  if (changes.outcomeStatus && isWon(updated.outcomeStatus)) {
-    const oppId = await createFreightOpportunityFromWonQuote(orgId, updated, actorUserId ?? null);
-    if (oppId) {
+  // Fires on ANY save where the resulting status is won — including
+  // re-saves of an already-won quote (e.g. the rep edits buy/sell/notes
+  // after marking won). The helper is idempotent (advisory-locked upsert)
+  // and short-circuits on org setting / window / company resolution. The
+  // af_handoff event + touchpoint are only emitted on the very first
+  // creation so re-saves don't spam the audit trail.
+  if (isWon(updated.outcomeStatus)) {
+    const handoff = await createFreightOpportunityFromWonQuote(orgId, updated, actorUserId ?? null);
+    if (handoff?.created) {
       const [handoffEvent] = await db.insert(quoteEvents).values({
         quoteId: id, eventType: "af_handoff", occurredAt: new Date(), actor,
-        payload: { opportunityId: oppId },
+        payload: { opportunityId: handoff.id },
       }).returning();
       if (handoffEvent) {
         await logQuoteTouchpointFromEvent({
