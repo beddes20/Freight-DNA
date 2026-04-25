@@ -1,13 +1,15 @@
 import { and, eq, asc, desc, inArray, sql, type SQL } from "drizzle-orm";
-import { db } from "../storage";
+import { db, storage } from "../storage";
 import { logQuoteTouchpointFromEvent } from "./quoteTouchpoints";
 import { carriers as carriersCatalog } from "@shared/schema";
 import {
   quoteCustomers, quoteReps, quoteCarriers, quoteLaneGroups, quoteOutcomeReasons,
   quoteOpportunities, quoteEvents, quoteSavedViews,
   recurringLanes, companies, emailMessages,
+  freightOpportunities,
   type QuoteOpportunity, type QuoteOutcomeStatus, type QuoteCustomer, type QuoteRep,
   type QuoteCarrier, type QuoteLaneGroup, type QuoteOutcomeReason, type QuoteSavedView,
+  type InsertFreightOpportunity,
 } from "@shared/schema";
 import { UNKNOWN_CUSTOMER_NAME, classifyPartyType } from "./customerNameResolver";
 import { learnFromReassign } from "./quoteSenderMappings";
@@ -1872,6 +1874,192 @@ export async function getLwqLaneForQuote(orgId: string, quoteId: string): Promis
   return row ? { laneId: row.id } : null;
 }
 
+// ── Task #654 — Won-quote → Available Freight same-day handoff ──────────────
+//
+// When a quote wins and the customer needs cover within the next 72 hours,
+// the rep needs the load to land directly in the Available Freight cockpit
+// (the spot-dispatch surface) — not in the LWQ recurring-lane backlog. This
+// is in addition to the existing LWQ handoff (`createLwqLaneFromWonQuote`),
+// which still fires regardless of pickup distance, because some won quotes
+// are also the start of a recurring pattern.
+//
+// The pickup-time proxy is `quote.requestDate` (the schema has no separate
+// pickup-date column on quote_opportunities). For real-time customer quotes
+// that's the right value: a quote that came in today with a request to ship
+// today/tomorrow has requestDate ≈ now+0–24h, which is the exact case this
+// handoff is designed to catch.
+//
+// Org-level toggle: `appSettings` key `auto_won_quote_af_handoff:${orgId}`,
+// defaulting to enabled. The setting is shared with the global app_settings
+// table — no separate org_settings table is added (matches the convention
+// already used by `available_freight_onedrive_url:${orgId}` and other
+// org-scoped settings throughout the codebase).
+
+const SAME_DAY_HANDOFF_WINDOW_MS = 72 * 60 * 60 * 1000;
+
+export function autoWonQuoteAfHandoffSettingKey(orgId: string): string {
+  return `auto_won_quote_af_handoff:${orgId}`;
+}
+
+export async function getAutoWonQuoteAfHandoffEnabled(orgId: string): Promise<boolean> {
+  const raw = await storage.getSetting(autoWonQuoteAfHandoffSettingKey(orgId));
+  // Default ON per spec — only an explicit "false"/"0" disables.
+  if (raw === undefined || raw === null || raw === "") return true;
+  const v = raw.trim().toLowerCase();
+  return !(v === "false" || v === "0" || v === "off" || v === "no");
+}
+
+export async function setAutoWonQuoteAfHandoffEnabled(orgId: string, enabled: boolean): Promise<void> {
+  await storage.setSetting(autoWonQuoteAfHandoffSettingKey(orgId), enabled ? "true" : "false");
+}
+
+/**
+ * Won-quote → Available Freight handoff. Idempotent on (orgId, quoteId):
+ * keyed off `source_ref->>'quoteId'`, the same field the cockpit reads to
+ * render the "From won quote" badge. Re-saving the same won quote updates
+ * the existing AF row in place rather than creating a duplicate.
+ *
+ * Returns the AF opportunity id on success, `null` on any skip-or-fail path.
+ * Every outcome is logged with a `[customer-quotes] AF handoff …` prefix so
+ * the audit trail is grep-able.
+ */
+async function createFreightOpportunityFromWonQuote(
+  orgId: string,
+  opp: QuoteOpportunity,
+  actorUserId: string | null,
+): Promise<string | null> {
+  try {
+    // 1. Org-level setting gate.
+    const enabled = await getAutoWonQuoteAfHandoffEnabled(orgId);
+    if (!enabled) {
+      console.log(`[customer-quotes] AF handoff skipped (disabled) quote=${opp.id} org=${orgId}`);
+      return null;
+    }
+
+    // 2. Pickup-window check. requestDate is the proxy (see header comment).
+    //    Window is the *next* 0–72h: a quote whose pickup is already in the
+    //    past (e.g. a stale won quote being re-marked weeks later) is not a
+    //    same-day cover candidate and must not generate an AF row.
+    const pickupAt = opp.requestDate.getTime();
+    const now = Date.now();
+    const deltaMs = pickupAt - now;
+    if (deltaMs > SAME_DAY_HANDOFF_WINDOW_MS) {
+      const hours = Math.round(deltaMs / 3600000);
+      console.log(`[customer-quotes] AF handoff skipped (>72h, pickup in ${hours}h) quote=${opp.id}`);
+      return null;
+    }
+    if (deltaMs < 0) {
+      const hoursPast = Math.round(-deltaMs / 3600000);
+      console.log(`[customer-quotes] AF handoff skipped (pickup ${hoursPast}h in the past) quote=${opp.id}`);
+      return null;
+    }
+
+    // 3. Resolve company. freight_opportunities.companyId is NOT NULL, so a
+    //    customer name with no matching CRM company can't be handed off.
+    const [cust] = await db.select().from(quoteCustomers)
+      .where(and(eq(quoteCustomers.organizationId, orgId), eq(quoteCustomers.id, opp.customerId))).limit(1);
+    const customerName = cust?.name ?? null;
+    if (!customerName) {
+      console.log(`[customer-quotes] AF handoff skipped (no customer) quote=${opp.id}`);
+      return null;
+    }
+    const [matched] = await db.select({ id: companies.id }).from(companies)
+      .where(and(eq(companies.organizationId, orgId), sql`LOWER(${companies.name}) = LOWER(${customerName})`))
+      .limit(1);
+    if (!matched) {
+      console.log(`[customer-quotes] AF handoff skipped (no company match for "${customerName}") quote=${opp.id}`);
+      return null;
+    }
+    const companyId = matched.id;
+
+    // Owner: prefer the quote rep's user mapping, like the LWQ handoff.
+    let ownerUserId: string | null = null;
+    if (opp.repId) {
+      const [r] = await db.select({ userId: quoteReps.userId }).from(quoteReps)
+        .where(eq(quoteReps.id, opp.repId)).limit(1);
+      ownerUserId = r?.userId ?? null;
+    }
+
+    const equipment = normalizeEquipmentType(opp.equipment);
+    const pickupDay = opp.requestDate.toISOString().slice(0, 10);
+    const sourceRef = {
+      type: "won_quote" as const,
+      quoteId: opp.id,
+      buy: opp.carrierPaid,   // null until the rep records carrier cost
+      sell: opp.quotedAmount, // the customer-facing rate locked in at win
+    };
+
+    // 4. Idempotent upsert. We can't add a unique constraint on a JSONB
+    //    expression without a migration, so we serialize concurrent calls
+    //    for the same (orgId, quoteId) with a Postgres advisory lock that
+    //    auto-releases at transaction commit/rollback. Two parallel PATCH
+    //    requests that both try to win the same quote will queue here, and
+    //    only the first will see "no existing row" → INSERT; the second
+    //    will see the row and UPDATE in place.
+    return await db.transaction(async (tx) => {
+      // hashtextextended returns a bigint that fits pg_advisory_xact_lock(bigint).
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`won_quote_af:${orgId}:${opp.id}`}, 0))`);
+
+      const [existing] = await tx.select({ id: freightOpportunities.id })
+        .from(freightOpportunities)
+        .where(and(
+          eq(freightOpportunities.orgId, orgId),
+          sql`${freightOpportunities.sourceRef}->>'quoteId' = ${opp.id}`,
+          sql`${freightOpportunities.sourceRef}->>'type' = 'won_quote'`,
+        ))
+        .limit(1);
+
+      if (existing) {
+        await tx.update(freightOpportunities).set({
+          companyId,
+          origin: opp.originCity,
+          originState: opp.originState,
+          destination: opp.destCity,
+          destinationState: opp.destState,
+          equipmentType: equipment,
+          pickupWindowStart: pickupDay,
+          pickupWindowEnd: pickupDay,
+          sourceRef,
+          ownerUserId,
+          notes: opp.notes,
+        }).where(and(
+          eq(freightOpportunities.id, existing.id),
+          eq(freightOpportunities.orgId, orgId),
+        ));
+        console.log(`[customer-quotes] AF handoff updated existing opp=${existing.id} quote=${opp.id}`);
+        return existing.id;
+      }
+
+      const insert: InsertFreightOpportunity = {
+        orgId,
+        companyId,
+        mode: "exact_load",
+        origin: opp.originCity,
+        originState: opp.originState,
+        destination: opp.destCity,
+        destinationState: opp.destState,
+        equipmentType: equipment,
+        pickupWindowStart: pickupDay,
+        pickupWindowEnd: pickupDay,
+        loadCount: 1,
+        sourceRef,
+        urgencyScore: 70,
+        status: "ready_to_send",
+        createdById: actorUserId,
+        ownerUserId,
+        notes: opp.notes,
+      };
+      const [created] = await tx.insert(freightOpportunities).values(insert)
+        .returning({ id: freightOpportunities.id });
+      console.log(`[customer-quotes] AF handoff created opp=${created?.id} quote=${opp.id} pickup=${pickupDay}`);
+      return created?.id ?? null;
+    });
+  } catch (err) {
+    console.error(`[customer-quotes] AF handoff failed quote=${opp.id}:`, err);
+    return null;
+  }
+}
+
 // Task #477 — Idempotent: if a lane already exists for this quote, returns it.
 // Maps quote → recurring_lane: equipment normalized; companyId resolved by
 // case-insensitive name match against companies; ownerUserId from
@@ -2114,6 +2302,27 @@ export async function updateQuote(orgId: string, actor: string, id: string, patc
       const [handoffEvent] = await db.insert(quoteEvents).values({
         quoteId: id, eventType: "lwq_handoff", occurredAt: new Date(), actor,
         payload: { laneId },
+      }).returning();
+      if (handoffEvent) {
+        await logQuoteTouchpointFromEvent({
+          orgId, oppId: id, eventId: handoffEvent.id, eventType: handoffEvent.eventType,
+          occurredAt: handoffEvent.occurredAt, fallbackUserId: actorUserId ?? null,
+        });
+      }
+    }
+  }
+
+  // Task #654 — Same-day cover handoff. When pickup is within 72h, also push
+  // the won quote into the Available Freight cockpit so it lands on the
+  // spot-dispatch surface alongside any LWQ lane that was created above.
+  // Runs unconditionally on outcomeStatus → won; the helper itself short-
+  // circuits on org setting / window / dedupe.
+  if (changes.outcomeStatus && isWon(updated.outcomeStatus)) {
+    const oppId = await createFreightOpportunityFromWonQuote(orgId, updated, actorUserId ?? null);
+    if (oppId) {
+      const [handoffEvent] = await db.insert(quoteEvents).values({
+        quoteId: id, eventType: "af_handoff", occurredAt: new Date(), actor,
+        payload: { opportunityId: oppId },
       }).returning();
       if (handoffEvent) {
         await logQuoteTouchpointFromEvent({

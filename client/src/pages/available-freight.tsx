@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Command, CommandEmpty, CommandInput, CommandItem, CommandList,
 } from "@/components/ui/command";
@@ -2094,6 +2095,49 @@ function tierTone(tier: string | null): string {
   }
 }
 
+/**
+ * Task #654 — "From won quote" badge for AF cockpit rows. Renders only when
+ * `sourceRef.type === "won_quote"`; the tooltip shows the buy/sell pricing
+ * priors the won quote landed with so the rep doesn't have to open the
+ * detail page just to see the rate context.
+ */
+function fmtCurrency(v: unknown): string | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = typeof v === "number" ? v : parseFloat(String(v));
+  if (!Number.isFinite(n)) return null;
+  return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+}
+
+function WonQuoteBadge({ sourceRef, oppId }: { sourceRef: unknown; oppId: string }) {
+  if (!sourceRef || typeof sourceRef !== "object") return null;
+  const ref = sourceRef as { type?: string; quoteId?: string; buy?: unknown; sell?: unknown };
+  if (ref.type !== "won_quote") return null;
+  const buy = fmtCurrency(ref.buy);
+  const sell = fmtCurrency(ref.sell);
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge
+            variant="outline"
+            className="text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
+            data-testid={`badge-from-won-quote-${oppId}`}
+          >
+            From won quote
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent side="top" data-testid={`tooltip-won-quote-${oppId}`}>
+          <div className="text-xs space-y-0.5">
+            <div className="font-medium">From won customer quote</div>
+            <div>Sell: {sell ?? "—"}</div>
+            <div>Buy: {buy ?? "—"}</div>
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 function slaDotColor(level: "green" | "yellow" | "red" | null): string {
   if (level === "red") return "bg-red-500";
   if (level === "yellow") return "bg-amber-500";
@@ -2188,6 +2232,10 @@ function CockpitRowView(props: {
           </span>
         )}
         <Badge variant="secondary" data-testid={`badge-status-${opp.id}`}>{opp.status.replace(/_/g, " ")}</Badge>
+        {/* Task #654 — "From won quote" badge with buy/sell tooltip. Surfaces
+            the pricing priors that came in on the source quote so the rep
+            can see them at a glance without opening the detail page. */}
+        <WonQuoteBadge sourceRef={opp.sourceRef} oppId={opp.id} />
         <span className="text-xs text-muted-foreground flex items-center gap-1">
           <Clock className="h-3 w-3" /> pickup {fmtPickup(opp.pickupWindowStart)}
         </span>

@@ -14,6 +14,8 @@ import {
   getActionQueue,
   bulkReassignCustomerForQuotes,
   bulkSetQuoteStatus,
+  getAutoWonQuoteAfHandoffEnabled,
+  setAutoWonQuoteAfHandoffEnabled,
   type QuoteFilters, type ListSortKey,
 } from "../services/customerQuotes";
 import { QUOTE_PARTY_TYPES } from "@shared/schema";
@@ -381,6 +383,45 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Internal error";
       console.error("[customer-quotes] sender-mappings delete error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Task #654 — Org-level toggle for the won-quote → Available Freight
+  // same-day handoff. Admin-only; the setting defaults ON if no row exists
+  // in app_settings. Stored under the `auto_won_quote_af_handoff:${orgId}`
+  // key so it follows the rest of the project's org-scoped settings
+  // convention (no separate org_settings table).
+  app.get("/api/customer-quotes/settings/auto-af-handoff", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!["admin", "director", "sales_director"].includes(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const enabled = await getAutoWonQuoteAfHandoffEnabled(user.organizationId);
+      res.json({ enabled });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
+      console.error("[customer-quotes] auto-af-handoff get error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  app.put("/api/customer-quotes/settings/auto-af-handoff", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (!["admin", "director", "sales_director"].includes(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const parsed = z.object({ enabled: z.boolean() }).safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "enabled (boolean) required" });
+      await setAutoWonQuoteAfHandoffEnabled(user.organizationId, parsed.data.enabled);
+      res.json({ enabled: parsed.data.enabled });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
+      console.error("[customer-quotes] auto-af-handoff put error:", err);
       res.status(500).json({ error: msg });
     }
   });
