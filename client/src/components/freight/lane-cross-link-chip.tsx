@@ -18,7 +18,21 @@ export interface LiveOppsChipData {
   laneSignature: string;
   count: number;
   totalLoads: number;
+  /** Combined customer-side revenue across the lane's open opps today. */
+  combinedRevenue?: number;
   nextPickupAt: string | null;
+}
+
+/**
+ * Format a dollar amount as a compact "$14K" / "$1.2M" string. Returns null
+ * when the value rounds to less than $500 so the chip stays clean for noisy
+ * pre-cover loads with no revenue stamped yet.
+ */
+function formatCombinedRevenue(usd: number | undefined): string | null {
+  if (!usd || !Number.isFinite(usd) || usd < 500) return null;
+  if (usd >= 1_000_000) return `$${(usd / 1_000_000).toFixed(usd >= 10_000_000 ? 0 : 1)}M`;
+  if (usd >= 1_000) return `$${Math.round(usd / 1_000)}K`;
+  return `$${Math.round(usd)}`;
 }
 
 function relativeAge(iso: string | null): string | null {
@@ -78,7 +92,9 @@ export function LiveOppsChip({
   testId?: string;
 }) {
   const pickup = formatPickup(data.nextPickupAt);
+  const revenue = formatCombinedRevenue(data.combinedRevenue);
   const parts: string[] = [`${data.count} live opp${data.count === 1 ? "" : "s"} today`];
+  if (revenue) parts.push(`${revenue} combined`);
   if (data.totalLoads !== data.count) parts.push(`${data.totalLoads} loads`);
   if (pickup) parts.push(`pickup ${pickup}`);
   return (

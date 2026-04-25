@@ -22,6 +22,7 @@ import {
   carrierOutreachLogs,
   laneCarrierInterest,
   freightOpportunities,
+  loadFact,
 } from "@shared/schema";
 
 const HOT_REPLY_STATUSES = ["available_now", "available_next_week"] as const;
@@ -71,6 +72,14 @@ export interface LwqLaneContext {
 export interface OpenOppLaneContext {
   count: number;
   totalLoads: number;
+  /**
+   * Combined customer-side revenue across all open opps for the lane today,
+   * derived by joining each opp to its source `load_fact.revenue` via
+   * `freight_opportunities.sourceRef->>'orderId'`. Falls back to 0 when no
+   * source row carries a revenue figure (so the chip can hide the dollar
+   * fragment cleanly).
+   */
+  combinedRevenue: number;
   nextPickupAt: string | null;
   sampleOppId: string | null;
 }
@@ -230,6 +239,9 @@ export async function buildOpenOppContextByLaneSig(
       loadCount: freightOpportunities.loadCount,
       generatedAt: freightOpportunities.generatedAt,
       status: freightOpportunities.status,
+      // Surface the source TMS order id so we can join to load_fact for the
+      // customer-side revenue without making per-row queries.
+      sourceOrderId: sql<string | null>`${freightOpportunities.sourceRef}->>'orderId'`.as("source_order_id"),
     })
     .from(freightOpportunities)
     .where(and(
@@ -247,7 +259,35 @@ export async function buildOpenOppContextByLaneSig(
       loadCount: number | null;
       generatedAt: Date | string | null;
       status: string;
+      sourceOrderId: string | null;
     }>;
+
+  // Fetch realized/available revenue for the matching source orders in a
+  // single round-trip (no per-row N+1). load_fact.revenue is the canonical
+  // customer-side revenue field (`coverFreightOpportunity` uses customerRate
+  // × loadCount on cover; until then this is the best per-load revenue
+  // signal, populated from the daily TMS extract).
+  const orderIds = Array.from(
+    new Set(rows.map(r => r.sourceOrderId).filter((x): x is string => !!x)),
+  );
+  const revenueByOrderId = new Map<string, number>();
+  if (orderIds.length > 0) {
+    const revRows = (await db
+      .select({
+        orderId: loadFact.orderId,
+        revenue: loadFact.revenue,
+      })
+      .from(loadFact)
+      .where(and(
+        eq(loadFact.orgId, orgId),
+        inArray(loadFact.orderId, orderIds),
+      ))) as Array<{ orderId: string; revenue: string | number | null }>;
+    for (const r of revRows) {
+      const n = typeof r.revenue === "string" ? parseFloat(r.revenue) : (r.revenue ?? 0);
+      if (!Number.isFinite(n)) continue;
+      revenueByOrderId.set(r.orderId, (revenueByOrderId.get(r.orderId) ?? 0) + n);
+    }
+  }
 
   for (const r of rows) {
     const sig = laneSig(
@@ -257,9 +297,18 @@ export async function buildOpenOppContextByLaneSig(
       r.destinationState,
       r.equipmentType,
     );
-    const acc = out.get(sig) ?? { count: 0, totalLoads: 0, nextPickupAt: null, sampleOppId: null };
+    const acc = out.get(sig) ?? {
+      count: 0,
+      totalLoads: 0,
+      combinedRevenue: 0,
+      nextPickupAt: null,
+      sampleOppId: null,
+    };
     acc.count += 1;
     acc.totalLoads += r.loadCount ?? 1;
+    if (r.sourceOrderId) {
+      acc.combinedRevenue += revenueByOrderId.get(r.sourceOrderId) ?? 0;
+    }
     if (!acc.sampleOppId) acc.sampleOppId = r.id;
     // Earliest pickup wins so "next" reflects the soonest actionable load.
     const pickup = r.pickupWindowStart;

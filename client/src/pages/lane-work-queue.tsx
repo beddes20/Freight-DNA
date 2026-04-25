@@ -144,6 +144,7 @@ interface LaneItem {
     laneSignature: string;
     count: number;
     totalLoads: number;
+    combinedRevenue: number;
     nextPickupAt: string | null;
     sampleOppId: string | null;
   } | null;

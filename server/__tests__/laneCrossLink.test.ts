@@ -36,6 +36,7 @@ function fakeDb(rows: {
   carrierOutreachLogs: any[]; // pre-aggregated rows the service expects
   laneCarrierInterest: any[]; // pre-aggregated rows the service expects
   freightOpportunities: any[];
+  loadFact?: any[]; // load_fact rows joined for combined-revenue lookup
 }) {
   // We tag table modules by reference identity using their underlying symbol —
   // but the service imports them from @shared/schema. The easiest way to
@@ -74,13 +75,15 @@ function fakeDb(rows: {
         target = "carrierOutreachLogs";
       } else if (tableName === "lane_carrier_interest" || keys.includes("interestStatus")) {
         target = "laneCarrierInterest";
-      } else if (tableName === "freight_opportunities" || keys.includes("pickupWindowStart")) {
+      } else if (tableName === "freight_opportunities" || keys.includes("pickupWindowStart") || keys.includes("sourceOrderId")) {
         target = "freightOpportunities";
+      } else if (tableName === "load_fact" || keys.includes("orderId") && keys.includes("revenue")) {
+        target = "loadFact" as keyof typeof rows;
       } else {
         // Default to opportunities so unknown shapes don't silently return lane rows
         target = "freightOpportunities";
       }
-      return chain(() => rows[target]);
+      return chain(() => (rows as any)[target] ?? []);
     },
   } as any;
 }
@@ -219,7 +222,6 @@ describe("buildLwqContextByLaneSig", () => {
 describe("buildOpenOppContextByLaneSig", () => {
   it("LWQ row carries openOppCount > 0 when matching opps exist today", async () => {
     const now = new Date("2026-04-25T20:00:00Z");
-    const startOfDay = new Date(now); startOfDay.setUTCHours(0, 0, 0, 0);
     const sig = laneSig("Chicago", "IL", "Dallas", "TX", "Dry Van");
 
     const db = fakeDb({
@@ -236,6 +238,7 @@ describe("buildOpenOppContextByLaneSig", () => {
           loadCount: 2,
           generatedAt: new Date("2026-04-25T08:00:00Z"),
           status: "ready_to_send",
+          sourceOrderId: "ORD-1",
         },
         {
           id: "opp-2",
@@ -246,7 +249,12 @@ describe("buildOpenOppContextByLaneSig", () => {
           loadCount: 1,
           generatedAt: new Date("2026-04-25T16:00:00Z"),
           status: "sent",
+          sourceOrderId: "ORD-2",
         },
+      ],
+      loadFact: [
+        { orderId: "ORD-1", revenue: "9000.00" },
+        { orderId: "ORD-2", revenue: "5000.00" },
       ],
     });
 
@@ -255,17 +263,22 @@ describe("buildOpenOppContextByLaneSig", () => {
     expect(ctx).toBeDefined();
     expect(ctx!.count).toBe(2);
     expect(ctx!.totalLoads).toBe(3);
+    expect(ctx!.combinedRevenue).toBe(14000); // → "$14K combined" per task spec
     expect(ctx!.nextPickupAt).toBe("2026-04-25T22:00:00Z"); // earlier of the two
     expect(ctx!.sampleOppId).toBe("opp-1");
   });
 
-  it("groups by canonical signature regardless of case/whitespace", async () => {
+  it("groups by canonical signature regardless of case/whitespace and sums revenue", async () => {
     const now = new Date();
     const db = fakeDb({
       recurringLanes: [], carrierOutreachLogs: [], laneCarrierInterest: [],
       freightOpportunities: [
-        { id: "a", origin: "Chicago", originState: "IL", destination: "Dallas", destinationState: "TX", equipmentType: "Dry Van", pickupWindowStart: "2026-04-26T14:00:00Z", loadCount: 1, generatedAt: now, status: "new" },
-        { id: "b", origin: " CHICAGO ", originState: "il", destination: "dallas", destinationState: " TX ", equipmentType: "DRY VAN", pickupWindowStart: "2026-04-26T15:00:00Z", loadCount: 2, generatedAt: now, status: "new" },
+        { id: "a", origin: "Chicago", originState: "IL", destination: "Dallas", destinationState: "TX", equipmentType: "Dry Van", pickupWindowStart: "2026-04-26T14:00:00Z", loadCount: 1, generatedAt: now, status: "new", sourceOrderId: "A" },
+        { id: "b", origin: " CHICAGO ", originState: "il", destination: "dallas", destinationState: " TX ", equipmentType: "DRY VAN", pickupWindowStart: "2026-04-26T15:00:00Z", loadCount: 2, generatedAt: now, status: "new", sourceOrderId: "B" },
+      ],
+      loadFact: [
+        { orderId: "A", revenue: 1500 },
+        { orderId: "B", revenue: 2500 },
       ],
     });
     const map = await buildOpenOppContextByLaneSig(db, "org-1", { now });
@@ -273,6 +286,23 @@ describe("buildOpenOppContextByLaneSig", () => {
     const ctx = map.get(laneSig("Chicago", "IL", "Dallas", "TX", "Dry Van"))!;
     expect(ctx.count).toBe(2);
     expect(ctx.totalLoads).toBe(3);
+    expect(ctx.combinedRevenue).toBe(4000);
+  });
+
+  it("falls back to combinedRevenue=0 when no source order or no load_fact match", async () => {
+    const now = new Date();
+    const db = fakeDb({
+      recurringLanes: [], carrierOutreachLogs: [], laneCarrierInterest: [],
+      freightOpportunities: [
+        { id: "x", origin: "Atlanta", originState: "GA", destination: "Miami", destinationState: "FL", equipmentType: "Reefer", pickupWindowStart: "2026-04-26T14:00:00Z", loadCount: 1, generatedAt: now, status: "new", sourceOrderId: null },
+        { id: "y", origin: "Atlanta", originState: "GA", destination: "Miami", destinationState: "FL", equipmentType: "Reefer", pickupWindowStart: "2026-04-26T16:00:00Z", loadCount: 1, generatedAt: now, status: "new", sourceOrderId: "UNKNOWN" },
+      ],
+      loadFact: [], // nothing matches
+    });
+    const map = await buildOpenOppContextByLaneSig(db, "org-1", { now });
+    const ctx = map.get(laneSig("Atlanta", "GA", "Miami", "FL", "Reefer"))!;
+    expect(ctx.count).toBe(2);
+    expect(ctx.combinedRevenue).toBe(0);
   });
 });
 
