@@ -1215,7 +1215,7 @@ function LazyLaneRow(props: LaneRowProps) {
       data-testid={`lwq-lazy-row-${item.laneId}`}
       data-state={visible ? "mounted" : "placeholder"}
     >
-      {visible && <LaneRow {...props} />}
+      {visible && <LaneRow {...props} votriData={votriData} />}
     </div>
   );
 }
