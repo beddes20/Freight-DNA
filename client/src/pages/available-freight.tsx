@@ -2117,6 +2117,10 @@ function CockpitRowView(props: {
   compact?: boolean;
 }) {
   const { item, isSelected, isFocused, onToggleSelected, onFocus, onAction, onReassign, onOpenDraft, onLogOutcome, onToggleAutoPilot, lastSeenAt } = props;
+  // Task #653 — local navigate so the "Make this recurring" item can deep-link
+  // into LWQ. Defined here (rather than passed as a prop) to keep the row's
+  // public surface unchanged.
+  const [, rowNavigate] = useLocation();
   const opp = item.opportunity;
   const coveragePct = item.coverage.included > 0
     ? Math.round((item.coverage.responded / Math.max(1, item.coverage.included)) * 100)
@@ -2221,6 +2225,26 @@ function CockpitRowView(props: {
               <DropdownMenuItem onClick={() => onAction("send_top", { topN: 3 })} data-testid={`menu-send-top-${opp.id}`}>Send top 3</DropdownMenuItem>
               <DropdownMenuItem onClick={() => onAction("snooze", { snoozeUntil: new Date(Date.now() + 4 * 3600_000).toISOString() })} data-testid={`menu-snooze-${opp.id}`}>Snooze 4h</DropdownMenuItem>
               <DropdownMenuItem onClick={onReassign} data-testid={`menu-reassign-${opp.id}`}>Reassign…</DropdownMenuItem>
+              {/* Task #653 — graduate this spot opp into a managed LWQ lane.
+                  Always available, regardless of bucket/status. Deep-links to
+                  the LWQ Build Lane dialog with customer + lane + equipment
+                  prefilled (loads/week, owner, notes intentionally blank). */}
+              <DropdownMenuItem
+                onClick={() => {
+                  const params = new URLSearchParams();
+                  params.set("createLane", "1");
+                  if (item.customer?.name) params.set("customer", item.customer.name);
+                  if (opp.origin) params.set("originCity", opp.origin);
+                  if (opp.originState) params.set("originState", opp.originState);
+                  if (opp.destination) params.set("destCity", opp.destination);
+                  if (opp.destinationState) params.set("destState", opp.destinationState);
+                  if (opp.equipmentType) params.set("equipment", opp.equipmentType);
+                  rowNavigate(`/lanes/work-queue?${params.toString()}`);
+                }}
+                data-testid={`menu-make-recurring-${opp.id}`}
+              >
+                Make this recurring
+              </DropdownMenuItem>
               {item.customer && onToggleAutoPilot && (
                 <DropdownMenuItem onClick={() => onToggleAutoPilot()} data-testid={`menu-toggle-autopilot-${opp.id}`}>
                   {item.customer.autoPilotEnabled ? "Turn off auto-pilot for this customer" : "Turn on auto-pilot for this customer"}

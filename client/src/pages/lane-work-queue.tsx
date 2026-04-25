@@ -12,6 +12,7 @@
  */
 
 import { useState, useMemo, useEffect, useRef } from "react";
+import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -1467,7 +1468,20 @@ interface BuildLaneForm {
 
 const EQUIPMENT_TYPES = ["Box Truck", "Conestoga", "Dry Van", "Flatbed", "Other", "Power Only", "Reefer", "RGN", "Step Deck", "Tanker"];
 
-function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, isAdminOrDirector }: { open: boolean; onClose: () => void; onCreated: () => void; currentUser: { id: string; name: string } | null; teamMembers: TeamMember[]; isAdminOrDirector: boolean }) {
+// Task #653 — payload of seed values handed to the dialog when the rep clicks
+// "Make this recurring" on an Available Freight row. `source` records where
+// the prefill came from so the dialog can show provenance to the rep.
+export interface BuildLanePrefill {
+  source: "available_freight";
+  companyName: string;
+  origin: string;
+  originState: string;
+  destination: string;
+  destinationState: string;
+  equipmentType: string;
+}
+
+function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, isAdminOrDirector, prefill }: { open: boolean; onClose: () => void; onCreated: () => void; currentUser: { id: string; name: string } | null; teamMembers: TeamMember[]; isAdminOrDirector: boolean; prefill?: BuildLanePrefill | null }) {
   const { toast } = useToast();
   const [form, setForm] = useState<BuildLaneForm>({
     origin: "",
@@ -1482,12 +1496,40 @@ function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, i
     dropTrailerReceiver: false,
     ownerUserId: currentUser?.id ?? "",
   });
+  // Task #653 — track whether the dialog is currently displaying values that
+  // came from the AF deep-link, so we can render the "Prefilled from
+  // Available Freight" provenance chip in the header. We keep this as
+  // separate state (rather than re-reading `prefill`) so the chip survives
+  // user edits and disappears the moment the dialog re-opens "blank".
+  const [prefilledFromAf, setPrefilledFromAf] = useState(false);
 
   useEffect(() => {
-    if (open && currentUser?.id) {
+    if (!open) return;
+    if (prefill) {
+      // Task #653 — seed every field the AF row gave us, then explicitly
+      // blank the fields the rep is supposed to pick (loads/week, owner,
+      // notes). This is the documented contract from the task spec.
+      setForm({
+        origin: prefill.origin ?? "",
+        originState: prefill.originState ?? "",
+        destination: prefill.destination ?? "",
+        destinationState: prefill.destinationState ?? "",
+        equipmentType: prefill.equipmentType ?? "",
+        avgLoadsPerWeek: "",
+        companyName: prefill.companyName ?? "",
+        notes: "",
+        dropTrailerShipper: false,
+        dropTrailerReceiver: false,
+        ownerUserId: "",
+      });
+      setPrefilledFromAf(true);
+    } else if (currentUser?.id) {
       setForm(f => ({ ...f, ownerUserId: currentUser.id }));
+      setPrefilledFromAf(false);
+    } else {
+      setPrefilledFromAf(false);
     }
-  }, [open, currentUser?.id]);
+  }, [open, currentUser?.id, prefill]);
 
   const [originNorm, setOriginNorm] = useState<FieldNormState>(EMPTY_NORM_STATE);
   const [destNorm, setDestNorm] = useState<FieldNormState>(EMPTY_NORM_STATE);
@@ -1623,6 +1665,7 @@ function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, i
       setForm({ origin: "", originState: "", destination: "", destinationState: "", equipmentType: "", avgLoadsPerWeek: "", companyName: "", notes: "", dropTrailerShipper: false, dropTrailerReceiver: false, ownerUserId: currentUser?.id ?? "" });
       setOriginNorm(EMPTY_NORM_STATE);
       setDestNorm(EMPTY_NORM_STATE);
+      setPrefilledFromAf(false);
     },
     onError: () => toast({ title: "Failed to create lane", variant: "destructive" }),
   });
@@ -1640,6 +1683,15 @@ function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, i
           <DialogTitle className="flex items-center gap-2">
             <PlusCircle className="w-4 h-4 text-amber-400" />
             Build Lane
+            {prefilledFromAf && (
+              <Badge
+                variant="outline"
+                className="ml-2 text-[10px] font-normal bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/30"
+                data-testid="badge-build-lane-prefilled-af"
+              >
+                Prefilled from Available Freight
+              </Badge>
+            )}
           </DialogTitle>
         </DialogHeader>
 
@@ -1858,6 +1910,11 @@ export default function LaneWorkQueuePage() {
   const [manualOnly, setManualOnly] = useState(false);
   const [customerFilter, setCustomerFilter] = useState<string>("__all__");
   const [buildLaneOpen, setBuildLaneOpen] = useState(false);
+  // Task #653 — prefill payload for the Build Lane dialog when the rep
+  // arrives here via "Make this recurring" on an Available Freight row.
+  // Null when the dialog should open in its blank/default state.
+  const [buildLanePrefill, setBuildLanePrefill] = useState<BuildLanePrefill | null>(null);
+  const [, navigate] = useLocation();
   const [sharingOpen, setSharingOpen] = useState(false);
   const [selectedLaneIds, setSelectedLaneIds] = useState<Set<string>>(new Set());
   const [bulkAssignUserId, setBulkAssignUserId] = useState<string>("");
@@ -1896,6 +1953,45 @@ export default function LaneWorkQueuePage() {
     const lid = params.get("laneId");
     if (lid) setOpenLaneId(lid);
   }, []);
+
+  // Task #653 — when arriving from Available Freight via "Make this
+  // recurring", the AF row deep-links here with `?createLane=1&customer=
+  // …&originCity=…&originState=…&destCity=…&destState=…&equipment=…`.
+  // Parse those once on mount, set the prefill payload, and open the
+  // Build Lane dialog. Falls back gracefully when only some params are
+  // present.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("createLane") !== "1") return;
+    setBuildLanePrefill({
+      source: "available_freight",
+      companyName: params.get("customer") ?? "",
+      origin: params.get("originCity") ?? "",
+      originState: params.get("originState") ?? "",
+      destination: params.get("destCity") ?? "",
+      destinationState: params.get("destState") ?? "",
+      equipmentType: params.get("equipment") ?? "",
+    });
+    setBuildLaneOpen(true);
+  }, []);
+
+  // Task #653 — strip the prefill query params from the URL so a refresh
+  // doesn't re-open the dialog and so the URL doesn't carry stale
+  // single-use state. Called from both the cancel and create-success paths.
+  function clearBuildLanePrefillFromUrl() {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    let dirty = false;
+    for (const k of ["createLane", "customer", "originCity", "originState", "destCity", "destState", "equipment"]) {
+      if (url.searchParams.has(k)) {
+        url.searchParams.delete(k);
+        dirty = true;
+      }
+    }
+    if (!dirty) return;
+    const qs = url.searchParams.toString();
+    navigate(`/lanes/work-queue${qs ? "?" + qs : ""}`, { replace: true });
+  }
 
   // Show a one-time hint when arriving from My Procurement with no lane match.
   // ?noMatch=Ogden%2C%20UT%20%E2%86%92%20Westfield%2C%20MA
@@ -2544,11 +2640,27 @@ export default function LaneWorkQueuePage() {
       {/* Build Lane dialog */}
       <BuildLaneDialog
         open={buildLaneOpen}
-        onClose={() => setBuildLaneOpen(false)}
-        onCreated={() => {}}
+        onClose={() => {
+          setBuildLaneOpen(false);
+          // Task #653 — clear AF prefill state and strip the deep-link
+          // params so a refresh or back-nav doesn't re-pop the dialog.
+          if (buildLanePrefill) {
+            setBuildLanePrefill(null);
+            clearBuildLanePrefillFromUrl();
+          }
+        }}
+        onCreated={() => {
+          // Task #653 — same cleanup on successful save (the dialog also
+          // calls onClose, but we clear here too to be defensive).
+          if (buildLanePrefill) {
+            setBuildLanePrefill(null);
+            clearBuildLanePrefillFromUrl();
+          }
+        }}
         currentUser={user ? { id: user.id, name: user.name } : null}
         teamMembers={teamMembers}
         isAdminOrDirector={isAdminOrDirector}
+        prefill={buildLanePrefill}
       />
 
       {/* Account sharing dialog */}
