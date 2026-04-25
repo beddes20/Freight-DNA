@@ -1,6 +1,8 @@
 import type { FreightOpportunity, User } from "@shared/schema";
 import { storage } from "../storage";
 import { upsertLoadFact } from "../carrierIntelligenceService";
+import { recordCarrierLaneOutcome } from "./carrierLaneOutcomes";
+import { laneSig } from "../laneCrossLinkService";
 import {
   applyCoverCaptureLoops,
   type CoverCaptureLoopsResult,
@@ -116,6 +118,30 @@ export async function coverFreightOpportunity(args: {
       notes: payload.notes ?? null,
     },
   });
+
+  // Task #637 — bump cover_count for the (carrier, lane) prior so the
+  // ranker can read "carrier X has 2 covers on this lane" on its next call.
+  // Carrier-id-less covers (rep typed in a brand-new carrier name) are
+  // skipped — the prior table is keyed on carriers.id by design.
+  if (payload.carrierId) {
+    await recordCarrierLaneOutcome({
+      orgId: org,
+      carrierId: payload.carrierId,
+      laneSignature: laneSig(
+        opp.origin,
+        opp.originState,
+        opp.destination,
+        opp.destinationState,
+        opp.equipmentType,
+      ),
+      origin: opp.origin,
+      originState: opp.originState,
+      destination: opp.destination,
+      destinationState: opp.destinationState,
+      equipmentType: opp.equipmentType,
+      event: "cover",
+    });
+  }
 
   const month = (opp.pickupWindowStart || new Date().toISOString()).slice(0, 7);
   const sourceRefOrderId = (() => {

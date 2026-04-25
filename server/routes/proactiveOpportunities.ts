@@ -27,6 +27,8 @@ import {
   sendOpportunityWave,
   type SendWaveOpts,
 } from "../freightOpportunityOutreachService";
+import { recordCarrierLaneOutcome } from "../services/carrierLaneOutcomes";
+import { laneSig } from "../laneCrossLinkService";
 import {
   FREIGHT_OPPORTUNITY_MODES,
   FREIGHT_OPPORTUNITY_RESPONSE_OUTCOMES,
@@ -745,6 +747,33 @@ export function registerProactiveOpportunityRoutes(app: Express) {
         actorUserId: uid,
         payload: { carrierId: row.carrierId, outcome: parsed.data.outcome, source: "manual" },
       });
+
+      // Task #637 — mirror the email-classifier wiring: every manual outcome
+      // bumps reply_count; positive bumps yes_count; negatives bump
+      // loss_count; "no_response" stays out (rep would not pick that here).
+      const POSITIVE_OUTCOMES = new Set(["interested_now","interested_few_days","interested_next_week","interested_future","booked"]);
+      const NEGATIVE_OUTCOMES = new Set(["declined","not_qualified","do_not_contact_lane"]);
+      if (row.carrierId && parsed.data.outcome !== "no_response") {
+        const sig = laneSig(opp.origin, opp.originState, opp.destination, opp.destinationState, opp.equipmentType);
+        const laneParts = {
+          origin: opp.origin,
+          originState: opp.originState,
+          destination: opp.destination,
+          destinationState: opp.destinationState,
+          equipmentType: opp.equipmentType,
+        };
+        await recordCarrierLaneOutcome({ orgId: org, carrierId: row.carrierId, laneSignature: sig, ...laneParts, event: "reply" });
+        if (POSITIVE_OUTCOMES.has(parsed.data.outcome)) {
+          await recordCarrierLaneOutcome({ orgId: org, carrierId: row.carrierId, laneSignature: sig, ...laneParts, event: "yes" });
+        } else if (NEGATIVE_OUTCOMES.has(parsed.data.outcome)) {
+          await recordCarrierLaneOutcome({ orgId: org, carrierId: row.carrierId, laneSignature: sig, ...laneParts, event: "loss" });
+        }
+        // Quote captured manually — record once.
+        if (parsed.data.quotedRate) {
+          await recordCarrierLaneOutcome({ orgId: org, carrierId: row.carrierId, laneSignature: sig, ...laneParts, event: "quote" });
+        }
+      }
+
       // Feed the signal back into ranking (additive, no master-data overwrite)
       await feedbackToCarrierIntel(storage, {
         orgId: org,

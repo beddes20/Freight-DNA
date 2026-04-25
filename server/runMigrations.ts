@@ -4471,4 +4471,54 @@ export async function runMigrations() {
   } finally {
     clientSourceModule.release();
   }
+
+  // ── Task #637: carrier_lane_outcomes ──────────────────────────────────────
+  // Per-(orgId, carrierId, laneSignature) rolling outcome counters. Written
+  // by recordCarrierLaneOutcome() on outbound send / reply / cover / etc and
+  // read by the carrier ranker as a "prior" so reps can see "carrier X has
+  // 2 covers + 1 yes on this lane" without re-scanning every legacy event
+  // table on the hot path. Idempotent CREATE IF NOT EXISTS — required by
+  // the schema-drift guard alongside the Drizzle table in shared/schema.ts.
+  const clientCarrierLaneOutcomes = await pool.connect();
+  try {
+    await clientCarrierLaneOutcomes.query(`
+      CREATE TABLE IF NOT EXISTS carrier_lane_outcomes (
+        id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id          varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        carrier_id      varchar NOT NULL REFERENCES carriers(id) ON DELETE CASCADE,
+        lane_signature  text NOT NULL,
+        origin              text,
+        origin_state        text,
+        destination         text,
+        destination_state   text,
+        equipment_type      text,
+        sent_count      integer NOT NULL DEFAULT 0,
+        open_count      integer NOT NULL DEFAULT 0,
+        reply_count     integer NOT NULL DEFAULT 0,
+        yes_count       integer NOT NULL DEFAULT 0,
+        quote_count     integer NOT NULL DEFAULT 0,
+        cover_count     integer NOT NULL DEFAULT 0,
+        loss_count      integer NOT NULL DEFAULT 0,
+        first_event_at  timestamp NOT NULL DEFAULT NOW(),
+        last_event_at   timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientCarrierLaneOutcomes.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS carrier_lane_outcomes_uq
+        ON carrier_lane_outcomes (org_id, carrier_id, lane_signature)
+    `);
+    await clientCarrierLaneOutcomes.query(`
+      CREATE INDEX IF NOT EXISTS carrier_lane_outcomes_org_carrier_idx
+        ON carrier_lane_outcomes (org_id, carrier_id)
+    `);
+    await clientCarrierLaneOutcomes.query(`
+      CREATE INDEX IF NOT EXISTS carrier_lane_outcomes_org_lane_idx
+        ON carrier_lane_outcomes (org_id, lane_signature)
+    `);
+    console.log("[migrations] carrier_lane_outcomes ensured (Task #637)");
+  } catch (err) {
+    console.error("[migrations] carrier_lane_outcomes migration error:", err);
+  } finally {
+    clientCarrierLaneOutcomes.release();
+  }
 }

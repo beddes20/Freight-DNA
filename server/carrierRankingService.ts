@@ -23,6 +23,8 @@ import { loadFact } from "@shared/schema";
 import { and, eq, isNull, ne, or, sql as sqlOp } from "drizzle-orm";
 import { findCarrierContactLocks, formatLockReason, type ContactLock } from "./carrierContactLocks";
 import { formatLaneDisplay } from "./laneOutreachEmailBuilder";
+import { getCarrierLaneOutcomesForLane, summarizeCarrierLaneOutcome } from "./services/carrierLaneOutcomes";
+import { laneSig as buildLaneSig } from "./laneCrossLinkService";
 
 /** Carriers whose historical origin AND destination are within this radius count as "nearby". */
 const NEARBY_RADIUS_MILES = 75;
@@ -1247,6 +1249,22 @@ export async function rankCarriersForLane(
     }
   }
 
+  // Task #637 — Per-(carrier, lane) outcome priors. Read once per ranking
+  // call; the helper returns an empty map on failure so this stays
+  // strictly additive: a missing table or transient pool error never
+  // breaks the rank, the carrier just shows zero prior wins.
+  const laneSignature = buildLaneSig(
+    lane.origin,
+    lane.originState,
+    lane.destination,
+    lane.destinationState,
+    lane.equipmentType,
+  );
+  const carrierLaneOutcomesByCarrierId = await getCarrierLaneOutcomesForLane(
+    lane.orgId,
+    laneSignature,
+  );
+
   // Build carrier history from BOTH financial uploads and load_fact, then
   // merge. Most orgs have one or the other (or strongly skewed weights),
   // and the prior implementation only read uploads — so an org with rich
@@ -1506,6 +1524,26 @@ export async function rankCarriersForLane(
     if (hadPositiveOutcome) {
       fitScore += 12;
       reasons.push("Showed availability in prior outreach");
+    }
+
+    // Task #637 — read the (carrier, lane) outcome prior. Covers are the
+    // strongest possible signal (+15), yes/quote replies +6, lone losses
+    // (no positive engagement at all) -4. The summary line goes into
+    // reasons so the "why this carrier" popover surfaces it.
+    const laneOutcome = carrierLaneOutcomesByCarrierId.get(carrier.id);
+    if (laneOutcome) {
+      if (laneOutcome.coverCount > 0) fitScore += 15;
+      else if (laneOutcome.yesCount > 0 || laneOutcome.quoteCount > 0) fitScore += 6;
+      else if (
+        laneOutcome.lossCount > 0
+        && laneOutcome.yesCount === 0
+        && laneOutcome.coverCount === 0
+        && laneOutcome.quoteCount === 0
+      ) {
+        fitScore -= 4;
+      }
+      const summary = summarizeCarrierLaneOutcome(laneOutcome);
+      if (summary) reasons.push(summary);
     }
 
     // Clamp score to [0, 100] — negative raw scores are possible after staleness penalty;

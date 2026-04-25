@@ -34,6 +34,8 @@ import {
   findCrossThrottledCarriers,
   FREIGHT_CROSS_THROTTLE_HOURS,
 } from "./freightOpportunityCrossThrottle";
+import { recordCarrierLaneOutcome } from "./services/carrierLaneOutcomes";
+import { laneSig } from "./laneCrossLinkService";
 import {
   carrierIntelSuggestions,
   type Carrier,
@@ -605,6 +607,26 @@ export async function sendOpportunityWave(
       },
     });
 
+    // Task #637 — bump rolling outcome counter so the ranker sees this
+    // carrier picked up a fresh "sent" against this lane signature.
+    await recordCarrierLaneOutcome({
+      orgId,
+      carrierId: row.carrierId,
+      laneSignature: laneSig(
+        opportunity.origin,
+        opportunity.originState,
+        opportunity.destination,
+        opportunity.destinationState,
+        opportunity.equipmentType,
+      ),
+      origin: opportunity.origin,
+      originState: opportunity.originState,
+      destination: opportunity.destination,
+      destinationState: opportunity.destinationState,
+      equipmentType: opportunity.equipmentType,
+      event: "sent",
+    });
+
     results.push({
       opportunityCarrierId: rowId,
       carrierId: row.carrierId,
@@ -991,6 +1013,51 @@ export async function classifyOpportunityReply(
         responseId: response.id,
       },
     });
+
+    // Task #637 — every classified inbound bumps reply_count; positive
+    // outcomes additionally bump yes_count, negatives bump loss_count.
+    // The "no_response" bucket (auto-acknowledgements, OOO) is intentionally
+    // skipped — it's not a substantive reply.
+    if (oppCarrier.carrierId && cls.outcome !== "no_response") {
+      const sig = laneSig(
+        opp.origin,
+        opp.originState,
+        opp.destination,
+        opp.destinationState,
+        opp.equipmentType,
+      );
+      const laneParts = {
+        origin: opp.origin,
+        originState: opp.originState,
+        destination: opp.destination,
+        destinationState: opp.destinationState,
+        equipmentType: opp.equipmentType,
+      };
+      await recordCarrierLaneOutcome({
+        orgId,
+        carrierId: oppCarrier.carrierId,
+        laneSignature: sig,
+        ...laneParts,
+        event: "reply",
+      });
+      if (POSITIVE_SET.has(cls.outcome)) {
+        await recordCarrierLaneOutcome({
+          orgId,
+          carrierId: oppCarrier.carrierId,
+          laneSignature: sig,
+          ...laneParts,
+          event: "yes",
+        });
+      } else if (NEGATIVE_SET.has(cls.outcome)) {
+        await recordCarrierLaneOutcome({
+          orgId,
+          carrierId: oppCarrier.carrierId,
+          laneSignature: sig,
+          ...laneParts,
+          event: "loss",
+        });
+      }
+    }
 
     // If positive, cancel any future automated waves on this opportunity —
     // we have what we need.

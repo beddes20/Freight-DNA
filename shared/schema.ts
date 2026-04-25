@@ -4913,6 +4913,53 @@ export type InsertCarrierLaneFit = z.infer<typeof insertCarrierLaneFitSchema>;
 export type CarrierLaneFit = typeof carrierLaneFit.$inferSelect;
 
 /**
+ * Task #637 — Per-(orgId, carrierId, laneSignature) rolling outcome counters.
+ *
+ * One row per carrier × lane signature. Counters increment as outreach events
+ * occur (sent / open / reply / yes / quote / cover / loss) so the ranker can
+ * read a compact "prior" without re-scanning legacy event tables on every
+ * call. firstEventAt / lastEventAt bracket the row's lifespan; downstream
+ * surfaces use lastEventAt to age out stale priors when needed.
+ *
+ * laneSignature mirrors the canonical `laneSig()` helper in
+ * server/laneCrossLinkService.ts — `origin|originState|destination|destinationState|equipmentType`,
+ * each part trimmed and lowercased. The unique index (orgId, carrierId,
+ * laneSignature) lets the writer use INSERT ... ON CONFLICT DO UPDATE for
+ * atomic, idempotent increments under concurrent senders.
+ */
+export const carrierLaneOutcomes = pgTable("carrier_lane_outcomes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  carrierId: varchar("carrier_id").notNull().references(() => carriers.id, { onDelete: "cascade" }),
+  laneSignature: text("lane_signature").notNull(),
+  // Denormalized lane parts — written once at first insert. Useful for
+  // ad-hoc inspection and the backfill script; the ranker keys solely off
+  // laneSignature so these are advisory only.
+  origin: text("origin"),
+  originState: text("origin_state"),
+  destination: text("destination"),
+  destinationState: text("destination_state"),
+  equipmentType: text("equipment_type"),
+  sentCount: integer("sent_count").notNull().default(0),
+  openCount: integer("open_count").notNull().default(0),
+  replyCount: integer("reply_count").notNull().default(0),
+  yesCount: integer("yes_count").notNull().default(0),
+  quoteCount: integer("quote_count").notNull().default(0),
+  coverCount: integer("cover_count").notNull().default(0),
+  lossCount: integer("loss_count").notNull().default(0),
+  firstEventAt: timestamp("first_event_at").notNull().defaultNow(),
+  lastEventAt: timestamp("last_event_at").notNull().defaultNow(),
+}, (t) => ({
+  uq: uniqueIndex("carrier_lane_outcomes_uq").on(t.orgId, t.carrierId, t.laneSignature),
+  orgCarrierIdx: index("carrier_lane_outcomes_org_carrier_idx").on(t.orgId, t.carrierId),
+  orgLaneIdx: index("carrier_lane_outcomes_org_lane_idx").on(t.orgId, t.laneSignature),
+}));
+export const insertCarrierLaneOutcomeSchema = createInsertSchema(carrierLaneOutcomes)
+  .omit({ id: true, firstEventAt: true, lastEventAt: true });
+export type InsertCarrierLaneOutcome = z.infer<typeof insertCarrierLaneOutcomeSchema>;
+export type CarrierLaneOutcome = typeof carrierLaneOutcomes.$inferSelect;
+
+/**
  * Recommendation snapshot per Available load. One row per (loadFactId, carrier
  * candidate). Rebuilt whenever the recommendation engine runs for a load —
  * keyed by load_fact_id so deletions cascade with the source load.
