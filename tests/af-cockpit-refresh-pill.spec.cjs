@@ -30,6 +30,8 @@ const SEED_TAG = `vtest-af649-${shortId()}`;
 let orgId;
 let companyId;
 const seededOppIds = [];
+const seededCarrierIds = [];
+const seededFocIds = [];
 
 async function insertOpp(label) {
   const pickup = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
@@ -74,10 +76,22 @@ test.describe('AF cockpit stable sort + refresh pill (Task #649)', () => {
 
   test.afterAll(async () => {
     try {
+      if (seededFocIds.length) {
+        await pool.query(
+          `DELETE FROM freight_opportunity_carriers WHERE id = ANY($1::varchar[])`,
+          [seededFocIds],
+        );
+      }
       if (seededOppIds.length) {
         await pool.query(
           `DELETE FROM freight_opportunities WHERE id = ANY($1::varchar[])`,
           [seededOppIds],
+        );
+      }
+      if (seededCarrierIds.length) {
+        await pool.query(
+          `DELETE FROM carriers WHERE id = ANY($1::varchar[])`,
+          [seededCarrierIds],
         );
       }
       if (companyId) {
@@ -171,5 +185,93 @@ test.describe('AF cockpit stable sort + refresh pill (Task #649)', () => {
         timeout: 10_000,
       })
       .toBe(beforeCount + 1);
+  });
+
+  test('moving pointer outside the list auto-applies pending feed after idle', async ({ page }) => {
+    await page.goto('/available-freight');
+
+    const container = page.getByTestId('cockpit-feed-container');
+    await expect(container).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid^="row-opportunity-"]').first()).toBeVisible({
+      timeout: 15_000,
+    });
+
+    const beforeCount = await page.locator('[data-testid^="row-opportunity-"]').count();
+
+    const box = await container.boundingBox();
+    await page.mouse.move(box.x + 40, box.y + 40);
+    await page.mouse.move(box.x + 40, box.y + 60);
+
+    await insertOpp('idle-apply');
+    await page.getByTestId('button-refresh-cockpit').click({ force: true });
+
+    const pill = page.getByTestId('cockpit-refresh-pill');
+    await expect(pill).toBeVisible({ timeout: 10_000 });
+
+    // Move pointer FAR outside the feed container; do not touch the pill.
+    // After the 3s trailing-idle window the buffer should auto-apply.
+    await page.mouse.move(5, 5);
+
+    await expect(pill).toBeHidden({ timeout: 8_000 });
+    await expect
+      .poll(async () => page.locator('[data-testid^="row-opportunity-"]').count(), {
+        timeout: 10_000,
+      })
+      .toBe(beforeCount + 1);
+  });
+
+  test('carrier-replies toast still fires when refetch lands while hovering', async ({ page }) => {
+    // Seed a carrier and a freight_opportunity_carriers row tied to one of
+    // the existing opps. Start with NO response, so the page-load refetch
+    // initialises replyTotalRef to the current total without firing a toast.
+    const carrierId = (await pool.query(
+      `INSERT INTO carriers (id, org_id, name)
+         VALUES (gen_random_uuid(), $1, $2) RETURNING id`,
+      [orgId, `${SEED_TAG} Carrier`],
+    )).rows[0].id;
+    seededCarrierIds.push(carrierId);
+
+    const oppId = seededOppIds[0];
+    const focId = (await pool.query(
+      `INSERT INTO freight_opportunity_carriers
+         (id, opportunity_id, carrier_id, rank, bucket, fit_score, history_match, sent_at)
+         VALUES (gen_random_uuid(), $1, $2, 1, 'proven', 80, 'won', now())
+         RETURNING id`,
+      [oppId, carrierId],
+    )).rows[0].id;
+    seededFocIds.push(focId);
+
+    await page.goto('/available-freight');
+    const container = page.getByTestId('cockpit-feed-container');
+    await expect(container).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid^="row-opportunity-"]').first()).toBeVisible({
+      timeout: 15_000,
+    });
+    // Wait long enough for the initial replyTotalRef to be primed.
+    await page.waitForTimeout(2_000);
+
+    // Pin pointer inside the list to force buffering.
+    const box = await container.boundingBox();
+    await page.mouse.move(box.x + 40, box.y + 40);
+    await page.mouse.move(box.x + 40, box.y + 60);
+
+    // Now flip the carrier row to "responded" — this drives coverage.responded
+    // up by 1 on the next refetch.
+    await pool.query(
+      `UPDATE freight_opportunity_carriers SET last_response_id = $1 WHERE id = $2`,
+      [crypto.randomUUID(), focId],
+    );
+    await page.getByTestId('button-refresh-cockpit').click({ force: true });
+
+    // Pill should buffer (we're hovering)…
+    const pill = page.getByTestId('cockpit-refresh-pill');
+    await expect(pill).toBeVisible({ timeout: 10_000 });
+
+    // …AND the toast must fire from raw server data despite buffering.
+    // shadcn/ui Toaster renders the title text inside a ToastTitle div;
+    // first() avoids strict-mode collision with the aria-live announcer span.
+    await expect(page.getByText(/new carrier repl(y|ies)/i).first()).toBeVisible({
+      timeout: 5_000,
+    });
   });
 });

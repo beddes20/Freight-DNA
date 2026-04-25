@@ -505,6 +505,13 @@ export default function AvailableFreightPage() {
     setPendingDelta(0);
   }, []);
 
+  // Task #649 — Escape on the pill dismisses the visible badge WITHOUT
+  // applying. The buffered payload stays alive so the 3s trailing-idle
+  // auto-apply still fires (or the next refetch will refresh the badge).
+  const dismissPill = useCallback(() => {
+    setPendingDelta(0);
+  }, []);
+
   useEffect(() => {
     const el = feedListRef.current;
     if (!el) return;
@@ -1271,9 +1278,12 @@ export default function AvailableFreightPage() {
                   type="button"
                   onClick={applyPending}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " " || e.key === "Escape") {
+                    if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
                       applyPending();
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      dismissPill();
                     }
                   }}
                   className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary text-primary-foreground px-3 py-1 text-xs font-medium shadow-md hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
