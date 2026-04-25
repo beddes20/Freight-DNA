@@ -2221,6 +2221,27 @@ export async function createQuote(orgId: string, actor: string, input: CreateQuo
       }
     }
   }
+
+  // Task #654 — Same as the LWQ block above: a quote can be created already
+  // won (manual rep entry of a closed deal, CSV backfill, etc.). Run the AF
+  // handoff here too so the create-time-won path matches the
+  // update-to-won path. The helper is idempotent and self-gates on the
+  // 72h window / org setting.
+  if (isWon(opp.outcomeStatus)) {
+    const handoff = await createFreightOpportunityFromWonQuote(orgId, opp, actorUserId ?? null);
+    if (handoff?.created) {
+      const [handoffEvent] = await db.insert(quoteEvents).values({
+        quoteId: opp.id, eventType: "af_handoff", occurredAt: new Date(), actor,
+        payload: { opportunityId: handoff.id },
+      }).returning();
+      if (handoffEvent) {
+        await logQuoteTouchpointFromEvent({
+          orgId, oppId: opp.id, eventId: handoffEvent.id, eventType: handoffEvent.eventType,
+          occurredAt: handoffEvent.occurredAt, fallbackUserId: actorUserId ?? null,
+        });
+      }
+    }
+  }
   return opp;
 }
 
