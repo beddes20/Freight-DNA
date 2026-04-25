@@ -80,16 +80,22 @@ const US_STATE_NAMES_RE = Object.keys(STATE_NAME_TO_CODE)
 const CITY = "[A-Z][A-Za-z'.-]+(?:\\s[A-Z][A-Za-z'.-]+){0,2}";
 
 // Pattern A — strict: "City, ST → City, ST"
+// `[Tt][Oo]` (not just `to`) so ALL-CAPS forwarded subjects like
+// "FW: NEED RATES CHICAGO, IL TO ATLANTA, GA ASAP" still match cleanly —
+// otherwise the literal "TO" gets swallowed by the destination CITY token
+// and the lane comes back as "To Atlanta" (Task #625).
 const LANE_RE = new RegExp(
-  `\\b(${CITY}),\\s*([A-Z]{2})\\s*(?:to|→|->|-+>?|–|—|>)\\s*(${CITY}),\\s*([A-Z]{2})\\b`,
+  `\\b(${CITY}),\\s*([A-Z]{2})\\s*(?:[Tt][Oo]|→|->|-+>?|–|—|>)\\s*(${CITY}),\\s*([A-Z]{2})\\b`,
 );
 
 // Pattern B — uppercase blob with state codes, no commas required:
 //   "EL PASO TX LAS VEGAS NV"  /  "DALLAS, TX MIAMI, FL"
 // Each city is 1-3 ALL-CAPS tokens; followed by 2-letter state code; then dest.
+// Same `[Tt][Oo]` widening as LANE_RE so an ALL-CAPS "TO" connector inside
+// the uppercase blob doesn't get absorbed by UPPER_CITY (Task #625).
 const UPPER_CITY = "[A-Z][A-Z'.-]+(?:\\s[A-Z][A-Z'.-]+){0,2}";
 const LANE_RE_UPPER = new RegExp(
-  `\\b(${UPPER_CITY}),?\\s+([A-Z]{2})\\s+(?:to\\s+)?(${UPPER_CITY}),?\\s+([A-Z]{2})\\b`,
+  `\\b(${UPPER_CITY}),?\\s+([A-Z]{2})\\s+(?:[Tt][Oo]\\s+)?(${UPPER_CITY}),?\\s+([A-Z]{2})\\b`,
 );
 
 // Pattern C — full state names: "Dallas, Texas to Miami, Florida"  /

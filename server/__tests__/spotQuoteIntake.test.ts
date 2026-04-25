@@ -173,6 +173,25 @@ describe("parseQuoteIntakeFromText — messy real-world emails", () => {
     expect(out.deliveryState).toBe("FL");
   });
 
+  it("parses an ALL-CAPS forwarded subject without absorbing 'TO' into the destination city (Task #625)", async () => {
+    // Reps forward customer mail with shouty subjects like
+    // "FW: NEED RATES CHICAGO, IL TO ATLANTA, GA ASAP". Before the fix the
+    // case-sensitive `to` connector inside LANE_RE failed to match, the
+    // ALL-CAPS LANE_RE_UPPER took over, and the literal "TO" token got
+    // swallowed by the destination CITY pattern — destination came back as
+    // "To Atlanta" instead of "Atlanta". After widening the connector to
+    // `[Tt][Oo]`, LANE_RE matches first and the destination is clean.
+    const out = await parseQuoteIntakeFromText({
+      subject: "FW: NEED RATES CHICAGO, IL TO ATLANTA, GA ASAP",
+      body: "",
+    });
+    expect(out.deliveryCity).toBe("Atlanta");
+    expect(out.deliveryCity).not.toBe("To Atlanta");
+    expect(out.deliveryState).toBe("GA");
+    // Heuristic should win — no AI fallback for an ALL-CAPS subject.
+    expect(openaiCalls.count).toBe(0);
+  });
+
   it("returns confidence=0 with a friendly note when no lane is found", async () => {
     const out = await parseQuoteIntakeFromText({
       subject: "Hi",
