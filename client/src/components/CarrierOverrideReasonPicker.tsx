@@ -1,20 +1,5 @@
-/**
- * Task #638 — One-tap reason picker for rep carrier overrides.
- *
- * Surfaces when a rep:
- *   - DESELECTS a top-3 ranked carrier from a wave (deselect_top3), or
- *   - ADDS a carrier the ranker did NOT shortlist in its top-N
- *     (added_outside_topn).
- *
- * Non-blocking by design: closing the dialog WITHOUT picking a reason still
- * fires a write with reasonCode=null so the action itself is recorded for
- * downstream learning. The "Other" branch reveals an inline notes field so
- * reps can leave context without leaving the wave.
- *
- * Server-side idempotency means a second open-and-pick on the same day for
- * the same (carrier, lane) is a no-op; the picker doesn't need to track
- * what's already been recorded.
- */
+// Task #638 — One-tap reason picker for rep carrier overrides.
+// Non-blocking: dismiss writes reasonCode=null. Server is idempotent per day.
 import { useEffect, useRef, useState } from "react";
 import {
   Dialog,
@@ -28,6 +13,18 @@ import { Textarea } from "@/components/ui/textarea";
 import { apiRequest } from "@/lib/queryClient";
 
 export type CarrierOverrideAction = "deselect_top3" | "added_outside_topn";
+
+// Pure gating helper used by both UI paths to decide whether a single-carrier
+// add should fire the picker. Returns true ONLY when the candidate carrier is
+// genuinely outside the ranker's current shortlist. Exported (and test-covered
+// in __tests__/carrierOverrideGating.test.ts) so both surfaces share one rule.
+export function shouldFireAddedOutsideTopN(
+  carrierId: string | null | undefined,
+  shortlistCarrierIds: ReadonlyArray<string | null | undefined>,
+): boolean {
+  if (!carrierId) return false;
+  return !shortlistCarrierIds.some(id => id === carrierId);
+}
 
 export type CarrierOverrideReasonCode =
   | "bad_service"
@@ -83,14 +80,11 @@ export function CarrierOverrideReasonPicker({
   lane,
   action,
 }: CarrierOverrideReasonPickerProps) {
-  // Local "submission has fired" guard: prevents a second POST when the
-  // dialog's auto-dismiss fires after the user already clicked a reason.
+  // Guards a second POST from the auto-dismiss after a reason click.
   const submittedRef = useRef(false);
   const [showOtherNote, setShowOtherNote] = useState(false);
   const [otherNote, setOtherNote] = useState("");
 
-  // Reset on every open so a re-open after a previous record can still write
-  // (the server will dedupe same-day duplicates separately).
   useEffect(() => {
     if (open) {
       submittedRef.current = false;
@@ -109,12 +103,7 @@ export function CarrierOverrideReasonPicker({
     ? "We'll learn this carrier should rank higher on this lane."
     : "We'll learn this carrier should rank lower on this lane.";
 
-  // Per Task #638 product spec: the same five-option picker
-  // (Bad service / Out of equipment / Won't run lane / Better fit / Other)
-  // is offered for BOTH the deselect-top3 and added-outside-topn paths.
-  // The aggregate's positive vs negative split is driven by reasonCode
-  // alone; "Better fit" boosts, the four negative codes downweight,
-  // regardless of which action surfaced the picker.
+  // Same 5-option set for both actions; reasonCode drives the boost/cap split.
   const options: ReasonOption[] = [...NEGATIVE_OPTIONS.slice(0, 3), POSITIVE_OPTION, NEGATIVE_OPTIONS[3]];
 
   const submit = async (reasonCode: CarrierOverrideReasonCode | null, notes?: string) => {
@@ -133,8 +122,7 @@ export function CarrierOverrideReasonPicker({
         notes: notes ?? null,
       });
     } catch {
-      // Swallow — non-blocking by design. The wave action already succeeded;
-      // a missed override row is a missed learning signal, not a user error.
+      // Non-blocking: wave action already succeeded; missed write = missed signal.
     } finally {
       onOpenChange(false);
     }

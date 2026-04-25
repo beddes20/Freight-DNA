@@ -1265,9 +1265,7 @@ export async function rankCarriersForLane(
     lane.orgId,
     laneSignature,
   );
-  // Task #638 — Per-(carrier, lane) override prior. Same lane signature, same
-  // soft-fail contract: a missing table or transient pool error returns an
-  // empty map and the rank proceeds without rep correction signal.
+  // Task #638 — Per-(carrier, lane) override prior; soft-fails to empty map.
   const carrierOverridesByCarrierId = await getCarrierOverridesForLane(
     lane.orgId,
     laneSignature,
@@ -1543,10 +1541,7 @@ export async function rankCarriersForLane(
     if (prior.delta !== 0) fitScore += prior.delta;
     if (prior.reason) reasons.push(prior.reason);
 
-    // Task #638 — Apply rep override prior. Positive boost is added BEFORE the
-    // negative cap so a strong negative signal always wins ties. The reasons
-    // surface in the carrier chip's reasons[] array so reps can see why a
-    // carrier got bumped up or pushed down.
+    // Task #638 — Rep override prior: boost first, then cap (negatives win ties).
     const overrideAgg = carrierOverridesByCarrierId.get(carrier.id);
     if (overrideAgg) {
       const ov = carrierOverridePrior(overrideAgg);
@@ -1780,13 +1775,8 @@ export async function rankCarriersForLane(
       reasons.push("Showed availability in prior outreach");
     }
 
-    // Task #638 — Apply rep override prior on history-only (TMS) carriers too.
-    // History-only carriers have no carrierId so the only key the override
-    // map could match on would be carrierName-derived; we deliberately do
-    // NOT match here — overrides are keyed by carriers.id and TMS-only
-    // carriers don't have a catalog row to override. Left as a no-op slot
-    // so the cap/boost logic can extend cleanly when TMS-only carriers gain
-    // canonical identifiers in a future task.
+    // Task #638 — Overrides are keyed by carriers.id; TMS-only carriers have
+    // no catalog row, so no override prior is applied here.
 
     // Suppression reasons for history-only carriers
     const suppressionReasons: string[] = [];

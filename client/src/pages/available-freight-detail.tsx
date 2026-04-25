@@ -20,6 +20,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
   CarrierOverrideReasonPicker,
+  shouldFireAddedOutsideTopN,
   type CarrierOverrideAction,
   type CarrierOverridePickerCarrier,
   type CarrierOverridePickerLane,
@@ -1634,13 +1635,14 @@ export default function AvailableFreightDetailPage() {
                       setSelectedPool(new Set());
                       await queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities", id] });
                       await queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities", id, "carrier-pool"] });
-                      // Task #638 — Single pool-add is the canonical "added
-                      // outside top-N" signal. Multi-add stays picker-free
-                      // to avoid an N-dialog avalanche on bulk power moves.
+                      // Task #638 — Single pool-add is the "added outside
+                      // top-N" signal IFF the carrier wasn't already on the
+                      // wave shortlist (`carriers`). Multi-add stays
+                      // picker-free.
                       if (poolIds.length === 1) {
                         const cid = poolIds[0];
                         const carrier = carrierById.get(cid);
-                        if (carrier) {
+                        if (carrier && shouldFireAddedOutsideTopN(cid, carriers.map(c => c.carrierId))) {
                           setOverridePicker({
                             carrier: { carrierId: cid, carrierName: carrier.name },
                             lane: pickerLane(),

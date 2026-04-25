@@ -1,22 +1,4 @@
-/**
- * Task #638 — carrier_overrides helper tests.
- *
- * Covers:
- *   1. recordCarrierOverride emits an INSERT … ON CONFLICT DO NOTHING with
- *      the right columns + computed lane signature.
- *   2. Idempotent same-day write: when ON CONFLICT trips, RETURNING is
- *      empty so the helper returns recorded:false.
- *   3. getCarrierOverridesForLane keys the result by carrierId.
- *   4. carrierOverridePrior turns negatives into a tightening cap and
- *      surfaces the most-recent labeled reason.
- *   5. carrierOverridePrior turns positives into a +12 boost (= one bench win).
- *   6. Both signals applied together: cap wins, boost still credited.
- *
- * Mirrors the carrierLaneOutcomes.test.ts strategy: stub `db.execute` so
- * no real PostgreSQL is required. We only assert on SQL fragments and
- * pure-function math.
- */
-
+// Task #638 — carrier_overrides helper tests. Mocks db.execute (no live PG).
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const executeMock = vi.fn();

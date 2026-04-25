@@ -919,36 +919,19 @@ export function registerProactiveOpportunityRoutes(app: Express) {
     }
   });
 
-  // ── Task #638 — REP CARRIER OVERRIDE ──────────────────────────────────────
-  // Records a single rep correction signal: a top-3 deselect (negative) or an
-  // outside-top-N add (typically positive). Non-blocking: dismissed picker
-  // still calls this endpoint with reasonCode=null so we capture the action
-  // for downstream learning while contributing no labeled reason text.
-  //
-  // Idempotency is enforced at the table level — duplicate calls within the
-  // same UTC day for (rep, carrier, lane) become a no-op, and the response
-  // surfaces `{ recorded: false }` so the client can stay UI-quiet.
+  // Task #638 — Rep carrier override write. Idempotent per UTC day.
+  // Accepts any (action, reasonCode) combo; reasonCode=null = explicit dismiss.
   app.post("/api/carrier-overrides", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
       const repId = userId(req);
       if (!repId) return res.status(401).json({ error: "Unauthorized" });
 
-      // Per Task #638 product spec, the same five-option reason picker is
-      // surfaced on both action paths, so the server intentionally accepts
-      // any (action, reasonCode) combination. The aggregate's positive vs
-      // negative split is driven by reasonCode alone, not by action — so
-      // a rep adding a carrier with reason 'bad_service' is recorded
-      // faithfully (rare, but preserves the learning signal). The 'action'
-      // column captures WHERE the override happened for downstream audit.
       const overrideSchema = z.object({
         carrierId: z.string().min(1),
         action: z.enum(["deselect_top3", "added_outside_topn"]),
-        // Null = explicit dismiss. Undefined coerced → null for forgiveness.
         reasonCode: z.enum(["bad_service", "out_of_equipment", "wont_run_lane", "better_fit", "other"])
           .nullable().optional().transform(v => v ?? null),
-        // Lane parts — at least one of (origin/destination) required so
-        // laneSig() never collapses to the empty signature.
         origin: z.string().nullable().optional(),
         originState: z.string().nullable().optional(),
         destination: z.string().nullable().optional(),

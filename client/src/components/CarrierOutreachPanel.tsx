@@ -17,6 +17,7 @@ import { formatLaneDisplay, formatLaneLocation, formatWeeklyLoadRange } from "@s
 import { CarrierReasonsPopover } from "@/components/CarrierReasonsPopover";
 import {
   CarrierOverrideReasonPicker,
+  shouldFireAddedOutsideTopN,
   type CarrierOverrideAction,
   type CarrierOverridePickerCarrier,
   type CarrierOverridePickerLane,
@@ -772,15 +773,17 @@ export function CarrierOutreachPanel({
           ? `${data.batch.matchedCount} already in catalog. All ${data.results.length} added to bench.`
           : `All added to bench.`,
       });
-      // Task #638 — Single-carrier imports are the prototypical "added
-      // outside top-N" signal. Multi-carrier paste-ins are typically
-      // bulk catalog seeding, not a per-carrier preference, so we skip
-      // the picker for those to avoid an N-dialog avalanche.
+      // Task #638 — Single-carrier imports are the canonical
+      // "added outside top-N" signal IFF the carrier wasn't already in
+      // the ranker's shortlist. Skip multi-imports (bulk seeding) and
+      // skip when the carrier was already shown to the rep — picking it
+      // there would be a normal selection, not an override.
       if (data.results.length === 1) {
         const r = data.results[0];
-        if (r?.carrier?.id) {
+        const id = r?.carrier?.id;
+        if (id && shouldFireAddedOutsideTopN(id, rankedCarriers.map(c => c.carrierId))) {
           setOverridePicker({
-            carrier: { carrierId: r.carrier.id, carrierName: r.carrier.name },
+            carrier: { carrierId: id, carrierName: r.carrier.name },
             lane: pickerLane(),
             action: "added_outside_topn",
           });

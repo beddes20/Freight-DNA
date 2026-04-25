@@ -4978,28 +4978,8 @@ export const carrierLaneOutcomeEventKeys = pgTable("carrier_lane_outcome_event_k
 }));
 export type CarrierLaneOutcomeEventKey = typeof carrierLaneOutcomeEventKeys.$inferSelect;
 
-/**
- * Task #638 — Per-(rep, carrier, lane) override ledger.
- *
- * Captures the most valuable training signal we can collect: when a rep
- * deselects a top-3 ranked carrier from a wave, or hand-adds a carrier the
- * ranker didn't shortlist, we ask "why" and persist the answer here. The
- * carrier ranker reads aggregates per (carrier, lane) on the next pass,
- * downweighting carriers reps consistently skip and boosting carriers reps
- * consistently prefer.
- *
- * reasonCode is nullable: the picker is non-blocking, so a rep who dismisses
- * still produces a row (with reasonCode=null) that counts as a "skip" signal
- * but contributes no labeled reason text.
- *
- * Idempotency: the (orgId, carrierId, laneSignature, repId, occurredAtDay)
- * unique index makes duplicate clicks within the same UTC day a no-op via
- * INSERT ... ON CONFLICT DO NOTHING. occurredAtDay is denormalized as a
- * stored varchar 'YYYY-MM-DD' (UTC) so the unique-index match is exact.
- *
- * laneSignature mirrors the canonical `laneSig()` helper in
- * server/laneCrossLinkService.ts.
- */
+// Task #638 — Per-(rep, carrier, lane, day) override ledger. Drives ranker priors.
+// reasonCode nullable (dismiss); idempotent via uniqueIndex on (org, carrier, lane, rep, day).
 export const carrierOverrideReasonCodes = [
   "bad_service",
   "out_of_equipment",

@@ -1,30 +1,6 @@
-/**
- * Task #638 — Per-(rep, carrier, lane) override ledger.
- *
- * The carrier reason picker on the LWQ + Available Freight wave UIs writes
- * here when a rep:
- *   - DESELECTS a top-3 ranked carrier from a wave (negative signal), or
- *   - ADDS a carrier the ranker did NOT shortlist in its top-N (typically
- *     a "better fit" positive signal).
- *
- * The ranker reads the aggregate per (carrier, lane) on the next pass:
- *   - Negative reasons (bad_service / out_of_equipment / wont_run_lane /
- *     other) cap the carrier's fitScore. Caps tighten as the count grows.
- *   - Positive reasons (better_fit) add a boost equal to one bench win
- *     (+12, matching `priorOutcomeBoost` in carrierRankingService.ts).
- *
- * Idempotency: a unique index on
- *   (org_id, carrier_id, lane_signature, rep_id, occurred_at_day)
- * makes duplicate clicks within the same UTC day a no-op via
- * INSERT ... ON CONFLICT DO NOTHING. The picker is non-blocking — a
- * dismiss writes a row with reason_code=null. Null rows are kept for
- * audit + dedupe, but do NOT influence ranking (counted as neither
- * negative nor positive). Only explicit reason codes move the score.
- *
- * Notes column: bounded to 240 chars server-side so we never accept
- * unbounded user-supplied text into a field that gets read on every rank.
- */
-
+// Task #638 — Per-(rep, carrier, lane, day) override ledger.
+// Negative reasons cap fitScore (1→60, 2→40, 3+→20); better_fit adds +12.
+// Dismiss writes reason_code=null (audit-only, no score impact).
 import { sql } from "drizzle-orm";
 import { db } from "../storage";
 import {
@@ -36,13 +12,7 @@ import { laneSig } from "../laneCrossLinkService";
 
 const NOTES_MAX_CHARS = 240;
 
-/**
- * Reasons that should DOWNWEIGHT the carrier on this lane.
- *
- * "other" is treated as negative because reps reach for it when none of the
- * specific labels fit but the underlying impulse is "not this carrier".
- * Positive sentiment has its own dedicated label (better_fit).
- */
+// "other" is bucketed negative — reps pick it when no specific label fits.
 const NEGATIVE_REASONS: ReadonlySet<CarrierOverrideReasonCode> = new Set([
   "bad_service",
   "out_of_equipment",
@@ -54,14 +24,9 @@ const POSITIVE_REASONS: ReadonlySet<CarrierOverrideReasonCode> = new Set([
   "better_fit",
 ]);
 
-/** Single-bench-win boost matches `priorOutcomeBoost` in carrierRankingService. */
+// Matches priorOutcomeBoost in carrierRankingService.
 const POSITIVE_BOOST = 12;
 
-/**
- * Score caps tighten as more reps skip the same carrier on the same lane.
- * 1 negative → cap at 60, 2 → 40, 3+ → 20. The ranker applies the cap
- * AFTER any positive boost, so a strong negative signal always wins ties.
- */
 function negativeCapForCount(n: number): number {
   if (n <= 0) return Infinity;
   if (n === 1) return 60;
@@ -129,9 +94,7 @@ export async function recordCarrierOverride(
     input.destinationState ?? null,
     input.equipmentType ?? null,
   );
-  // laneSig joins five normalized parts with '|' so an "empty" sig collapses
-  // to a string of separators only — explicitly reject that to keep the
-  // unique index meaningful.
+  // Reject all-separator sigs ("|||" etc.) so the unique index stays meaningful.
   if (!signature || /^\|*$/.test(signature)) {
     throw new Error("recordCarrierOverride: laneSignature could not be derived");
   }
@@ -139,9 +102,7 @@ export async function recordCarrierOverride(
   const occurredAtDay = toUtcDayString(occurredAt);
   const notes = (input.notes ?? "").trim().slice(0, NOTES_MAX_CHARS) || null;
 
-  // ON CONFLICT DO NOTHING: duplicate same-day click is a no-op. RETURNING
-  // returns zero rows on conflict so the caller can tell idempotent hits
-  // from fresh writes.
+  // ON CONFLICT DO NOTHING + RETURNING — caller distinguishes new write vs dedup hit.
   const inserted = await db.execute<{ id: string }>(sql`
     INSERT INTO carrier_overrides (
       org_id, carrier_id, lane_signature,
@@ -163,10 +124,7 @@ export async function recordCarrierOverride(
   return { recorded: rows.length > 0 };
 }
 
-/**
- * Aggregate of every override row written against (orgId, carrierId, lane).
- * The ranker turns this into a fitScore prior via `carrierOverridePrior()`.
- */
+// Aggregate per (orgId, carrierId, lane). Fed to carrierOverridePrior().
 export interface CarrierOverrideAggregate {
   carrierId: string;
   laneSignature: string;
@@ -177,10 +135,7 @@ export interface CarrierOverrideAggregate {
   lastOccurredAt: Date | null;
 }
 
-/**
- * Returns one aggregate per carrier that has at least one override row on
- * this (org, lane). Carriers with no signal are omitted.
- */
+// One row per carrier with at least one override on (org, lane). Empty otherwise.
 export async function getCarrierOverridesForLane(
   orgId: string,
   laneSignature: string,
@@ -195,10 +150,8 @@ export async function getCarrierOverridesForLane(
     lastNegativeReason: string | null;
     lastOccurredAt: string | Date | null;
   }
-  // Soft-fail by design: the ranker is on the hot path and a transient
-  // DB hiccup on this read should degrade to "no override prior" rather
-  // than break the whole rank pass. Mirrors the resilience pattern in
-  // getCarrierLaneOutcomesForLane().
+  // Soft-fail: ranker is hot-path; a DB hiccup should degrade to
+  // "no prior", not break the rank pass (mirrors getCarrierLaneOutcomesForLane).
   try {
     const result = await db.execute<AggregateRow>(sql`
       SELECT
@@ -242,16 +195,8 @@ export async function getCarrierOverridesForLane(
   return out;
 }
 
-/**
- * Pure function: turns one aggregate into the ranker prior.
- *
- *   { boost }  — points to ADD to fitScore before the cap is applied.
- *   { cap }    — upper bound to apply AFTER the boost. `Infinity` = no cap.
- *   { reasons }— display strings for the carrier chip's reasons[] array.
- *
- * Both boost and cap can be present at once when reps disagree (rare, but
- * we honor the negative signal by capping AFTER the boost).
- */
+// Pure function — turns one aggregate into the ranker prior.
+// boost adds to fitScore; cap is applied AFTER the boost (negatives win ties).
 export interface CarrierOverridePrior {
   boost: number;
   cap: number;

@@ -4542,14 +4542,7 @@ export async function runMigrations() {
     clientCarrierLaneOutcomeEventKeys.release();
   }
 
-  // ── Task #638: carrier_overrides ──────────────────────────────────────────
-  // Per-(rep, carrier, lane) override ledger. Written by the rep override
-  // reason picker on LWQ + Available Freight wave UIs and read by the carrier
-  // ranker as a "rep correction" prior. The unique index on
-  // (org_id, carrier_id, lane_signature, rep_id, occurred_at_day) makes
-  // duplicate clicks within the same UTC day a no-op via ON CONFLICT DO
-  // NOTHING. Idempotent CREATE IF NOT EXISTS — required by the schema-drift
-  // guard alongside the Drizzle table in shared/schema.ts.
+  // Task #638: carrier_overrides — rep override ledger; idempotent per UTC day.
   const clientCarrierOverrides = await pool.connect();
   try {
     await clientCarrierOverrides.query(`
