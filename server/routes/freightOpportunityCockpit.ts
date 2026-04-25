@@ -254,9 +254,13 @@ export async function buildCockpitRow(
       // Task #632 — bench tier-0 chip data is stamped on `responsivenessSnapshot`
       // at rank-time (proactiveOpportunityService). Snapshot is JSONB so cast
       // through `unknown` to read it safely without expanding the column type.
+      // Task #633 also stamps `reasons` (capped, ordered) and the original
+      // `suppressionReasons` so the chip popover can render them inline.
       const snap = (row.responsivenessSnapshot ?? {}) as {
         bench?: boolean;
         benchWins?: number;
+        reasons?: string[];
+        suppressionReasons?: string[];
       };
       return {
         opportunityCarrierId: row.id,
@@ -275,6 +279,10 @@ export async function buildCockpitRow(
         respondedAt: row.lastResponseId ? (row.sentAt ?? row.createdAt) : null,
         bench: !!snap.bench,
         benchWins: typeof snap.benchWins === "number" ? snap.benchWins : 0,
+        // Task #633 — surface "why this carrier" reasons + suppression list to
+        // the cockpit chip popover. Both are bounded plain-string arrays.
+        reasons: Array.isArray(snap.reasons) ? snap.reasons : [],
+        suppressionReasons: Array.isArray(snap.suppressionReasons) ? snap.suppressionReasons : [],
       };
     }),
   );

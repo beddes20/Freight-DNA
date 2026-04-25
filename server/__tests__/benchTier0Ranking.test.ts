@@ -350,3 +350,89 @@ describe("bench tier-0 — AF persisted shortlist preserves order under cap", ()
     expect(exactRow?.excludedReason).toBe("rep_override");
   });
 });
+
+/**
+ * Task #633 — "Why this carrier" reasons surface.
+ *
+ * The ranker exposes a capped, ordered `reasons: string[]` on every
+ * RankedCarrier from existing scoring inputs. Bench wins always lead.
+ * The proactive opportunity service then mirrors `reasons` onto
+ * `responsivenessSnapshot` so the AF cockpit chip popover can render them.
+ *
+ * These tests use `buildRankReasons` directly (the helper the ranker calls)
+ * to avoid taking a hard dependency on a real DB / lane fixture.
+ */
+describe("task #633 — RankedCarrier.reasons (why this carrier)", () => {
+  it("prepends 'Bench: N wins (last 90d)' when benchWins > 0", async () => {
+    const { buildRankReasons } = await import("../carrierRankingService");
+    const reasons = buildRankReasons(
+      ["Ran this exact lane 12× in last 90 days", "On-time: 95%"],
+      3,
+    );
+    expect(reasons[0]).toBe("Bench: 3 wins (last 90d)");
+    expect(reasons[1]).toBe("Ran this exact lane 12× in last 90 days");
+  });
+
+  it("uses singular 'win' for a single bench win", async () => {
+    const { buildRankReasons } = await import("../carrierRankingService");
+    const reasons = buildRankReasons(["Region & equipment match"], 1);
+    expect(reasons[0]).toBe("Bench: 1 win (last 90d)");
+  });
+
+  it("omits the bench reason when benchWins is 0", async () => {
+    const { buildRankReasons } = await import("../carrierRankingService");
+    const reasons = buildRankReasons(["Region & equipment match"], 0);
+    expect(reasons.some(r => r.startsWith("Bench:"))).toBe(false);
+    expect(reasons[0]).toBe("Region & equipment match");
+  });
+
+  it("caps the reasons list at REASONS_DISPLAY_CAP (8 entries)", async () => {
+    const { buildRankReasons, REASONS_DISPLAY_CAP } = await import(
+      "../carrierRankingService"
+    );
+    const inputs = Array.from({ length: 20 }, (_, i) => `signal ${i}`);
+    const reasons = buildRankReasons(inputs, 0);
+    expect(reasons).toHaveLength(REASONS_DISPLAY_CAP);
+  });
+
+  it("dedupes identical signal strings", async () => {
+    const { buildRankReasons } = await import("../carrierRankingService");
+    const reasons = buildRankReasons(["dup", "dup", "other"], 0);
+    expect(reasons).toEqual(["dup", "other"]);
+  });
+
+  it("filters out empty strings", async () => {
+    const { buildRankReasons } = await import("../carrierRankingService");
+    const reasons = buildRankReasons(["", "real", "  "], 0);
+    expect(reasons).toContain("real");
+    expect(reasons).toContain("  ");
+    expect(reasons).not.toContain("");
+  });
+
+  it("snapshot mapping shape preserves reasons + suppressionReasons + bench fields", () => {
+    // Mirrors the exact mapping in proactiveOpportunityService.ts so a
+    // future refactor that drops `reasons` from the snapshot will fail
+    // here. Independent of the live storage / ranker pipeline.
+    const ranked = makeRanked({
+      reasons: ["Bench: 2 wins (last 90d)", "Hauled for ACME (4 loads)"],
+      suppressionReasons: ["No email on file"],
+      bench: true,
+      benchWins: 2,
+      loadsOnLane: 4,
+      priorOutcomeBoost: true,
+    });
+    const snap = {
+      suppressionReasons: ranked.suppressionReasons ?? [],
+      loadsOnLane: ranked.loadsOnLane,
+      priorOutcomeBoost: ranked.priorOutcomeBoost,
+      bench: ranked.bench,
+      benchWins: ranked.benchWins,
+      reasons: ranked.reasons ?? [],
+    };
+    expect(snap.reasons[0]).toBe("Bench: 2 wins (last 90d)");
+    expect(snap.suppressionReasons).toContain("No email on file");
+    expect(snap.bench).toBe(true);
+    expect(snap.benchWins).toBe(2);
+  });
+});
+

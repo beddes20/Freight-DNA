@@ -441,6 +441,15 @@ export interface RankedCarrier {
   bench: boolean;
   /** Count of positive bench outcomes on this lane in the last 90d. */
   benchWins: number;
+  /**
+   * Task #633 — Plain-language reasons this carrier was ranked, ordered by
+   * importance. Capped at REASONS_DISPLAY_CAP entries. Drives the
+   * "why this carrier" hover popover in LWQ + Available Freight.
+   *
+   * Suppression notes live separately in `suppressionReasons` so the popover
+   * can render them at the top with muted styling.
+   */
+  reasons: string[];
   sourceChannel: string | null;        // where this carrier was originally sourced from
   suppressionReasons: string[];        // human-readable negative flags (no email, recently contacted, flagged, etc.)
   equipmentMatch: boolean;             // carrier equipment overlaps with lane equipment
@@ -487,6 +496,37 @@ function normStr(s: string): string {
  *  bench wins" without spinning up the full ranker pipeline.
  */
 export const BENCH_TIER0_CAP = 5;
+
+/**
+ * Task #633 — Cap on the number of plain-language reasons we surface on the
+ * "why this carrier" hover popover. We over-collect reasons inside the ranker
+ * (one per scoring signal) but the UI tooltip stays scannable when bounded.
+ */
+export const REASONS_DISPLAY_CAP = 8;
+
+/**
+ * Task #633 — Build the final ordered `reasons[]` exposed on RankedCarrier.
+ *
+ * Bench wins are the strongest possible signal (they outrank `exact` history
+ * in the comparator), so they go on top. Everything else preserves the
+ * ranker's natural authoring order, which already runs from history quality
+ * → fit signals → bonuses, and we cap at REASONS_DISPLAY_CAP for the UI.
+ */
+export function buildRankReasons(
+  rawReasons: string[],
+  benchWins: number,
+): string[] {
+  const out: string[] = [];
+  if (benchWins > 0) {
+    out.push(`Bench: ${benchWins} win${benchWins === 1 ? "" : "s"} (last 90d)`);
+  }
+  for (const r of rawReasons) {
+    if (out.length >= REASONS_DISPLAY_CAP) break;
+    if (!r || out.includes(r)) continue;
+    out.push(r);
+  }
+  return out;
+}
 
 export function benchTier0KeyFor(c: Pick<RankedCarrier, "carrierId" | "carrierName">): string {
   return c.carrierId ?? `name:${normStr(c.carrierName)}`;
@@ -1562,6 +1602,7 @@ export async function rankCarriersForLane(
       priorOutcomeBoost: hadPositiveOutcome,
       bench: hadPositiveOutcome && benchWinsForCarrier(carrier.id, carrier.name) > 0,
       benchWins: benchWinsForCarrier(carrier.id, carrier.name),
+      reasons: buildRankReasons(reasons, benchWinsForCarrier(carrier.id, carrier.name)),
       sourceChannel: (carrier as any).sourceChannel ?? null,
       suppressionReasons,
       equipmentMatch,
@@ -1742,6 +1783,7 @@ export async function rankCarriersForLane(
       priorOutcomeBoost: hadPositiveOutcomeHist,
       bench: hadPositiveOutcomeHist && benchWinsForCarrier(null, carrierNorm) > 0,
       benchWins: benchWinsForCarrier(null, carrierNorm),
+      reasons: buildRankReasons(reasons, benchWinsForCarrier(null, carrierNorm)),
       sourceChannel: null,
       suppressionReasons,
       equipmentMatch: false,

@@ -14,6 +14,7 @@ import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { formatLaneDisplay, formatLaneLocation, formatWeeklyLoadRange } from "@shared/laneFormatters";
+import { CarrierReasonsPopover } from "@/components/CarrierReasonsPopover";
 import {
   OUTREACH_TEMPLATES,
   DEFAULT_TEMPLATE_ID,
@@ -159,6 +160,8 @@ interface RankedCarrier {
   // Task #632 — Bench tier-0: positive lane outcomes within 90d.
   bench?: boolean;
   benchWins?: number;
+  // Task #633 — capped, ordered "why this carrier" reasons (server: ranker).
+  reasons?: string[];
 }
 
 interface SuggestionsResponse {
@@ -1871,7 +1874,24 @@ export function CarrierOutreachPanel({
                               {/* Main content */}
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-                                  <span className="text-xs font-semibold text-foreground">{c.carrierName}</span>
+                                  {/*
+                                    Task #633 — wrap the carrier name in the
+                                    shared "why this carrier" popover. Hover on
+                                    desktop / tap on mobile.
+                                  */}
+                                  <CarrierReasonsPopover
+                                    carrierName={c.carrierName}
+                                    reasons={c.reasons ?? []}
+                                    suppressionReasons={c.suppressionReasons ?? []}
+                                    testId={`trigger-reasons-${idx}`}
+                                  >
+                                    <span
+                                      className="text-xs font-semibold text-foreground cursor-help underline-offset-2 decoration-dotted hover:underline"
+                                      data-testid={`text-carrier-name-${idx}`}
+                                    >
+                                      {c.carrierName}
+                                    </span>
+                                  </CarrierReasonsPopover>
                                   {c.mcDot && (
                                     <span className="text-[9px] px-1 py-0 rounded border border-border text-muted-foreground bg-muted/20 font-mono" title="MC Number" data-testid={`text-mc-number-${idx}`}>
                                       MC {c.mcDot.replace(/^MC[-#\s]?/i, "")}

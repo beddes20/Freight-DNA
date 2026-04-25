@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import type { FreightOpportunity } from "@shared/schema";
 import { applyCockpitFilters } from "@/lib/cockpitFilters";
+import { CarrierReasonsPopover } from "@/components/CarrierReasonsPopover";
 
 
 interface CockpitChip {
@@ -46,6 +47,13 @@ interface CockpitChip {
   bench?: boolean;
   /** Count of positive bench outcomes used for the "Bench Nx wins" chip label */
   benchWins?: number;
+  /**
+   * Task #633 — Capped, ordered "why this carrier" reason strings driven by
+   * the carrier ranker. Mirrors `RankedCarrier.reasons` on the server.
+   */
+  reasons?: string[];
+  /** Task #633 — suppression notes, rendered muted at the top of the popover. */
+  suppressionReasons?: string[];
 }
 
 interface CockpitItem {
@@ -1632,16 +1640,29 @@ function CockpitRowView(props: {
             const showBench = !!chip.bench && benchWins > 0;
             return (
               <span key={chip.opportunityCarrierId} className="inline-flex items-center gap-1">
-                <Badge
-                  variant="outline"
-                  className={bucketTone(chip.bucket)}
-                  data-testid={`chip-carrier-${opp.id}-${chip.carrierId}`}
-                  title={tip}
+                {/*
+                  Task #633 — wrap the carrier badge in CarrierReasonsPopover so
+                  reps can see the ranker's "why this carrier" reasons on hover
+                  (desktop) or tap (mobile). The native title= tooltip is kept
+                  as a fallback for screen readers / older browsers.
+                */}
+                <CarrierReasonsPopover
+                  carrierName={chip.carrierName}
+                  reasons={chip.reasons ?? []}
+                  suppressionReasons={chip.suppressionReasons ?? []}
+                  testId={`trigger-reasons-${opp.id}-${chip.carrierId}`}
                 >
-                  #{chip.rank} {chip.carrierName}
-                  {chip.respondedAt && <CheckCircle2 className="h-3 w-3 ml-1" />}
-                  {!chip.respondedAt && chip.sentAt && <Send className="h-3 w-3 ml-1" />}
-                </Badge>
+                  <Badge
+                    variant="outline"
+                    className={`${bucketTone(chip.bucket)} cursor-help`}
+                    data-testid={`chip-carrier-${opp.id}-${chip.carrierId}`}
+                    title={tip}
+                  >
+                    #{chip.rank} {chip.carrierName}
+                    {chip.respondedAt && <CheckCircle2 className="h-3 w-3 ml-1" />}
+                    {!chip.respondedAt && chip.sentAt && <Send className="h-3 w-3 ml-1" />}
+                  </Badge>
+                </CarrierReasonsPopover>
                 {showBench && (
                   <Badge
                     variant="outline"

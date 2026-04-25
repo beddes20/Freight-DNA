@@ -657,6 +657,10 @@ export async function generateOpportunitiesForCompany(
         // surface can render "Bench Nx wins" without a schema migration.
         bench: row.ranked.bench,
         benchWins: row.ranked.benchWins,
+        // Task #633 — capped, ordered "why this carrier" reasons. Same JSONB
+        // pattern as bench so we can hydrate the chip popover without adding
+        // a column.
+        reasons: row.ranked.reasons ?? [],
       },
       excludedReason: row.excludedReason,
       outreachLogId: null,
@@ -757,6 +761,10 @@ export async function ensureShortlistRanked(
       // surface can render "Bench Nx wins" without a schema migration.
       bench: row.ranked.bench,
       benchWins: row.ranked.benchWins,
+      // Task #633 — capped, ordered "why this carrier" reasons. Same JSONB
+      // pattern as bench so we can hydrate the chip popover without adding
+      // a column.
+      reasons: row.ranked.reasons ?? [],
     },
     excludedReason: row.excludedReason,
     outreachLogId: null,
