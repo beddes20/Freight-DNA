@@ -160,4 +160,62 @@ test.describe("AF 'Make this recurring' one-click", () => {
     await loads.fill('3');
     await expect(loads).toHaveValue('3');
   });
+
+  test('saving from a prefilled dialog persists edited values into the created recurring lane', async ({ page }) => {
+    // Use a unique destination so we can identify the row this test created
+    // independently of the test that just edited Dallas → Houston.
+    const stamp = shortId();
+    const editedDest = `Memphis-${stamp}`;
+    const editedDestState = 'TN';
+
+    const seed = `?createLane=1&customer=${encodeURIComponent(seeded.companyName)}&originCity=Atlanta&originState=GA&destCity=Dallas&destState=TX&equipment=Reefer`;
+    await gotoAuth(page, `/lanes/work-queue${seed}`);
+    const dialog = page.locator('[data-testid="dialog-build-lane"]');
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="badge-build-lane-prefilled-af"]')).toBeVisible();
+
+    // Edit one prefilled field (destination) and fill the required loads/wk.
+    await page.locator('[data-testid="input-build-dest"]').fill(editedDest);
+    await page.locator('[data-testid="input-build-dest-state"]').fill(editedDestState);
+    await page.locator('#build-loads').fill('2.5');
+
+    // Submit. The Build Lane dialog's confirm button is "Build Lane".
+    const submit = page.locator('[data-testid="btn-build-lane-submit"]');
+    await expect(submit).toBeEnabled();
+    await submit.click();
+
+    // Dialog closes on success.
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    // Lane row exists in DB with the EDITED destination, not the prefilled
+    // one — this is the genuine "edits persist on save" assertion.
+    const r = await pool.query(
+      `SELECT origin, origin_state, destination, destination_state,
+              equipment_type, company_name, avg_loads_per_week, is_manual
+         FROM recurring_lanes
+        WHERE org_id = $1 AND destination = $2`,
+      [seeded.orgId, editedDest],
+    );
+    expect(r.rowCount, 'a recurring lane should be created with the edited destination').toBe(1);
+    const row = r.rows[0];
+    expect(row.origin).toBe('Atlanta');
+    expect(row.origin_state).toBe('GA');
+    expect(row.destination_state).toBe(editedDestState);
+    expect(row.equipment_type).toBe('Reefer');
+    expect(row.company_name).toBe(seeded.companyName);
+    expect(parseFloat(row.avg_loads_per_week)).toBe(2.5);
+    expect(row.is_manual).toBe(true);
+
+    // URL prefill params are stripped after a successful save.
+    const url = new URL(page.url());
+    for (const k of ['createLane', 'customer', 'originCity', 'originState', 'destCity', 'destState', 'equipment']) {
+      expect(url.searchParams.get(k), `expected ${k} to be cleared after save`).toBeNull();
+    }
+
+    // Cleanup so the test is idempotent across re-runs.
+    await pool.query(
+      `DELETE FROM recurring_lanes WHERE org_id = $1 AND destination = $2`,
+      [seeded.orgId, editedDest],
+    );
+  });
 });
