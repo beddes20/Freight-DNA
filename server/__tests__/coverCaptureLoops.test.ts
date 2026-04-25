@@ -18,6 +18,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   applyCoverCaptureLoops,
   type CoverCaptureLoopsInput,
+  type CoverLoopsDbHandle,
 } from "../services/coverCaptureLoops";
 import {
   recurringLanes,
@@ -26,6 +27,13 @@ import {
 
 type FakeRow = Record<string, any>;
 
+/**
+ * Test fake satisfies the structural shape of `CoverLoopsDbHandle` for the
+ * narrow surface the loops actually use (`select/insert/update`). Fully
+ * typing it against drizzle's complex generics would obscure intent, so we
+ * intentionally cast the fake to the production handle type at the seam
+ * — production code itself remains strictly typed.
+ */
 interface FakeDb {
   recurringLaneRows: FakeRow[];
   laneRateRows: FakeRow[];
@@ -34,6 +42,11 @@ interface FakeDb {
   select: (...args: any[]) => any;
   insert: (...args: any[]) => any;
   update: (...args: any[]) => any;
+}
+
+/** Casts the test fake to the strict prod handle type at the test boundary. */
+function asDbHandle(fake: FakeDb): CoverLoopsDbHandle {
+  return fake as unknown as CoverLoopsDbHandle;
 }
 
 function makeFakeDb(seed: { recurringLanes?: FakeRow[]; laneRateHistory?: FakeRow[] } = {}): FakeDb {
@@ -136,7 +149,7 @@ describe("applyCoverCaptureLoops", () => {
       });
       const storage = makeStorage();
 
-      const result = await applyCoverCaptureLoops(baseInput(), { storage, db });
+      const result = await applyCoverCaptureLoops(baseInput(), { storage, db: asDbHandle(db) });
 
       expect(result.bench.applied).toBe(true);
       expect(result.bench.rows).toHaveLength(2);
@@ -159,7 +172,7 @@ describe("applyCoverCaptureLoops", () => {
 
       const result = await applyCoverCaptureLoops(
         baseInput({ options: { applyToBench: false } }),
-        { storage, db },
+        { storage, db: asDbHandle(db) },
       );
 
       expect(result.bench.applied).toBe(false);
@@ -172,7 +185,7 @@ describe("applyCoverCaptureLoops", () => {
       const db = makeFakeDb({ recurringLanes: [] });
       const storage = makeStorage();
 
-      const result = await applyCoverCaptureLoops(baseInput(), { storage, db });
+      const result = await applyCoverCaptureLoops(baseInput(), { storage, db: asDbHandle(db) });
 
       expect(result.bench.applied).toBe(false);
       expect(result.bench.reason).toBe("no_recurring_lane");
@@ -193,8 +206,8 @@ describe("applyCoverCaptureLoops", () => {
         ...row,
       }));
 
-      const r1 = await applyCoverCaptureLoops(baseInput(), { storage, db });
-      const r2 = await applyCoverCaptureLoops(baseInput(), { storage, db });
+      const r1 = await applyCoverCaptureLoops(baseInput(), { storage, db: asDbHandle(db) });
+      const r2 = await applyCoverCaptureLoops(baseInput(), { storage, db: asDbHandle(db) });
 
       expect(r1.bench.rows[0].benchRowId).toBe("bench_dedup_lane_1_car_1");
       expect(r2.bench.rows[0].benchRowId).toBe("bench_dedup_lane_1_car_1");
@@ -208,7 +221,7 @@ describe("applyCoverCaptureLoops", () => {
 
       const result = await applyCoverCaptureLoops(
         baseInput({ miles: 800 }),
-        { storage, db },
+        { storage, db: asDbHandle(db) },
       );
 
       expect(result.rateBand.applied).toBe(true);
@@ -272,7 +285,7 @@ describe("applyCoverCaptureLoops", () => {
       // 2200 / 800 = 2.75 — weighted avg should be (2.5 * 4 + 2.75) / 5 = 2.55.
       const result = await applyCoverCaptureLoops(
         baseInput({ miles: 800 }),
-        { storage, db },
+        { storage, db: asDbHandle(db) },
       );
 
       expect(result.rateBand.applied).toBe(true);
@@ -331,7 +344,7 @@ describe("applyCoverCaptureLoops", () => {
 
       const result = await applyCoverCaptureLoops(
         baseInput({ miles: 800, options: { applyToRateBand: false } }),
-        { storage, db },
+        { storage, db: asDbHandle(db) },
       );
 
       expect(result.rateBand.applied).toBe(false);
@@ -346,7 +359,7 @@ describe("applyCoverCaptureLoops", () => {
 
       const result = await applyCoverCaptureLoops(
         baseInput({ miles: 800, opp: makeOpp({ originState: "" }) }),
-        { storage, db },
+        { storage, db: asDbHandle(db) },
       );
 
       expect(result.rateBand.applied).toBe(false);
@@ -360,7 +373,7 @@ describe("applyCoverCaptureLoops", () => {
       const db = makeFakeDb({ recurringLanes: [] });
       const storage = makeStorage();
 
-      const result = await applyCoverCaptureLoops(baseInput(), { storage, db });
+      const result = await applyCoverCaptureLoops(baseInput(), { storage, db: asDbHandle(db) });
 
       expect(result.recurringLaneSuggestion.suggested).toBe(true);
       expect(result.recurringLaneSuggestion.reason).toBe("no_recurring_lane");
@@ -380,7 +393,7 @@ describe("applyCoverCaptureLoops", () => {
       });
       const storage = makeStorage();
 
-      const result = await applyCoverCaptureLoops(baseInput(), { storage, db });
+      const result = await applyCoverCaptureLoops(baseInput(), { storage, db: asDbHandle(db) });
 
       expect(result.recurringLaneSuggestion.suggested).toBe(false);
       expect(result.recurringLaneSuggestion.reason).toBe("already_recurring");
@@ -393,7 +406,7 @@ describe("applyCoverCaptureLoops", () => {
 
       const result = await applyCoverCaptureLoops(
         baseInput({ options: { offerRecurringLane: false } }),
-        { storage, db },
+        { storage, db: asDbHandle(db) },
       );
 
       expect(result.recurringLaneSuggestion.suggested).toBe(false);
@@ -414,7 +427,7 @@ describe("applyCoverCaptureLoops", () => {
             offerRecurringLane: false,
           },
         }),
-        { storage, db },
+        { storage, db: asDbHandle(db) },
       );
 
       expect(result.bench.reason).toBe("opted_out");

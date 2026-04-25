@@ -35,9 +35,18 @@ import {
   loadFact,
   type FreightOpportunity,
   type RecurringLane,
+  type LaneRateHistory,
   type LaneCarrierInterest,
 } from "@shared/schema";
-import type { IStorage } from "../storage";
+import type { IStorage, db as DefaultDb } from "../storage";
+
+/**
+ * Drizzle handle the loops use for ad-hoc reads/writes outside of `IStorage`.
+ * Aliased from the real exported `db` so the loops keep type safety on
+ * `select/insert/update` while still allowing tests to inject a structurally
+ * compatible fake (the test cast happens in the test file, not here).
+ */
+export type CoverLoopsDbHandle = typeof DefaultDb;
 
 export interface CoverLoopOptions {
   applyToBench: boolean;
@@ -105,10 +114,10 @@ export interface CoverCaptureLoopsDeps {
     "upsertLaneCarrierInterest"
   >;
   /**
-   * Drizzle-shaped db. Defaults to the real `db` from `../storage`. Tests
-   * inject a fake that intercepts `select`/`insert`/`update` calls.
+   * Drizzle handle. Defaults to the real `db` from `../storage`. Tests
+   * inject a structurally compatible fake (cast at the test site).
    */
-  db?: any;
+  db?: CoverLoopsDbHandle;
   /** Optional override so tests can short-circuit miles lookup. */
   resolveMiles?: (orgId: string, opp: FreightOpportunity) => Promise<number | null>;
 }
@@ -236,7 +245,7 @@ async function runBenchLoop(
 // ── Loop 2: Rate band ──────────────────────────────────────────────────────
 
 async function runRateBandLoop(
-  db: any,
+  db: CoverLoopsDbHandle,
   resolveMiles: CoverCaptureLoopsDeps["resolveMiles"],
   input: CoverCaptureLoopsInput,
 ): Promise<CoverCaptureLoopsResult["rateBand"]> {
@@ -279,7 +288,7 @@ async function runRateBandLoop(
     )
     .limit(1);
 
-  const existing = existingRows[0] as any | undefined;
+  const existing: LaneRateHistory | undefined = existingRows[0];
 
   if (!existing) {
     // Create a fresh row reflecting just this cover.
@@ -418,7 +427,7 @@ function buildRecurringLaneSuggestion(
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 async function findMatchingRecurringLanes(
-  db: any,
+  db: CoverLoopsDbHandle,
   org: string,
   opp: FreightOpportunity,
 ): Promise<RecurringLane[]> {
@@ -445,7 +454,7 @@ async function findMatchingRecurringLanes(
 }
 
 async function lookupMilesFromLoadFact(
-  db: any,
+  db: CoverLoopsDbHandle,
   org: string,
   opp: FreightOpportunity,
 ): Promise<number | null> {
@@ -453,7 +462,7 @@ async function lookupMilesFromLoadFact(
   const orderId = typeof ref?.orderId === "string" ? ref.orderId.trim() : "";
   if (!orderId || orderId.startsWith("freight_opp:")) return null;
   try {
-    const rows: any[] = await db
+    const rows: Array<{ totalMiles: string | number | null }> = await db
       .select({ totalMiles: loadFact.totalMiles })
       .from(loadFact)
       .where(and(eq(loadFact.orgId, org), eq(loadFact.orderId, orderId)))
