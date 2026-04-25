@@ -164,6 +164,26 @@ interface CockpitPrefs {
 }
 
 
+// Task #649 — count "interesting" deltas between the displayed feed and a
+// fresh server payload: added rows, removed rows, status changes, urgency
+// level changes, and new carrier replies. Used to label the refresh pill.
+export function countCockpitDelta(prev: CockpitItem[], next: CockpitItem[]): number {
+  const prevById = new Map(prev.map(i => [i.opportunity.id, i]));
+  const nextIds = new Set(next.map(i => i.opportunity.id));
+  let delta = 0;
+  for (const it of next) {
+    const before = prevById.get(it.opportunity.id);
+    if (!before) { delta++; continue; }
+    if (before.opportunity.status !== it.opportunity.status) { delta++; continue; }
+    if ((before.urgency?.level ?? null) !== (it.urgency?.level ?? null)) { delta++; continue; }
+    if ((before.coverage?.responded ?? 0) !== (it.coverage?.responded ?? 0)) { delta++; continue; }
+  }
+  for (const id of prevById.keys()) {
+    if (!nextIds.has(id)) delta++;
+  }
+  return delta;
+}
+
 function fmtLane(o: string, os: string | null, d: string, ds: string | null) {
   return `${os ? `${o}, ${os.toUpperCase()}` : o} → ${ds ? `${d}, ${ds.toUpperCase()}` : d}`;
 }
@@ -443,7 +463,7 @@ export default function AvailableFreightPage() {
       : statusFilter;
 
   const feedKey = ["/api/freight-opportunities/cockpit", { status: statusParam, sort, grouping, companyId: companyFilter, lane: laneFilter }];
-  const { data: feed, isLoading, isError, refetch, isFetching } = useQuery<CockpitResponse>({
+  const { data: serverFeed, isLoading, isError, refetch, isFetching } = useQuery<CockpitResponse>({
     queryKey: feedKey,
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -462,6 +482,98 @@ export default function AvailableFreightPage() {
     refetchOnWindowFocus: true,
   });
 
+  // Task #649 — buffer fresh server data into a "pending" slot whenever the
+  // rep is mid-interaction with the feed (pointer over the list or keyboard
+  // focus inside a row), so a focus refetch never re-sorts rows out from
+  // under their cursor. The buffer applies on click of the refresh pill, on
+  // Enter while focused on it, or after ~3s of idle outside the list.
+  const feedListRef = useRef<HTMLDivElement>(null);
+  const isInteractingRef = useRef(false);
+  const [displayedFeed, setDisplayedFeed] = useState<CockpitResponse | null>(null);
+  const [pendingFeed, setPendingFeed] = useState<CockpitResponse | null>(null);
+  const [pendingDelta, setPendingDelta] = useState(0);
+  const displayedRef = useRef<CockpitResponse | null>(null);
+  const pendingRef = useRef<CockpitResponse | null>(null);
+  useEffect(() => { displayedRef.current = displayedFeed; }, [displayedFeed]);
+  useEffect(() => { pendingRef.current = pendingFeed; }, [pendingFeed]);
+
+  const applyPending = useCallback(() => {
+    const next = pendingRef.current;
+    if (!next) return;
+    setDisplayedFeed(next);
+    setPendingFeed(null);
+    setPendingDelta(0);
+  }, []);
+
+  useEffect(() => {
+    const el = feedListRef.current;
+    if (!el) return;
+    // Track pointer-inside and focus-inside as INDEPENDENT flags. Interaction
+    // is the union (pointerInside || focusInside) so that crossing modalities
+    // (e.g. mouse leaves but keyboard focus stays in a row) does NOT collapse
+    // the interacting state. Only when both go false do we start the 3s
+    // trailing timer to auto-apply pending updates.
+    let pointerInside = false;
+    let focusInside = false;
+    let trailing: ReturnType<typeof setTimeout> | null = null;
+    const reconcile = () => {
+      const interacting = pointerInside || focusInside;
+      if (interacting) {
+        if (trailing) { clearTimeout(trailing); trailing = null; }
+        isInteractingRef.current = true;
+      } else {
+        if (trailing) clearTimeout(trailing);
+        trailing = setTimeout(() => {
+          trailing = null;
+          isInteractingRef.current = false;
+          if (pendingRef.current) applyPending();
+        }, 3_000);
+      }
+    };
+    const onPointerEnter = () => { pointerInside = true; reconcile(); };
+    const onPointerLeave = () => { pointerInside = false; reconcile(); };
+    const onFocusIn = () => { focusInside = true; reconcile(); };
+    const onFocusOut = (e: FocusEvent) => {
+      if (!el.contains(e.relatedTarget as Node | null)) {
+        focusInside = false;
+        reconcile();
+      }
+    };
+    el.addEventListener("pointerenter", onPointerEnter);
+    el.addEventListener("pointerleave", onPointerLeave);
+    el.addEventListener("focusin", onFocusIn as EventListener);
+    el.addEventListener("focusout", onFocusOut as EventListener);
+    return () => {
+      el.removeEventListener("pointerenter", onPointerEnter);
+      el.removeEventListener("pointerleave", onPointerLeave);
+      el.removeEventListener("focusin", onFocusIn as EventListener);
+      el.removeEventListener("focusout", onFocusOut as EventListener);
+      if (trailing) clearTimeout(trailing);
+    };
+  }, [applyPending]);
+
+  useEffect(() => {
+    if (!serverFeed) return;
+    const prev = displayedRef.current;
+    if (!prev) {
+      setDisplayedFeed(serverFeed);
+      setPendingFeed(null);
+      setPendingDelta(0);
+      return;
+    }
+    if (isInteractingRef.current) {
+      setPendingFeed(serverFeed);
+      setPendingDelta(countCockpitDelta(prev.items, serverFeed.items));
+    } else {
+      setDisplayedFeed(serverFeed);
+      setPendingFeed(null);
+      setPendingDelta(0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverFeed]);
+
+  const feed = displayedFeed;
+
   useEffect(() => {
     if (!feed) return;
     const t = setTimeout(() => {
@@ -475,11 +587,15 @@ export default function AvailableFreightPage() {
   const items = feed?.items ?? [];
   const kpis = feed?.kpis;
 
+  // Task #649 — toast fires off the raw server payload (not the buffered
+  // displayedFeed) so reps still hear about new carrier replies the instant
+  // the refetch lands, even if the visible list is paused mid-interaction.
   const replyTotalRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!feed) return;
+    if (!serverFeed) return;
+    const sItems = serverFeed.items;
     const myItems = currentUser?.id
-      ? items.filter(it => it.owner?.id === currentUser.id)
+      ? sItems.filter(it => it.owner?.id === currentUser.id)
       : [];
     const total = myItems.reduce((a, it) => a + (it.coverage?.responded ?? 0), 0);
     if (replyTotalRef.current !== null && total > replyTotalRef.current) {
@@ -490,7 +606,7 @@ export default function AvailableFreightPage() {
       });
     }
     replyTotalRef.current = total;
-  }, [feed, items, toast]);
+  }, [serverFeed, currentUser?.id, toast]);
 
   const activeView = activeViewId ? savedViews.find(v => v.id === activeViewId) : null;
   const viewFilters = (activeView?.filters ?? {}) as {
@@ -1148,6 +1264,27 @@ export default function AvailableFreightPage() {
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
         <Card>
           <CardContent className="p-0">
+            <div ref={feedListRef} className="relative" data-testid="cockpit-feed-container">
+            {pendingDelta > 0 && (
+              <div className="sticky top-0 z-10 flex justify-center px-3 pt-2 pb-1 bg-gradient-to-b from-background via-background/90 to-transparent pointer-events-none">
+                <button
+                  type="button"
+                  onClick={applyPending}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " " || e.key === "Escape") {
+                      e.preventDefault();
+                      applyPending();
+                    }
+                  }}
+                  className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary text-primary-foreground px-3 py-1 text-xs font-medium shadow-md hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  data-testid="cockpit-refresh-pill"
+                  aria-label={`${pendingDelta} new update${pendingDelta === 1 ? "" : "s"} — refresh`}
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  <span>{pendingDelta} new update{pendingDelta === 1 ? "" : "s"} — refresh</span>
+                </button>
+              </div>
+            )}
             {isError ? (
               <div className="flex flex-col items-center justify-center gap-2 py-16 text-center" data-testid="state-error">
                 <AlertCircle className="h-8 w-8 text-destructive" />
@@ -1270,6 +1407,7 @@ export default function AvailableFreightPage() {
                 )}
               </div>
             )}
+            </div>
           </CardContent>
         </Card>
 
