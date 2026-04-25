@@ -213,6 +213,17 @@ export default function AvailableFreightPage() {
     const v = new URLSearchParams(window.location.search).get("lane");
     return v && v.length > 0 ? v : null;
   });
+  // Re-sync laneFilter whenever the URL changes (so navigating in-place from
+  // an LWQ deep link or back/forward updates the filtered cockpit view).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sync = () => {
+      const v = new URLSearchParams(window.location.search).get("lane");
+      setLaneFilter(v && v.length > 0 ? v : null);
+    };
+    window.addEventListener("popstate", sync);
+    return () => window.removeEventListener("popstate", sync);
+  }, []);
   const [statusFilter, setStatusFilter] = useState<string>("active");
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [grouping, setGrouping] = useState<CockpitPrefs["grouping"]>("none");
