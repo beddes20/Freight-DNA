@@ -20,6 +20,11 @@ import {
 import { ensureShortlistRanked } from "../proactiveOpportunityService";
 import { sendOpportunityWave } from "../freightOpportunityOutreachService";
 import { getBlendedRate } from "../pricingBlendService";
+import {
+  listAutoPilotPendingForOrg,
+  buildSkipNextRunPolicyUpsert,
+  buildDisableAutoSendPolicyUpsert,
+} from "../freightOpportunityAutoPilot";
 
 function orgId(req: Express.Request): string {
   return (req as any).session?.organizationId as string;
@@ -942,5 +947,278 @@ export function registerFreightCockpitRoutes(app: Express) {
         : existing?.autopilotMutedUntil ?? null,
     });
     res.json({ prefs });
+  });
+
+  // ── Auto-pilot transparency drawer (Task #634) ──────────────────────────
+  // Read-only preview of what the scheduler would dispatch at the next CT
+  // hour. Mirrors `runAutoPilotTick` selection logic; does not send.
+  app.get("/api/freight-opportunities/auto-pilot/preview", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      if (!org) return res.status(400).json({ error: "No organization" });
+      const now = new Date();
+      const entries = await listAutoPilotPendingForOrg(storage, org, now);
+
+      // Hydrate company name + carrier name + suggested buy. Caches keep the
+      // response cheap when one company has many opps.
+      const carrierCache = new Map<string, Carrier | null>();
+      const companyCache = new Map<string, Company | null>();
+
+      const companies = await Promise.all(entries.map(async (entry) => {
+        const company = await (async () => {
+          if (companyCache.has(entry.policy.companyId)) return companyCache.get(entry.policy.companyId)!;
+          const c = (await storage.getCompany(entry.policy.companyId)) ?? null;
+          companyCache.set(entry.policy.companyId, c);
+          return c;
+        })();
+
+        const opportunities = await Promise.all(entry.opportunities.map(async (oppEntry) => {
+          const opp = oppEntry.opportunity;
+
+          // Carrier-name hydration (parallel, dedup'd by id).
+          const allRows = [...oppEntry.candidates, ...oppEntry.suppressed];
+          await Promise.all(allRows.map(async (row) => {
+            if (carrierCache.has(row.carrierId)) return;
+            carrierCache.set(row.carrierId, (await storage.getCarrier(row.carrierId)) ?? null);
+          }));
+          const carrierName = (id: string) => carrierCache.get(id)?.name ?? "(unknown)";
+
+          // Suggested buy — best-effort; pricing failures must never break the
+          // preview since the scheduler doesn't compute it either.
+          let suggestedBuy: { rate: number | null; confidence: string; reason: string } | null = null;
+          try {
+            const blended = await getBlendedRate({
+              orgId: org,
+              origin: opp.origin,
+              destination: opp.destination,
+              originState: opp.originState,
+              destinationState: opp.destinationState,
+              equipmentType: opp.equipmentType,
+              customerName: company?.name ?? null,
+            });
+            suggestedBuy = {
+              rate: blended.targetBuyRpm,
+              confidence: blended.confidence,
+              reason: blended.reason,
+            };
+          } catch (e) {
+            suggestedBuy = { rate: null, confidence: "none", reason: (e as Error)?.message ?? "blend failed" };
+          }
+
+          return {
+            opportunityId: opp.id,
+            origin: opp.origin,
+            originState: opp.originState,
+            destination: opp.destination,
+            destinationState: opp.destinationState,
+            equipmentType: opp.equipmentType,
+            pickupWindowStart: opp.pickupWindowStart,
+            loadCount: opp.loadCount,
+            status: opp.status,
+            candidates: oppEntry.candidates.map(c => ({
+              rowId: c.rowId, carrierId: c.carrierId, carrierName: carrierName(c.carrierId),
+              rank: c.rank, fitScore: c.fitScore, bucket: c.bucket, explanation: c.explanation,
+            })),
+            suppressed: oppEntry.suppressed.map(c => ({
+              carrierId: c.carrierId, carrierName: carrierName(c.carrierId), reason: c.reason,
+            })),
+            suggestedBuy,
+          };
+        }));
+
+        return {
+          companyId: entry.policy.companyId,
+          companyName: company?.name ?? "(unknown company)",
+          policyId: entry.policy.id,
+          nextRunAt: entry.nextRunAt.toISOString(),
+          ctHour: entry.policy.autoSendHourCt,
+          topN: entry.policy.autoSendTopN,
+          maxPerDay: entry.policy.autoSendMaxPerDay,
+          approvalRequired: entry.policy.approvalRequired,
+          autoSendEnabled: entry.policy.autoSendEnabled,
+          blockedReason: entry.blockedReason ?? null,
+          totalCarriers: entry.totalCarriers,
+          opportunities,
+        };
+      }));
+
+      const totalCarriers = companies.reduce((a, c) => a + c.totalCarriers, 0);
+      const nextRunAt = companies.length > 0 ? companies[0].nextRunAt : null;
+      const ctHour = companies.length > 0 ? companies[0].ctHour : null;
+
+      res.json({
+        nextRunAt,
+        ctHour,
+        totalCompanies: companies.length,
+        totalCarriers,
+        companies,
+      });
+    } catch (err) {
+      console.error("[auto-pilot] preview failed:", err);
+      res.status(500).json({ error: "Failed to load auto-pilot preview" });
+    }
+  });
+
+  const skipSchema = z.object({ companyId: z.string().min(1) });
+  app.post("/api/freight-opportunities/auto-pilot/skip", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const uid = userId(req);
+      if (!org || !uid) return res.status(401).json({ error: "Unauthorized" });
+      const parsed = skipSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid payload", issues: parsed.error.issues });
+
+      const policy = await storage.getCompanyOutreachPolicy(org, parsed.data.companyId);
+      if (!policy) return res.status(404).json({ error: "Policy not found" });
+      if (!policy.autoSendEnabled) return res.status(400).json({ error: "Auto-pilot is not armed for this customer" });
+
+      const now = new Date();
+      // Audit the would-have-been-sent opps BEFORE flipping lastRunAt so the
+      // preview helper still returns them.
+      const entries = await listAutoPilotPendingForOrg(storage, org, now);
+      const entry = entries.find(e => e.policy.companyId === parsed.data.companyId);
+      const auditPayload = {
+        kind: "auto_pilot_skipped" as const,
+        companyId: parsed.data.companyId,
+        actorUserId: uid,
+        skippedAt: now.toISOString(),
+      };
+      if (entry) {
+        await Promise.all(entry.opportunities.map(o =>
+          storage.appendFreightOpportunityAudit({
+            opportunityId: o.opportunity.id,
+            eventType: "outreach_blocked",
+            actorUserId: uid,
+            payload: auditPayload,
+          }).catch((auditErr: unknown) => {
+            // Audit must never block the rep action; log so failures are
+            // visible in production without losing the persisted skip.
+            console.error("[auto-pilot] skip audit failed", {
+              opportunityId: o.opportunity.id, err: (auditErr as Error)?.message,
+            });
+          })
+        ));
+      } else {
+        console.log("[auto-pilot] skip recorded with no pending opportunities", {
+          companyId: parsed.data.companyId, actorUserId: uid,
+        });
+      }
+
+      const upsert = buildSkipNextRunPolicyUpsert(policy, now);
+      // Preserve audit trail of the user that performed the skip.
+      upsert.updatedById = uid;
+      const updated = await storage.upsertCompanyOutreachPolicy(upsert);
+      res.json({ policy: updated, skippedOpportunities: entry?.opportunities.length ?? 0 });
+    } catch (err) {
+      console.error("[auto-pilot] skip failed:", err);
+      res.status(500).json({ error: "Failed to skip auto-pilot run" });
+    }
+  });
+
+  const disableSchema = z.object({
+    companyId: z.string().min(1),
+    confirm: z.literal(true),
+  });
+  app.post("/api/freight-opportunities/auto-pilot/disable", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const uid = userId(req);
+      if (!org || !uid) return res.status(401).json({ error: "Unauthorized" });
+      const parsed = disableSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid payload", issues: parsed.error.issues });
+
+      const policy = await storage.getCompanyOutreachPolicy(org, parsed.data.companyId);
+      if (!policy) return res.status(404).json({ error: "Policy not found" });
+
+      const now = new Date();
+      const entries = await listAutoPilotPendingForOrg(storage, org, now);
+      const entry = entries.find(e => e.policy.companyId === parsed.data.companyId);
+      const auditPayload = {
+        kind: "auto_pilot_disabled" as const,
+        companyId: parsed.data.companyId,
+        actorUserId: uid,
+        disabledAt: now.toISOString(),
+      };
+      if (entry) {
+        await Promise.all(entry.opportunities.map(o =>
+          storage.appendFreightOpportunityAudit({
+            opportunityId: o.opportunity.id,
+            eventType: "policy_blocked",
+            actorUserId: uid,
+            payload: auditPayload,
+          }).catch((auditErr: unknown) => {
+            console.error("[auto-pilot] disable audit failed", {
+              opportunityId: o.opportunity.id, err: (auditErr as Error)?.message,
+            });
+          })
+        ));
+      } else {
+        console.log("[auto-pilot] disable recorded with no pending opportunities", {
+          companyId: parsed.data.companyId, actorUserId: uid,
+        });
+      }
+
+      const upsert = buildDisableAutoSendPolicyUpsert(policy);
+      upsert.updatedById = uid;
+      const updated = await storage.upsertCompanyOutreachPolicy(upsert);
+      res.json({ policy: updated, blockedOpportunities: entry?.opportunities.length ?? 0 });
+    } catch (err) {
+      console.error("[auto-pilot] disable failed:", err);
+      res.status(500).json({ error: "Failed to disable auto-pilot policy" });
+    }
+  });
+
+  const approveNowSchema = z.object({
+    opportunityId: z.string().min(1),
+    carrierRowIds: z.array(z.string().min(1)).min(1).max(20),
+  });
+  app.post("/api/freight-opportunities/auto-pilot/approve-now", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const uid = userId(req);
+      if (!org || !uid) return res.status(401).json({ error: "Unauthorized" });
+      const parsed = approveNowSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid payload", issues: parsed.error.issues });
+
+      const opp = await storage.getFreightOpportunity(org, parsed.data.opportunityId);
+      if (!opp) return res.status(404).json({ error: "Opportunity not found" });
+
+      // Reuse the rep's session user as the actor — Approve-now is the rep
+      // explicitly choosing to bypass the wait, so attribute the send to them
+      // (not the policy.updatedById). sendOpportunityWave still re-evaluates
+      // every guardrail; we are only choosing carrier rows here.
+      const actor = await storage.getUser(uid);
+      if (!actor) return res.status(401).json({ error: "Unauthorized" });
+
+      const { results, opportunity } = await sendOpportunityWave(storage, org, opp.id, actor, {
+        carrierRowIds: parsed.data.carrierRowIds,
+        sourceModule: "auto_pilot",
+      });
+
+      // Tag the audit with the approve-now kind so reviewers can distinguish
+      // these from the scheduled tick. sendOpportunityWave already wrote per-
+      // carrier audit entries; this is a single summary marker.
+      await storage.appendFreightOpportunityAudit({
+        opportunityId: opp.id,
+        eventType: "outreach_sent",
+        actorUserId: uid,
+        payload: {
+          kind: "auto_pilot_approve_now",
+          carrierRowIds: parsed.data.carrierRowIds,
+          sentNow: results.filter(r => r.status === "sent" || r.status === "scheduled").length,
+          blocked: results.filter(r => r.status === "blocked").length,
+        },
+      }).catch((auditErr: unknown) => {
+        console.error("[auto-pilot] approve-now summary audit failed", {
+          opportunityId: opp.id, err: (auditErr as Error)?.message,
+        });
+      });
+
+      res.json({ opportunity, results });
+    } catch (err) {
+      console.error("[auto-pilot] approve-now failed:", err);
+      const msg = err instanceof Error ? err.message : "Failed to approve and send";
+      res.status(400).json({ error: msg });
+    }
   });
 }

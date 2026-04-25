@@ -21,7 +21,8 @@ import { storage } from "./storage";
 import { sendOpportunityWave } from "./freightOpportunityOutreachService";
 import { ensureShortlistRanked } from "./proactiveOpportunityService";
 import type {
-  CompanyOutreachPolicy, FreightOpportunity, InsertCompanyOutreachPolicy, User,
+  CompanyOutreachPolicy, FreightOpportunity, FreightOpportunityCarrier,
+  InsertCompanyOutreachPolicy, User,
 } from "@shared/schema";
 import type { IStorage } from "./storage";
 
@@ -194,6 +195,219 @@ function isSnoozed(opp: FreightOpportunity, now: Date): boolean {
   const t = new Date(opp.snoozedUntil).getTime();
   if (!Number.isFinite(t)) return false;
   return t > now.getTime();
+}
+
+/**
+ * Compute the next-fire UTC instant for a policy. The scheduler runs hourly;
+ * a policy fires the next time the CT clock hits `policy.autoSendHourCt` and
+ * `sameCentralDay(policy.autoSendLastRunAt, fireTime)` is false.
+ *
+ * If the policy already ran today (CT), the next fire is tomorrow at HH:00 CT.
+ * Otherwise, if today's HH:00 CT is in the future relative to `now`, fire
+ * today; if today's HH:00 CT is in the past, the policy missed its window
+ * today and will fire tomorrow.
+ */
+export function nextRunAtForPolicy(policy: CompanyOutreachPolicy, now = new Date()): Date {
+  const hour = Math.max(0, Math.min(23, policy.autoSendHourCt));
+  const ranToday = sameCentralDay(policy.autoSendLastRunAt, now);
+  // Build today's HH:00 CT instant by formatting "now" as a CT calendar date
+  // and constructing a UTC anchor for that date — then fold in the CT offset.
+  const ctDate = new Intl.DateTimeFormat("en-CA", {
+    timeZone: CT_TZ, year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(now);
+  const today = ctHourToUtc(ctDate, hour);
+  if (!ranToday && today.getTime() > now.getTime()) return today;
+  return ctHourToUtc(addOneCtDay(ctDate), hour);
+}
+
+/** Format "YYYY-MM-DD" + hour-in-CT into the corresponding UTC Date instant. */
+function ctHourToUtc(ctDate: string, hour: number): Date {
+  // Probe a noon-UTC anchor for the date to learn the CT offset on that date
+  // (handles DST). The probe is in UTC, so adding the offset gives us HH:00 CT.
+  const probe = new Date(`${ctDate}T12:00:00.000Z`);
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: CT_TZ, hour12: false, hour: "2-digit",
+  });
+  const ctHourAtProbe = parseInt(fmt.formatToParts(probe).find(p => p.type === "hour")!.value, 10) % 24;
+  const offsetHours = 12 - ctHourAtProbe; // probe was UTC noon
+  const utcHour = (hour + offsetHours + 24) % 24;
+  // If the requested CT hour rolled past UTC midnight, push forward a day.
+  const utcDayShift = (hour + offsetHours) >= 24 ? 1 : (hour + offsetHours) < 0 ? -1 : 0;
+  const base = new Date(`${ctDate}T00:00:00.000Z`);
+  base.setUTCDate(base.getUTCDate() + utcDayShift);
+  base.setUTCHours(utcHour, 0, 0, 0);
+  return base;
+}
+
+function addOneCtDay(ctDate: string): string {
+  const d = new Date(`${ctDate}T12:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: CT_TZ, year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(d);
+}
+
+/**
+ * Read-only mirror of `runAutoPilotTick` selection logic. Used by the
+ * "Auto-pilot preview" drawer to show reps EXACTLY which (company, opp,
+ * top-N carriers) tuples are armed for the next CT run, without actually
+ * dispatching anything. Picks identical candidates by:
+ *   - listCompanyOutreachPolicies(enabledOnly: true)
+ *   - autoSendEnabled gate
+ *   - sameCentralDay(autoSendLastRunAt) skip
+ *   - listFreightOpportunities (status ready/new/awaiting_approval)
+ *   - !isSnoozed
+ *   - approval gate (when policy.approvalRequired)
+ *   - ensureShortlistRanked (so freshly imported opps surface)
+ *   - top-N + maxPerDay cap
+ *
+ * The single intentional difference: this helper does NOT honor the
+ * `autoSendHourCt` hour-match gate so the drawer can preview policies whose
+ * next fire is in a future hour. That gate is re-applied at run-time by
+ * `runAutoPilotTick`.
+ */
+export interface AutoPilotPendingCarrier {
+  rowId: string;
+  carrierId: string;
+  rank: number | null;
+  fitScore: number;
+  bucket: string | null;
+  explanation: string | null;
+}
+export interface AutoPilotPendingOpportunity {
+  opportunity: FreightOpportunity;
+  candidates: AutoPilotPendingCarrier[];
+  /** Eligible carriers beyond the top-N cut, surfaced for transparency. */
+  remaining: AutoPilotPendingCarrier[];
+  /** Excluded carriers, surfaced so reps see the suppressions. */
+  suppressed: Array<AutoPilotPendingCarrier & { reason: string }>;
+}
+export interface AutoPilotPendingPolicyEntry {
+  policy: CompanyOutreachPolicy;
+  nextRunAt: Date;
+  opportunities: AutoPilotPendingOpportunity[];
+  totalCarriers: number;
+  /** When set, the policy is armed but cannot actually fire (e.g. no actor). */
+  blockedReason?: "missing_actor";
+}
+
+function carrierToPending(c: FreightOpportunityCarrier): AutoPilotPendingCarrier {
+  return {
+    rowId: c.id,
+    carrierId: c.carrierId,
+    rank: c.rank,
+    fitScore: c.fitScore,
+    bucket: c.bucket,
+    explanation: c.explanation,
+  };
+}
+
+export async function listAutoPilotPendingForOrg(
+  s: IStorage,
+  orgId: string,
+  now: Date = new Date(),
+): Promise<AutoPilotPendingPolicyEntry[]> {
+  const out: AutoPilotPendingPolicyEntry[] = [];
+  const policies = await s.listCompanyOutreachPolicies(orgId, { enabledOnly: true });
+  for (const policy of policies) {
+    if (!policy.autoSendEnabled) continue;
+    if (sameCentralDay(policy.autoSendLastRunAt, now)) continue;
+
+    const cap = Math.max(1, policy.autoSendMaxPerDay);
+    const opps = await s.listFreightOpportunities(orgId, {
+      companyId: policy.companyId,
+      status: ["ready_to_send", "new", "awaiting_approval"],
+      limit: 50,
+    });
+
+    const entry: AutoPilotPendingPolicyEntry = {
+      policy,
+      nextRunAt: nextRunAtForPolicy(policy, now),
+      opportunities: [],
+      totalCarriers: 0,
+    };
+    if (!policy.updatedById) entry.blockedReason = "missing_actor";
+
+    let allocated = 0;
+    for (const opp of opps) {
+      if (allocated >= cap) break;
+      if (isSnoozed(opp, now)) continue;
+      if (policy.approvalRequired && !opp.approvedAt) continue;
+
+      // Make sure the shortlist exists; preview must mirror what runAutoPilotTick
+      // would have at fire-time.
+      await ensureShortlistRanked(s, opp);
+      const carriers = await s.listFreightOpportunityCarriers(opp.id);
+      const eligible = carriers
+        .filter(c => !c.excludedReason && !c.sentAt)
+        .sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999));
+      const remainingCap = cap - allocated;
+      const take = Math.min(policy.autoSendTopN, remainingCap);
+      const candidates = eligible.slice(0, take).map(carrierToPending);
+      const remaining = eligible.slice(take).map(carrierToPending);
+      const suppressed = carriers
+        .filter(c => !!c.excludedReason)
+        .map(c => ({ ...carrierToPending(c), reason: c.excludedReason! }));
+
+      if (candidates.length === 0 && suppressed.length === 0) continue;
+
+      entry.opportunities.push({
+        opportunity: opp,
+        candidates,
+        remaining,
+        suppressed,
+      });
+      allocated += candidates.length;
+      entry.totalCarriers += candidates.length;
+    }
+
+    if (entry.opportunities.length > 0) out.push(entry);
+  }
+  // Sort by nextRunAt ascending so the soonest run shows first.
+  out.sort((a, b) => a.nextRunAt.getTime() - b.nextRunAt.getTime());
+  return out;
+}
+
+/**
+ * Suppress exactly the *next* scheduled auto-pilot run for this policy
+ * without changing the policy schema. We do this by stamping
+ * `autoSendLastRunAt` to a moment inside the CT day on which the next fire
+ * would land — so when the scheduler tick runs at that hour,
+ * `sameCentralDay(autoSendLastRunAt, fireInstant)` returns true and the
+ * tick skips. The run after that (next CT day) fires normally.
+ *
+ * Why we don't just stamp `now`: if today's CT fire window already passed
+ * (e.g. user clicks Skip at 10:00 CT for an 07:00 CT policy), stamping
+ * `now` would mark "today" as already-ran — but the next fire was
+ * tomorrow anyway, so nothing is skipped. By stamping the next-fire CT
+ * day instead, we always cancel the upcoming tick, regardless of the
+ * current clock.
+ */
+export function buildSkipNextRunPolicyUpsert(
+  policy: CompanyOutreachPolicy,
+  now: Date,
+): InsertCompanyOutreachPolicy {
+  const next = nextRunAtForPolicy(policy, now);
+  return buildPolicyUpsertExternal(policy, { autoSendLastRunAt: next });
+}
+
+/**
+ * Mark `autoSendEnabled = false` while preserving the rest of the policy.
+ * Used by the drawer's "Disable policy" action.
+ */
+export function buildDisableAutoSendPolicyUpsert(
+  policy: CompanyOutreachPolicy,
+): InsertCompanyOutreachPolicy {
+  return buildPolicyUpsertExternal(policy, { autoSendEnabled: false });
+}
+
+// Wrap the local `buildPolicyUpsert` so route code can reuse it without
+// duplicating the type-safe column list.
+function buildPolicyUpsertExternal(
+  policy: CompanyOutreachPolicy,
+  patch: Partial<InsertCompanyOutreachPolicy>,
+): InsertCompanyOutreachPolicy {
+  return buildPolicyUpsert(policy, patch);
 }
 
 /**

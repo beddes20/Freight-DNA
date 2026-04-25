@@ -31,6 +31,7 @@ import {
 import type { FreightOpportunity } from "@shared/schema";
 import { applyCockpitFilters } from "@/lib/cockpitFilters";
 import { CarrierReasonsPopover } from "@/components/CarrierReasonsPopover";
+import { AutoPilotPreviewDrawer } from "@/components/freight/auto-pilot-preview-drawer";
 
 
 interface CockpitChip {
@@ -211,6 +212,7 @@ export default function AvailableFreightPage() {
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [snoozeHours, setSnoozeHours] = useState<string>("4");
   const [saveViewOpen, setSaveViewOpen] = useState(false);
+  const [autoPilotDrawerOpen, setAutoPilotDrawerOpen] = useState(false);
   const [newViewName, setNewViewName] = useState("");
   const [newViewShared, setNewViewShared] = useState(false);
   const [confirmBulk, setConfirmBulk] = useState<
@@ -632,8 +634,19 @@ export default function AvailableFreightPage() {
             <RefreshCw className={`h-4 w-4 mr-2 ${isFetching ? "animate-spin" : ""}`} />
             Refresh
           </Button>
+          <Button
+            variant="outline" size="sm"
+            onClick={() => setAutoPilotDrawerOpen(true)}
+            data-testid="button-auto-pilot-preview"
+          >
+            <Truck className="h-4 w-4 mr-2" /> Auto-pilot preview
+          </Button>
         </div>
       </div>
+      <AutoPilotPreviewDrawer
+        open={autoPilotDrawerOpen}
+        onOpenChange={setAutoPilotDrawerOpen}
+      />
 
       {/* KPI strip — Task #601 contract semantics */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
