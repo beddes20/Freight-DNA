@@ -16,6 +16,7 @@ import { storage, db } from "../storage";
 import {
   recurringLanes,
   freightOpportunities,
+  carrierOutreachLogs,
   users,
   type RecurringLane,
   type FreightOpportunity,
@@ -48,10 +49,16 @@ function equipmentFamily(raw: string | null | undefined): string | null {
     u.includes("reefer") || u.includes("refrig") || u.includes("multi-temp") ||
     u.includes("multi temp") || u === "refr" || u === "r"
   ) return "reefer";
+  // Flatbed / open-deck family — the parser collapses literal "open" /
+  // "open deck" into this bucket too, since open-deck freight is the
+  // operational umbrella for flatbed, step deck, RGN, and conestoga in
+  // this org's TMS taxonomy.
   if (
     u.includes("flatbed") || u === "fb" || u === "f" ||
     u.includes("step deck") || u.includes("stepdeck") || u === "sd" ||
-    u.includes("rgn") || u.includes("conestoga")
+    u.includes("rgn") || u.includes("conestoga") ||
+    u === "open" || u === "open deck" || u === "open-deck" ||
+    u.includes("open deck")
   ) return "flatbed";
   return null;
 }
@@ -94,6 +101,10 @@ export interface SwitchboardRecurringRow {
   ownerUserId: string | null;
   carriersContactedCount: number | null;
   laneScore: number | null;
+  // Most recent successful outreach timestamp on this lane (max sent_at
+  // across carrier_outreach_logs). Surfaces "last touch" so a rep can
+  // see at a glance whether the lane is being actively worked.
+  lastTouchAt: string | null;
 }
 
 export interface SwitchboardLiveRow {
@@ -256,6 +267,34 @@ async function fetchRecurring(
     for (const u of ownerRows) ownerNameById.set(u.id, u.name);
   }
 
+  // Last-touch per lane — max(sent_at) across carrier_outreach_logs that
+  // were actually sent (not draft/failed). This mirrors the LWQ context
+  // signal and is what reps use to gauge whether a lane is being worked.
+  const topLaneIds = top.map(r => r.id);
+  const lastTouchByLane = new Map<string, string>();
+  if (topLaneIds.length > 0) {
+    const touches = await db
+      .select({
+        laneId: carrierOutreachLogs.laneId,
+        lastSentAt: sql<Date | null>`max(${carrierOutreachLogs.sentAt})`,
+      })
+      .from(carrierOutreachLogs)
+      .where(and(
+        eq(carrierOutreachLogs.orgId, user.organizationId),
+        inArray(carrierOutreachLogs.laneId, topLaneIds),
+        inArray(carrierOutreachLogs.deliveryStatus, ["sent", "delivered", "opened"]),
+      ))
+      .groupBy(carrierOutreachLogs.laneId);
+    for (const t of touches) {
+      if (t.laneId && t.lastSentAt) {
+        lastTouchByLane.set(
+          t.laneId,
+          typeof t.lastSentAt === "string" ? t.lastSentAt : new Date(t.lastSentAt).toISOString(),
+        );
+      }
+    }
+  }
+
   return top.map(r => ({
     laneId: r.id,
     origin: r.origin,
@@ -268,6 +307,7 @@ async function fetchRecurring(
     ownerUserId: r.ownerUserId ?? null,
     carriersContactedCount: r.carriersContactedCount ?? 0,
     laneScore: r.laneScore ?? null,
+    lastTouchAt: lastTouchByLane.get(r.id) ?? null,
   }));
 }
 
@@ -294,6 +334,11 @@ async function fetchLive(
     inArray(freightOpportunities.status, OPEN_OPP_STATUSES as unknown as string[]),
     sql`lower(trim(${freightOpportunities.origin})) in (${sql.join(originPatterns.map(p => sql`${p}`), sql`, `)})`,
     sql`lower(trim(${freightOpportunities.destination})) in (${sql.join(destPatterns.map(p => sql`${p}`), sql`, `)})`,
+    // Mirror the AF cockpit's snooze suppression contract — see
+    // server/services/todayQueue.ts ("Hide rows the rep is currently
+    // snoozing"). Without this, the switchboard would surface
+    // opportunities the cockpit deliberately hides.
+    sql`(${freightOpportunities.snoozedUntil} is null or ${freightOpportunities.snoozedUntil} <= now())`,
   ];
   if (originState) {
     conds.push(sql`lower(coalesce(${freightOpportunities.originState}, '')) = ${originState.toLowerCase()}`);

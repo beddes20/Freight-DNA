@@ -132,23 +132,34 @@ export function LaneSwitchboard({ open, onOpenChange }: LaneSwitchboardProps) {
     handleClose();
     navigate(`/freight?lane=${encodeURIComponent(sig)}`);
   };
-  // Customer Quotes prefills via the page's `laneSearch` filter (a free-text
-  // origin/dest field; see filtersFromUrl in customer-quotes.tsx). The page
-  // expects "ORIGIN DEST" with a single space between cities — equipment is a
-  // separate filter param.
+  // Customer Quotes deep-link. We emit the documented lane contract
+  // (originCity/originState/destCity/destState/equipment — the keys the
+  // task spec calls out and that downstream tooling can consume), AND the
+  // page's existing `laneSearch` filter (the only key today's
+  // customer-quotes.tsx `filtersFromUrl` actually reads, so the lane is
+  // visibly prefilled on arrival). Both sets travel together — that
+  // satisfies the contract and produces correct UI prefill in one shot.
   const goCq = () => {
     if (parsed.status !== "ok" || !parsed.originCity || !parsed.destCity) return;
     handleClose();
     const params = new URLSearchParams();
-    params.set("laneSearch", `${parsed.originCity} ${parsed.destCity}`);
+    params.set("originCity", parsed.originCity);
+    if (parsed.originState) params.set("originState", parsed.originState);
+    params.set("destCity", parsed.destCity);
+    if (parsed.destState) params.set("destState", parsed.destState);
     if (parsed.equipment) params.set("equipment", parsed.equipment);
+    params.set("laneSearch", `${parsed.originCity} ${parsed.destCity}`);
     navigate(`/customer-quotes?${params.toString()}`);
   };
   const goCqRow = (row: SwitchboardHistoricalRow) => {
     handleClose();
     const params = new URLSearchParams();
-    params.set("laneSearch", `${row.originCity} ${row.destCity}`);
+    params.set("originCity", row.originCity);
+    params.set("originState", row.originState);
+    params.set("destCity", row.destCity);
+    params.set("destState", row.destState);
     if (row.equipment) params.set("equipment", row.equipment);
+    params.set("laneSearch", `${row.originCity} ${row.destCity}`);
     navigate(`/customer-quotes?${params.toString()}`);
   };
   // CTA in the unified no-results panel — same destination as goCq, used
@@ -276,6 +287,12 @@ export function LaneSwitchboard({ open, onOpenChange }: LaneSwitchboardProps) {
                   r.equipmentType ?? null,
                   r.ownerName ? `Owner: ${r.ownerName}` : "Unowned",
                   r.carriersContactedCount != null ? `${r.carriersContactedCount} carriers contacted` : null,
+                  // Last touch — null until a carrier outreach has been sent;
+                  // "No outreach yet" reads better than a missing slot when
+                  // the lane is brand new.
+                  r.lastTouchAt
+                    ? `Last touch ${new Date(r.lastTouchAt).toLocaleDateString()}`
+                    : "No outreach yet",
                 ].filter(Boolean).join(" · ")}
               />
             ))}
