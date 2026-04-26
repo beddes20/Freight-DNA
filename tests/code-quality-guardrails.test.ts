@@ -306,6 +306,72 @@ for (const [i, content] of chatRouteFiles.entries()) {
   }
 }
 
+// ── 9. Daily Priorities Workspace (Task #674) ─────────────────────────────────
+console.log("\n── 9. Daily Priorities Workspace endpoints ───────────────────────────\n");
+
+assert(
+  "routes.ts — GET /api/nba/daily-workspace has requireAuth",
+  /app\.get\("\/api\/nba\/daily-workspace",\s*requireAuth/.test(mainRoutesContent),
+  "GET /api/nba/daily-workspace is missing requireAuth middleware"
+);
+
+assert(
+  "routes.ts — POST /api/nba/dismiss/:cardId has requireAuth",
+  /app\.post\("\/api\/nba\/dismiss\/:cardId",\s*requireAuth/.test(mainRoutesContent),
+  "POST /api/nba/dismiss/:cardId is missing requireAuth middleware"
+);
+
+assert(
+  "routes.ts — dismiss endpoint uses pStr for cardId param",
+  mainRoutesContent.includes("pStr(req.params.cardId)"),
+  "POST /api/nba/dismiss/:cardId does not normalize cardId with pStr"
+);
+
+assert(
+  "routes.ts — daily-workspace endpoint uses qOptStr for repId query param",
+  mainRoutesContent.includes("qOptStr(req.query.repId)"),
+  "GET /api/nba/daily-workspace does not normalize repId with qOptStr"
+);
+
+assert(
+  "routes.ts — daily-workspace uses getErrorMessage for error handling",
+  mainRoutesContent.includes('[nba/daily-workspace GET]') &&
+    mainRoutesContent.includes("getErrorMessage(err)"),
+  "daily-workspace catch block does not use getErrorMessage"
+);
+
+assert(
+  "server/lib/dailyWorkspaceBuckets.ts — bucket mapping module exists",
+  fs.existsSync(path.join(ROOT, "server", "lib", "dailyWorkspaceBuckets.ts")),
+  "dailyWorkspaceBuckets.ts not found in server/lib"
+);
+
+const bucketMapContent = readFile("server/lib/dailyWorkspaceBuckets.ts");
+assert(
+  "dailyWorkspaceBuckets.ts — exports ruleTypeToBucket",
+  bucketMapContent.includes("export function ruleTypeToBucket"),
+  "ruleTypeToBucket not exported from dailyWorkspaceBuckets.ts"
+);
+
+assert(
+  "dailyWorkspaceBuckets.ts — exports BUCKET_PRIORITY",
+  bucketMapContent.includes("export const BUCKET_PRIORITY"),
+  "BUCKET_PRIORITY not exported from dailyWorkspaceBuckets.ts"
+);
+
+assert(
+  "daily-priorities page — loading skeleton present",
+  fs.existsSync(path.join(ROOT, "client", "src", "pages", "daily-priorities.tsx")) &&
+    readFile("client/src/pages/daily-priorities.tsx").includes("isLoading"),
+  "daily-priorities.tsx does not handle loading state"
+);
+
+assert(
+  "daily-priorities page — error state present",
+  readFile("client/src/pages/daily-priorities.tsx").includes("error-workspace"),
+  "daily-priorities.tsx does not have a data-testid=error-workspace error state"
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {
