@@ -1448,7 +1448,7 @@ export function registerWebexRoutes(app: Express) {
         return res.status(400).json({ error: "Webex needs re-authorization." });
       }
 
-      const daysRaw = Number(req.query.days);
+      const daysRaw = Number(qStr(req.query.days));
       const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(daysRaw, 90) : 30;
       const managerFilter = (qOptStr(req.query.managerId))?.trim() || null;
 
@@ -2044,7 +2044,7 @@ export function registerWebexRoutes(app: Express) {
         return res.status(403).json({ error: "Access restricted to leadership roles" });
       }
 
-      const userId = qStr(req.query.userId) || "".trim();
+      const userId = (qStr(req.query.userId) || "").trim();
       if (!userId) return res.status(400).json({ error: "userId is required" });
 
       const range = qStr(req.query.range) || "7d";

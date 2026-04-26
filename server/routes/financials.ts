@@ -732,7 +732,7 @@ export function registerFinancialRoutes(app: Express): void {
 
   app.get("/api/financials/account-summary", requireAuth, async (req, res) => {
     try {
-      const asCacheKey = `account-summary:${req.session.organizationId}:${req.query.period || "current"}`;
+      const asCacheKey = `account-summary:${req.session.organizationId}:${qStr(req.query.period) || "current"}`;
       const asCached = cacheGet(asCacheKey);
       if (asCached) return res.json(asCached);
       const latest = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
@@ -830,7 +830,7 @@ export function registerFinancialRoutes(app: Express): void {
         return { customerName, totalLoads, spotLoads, totalMargin, repName };
       }).filter((r: any) => r.customerName);
 
-      cacheSet(`account-summary:${req.session.organizationId}:${req.query.period || "current"}`, result, 15 * 60 * 1000);
+      cacheSet(`account-summary:${req.session.organizationId}:${qStr(req.query.period) || "current"}`, result, 15 * 60 * 1000);
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch account summary" });
@@ -840,7 +840,7 @@ export function registerFinancialRoutes(app: Express): void {
   // ── Dispatcher summary (for Logistics Managers) ────────────────────────────
   app.get("/api/financials/dispatcher-summary", requireAuth, async (req, res) => {
     try {
-      const dsCacheKey = `dispatcher-summary:${req.session.organizationId}:${req.query.period || "current"}`;
+      const dsCacheKey = `dispatcher-summary:${req.session.organizationId}:${qStr(req.query.period) || "current"}`;
       const dsCached = cacheGet(dsCacheKey);
       if (dsCached) return res.json(dsCached);
       const latest = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
@@ -889,7 +889,7 @@ export function registerFinancialRoutes(app: Express): void {
       }
 
       const dsResult = Object.values(byDispatcher);
-      cacheSet(`dispatcher-summary:${req.session.organizationId}:${req.query.period || "current"}`, dsResult, 15 * 60 * 1000);
+      cacheSet(`dispatcher-summary:${req.session.organizationId}:${qStr(req.query.period) || "current"}`, dsResult, 15 * 60 * 1000);
       return res.json(dsResult);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch dispatcher summary" });

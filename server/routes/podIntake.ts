@@ -36,7 +36,7 @@ import {
   type PodCandidateAttachment,
 } from "../services/podIntakeService";
 import { getErrorMessage } from "../lib/errors";
-import { pStr } from "../lib/req";
+import { pStr, qStr } from "../lib/req";
 
 function requireAdmin(req: Request, res: Response, next: () => void) {
   getCurrentUser(req)
@@ -84,15 +84,15 @@ export function registerPodIntakeRoutes(app: Express): void {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-        const bucketParam = bucketSchema.safeParse(req.query.bucket ?? "forwarded");
+        const bucketParam = bucketSchema.safeParse(qStr(req.query.bucket) || "forwarded");
         if (!bucketParam.success) {
           return res.status(400).json({ error: "Invalid bucket" });
         }
-        const deliveryParam = deliverySchema.safeParse(req.query.delivery ?? "all");
+        const deliveryParam = deliverySchema.safeParse(qStr(req.query.delivery) || "all");
         if (!deliveryParam.success) {
           return res.status(400).json({ error: "Invalid delivery filter" });
         }
-        const limit = Math.min(Number(req.query.limit ?? 100) || 100, 500);
+        const limit = Math.min(Number(qStr(req.query.limit) || "100") || 100, 500);
 
         const rows = await storage.listPodIntakeEmails(user.organizationId, {
           bucket: bucketParam.data,
@@ -506,7 +506,7 @@ export function registerPodIntakeRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const limit = Math.min(Number(req.query.limit ?? 200) || 200, 500);
+      const limit = Math.min(Number(qStr(req.query.limit) || "200") || 200, 500);
       const rows = await storage.listPodIntakeEmailsForUser(user.id, user.organizationId, { limit });
 
       // Pull notification rows for this user so the client can show
