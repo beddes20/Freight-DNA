@@ -1,0 +1,487 @@
+import type { Express } from "express";
+import { eq, and, desc } from "drizzle-orm";
+import { storage, db } from "../storage";
+import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "../auth";
+import { pStr, qStr } from "../lib/req";
+import { isAdmin } from "../lib/roles";
+import { fanOutCelebration } from "../lib/fanOutCelebration";
+import {
+  insertCompanySchema,
+  sharedRepSchema,
+  onboardingMilestoneToggleSchema,
+  type SharedRep,
+  type OnboardingMilestones,
+  emailSignals,
+  emailMessages,
+} from "@shared/schema";
+
+export function registerCompanyRoutes(app: Express): void {
+  // ── List companies ─────────────────────────────────────────────────────────
+  app.get("/api/companies", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      let allCompanies = await storage.getCompanies(req.session.organizationId!);
+      const visibleIds = await getVisibleCompanyIds(currentUser);
+      if (visibleIds !== null) {
+        allCompanies = allCompanies.filter(c => visibleIds.includes(c.id));
+      }
+      const includeArchived = req.query.includeArchived === "true";
+      if (!includeArchived) {
+        allCompanies = allCompanies.filter(c => !c.archivedAt);
+      }
+      res.json(allCompanies);
+    } catch (error) {
+      console.error("Error fetching companies:", error);
+      res.status(500).json({ error: "Failed to fetch companies" });
+    }
+  });
+
+  // ── Single company ─────────────────────────────────────────────────────────
+  app.get("/api/companies/:id", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const company = await storage.getCompanyInOrg(pStr(req.params.id), currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      if (!(await canAccessCompany(currentUser, company.id))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      res.json(company);
+    } catch (error) {
+      console.error("Error fetching company:", error);
+      res.status(500).json({ error: "Failed to fetch company" });
+    }
+  });
+
+  // ── Shared reps ────────────────────────────────────────────────────────────
+  app.get("/api/companies/:id/shared-reps", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const company = await storage.getCompanyInOrg(pStr(req.params.id), currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      if (!(await canAccessCompany(currentUser, company.id))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const reps = (company.sharedReps || []) as SharedRep[];
+      const allUsers = await storage.getUsers(currentUser.organizationId);
+      const result = reps.map(r => {
+        const u = allUsers.find(u => u.id === r.userId);
+        return { userId: r.userId, territoryNote: r.territoryNote || "", name: u?.name || "Unknown" };
+      });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch shared reps" });
+    }
+  });
+
+  app.post("/api/companies/:id/shared-reps", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
+        return res.status(403).json({ error: "Only admins and NAMs can manage shared reps" });
+      }
+      const company = await storage.getCompanyInOrg(pStr(req.params.id), currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      const parsed = sharedRepSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
+      const { userId, territoryNote } = parsed.data;
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser || targetUser.organizationId !== currentUser.organizationId) {
+        return res.status(400).json({ error: "User not found in organization" });
+      }
+      const existing = (company.sharedReps || []) as SharedRep[];
+      if (existing.some(r => r.userId === userId)) {
+        return res.status(400).json({ error: "User is already a shared rep on this account" });
+      }
+      const updated = [...existing, { userId, territoryNote: territoryNote || "" }];
+      await storage.updateCompany(company.id, currentUser.organizationId, { sharedReps: updated });
+      res.json({ userId, territoryNote: territoryNote || "", name: targetUser.name });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to add shared rep" });
+    }
+  });
+
+  app.delete("/api/companies/:id/shared-reps/:userId", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
+        return res.status(403).json({ error: "Only admins and NAMs can manage shared reps" });
+      }
+      const company = await storage.getCompanyInOrg(pStr(req.params.id), currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      const existing = (company.sharedReps || []) as SharedRep[];
+      const updated = existing.filter(r => r.userId !== pStr(req.params.userId));
+      await storage.updateCompany(company.id, currentUser.organizationId, { sharedReps: updated });
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to remove shared rep" });
+    }
+  });
+
+  // ── Team members (scoped to current user's visibility) ─────────────────────
+  app.get("/api/team-members", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const allUsers = await storage.getUsers(req.session.organizationId!);
+      const safeUsers = allUsers.map(({ password, ...u }) => u);
+      if (isAdmin(currentUser)) {
+        return res.json(safeUsers);
+      }
+      if (
+        currentUser.role === "director" ||
+        currentUser.role === "national_account_manager" ||
+        currentUser.role === "sales" ||
+        currentUser.role === "sales_director"
+      ) {
+        const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
+        const visibleIds = new Set([...teamIds, currentUser.id]);
+        if (currentUser.managerId) visibleIds.add(currentUser.managerId);
+        safeUsers.filter(u => isAdmin(u)).forEach(u => visibleIds.add(u.id));
+        return res.json(safeUsers.filter(u => visibleIds.has(u.id)));
+      }
+      const visibleIds = new Set<string>([currentUser.id]);
+      if (currentUser.managerId) {
+        visibleIds.add(currentUser.managerId);
+        allUsers.forEach(u => {
+          if (u.managerId === currentUser.managerId) visibleIds.add(u.id);
+        });
+      }
+      safeUsers.filter(u => u.role === "admin").forEach(u => visibleIds.add(u.id));
+      return res.json(safeUsers.filter(u => visibleIds.has(u.id)));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch team members" });
+    }
+  });
+
+  // ── Create company ─────────────────────────────────────────────────────────
+  app.post("/api/companies", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const parsed = insertCompanySchema.omit({ organizationId: true }).safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.message });
+      }
+      const data = { ...parsed.data, organizationId: req.session.organizationId! };
+      if (isAdmin(currentUser)) {
+        // admin can assign to anyone — leave assignedTo as-is
+      } else if (
+        currentUser.role === "director" ||
+        currentUser.role === "national_account_manager" ||
+        currentUser.role === "sales" ||
+        currentUser.role === "sales_director"
+      ) {
+        if (data.assignedTo) {
+          const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
+          if (!teamIds.includes(data.assignedTo)) {
+            data.assignedTo = currentUser.id;
+          }
+        } else {
+          data.assignedTo = currentUser.id;
+        }
+      } else {
+        data.assignedTo = currentUser.id;
+      }
+      const company = await storage.createCompany(data);
+      fanOutCelebration(
+        "new_account",
+        `\uD83C\uDF89 New account: ${company.name}`,
+        `${currentUser.name} just added a new account to the CRM.`,
+        `/companies/${company.id}`,
+        company.id,
+        currentUser.id,
+        req.session.organizationId!
+      );
+      res.status(201).json(company);
+    } catch (error) {
+      console.error("Error creating company:", error);
+      res.status(500).json({ error: "Failed to create company" });
+    }
+  });
+
+  // ── Update company ─────────────────────────────────────────────────────────
+  app.patch("/api/companies/:id", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, pStr(req.params.id)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const parsed = insertCompanySchema.omit({ organizationId: true }).partial().safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.message });
+      }
+      const data = { ...parsed.data };
+      if (currentUser.role !== "admin") {
+        delete (data as Record<string, unknown>).assignedTo;
+      }
+      const company = await storage.updateCompany(pStr(req.params.id), currentUser.organizationId, data);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      res.json(company);
+    } catch (error) {
+      console.error("Error updating company:", error);
+      res.status(500).json({ error: "Failed to update company" });
+    }
+  });
+
+  app.patch("/api/companies/:id/financial-alias", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, pStr(req.params.id)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const { financialAlias } = req.body;
+      const company = await storage.updateCompany(pStr(req.params.id), currentUser.organizationId, {
+        financialAlias: financialAlias || null,
+      });
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      res.json(company);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update financial alias" });
+    }
+  });
+
+  app.patch("/api/companies/:id/salesperson", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, pStr(req.params.id)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const { salesPersonId } = req.body;
+      const company = await storage.updateCompany(pStr(req.params.id), currentUser.organizationId, {
+        salesPersonId: salesPersonId || null,
+      });
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      res.json(company);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update salesperson" });
+    }
+  });
+
+  app.patch("/api/companies/:id/reassign", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, pStr(req.params.id)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      if (
+        currentUser.role !== "admin" &&
+        currentUser.role !== "director" &&
+        currentUser.role !== "national_account_manager" &&
+        currentUser.role !== "sales" &&
+        currentUser.role !== "sales_director"
+      ) {
+        return res.status(403).json({ error: "Only admins, directors and NAMs can reassign accounts" });
+      }
+      const { assignedTo } = req.body;
+      if (!assignedTo) return res.status(400).json({ error: "assignedTo is required" });
+      if (
+        currentUser.role === "national_account_manager" ||
+        currentUser.role === "director" ||
+        currentUser.role === "sales"
+      ) {
+        const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
+        if (!teamIds.includes(assignedTo)) {
+          return res.status(403).json({ error: "Can only assign to team members" });
+        }
+      }
+      const existing = await storage.getCompanyInOrg(pStr(req.params.id), currentUser.organizationId);
+      if (!existing) return res.status(404).json({ error: "Company not found" });
+      const company = await storage.updateCompany(pStr(req.params.id), currentUser.organizationId, {
+        assignedTo: assignedTo as string,
+      });
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      if (assignedTo !== currentUser.id && assignedTo !== existing.assignedTo) {
+        storage
+          .createNotification({
+            userId: assignedTo,
+            type: "account_assigned",
+            title: `${currentUser.name} assigned you an account`,
+            body: existing.name,
+            link: `/companies/${existing.id}`,
+            relatedId: existing.id,
+            read: false,
+          })
+          .catch(e => console.error("Notification error:", e));
+      }
+      res.json(company);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to reassign company" });
+    }
+  });
+
+  // ── Customer email signals ─────────────────────────────────────────────────
+  app.get("/api/companies/:id/email-signals", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const companyId = pStr(req.params.id);
+      if (!(await canAccessCompany(currentUser, companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const limit = Math.min(parseInt((qStr(req.query.limit)) ?? "50", 10), 200);
+      const rows = await db
+        .select({
+          signalId: emailSignals.id,
+          intentType: emailSignals.intentType,
+          intentSubtype: emailSignals.intentSubtype,
+          actorType: emailSignals.actorType,
+          confidence: emailSignals.confidence,
+          extractedData: emailSignals.extractedData,
+          signalCreatedAt: emailSignals.createdAt,
+          messageId: emailMessages.id,
+          direction: emailMessages.direction,
+          fromEmail: emailMessages.fromEmail,
+          toEmail: emailMessages.toEmail,
+          subject: emailMessages.subject,
+          messageCreatedAt: emailMessages.createdAt,
+          threadId: emailMessages.threadId,
+        })
+        .from(emailSignals)
+        .innerJoin(emailMessages, eq(emailSignals.messageId, emailMessages.id))
+        .where(
+          and(
+            eq(emailMessages.linkedAccountId, companyId),
+            eq(emailMessages.orgId, currentUser.organizationId)
+          )
+        )
+        .orderBy(desc(emailSignals.createdAt))
+        .limit(limit);
+      res.json(rows);
+    } catch (err) {
+      console.error("[email-signals] company route error:", err);
+      res.status(500).json({ error: "Failed to fetch email signals" });
+    }
+  });
+
+  // ── Delete company ─────────────────────────────────────────────────────────
+  app.delete("/api/companies/:id", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, pStr(req.params.id)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const deleted = await storage.deleteCompany(pStr(req.params.id), currentUser.organizationId);
+      if (!deleted) return res.status(404).json({ error: "Company not found" });
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting company:", error);
+      res.status(500).json({ error: "Failed to delete company" });
+    }
+  });
+
+  // ── Pinned companies ───────────────────────────────────────────────────────
+  app.get("/api/pinned-companies", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const pinned = await storage.getPinnedCompanies(currentUser.id);
+      res.json(pinned);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get pinned companies" });
+    }
+  });
+
+  app.post("/api/pinned-companies/:companyId", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const companyId = pStr(req.params.companyId);
+      if (!(await canAccessCompany(currentUser, companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const existing = await storage.getPinnedCompanies(currentUser.id);
+      const alreadyPinned = existing.some(p => p.companyId === companyId);
+      if (!alreadyPinned && existing.length >= 10) {
+        return res.status(400).json({ error: "Maximum of 10 pinned accounts allowed" });
+      }
+      const pinned = await storage.pinCompany(currentUser.id, companyId);
+      res.json(pinned);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to pin company" });
+    }
+  });
+
+  app.delete("/api/pinned-companies/:companyId", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const companyId = pStr(req.params.companyId);
+      await storage.unpinCompany(currentUser.id, companyId);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to unpin company" });
+    }
+  });
+
+  // ── Archive / Unarchive ────────────────────────────────────────────────────
+  app.post("/api/companies/:id/archive", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, pStr(req.params.id)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const updated = await storage.archiveCompany(pStr(req.params.id), currentUser.organizationId);
+      if (!updated) return res.status(404).json({ error: "Company not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to archive company" });
+    }
+  });
+
+  app.post("/api/companies/:id/unarchive", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, pStr(req.params.id)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const updated = await storage.unarchiveCompany(pStr(req.params.id), currentUser.organizationId);
+      if (!updated) return res.status(404).json({ error: "Company not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to unarchive company" });
+    }
+  });
+
+  // ── Onboarding milestones ──────────────────────────────────────────────────
+  app.patch("/api/companies/:id/onboarding-milestones", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, pStr(req.params.id)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const parsed = onboardingMilestoneToggleSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid milestone payload", details: parsed.error.flatten() });
+      }
+      const { milestoneId, completed } = parsed.data;
+      const existing = await storage.getCompany(pStr(req.params.id));
+      if (!existing) return res.status(404).json({ error: "Company not found" });
+      const stored = existing.onboardingMilestones;
+      const current: OnboardingMilestones =
+        stored && typeof stored === "object" && !Array.isArray(stored)
+          ? { ...(stored as OnboardingMilestones) }
+          : {};
+      current[milestoneId] = completed;
+      const updated = await storage.updateCompany(pStr(req.params.id), currentUser.organizationId, {
+        onboardingMilestones: current,
+      });
+      if (!updated) return res.status(404).json({ error: "Company not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update onboarding milestones" });
+    }
+  });
+}
