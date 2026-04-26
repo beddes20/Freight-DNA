@@ -82,6 +82,10 @@ let stripeSync: StripeSyncInstance | null = null;
 
 export async function getStripeSync(): Promise<StripeSyncInstance> {
   if (!stripeSync) {
+    // `stripe-replit-sync` ships without TS declarations; we narrow its
+    // dynamic-import shape to the constructor we actually use here. Safe
+    // because the call site below immediately calls `new StripeSync(...)`
+    // and any breakage would surface at runtime on the very next line.
     const { StripeSync } = await import('stripe-replit-sync') as unknown as { StripeSync: new (opts: object) => StripeSyncInstance };
     const secretKey = await getStripeSecretKey();
 
