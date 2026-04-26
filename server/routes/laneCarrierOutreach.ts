@@ -1431,14 +1431,14 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       const pageSize = parseInt(qStr(req.query.pageSize) || "20", 10);
       const page = Math.max(1, parseInt(qStr(req.query.page) || "1", 10));
       const sort = qStr(req.query.sort) || "recommended";
-      const exactOnly = req.query.exactOnly === "true";
-      const hasEmail = req.query.hasEmail === "true";
-      const notRecentlyContacted = req.query.notRecentlyContacted === "true";
-      const activeOnly = req.query.activeOnly === "true";
-      const includeNewProspects = req.query.includeNewProspects !== "false";
-      const overrideRecentlyContacted = req.query.overrideRecentlyContacted === "true";
-      const debugMode = req.query.debug === "true";
-      const forceRefresh = req.query.refresh === "true";
+      const exactOnly = qStr(req.query.exactOnly) === "true";
+      const hasEmail = qStr(req.query.hasEmail) === "true";
+      const notRecentlyContacted = qStr(req.query.notRecentlyContacted) === "true";
+      const activeOnly = qStr(req.query.activeOnly) === "true";
+      const includeNewProspects = qStr(req.query.includeNewProspects) !== "false";
+      const overrideRecentlyContacted = qStr(req.query.overrideRecentlyContacted) === "true";
+      const debugMode = qStr(req.query.debug) === "true";
+      const forceRefresh = qStr(req.query.refresh) === "true";
 
       const cacheKey = `${pStr(req.params.laneId)}::${user.organizationId}`;
       const cached = _rankingCache.get(cacheKey);

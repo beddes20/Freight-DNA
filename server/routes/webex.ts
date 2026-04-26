@@ -2388,8 +2388,8 @@ export function registerWebexRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const daysRaw = parseInt(qStr(req.query.days) || "30", 10);
       const days = Math.min(90, Math.max(1, Number.isFinite(daysRaw) ? daysRaw : 30));
-      const userIdFilter = typeof req.query.userId === "string" ? qStr(req.query.userId) : null;
-      const gradeFilter = typeof req.query.grade === "string" ? qStr(req.query.grade).toUpperCase() : null;
+      const userIdFilter = qOptStr(req.query.userId) ?? null;
+      const gradeFilter = qOptStr(req.query.grade)?.toUpperCase() ?? null;
       const limitRaw = parseInt(qStr(req.query.limit) || "200", 10);
       const limit = Math.min(500, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 200));
 
