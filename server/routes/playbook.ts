@@ -1,3 +1,4 @@
+import { getErrorMessage } from "../lib/errors";
 /**
  * Playbook Module Routes (Task #300)
  *
@@ -300,7 +301,7 @@ export function registerPlaybookRoutes(app: Express): void {
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       res.setHeader("Content-Disposition", `attachment; filename="playbook-import-template.xlsx"`);
       res.send(buffer);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[playbook] template error:", err);
       res.status(500).json({ error: "Failed to build template" });
     }
@@ -325,7 +326,7 @@ export function registerPlaybookRoutes(app: Express): void {
         if (parsed.headers.length === 0) return res.status(400).json({ error: "No header row detected" });
         if (parsed.rows.length === 0) return res.status(400).json({ error: "No data rows detected" });
         res.json({ headers: parsed.headers, rows: parsed.rows });
-      } catch (err: any) {
+      } catch (err) {
         console.error("[playbook] parse error:", err);
         res.status(500).json({ error: "Failed to parse file" });
       }
@@ -355,8 +356,8 @@ export function registerPlaybookRoutes(app: Express): void {
       });
       const preview = buildPlaybookImportPreview(stringRows, existingNames);
       res.json({ preview });
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       console.error("[playbook] import preview error:", err);
       res.status(500).json({ error: "Failed to preview import" });
     }
@@ -474,8 +475,8 @@ export function registerPlaybookRoutes(app: Express): void {
       }
 
       res.json({ created, updated, skipped, errors });
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       console.error("[playbook] import error:", err);
       res.status(500).json({ error: "Failed to import" });
     }
@@ -505,7 +506,7 @@ export function registerPlaybookRoutes(app: Express): void {
         .where(and(...conds))
         .orderBy(desc(plays.updatedAt));
       res.json({ plays: rows, canAuthor: isAuthor(user.role) });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[playbook] list error:", err);
       res.status(500).json({ error: "Failed to load plays" });
     }
@@ -526,7 +527,7 @@ export function registerPlaybookRoutes(app: Express): void {
         .where(eq(playVersions.playId, play.id))
         .orderBy(desc(playVersions.version));
       res.json({ play, versions, canAuthor: isAuthor(user.role) });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[playbook] get error:", err);
       res.status(500).json({ error: "Failed to load play" });
     }
@@ -563,8 +564,8 @@ export function registerPlaybookRoutes(app: Express): void {
         createdBy: user.id,
       });
       res.json({ play: created });
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       console.error("[playbook] create error:", err);
       res.status(500).json({ error: "Failed to create play" });
     }
@@ -622,8 +623,8 @@ export function registerPlaybookRoutes(app: Express): void {
       }
 
       res.json({ play: updated });
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       console.error("[playbook] update error:", err);
       res.status(500).json({ error: "Failed to update play" });
     }
@@ -646,7 +647,7 @@ export function registerPlaybookRoutes(app: Express): void {
         .set({ publishedAt: new Date() })
         .where(and(eq(playVersions.playId, updated.id), eq(playVersions.version, updated.currentVersion)));
       res.json({ play: updated });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[playbook] publish error:", err);
       res.status(500).json({ error: "Failed to publish play" });
     }
@@ -664,7 +665,7 @@ export function registerPlaybookRoutes(app: Express): void {
         .returning();
       if (!updated) return res.status(404).json({ error: "Play not found" });
       res.json({ play: updated });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[playbook] archive error:", err);
       res.status(500).json({ error: "Failed to archive play" });
     }
@@ -805,8 +806,8 @@ export function registerPlaybookRoutes(app: Express): void {
           ? { type: "compose_email", body: rendered }
           : { type: "open_task", taskId: createdTaskId },
       });
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       console.error("[playbook] run error:", err);
       res.status(500).json({ error: "Failed to start play run" });
     }
@@ -860,8 +861,8 @@ export function registerPlaybookRoutes(app: Express): void {
         });
       }
       res.json({ ok: true, runId: run.id, windowExpiresAt: windowExpiresAt.toISOString() });
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       console.error("[playbook] sent error:", err);
       res.status(500).json({ error: "Failed to mark run sent" });
     }
@@ -920,8 +921,8 @@ export function registerPlaybookRoutes(app: Express): void {
         completedAt: run.completedAt ?? new Date(),
       }).where(eq(playRuns.id, run.id));
       res.json({ ok: true, runId: run.id, label: parsed.label });
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       console.error("[playbook] override error:", err);
       res.status(500).json({ error: "Failed to override outcome" });
     }
@@ -985,8 +986,8 @@ export function registerPlaybookRoutes(app: Express): void {
       }).where(eq(playRuns.id, run.id));
 
       res.json({ ok: true, runId: run.id });
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       console.error("[playbook] outcome error:", err);
       res.status(500).json({ error: "Failed to record outcome" });
     }
@@ -1019,7 +1020,7 @@ export function registerPlaybookRoutes(app: Express): void {
         .limit(200);
 
       res.json({ runs: rows });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[playbook] runs error:", err);
       res.status(500).json({ error: "Failed to load runs" });
     }
@@ -1047,7 +1048,7 @@ export function registerPlaybookRoutes(app: Express): void {
         .orderBy(desc(playRuns.suggestedAt))
         .limit(50);
       res.json({ triggered: rows });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[playbook] triggered error:", err);
       res.status(500).json({ error: "Failed to evaluate triggered plays" });
     }
@@ -1158,7 +1159,7 @@ export function registerPlaybookRoutes(app: Express): void {
       }
 
       res.json({ analytics });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[playbook] analytics error:", err);
       res.status(500).json({ error: "Failed to load analytics" });
     }

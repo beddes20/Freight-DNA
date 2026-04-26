@@ -1,3 +1,4 @@
+import { getErrorMessage } from "../lib/errors";
 import { Router, type Express } from "express";
 import { pStr, qStr, qOptStr } from "../lib/req";
 import { requireAuth, getCurrentUser } from "../auth";
@@ -28,9 +29,9 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const data = await getAIIntelligenceDashboard(user.organizationId);
       res.json(data);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[ai-intelligence] dashboard error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -40,9 +41,9 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const brief = await generateMeetingPrepBrief(user.organizationId, pStr(req.params.companyId), user.id);
       res.json(brief);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[ai-intelligence] meeting-prep error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -52,8 +53,8 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const briefs = await getRecentBriefs(user.organizationId, pStr(req.params.companyId));
       res.json({ briefs });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -63,9 +64,9 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const result = await analyzeContactSentiment(user.organizationId, pStr(req.params.companyId), pStr(req.params.contactId));
       res.json(result);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[ai-intelligence] sentiment error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -85,8 +86,8 @@ export function registerAIIntelligenceRoutes(app: Express) {
       }
       const enriched = data.map(d => ({ ...d, contactName: contactMap[d.contactId] || null }));
       res.json({ sentiment: enriched });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -96,9 +97,9 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const result = await analyzeFollowUpTiming(user.organizationId, pStr(req.params.companyId), pStr(req.params.contactId));
       res.json(result);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[ai-intelligence] follow-up error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -119,8 +120,8 @@ export function registerAIIntelligenceRoutes(app: Express) {
       }
       const enriched = data.map(d => ({ ...d, contactName: contactMap[d.contactId] || null }));
       res.json({ recommendations: enriched });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -130,9 +131,9 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const results = await bulkAnalyzeCompanySentiment(user.organizationId, pStr(req.params.companyId));
       res.json({ results });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[ai-intelligence] bulk sentiment error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -142,9 +143,9 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const results = await bulkAnalyzeCompanyFollowUps(user.organizationId, pStr(req.params.companyId));
       res.json({ results });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[ai-intelligence] bulk follow-up error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -154,9 +155,9 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const insights = await generateRelationshipCoaching(user.organizationId, pStr(req.params.companyId));
       res.json({ insights });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[ai-intelligence] coaching error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -166,8 +167,8 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const insights = await getRelationshipCoaching(user.organizationId, pStr(req.params.companyId));
       res.json({ insights });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -177,9 +178,9 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const gaps = await analyzeOrgChartGaps(user.organizationId, pStr(req.params.companyId));
       res.json({ gaps });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[ai-intelligence] org-gaps error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -189,8 +190,8 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const gaps = await getOrgChartGaps(user.organizationId, pStr(req.params.companyId));
       res.json({ gaps });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -202,8 +203,8 @@ export function registerAIIntelligenceRoutes(app: Express) {
         .set({ status: "dismissed" })
         .where(and(eq(orgChartGaps.id, pStr(req.params.gapId)), eq(orgChartGaps.orgId, user.organizationId)));
       res.json({ ok: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -213,9 +214,9 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const suggestions = await findWarmIntroPaths(user.organizationId, pStr(req.params.companyId));
       res.json({ suggestions });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[ai-intelligence] warm-intros error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -225,9 +226,9 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const matches = await findLookAlikes(user.organizationId, pStr(req.params.companyId));
       res.json({ matches });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[ai-intelligence] look-alikes error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -237,9 +238,9 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const opportunities = await analyzeCrossSellOpportunities(user.organizationId, pStr(req.params.companyId));
       res.json({ opportunities });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[ai-intelligence] cross-sell error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -251,8 +252,8 @@ export function registerAIIntelligenceRoutes(app: Express) {
         .from(crossSellOpportunities)
         .where(and(eq(crossSellOpportunities.orgId, user.organizationId), eq(crossSellOpportunities.companyId, pStr(req.params.companyId))));
       res.json({ opportunities: opps });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -262,9 +263,9 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const play = await generateWalletSharePlay(user.organizationId, pStr(req.params.companyId));
       res.json(play);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[ai-intelligence] wallet-share error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -276,8 +277,8 @@ export function registerAIIntelligenceRoutes(app: Express) {
         .from(walletSharePlays)
         .where(and(eq(walletSharePlays.orgId, user.organizationId), eq(walletSharePlays.companyId, pStr(req.params.companyId))));
       res.json({ plays });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -290,9 +291,9 @@ export function registerAIIntelligenceRoutes(app: Express) {
       }
       const patterns = await analyzeWinLossPatterns(user.organizationId);
       res.json({ patterns });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[ai-intelligence] win-loss error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -302,8 +303,8 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const patterns = await getWinLossPatterns(user.organizationId);
       res.json({ patterns });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -313,9 +314,9 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const signals = await detectCompetitiveSignals(user.organizationId, pStr(req.params.companyId));
       res.json({ signals });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[ai-intelligence] competitive error:", err);
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -326,8 +327,8 @@ export function registerAIIntelligenceRoutes(app: Express) {
       const companyId = qOptStr(req.query.companyId);
       const signals = await getCompetitiveSignals(user.organizationId, companyId);
       res.json({ signals });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -339,8 +340,8 @@ export function registerAIIntelligenceRoutes(app: Express) {
         .set({ status: "dismissed" })
         .where(and(eq(competitiveSignals.id, pStr(req.params.signalId)), eq(competitiveSignals.orgId, user.organizationId)));
       res.json({ ok: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -353,8 +354,8 @@ export function registerAIIntelligenceRoutes(app: Express) {
         .set({ status })
         .where(and(eq(crossSellOpportunities.id, pStr(req.params.oppId)), eq(crossSellOpportunities.orgId, user.organizationId)));
       res.json({ ok: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -366,8 +367,8 @@ export function registerAIIntelligenceRoutes(app: Express) {
         .set({ status: "dismissed" })
         .where(and(eq(relationshipCoachingInsights.id, pStr(req.params.insightId)), eq(relationshipCoachingInsights.orgId, user.organizationId)));
       res.json({ ok: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 }

@@ -1,3 +1,4 @@
+import { getErrorMessage } from "../lib/errors";
 /**
  * Intel Route — Admin-only market intelligence endpoint
  * GET  /api/intel          — returns Daily Insights + Bi-Weekly Scorecard + Executive Report
@@ -628,7 +629,7 @@ Format: Return ONLY the bullet list, one bullet per line, starting each with "�
     setDbCached(`intel:brief:${cacheKey}`, result, 4 * 60 * 60, "ai-brief");
     logIntel(`AI brief generated for user ${userId} (${bullets.length} bullets)`);
     return result;
-  } catch (err: any) {
+  } catch (err) {
     logIntel(`AI brief error for user ${userId}: ${err.message}`);
     const fallback: AiBriefResult = {
       bullets: ["Market intelligence brief temporarily unavailable. SONAR data is live — check market pulse below."],
@@ -1645,7 +1646,7 @@ export function registerIntelRoutes(app: Express): void {
       const payload = await computeIntelPayload(orgId, filterUserId);
       logIntel(`Intel payload generated — ${filterUserId ? `user ${filterUserId}` : "all reps"}`);
       res.json(payload);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[intel] Error:", err);
       res.status(500).json({ error: "Failed to generate intel" });
     }
@@ -1677,7 +1678,7 @@ export function registerIntelRoutes(app: Express): void {
       const data = await compute(orgId, filterUserId);
       logIntel(`section ${label} (${filterUserId ? "rep " + filterUserId : "org"}) in ${Date.now() - tStart}ms`);
       res.json(data);
-    } catch (err: any) {
+    } catch (err) {
       console.error(`[intel/${label}] Error:`, err);
       res.status(500).json({ error: `Failed to load ${label}` });
     }
@@ -1786,7 +1787,7 @@ export function registerIntelRoutes(app: Express): void {
       } catch { /* non-blocking */ }
       const brief = await generateAiBrief(user.id, user.name, orgId, topAccounts, topLanes, national, briefRatePositioning);
       res.json(brief);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[intel] Brief error:", err);
       res.status(500).json({ error: "Failed to generate brief" });
     }
@@ -1904,7 +1905,7 @@ export function registerIntelRoutes(app: Express): void {
       // near-instant on subsequent visits within the session.
       setDbCached(myLanesCacheKey, payload, 15 * 60, "intel-my-lanes");
       res.json(payload);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[intel] My-lanes error:", err);
       res.status(500).json({ error: "Failed to load my lanes" });
     }
@@ -2252,7 +2253,7 @@ export function registerIntelRoutes(app: Express): void {
       await sendIntelNowForOrg(orgId);
 
       res.json({ ok: true, message: "Intel report sent to all admin users" });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[intel] Send-now error:", err);
       res.status(500).json({ error: "Failed to send intel report" });
     }

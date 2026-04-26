@@ -1,3 +1,4 @@
+import { getErrorMessage } from "../lib/errors";
 /**
  * Task #360 — DNA Copilot Analytics, Feedback & Audit endpoints.
  *
@@ -86,8 +87,8 @@ export function registerAgentAnalyticsRoutes(app: Express) {
       } catch { /* non-fatal */ }
 
       res.json(row);
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       console.error("[agent-analytics] feedback:", err);
       res.status(500).json({ error: "Failed to record feedback" });
     }
@@ -144,8 +145,8 @@ export function registerAgentAnalyticsRoutes(app: Express) {
       } catch { /* non-fatal */ }
 
       res.json(row);
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       console.error("[agent-analytics] audit:", err);
       res.status(500).json({ error: "Failed to record action" });
     }
@@ -163,7 +164,7 @@ export function registerAgentAnalyticsRoutes(app: Express) {
       const days = Math.min(90, Math.max(1, Number(req.query.days ?? 30)));
       const overview = await agentAnalyticsStorage.getOverview(me.organizationId, days);
       res.json(overview);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[agent-analytics] overview:", err);
       res.status(500).json({ error: "Failed to load analytics" });
     }
@@ -180,7 +181,7 @@ export function registerAgentAnalyticsRoutes(app: Express) {
       const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 100)));
       const rows = await agentAnalyticsStorage.getNeedsAttention(me.organizationId, days, limit);
       res.json(rows);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[agent-analytics] needs-attention:", err);
       res.status(500).json({ error: "Failed to load queue" });
     }
@@ -197,7 +198,7 @@ export function registerAgentAnalyticsRoutes(app: Express) {
       const limit = Math.min(500, Math.max(1, Number(req.query.limit ?? 200)));
       const rows = await agentAnalyticsStorage.getRecentActions(me.organizationId, days, limit);
       res.json(rows);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[agent-analytics] actions:", err);
       res.status(500).json({ error: "Failed to load actions" });
     }
@@ -231,7 +232,7 @@ export function registerAgentAnalyticsRoutes(app: Express) {
       const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 25)));
       const rows = await agentAnalyticsStorage.getActionsByUser(me.organizationId, targetId, limit);
       res.json(rows);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[agent-analytics] actions/by-user:", err);
       res.status(500).json({ error: "Failed to load actions" });
     }
@@ -251,7 +252,7 @@ export function registerAgentAnalyticsRoutes(app: Express) {
       const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 25)));
       const rows = await agentAnalyticsStorage.getActionsByCompany(me.organizationId, companyId, limit);
       res.json(rows);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[agent-analytics] actions/by-company:", err);
       res.status(500).json({ error: "Failed to load actions" });
     }
@@ -267,7 +268,7 @@ export function registerAgentAnalyticsRoutes(app: Express) {
       const turn = await agentAnalyticsStorage.getTurnDetail(me.organizationId, String(req.params.id));
       if (!turn) return res.status(404).json({ error: "Turn not found" });
       res.json(turn);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[agent-analytics] turns/:id:", err);
       res.status(500).json({ error: "Failed to load turn" });
     }
@@ -297,8 +298,8 @@ export function registerAgentAnalyticsRoutes(app: Express) {
         comment: `[error-report] ${safe}`,
       }).returning();
       res.json(row);
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       res.status(500).json({ error: "Failed to send report" });
     }
   });

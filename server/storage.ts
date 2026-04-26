@@ -106,6 +106,7 @@ import {
   type ContactLaneAttribution,
   type InsertContactLaneAttribution,
   contactBaseHistory,
+  type InternalPost,
   type LaneCarrier,
   type InsertLaneCarrier,
   nbaCards,
@@ -269,6 +270,14 @@ import {
 } from "@shared/schema";
 
 const { Pool } = pg;
+
+export type ContactBaseHistoryRow = {
+  id: number;
+  fromBase: string | null;
+  toBase: string;
+  changedAt: Date | null;
+  changedByName: string | null;
+};
 
 /**
  * Configurable daily email budget per carrier (cross-lane).
@@ -438,7 +447,7 @@ export interface IStorage {
 getContactsByIds(ids: string[]): Promise<Contact[]>;
   getContact(id: string): Promise<Contact | undefined>;
   logContactBaseHistory(contactId: string, fromBase: string | null, toBase: string, changedById: string): Promise<void>;
-  getContactBaseHistory(contactId: string): Promise<any[]>;
+  getContactBaseHistory(contactId: string): Promise<ContactBaseHistoryRow[]>;
   createContact(contact: InsertContact): Promise<Contact>;
   bulkCreateContacts(contacts: InsertContact[]): Promise<Contact[]>;
   updateContact(id: string, contact: InsertContact): Promise<Contact | undefined>;
@@ -672,8 +681,8 @@ getContactsByIds(ids: string[]): Promise<Contact[]>;
   updatePtoPassoffItem(id: string, data: Partial<InsertPtoPassoffItem>): Promise<PtoPassoffItem | undefined>;
   deletePtoPassoffItem(id: string): Promise<boolean>;
 
-  getInternalPosts(userId: string, role: string, orgUserIds: string[]): Promise<any[]>;
-  createInternalPost(data: { content: string; authorId: string; recipientIds: string[]; parentId?: string | null; createdAt: string }): Promise<any>;
+  getInternalPosts(userId: string, role: string, orgUserIds: string[]): Promise<InternalPost[]>;
+  createInternalPost(data: { content: string; authorId: string; recipientIds: string[]; parentId?: string | null; createdAt: string }): Promise<InternalPost>;
   deleteInternalPost(id: string): Promise<boolean>;
 
   getMarketShareEntries(companyId: string): Promise<MarketShareEntry[]>;
@@ -1719,7 +1728,7 @@ export class DatabaseStorage implements IStorage {
     await db.insert(contactBaseHistory).values({ contactId, fromBase: fromBase ?? null, toBase, changedById });
   }
 
-  async getContactBaseHistory(contactId: string): Promise<any[]> {
+  async getContactBaseHistory(contactId: string): Promise<ContactBaseHistoryRow[]> {
     const rows = await db
       .select({
         id: contactBaseHistory.id,
@@ -3482,7 +3491,7 @@ export class DatabaseStorage implements IStorage {
     return result.length > 0;
   }
 
-  async getInternalPosts(userId: string, role: string, orgUserIds: string[]): Promise<any[]> {
+  async getInternalPosts(userId: string, role: string, orgUserIds: string[]): Promise<InternalPost[]> {
     const isLeadership = role === "admin" || role === "director";
     if (isLeadership) {
       if (!orgUserIds.length) return [];
@@ -3502,7 +3511,7 @@ export class DatabaseStorage implements IStorage {
     return [...topLevel, ...replies];
   }
 
-  async createInternalPost(data: { content: string; authorId: string; recipientIds: string[]; parentId?: string | null; createdAt: string }): Promise<any> {
+  async createInternalPost(data: { content: string; authorId: string; recipientIds: string[]; parentId?: string | null; createdAt: string }): Promise<InternalPost> {
     const [created] = await db.insert(internalPosts).values(data).returning();
     return created;
   }

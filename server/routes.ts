@@ -46,6 +46,8 @@ import { registerCustomerQuoteRoutes } from "./routes/customerQuotes";
 import { registerLiveSyncRoutes } from "./routes/liveSync";
 import { registerLaneInboxRoutes } from "./routes/laneInbox";
 import { registerNotificationRoutes } from "./routes/notifications";
+import { registerContactRoutes } from "./routes/contacts";
+import { createRateLimiter } from "./lib/rateLimiter";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
@@ -54,9 +56,11 @@ import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany, getVisibleRepUserIds, canSeeRepUser } from "./auth";
 import { isAdmin, isLeadership, canEditOtherUsers, isAdminOrDirector } from "./lib/roles";
+import { fanOutCelebration } from "./lib/fanOutCelebration";
+import { getErrorMessage } from "./lib/errors";
 import { projectNbaCard, collectProjectionIds } from "./lib/nbaCardProjection";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable, emailMessages, emailSignals, onboardingMilestoneToggleSchema, type OnboardingMilestones, upsertSidebarTooltipSchema, type Contact, type RecurringLane } from "@shared/schema";
+import { insertCompanySchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable, emailMessages, emailSignals, onboardingMilestoneToggleSchema, type OnboardingMilestones, upsertSidebarTooltipSchema, type Contact, type RecurringLane } from "@shared/schema";
 import { normalizeLaneLocation, normalizeEquipmentType } from "@shared/laneFormatters";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
@@ -71,6 +75,9 @@ import { db } from "./storage";
 import { sql, eq, and, desc, inArray } from "drizzle-orm";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+
+const bulkImportRateLimit = createRateLimiter(10, 60_000, "Too many bulk-import requests. Please wait a moment.");
+const aiPreviewRateLimit = createRateLimiter(20, 60_000, "AI rate limit exceeded. Please wait a moment.");
 
 const zipCodeMap: Record<string, string> = JSON.parse(
   readFileSync(join(process.cwd(), "server", "zipcodes.json"), "utf-8")
@@ -791,7 +798,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.post("/api/users/bulk-import", requireAuth, upload.single("file"), async (req, res) => {
+  app.post("/api/users/bulk-import", requireAuth, bulkImportRateLimit, upload.single("file"), async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -895,7 +902,7 @@ RULES FOR YOUR RESPONSES:
   });
 
   // ── Companies bulk import ────────────────────────────────────────────────
-  app.post("/api/companies/bulk-import", requireAuth, upload.single("file"), async (req, res) => {
+  app.post("/api/companies/bulk-import", requireAuth, bulkImportRateLimit, upload.single("file"), async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1222,39 +1229,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  function getBaseRank(base: string | null | undefined): number {
-    if (!base) return 0;
-    const s = base.toLowerCase().replace(/\s+/g, "");
-    if (s.includes("home") || s === "hr" || s === "homerun") return 4;
-    if (s.includes("3rd") || s.includes("third")) return 3;
-    if (s.includes("2nd") || s.includes("second")) return 2;
-    if (s.includes("1st") || s.includes("first")) return 1;
-    return 0;
-  }
 
-  async function fanOutCelebration(type: "new_account" | "new_contact" | "base_advanced", title: string, body: string, link: string, relatedId: string, actorId: string, organizationId: string) {
-    try {
-      const allUsers = await storage.getUsers(organizationId);
-      const actor = allUsers.find(u => u.id === actorId);
-      const notifyIds = new Set<string>();
-      // Walk up the manager chain from the actor
-      let current = actor;
-      while (current?.managerId) {
-        const manager = allUsers.find(u => u.id === current!.managerId);
-        if (manager) notifyIds.add(manager.id);
-        current = manager;
-      }
-      // Always include all admins
-      allUsers.filter(u => u.role === "admin").forEach(u => notifyIds.add(u.id));
-      // Never notify the actor themselves
-      notifyIds.delete(actorId);
-      await Promise.all([...notifyIds].map(uid =>
-        storage.createNotification({ userId: uid, type, title, body, link, relatedId, read: false }).catch(() => {})
-      ));
-    } catch (e) {
-      console.error("fanOutCelebration error:", e);
-    }
-  }
 
   app.post("/api/companies", requireAuth, async (req, res) => {
     try {
@@ -1557,224 +1532,6 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.get("/api/contacts", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      let contacts = await storage.getContactsByOrg(currentUser.organizationId);
-      const visibleIds = await getVisibleCompanyIds(currentUser);
-      if (visibleIds !== null) {
-        contacts = contacts.filter(c => visibleIds.includes(c.companyId));
-      }
-      res.json(contacts);
-    } catch (error) {
-      console.error("Error fetching contacts:", error);
-      res.status(500).json({ error: "Failed to fetch contacts" });
-    }
-  });
-
-  app.get("/api/companies/:companyId/contacts", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (pStr(req.params.companyId))))) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-      const contacts = await storage.getContactsByCompany((pStr(req.params.companyId)));
-      res.json(contacts);
-    } catch (error) {
-      console.error("Error fetching contacts:", error);
-      res.status(500).json({ error: "Failed to fetch contacts" });
-    }
-  });
-
-  app.post("/api/companies/:companyId/contacts", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (pStr(req.params.companyId))))) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-      const contactData = {
-        ...req.body,
-        companyId: (pStr(req.params.companyId)),
-        createdAt: new Date().toISOString(),
-        createdBy: currentUser.id,
-      };
-      const parsed = insertContactSchema.safeParse(contactData);
-      if (!parsed.success) {
-        return res.status(400).json({ error: parsed.error.message });
-      }
-      const contact = await storage.createContact(parsed.data);
-      const _orgIdForFanOut1 = req.session.organizationId!;
-      storage.getCompanyInOrg((pStr(req.params.companyId)), _orgIdForFanOut1).then(co => {
-        fanOutCelebration(
-          "new_contact",
-          `🎉 New contact: ${contact.name}`,
-          `${currentUser.name} added ${contact.name}${contact.title ? ` (${contact.title})` : ""} at ${co?.name ?? "an account"}.`,
-          `/companies/${(pStr(req.params.companyId))}`,
-          contact.id,
-          currentUser.id,
-          _orgIdForFanOut1
-        );
-      }).catch(() => {});
-      res.status(201).json(contact);
-    } catch (error) {
-      console.error("Error creating contact:", error);
-      res.status(500).json({ error: "Failed to create contact" });
-    }
-  });
-
-  app.post("/api/companies/:companyId/contacts/bulk-import", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (pStr(req.params.companyId))))) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-      const rows: any[] = req.body.contacts;
-      if (!Array.isArray(rows) || rows.length === 0) {
-        return res.status(400).json({ error: "No contacts provided" });
-      }
-      const now = new Date().toISOString();
-      const toInsert = rows.map(r => ({
-        companyId: (pStr(req.params.companyId)),
-        name: (r.name || "").trim(),
-        title: r.title?.trim() || null,
-        email: r.email?.trim() || null,
-        phone: r.phone?.trim() || null,
-        notes: r.notes?.trim() || null,
-        nextSteps: r.nextSteps?.trim() || null,
-        createdAt: now,
-        createdBy: currentUser.id,
-      })).filter(r => r.name.length > 0);
-      if (toInsert.length === 0) return res.status(400).json({ error: "No valid contacts (name is required)" });
-      const created = await storage.bulkCreateContacts(toInsert);
-      res.status(201).json({ count: created.length, contacts: created });
-    } catch (error) {
-      console.error("Error bulk importing contacts:", error);
-      res.status(500).json({ error: "Failed to import contacts" });
-    }
-  });
-
-  app.patch("/api/contacts/:id", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getContact((pStr(req.params.id)));
-      if (!existing) {
-        return res.status(404).json({ error: "Contact not found" });
-      }
-      if (!(await canAccessCompany(currentUser, existing.companyId))) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-      // Allow companyId to change if provided; fall back to existing value
-      const newCompanyId = req.body.companyId && req.body.companyId !== existing.companyId
-        ? req.body.companyId
-        : existing.companyId;
-      // If company is changing, verify the user can also access the destination company
-      if (newCompanyId !== existing.companyId) {
-        if (!(await canAccessCompany(currentUser, newCompanyId))) {
-          return res.status(403).json({ error: "Access denied to destination company" });
-        }
-      }
-      const contactData = {
-        ...req.body,
-        companyId: newCompanyId,
-      };
-      const parsed = insertContactSchema.safeParse(contactData);
-      if (!parsed.success) {
-        return res.status(400).json({ error: parsed.error.message });
-      }
-      const baseChanged = parsed.data.relationshipBase && parsed.data.relationshipBase !== existing.relationshipBase;
-      const oldRank = getBaseRank(existing.relationshipBase);
-      const newRank = baseChanged ? getBaseRank(parsed.data.relationshipBase) : 0;
-      if (baseChanged) {
-        parsed.data.baseAdvancedAt = new Date().toISOString().split("T")[0];
-        if (newRank > oldRank && newRank > 0) {
-          const _orgIdForFanOut2 = req.session.organizationId!;
-          storage.getCompanyInOrg(existing.companyId, _orgIdForFanOut2).then(co => {
-            fanOutCelebration(
-              "base_advanced",
-              `🎉 Relationship advanced: ${parsed.data.name ?? existing.name}`,
-              `${currentUser.name} moved ${parsed.data.name ?? existing.name} at ${co?.name ?? "an account"} from ${existing.relationshipBase ?? "no base"} → ${parsed.data.relationshipBase}.`,
-              `/companies/${existing.companyId}`,
-              (pStr(req.params.id)),
-              currentUser.id,
-              _orgIdForFanOut2
-            );
-          }).catch(() => {});
-        }
-        // Log history
-        storage.logContactBaseHistory(
-          pStr(req.params.id),
-          existing.relationshipBase ?? null,
-          parsed.data.relationshipBase!,
-          currentUser.id
-        ).catch(() => {});
-      }
-      const contact = await storage.updateContact((pStr(req.params.id)), parsed.data);
-      // B3 fix: if company changed, re-attribute historical touchpoints then refresh growth scores
-      // Must await the cascade before recomputing so scores reflect the correct touchpoint set.
-      if (newCompanyId !== existing.companyId) {
-        try {
-          await storage.updateTouchpointCompanyByContact((pStr(req.params.id)), newCompanyId);
-        } catch (err) {
-          console.error("[contact-update] touchpoint company cascade failed:", err);
-        }
-        // After cascade completes, refresh growth scores for both companies (async, non-blocking)
-        const orgId = req.session.organizationId!;
-        Promise.all([
-          computeGrowthScore(existing.companyId, orgId, storage).then(gs =>
-            storage.upsertGrowthScore({ companyId: existing.companyId, organizationId: orgId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() })
-          ),
-          computeGrowthScore(newCompanyId, orgId, storage).then(gs =>
-            storage.upsertGrowthScore({ companyId: newCompanyId, organizationId: orgId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() })
-          ),
-        ]).catch(err => {
-          console.error("[contact-update] growth score refresh after company change failed:", err);
-        });
-      }
-      res.json({ ...contact });
-    } catch (error) {
-      console.error("Error updating contact:", error);
-      res.status(500).json({ error: "Failed to update contact" });
-    }
-  });
-
-  app.delete("/api/contacts/:id", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getContact((pStr(req.params.id)));
-      if (!existing) {
-        return res.status(404).json({ error: "Contact not found" });
-      }
-      if (!(await canAccessCompany(currentUser, existing.companyId))) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-      const deleted = await storage.deleteContact((pStr(req.params.id)));
-      if (!deleted) {
-        return res.status(404).json({ error: "Contact not found" });
-      }
-      res.status(204).send();
-    } catch (error) {
-      console.error("Error deleting contact:", error);
-      res.status(500).json({ error: "Failed to delete contact" });
-    }
-  });
-
-  // T003: Relationship advancement history
-  app.get("/api/contacts/:id/base-history", requireAuth, async (req, res) => {
-    try {
-      const history = await storage.getContactBaseHistory(pStr(req.params.id));
-      res.json(history);
-    } catch (e) {
-      console.error("Error fetching base history:", e);
-      res.status(500).json({ error: "Failed to fetch history" });
-    }
-  });
-
   // Cross-RFP lane search: search origin/destination across all uploaded RFP lane data
   app.get("/api/rfps/lane-search", requireAuth, async (req, res) => {
     try {
@@ -1933,7 +1690,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.post("/api/rfps/preview-headers", requireAuth, upload.single("file"), async (req, res) => {
+  app.post("/api/rfps/preview-headers", requireAuth, aiPreviewRateLimit, upload.single("file"), async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) {
@@ -3245,6 +3002,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerLiveSyncRoutes(app);
   registerLaneInboxRoutes(app);
   registerNotificationRoutes(app);
+  registerContactRoutes(app);
   // Task #478 — periodic lost-streak alerts for customers and lane groups.
   {
     const { initQuoteLostStreakScheduler } = await import("./quoteLostStreakScheduler");
@@ -3281,8 +3039,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         if (!me || me.role !== "admin") return res.status(403).json({ error: "Admin only" });
         const result = await indexOrg(me.organizationId);
         res.json(result);
-      } catch (err: any) {
-        res.status(500).json({ error: err.message ?? "Failed" });
+      } catch (err) {
+        res.status(500).json({ error: getErrorMessage(err) });
       }
     });
   }
@@ -4475,8 +4233,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       }
       const result = await verifySmtp();
       res.json(result);
-    } catch (err: any) {
-      res.status(500).json({ ok: false, error: err.message });
+    } catch (err) {
+      res.status(500).json({ ok: false, error: getErrorMessage(err) });
     }
   });
 
@@ -4492,8 +4250,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         env: { ...process.env },
       });
       res.json({ success: true, message: "Demo org seeded successfully", output: output.toString().slice(-500) });
-    } catch (err: any) {
-      res.status(500).json({ success: false, error: err.message?.slice(0, 300) });
+    } catch (err) {
+      res.status(500).json({ success: false, error: getErrorMessage(err).slice(0, 300) });
     }
   });
 
@@ -4646,7 +4404,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       }
 
       res.json({ success: true, message: "Email sent successfully", touchpoint, autoLinkedCompanyId });
-    } catch (error: any) {
+    } catch (error) {
       console.error("[outlook] send error:", error);
       res.status(500).json({ error: "Failed to send email" });
     }
@@ -4690,7 +4448,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       } else {
         res.json({ success: false, message: sentTo ? "Email could not be sent — check SMTP configuration and try again." : "No username found for this user.", sentTo });
       }
-    } catch (error: any) {
+    } catch (error) {
       console.error("send-email error:", error);
       res.status(500).json({ error: "Failed to send email" });
     }
@@ -4726,8 +4484,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       }).sort((a, b) => a.name.localeCompare(b.name));
 
       res.json({ recipients, total: recipients.length });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -4767,8 +4525,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const sent = results.filter(r => r.ok).length;
       const failed = results.filter(r => !r.ok).length;
       res.json({ sent, failed, total: targetIds.length, results });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -7343,7 +7101,7 @@ Respond with valid JSON only:
       const { searchZoomInfoContacts } = await import("./zoominfo.js");
       const contacts = await searchZoomInfoContacts(companyName.trim(), 25);
       res.json({ contacts });
-    } catch (error: any) {
+    } catch (error) {
       console.error("[zoominfo] search error:", error?.message);
       res.status(502).json({ error: error?.message || "ZoomInfo search failed" });
     }
@@ -8454,7 +8212,7 @@ Respond with valid JSON only:
       if (err.code === "LIMIT_FILE_SIZE") {
         return res.status(413).json({ error: "File is too large. Maximum size is 50MB." });
       }
-      return res.status(400).json({ error: err.message });
+      return res.status(400).json({ error: getErrorMessage(err) });
     }
     next(err);
   });
@@ -8533,7 +8291,7 @@ Respond with valid JSON only:
 
       res.json({ products: Array.from(productsMap.values()) });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = getErrorMessage(err);
       console.error("GET /api/stripe/products error:", message);
       res.json({ products: [] });
     }
@@ -8619,7 +8377,7 @@ Respond with valid JSON only:
       });
       res.json({ url: session.url });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = getErrorMessage(err);
       console.error("POST /api/stripe/checkout error:", message);
       res.status(500).json({ error: "Failed to create checkout session" });
     }
@@ -8662,7 +8420,7 @@ Respond with valid JSON only:
         planName: "Freight DNA Subscription",
       });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = getErrorMessage(err);
       console.error("GET /api/stripe/confirm-checkout error:", message);
       res.status(500).json({ error: "Failed to confirm checkout" });
     }
@@ -8677,7 +8435,7 @@ Respond with valid JSON only:
       const org = user.organizationId ? await storage.getOrganizationById(user.organizationId) : null;
       res.json({ organization: org ?? null });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = getErrorMessage(err);
       console.error("GET /api/admin/billing error:", message);
       res.status(500).json({ error: "Failed to fetch billing data" });
     }
@@ -8714,7 +8472,7 @@ Respond with valid JSON only:
 
       res.json({ invoices });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = getErrorMessage(err);
       console.error("GET /api/admin/billing/invoices error:", message);
       res.status(500).json({ error: "Failed to fetch invoices" });
     }
@@ -9177,7 +8935,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
 
       const draft = completion.choices[0]?.message?.content?.trim() ?? "";
       res.json({ draft });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[ai-draft-email] error:", err?.message ?? err);
       res.status(500).json({ error: "Failed to generate draft" });
     }
@@ -9295,7 +9053,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
 
       results.sort((a, b) => b.weeklyTotal - a.weeklyTotal);
       res.json({ weekStart: weekStartStr, results });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[rep-scorecard]", err?.message ?? err);
       res.status(500).json({ error: "Failed to load rep scorecard" });
     }
@@ -9392,7 +9150,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       }).filter(r => r.totalPlaysExecuted > 0).sort((a, b) => b.totalPlaysExecuted - a.totalPlaysExecuted);
 
       res.json({ plays, repPlayStats });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[plays-activity]", err?.message ?? err);
       res.status(500).json({ error: "Failed to load plays activity" });
     }
@@ -9424,7 +9182,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const weekStart = (qStr(req.query.weekStart)) || getWeekStart();
       const rows = await storage.getTeamWeeklyCommitments(orgId, weekStart);
       res.json(rows);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[weekly-commitments/team]", err?.message ?? err);
       res.status(500).json({ error: "Failed to load team commitments" });
     }
@@ -9438,7 +9196,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const weekStart = qOptStr(req.query.weekStart);
       const rows = await storage.getWeeklyCommitments(currentUser.id, orgId, weekStart);
       res.json(rows);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[weekly-commitments]", err?.message ?? err);
       res.status(500).json({ error: "Failed to load commitments" });
     }
@@ -9483,7 +9241,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       if (!payload.commitmentText) return res.status(400).json({ error: "commitmentText is required" });
       const row = await storage.createWeeklyCommitment(payload);
       res.json(row);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[weekly-commitments POST]", err?.message ?? err);
       res.status(500).json({ error: "Failed to create commitment" });
     }
@@ -9498,7 +9256,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const row = await storage.updateWeeklyCommitmentStatus(pStr(req.params.id), currentUser.id, status);
       if (!row) return res.status(404).json({ error: "Commitment not found" });
       res.json(row);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[weekly-commitments PATCH]", err?.message ?? err);
       res.status(500).json({ error: "Failed to update commitment" });
     }
@@ -9511,7 +9269,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const ok = await storage.deleteWeeklyCommitment(pStr(req.params.id), currentUser.id);
       if (!ok) return res.status(404).json({ error: "Commitment not found" });
       res.json({ success: true });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[weekly-commitments DELETE]", err?.message ?? err);
       res.status(500).json({ error: "Failed to delete commitment" });
     }
@@ -9557,7 +9315,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       );
 
       res.json(projectNbaCard(card, { contacts, lanes, users: userMap }));
-    } catch (err: any) {
+    } catch (err) {
       console.error("[nba/company/card GET]", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch company NBA card" });
     }
@@ -9628,7 +9386,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
         projectNbaCard(c, { contacts, lanes, users: userMap }),
       );
       res.json(projected);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[nba/cards GET]", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch NBA cards" });
     }
@@ -9690,7 +9448,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
         });
       } catch (e) { console.error("[nba/cards PATCH event]", e); }
       res.json(updated);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[nba/cards PATCH]", err?.message ?? err);
       res.status(500).json({ error: "Failed to resolve NBA card" });
     }
@@ -9704,7 +9462,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const updated = await storage.markNbaCardViewed(pStr(req.params.id), currentUser.id, currentUser.organizationId);
       if (!updated) return res.status(404).json({ error: "Card not found or not yours" });
       res.json({ ok: true, firstViewedAt: updated.firstViewedAt });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[nba/cards/:id/view POST]", err?.message ?? err);
       res.status(500).json({ error: "Failed to record view" });
     }
@@ -9763,7 +9521,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
         });
       } catch (e) { console.error("[nba/cards/link-outcome event]", e); }
       res.json(updated);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[nba/cards/link-outcome POST]", err?.message ?? err);
       res.status(500).json({ error: "Failed to link outcome" });
     }
@@ -9784,7 +9542,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
         : monthDays;
       const summary = await storage.getNbaImpactForUser(currentUser.id, currentUser.organizationId, daysBack);
       res.json(summary);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[nba/my-impact GET]", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch NBA impact" });
     }
@@ -9814,7 +9572,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       }
       const rollup = await storage.getNbaTeamRollup(amIds, organizationId, daysBack);
       res.json(rollup);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[nba/team-rollup GET]", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch team rollup" });
     }
@@ -9854,7 +9612,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
         companyName: c.companyId ? companyNameMap.get(c.companyId) ?? null : null,
       }));
       res.json({ repId, repName: rep.name, cards: decorated });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[nba/team-rollup/:repId/cards GET]", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch rep cards" });
     }
@@ -9871,7 +9629,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const weekStart = String(req.query.weekStart ?? new Date().toISOString().split("T")[0].slice(0, 10));
       const summary = await storage.getNbaManagerSummary(organizationId, weekStart);
       res.json(summary);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[nba/manager-summary GET]", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch manager summary" });
     }
@@ -9888,7 +9646,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const daysBack = Math.min(Number(req.query.daysBack ?? 30), 90);
       const performance = await storage.getNbaRulePerformance(organizationId, daysBack);
       res.json(performance);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[nba/rule-performance GET]", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch rule performance" });
     }
@@ -9981,7 +9739,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       }
 
       res.json({ generated, skipped, total: companyResults.length + laneCapacitySpecs.length });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[nba/run-engine POST]", err?.message ?? err);
       res.status(500).json({ error: "Failed to run NBA engine" });
     }
@@ -10005,7 +9763,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       }
       const counts = await storage.countPendingContactSuggestionsByOrg(currentUser.organizationId, scope);
       res.json(counts);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[suggestion-counts GET]", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch suggestion counts" });
     }
@@ -10034,7 +9792,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       // Only return pending / snoozed suggestions (exclude accepted/ignored/never_suggest unless explicitly requested)
       const filtered = status ? suggestions : suggestions.filter(s => s.status === "pending" || s.status === "snoozed");
       res.json(filtered);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[contact-suggestions GET]", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch suggestions" });
     }
@@ -10160,7 +9918,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       // Mark suggestion as accepted
       await storage.updateAccountContactSuggestionStatus(id, "accepted", { userId: currentUser.id });
       res.json({ suggestion: { ...suggestion, status: "accepted" }, contact });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[contact-suggestions/accept POST]", err?.message ?? err);
       res.status(500).json({ error: "Failed to accept suggestion" });
     }
@@ -10178,7 +9936,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       if (!suggestion || suggestion.accountId !== accountId) return res.status(404).json({ error: "Suggestion not found" });
       const updated = await storage.updateAccountContactSuggestionStatus(id, "ignored", { userId: currentUser.id });
       res.json(updated);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[contact-suggestions/ignore POST]", err?.message ?? err);
       res.status(500).json({ error: "Failed to ignore suggestion" });
     }
@@ -10198,7 +9956,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const snoozedUntilDate = snoozedUntil ? new Date(snoozedUntil) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       const updated = await storage.updateAccountContactSuggestionStatus(id, "snoozed", { userId: currentUser.id, snoozedUntil: snoozedUntilDate });
       res.json(updated);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[contact-suggestions/snooze POST]", err?.message ?? err);
       res.status(500).json({ error: "Failed to snooze suggestion" });
     }
@@ -10216,7 +9974,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       if (!suggestion || suggestion.accountId !== accountId) return res.status(404).json({ error: "Suggestion not found" });
       const updated = await storage.updateAccountContactSuggestionStatus(id, "never_suggest", { userId: currentUser.id });
       res.json(updated);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[contact-suggestions/never-suggest POST]", err?.message ?? err);
       res.status(500).json({ error: "Failed to suppress suggestion" });
     }
@@ -10233,7 +9991,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const items = await storage.getSidebarTooltips(currentUser.organizationId);
       res.json({ items });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[sidebar-tooltips GET]", err?.message ?? err);
       res.status(500).json({ error: "Failed to load sidebar tooltips" });
     }
@@ -10254,7 +10012,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       }
       const row = await storage.upsertSidebarTooltip(currentUser.organizationId, itemKey, trimmed, currentUser.id);
       res.json(row);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[sidebar-tooltips PUT]", err?.message ?? err);
       res.status(500).json({ error: "Failed to save sidebar tooltip" });
     }
@@ -10267,7 +10025,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       if (currentUser.role !== "admin") return res.status(403).json({ error: "Admin access required" });
       await storage.deleteSidebarTooltip(currentUser.organizationId, pStr(req.params.itemKey));
       res.json({ ok: true });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[sidebar-tooltips DELETE]", err?.message ?? err);
       res.status(500).json({ error: "Failed to reset sidebar tooltip" });
     }

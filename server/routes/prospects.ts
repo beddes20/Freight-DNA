@@ -1,3 +1,4 @@
+import { getErrorMessage } from "../lib/errors";
 import type { Express } from "express";
 import { pStr, qStr, qOptStr } from "../lib/req";
 import { storage } from "../storage";
@@ -777,7 +778,7 @@ export function registerProspectRoutes(app: Express) {
           }
 
           created++;
-        } catch (err: any) {
+        } catch (err) {
           errors.push({ row: i + 1, error: err.message ?? "Failed to create" });
         }
       }

@@ -1,3 +1,4 @@
+import { getErrorMessage } from "../lib/errors";
 /**
  * ValueIQ workspace API surface.
  *
@@ -183,7 +184,7 @@ export function registerValueIQRoutes(app: Express) {
         name: body.name, pinnedContext: body.pinnedContext ?? null,
       }).returning();
       res.json(row);
-    } catch (err: any) {
+    } catch (err) {
       res.status(400).json({ error: err.message ?? "Invalid project" });
     }
   });
@@ -264,7 +265,7 @@ export function registerValueIQRoutes(app: Express) {
         surface: body.surface ?? "valueiq",
       }).returning();
       res.json(row);
-    } catch (err: any) {
+    } catch (err) {
       res.status(400).json({ error: err.message ?? "Invalid thread" });
     }
   });
@@ -332,7 +333,7 @@ export function registerValueIQRoutes(app: Express) {
     if (!thread) return res.status(404).json({ error: "Not found" });
     let body: z.infer<typeof sendSchema>;
     try { body = sendSchema.parse(req.body); }
-    catch (err: any) { return res.status(400).json({ error: err.message }); }
+    catch (err) { return res.status(400).json({ error: getErrorMessage(err) }); }
 
     const requestedAgentId = body.agentId ?? thread.defaultAgentId ?? (await ensureDefaultAgent(user.organizationId));
     // Enforce eligibility: agent must be in the user's org, published (or
@@ -547,7 +548,7 @@ export function registerValueIQRoutes(app: Express) {
       if (!updated) return res.status(404).json({ error: "Not found" });
       const { password: _p, ...safe }: User & { password?: string | null } = updated;
       res.json(safe);
-    } catch (err: any) {
+    } catch (err) {
       res.status(400).json({ error: err.message ?? "Invalid preferences" });
     }
   });
@@ -567,7 +568,7 @@ export function registerValueIQRoutes(app: Express) {
       const tz = settings?.valueiqTodayTimezone || "America/Chicago";
       const r = await seedTodayForUser(user, { timeZone: tz });
       res.json({ enabled: true, threadId: r.threadId, created: r.created, title: r.title, date: r.date, timeZone: tz });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[valueiq] today get:", err);
       res.status(500).json({ error: err.message ?? "Failed" });
     }
@@ -586,7 +587,7 @@ export function registerValueIQRoutes(app: Express) {
       const tz = settings?.valueiqTodayTimezone || "America/Chicago";
       const r = await seedTodayForUser(user, { overwrite: true, timeZone: tz });
       res.json({ threadId: r.threadId, title: r.title, date: r.date, timeZone: tz });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[valueiq] today refresh:", err);
       res.status(500).json({ error: err.message ?? "Failed" });
     }
@@ -712,7 +713,7 @@ export function registerValueIQRoutes(app: Express) {
         kind: body.kind, title: body.title, body: body.body ?? null,
       });
       res.json({ id });
-    } catch (err: any) {
+    } catch (err) {
       res.status(400).json({ error: err.message ?? "Invalid item" });
     }
   });
@@ -741,7 +742,7 @@ export function registerValueIQRoutes(app: Express) {
         kind: "file", title: file.originalname || "Uploaded file", body: parsedText,
       });
       res.json({ id, fileName: file.originalname, chars: parsedText.length });
-    } catch (err: any) {
+    } catch (err) {
       res.status(500).json({ error: err.message ?? "Upload failed" });
     }
   });

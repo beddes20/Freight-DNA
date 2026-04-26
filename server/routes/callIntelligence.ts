@@ -6,7 +6,10 @@ import { analyzeTouchpointNote } from "../aiTouchpoint";
 import { computeGrowthScore } from "../growthScoreCalculator";
 import { checkAndFireMomentumDropNotification } from "../momentumNotifications";
 import { getPlayForRuleType, getPlayByLabel, getAllPlayLabels, PLAYS_REGISTRY } from "../playsRegistry";
+import { createRateLimiter } from "../lib/rateLimiter";
 import OpenAI from "openai";
+
+const aiRateLimit = createRateLimiter(20, 60_000, "AI rate limit exceeded. Please wait a moment.");
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -25,7 +28,7 @@ function getPlaybook() {
 
 export function registerCallIntelligenceRoutes(app: Express) {
 
-  app.post("/api/call-prep/:companyId", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/call-prep/:companyId", requireAuth, aiRateLimit, async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -210,7 +213,7 @@ Return ONLY a JSON array of 3 strings, no markdown:
     }
   });
 
-  app.post("/api/post-call-capture", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/post-call-capture", requireAuth, aiRateLimit, async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });

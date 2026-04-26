@@ -1,3 +1,4 @@
+import { getErrorMessage } from "../lib/errors";
 /**
  * Lane Carrier Outreach Routes — Task #148
  *
@@ -2412,7 +2413,7 @@ Rules for suggestions:
             failedCount++;
           }
         }
-      } catch (err: any) {
+      } catch (err) {
         results.push({ carrierId: draft.carrierId, carrierName: draft.carrierName, email, status: "failed", error: err?.message ?? "Send error" });
         failedCount++;
       }

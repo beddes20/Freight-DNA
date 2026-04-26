@@ -1,3 +1,4 @@
+import { getErrorMessage } from "../lib/errors";
 import type { Express, Request, Response } from "express";
 import { pStr, qStr, qOptStr } from "../lib/req";
 import { eq, and, desc, sql, inArray } from "drizzle-orm";
@@ -107,7 +108,7 @@ export function registerAgentAdminRoutes(app: Express) {
         };
       });
       res.json(rows);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[agent-admin] me/capabilities:", err);
       res.status(500).json({ error: "Failed to load capabilities" });
     }
@@ -144,8 +145,8 @@ export function registerAgentAdminRoutes(app: Express) {
         source: "rep",
       });
       res.json(row);
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       res.status(500).json({ error: "Failed to add fact" });
     }
   });
@@ -265,7 +266,7 @@ export function registerAgentAdminRoutes(app: Express) {
       const nameMap = new Map(nameRows.map((n) => [n.id, n.name]));
 
       res.json(rows.map((r) => ({ ...r, userName: nameMap.get(r.userId) ?? "Unknown" })));
-    } catch (err: any) {
+    } catch (err) {
       console.error("[agent-admin] activity:", err);
       res.status(500).json({ error: "Failed to load activity" });
     }
@@ -374,8 +375,8 @@ export function registerAgentAdminRoutes(app: Express) {
         });
       }
       res.json({ ok: true });
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       console.error("[agent-admin] upsert capability:", err);
       res.status(500).json({ error: "Failed to update capability" });
     }
@@ -450,8 +451,8 @@ export function registerAgentAdminRoutes(app: Express) {
         });
       }
       res.json({ ok: true, effect: targetEffect, source: "override" });
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       res.status(500).json({ error: "Failed to update access" });
     }
   });
@@ -496,8 +497,8 @@ export function registerAgentAdminRoutes(app: Express) {
         changed++;
       }
       res.json({ ok: true, changed });
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       res.status(500).json({ error: "Bulk update failed" });
     }
   });
@@ -534,8 +535,8 @@ export function registerAgentAdminRoutes(app: Express) {
         .where(eq(agentOrgSettings.organizationId, me.organizationId));
       const row = await getOrInitOrgSettings(me.organizationId);
       res.json(row);
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       res.status(500).json({ error: "Failed to save settings" });
     }
   });
@@ -576,7 +577,7 @@ export function registerAgentAdminRoutes(app: Express) {
         defaultBody: DEFAULT_BASE_PERSONA,
         channels,
       });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[agent-admin] persona GET:", err);
       res.status(500).json({ error: "Failed to load persona" });
     }
@@ -626,8 +627,8 @@ export function registerAgentAdminRoutes(app: Express) {
 
       invalidatePersonaCache(agentId);
       res.json({ ok: true, version: nextVersion });
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       console.error("[agent-admin] persona PUT:", err);
       res.status(500).json({ error: "Failed to save persona" });
     }
@@ -653,8 +654,8 @@ export function registerAgentAdminRoutes(app: Express) {
         ));
       invalidatePersonaCache(agentId);
       res.json({ ok: true });
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       res.status(500).json({ error: "Failed to reset persona" });
     }
   });
@@ -688,7 +689,7 @@ export function registerAgentAdminRoutes(app: Express) {
         : [];
       const nameMap = new Map(nameRows.map((n) => [n.id, n.name]));
       res.json(rows.map((r) => ({ ...r, createdByName: r.createdBy ? nameMap.get(r.createdBy) ?? null : null })));
-    } catch (err: any) {
+    } catch (err) {
       console.error("[agent-admin] persona history:", err);
       res.status(500).json({ error: "Failed to load history" });
     }
@@ -734,8 +735,8 @@ export function registerAgentAdminRoutes(app: Express) {
 
       invalidatePersonaCache(agentId);
       res.json({ ok: true, version: nextVersion });
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       res.status(500).json({ error: "Failed to restore version" });
     }
   });
@@ -751,7 +752,7 @@ export function registerAgentAdminRoutes(app: Express) {
         .where(eq(agentPlays.agentId, agentId))
         .orderBy(agentPlays.sortOrder, agentPlays.createdAt);
       res.json(rows);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[agent-admin] plays GET:", err);
       res.status(500).json({ error: "Failed to load plays" });
     }
@@ -782,8 +783,8 @@ export function registerAgentAdminRoutes(app: Express) {
       }).returning();
       invalidatePersonaCache(agentId);
       res.json(row);
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       res.status(500).json({ error: "Failed to create play" });
     }
   });
@@ -806,8 +807,8 @@ export function registerAgentAdminRoutes(app: Express) {
         .where(eq(agentPlays.id, id));
       invalidatePersonaCache(agentId);
       res.json({ ok: true });
-    } catch (err: any) {
-      if (err?.issues) return res.status(400).json({ error: err.issues });
+    } catch (err) {
+      if ((err as { issues?: unknown }).issues) return res.status(400).json({ error: (err as { issues?: unknown }).issues });
       res.status(500).json({ error: "Failed to update play" });
     }
   });
@@ -826,7 +827,7 @@ export function registerAgentAdminRoutes(app: Express) {
       await db.delete(agentPlays).where(eq(agentPlays.id, id));
       invalidatePersonaCache(agentId);
       res.json({ ok: true });
-    } catch (err: any) {
+    } catch (err) {
       res.status(500).json({ error: "Failed to delete play" });
     }
   });
@@ -873,8 +874,8 @@ export function registerAgentAdminRoutes(app: Express) {
         status: body.status ?? "published", createdBy: me.id, isDefault: false,
       }).returning();
       res.json(row);
-    } catch (err: any) {
-      res.status(400).json({ error: err.message ?? "Invalid agent" });
+    } catch (err) {
+      res.status(400).json({ error: getErrorMessage(err) || "Invalid agent" });
     }
   });
 
@@ -900,8 +901,8 @@ export function registerAgentAdminRoutes(app: Express) {
       invalidateAgentRuntime(row.id);
       invalidatePersonaCache(row.id);
       res.json(row);
-    } catch (err: any) {
-      res.status(400).json({ error: err.message ?? "Failed" });
+    } catch (err) {
+      res.status(400).json({ error: getErrorMessage(err) || "Failed" });
     }
   });
 

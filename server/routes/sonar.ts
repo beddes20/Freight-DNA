@@ -273,7 +273,7 @@ export function registerSonarRoutes(app: Express): void {
       }
 
       res.json(nationalWithStatus);
-    } catch (err: any) {
+    } catch (err) {
       console.error("[sonar] market-pulse error:", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch market pulse" });
     }
@@ -287,7 +287,7 @@ export function registerSonarRoutes(app: Express): void {
       const markets = raw.split(",").map(m => m.trim()).filter(Boolean).slice(0, 30);
       const otris = await getMarketOtris(markets);
       res.json({ otris });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[sonar] market-otris error:", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch market OTRIs" });
     }
@@ -315,7 +315,7 @@ export function registerSonarRoutes(app: Express): void {
         if (tracDir) sig.signal = tracDir;
       }
       res.json({ signals: allSignals });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[sonar] lane-signals/batch error:", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch lane signals" });
     }
@@ -374,7 +374,7 @@ export function registerSonarRoutes(app: Express): void {
         } catch {}
       }
       res.json({ signal, tracSpotRpm });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[sonar] lane-signals error:", err?.message ?? err);
       res.status(500).json({ error: "Failed to fetch lane signal" });
     }
@@ -398,7 +398,7 @@ export function registerSonarRoutes(app: Express): void {
         "ok";
       const laneTimeouts = getLaneTimeoutStats();
       res.json({ status, dailyAgeHours, laneTimeouts, ...report });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[sonar] health error:", err?.message ?? err);
       res.status(500).json({ status: "down", error: err?.message ?? "probe failed" });
     }
@@ -414,7 +414,7 @@ export function registerSonarRoutes(app: Express): void {
       }
       const status = await runDailySonarRefresh();
       res.json({ ok: true, status });
-    } catch (err: any) {
+    } catch (err) {
       console.error("[sonar] manual refresh error:", err?.message ?? err);
       res.status(500).json({ error: err?.message ?? "refresh failed" });
     }
