@@ -45,7 +45,7 @@ import { registerWebexRoutes } from "./routes/webex";
 import { registerCallTrendlineRoutes } from "./routes/callTrendlines";
 import { registerCustomerQuoteRoutes } from "./routes/customerQuotes";
 import { registerLiveSyncRoutes } from "./routes/liveSync";
-import { publish as publishLiveSync } from "./services/liveSync";
+import { publish as publishLiveSync, subscribeAll as subscribeAllLiveSync } from "./services/liveSync";
 import { registerLaneInboxRoutes } from "./routes/laneInbox";
 import { registerNotificationRoutes } from "./routes/notifications";
 import { registerContactRoutes } from "./routes/contacts";
@@ -4424,6 +4424,9 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
           console.error("[contact-touchpoint] growth score refresh failed for company", contact.companyId, "—", gsErr instanceof Error ? gsErr.stack : gsErr);
         }
       }
+      // Logging a touchpoint changes recency / NBA signals — broadcast so any
+      // open Today's Priorities tabs refresh and the cache busts in lockstep.
+      publishLiveSync(user.organizationId, "daily_workspace", contact.companyId ?? undefined);
       res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       console.error("Failed to create touchpoint:", error);
@@ -6191,6 +6194,8 @@ Respond with valid JSON only:
       } catch (gsErr) {
         console.error("[company-touchpoint] growth score refresh failed:", gsErr);
       }
+      // Logging a company touchpoint changes the daily workspace signals.
+      publishLiveSync(user.organizationId, "daily_workspace", pStr(req.params.id));
       res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       console.error("Failed to log touchpoint (company route):", error);
@@ -6256,6 +6261,8 @@ Respond with valid JSON only:
         // Log full stack so transient failures are visible in server logs
         console.error("[touch-logs] growth score refresh failed for company", companyId, "—", gsErr instanceof Error ? gsErr.stack : gsErr);
       }
+      // Logging a touch from /touch-logs changes daily workspace signals.
+      publishLiveSync(user.organizationId, "daily_workspace", companyId);
       res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       console.error("Failed to log touch:", error);
@@ -9226,6 +9233,25 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       if (k.startsWith(prefix)) _workspaceCache.delete(k);
     }
   };
+
+  // Bust the workspace cache whenever ANY topic that can affect a daily
+  // workspace fires for an org. This makes server-side cache freshness match
+  // the client's live-sync semantics — clients get an SSE invalidation, then
+  // their immediate refetch hits a fresh cache (rather than reading the
+  // stale 30s entry). Topics here mirror the client TOPIC_TO_QUERY_KEYS map
+  // entries that include /api/nba/daily-workspace.
+  const _WORKSPACE_INVALIDATING_TOPICS = new Set([
+    "daily_workspace",
+    "customer_quote",
+    "carrier_outreach",
+    "recurring_lane",
+    "freight_opportunity",
+  ]);
+  subscribeAllLiveSync((evt) => {
+    if (_WORKSPACE_INVALIDATING_TOPICS.has(evt.topic)) {
+      _invalidateWorkspaceCache(evt.orgId);
+    }
+  });
 
   // GET /api/nba/daily-workspace — bucketed priority list for Today's Priorities
   // ?repId=<userId>  — admin/director/sales_director may scope to a specific rep

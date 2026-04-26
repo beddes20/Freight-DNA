@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Dialog,
   DialogContent,
@@ -27,9 +28,25 @@ import {
   ExternalLink,
   Building2,
   User as UserIcon,
+  Clock,
 } from "lucide-react";
 import { NbaCard } from "@/components/NbaCard";
 import type { NbaCardData } from "@/components/NbaCard";
+
+// Ordered list of action button selectors to try when the user hits Enter
+// on a selected card. The first match found inside the card is "clicked".
+// Mirrors the visual primary CTA in NbaCard's bottom action row, which is
+// rule-type-dependent (lane capacity → outreach, stale quote → view quote,
+// overdue next action → open account, etc.). Falls back to the company link
+// if none of the action buttons exist.
+const PRIMARY_ACTION_SELECTORS = (cardId: string): string[] => [
+  `[data-testid="nba-card-generate-carrier-outreach-${cardId}"]`,
+  `[data-testid="nba-card-open-quote-${cardId}"]`,
+  `[data-testid="nba-card-open-account-${cardId}"]`,
+  `[data-testid="nba-card-log-touch-${cardId}"]`,
+  `[data-testid="nba-card-action-${cardId}"]`,
+  `[data-testid="nba-card-company-link-${cardId}"]`,
+];
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -238,11 +255,82 @@ function BucketSection({
   );
 }
 
+// ── Recent Touchpoints (inline strip rendered in the preview pane) ────────────
+
+interface TouchpointRow {
+  id: string;
+  date: string;
+  type: string;
+  notes: string | null;
+  isMeaningful?: boolean;
+}
+
+function RecentTouchpoints({ companyId }: { companyId: string }) {
+  const { data, isLoading } = useQuery<TouchpointRow[]>({
+    queryKey: ["/api/companies", companyId, "touchpoints"],
+    queryFn: async () => {
+      const res = await fetch(`/api/companies/${companyId}/touchpoints`, {
+        credentials: "include",
+      });
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+
+  if (isLoading) {
+    return <Skeleton className="h-16 w-full" data-testid="preview-touchpoints-skeleton" />;
+  }
+
+  const recent = (data ?? [])
+    .slice()
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, 3);
+
+  if (recent.length === 0) {
+    return (
+      <p className="text-xs text-muted-foreground italic" data-testid="preview-touchpoints-empty">
+        No recent touchpoints logged for this account.
+      </p>
+    );
+  }
+
+  return (
+    <ul className="space-y-1.5" data-testid="preview-touchpoints-list">
+      {recent.map(tp => (
+        <li
+          key={tp.id}
+          className="text-xs flex items-start gap-2"
+          data-testid={`preview-touchpoint-${tp.id}`}
+        >
+          <Clock className="h-3 w-3 text-muted-foreground/60 mt-0.5 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 text-muted-foreground">
+              <span className="font-medium capitalize">{tp.type}</span>
+              <span className="text-muted-foreground/50">·</span>
+              <span>{tp.date}</span>
+              {tp.isMeaningful && (
+                <Badge variant="outline" className="text-[10px] h-4 px-1 leading-none">
+                  meaningful
+                </Badge>
+              )}
+            </div>
+            {tp.notes && (
+              <p className="text-foreground/80 line-clamp-2 mt-0.5">{tp.notes}</p>
+            )}
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 // ── Preview Pane ───────────────────────────────────────────────────────────────
 //
-// Right-side inline preview of the currently-selected card. Shows the same
-// rich detail as the card row plus contextual deep-links so the rep can act
-// without leaving the workspace.
+// Right-side inline preview of the currently-selected card. Re-uses the
+// canonical NbaCard component so every action button (Done, Snooze, Dismiss,
+// Log Touch, Generate Carrier Outreach, Draft Email, Ready to Act, View
+// Quote, Open Account…) is available exactly as on the card row, plus shows
+// recent touchpoints for the account and contextual deep-links.
 
 function PreviewPane({
   card,
@@ -268,27 +356,19 @@ function PreviewPane({
           <kbd className="px-1.5 py-0.5 rounded bg-muted text-foreground font-mono text-[10px]">k</kbd>
           {" "}to navigate, then{" "}
           <kbd className="px-1.5 py-0.5 rounded bg-muted text-foreground font-mono text-[10px]">Enter</kbd>
-          {" "}to open it in context.
+          {" "}to trigger the card's primary action.
         </p>
       </div>
     );
   }
 
-  const atStakeNumber =
-    typeof card.atStakeAmount === "string"
-      ? parseFloat(card.atStakeAmount)
-      : card.atStakeAmount ?? 0;
-  const atStakeFormatted =
-    Number.isFinite(atStakeNumber) && atStakeNumber > 0
-      ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(atStakeNumber)
-      : null;
-
   return (
     <div
-      className="rounded-lg border border-border bg-card p-5 shadow-sm flex flex-col gap-4"
+      className="rounded-lg border border-border bg-card shadow-sm flex flex-col"
       data-testid={`preview-pane-${card.id}`}
     >
-      <div className="flex items-start justify-between gap-3">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3 p-4 pb-3 border-b border-border">
         <div className="flex flex-col gap-1.5 min-w-0">
           {bucketLabel && (
             <Badge variant="outline" className="self-start text-xs uppercase tracking-wide">
@@ -317,111 +397,107 @@ function PreviewPane({
         </Button>
       </div>
 
-      <div className="space-y-3 text-sm">
-        <div>
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">
-            Why this now
-          </p>
-          <p className="text-foreground" data-testid="preview-why">{card.whyThisNow}</p>
-        </div>
-
-        <div>
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">
-            Suggested action
-          </p>
-          <p className="text-foreground" data-testid="preview-action">{card.suggestedAction}</p>
-        </div>
-
-        {card.expectedOutcome && (
-          <div>
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">
-              Expected outcome
-            </p>
-            <p className="text-foreground/80">{card.expectedOutcome}</p>
+      <ScrollArea className="max-h-[calc(100vh-220px)]">
+        <div className="p-4 flex flex-col gap-4">
+          {/* Embed the canonical NbaCard so all real actions are available
+              inline. The dark NbaCard styling sits in a wrapper with the
+              same surface so it visually fits the preview pane. */}
+          <div className="rounded-lg bg-slate-950 p-3" data-testid="preview-nba-card-host">
+            <NbaCard card={card} hideCompanyLink />
           </div>
-        )}
 
-        {card.signalSummary && card.signalSummary.length > 0 && (
-          <div>
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1.5">
-              Signals ({card.signalCount})
-            </p>
-            <ul className="space-y-1 text-xs text-muted-foreground">
-              {card.signalSummary.slice(0, 5).map((s, i) => (
-                <li key={i} className="flex gap-1.5">
-                  <span className="text-muted-foreground/40">•</span>
-                  <span>{s}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
+          {/* Full why/expected outcome (NbaCard truncates to 2 lines) */}
+          {card.whyThisNow && (
+            <div>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">
+                Why this now
+              </p>
+              <p className="text-sm text-foreground" data-testid="preview-why">{card.whyThisNow}</p>
+            </div>
+          )}
 
-      {(atStakeFormatted || card.urgencyScore || card.confidence) && (
-        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-border">
-          {atStakeFormatted && (
-            <Badge variant="secondary" className="text-xs" data-testid="preview-at-stake">
-              At stake: {atStakeFormatted}
-            </Badge>
+          {card.expectedOutcome && (
+            <div>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1">
+                Expected outcome
+              </p>
+              <p className="text-sm text-foreground/85">{card.expectedOutcome}</p>
+            </div>
           )}
-          {card.urgencyScore > 0 && (
-            <Badge variant="outline" className="text-xs">
-              Urgency {card.urgencyScore}
-            </Badge>
+
+          {card.signalSummary && card.signalSummary.length > 3 && (
+            <div>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1.5">
+                All signals ({card.signalCount})
+              </p>
+              <ul className="space-y-1 text-xs text-muted-foreground">
+                {card.signalSummary.map((s, i) => (
+                  <li key={i} className="flex gap-1.5">
+                    <span className="text-muted-foreground/40">•</span>
+                    <span>{s}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
-          {card.confidence && (
-            <Badge variant="outline" className="text-xs capitalize">
-              {card.confidence} confidence
-            </Badge>
+
+          {/* Recent touchpoints — fetched on demand */}
+          {card.companyId && (
+            <div>
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-1.5">
+                Recent touchpoints
+              </p>
+              <RecentTouchpoints companyId={card.companyId} />
+            </div>
+          )}
+
+          {/* Cross-tab deep-links */}
+          {card.companyId && (
+            <div className="flex flex-col gap-2 pt-2 border-t border-border">
+              <Link href={`/companies/${card.companyId}`}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full justify-between"
+                  data-testid="button-preview-open-company"
+                >
+                  <span className="flex items-center gap-2">
+                    <Building2 className="h-4 w-4" />
+                    Open {card.companyName ?? "company"}
+                  </span>
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </Button>
+              </Link>
+              {card.linkedCommitmentId && (
+                <Link href={`/customer-quotes?quote=${card.linkedCommitmentId}`}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full justify-between"
+                    data-testid="button-preview-open-quote"
+                  >
+                    <span>Open quote</span>
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </Button>
+                </Link>
+              )}
+              {card.linkedLaneId && (
+                <Link href={`/lane-work-queue?laneId=${card.linkedLaneId}`}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="w-full justify-between"
+                    data-testid="button-preview-open-lane"
+                  >
+                    <span>Open lane</span>
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </Button>
+                </Link>
+              )}
+            </div>
           )}
         </div>
-      )}
-
-      {card.companyId && (
-        <div className="flex flex-col gap-2 pt-2 border-t border-border">
-          <Link href={`/companies/${card.companyId}`}>
-            <Button
-              variant="default"
-              size="sm"
-              className="w-full justify-between"
-              data-testid="button-preview-open-company"
-            >
-              <span className="flex items-center gap-2">
-                <Building2 className="h-4 w-4" />
-                Open {card.companyName ?? "company"}
-              </span>
-              <ExternalLink className="h-3.5 w-3.5" />
-            </Button>
-          </Link>
-          {card.linkedCommitmentId && (
-            <Link href={`/customer-quotes?quoteId=${card.linkedCommitmentId}`}>
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full justify-between"
-                data-testid="button-preview-open-quote"
-              >
-                <span>Open quote</span>
-                <ExternalLink className="h-3.5 w-3.5" />
-              </Button>
-            </Link>
-          )}
-          {card.linkedLaneId && (
-            <Link href={`/lane-work-queue?laneId=${card.linkedLaneId}`}>
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full justify-between"
-                data-testid="button-preview-open-lane"
-              >
-                <span>Open lane</span>
-                <ExternalLink className="h-3.5 w-3.5" />
-              </Button>
-            </Link>
-          )}
-        </div>
-      )}
+      </ScrollArea>
     </div>
   );
 }
@@ -432,7 +508,7 @@ function ShortcutsHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (v
   const ROWS: { keys: string[]; label: string }[] = [
     { keys: ["j", "↓"], label: "Next card" },
     { keys: ["k", "↑"], label: "Previous card" },
-    { keys: ["Enter"], label: "Open the selected card's company" },
+    { keys: ["Enter"], label: "Trigger the selected card's primary action" },
     { keys: ["Esc"], label: "Clear selection" },
     { keys: ["?"], label: "Show this help" },
   ];
@@ -589,11 +665,26 @@ export default function DailyPrioritiesPage() {
         return;
       }
 
-      if (e.key === "Enter" && selCard?.companyId) {
+      if (e.key === "Enter" && selCard) {
         e.preventDefault();
-        // Navigate to the selected company. Using window.location keeps this
-        // self-contained without dragging in the wouter useLocation hook.
-        window.location.assign(`/companies/${selCard.companyId}`);
+        // Trigger the card's actual primary action button (Generate Carrier
+        // Outreach, View Quote, Open Account, Log Touch, generic Action, or
+        // — as a last resort — the company link). This matches what the
+        // user would do by clicking the most prominent CTA on the card.
+        const root = document.querySelector(`[data-testid="workspace-card-${selCard.id}"]`);
+        if (root) {
+          for (const sel of PRIMARY_ACTION_SELECTORS(selCard.id)) {
+            const btn = root.querySelector(sel) as HTMLElement | null;
+            if (btn) {
+              btn.click();
+              return;
+            }
+          }
+        }
+        // Fallback: still navigate to the company so Enter is never a no-op.
+        if (selCard.companyId) {
+          window.location.assign(`/companies/${selCard.companyId}`);
+        }
         return;
       }
     };

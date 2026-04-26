@@ -44,6 +44,15 @@ emitter.setMaxListeners(0);
 
 const channelFor = (orgId: string) => `org:${orgId}`;
 
+/** Wildcard channel — every publish is also fanned out here so server-side
+ *  consumers (e.g. response caches that need to bust on related write paths)
+ *  can listen to all orgs without registering N per-org subscribers. */
+const ALL_CHANNEL = "__all__";
+
+export interface LiveSyncEventWithOrg extends LiveSyncEvent {
+  orgId: string;
+}
+
 /**
  * Publish an event to all subscribers for the given org.
  *
@@ -59,6 +68,7 @@ export function publish(
   try {
     const evt: LiveSyncEvent = { topic, key, ts: Date.now() };
     emitter.emit(channelFor(orgId), evt);
+    emitter.emit(ALL_CHANNEL, { ...evt, orgId } as LiveSyncEventWithOrg);
   } catch {
     // Swallow — pub/sub is purely advisory and must never break a write path.
   }
@@ -77,5 +87,19 @@ export function subscribe(
   emitter.on(channel, listener);
   return () => {
     emitter.off(channel, listener);
+  };
+}
+
+/**
+ * Subscribe to ALL org events at once. Used by server-side response caches
+ * that need to invalidate on cross-org write traffic. Listeners receive the
+ * `orgId` so they can bust the right partition.
+ */
+export function subscribeAll(
+  listener: (evt: LiveSyncEventWithOrg) => void,
+): () => void {
+  emitter.on(ALL_CHANNEL, listener);
+  return () => {
+    emitter.off(ALL_CHANNEL, listener);
   };
 }
