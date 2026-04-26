@@ -11,11 +11,12 @@
  */
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Inbox, Quote, Send, Trophy, XCircle, Clock, TrendingDown, AlertCircle } from "lucide-react";
+import { Inbox, Quote, Send, Trophy, XCircle, Clock, TrendingDown, AlertCircle, Filter as FilterIcon } from "lucide-react";
 
 type StageKey = "received" | "quoted" | "followup" | "won" | "lost" | "stale";
 
@@ -73,6 +74,7 @@ export type FunnelFilters = {
 
 interface Props {
   filters: FunnelFilters;
+  onLaneClick?: (laneLabel: string) => void;
 }
 
 const STAGE_ICONS: Record<StageKey, JSX.Element> = {
@@ -121,7 +123,7 @@ function buildQueryString(filters: FunnelFilters): string {
   return s ? `?${s}` : "";
 }
 
-export function FreightCaptureFunnel({ filters }: Props): JSX.Element {
+export function FreightCaptureFunnel({ filters, onLaneClick }: Props): JSX.Element {
   const qs = buildQueryString(filters);
   const queryKey = useMemo(() => ["/api/customer-quotes/funnel", filters] as const, [filters]);
 
@@ -159,6 +161,32 @@ export function FreightCaptureFunnel({ filters }: Props): JSX.Element {
   const sequential = data.stages.filter(s => (SEQUENTIAL_STAGES as string[]).includes(s.key));
   const exits = data.stages.filter(s => (EXIT_STAGES as string[]).includes(s.key));
   const maxLossCount = data.lossReasons.reduce((m, r) => Math.max(m, r.count), 0);
+  const top3LossReasons = data.lossReasons.slice(0, 3);
+
+  // Empty-state: no quote requests in this slice. Surface a single, clear
+  // empty UX rather than zeroed funnel/KPIs/performers per Task #673.
+  if (data.summary.totalReceived === 0) {
+    return (
+      <Card data-testid="funnel-empty-state">
+        <CardContent className="py-16 flex flex-col items-center justify-center text-center">
+          <div className="rounded-full bg-muted/60 p-4 mb-3">
+            <FilterIcon className="h-6 w-6 text-muted-foreground" />
+          </div>
+          <h3 className="text-base font-semibold text-foreground mb-1">No quote opportunities match this slice</h3>
+          <p className="text-sm text-muted-foreground max-w-md">
+            Try widening the time period, clearing the customer or rep filter,
+            or switching equipment mode. As soon as quote requests come in,
+            they'll appear here.
+          </p>
+          {data.scopedToRepId && (
+            <Badge variant="outline" className="mt-4 text-[10px] uppercase tracking-wide">
+              You only see your own quotes
+            </Badge>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-4" data-testid="funnel-root">
@@ -170,6 +198,28 @@ export function FreightCaptureFunnel({ filters }: Props): JSX.Element {
         <SummaryKpi label="Quote → Book" value={fmtPct(data.summary.quoteToBookPct)} testId="funnel-kpi-quote-to-book" />
         <SummaryKpi label="Win rate" value={fmtPct(data.summary.winRatePct)} sub="of decided" testId="funnel-kpi-win-rate" />
         <SummaryKpi label="Avg response" value={fmtHours(data.summary.avgResponseTimeHours)} testId="funnel-kpi-avg-response" />
+      </div>
+
+      {/* Top 3 lost reasons surfaced in the summary row, per Task #673 spec. */}
+      <div
+        className="rounded border border-border bg-card px-3 py-2 flex flex-wrap items-center gap-2 text-xs"
+        data-testid="funnel-top-lost-reasons"
+      >
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground mr-1">Top 3 lost reasons</span>
+        {top3LossReasons.length === 0 ? (
+          <span className="text-muted-foreground" data-testid="funnel-top-lost-reasons-empty">No lost quotes in this slice</span>
+        ) : (
+          top3LossReasons.map((r, idx) => (
+            <Badge
+              key={r.reasonId ?? `__none__-${idx}`}
+              variant="outline"
+              className="bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30"
+              data-testid={`funnel-top-lost-${idx}`}
+            >
+              {r.label} <span className="ml-1 tabular-nums opacity-70">({r.count})</span>
+            </Badge>
+          ))
+        )}
       </div>
 
       {/* Funnel stages */}
@@ -206,7 +256,7 @@ export function FreightCaptureFunnel({ filters }: Props): JSX.Element {
       </Card>
 
       {/* Loss reasons + Performers */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.4fr] gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.4fr] gap-4" data-testid="funnel-detail-grid">
         <Card data-testid="funnel-loss-reasons-card">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-semibold flex items-center gap-2">
@@ -244,7 +294,7 @@ export function FreightCaptureFunnel({ filters }: Props): JSX.Element {
             <CardTitle className="text-sm font-semibold">Best & worst performers</CardTitle>
           </CardHeader>
           <CardContent>
-            <PerformerTabs performers={data.performers} />
+            <PerformerTabs performers={data.performers} onLaneClick={onLaneClick} />
           </CardContent>
         </Card>
       </div>
@@ -298,45 +348,51 @@ function FunnelBar({ stage, totalReceived, variant = "stage" }: FunnelBarProps):
   );
 }
 
+type PerformerKind = "lanes" | "customers" | "reps";
+
 interface PerformerTabsProps {
   performers: FunnelResult["performers"];
+  onLaneClick?: (laneLabel: string) => void;
 }
 
-function PerformerTabs({ performers }: PerformerTabsProps): JSX.Element {
-  const [tab, setTab] = useState<"lanes" | "customers" | "reps">("lanes");
+function PerformerTabs({ performers, onLaneClick }: PerformerTabsProps): JSX.Element {
+  const [tab, setTab] = useState<PerformerKind>("lanes");
   return (
-    <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
+    <Tabs value={tab} onValueChange={(v) => setTab(v as PerformerKind)}>
       <TabsList className="h-8 mb-2" data-testid="funnel-performers-tabs">
         <TabsTrigger value="lanes" className="text-xs h-7" data-testid="tab-performers-lanes">Lanes</TabsTrigger>
         <TabsTrigger value="customers" className="text-xs h-7" data-testid="tab-performers-customers">Customers</TabsTrigger>
         <TabsTrigger value="reps" className="text-xs h-7" data-testid="tab-performers-reps">Reps</TabsTrigger>
       </TabsList>
-      <TabsContent value="lanes"><PerformerTable rows={performers.lanes} firstColLabel="Lane" testId="performers-table-lanes" /></TabsContent>
-      <TabsContent value="customers"><PerformerTable rows={performers.customers} firstColLabel="Customer" testId="performers-table-customers" /></TabsContent>
-      <TabsContent value="reps"><PerformerTable rows={performers.reps} firstColLabel="Rep" testId="performers-table-reps" /></TabsContent>
+      <TabsContent value="lanes"><PerformerTable rows={performers.lanes} kind="lanes" firstColLabel="Lane" testId="performers-table-lanes" onLaneClick={onLaneClick} /></TabsContent>
+      <TabsContent value="customers"><PerformerTable rows={performers.customers} kind="customers" firstColLabel="Customer" testId="performers-table-customers" /></TabsContent>
+      <TabsContent value="reps"><PerformerTable rows={performers.reps} kind="reps" firstColLabel="Rep" testId="performers-table-reps" /></TabsContent>
     </Tabs>
   );
 }
 
 interface PerformerTableProps {
   rows: FunnelPerformerRow[];
+  kind: PerformerKind;
   firstColLabel: string;
   testId: string;
+  onLaneClick?: (laneLabel: string) => void;
 }
 
-function PerformerTable({ rows, firstColLabel, testId }: PerformerTableProps): JSX.Element {
+function PerformerTable({ rows, kind, firstColLabel, testId, onLaneClick }: PerformerTableProps): JSX.Element {
   if (rows.length === 0) {
     return <div className="text-xs text-muted-foreground py-6 text-center" data-testid={`${testId}-empty`}>No data in this slice.</div>;
   }
-  // Best = highest win rate; Worst = lowest win rate (among rows with at least one decided outcome).
+  // Backend already ranks by winRate desc with volume as tiebreaker (rows
+  // with no decided outcomes drop to winRate=0). For "Best" we keep that
+  // order; for "Worst" we reverse so the lowest-converting buckets surface.
   const decided = rows.filter(r => r.won + r.lost > 0);
-  const sortedByWin = decided.slice().sort((a, b) => b.winRate - a.winRate);
-  const best = sortedByWin.slice(0, 5);
-  const worst = sortedByWin.slice().reverse().slice(0, 5);
+  const best = decided.slice(0, 5);
+  const worst = decided.slice().reverse().slice(0, 5);
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3" data-testid={testId}>
-      <PerformerSubTable title="Best" rows={best} firstColLabel={firstColLabel} testId={`${testId}-best`} />
-      <PerformerSubTable title="Worst" rows={worst} firstColLabel={firstColLabel} testId={`${testId}-worst`} />
+      <PerformerSubTable title="Best" rows={best} kind={kind} firstColLabel={firstColLabel} testId={`${testId}-best`} onLaneClick={onLaneClick} />
+      <PerformerSubTable title="Worst" rows={worst} kind={kind} firstColLabel={firstColLabel} testId={`${testId}-worst`} onLaneClick={onLaneClick} />
     </div>
   );
 }
@@ -344,11 +400,24 @@ function PerformerTable({ rows, firstColLabel, testId }: PerformerTableProps): J
 interface PerformerSubTableProps {
   title: string;
   rows: FunnelPerformerRow[];
+  kind: PerformerKind;
   firstColLabel: string;
   testId: string;
+  onLaneClick?: (laneLabel: string) => void;
 }
 
-function PerformerSubTable({ title, rows, firstColLabel, testId }: PerformerSubTableProps): JSX.Element {
+// Map a performer row to the deep-link URL that surfaces the underlying
+// detail. Lanes are filter-as-self (re-apply lane to the funnel) since
+// quoteCustomers is its own table not joined to companies. Customers go to
+// the customer-quotes page filtered by that customer; reps go to the team
+// performance page (no per-rep detail page exists yet).
+function performerHref(kind: PerformerKind, row: FunnelPerformerRow): string | null {
+  if (kind === "customers") return `/customer-quotes?customerId=${encodeURIComponent(row.id)}`;
+  if (kind === "reps") return `/team-performance`;
+  return null;
+}
+
+function PerformerSubTable({ title, rows, kind, firstColLabel, testId, onLaneClick }: PerformerSubTableProps): JSX.Element {
   return (
     <div data-testid={testId}>
       <div className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">{title}</div>
@@ -366,12 +435,13 @@ function PerformerSubTable({ title, rows, firstColLabel, testId }: PerformerSubT
           </thead>
           <tbody>
             {rows.map(r => (
-              <tr key={r.id} className="border-b border-border/60 last:border-0" data-testid={`${testId}-row-${r.id}`}>
-                <td className="py-1 pr-2 truncate max-w-[140px] text-foreground">{r.label}</td>
-                <td className="py-1 px-1 text-right tabular-nums text-muted-foreground">{r.total}</td>
-                <td className="py-1 px-1 text-right tabular-nums text-foreground">{r.won}</td>
-                <td className="py-1 pl-1 text-right tabular-nums text-foreground">{fmtPct(r.winRate)}</td>
-              </tr>
+              <PerformerRow
+                key={r.id}
+                row={r}
+                kind={kind}
+                testId={`${testId}-row-${r.id}`}
+                onLaneClick={onLaneClick}
+              />
             ))}
           </tbody>
         </table>
@@ -380,5 +450,58 @@ function PerformerSubTable({ title, rows, firstColLabel, testId }: PerformerSubT
         <div className="text-[10px] text-muted-foreground mt-1 text-right">Top avg quoted: {fmtMoney(rows[0].avgQuoted)}</div>
       )}
     </div>
+  );
+}
+
+interface PerformerRowProps {
+  row: FunnelPerformerRow;
+  kind: PerformerKind;
+  testId: string;
+  onLaneClick?: (laneLabel: string) => void;
+}
+
+function PerformerRow({ row, kind, testId, onLaneClick }: PerformerRowProps): JSX.Element {
+  const href = performerHref(kind, row);
+  const cells = (
+    <>
+      <td className="py-1 pr-2 truncate max-w-[140px] text-foreground group-hover:underline">{row.label}</td>
+      <td className="py-1 px-1 text-right tabular-nums text-muted-foreground">{row.total}</td>
+      <td className="py-1 px-1 text-right tabular-nums text-foreground">{row.won}</td>
+      <td className="py-1 pl-1 text-right tabular-nums text-foreground">{fmtPct(row.winRate)}</td>
+    </>
+  );
+  // Lanes: in-page filter handler.
+  if (kind === "lanes" && onLaneClick) {
+    return (
+      <tr
+        className="group border-b border-border/60 last:border-0 cursor-pointer hover-elevate"
+        data-testid={testId}
+        onClick={() => onLaneClick(row.label)}
+        title={`Filter funnel to lane ${row.label}`}
+      >
+        {cells}
+      </tr>
+    );
+  }
+  // Customers / reps: deep-link to detail surface.
+  if (href) {
+    return (
+      <tr className="group border-b border-border/60 last:border-0 hover-elevate" data-testid={testId}>
+        <td colSpan={4} className="p-0">
+          <Link href={href} className="grid grid-cols-[1fr_auto_auto_auto] gap-x-1 px-0 py-1 cursor-pointer">
+            <span className="truncate max-w-[140px] text-foreground group-hover:underline pr-2">{row.label}</span>
+            <span className="text-right tabular-nums text-muted-foreground px-1">{row.total}</span>
+            <span className="text-right tabular-nums text-foreground px-1">{row.won}</span>
+            <span className="text-right tabular-nums text-foreground pl-1">{fmtPct(row.winRate)}</span>
+          </Link>
+        </td>
+      </tr>
+    );
+  }
+  // Fallback: static row.
+  return (
+    <tr className="border-b border-border/60 last:border-0" data-testid={testId}>
+      {cells}
+    </tr>
   );
 }

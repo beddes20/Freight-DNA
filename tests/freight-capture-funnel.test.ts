@@ -197,6 +197,18 @@ async function main(): Promise<void> {
     assert("performers.customers excludes carrier bucket", !customerLabels.includes("Bad Carrier Inc"));
     assert("performers.customers includes Acme Foods", customerLabels.includes("Acme Foods"));
 
+    // Performer ranking: Best Performers should be sorted by win rate
+    // descending. Rep A = 2W/1L = 67%, Rep B = 1W/1L = 50% → Rep A first.
+    assert(
+      "performers.reps sorted by winRate desc — Rep A first",
+      result.performers.reps[0]?.label === "Rep A",
+      `got ${result.performers.reps[0]?.label}`,
+    );
+    assert(
+      "performers.reps Rep A winRate > Rep B winRate",
+      (result.performers.reps[0]?.winRate ?? 0) > (result.performers.reps[1]?.winRate ?? 0),
+    );
+
     assert("scopedToRepId is null for admin", result.scopedToRepId === null);
   }
 
@@ -260,6 +272,42 @@ async function main(): Promise<void> {
   {
     const scope = await resolveFunnelRepScope(ctx.org.id, { id: ctx.adminUser.id, role: "admin" });
     assert("admin scope = null (no auto-scoping)", scope === null, `got ${scope}`);
+  }
+
+  // ── 6b. Manager-style roles see the org-wide funnel (RBAC regression) ────
+  // national_account_manager / sales / director / sales_director are treated
+  // as managerRoles elsewhere in the codebase. They MUST NOT be auto-scoped
+  // to a QuoteRep mapping (which would silently hide org data when no
+  // mapping exists). See server/services/customerQuotes.ts > resolveFunnelRepScope.
+  console.log("\n── 6b. Manager-style roles see org-wide funnel ──");
+  {
+    const ts = Date.now();
+    const [namUser] = await db
+      .insert(users)
+      .values({
+        organizationId: ctx.org.id,
+        name: "NAM No Map",
+        username: `nam-${ts}@example.com`,
+        role: "national_account_manager",
+        password: "x",
+        managerId: null,
+      })
+      .returning();
+    const namScope = await resolveFunnelRepScope(ctx.org.id, { id: namUser.id, role: "national_account_manager" });
+    assert("NAM scope = null (org-wide, NOT __none__)", namScope === null, `got ${namScope}`);
+    const namResult = await getFunnel(ctx.org.id, {}, namScope);
+    assert(
+      "NAM sees full org funnel (10 received)",
+      namResult.summary.totalReceived === 10,
+      `got ${namResult.summary.totalReceived}`,
+    );
+
+    const directorScope = await resolveFunnelRepScope(ctx.org.id, { id: namUser.id, role: "director" });
+    assert("director scope = null", directorScope === null);
+    const salesDirScope = await resolveFunnelRepScope(ctx.org.id, { id: namUser.id, role: "sales_director" });
+    assert("sales_director scope = null", salesDirScope === null);
+    const salesScope = await resolveFunnelRepScope(ctx.org.id, { id: namUser.id, role: "sales" });
+    assert("sales scope = null", salesScope === null);
   }
 
   // ── 7. Empty org → empty result ───────────────────────────────────────────

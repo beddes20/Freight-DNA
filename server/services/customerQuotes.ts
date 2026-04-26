@@ -3573,16 +3573,29 @@ export type FunnelResult = {
 
 /**
  * Resolve the QuoteRep row that a non-admin viewer should be scoped to.
- * Returns null if the role does not require scoping; returns the rep id
+ * Returns null if the role sees the org-wide funnel; returns the rep id
  * when the user is mapped to a QuoteRep; returns the sentinel "__none__"
  * when the user is in a scoped role but has no rep mapping (so the caller
  * can short-circuit to an empty result).
+ *
+ * RBAC policy (matches managerRoles used elsewhere in the codebase):
+ *   - elevated (org-wide):    admin, director, sales_director,
+ *                             national_account_manager, sales
+ *   - rep-scoped (self-only): account_manager, logistics_manager,
+ *                             logistics_coordinator
+ * Any other role falls into rep-scoped by default to fail closed.
  */
 export async function resolveFunnelRepScope(
   orgId: string,
   user: { id: string; role: string },
 ): Promise<string | null | "__none__"> {
-  const elevated = new Set(["admin", "director", "sales_director"]);
+  const elevated = new Set([
+    "admin",
+    "director",
+    "sales_director",
+    "national_account_manager",
+    "sales",
+  ]);
   if (elevated.has(user.role)) return null;
   const [rep] = await db
     .select({ id: quoteReps.id })
@@ -3778,7 +3791,10 @@ export async function getFunnel(
         winRate: pct(b.won, b.won + b.lost),
         avgQuoted: b.total > 0 ? b.quotedSum / b.total : 0,
       }))
-      .sort((a, b) => b.total - a.total || b.winRate - a.winRate)
+      // Rank by conversion rate (winRate) per spec. Tiebreak by volume so a
+      // 100% winRate single-quote bucket doesn't dominate over a 90%/20-quote
+      // bucket. UI slices best/worst from this ranked list.
+      .sort((a, b) => b.winRate - a.winRate || b.total - a.total)
       .slice(0, limit);
   }
 

@@ -27,14 +27,17 @@ const FREIGHT_CAPTURE_ROLES = new Set<string>([
   "account_manager",
 ]);
 
-const TIME_PERIODS: { key: string; label: string; days: number | null }[] = [
-  { key: "7d", label: "Last 7 days", days: 7 },
-  { key: "30d", label: "Last 30 days", days: 30 },
-  { key: "90d", label: "Last 90 days", days: 90 },
-  { key: "qtd", label: "Quarter to date", days: null },
-  { key: "ytd", label: "Year to date", days: null },
-  { key: "all", label: "All time", days: null },
-];
+// Per Task #673 spec: This Week / This Month / Last 30 Days / Custom.
+// "All time" remains as an explicit reset escape-hatch but is not part of the
+// task's required set.
+const TIME_PERIODS = [
+  { key: "this_week", label: "This week" },
+  { key: "this_month", label: "This month" },
+  { key: "30d", label: "Last 30 days" },
+  { key: "custom", label: "Custom range" },
+  { key: "all", label: "All time" },
+] as const;
+type TimePeriodKey = typeof TIME_PERIODS[number]["key"];
 
 const EQUIPMENTS = ["Van", "Reefer", "Flatbed", "Stepdeck", "Power-Only", "Specialized"];
 
@@ -46,23 +49,34 @@ type SnapshotLite = {
   reps?: RepOpt[];
 };
 
-function periodToDates(key: string): { startDate?: string; endDate?: string } {
+function periodToDates(
+  key: TimePeriodKey,
+  customStart: string,
+  customEnd: string,
+): { startDate?: string; endDate?: string } {
   const today = new Date();
   const todayIso = today.toISOString().slice(0, 10);
-  const period = TIME_PERIODS.find(p => p.key === key);
-  if (!period || period.key === "all") return {};
-  if (period.days !== null) {
-    const start = new Date(today.getTime() - (period.days - 1) * 24 * 3600 * 1000);
+  if (key === "all") return {};
+  if (key === "30d") {
+    const start = new Date(today.getTime() - 29 * 24 * 3600 * 1000);
     return { startDate: start.toISOString().slice(0, 10), endDate: todayIso };
   }
-  if (period.key === "qtd") {
-    const month = today.getMonth();
-    const qStart = new Date(today.getFullYear(), Math.floor(month / 3) * 3, 1);
-    return { startDate: qStart.toISOString().slice(0, 10), endDate: todayIso };
+  if (key === "this_week") {
+    // ISO week — Monday as first day.
+    const dow = today.getDay(); // 0=Sun..6=Sat
+    const daysSinceMon = (dow + 6) % 7;
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - daysSinceMon);
+    return { startDate: start.toISOString().slice(0, 10), endDate: todayIso };
   }
-  if (period.key === "ytd") {
-    const yStart = new Date(today.getFullYear(), 0, 1);
-    return { startDate: yStart.toISOString().slice(0, 10), endDate: todayIso };
+  if (key === "this_month") {
+    const start = new Date(today.getFullYear(), today.getMonth(), 1);
+    return { startDate: start.toISOString().slice(0, 10), endDate: todayIso };
+  }
+  if (key === "custom") {
+    const out: { startDate?: string; endDate?: string } = {};
+    if (customStart) out.startDate = customStart;
+    if (customEnd) out.endDate = customEnd;
+    return out;
   }
   return {};
 }
@@ -96,7 +110,9 @@ export default function FreightCapturePage(): JSX.Element {
 }
 
 function FreightCapturePageInner(): JSX.Element {
-  const [period, setPeriod] = useState<string>("30d");
+  const [period, setPeriod] = useState<TimePeriodKey>("30d");
+  const [customStart, setCustomStart] = useState<string>("");
+  const [customEnd, setCustomEnd] = useState<string>("");
   const [customerId, setCustomerId] = useState<string | undefined>(undefined);
   const [repId, setRepId] = useState<string | undefined>(undefined);
   const [equipment, setEquipment] = useState<string | undefined>(undefined);
@@ -116,21 +132,28 @@ function FreightCapturePageInner(): JSX.Element {
   });
 
   const filters: FunnelFilters = useMemo(() => {
-    const dates = periodToDates(period);
+    const dates = periodToDates(period, customStart, customEnd);
     const f: FunnelFilters = { ...dates };
     if (customerId) f.customerId = customerId;
     if (repId) f.repId = repId;
     if (equipment) f.equipment = equipment;
     if (laneSearch.trim().length > 0) f.laneSearch = laneSearch.trim();
     return f;
-  }, [period, customerId, repId, equipment, laneSearch]);
+  }, [period, customStart, customEnd, customerId, repId, equipment, laneSearch]);
 
   const clearAll = (): void => {
     setPeriod("30d");
+    setCustomStart("");
+    setCustomEnd("");
     setCustomerId(undefined);
     setRepId(undefined);
     setEquipment(undefined);
     setLaneSearch("");
+  };
+
+  // Lanes performer rows feed back into the lane filter.
+  const onLaneClick = (laneLabel: string): void => {
+    setLaneSearch(laneLabel);
   };
 
   return (
@@ -149,7 +172,7 @@ function FreightCapturePageInner(): JSX.Element {
       <div className="sticky top-0 z-20 px-6 py-3 border-b border-border bg-background/95 backdrop-blur shrink-0" data-testid="freight-capture-filter-bar">
         <div className="flex flex-wrap items-end gap-2">
           <FilterBox label="Time period">
-            <Select value={period} onValueChange={setPeriod}>
+            <Select value={period} onValueChange={(v) => setPeriod(v as TimePeriodKey)}>
               <SelectTrigger className="h-8 w-[160px] bg-card border-border text-xs" data-testid="select-period">
                 <SelectValue />
               </SelectTrigger>
@@ -160,6 +183,29 @@ function FreightCapturePageInner(): JSX.Element {
               </SelectContent>
             </Select>
           </FilterBox>
+
+          {period === "custom" && (
+            <>
+              <FilterBox label="From">
+                <Input
+                  type="date"
+                  value={customStart}
+                  onChange={e => setCustomStart(e.target.value)}
+                  className="h-8 w-[150px] bg-card border-border text-xs"
+                  data-testid="input-custom-start"
+                />
+              </FilterBox>
+              <FilterBox label="To">
+                <Input
+                  type="date"
+                  value={customEnd}
+                  onChange={e => setCustomEnd(e.target.value)}
+                  className="h-8 w-[150px] bg-card border-border text-xs"
+                  data-testid="input-custom-end"
+                />
+              </FilterBox>
+            </>
+          )}
 
           <FilterBox label="Customer">
             <Select value={customerId ?? "_all"} onValueChange={v => setCustomerId(v === "_all" ? undefined : v)}>
@@ -224,7 +270,7 @@ function FreightCapturePageInner(): JSX.Element {
       </div>
 
       <div className="flex-1 overflow-auto px-6 py-4">
-        <FreightCaptureFunnel filters={filters} />
+        <FreightCaptureFunnel filters={filters} onLaneClick={onLaneClick} />
       </div>
     </div>
   );
