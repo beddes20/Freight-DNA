@@ -25,6 +25,7 @@ import { ensureDefaultAgent } from "../agent/persona";
 import { runAgentTurn } from "../agent/core";
 import type { AgentContext } from "../agent/tools";
 import { getErrorMessage } from "../lib/errors";
+import { pStr, qStr, qOptStr } from "../lib/req";
 
 /** Roles with implicit cross-rep visibility (still org-scoped). */
 const MANAGER_ROLES = new Set(["admin", "director", "sales_director", "national_account_manager"]);
@@ -91,11 +92,11 @@ export function registerAccountReviewRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const companyId = String(req.params.companyId);
+      const companyId = pStr(req.params.companyId);
       if (!(await canAccessCompany(user, companyId))) {
         return res.status(403).json({ error: "Forbidden" });
       }
-      const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit ?? "8"), 10)));
+      const limit = Math.min(50, Math.max(1, parseInt(qStr(req.query.limit) || "8", 10)));
       const rows = await storage.getAccountReviewsByCompany(companyId, user.organizationId, limit);
       res.json(rows);
     } catch (err) {
@@ -108,7 +109,7 @@ export function registerAccountReviewRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const repUserId = String(req.params.repUserId);
+      const repUserId = pStr(req.params.repUserId);
 
       // Verify the target rep exists in the same org before any further work.
       const targetRep = await storage.getUser(repUserId);
@@ -119,7 +120,7 @@ export function registerAccountReviewRoutes(app: Express): void {
         return res.status(403).json({ error: "Forbidden" });
       }
 
-      const weekOf = req.query.weekOf ? String(req.query.weekOf) : undefined;
+      const weekOf = qOptStr(req.query.weekOf);
       const rows = await storage.getAccountReviewsByRep(repUserId, user.organizationId, weekOf, 100);
 
       // Hydrate company name for the manager UI.
@@ -206,7 +207,7 @@ export function registerAccountReviewRoutes(app: Express): void {
       }).safeParse(req.body);
       if (!body.success) return res.status(400).json({ error: "Invalid body" });
 
-      const review = await storage.getAccountReviewById(String(req.params.id), user.organizationId);
+      const review = await storage.getAccountReviewById(pStr(req.params.id), user.organizationId);
       if (!review) return res.status(404).json({ error: "Account review not found" });
       if (!canModifyReview(user, review)) {
         return res.status(403).json({ error: "Only the owning rep can rate this review." });
@@ -242,7 +243,7 @@ export function registerAccountReviewRoutes(app: Express): void {
       const body = z.object({ message: z.string().min(1).max(4000) }).safeParse(req.body);
       if (!body.success) return res.status(400).json({ error: "Invalid body" });
 
-      const review = await storage.getAccountReviewById(String(req.params.id), user.organizationId);
+      const review = await storage.getAccountReviewById(pStr(req.params.id), user.organizationId);
       if (!review) return res.status(404).json({ error: "Account review not found" });
       if (!canModifyReview(user, review)) {
         return res.status(403).json({ error: "Only the owning rep can post follow-ups." });
@@ -321,7 +322,7 @@ export function registerAccountReviewRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const review = await storage.getAccountReviewById(String(req.params.id), user.organizationId);
+      const review = await storage.getAccountReviewById(pStr(req.params.id), user.organizationId);
       if (!review) return res.status(404).json({ error: "Account review not found" });
       if (!(await canViewRepReviews(user, review.repUserId))) {
         return res.status(403).json({ error: "Forbidden" });

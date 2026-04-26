@@ -40,6 +40,7 @@ import {
   type InsertCompanyOutreachPolicy,
 } from "@shared/schema";
 import { getErrorMessage } from "../lib/errors";
+import { pStr } from "../lib/req";
 
 function orgId(req: Express.Request): string {
   return (req as any).session?.organizationId as string;
@@ -181,7 +182,7 @@ export function registerProactiveOpportunityRoutes(app: Express) {
   app.get("/api/freight-opportunities/:id", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const opp = await storage.getFreightOpportunity(org, String(req.params.id));
+      const opp = await storage.getFreightOpportunity(org, pStr(req.params.id));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
       const carriers = await storage.listFreightOpportunityCarriers(opp.id);
       // Backfill: rows imported via the Available Freight workbook never went
@@ -231,7 +232,7 @@ export function registerProactiveOpportunityRoutes(app: Express) {
   app.post("/api/freight-opportunities/:id/rerank", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const opp = await storage.getFreightOpportunity(org, String(req.params.id));
+      const opp = await storage.getFreightOpportunity(org, pStr(req.params.id));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
       // Snapshot-and-restore (rather than a DB transaction) because
       // ensureShortlistRanked uses the global storage/db pool and would not
@@ -281,7 +282,7 @@ export function registerProactiveOpportunityRoutes(app: Express) {
   app.get("/api/freight-opportunities/:id/carrier-pool", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const opp = await storage.getFreightOpportunity(org, String(req.params.id));
+      const opp = await storage.getFreightOpportunity(org, pStr(req.params.id));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
 
       const [shortlistRows, allCarriers] = await Promise.all([
@@ -430,7 +431,7 @@ export function registerProactiveOpportunityRoutes(app: Express) {
   app.post("/api/freight-opportunities/:id/carriers/from-pool", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const opp = await storage.getFreightOpportunity(org, String(req.params.id));
+      const opp = await storage.getFreightOpportunity(org, pStr(req.params.id));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
       const parsed = fromPoolSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -506,12 +507,12 @@ export function registerProactiveOpportunityRoutes(app: Express) {
   app.post("/api/freight-opportunities/:oppId/carriers/:carrierRowId/swap", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const opp = await storage.getFreightOpportunity(org, String(req.params.oppId));
+      const opp = await storage.getFreightOpportunity(org, pStr(req.params.oppId));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
       const otherRowId = String((req.body ?? {}).otherRowId ?? "");
       if (!otherRowId) return res.status(400).json({ error: "otherRowId is required" });
       const carriers = await storage.listFreightOpportunityCarriers(opp.id);
-      const a = carriers.find(c => c.id === String(req.params.carrierRowId));
+      const a = carriers.find(c => c.id === pStr(req.params.carrierRowId));
       const b = carriers.find(c => c.id === otherRowId);
       if (!a || !b) return res.status(404).json({ error: "One or both carrier rows not found on this opportunity" });
       if (a.bucket !== b.bucket) {
@@ -541,14 +542,14 @@ export function registerProactiveOpportunityRoutes(app: Express) {
   app.patch("/api/freight-opportunities/:oppId/carriers/:carrierRowId", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const opp = await storage.getFreightOpportunity(org, String(req.params.oppId));
+      const opp = await storage.getFreightOpportunity(org, pStr(req.params.oppId));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
       const parsed = carrierPatchSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: "Invalid carrier patch", details: parsed.error.flatten() });
       }
       const carriers = await storage.listFreightOpportunityCarriers(opp.id);
-      const target = carriers.find(c => c.id === String(req.params.carrierRowId));
+      const target = carriers.find(c => c.id === pStr(req.params.carrierRowId));
       if (!target) return res.status(404).json({ error: "Carrier row not found on this opportunity" });
       const updated = await storage.updateFreightOpportunityCarrier(target.id, parsed.data);
       // Audit overrides so reviewers can see who changed what.
@@ -582,7 +583,7 @@ export function registerProactiveOpportunityRoutes(app: Express) {
   app.get("/api/companies/:id/outreach-policy", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const companyId = String(req.params.id);
+      const companyId = pStr(req.params.id);
       const check = await assertCompanyBelongsToOrg(companyId, org);
       if (check === "not_found") return res.status(404).json({ error: "Company not found" });
       if (check === "forbidden") return res.status(403).json({ error: "Company does not belong to your organization" });
@@ -626,7 +627,7 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       if (!actor || actor.role !== "admin") {
         return res.status(403).json({ error: "Admin access required" });
       }
-      const kind = String(req.params.kind);
+      const kind = pStr(req.params.kind);
       if (!(FREIGHT_OUTREACH_TEMPLATE_KINDS as readonly string[]).includes(kind)) {
         return res.status(400).json({ error: "Invalid template kind" });
       }
@@ -652,10 +653,10 @@ export function registerProactiveOpportunityRoutes(app: Express) {
   app.get("/api/freight-opportunities/:oppId/carriers/:carrierRowId/draft", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const opp = await storage.getFreightOpportunity(org, String(req.params.oppId));
+      const opp = await storage.getFreightOpportunity(org, pStr(req.params.oppId));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
       const carriers = await storage.listFreightOpportunityCarriers(opp.id);
-      const row = carriers.find(c => c.id === String(req.params.carrierRowId));
+      const row = carriers.find(c => c.id === pStr(req.params.carrierRowId));
       if (!row) return res.status(404).json({ error: "Carrier row not found" });
       const uid = userId(req);
       const rep = uid ? await storage.getUser(uid) : null;
@@ -699,7 +700,7 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       const inferredSource: SendWaveOpts["sourceModule"] =
         parsed.data.sourceModule
         ?? (parsed.data.carrierRowIds.length === 1 ? "single_carrier" : "af_wave");
-      const out = await sendOpportunityWave(storage, org, String(req.params.oppId), rep, {
+      const out = await sendOpportunityWave(storage, org, pStr(req.params.oppId), rep, {
         ...parsed.data,
         sourceModule: inferredSource,
       });
@@ -720,10 +721,10 @@ export function registerProactiveOpportunityRoutes(app: Express) {
   app.post("/api/freight-opportunities/:oppId/carriers/:carrierRowId/response", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const opp = await storage.getFreightOpportunity(org, String(req.params.oppId));
+      const opp = await storage.getFreightOpportunity(org, pStr(req.params.oppId));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
       const carriers = await storage.listFreightOpportunityCarriers(opp.id);
-      const row = carriers.find(c => c.id === String(req.params.carrierRowId));
+      const row = carriers.find(c => c.id === pStr(req.params.carrierRowId));
       if (!row) return res.status(404).json({ error: "Carrier row not found" });
       const parsed = outcomePostSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -834,7 +835,7 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       const org = orgId(req);
       const uid = userId(req);
       if (!uid) return res.status(401).json({ error: "Not authenticated" });
-      const opp = await storage.getFreightOpportunity(org, String(req.params.oppId));
+      const opp = await storage.getFreightOpportunity(org, pStr(req.params.oppId));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
       // Anyone with line-of-sight to the opp may close it: owner, delegate,
       // or a manager (managers may close on behalf of an out-of-office rep).
@@ -894,7 +895,7 @@ export function registerProactiveOpportunityRoutes(app: Express) {
   app.patch("/api/companies/:id/outreach-policy", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const companyId = String(req.params.id);
+      const companyId = pStr(req.params.id);
       const check = await assertCompanyBelongsToOrg(companyId, org);
       if (check === "not_found") return res.status(404).json({ error: "Company not found" });
       if (check === "forbidden") return res.status(403).json({ error: "Company does not belong to your organization" });

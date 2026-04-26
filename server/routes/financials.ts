@@ -24,6 +24,7 @@ import { azureCredentialsConfigured } from "../graphService";
 import { geocodeCity, haversineDistance } from "../geocoding";
 import { cacheGet, cacheSet, cacheInvalidatePrefix } from "../cache";
 import { getErrorMessage } from "../lib/errors";
+import { pStr, qStr } from "../lib/req";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -390,7 +391,7 @@ export function registerFinancialRoutes(app: Express): void {
         `INSERT INTO opportunity_dismissals (company_id, org_id, dismissed_by, dismissed_at)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (company_id, org_id) DO UPDATE SET dismissed_by = $3, dismissed_at = $4`,
-        [req.params.companyId, req.session.organizationId, user.id, new Date().toISOString()]
+        [pStr(req.params.companyId), req.session.organizationId, user.id, new Date().toISOString()]
       );
       res.json({ success: true });
     } catch (err) {
@@ -407,7 +408,7 @@ export function registerFinancialRoutes(app: Express): void {
       }
       await storage.pool.query(
         `DELETE FROM opportunity_dismissals WHERE company_id = $1 AND org_id = $2`,
-        [req.params.companyId, req.session.organizationId]
+        [pStr(req.params.companyId), req.session.organizationId]
       );
       res.json({ success: true });
     } catch (err) {
@@ -553,7 +554,7 @@ export function registerFinancialRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
-      const upload = await storage.getFinancialUploadById(req.params.id as string);
+      const upload = await storage.getFinancialUploadById(pStr(req.params.id));
       if (!upload) return res.status(404).json({ error: "Upload not found" });
 
       const wb = XLSX.utils.book_new();
@@ -687,7 +688,7 @@ export function registerFinancialRoutes(app: Express): void {
       if (!user || user.role !== "admin") {
         return res.status(403).json({ error: "Forbidden" });
       }
-      await storage.deleteFinancialUpload(req.params.id as string);
+      await storage.deleteFinancialUpload(pStr(req.params.id));
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete upload" });
@@ -739,7 +740,7 @@ export function registerFinancialRoutes(app: Express): void {
       const raw = (latest.summaryRows as any[]) || [];
 
       // Determine which month keys are valid for the requested period
-      const period = String(req.query.period || "current");
+      const period = qStr(req.query.period) || "current";
       const now = new Date();
       const curYear = now.getFullYear();
       const curMonth = now.getMonth(); // 0-indexed
@@ -845,7 +846,7 @@ export function registerFinancialRoutes(app: Express): void {
       const latest = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
       if (!latest) return res.json([]);
 
-      const period = String(req.query.period || "current");
+      const period = qStr(req.query.period) || "current";
       const now = new Date();
       const curYear = now.getFullYear();
       const curMonth = now.getMonth();
@@ -901,7 +902,7 @@ export function registerFinancialRoutes(app: Express): void {
       const latest = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
       if (!latest) return res.json([]);
 
-      const period = String(req.query.period || "current");
+      const period = qStr(req.query.period) || "current";
       const now = new Date();
       const curYear = now.getFullYear();
       const curMonth = now.getMonth();
@@ -972,10 +973,10 @@ export function registerFinancialRoutes(app: Express): void {
   app.get("/api/carriers/lane-search", requireAuth, async (req, res) => {
     try {
       const orgId = req.session.organizationId!;
-      const originQuery = String(req.query.origin || "").trim();
-      const destQuery   = String(req.query.destination || "").trim();
-      const radiusMiles = Math.max(1, Math.min(500, parseFloat(String(req.query.radius || "75")) || 75));
-      const minLoadsPerMonth = Math.max(1, parseFloat(String(req.query.minLoadsPerMonth || "5")) || 5);
+      const originQuery = qStr(req.query.origin) || "".trim();
+      const destQuery   = qStr(req.query.destination) || "".trim();
+      const radiusMiles = Math.max(1, Math.min(500, parseFloat(qStr(req.query.radius) || "75") || 75));
+      const minLoadsPerMonth = Math.max(1, parseFloat(qStr(req.query.minLoadsPerMonth) || "5") || 5);
 
       // Parse "City, ST" / "City ST" / "ST" into components for geocoding
       function parseCityState(q: string): { city: string; state: string } {
@@ -1171,7 +1172,7 @@ export function registerFinancialRoutes(app: Express): void {
       const latest = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
       if (!latest) return res.json([]);
 
-      const period = String(req.query.period || "current");
+      const period = qStr(req.query.period) || "current";
       const now = new Date();
       const curYear = now.getFullYear();
       const curMonth = now.getMonth();
@@ -1314,7 +1315,7 @@ export function registerFinancialRoutes(app: Express): void {
       if (!uploads.length) return res.json([]);
       const latest = uploads[uploads.length - 1];
 
-      const period = String(req.query.period || "current");
+      const period = qStr(req.query.period) || "current";
       const now = new Date();
       const curYear = now.getFullYear();
       const curMonth = now.getMonth();
@@ -1332,8 +1333,8 @@ export function registerFinancialRoutes(app: Express): void {
         allowedMonths = keys;
       }
 
-      const repId = String(req.query.repId || "").toLowerCase().trim();
-      const repName = String(req.query.repName || "").toLowerCase().trim();
+      const repId = qStr(req.query.repId) || "".toLowerCase().trim();
+      const repName = qStr(req.query.repName) || "".toLowerCase().trim();
 
       function backendMatchRep2(excelName: string, targetName: string): boolean {
         const a = excelName.toLowerCase().trim();

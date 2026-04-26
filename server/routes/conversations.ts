@@ -67,7 +67,7 @@ export function registerConversationsRoutes(app: Express): void {
 
       // Honour the audience toggle so the sidebar count matches what the
       // rep is currently viewing (Customers vs Carriers vs both).
-      const rawAudience = typeof req.query.audience === "string" ? req.query.audience : "";
+      const rawAudience = qStr(req.query.audience);
       const audience: "customers" | "carriers" | undefined =
         rawAudience === "customers" ? "customers" : rawAudience === "carriers" ? "carriers" : undefined;
 
@@ -310,7 +310,7 @@ export function registerConversationsRoutes(app: Express): void {
       // other team's conversations. Enforce that the requested team's root
       // is inside the caller's reporting tree (admin / sales_director keep
       // org-wide access; the caller can always look at their own team).
-      const team = typeof req.query.team === "string" ? req.query.team.trim() : "";
+      const team = qStr(req.query.team).trim();
       if (team) {
         if (
           user.role !== "admin"
@@ -1024,7 +1024,7 @@ export function registerConversationsRoutes(app: Express): void {
       // record has been materialized yet (drilldowns can surface threads with
       // signals that never produced an email_conversation_threads row).
       let threadIdForMessages: string | null = null;
-      const idParam = String(req.params.id);
+      const idParam = pStr(req.params.id);
 
       if (idParam.startsWith("thread:")) {
         threadIdForMessages = idParam.slice("thread:".length);
@@ -1155,7 +1155,7 @@ export function registerConversationsRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const resolved = await resolveAndAuthorizeReadTarget(user, String(req.params.id));
+      const resolved = await resolveAndAuthorizeReadTarget(user, pStr(req.params.id));
       if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
       await storage.markEmailConversationThreadRead(user.organizationId, user.id, resolved.conversationId);
       res.json({ ok: true, threadId: resolved.conversationId, lastReadAt: new Date().toISOString() });
@@ -1170,7 +1170,7 @@ export function registerConversationsRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const resolved = await resolveAndAuthorizeReadTarget(user, String(req.params.id));
+      const resolved = await resolveAndAuthorizeReadTarget(user, pStr(req.params.id));
       if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
       await storage.markEmailConversationThreadUnread(user.organizationId, user.id, resolved.conversationId);
       res.json({ ok: true, threadId: resolved.conversationId });
@@ -1673,7 +1673,7 @@ export function registerConversationsRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const resolved = await resolveSmartPaneTarget(user, String(req.params.id));
+      const resolved = await resolveSmartPaneTarget(user, pStr(req.params.id));
       if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
       const summary = await getOrGenerateThreadSummary({
         orgId: user.organizationId,
@@ -1693,7 +1693,7 @@ export function registerConversationsRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const resolved = await resolveSmartPaneTarget(user, String(req.params.id));
+      const resolved = await resolveSmartPaneTarget(user, pStr(req.params.id));
       if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
       const summary = await getOrGenerateThreadSummary({
         orgId: user.organizationId,
@@ -1714,7 +1714,7 @@ export function registerConversationsRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const resolved = await resolveSmartPaneTarget(user, String(req.params.id));
+      const resolved = await resolveSmartPaneTarget(user, pStr(req.params.id));
       if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
       const suggestion = await getOrComputeThreadSuggestion({
         orgId: user.organizationId,
@@ -1733,7 +1733,7 @@ export function registerConversationsRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const resolved = await resolveSmartPaneTarget(user, String(req.params.id));
+      const resolved = await resolveSmartPaneTarget(user, pStr(req.params.id));
       if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
       const ok = await dismissSuggestion({
         orgId: user.organizationId,
@@ -1761,7 +1761,7 @@ export function registerConversationsRoutes(app: Express): void {
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
 
-      const resolved = await resolveSmartPaneTarget(user, String(req.params.id));
+      const resolved = await resolveSmartPaneTarget(user, pStr(req.params.id));
       if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
       const ok = await recordSuggestionFeedback({
         orgId: user.organizationId,
@@ -1784,7 +1784,7 @@ export function registerConversationsRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const resolved = await resolveSmartPaneTarget(user, String(req.params.id));
+      const resolved = await resolveSmartPaneTarget(user, pStr(req.params.id));
       if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
       const events = await listThreadEvents(user.organizationId, resolved.threadId, 100);
       res.json({ events });

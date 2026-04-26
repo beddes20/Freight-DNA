@@ -31,6 +31,7 @@ import { performLoadFactImport } from "../loadFactPowerBIImporter";
 import { backfillAll, backfillFromFinancialUploads, backfillFromFreightOpportunities } from "../loadFactBackfill";
 import { runParityHarness } from "../loadFactParity";
 import { getErrorMessage } from "../lib/errors";
+import { qOptStr, qStr } from "../lib/req";
 
 export function registerLoadFactRoutes(app: Express): void {
   // ── Settings: PowerBI URL ────────────────────────────────────────────────
@@ -132,10 +133,10 @@ export function registerLoadFactRoutes(app: Express): void {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       if (user.role !== "admin") return res.status(403).json({ error: "Admin access required" });
       const filter: Record<string, string | undefined> = {};
-      const month = typeof req.query.month === "string" ? req.query.month : undefined;
-      const carrierName = typeof req.query.carrier === "string" ? req.query.carrier : undefined;
-      const customerName = typeof req.query.customer === "string" ? req.query.customer : undefined;
-      const accountManager = typeof req.query.accountManager === "string" ? req.query.accountManager : undefined;
+      const month = qOptStr(req.query.month);
+      const carrierName = qOptStr(req.query.carrier);
+      const customerName = qOptStr(req.query.customer);
+      const accountManager = qOptStr(req.query.accountManager);
       if (month) filter.month = month;
       if (carrierName) filter.carrierName = carrierName;
       if (customerName) filter.customerName = customerName;
@@ -175,7 +176,7 @@ export function registerLoadFactRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       if (user.role !== "admin") return res.status(403).json({ error: "Admin access required" });
-      const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? "25"), 10) || 25));
+      const limit = Math.min(100, Math.max(1, parseInt(qStr(req.query.limit) || "25", 10) || 25));
       const imports = await listLoadFactImports(user.organizationId, limit);
       return res.json({ imports });
     } catch (err) {
@@ -221,7 +222,7 @@ export function registerLoadFactRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       if (user.role !== "admin") return res.status(403).json({ error: "Admin access required" });
-      const tolerance = Math.max(0.5, Math.min(50, parseFloat(String(req.query.tolerance ?? "5")) || 5));
+      const tolerance = Math.max(0.5, Math.min(50, parseFloat(qStr(req.query.tolerance) || "5") || 5));
       const report = await runParityHarness(user.organizationId, tolerance);
       return res.json(report);
     } catch (err) {

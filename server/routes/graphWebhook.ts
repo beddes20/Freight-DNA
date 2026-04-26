@@ -18,6 +18,7 @@ import { storage } from "../storage";
 import type { EmailConversationThread, EmailMessage } from "@shared/schema";
 import type { ConversationOwnershipStorage } from "../services/conversationOwnershipService";
 import { getErrorMessage } from "../lib/errors";
+import { qOptStr } from "../lib/req";
 
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -837,7 +838,7 @@ export async function processGraphNotifications(body: unknown): Promise<void> {
 
 export function registerGraphWebhookRoutes(app: Express): void {
   app.get("/api/webhooks/graph/email", (req: Request, res: Response) => {
-    const validationToken = req.query.validationToken as string | undefined;
+    const validationToken = qOptStr(req.query.validationToken);
     if (validationToken) {
       res.set("Content-Type", "text/plain");
       return res.status(200).send(validationToken);

@@ -148,8 +148,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
   app.get("/api/feature-flags/:key", async (req, res) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const enabled = await storage.getFeatureFlag(user.organizationId, req.params.key);
-    res.json({ key: req.params.key, enabled });
+    const enabled = await storage.getFeatureFlag(user.organizationId, pStr(req.params.key));
+    res.json({ key: pStr(req.params.key), enabled });
   });
 
   app.patch("/api/feature-flags/:key", async (req, res) => {
@@ -158,9 +158,9 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     if (!ADMIN_ROLES.includes(user.role)) return res.status(403).json({ error: "Admin/Director only" });
     const { enabled } = req.body;
     if (typeof enabled !== "boolean") return res.status(400).json({ error: "enabled must be boolean" });
-    await storage.setFeatureFlag(user.organizationId, req.params.key, enabled, user.id);
+    await storage.setFeatureFlag(user.organizationId, pStr(req.params.key), enabled, user.id);
     // Keep the in-memory email gate in sync whenever the live-mode flag is toggled.
-    if (req.params.key === EMAIL_LIVE_MODE_FLAG) {
+    if (pStr(req.params.key) === EMAIL_LIVE_MODE_FLAG) {
       setEmailLiveMode(enabled);
     }
     res.json({ success: true });
@@ -256,7 +256,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       return res.status(403).json({ error: "Director/Admin only" });
     }
     // Tenant isolation: verify carrier belongs to this org before updating
-    const existing = await storage.getCarrier(req.params.id);
+    const existing = await storage.getCarrier(pStr(req.params.id));
     if (!existing || existing.orgId !== user.organizationId) {
       return res.status(404).json({ error: "Carrier not found" });
     }
@@ -272,7 +272,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     if (backupEmail !== undefined) allowedData.backupEmail = backupEmail;
     if (notes !== undefined) allowedData.notes = notes;
     if (lastEmailValidatedAt !== undefined) allowedData.lastEmailValidatedAt = lastEmailValidatedAt;
-    const carrier = await storage.updateCarrier(req.params.id, user.organizationId, allowedData);
+    const carrier = await storage.updateCarrier(pStr(req.params.id), user.organizationId, allowedData);
     if (!carrier) return res.status(404).json({ error: "Carrier not found" });
     res.json(carrier);
   });
@@ -284,11 +284,11 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       return res.status(403).json({ error: "Admin/Director only" });
     }
     // Tenant isolation: verify carrier belongs to this org before deleting
-    const existing = await storage.getCarrier(req.params.id);
+    const existing = await storage.getCarrier(pStr(req.params.id));
     if (!existing || existing.orgId !== user.organizationId) {
       return res.status(404).json({ error: "Carrier not found" });
     }
-    const ok = await storage.deleteCarrier(req.params.id, user.organizationId);
+    const ok = await storage.deleteCarrier(pStr(req.params.id), user.organizationId);
     if (!ok) return res.status(404).json({ error: "Carrier not found" });
     res.json({ success: true });
   });
@@ -722,7 +722,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     try {
       // Pagination: keyset by (laneScore DESC, laneId). Default page size 50.
-      const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? "50"), 10) || 50));
+      const limit = Math.min(200, Math.max(1, parseInt(qStr(req.query.limit) || "50", 10) || 50));
       const cursor = qOptStr(req.query.cursor); // format: "score:laneId"
 
       const { visibleUserIds, canSeeUnassigned, scopeLabel } = await storage.resolveVisibleUserIds(
@@ -1054,7 +1054,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    const lane = await getLaneForOrg(req.params.id, user, res);
+    const lane = await getLaneForOrg(pStr(req.params.id), user, res);
     if (!lane) return;
     res.json(lane);
   });
@@ -1070,7 +1070,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    const lane = await getLaneForOrg(req.params.id, user, res);
+    const lane = await getLaneForOrg(pStr(req.params.id), user, res);
     if (!lane) return;
 
     try {
@@ -1081,7 +1081,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         carrierName: lciTable.carrierName,
         interestStatus: lciTable.interestStatus,
         sourceType: lciTable.sourceType,
-      }).from(lciTable).where(eq(lciTable.laneId, req.params.id));
+      }).from(lciTable).where(eq(lciTable.laneId, pStr(req.params.id)));
 
       // Reply summary computation
       const HOT_STATUSES = new Set(["available_now", "available_next_week"]);
@@ -1103,7 +1103,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
            AND lane_context->>'type' = 'carrier_reply_follow_up'
            AND lane_context->>'laneId' = $2
          LIMIT 1`,
-        [user.organizationId, req.params.id]
+        [user.organizationId, pStr(req.params.id)]
       );
       const hasOpenTask = openTaskResult.rows.length > 0;
 
@@ -1119,7 +1119,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       const historicalCount = benchEntries.filter(b => b.sourceType === "historical").length;
 
       res.json({
-        laneId: req.params.id,
+        laneId: pStr(req.params.id),
         replySummary,
         totalBenchCount,
         historicalCount,
@@ -1135,7 +1135,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
-    const lane = await storage.getRecurringLane(req.params.id);
+    const lane = await storage.getRecurringLane(pStr(req.params.id));
     if (!lane || lane.orgId !== user.organizationId) return res.status(404).json({ error: "Lane not found" });
 
     const isManagerRole = ADMIN_ROLES.includes(user.role) ||
@@ -1194,18 +1194,18 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       updates.snoozedUntil = snoozeUntil.toISOString().split("T")[0];
     }
 
-    const updated = await storage.updateRecurringLane(req.params.id, updates);
+    const updated = await storage.updateRecurringLane(pStr(req.params.id), updates);
 
     // Cross-tab UX (option A) — owner/preferred-program changes affect the
     // LWQ work queue and (for resolved lanes) NBA dashboards. Notify other
     // tabs so they refetch without waiting for window focus.
-    publishLiveSync(user.organizationId, "recurring_lane", req.params.id);
+    publishLiveSync(user.organizationId, "recurring_lane", pStr(req.params.id));
 
     // Resolve linked NBA cards so they leave users' dashboards
     if (preferredProgramToggled) {
-      await storage.resolveNbaCardsForLane(req.params.id);
+      await storage.resolveNbaCardsForLane(pStr(req.params.id));
       // Auto-complete any open lane-procurement tasks so reps' task lists stay clean
-      await storage.completeTasksForLane(req.params.id);
+      await storage.completeTasksForLane(pStr(req.params.id));
     }
 
     // Audit log: record any ownership reassignment
@@ -1214,7 +1214,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     if (ownerChanged || overseerChanged) {
       await storage.createCarrierOutreachLog({
         orgId: user.organizationId,
-        laneId: req.params.id,
+        laneId: pStr(req.params.id),
         companyId: lane.companyId ?? null,
         carrierIds: [],
         carrierNames: [],
@@ -1236,7 +1236,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
-    const lane = await storage.getRecurringLane(req.params.id);
+    const lane = await storage.getRecurringLane(pStr(req.params.id));
     if (!lane || lane.orgId !== user.organizationId) {
       return res.status(404).json({ error: "Lane not found" });
     }
@@ -1249,7 +1249,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       return res.status(403).json({ error: "Only managers, admins, or the lane owner can delete a lane" });
     }
 
-    const deleted = await storage.deleteRecurringLane(req.params.id);
+    const deleted = await storage.deleteRecurringLane(pStr(req.params.id));
     if (!deleted) return res.status(404).json({ error: "Lane not found" });
 
     res.status(204).end();
@@ -1262,7 +1262,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
-    const lane = await storage.getRecurringLane(req.params.laneId);
+    const lane = await storage.getRecurringLane(pStr(req.params.laneId));
     if (!lane || lane.orgId !== user.organizationId) return res.status(404).json({ error: "Lane not found" });
 
     const isManager = ["admin", "director", "national_account_manager", "logistics_manager"].includes(user.role);
@@ -1307,13 +1307,13 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     }
 
     try {
-      const updated = await storage.assignLaneOwner(req.params.laneId, user.organizationId, ownerUserId ?? null, user.id);
+      const updated = await storage.assignLaneOwner(pStr(req.params.laneId), user.organizationId, ownerUserId ?? null, user.id);
       if (!updated) return res.status(404).json({ error: "Lane not found" });
 
       // Audit log
       await storage.createCarrierOutreachLog({
         orgId: user.organizationId,
-        laneId: req.params.laneId,
+        laneId: pStr(req.params.laneId),
         companyId: lane.companyId ?? null,
         carrierIds: [],
         carrierNames: [],
@@ -1341,14 +1341,14 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           title: `Lane assigned to you — ${origin} → ${dest}`,
           body: bodyParts.join(" · "),
           link: "/lanes/work-queue",
-          relatedId: req.params.laneId,
+          relatedId: pStr(req.params.laneId),
         });
       }
 
       // Create a task for the assignee (self-assign or manager-assign both get a task)
       // Dedup: skip if an open lane-procurement task already exists for this lane+user
       if (ownerUserId) {
-        const existing = await storage.findOpenLaneProcurementTask(req.params.laneId, ownerUserId);
+        const existing = await storage.findOpenLaneProcurementTask(pStr(req.params.laneId), ownerUserId);
         if (!existing) {
           const customer = lane.companyName ?? "Unknown Customer";
           const origin = lane.origin;
@@ -1374,7 +1374,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
             companyId: lane.companyId ?? null,
             companyName: customer,
             lever: "Lane ID",
-            laneContext: { type: "lane_procurement", laneId: req.params.laneId } as any,
+            laneContext: { type: "lane_procurement", laneId: pStr(req.params.laneId) } as any,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           });
@@ -1383,7 +1383,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
       // Patch lane_summary_cache so list queries reflect new owner immediately
       const newOwnerForCache = ownerUserId ? await storage.getUser(ownerUserId) : null;
-      await storage.patchLaneSummaryCache(req.params.laneId, {
+      await storage.patchLaneSummaryCache(pStr(req.params.laneId), {
         ownerUserId: ownerUserId ?? undefined,
         ownerName: newOwnerForCache?.name ?? null,
       }).catch(() => {});
@@ -1423,14 +1423,14 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
-    const lane = await getLaneForOrg(req.params.laneId, user!, res);
+    const lane = await getLaneForOrg(pStr(req.params.laneId), user!, res);
     if (!lane) return;
 
     try {
       // ── Query parameter parsing ──────────────────────────────────────────
-      const pageSize = parseInt(String(req.query.pageSize ?? "20"), 10);
-      const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10));
-      const sort = String(req.query.sort ?? "recommended");
+      const pageSize = parseInt(qStr(req.query.pageSize) || "20", 10);
+      const page = Math.max(1, parseInt(qStr(req.query.page) || "1", 10));
+      const sort = qStr(req.query.sort) || "recommended";
       const exactOnly = req.query.exactOnly === "true";
       const hasEmail = req.query.hasEmail === "true";
       const notRecentlyContacted = req.query.notRecentlyContacted === "true";
@@ -1440,7 +1440,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       const debugMode = req.query.debug === "true";
       const forceRefresh = req.query.refresh === "true";
 
-      const cacheKey = `${req.params.laneId}::${user.organizationId}`;
+      const cacheKey = `${pStr(req.params.laneId)}::${user.organizationId}`;
       const cached = _rankingCache.get(cacheKey);
       let ranked: Awaited<ReturnType<typeof rankCarriersForLane>>;
       let isHfLane: boolean;
@@ -1452,7 +1452,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         const rankingStart = Date.now();
         const rankingPromise = (async () => {
           const [bench, suggUploads] = await Promise.all([
-            storage.getLaneCarrierBench(req.params.laneId),
+            storage.getLaneCarrierBench(pStr(req.params.laneId)),
             storage.getFinancialUploadsForOrg(user.organizationId),
           ]);
 
@@ -1479,7 +1479,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         const result = await Promise.race([rankingPromise, timeoutPromise]);
         ranked = result.ranked;
         isHfLane = result.isHfLane;
-        console.log(`[carrier-suggestions] ranked ${ranked.length} carriers for lane ${req.params.laneId} in ${Date.now() - rankingStart}ms`);
+        console.log(`[carrier-suggestions] ranked ${ranked.length} carriers for lane ${pStr(req.params.laneId)} in ${Date.now() - rankingStart}ms`);
 
         _rankingCache.set(cacheKey, { ranked, isHfLane, expiresAt: Date.now() + RANKING_CACHE_TTL });
       }
@@ -1678,7 +1678,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     } catch (err) {
       const msg = (err as Error)?.message ?? "Failed to rank carriers";
       const isTimeout = msg.includes("timed out");
-      console.error(`[carrier-suggestions] error for lane ${req.params.laneId}: ${msg}`);
+      console.error(`[carrier-suggestions] error for lane ${pStr(req.params.laneId)}: ${msg}`);
       res.status(isTimeout ? 504 : 500).json({
         error: isTimeout
           ? "Carrier ranking took too long — please try again in a moment"
@@ -1694,7 +1694,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
-    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    const lane = await getLaneWithAccessCheck(pStr(req.params.laneId), user!, res);
     if (!lane) return;
 
     const { carrierIds, outreachMode = "lane_building" } = req.body;
@@ -1802,9 +1802,9 @@ House style — follow every rule:
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    const lane = await getLaneForOrg(req.params.laneId, user!, res);
+    const lane = await getLaneForOrg(pStr(req.params.laneId), user!, res);
     if (!lane) return;
-    const bench = await storage.getLaneCarrierBench(req.params.laneId);
+    const bench = await storage.getLaneCarrierBench(pStr(req.params.laneId));
 
     // Enrich each bench item with contactability info from the carrier catalog
     const carrierIds = bench.map(b => b.carrierId).filter(Boolean) as string[];
@@ -1908,7 +1908,7 @@ House style — follow every rule:
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    const lane = await getLaneWithAccessCheck(pStr(req.params.laneId), user!, res);
     if (!lane) return;
 
     const { carrierId, carrierName, interestStatus, notes, fitScore, fitReason, replySnippet } = req.body;
@@ -1923,7 +1923,7 @@ House style — follow every rule:
     }
 
     const record = await storage.upsertLaneCarrierInterest({
-      laneId: req.params.laneId,
+      laneId: pStr(req.params.laneId),
       carrierId: carrierId ?? null,
       carrierName,
       interestStatus: interestStatus ?? "needs_follow_up",
@@ -1937,7 +1937,7 @@ House style — follow every rule:
     // If a rep directly sets (or reclassifies) a carrier to a hot status, ensure
     // a follow-up task exists. Non-blocking — response is sent regardless.
     if (carrierId && interestStatus) {
-      await ensureHotFollowUpTask(req.params.laneId, carrierId, carrierName, interestStatus, user.id, user.organizationId, {
+      await ensureHotFollowUpTask(pStr(req.params.laneId), carrierId, carrierName, interestStatus, user.id, user.organizationId, {
         replySnippet: replySnippet ?? null,
         eventId: record.id ? `interest:${record.id}` : null,
       });
@@ -1978,7 +1978,7 @@ House style — follow every rule:
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    const lane = await getLaneWithAccessCheck(pStr(req.params.laneId), user!, res);
     if (!lane) return;
 
     const { replyText, carrierId, carrierName, interestId } = req.body;
@@ -2040,7 +2040,7 @@ Respond with ONLY the status label (one of the 5 above), nothing else.
     if (interestId) {
       // Cross-record safety: verify the interest record belongs to this lane before updating
       const existingInterest = await storage.getLaneCarrierInterestById(interestId);
-      if (!existingInterest || existingInterest.laneId !== req.params.laneId) {
+      if (!existingInterest || existingInterest.laneId !== pStr(req.params.laneId)) {
         return res.status(403).json({ error: "Interest record does not belong to this lane" });
       }
       await storage.updateLaneCarrierInterest(interestId, {
@@ -2052,7 +2052,7 @@ Respond with ONLY the status label (one of the 5 above), nothing else.
       outcomeRecordId = interestId;
     } else {
       const upserted = await storage.upsertLaneCarrierInterest({
-        laneId: req.params.laneId,
+        laneId: pStr(req.params.laneId),
         carrierId: carrierId ?? null,
         carrierName,
         interestStatus: classification,
@@ -2067,7 +2067,7 @@ Respond with ONLY the status label (one of the 5 above), nothing else.
     // Pass the reply snippet and interestId for event-level deduplication so each distinct
     // classify-reply event produces its own task (rather than being suppressed while another open task exists).
     if (carrierId) {
-      await ensureHotFollowUpTask(req.params.laneId, carrierId, carrierName, classification, user.id, user.organizationId, {
+      await ensureHotFollowUpTask(pStr(req.params.laneId), carrierId, carrierName, classification, user.id, user.organizationId, {
         replySnippet: replyText.slice(0, 500),
         eventId: interestId ? `interest:${interestId}` : null,
       });
@@ -2107,11 +2107,11 @@ Respond with ONLY the status label (one of the 5 above), nothing else.
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    const lane = await getLaneForOrg(req.params.laneId, user!, res);
+    const lane = await getLaneForOrg(pStr(req.params.laneId), user!, res);
     if (!lane) return;
 
-    const bench = await storage.getLaneCarrierBench(req.params.laneId);
-    const logs = await storage.getCarrierOutreachLogs(req.params.laneId);
+    const bench = await storage.getLaneCarrierBench(pStr(req.params.laneId));
+    const logs = await storage.getCarrierOutreachLogs(pStr(req.params.laneId));
 
     const suggestions: Array<{ type: string; priority: "high" | "medium" | "low"; message: string; carrierId?: string | null; carrierName?: string }> = [];
     const now = new Date();
@@ -2222,7 +2222,7 @@ Rules for suggestions:
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
-    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    const lane = await getLaneWithAccessCheck(pStr(req.params.laneId), user!, res);
     if (!lane) return;
 
     interface SendDraft {
@@ -2283,7 +2283,7 @@ Rules for suggestions:
         const locks = await findCarrierContactLocks({
           orgId: user.organizationId,
           carrierIds: candidateCarrierIds,
-          recurringLaneId: req.params.laneId,
+          recurringLaneId: pStr(req.params.laneId),
           companyId: lane.companyId ?? null,
           laneLabel: formatLaneDisplay(lane.origin, lane.originState, lane.destination, lane.destinationState),
         });
@@ -2455,7 +2455,7 @@ Rules for suggestions:
       const internetMsgId = (result as { internetMessageId?: string }).internetMessageId ?? null;
       const log = await storage.createCarrierOutreachLog({
         orgId: user.organizationId,
-        laneId: req.params.laneId,
+        laneId: pStr(req.params.laneId),
         companyId: lane.companyId ?? null,
         carrierIds: draft.carrierId ? [draft.carrierId] : [],
         carrierNames: [draft.carrierName],
@@ -2522,7 +2522,7 @@ Rules for suggestions:
         subject: draftForCarrier?.subject ?? emailDrafts[0]?.subject ?? null,
         body: draftForCarrier?.body ?? null,
         linkedCarrierId: r.carrierId ?? null,
-        linkedLaneId: req.params.laneId,
+        linkedLaneId: pStr(req.params.laneId),
         linkedOutreachLogId: matchedLog?.id ?? null,
       }).catch(err =>
         console.error("[emailIntelligence] outbound log error:", err)
@@ -2536,7 +2536,7 @@ Rules for suggestions:
       if (r.status === "dedup_skipped") continue; // dedup-blocked carriers are not re-marked
       if (r.status === "throttled_daily_cap" || r.status === "throttled_too_soon") continue; // throttled carriers are not re-marked
       await storage.upsertLaneCarrierInterest({
-        laneId: req.params.laneId,
+        laneId: pStr(req.params.laneId),
         carrierId: r.carrierId,
         carrierName: r.carrierName,
         interestStatus: "needs_follow_up",
@@ -2545,14 +2545,14 @@ Rules for suggestions:
     }
 
     // Update carriersContactedCount on the lane
-    const updatedBench = await storage.getLaneCarrierBench(req.params.laneId);
+    const updatedBench = await storage.getLaneCarrierBench(pStr(req.params.laneId));
     const contactedKeys = new Set<string>();
     for (const b of updatedBench) {
       if (!b.outreachSentAt) continue;
       contactedKeys.add(b.carrierId ?? b.carrierName.toLowerCase().trim());
     }
     const newCount = contactedKeys.size;
-    await storage.updateRecurringLane(req.params.laneId, { carriersContactedCount: newCount });
+    await storage.updateRecurringLane(pStr(req.params.laneId), { carriersContactedCount: newCount });
 
     // Auto-resolve if threshold reached
     let resolved = false;
@@ -2561,16 +2561,16 @@ Rules for suggestions:
       resolveNowSend = new Date().toISOString();
       const snoozeUntil = new Date();
       snoozeUntil.setDate(snoozeUntil.getDate() + LANE_CONFIG.snoozeAfterResolveDays);
-      await storage.updateRecurringLane(req.params.laneId, {
+      await storage.updateRecurringLane(pStr(req.params.laneId), {
         resolvedAt: resolveNowSend,
         snoozedUntil: snoozeUntil.toISOString().split("T")[0],
       });
-      await storage.resolveNbaCardsForLane(req.params.laneId);
+      await storage.resolveNbaCardsForLane(pStr(req.params.laneId));
       resolved = true;
     }
 
     // Patch cache so LWQ list reflects updated contacted count + resolved state immediately
-    await storage.patchLaneSummaryCache(req.params.laneId, {
+    await storage.patchLaneSummaryCache(pStr(req.params.laneId), {
       carriersContactedCount: newCount,
       ...(resolved && resolveNowSend ? { resolvedAt: resolveNowSend } : {}),
     }).catch(() => {});
@@ -2584,7 +2584,7 @@ Rules for suggestions:
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    const lane = await getLaneWithAccessCheck(req.params.laneId, user!, res);
+    const lane = await getLaneWithAccessCheck(pStr(req.params.laneId), user!, res);
     if (!lane) return;
 
     const { carrierIds, carrierNames, outreachMode, emailDrafts, ownerUserId, overseerUserId, capturedEmails } = req.body;
@@ -2630,7 +2630,7 @@ Rules for suggestions:
     const adhocSentAt = new Date();
     const log = await storage.createCarrierOutreachLog({
       orgId: user.organizationId,
-      laneId: req.params.laneId,
+      laneId: pStr(req.params.laneId),
       companyId: lane.companyId ?? null,
       carrierIds: carrierIds ?? carrierNames.map(() => null),
       carrierNames,
@@ -2648,15 +2648,15 @@ Rules for suggestions:
 
     // Cross-tab UX (option A) — manual outreach logging changes the LWQ
     // contact-lock status and the per-carrier activity tab. Hint both.
-    publishLiveSync(user.organizationId, "carrier_outreach", req.params.laneId);
-    publishLiveSync(user.organizationId, "recurring_lane", req.params.laneId);
+    publishLiveSync(user.organizationId, "carrier_outreach", pStr(req.params.laneId));
+    publishLiveSync(user.organizationId, "recurring_lane", pStr(req.params.laneId));
 
     // First upsert bench entries so the count reflects real distinct carriers contacted
     const now = new Date().toISOString();
     for (let i = 0; i < carrierNames.length; i++) {
       const cId = carrierIds?.[i] ?? null;
       await storage.upsertLaneCarrierInterest({
-        laneId: req.params.laneId,
+        laneId: pStr(req.params.laneId),
         carrierId: cId,
         carrierName: carrierNames[i],
         interestStatus: "needs_follow_up",
@@ -2668,14 +2668,14 @@ Rules for suggestions:
     // Deduplicate: prefer carrierId when set; fall back to normalized carrierName.
     // This prevents inflated counts if the same carrier appears under different
     // carrierId / name-only entries for the same lane.
-    const updatedBench = await storage.getLaneCarrierBench(req.params.laneId);
+    const updatedBench = await storage.getLaneCarrierBench(pStr(req.params.laneId));
     const contactedKeys = new Set<string>();
     for (const b of updatedBench) {
       if (!b.outreachSentAt) continue;
       contactedKeys.add(b.carrierId ?? b.carrierName.toLowerCase().trim());
     }
     const newCount = contactedKeys.size;
-    await storage.updateRecurringLane(req.params.laneId, { carriersContactedCount: newCount });
+    await storage.updateRecurringLane(pStr(req.params.laneId), { carriersContactedCount: newCount });
 
     // Check if completion threshold reached (from shared LANE_CONFIG)
     const THRESHOLD = LANE_CONFIG.completionCarriersContacted;
@@ -2685,17 +2685,17 @@ Rules for suggestions:
       resolvedAt = new Date().toISOString();
       const snoozeUntil = new Date();
       snoozeUntil.setDate(snoozeUntil.getDate() + LANE_CONFIG.snoozeAfterResolveDays);
-      await storage.updateRecurringLane(req.params.laneId, {
+      await storage.updateRecurringLane(pStr(req.params.laneId), {
         resolvedAt,
         snoozedUntil: snoozeUntil.toISOString().split("T")[0],
       });
       // Resolve all active NBA cards tied to this lane so they leave the dashboard
-      await storage.resolveNbaCardsForLane(req.params.laneId);
+      await storage.resolveNbaCardsForLane(pStr(req.params.laneId));
       resolved = true;
     }
 
     // Patch cache so LWQ list reflects updated contacted count + resolved state immediately
-    await storage.patchLaneSummaryCache(req.params.laneId, {
+    await storage.patchLaneSummaryCache(pStr(req.params.laneId), {
       carriersContactedCount: newCount,
       ...(resolved && resolvedAt ? { resolvedAt } : {}),
     }).catch(() => {});
@@ -2707,9 +2707,9 @@ Rules for suggestions:
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    const lane = await getLaneForOrg(req.params.laneId, user!, res);
+    const lane = await getLaneForOrg(pStr(req.params.laneId), user!, res);
     if (!lane) return;
-    const logs = await storage.getCarrierOutreachLogs(req.params.laneId);
+    const logs = await storage.getCarrierOutreachLogs(pStr(req.params.laneId));
     res.json(logs);
   });
 
@@ -2761,7 +2761,7 @@ Rules for suggestions:
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    const batches = await storage.getCarrierImportBatches(user.organizationId, req.params.laneId);
+    const batches = await storage.getCarrierImportBatches(user.organizationId, pStr(req.params.laneId));
     res.json(batches);
   });
 
@@ -2773,7 +2773,7 @@ Rules for suggestions:
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
-    const lane = await getLaneForOrg(req.params.laneId, user, res);
+    const lane = await getLaneForOrg(pStr(req.params.laneId), user, res);
     if (!lane) return;
 
     try {
@@ -2791,7 +2791,7 @@ Rules for suggestions:
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
-    const lane = await getLaneWithAccessCheck(req.params.laneId, user, res);
+    const lane = await getLaneWithAccessCheck(pStr(req.params.laneId), user, res);
     if (!lane) return;
 
     try {
@@ -2818,7 +2818,7 @@ Rules for suggestions:
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
-    const lane = await getLaneWithAccessCheck(req.params.laneId, user, res);
+    const lane = await getLaneWithAccessCheck(pStr(req.params.laneId), user, res);
     if (!lane) return;
 
     const schema = z.object({
@@ -2854,7 +2854,7 @@ Rules for suggestions:
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
-    const lane = await getLaneWithAccessCheck(req.params.laneId, user, res);
+    const lane = await getLaneWithAccessCheck(pStr(req.params.laneId), user, res);
     if (!lane) return;
 
     const active = req.body?.active !== false; // default true
@@ -2950,9 +2950,7 @@ Rules for suggestions:
     const MANAGER_ROLES = new Set(["admin", "director", "national_account_manager", "logistics_manager"]);
     const isManager = MANAGER_ROLES.has(user.role);
 
-    const requestedRepId = typeof req.query.repId === "string" && req.query.repId.length > 0
-      ? req.query.repId
-      : user.id;
+    const requestedRepId = qStr(req.query.repId) || user.id;
 
     if (requestedRepId !== user.id && !isManager) {
       return res.status(403).json({ error: "Only managers may view another rep's audit" });

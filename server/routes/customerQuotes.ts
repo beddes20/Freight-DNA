@@ -44,6 +44,7 @@ import {
   MAX_INTAKE_TEXT_BYTES,
 } from "../services/spotQuoteIntake";
 import { getErrorMessage } from "../lib/errors";
+import { pStr } from "../lib/req";
 
 // Minimum margin % guardrail when estimatedCost is supplied. Env-tunable.
 const SPOT_MIN_MARGIN_PCT: number = (() => {
@@ -238,7 +239,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const data = updateQuoteSchema.parse(req.body);
-      const opp = await updateQuote(user.organizationId, actorName(user), String(req.params.id), data, user.id);
+      const opp = await updateQuote(user.organizationId, actorName(user), pStr(req.params.id), data, user.id);
       const detail = await getQuoteDetail(user.organizationId, opp.id);
       // Cross-tab UX (option A) — quote outcome/status edits affect the
       // snapshot KPIs, the list view, and the action queue. One topic
@@ -283,7 +284,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const data = z.object({
         partyType: z.enum(QUOTE_PARTY_TYPES),
       }).parse(req.body);
-      const updated = await setCustomerPartyType(user.organizationId, String(req.params.id), data.partyType);
+      const updated = await setCustomerPartyType(user.organizationId, pStr(req.params.id), data.partyType);
       if (!updated) return res.status(404).json({ error: "Not found" });
       // Bust the lazy backfill cache so other dashboards that depend on the
       // classification (e.g., snapshot KPIs) reflect the change immediately.
@@ -300,7 +301,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const detail = await getQuoteDetail(user.organizationId, String(req.params.id));
+      const detail = await getQuoteDetail(user.organizationId, pStr(req.params.id));
       if (!detail) return res.status(404).json({ error: "Not found" });
       res.json(detail);
     } catch (err) {
@@ -342,7 +343,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const rec = await getPricingRecommendation(user.organizationId, String(req.params.id));
+      const rec = await getPricingRecommendation(user.organizationId, pStr(req.params.id));
       res.json(rec);
     } catch (err) {
       const msg = getErrorMessage(err);
@@ -414,7 +415,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       if (!["admin", "director", "sales_director"].includes(user.role)) {
         return res.status(403).json({ error: "Admin access required" });
       }
-      const id = String(req.params.id ?? "");
+      const id = pStr(req.params.id);
       if (!id) return res.status(400).json({ error: "Missing mapping id" });
       const result = await deleteMapping(user.organizationId, id);
       if (!result.deleted) return res.status(404).json({ error: "Mapping not found" });
@@ -694,7 +695,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   app.delete("/api/customer-quotes/saved-views/:id", requireAuth, async (req, res) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    await deleteSavedView(user.organizationId, user.id, String(req.params.id));
+    await deleteSavedView(user.organizationId, user.id, pStr(req.params.id));
     res.json({ ok: true });
   });
 

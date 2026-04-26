@@ -36,6 +36,7 @@ import {
   type PodCandidateAttachment,
 } from "../services/podIntakeService";
 import { getErrorMessage } from "../lib/errors";
+import { pStr } from "../lib/req";
 
 function requireAdmin(req: Request, res: Response, next: () => void) {
   getCurrentUser(req)
@@ -220,7 +221,7 @@ export function registerPodIntakeRoutes(app: Express): void {
       try {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
-        const row = await storage.getPodIntakeEmail(user.organizationId, String(req.params.id));
+        const row = await storage.getPodIntakeEmail(user.organizationId, pStr(req.params.id));
         if (!row) return res.status(404).json({ error: "Not found" });
         res.json({ row: { ...row, bucket: bucketForRow(row) } });
       } catch (err) {
@@ -251,7 +252,7 @@ export function registerPodIntakeRoutes(app: Express): void {
             .json({ error: "Invalid payload", details: parsed.error.flatten() });
         }
 
-        const row = await storage.getPodIntakeEmail(user.organizationId, String(req.params.id));
+        const row = await storage.getPodIntakeEmail(user.organizationId, pStr(req.params.id));
         if (!row) return res.status(404).json({ error: "Not found" });
 
         const match = await matchOrderIdToLoad(user.organizationId, [parsed.data.orderId]);
@@ -287,7 +288,7 @@ export function registerPodIntakeRoutes(app: Express): void {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-        const row = await storage.getPodIntakeEmail(user.organizationId, String(req.params.id));
+        const row = await storage.getPodIntakeEmail(user.organizationId, pStr(req.params.id));
         if (!row) return res.status(404).json({ error: "Not found" });
         if (!row.matchedOrderId) {
           return res
@@ -578,7 +579,7 @@ export function registerPodIntakeRoutes(app: Express): void {
       try {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
-        const podId = String(req.params.id);
+        const podId = pStr(req.params.id);
 
         // Confirm the user owns this POD before clearing notifications —
         // prevents a malicious client from marking arbitrary IDs read.
@@ -624,7 +625,7 @@ export function registerPodIntakeRoutes(app: Express): void {
       try {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
-        const orderId = String(req.params.orderId).trim();
+        const orderId = pStr(req.params.orderId).trim();
         if (!orderId) return res.json({ count: 0, rows: [] });
         const rows = await storage.listPodIntakeEmailsByOrderId(user.organizationId, orderId);
         const { customerByOrderId, foIdByOrderId } = await podDisplayExtras(
@@ -670,7 +671,7 @@ export function registerPodIntakeRoutes(app: Express): void {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-        const row = await storage.getPodIntakeEmail(user.organizationId, String(req.params.id));
+        const row = await storage.getPodIntakeEmail(user.organizationId, pStr(req.params.id));
         if (!row) return res.status(404).json({ error: "Not found" });
 
         const isAdmin = ["admin", "director", "sales_director"].includes(user.role);
@@ -699,7 +700,7 @@ export function registerPodIntakeRoutes(app: Express): void {
           mailboxAddress,
           row.providerMessageId,
         );
-        const att = attachments.find((a) => a.id === req.params.attachmentId);
+        const att = attachments.find((a) => a.id === pStr(req.params.attachmentId));
         if (!att) return res.status(404).json({ error: "Attachment not found" });
         if (!att.contentBase64) {
           return res

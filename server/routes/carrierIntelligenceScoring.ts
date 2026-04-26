@@ -35,6 +35,7 @@ import { getBlendedRate } from "../pricingBlendService";
 import { recommendCarriersForLoad } from "../carrierRecommendationEngine";
 import { recomputeCarrierIntelligence } from "../carrierIntelligenceRecompute";
 import { getErrorMessage } from "../lib/errors";
+import { pStr, qOptStr } from "../lib/req";
 
 function orgOf(req: any): string | null {
   return (req?.session?.organizationId as string) ?? null;
@@ -52,8 +53,8 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
   app.get("/api/carrier-intelligence/scorecard", requireAuth, async (req, res) => {
     try {
       const orgId = orgOf(req); if (!orgId) return res.status(401).json({ error: "Unauthorized" });
-      const equipment = (req.query.equipment as string | undefined) || "ALL";
-      const tier = req.query.tier as string | undefined;
+      const equipment = (qOptStr(req.query.equipment)) || "ALL";
+      const tier = qOptStr(req.query.tier);
       const minLoads = req.query.minLoads ? Number(req.query.minLoads) : undefined;
       const limit = req.query.limit ? Number(req.query.limit) : undefined;
       const rows = await listScorecards(orgId, { equipment, tier, minLoads, limit });
@@ -69,7 +70,7 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
   app.get("/api/carrier-intelligence/carriers/:carrierId", requireAuth, async (req, res) => {
     try {
       const orgId = orgOf(req); if (!orgId) return res.status(401).json({ error: "Unauthorized" });
-      const ident = decodeURIComponent(String(req.params.carrierId));
+      const ident = decodeURIComponent(pStr(req.params.carrierId));
       const isUuidish = /^[0-9a-f-]{20,}$/i.test(ident);
       let carrierName = ident;
       let carrierMeta: { id: string | null; name: string; status: string | null; tags: string[] } | null = null;
@@ -326,7 +327,7 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
       const orgId = orgOf(req); if (!orgId) return res.status(401).json({ error: "Unauthorized" });
       const limit = Math.min(15, Math.max(1, Number(req.query.limit) || 5));
       const refresh = req.query.refresh === "1";
-      const orderId = decodeURIComponent(String(req.params.orderId));
+      const orderId = decodeURIComponent(pStr(req.params.orderId));
       const [load] = await db.select().from(loadFact)
         .where(and(eq(loadFact.orgId, orgId), or(eq(loadFact.orderId, orderId), eq(loadFact.id, orderId))!))
         .limit(1);

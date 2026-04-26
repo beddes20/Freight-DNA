@@ -28,6 +28,7 @@ import { notifyFreightDelegated, notifyFreightApproved } from "../freightOpportu
 import { computeSlaState, countOverSlaForOrg, SLA_L1_HOURS, SLA_L2_HOURS } from "../freightOpportunitySlaService";
 import { z } from "zod";
 import { getErrorMessage } from "../lib/errors";
+import { pStr, qOptStr, qStr } from "../lib/req";
 
 const APPROVER_ROLES = new Set([
   "admin",
@@ -86,7 +87,7 @@ export function registerMyProcurementRoutes(app: Express) {
       // Allowed roles: admin (any user in org), or
       //   director / sales_director / national_account_manager / logistics_manager
       //   restricted to users in their reporting chain.
-      const requestedUserId = (req.query.userId as string | undefined) || null;
+      const requestedUserId = (qOptStr(req.query.userId)) || null;
       let user = viewer;
       let viewing: { id: string; name: string; isOther: boolean } | null = null;
       if (requestedUserId && requestedUserId !== viewer.id) {
@@ -115,9 +116,9 @@ export function registerMyProcurementRoutes(app: Express) {
       }
 
       // Pagination params — default page size 50, max 200
-      const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? "50"), 10) || 50));
-      const lanesCursor = req.query.lanesCursor as string | undefined;
-      const tasksCursor = req.query.tasksCursor as string | undefined;
+      const limit = Math.min(200, Math.max(1, parseInt(qStr(req.query.limit) || "50", 10) || 50));
+      const lanesCursor = qOptStr(req.query.lanesCursor);
+      const tasksCursor = qOptStr(req.query.tasksCursor);
 
       // Per-bucket error capture so a single failing query no longer blanks
       // the whole queue. Buckets that fail return their safe-empty default
@@ -830,7 +831,7 @@ export function registerMyProcurementRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const opp = await storage.getFreightOpportunity(user.organizationId, String(req.params.id));
+      const opp = await storage.getFreightOpportunity(user.organizationId, pStr(req.params.id));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
 
       const isManager = APPROVER_ROLES.has(user.role);
@@ -899,7 +900,7 @@ export function registerMyProcurementRoutes(app: Express) {
       if (!APPROVER_ROLES.has(user.role)) {
         return res.status(403).json({ error: "Only managers can assign freight opportunities" });
       }
-      const opp = await storage.getFreightOpportunity(user.organizationId, String(req.params.id));
+      const opp = await storage.getFreightOpportunity(user.organizationId, pStr(req.params.id));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
 
       // Gate: this endpoint is purpose-built for routing import-sourced
@@ -967,7 +968,7 @@ export function registerMyProcurementRoutes(app: Express) {
       if (!APPROVER_ROLES.has(user.role)) {
         return res.status(403).json({ error: "Only managers can approve freight opportunities" });
       }
-      const opp = await storage.getFreightOpportunity(user.organizationId, String(req.params.id));
+      const opp = await storage.getFreightOpportunity(user.organizationId, pStr(req.params.id));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
 
       const parsed = approveSchema.safeParse(req.body ?? {});
@@ -1028,7 +1029,7 @@ export function registerMyProcurementRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const opp = await storage.getFreightOpportunity(user.organizationId, String(req.params.id));
+      const opp = await storage.getFreightOpportunity(user.organizationId, pStr(req.params.id));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
       const isManager = APPROVER_ROLES.has(user.role);
       const isOwner = opp.ownerUserId === user.id;
@@ -1098,7 +1099,7 @@ export function registerMyProcurementRoutes(app: Express) {
       // Rolling 30-day window: pull a generous cap then trim to anything
       // newer than 30 days ago. Keeps the page focused on operationally
       // relevant runs without truncating a high-volume day.
-      const cap = Math.min(500, Math.max(1, parseInt(String(req.query.limit ?? "200"), 10) || 200));
+      const cap = Math.min(500, Math.max(1, parseInt(qStr(req.query.limit) || "200", 10) || 200));
       const cutoffMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
       const all = await listAvailableFreightImports(user.organizationId, cap);
       const imports = all.filter((r) => {

@@ -34,6 +34,7 @@ import { getCarrierCoverableLanes } from "../services/carrierCoverableLanes";
 import { db } from "../storage";
 import { publish as publishLiveSync } from "../services/liveSync";
 import { getErrorMessage } from "../lib/errors";
+import { pStr } from "../lib/req";
 
 function orgId(req: Express.Request): string {
   return (req as any).session?.organizationId as string;
@@ -1001,7 +1002,7 @@ export function registerFreightCockpitRoutes(app: Express) {
     if (!org || !uid) return res.status(401).json({ error: "Unauthorized" });
     const parsed = savedViewPatchSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid patch", issues: parsed.error.issues });
-    const view = await storage.updateFreightOpportunitySavedView(String(req.params.id), uid, {
+    const view = await storage.updateFreightOpportunitySavedView(pStr(req.params.id), uid, {
       name: parsed.data.name,
       filters: parsed.data.filters,
       isShared: parsed.data.isShared,
@@ -1014,7 +1015,7 @@ export function registerFreightCockpitRoutes(app: Express) {
     const org = orgId(req);
     const uid = userId(req);
     if (!org || !uid) return res.status(401).json({ error: "Unauthorized" });
-    const ok = await storage.deleteFreightOpportunitySavedView(String(req.params.id), uid, org);
+    const ok = await storage.deleteFreightOpportunitySavedView(pStr(req.params.id), uid, org);
     res.json({ ok });
   });
 

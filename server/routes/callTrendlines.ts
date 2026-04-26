@@ -54,7 +54,7 @@ export function registerCallTrendlineRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const lane = String(req.query.lane || "").trim();
+      const lane = qStr(req.query.lane) || "".trim();
       if (!lane) return res.status(400).json({ error: "lane query param required" });
       const days = clampDays(req.query.days);
       const result = await buildLaneCallRollup(user.organizationId, lane, days);

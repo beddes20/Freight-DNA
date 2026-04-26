@@ -1827,7 +1827,7 @@ export function registerWebexRoutes(app: Express) {
         return res.status(403).json({ error: "Access restricted to leadership roles" });
       }
 
-      const range = String(req.query.range ?? "7d");
+      const range = qStr(req.query.range) || "7d";
       const managerId = (qOptStr(req.query.managerId)) || null;
 
       const rangeDays = range === "today" ? 1 : range === "30d" ? 30 : range === "90d" ? 90 : 7;
@@ -2044,10 +2044,10 @@ export function registerWebexRoutes(app: Express) {
         return res.status(403).json({ error: "Access restricted to leadership roles" });
       }
 
-      const userId = String(req.query.userId ?? "").trim();
+      const userId = qStr(req.query.userId) || "".trim();
       if (!userId) return res.status(400).json({ error: "userId is required" });
 
-      const range = String(req.query.range ?? "7d");
+      const range = qStr(req.query.range) || "7d";
       const managerId = (qOptStr(req.query.managerId)) || null;
       const rangeDays = range === "today" ? 1 : range === "30d" ? 30 : range === "90d" ? 90 : 7;
       const now = Date.now();
@@ -2220,11 +2220,9 @@ export function registerWebexRoutes(app: Express) {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const daysRaw = parseInt(String(req.query.days ?? "30"), 10);
+      const daysRaw = parseInt(qStr(req.query.days) || "30", 10);
       const days = Math.min(90, Math.max(1, Number.isFinite(daysRaw) ? daysRaw : 30));
-      const singleUserId = typeof req.query.userId === "string" && req.query.userId.length > 0
-        ? String(req.query.userId)
-        : null;
+      const singleUserId = qStr(req.query.userId) || null;
 
       const params: any[] = [user.organizationId, days];
       let userFilter = "";
@@ -2388,11 +2386,11 @@ export function registerWebexRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const daysRaw = parseInt(String(req.query.days ?? "30"), 10);
+      const daysRaw = parseInt(qStr(req.query.days) || "30", 10);
       const days = Math.min(90, Math.max(1, Number.isFinite(daysRaw) ? daysRaw : 30));
-      const userIdFilter = typeof req.query.userId === "string" ? String(req.query.userId) : null;
-      const gradeFilter = typeof req.query.grade === "string" ? String(req.query.grade).toUpperCase() : null;
-      const limitRaw = parseInt(String(req.query.limit ?? "200"), 10);
+      const userIdFilter = typeof req.query.userId === "string" ? qStr(req.query.userId) : null;
+      const gradeFilter = typeof req.query.grade === "string" ? qStr(req.query.grade).toUpperCase() : null;
+      const limitRaw = parseInt(qStr(req.query.limit) || "200", 10);
       const limit = Math.min(500, Math.max(1, Number.isFinite(limitRaw) ? limitRaw : 200));
 
       const params: any[] = [user.organizationId, days];
