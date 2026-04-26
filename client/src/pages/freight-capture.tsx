@@ -25,6 +25,7 @@ const FREIGHT_CAPTURE_ROLES = new Set<string>([
   "sales_director",
   "national_account_manager",
   "account_manager",
+  "sales",
 ]);
 
 // Per Task #673 spec: This Week / This Month / Last 30 Days / Custom.
