@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ChevronDown, ChevronRight, ShieldAlert, Zap, RefreshCw, TrendingUp, Truck } from "lucide-react";
+import { ChevronDown, ChevronRight, ShieldAlert, Zap, RefreshCw, TrendingUp, Truck, X } from "lucide-react";
 import { NbaCard } from "@/components/NbaCard";
 import type { NbaCardData } from "@/components/NbaCard";
 
@@ -37,6 +37,7 @@ const BUCKET_CONFIG: {
   key: WorkspaceBucket;
   label: string;
   description: string;
+  emptyHint: string;
   icon: typeof ShieldAlert;
   color: string;
   badgeClass: string;
@@ -45,6 +46,7 @@ const BUCKET_CONFIG: {
     key: "defend",
     label: "Defend",
     description: "Accounts at risk of churning or losing volume — act now.",
+    emptyHint: "No at-risk accounts right now. Keep up the great relationship work.",
     icon: ShieldAlert,
     color: "text-red-600 dark:text-red-400",
     badgeClass: "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300",
@@ -53,6 +55,7 @@ const BUCKET_CONFIG: {
     key: "quote_now",
     label: "Quote Now",
     description: "Accounts waiting on a quote or spot rate from you.",
+    emptyHint: "No pending quotes — inbox is clear.",
     icon: Zap,
     color: "text-amber-600 dark:text-amber-400",
     badgeClass: "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300",
@@ -61,6 +64,7 @@ const BUCKET_CONFIG: {
     key: "follow_up",
     label: "Follow Up",
     description: "Accounts that need a check-in or pending action closed out.",
+    emptyHint: "No overdue follow-ups — you're on top of your pipeline.",
     icon: RefreshCw,
     color: "text-blue-600 dark:text-blue-400",
     badgeClass: "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
@@ -69,6 +73,7 @@ const BUCKET_CONFIG: {
     key: "grow",
     label: "Grow",
     description: "Accounts primed for expansion into new lanes or services.",
+    emptyHint: "No expansion signals detected today — check back tomorrow.",
     icon: TrendingUp,
     color: "text-emerald-600 dark:text-emerald-400",
     badgeClass: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300",
@@ -77,22 +82,66 @@ const BUCKET_CONFIG: {
     key: "procure_carrier",
     label: "Procure Carrier",
     description: "Lanes needing carrier coverage or capacity outreach.",
+    emptyHint: "No open capacity gaps — lanes are covered.",
     icon: Truck,
     color: "text-purple-600 dark:text-purple-400",
     badgeClass: "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300",
   },
 ];
 
+// ── WorkspaceCardRow — NbaCard + "Not now" session-dismiss overlay ─────────────
+//
+// The NbaCard's built-in dismiss is permanent (writes to DB via PATCH
+// /api/nba/cards/:id/resolve). The workspace also offers a lighter-weight
+// "Not now" session-scoped dismiss (POST /api/nba/dismiss/:cardId, in-memory
+// only — resets on server restart) so a rep can temporarily hide a card
+// without permanently resolving it on all other NBA surfaces.
+
+function WorkspaceCardRow({
+  card,
+  onSessionDismiss,
+  isPendingDismiss,
+}: {
+  card: WorkspaceCard;
+  onSessionDismiss: (cardId: string) => void;
+  isPendingDismiss: boolean;
+}) {
+  return (
+    <div className="relative group" data-testid={`workspace-card-${card.id}`}>
+      {/* "Not now" session-dismiss button — visible on hover */}
+      <button
+        onClick={() => onSessionDismiss(card.id)}
+        disabled={isPendingDismiss}
+        title="Not now — hide until next session"
+        className="absolute top-2 right-2 z-10 hidden group-hover:flex items-center gap-1
+                   rounded-md px-2 py-0.5 text-xs font-medium
+                   bg-muted/80 text-muted-foreground border border-border
+                   hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30
+                   transition-colors"
+        data-testid={`button-not-now-${card.id}`}
+      >
+        <X className="h-3 w-3" />
+        Not now
+      </button>
+
+      {/* NbaCard renders normally; its own dismiss button permanently resolves the card */}
+      <NbaCard card={card} />
+    </div>
+  );
+}
+
 // ── Bucket section ─────────────────────────────────────────────────────────────
 
 function BucketSection({
   bucketKey,
   cards,
-  onDismiss,
+  onSessionDismiss,
+  isPendingDismiss,
 }: {
   bucketKey: WorkspaceBucket;
   cards: WorkspaceCard[];
-  onDismiss: (cardId: string) => void;
+  onSessionDismiss: (cardId: string) => void;
+  isPendingDismiss: boolean;
 }) {
   const [open, setOpen] = useState(true);
   const config = BUCKET_CONFIG.find(b => b.key === bucketKey)!;
@@ -126,17 +175,20 @@ function BucketSection({
       <CollapsibleContent>
         <div className="mt-2 space-y-3 pb-2">
           {cards.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-6" data-testid={`empty-${bucketKey}`}>
-              No active signals in this bucket.
+            <p
+              className="text-sm text-muted-foreground text-center py-5 italic"
+              data-testid={`empty-bucket-${bucketKey}`}
+            >
+              {config.emptyHint}
             </p>
           ) : (
             cards.map(card => (
-              <div key={card.id} data-testid={`card-${bucketKey}-${card.id}`} className="relative group">
-                <NbaCard
-                  card={card}
-                  onDismissed={() => onDismiss(card.id)}
-                />
-              </div>
+              <WorkspaceCardRow
+                key={card.id}
+                card={card}
+                onSessionDismiss={onSessionDismiss}
+                isPendingDismiss={isPendingDismiss}
+              />
             ))
           )}
         </div>
@@ -176,7 +228,7 @@ export default function DailyPrioritiesPage() {
     },
   });
 
-  const handleDismiss = (cardId: string) => {
+  const handleSessionDismiss = (cardId: string) => {
     dismissMutation.mutate(cardId);
   };
 
@@ -256,21 +308,8 @@ export default function DailyPrioritiesPage() {
         </div>
       )}
 
-      {/* Empty state */}
-      {!isLoading && !error && totalCards === 0 && (
-        <div
-          className="rounded-lg border border-dashed p-10 text-center"
-          data-testid="empty-workspace"
-        >
-          <p className="text-lg font-medium">You're all caught up!</p>
-          <p className="text-sm text-muted-foreground mt-1">
-            No active NBA signals right now. Check back later or review your accounts.
-          </p>
-        </div>
-      )}
-
-      {/* Bucket sections */}
-      {!isLoading && !error && data && totalCards > 0 && (
+      {/* Five bucket sections — always rendered once data is loaded, even when empty */}
+      {!isLoading && !error && data && (
         <div className="space-y-4" data-testid="bucket-sections">
           {BUCKET_CONFIG.map(config => {
             const cards = data.buckets[config.key] ?? [];
@@ -279,7 +318,8 @@ export default function DailyPrioritiesPage() {
                 key={config.key}
                 bucketKey={config.key}
                 cards={cards}
-                onDismiss={handleDismiss}
+                onSessionDismiss={handleSessionDismiss}
+                isPendingDismiss={dismissMutation.isPending}
               />
             );
           })}

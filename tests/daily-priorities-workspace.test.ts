@@ -280,4 +280,81 @@ section("10. Cards without companyId are not cross-deduplicated");
   test("null-companyId cards each get their own key (no dedup)", deduped.length === 2);
 }
 
+// 11. Session-scoped dismiss exclusion logic
+section("11. Session-scoped dismiss exclusion (in-memory Map simulation)");
+
+{
+  // Simulate the _workspaceDismissed Map that the endpoint uses to filter cards.
+  // Key: userId, Value: Set<cardId>
+  const sessionDismissed = new Map<string, Set<string>>();
+
+  const userId = "user-abc";
+  const cardA = "card-1";
+  const cardB = "card-2";
+  const cardC = "card-3";
+
+  // Dismiss card-1 for userId
+  let set = sessionDismissed.get(userId);
+  if (!set) { set = new Set<string>(); sessionDismissed.set(userId, set); }
+  set.add(cardA);
+
+  const rawCards = [
+    { id: cardA, urgencyScore: 90 },
+    { id: cardB, urgencyScore: 70 },
+    { id: cardC, urgencyScore: 50 },
+  ];
+
+  // Apply dismiss filter (same logic as in routes.ts)
+  const dismissedSet = sessionDismissed.get(userId) ?? new Set<string>();
+  const filteredCards = rawCards.filter(c => !dismissedSet.has(c.id));
+
+  test("dismissed card is excluded from workspace cards", filteredCards.every(c => c.id !== cardA));
+  test("non-dismissed cards are retained", filteredCards.some(c => c.id === cardB) && filteredCards.some(c => c.id === cardC));
+  test("filtered count is 2 after dismissing 1 of 3", filteredCards.length === 2);
+
+  // Dismiss another card
+  set.add(cardC);
+  const filteredAfterSecondDismiss = rawCards.filter(c => !(sessionDismissed.get(userId) ?? new Set()).has(c.id));
+  test("second dismiss further reduces workspace to 1 card", filteredAfterSecondDismiss.length === 1);
+  test("only the non-dismissed card remains after two dismissals", filteredAfterSecondDismiss[0]?.id === cardB);
+
+  // Different user should have a clean dismiss set
+  const otherUserId = "user-xyz";
+  const dismissedForOther = sessionDismissed.get(otherUserId) ?? new Set<string>();
+  const filteredForOther = rawCards.filter(c => !dismissedForOther.has(c.id));
+  test("dismiss is user-scoped — other user sees all 3 cards", filteredForOther.length === 3);
+}
+
+// 12. Rep-filter scoping authz logic
+section("12. Rep-filter scoping authz (role-based access control simulation)");
+
+{
+  // Simulate the roles allowed to scope to a different rep
+  const scopeAllowedRoles = ["admin", "director", "sales_director"];
+  const scopeDeniedRoles  = ["account_manager", "national_account_manager", "sales", "logistics_manager"];
+
+  const canScope = (role: string, repIdParam: string, currentUserId: string): boolean => {
+    if (!repIdParam || repIdParam === currentUserId) return true; // scoping to self is always ok
+    return scopeAllowedRoles.includes(role);
+  };
+
+  // admin can scope to any rep
+  test("admin can scope to a different rep", canScope("admin", "rep-123", "admin-456") === true);
+  test("director can scope to a different rep", canScope("director", "rep-123", "dir-789") === true);
+  test("sales_director can scope to a different rep", canScope("sales_director", "rep-123", "sd-999") === true);
+
+  // account_manager cannot scope to a different rep
+  test("account_manager cannot scope to another rep", canScope("account_manager", "rep-123", "am-001") === false);
+  test("national_account_manager cannot scope to another rep", canScope("national_account_manager", "rep-123", "nam-001") === false);
+  test("sales cannot scope to another rep", canScope("sales", "rep-123", "s-001") === false);
+
+  // Any role can scope to themselves (self view)
+  for (const role of [...scopeAllowedRoles, ...scopeDeniedRoles]) {
+    test(`any role can view own workspace (role=${role})`, canScope(role, "user-self", "user-self") === true);
+  }
+
+  // Empty / absent repId param is always self-scoped
+  test("empty repId defaults to self-scoped (always allowed)", canScope("account_manager", "", "am-001") === true);
+}
+
 report();
