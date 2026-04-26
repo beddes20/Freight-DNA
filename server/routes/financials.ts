@@ -1461,7 +1461,7 @@ export function registerFinancialRoutes(app: Express): void {
       res.json(result);
     } catch (error) {
       console.error("Error syncing from OneDrive:", error);
-      const message = error?.message || "Failed to sync from OneDrive. Please check the share link and try again.";
+      const message = (error instanceof Error ? error.message : null) || "Failed to sync from OneDrive. Please check the share link and try again.";
       res.status(500).json({ error: message });
     }
   });

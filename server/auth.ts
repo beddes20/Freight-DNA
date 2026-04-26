@@ -305,7 +305,9 @@ export async function getCurrentUser(req: Request): Promise<User | null> {
   return null;
 }
 
-export async function getVisibleCompanyIds(user: User): Promise<string[] | null> {
+type UserMinimal = Pick<User, "id" | "role" | "managerId" | "organizationId">;
+
+export async function getVisibleCompanyIds(user: UserMinimal): Promise<string[] | null> {
   if (user.role === "admin") return null;
 
   const allCompanies = await storage.getCompanies(user.organizationId);
@@ -357,7 +359,7 @@ export async function getVisibleCompanyIds(user: User): Promise<string[] | null>
     .map(c => c.id);
 }
 
-export async function canAccessCompany(user: User, companyId: string): Promise<boolean> {
+export async function canAccessCompany(user: UserMinimal, companyId: string): Promise<boolean> {
   if (user.role === "admin") return true;
   const visibleIds = await getVisibleCompanyIds(user);
   if (visibleIds === null) return true;

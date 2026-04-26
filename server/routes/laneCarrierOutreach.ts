@@ -2414,7 +2414,7 @@ Rules for suggestions:
           }
         }
       } catch (err) {
-        results.push({ carrierId: draft.carrierId, carrierName: draft.carrierName, email, status: "failed", error: err?.message ?? "Send error" });
+        results.push({ carrierId: draft.carrierId, carrierName: draft.carrierName, email, status: "failed", error: getErrorMessage(err) });
         failedCount++;
       }
     }

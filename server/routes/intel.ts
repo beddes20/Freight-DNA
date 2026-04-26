@@ -630,7 +630,7 @@ Format: Return ONLY the bullet list, one bullet per line, starting each with "â€
     logIntel(`AI brief generated for user ${userId} (${bullets.length} bullets)`);
     return result;
   } catch (err) {
-    logIntel(`AI brief error for user ${userId}: ${err.message}`);
+    logIntel(`AI brief error for user ${userId}: ${getErrorMessage(err)}`);
     const fallback: AiBriefResult = {
       bullets: ["Market intelligence brief temporarily unavailable. SONAR data is live â€” check market pulse below."],
       generatedAt: new Date().toISOString(),
@@ -2046,7 +2046,7 @@ export function registerIntelRoutes(app: Express): void {
         }));
 
         const fullData = await fetchFullLaneBatch(inputs).catch((err: Error) => {
-          logIntel(`TRAC batch fetch error: ${err.message}`);
+          logIntel(`TRAC batch fetch error: ${getErrorMessage(err)}`);
           return [];
         });
 

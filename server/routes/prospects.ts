@@ -779,7 +779,7 @@ export function registerProspectRoutes(app: Express) {
 
           created++;
         } catch (err) {
-          errors.push({ row: i + 1, error: err.message ?? "Failed to create" });
+          errors.push({ row: i + 1, error: getErrorMessage(err) });
         }
       }
       res.json({ created, errors });

@@ -15,6 +15,7 @@
 
 import type { Express, Request, Response, NextFunction } from "express";
 import { storage } from "../storage";
+import { getErrorMessage } from "../lib/errors";
 import { MarketSignalEngine } from "../marketSignalEngine";
 import type { MarketScopeType, MarketSignalType, MarketSignalStatus } from "@shared/schema";
 
@@ -164,7 +165,7 @@ export function registerMarketSignalRoutes(app: Express): void {
 
       return res.status(400).json({ error: "Provide one of: companyId, userId, signalId" });
     } catch (err) {
-      console.error("[market-nbas route]", err?.message ?? err);
+      console.error("[market-nbas route]", getErrorMessage(err));
       return res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -180,7 +181,7 @@ export function registerMarketSignalRoutes(app: Express): void {
       const nbas = await storage.getCarrierMarketNbasBySignal(marketSignalId);
       res.json({ nbas, total: nbas.length });
     } catch (err) {
-      console.error("[carrier-market-nbas by signal]", err?.message ?? err);
+      console.error("[carrier-market-nbas by signal]", getErrorMessage(err));
       return res.status(500).json({ error: "Internal server error" });
     }
   });
@@ -196,7 +197,7 @@ export function registerMarketSignalRoutes(app: Express): void {
       const nbas = await storage.getCarrierMarketNbasByCarrier(carrierId);
       res.json({ nbas, total: nbas.length });
     } catch (err) {
-      console.error("[carrier-market-nbas by carrier]", err?.message ?? err);
+      console.error("[carrier-market-nbas by carrier]", getErrorMessage(err));
       return res.status(500).json({ error: "Internal server error" });
     }
   });

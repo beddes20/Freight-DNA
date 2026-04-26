@@ -6664,8 +6664,8 @@ Respond with valid JSON only:
       const contacts = await searchZoomInfoContacts(companyName.trim(), 25);
       res.json({ contacts });
     } catch (error) {
-      console.error("[zoominfo] search error:", error?.message);
-      res.status(502).json({ error: error?.message || "ZoomInfo search failed" });
+      console.error("[zoominfo] search error:", getErrorMessage(error));
+      res.status(502).json({ error: getErrorMessage(error) || "ZoomInfo search failed" });
     }
   });
 
@@ -8498,7 +8498,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const draft = completion.choices[0]?.message?.content?.trim() ?? "";
       res.json({ draft });
     } catch (err) {
-      console.error("[ai-draft-email] error:", err?.message ?? err);
+      console.error("[ai-draft-email] error:", getErrorMessage(err));
       res.status(500).json({ error: "Failed to generate draft" });
     }
   });
@@ -8616,7 +8616,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       results.sort((a, b) => b.weeklyTotal - a.weeklyTotal);
       res.json({ weekStart: weekStartStr, results });
     } catch (err) {
-      console.error("[rep-scorecard]", err?.message ?? err);
+      console.error("[rep-scorecard]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to load rep scorecard" });
     }
   });
@@ -8713,7 +8713,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
 
       res.json({ plays, repPlayStats });
     } catch (err) {
-      console.error("[plays-activity]", err?.message ?? err);
+      console.error("[plays-activity]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to load plays activity" });
     }
   });
@@ -8745,7 +8745,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const rows = await storage.getTeamWeeklyCommitments(orgId, weekStart);
       res.json(rows);
     } catch (err) {
-      console.error("[weekly-commitments/team]", err?.message ?? err);
+      console.error("[weekly-commitments/team]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to load team commitments" });
     }
   });
@@ -8759,7 +8759,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const rows = await storage.getWeeklyCommitments(currentUser.id, orgId, weekStart);
       res.json(rows);
     } catch (err) {
-      console.error("[weekly-commitments]", err?.message ?? err);
+      console.error("[weekly-commitments]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to load commitments" });
     }
   });
@@ -8804,7 +8804,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const row = await storage.createWeeklyCommitment(payload);
       res.json(row);
     } catch (err) {
-      console.error("[weekly-commitments POST]", err?.message ?? err);
+      console.error("[weekly-commitments POST]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to create commitment" });
     }
   });
@@ -8819,7 +8819,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       if (!row) return res.status(404).json({ error: "Commitment not found" });
       res.json(row);
     } catch (err) {
-      console.error("[weekly-commitments PATCH]", err?.message ?? err);
+      console.error("[weekly-commitments PATCH]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to update commitment" });
     }
   });
@@ -8832,7 +8832,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       if (!ok) return res.status(404).json({ error: "Commitment not found" });
       res.json({ success: true });
     } catch (err) {
-      console.error("[weekly-commitments DELETE]", err?.message ?? err);
+      console.error("[weekly-commitments DELETE]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to delete commitment" });
     }
   });
@@ -8878,7 +8878,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
 
       res.json(projectNbaCard(card, { contacts, lanes, users: userMap }));
     } catch (err) {
-      console.error("[nba/company/card GET]", err?.message ?? err);
+      console.error("[nba/company/card GET]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch company NBA card" });
     }
   });
@@ -8949,7 +8949,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       );
       res.json(projected);
     } catch (err) {
-      console.error("[nba/cards GET]", err?.message ?? err);
+      console.error("[nba/cards GET]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch NBA cards" });
     }
   });
@@ -9011,7 +9011,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       } catch (e) { console.error("[nba/cards PATCH event]", e); }
       res.json(updated);
     } catch (err) {
-      console.error("[nba/cards PATCH]", err?.message ?? err);
+      console.error("[nba/cards PATCH]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to resolve NBA card" });
     }
   });
@@ -9025,7 +9025,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       if (!updated) return res.status(404).json({ error: "Card not found or not yours" });
       res.json({ ok: true, firstViewedAt: updated.firstViewedAt });
     } catch (err) {
-      console.error("[nba/cards/:id/view POST]", err?.message ?? err);
+      console.error("[nba/cards/:id/view POST]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to record view" });
     }
   });
@@ -9084,7 +9084,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       } catch (e) { console.error("[nba/cards/link-outcome event]", e); }
       res.json(updated);
     } catch (err) {
-      console.error("[nba/cards/link-outcome POST]", err?.message ?? err);
+      console.error("[nba/cards/link-outcome POST]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to link outcome" });
     }
   });
@@ -9105,7 +9105,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const summary = await storage.getNbaImpactForUser(currentUser.id, currentUser.organizationId, daysBack);
       res.json(summary);
     } catch (err) {
-      console.error("[nba/my-impact GET]", err?.message ?? err);
+      console.error("[nba/my-impact GET]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch NBA impact" });
     }
   });
@@ -9135,7 +9135,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const rollup = await storage.getNbaTeamRollup(amIds, organizationId, daysBack);
       res.json(rollup);
     } catch (err) {
-      console.error("[nba/team-rollup GET]", err?.message ?? err);
+      console.error("[nba/team-rollup GET]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch team rollup" });
     }
   });
@@ -9175,7 +9175,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       }));
       res.json({ repId, repName: rep.name, cards: decorated });
     } catch (err) {
-      console.error("[nba/team-rollup/:repId/cards GET]", err?.message ?? err);
+      console.error("[nba/team-rollup/:repId/cards GET]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch rep cards" });
     }
   });
@@ -9192,7 +9192,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const summary = await storage.getNbaManagerSummary(organizationId, weekStart);
       res.json(summary);
     } catch (err) {
-      console.error("[nba/manager-summary GET]", err?.message ?? err);
+      console.error("[nba/manager-summary GET]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch manager summary" });
     }
   });
@@ -9209,7 +9209,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const performance = await storage.getNbaRulePerformance(organizationId, daysBack);
       res.json(performance);
     } catch (err) {
-      console.error("[nba/rule-performance GET]", err?.message ?? err);
+      console.error("[nba/rule-performance GET]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch rule performance" });
     }
   });
@@ -9302,7 +9302,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
 
       res.json({ generated, skipped, total: companyResults.length + laneCapacitySpecs.length });
     } catch (err) {
-      console.error("[nba/run-engine POST]", err?.message ?? err);
+      console.error("[nba/run-engine POST]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to run NBA engine" });
     }
   });
@@ -9326,7 +9326,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const counts = await storage.countPendingContactSuggestionsByOrg(currentUser.organizationId, scope);
       res.json(counts);
     } catch (err) {
-      console.error("[suggestion-counts GET]", err?.message ?? err);
+      console.error("[suggestion-counts GET]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch suggestion counts" });
     }
   });
@@ -9355,7 +9355,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const filtered = status ? suggestions : suggestions.filter(s => s.status === "pending" || s.status === "snoozed");
       res.json(filtered);
     } catch (err) {
-      console.error("[contact-suggestions GET]", err?.message ?? err);
+      console.error("[contact-suggestions GET]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch suggestions" });
     }
   });
@@ -9481,7 +9481,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       await storage.updateAccountContactSuggestionStatus(id, "accepted", { userId: currentUser.id });
       res.json({ suggestion: { ...suggestion, status: "accepted" }, contact });
     } catch (err) {
-      console.error("[contact-suggestions/accept POST]", err?.message ?? err);
+      console.error("[contact-suggestions/accept POST]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to accept suggestion" });
     }
   });
@@ -9499,7 +9499,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const updated = await storage.updateAccountContactSuggestionStatus(id, "ignored", { userId: currentUser.id });
       res.json(updated);
     } catch (err) {
-      console.error("[contact-suggestions/ignore POST]", err?.message ?? err);
+      console.error("[contact-suggestions/ignore POST]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to ignore suggestion" });
     }
   });
@@ -9519,7 +9519,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const updated = await storage.updateAccountContactSuggestionStatus(id, "snoozed", { userId: currentUser.id, snoozedUntil: snoozedUntilDate });
       res.json(updated);
     } catch (err) {
-      console.error("[contact-suggestions/snooze POST]", err?.message ?? err);
+      console.error("[contact-suggestions/snooze POST]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to snooze suggestion" });
     }
   });
@@ -9537,7 +9537,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const updated = await storage.updateAccountContactSuggestionStatus(id, "never_suggest", { userId: currentUser.id });
       res.json(updated);
     } catch (err) {
-      console.error("[contact-suggestions/never-suggest POST]", err?.message ?? err);
+      console.error("[contact-suggestions/never-suggest POST]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to suppress suggestion" });
     }
   });
@@ -9554,7 +9554,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const items = await storage.getSidebarTooltips(currentUser.organizationId);
       res.json({ items });
     } catch (err) {
-      console.error("[sidebar-tooltips GET]", err?.message ?? err);
+      console.error("[sidebar-tooltips GET]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to load sidebar tooltips" });
     }
   });
@@ -9575,7 +9575,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const row = await storage.upsertSidebarTooltip(currentUser.organizationId, itemKey, trimmed, currentUser.id);
       res.json(row);
     } catch (err) {
-      console.error("[sidebar-tooltips PUT]", err?.message ?? err);
+      console.error("[sidebar-tooltips PUT]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to save sidebar tooltip" });
     }
   });
@@ -9588,7 +9588,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       await storage.deleteSidebarTooltip(currentUser.organizationId, pStr(req.params.itemKey));
       res.json({ ok: true });
     } catch (err) {
-      console.error("[sidebar-tooltips DELETE]", err?.message ?? err);
+      console.error("[sidebar-tooltips DELETE]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to reset sidebar tooltip" });
     }
   });

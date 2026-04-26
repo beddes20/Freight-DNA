@@ -185,7 +185,7 @@ export function registerValueIQRoutes(app: Express) {
       }).returning();
       res.json(row);
     } catch (err) {
-      res.status(400).json({ error: err.message ?? "Invalid project" });
+      res.status(400).json({ error: getErrorMessage(err) });
     }
   });
   app.patch("/api/valueiq/projects/:id", requireAuth, async (req: Request, res: Response) => {
@@ -266,7 +266,7 @@ export function registerValueIQRoutes(app: Express) {
       }).returning();
       res.json(row);
     } catch (err) {
-      res.status(400).json({ error: err.message ?? "Invalid thread" });
+      res.status(400).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -549,7 +549,7 @@ export function registerValueIQRoutes(app: Express) {
       const { password: _p, ...safe }: User & { password?: string | null } = updated;
       res.json(safe);
     } catch (err) {
-      res.status(400).json({ error: err.message ?? "Invalid preferences" });
+      res.status(400).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -570,7 +570,7 @@ export function registerValueIQRoutes(app: Express) {
       res.json({ enabled: true, threadId: r.threadId, created: r.created, title: r.title, date: r.date, timeZone: tz });
     } catch (err) {
       console.error("[valueiq] today get:", err);
-      res.status(500).json({ error: err.message ?? "Failed" });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -589,7 +589,7 @@ export function registerValueIQRoutes(app: Express) {
       res.json({ threadId: r.threadId, title: r.title, date: r.date, timeZone: tz });
     } catch (err) {
       console.error("[valueiq] today refresh:", err);
-      res.status(500).json({ error: err.message ?? "Failed" });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -714,7 +714,7 @@ export function registerValueIQRoutes(app: Express) {
       });
       res.json({ id });
     } catch (err) {
-      res.status(400).json({ error: err.message ?? "Invalid item" });
+      res.status(400).json({ error: getErrorMessage(err) });
     }
   });
   app.delete("/api/valueiq/library/:id", requireAuth, async (req: Request, res: Response) => {
@@ -743,7 +743,7 @@ export function registerValueIQRoutes(app: Express) {
       });
       res.json({ id, fileName: file.originalname, chars: parsedText.length });
     } catch (err) {
-      res.status(500).json({ error: err.message ?? "Upload failed" });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 }

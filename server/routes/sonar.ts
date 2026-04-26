@@ -11,6 +11,7 @@
 
 import type { Express, Request, Response } from "express";
 import { requireAuth, getCurrentUser } from "../auth";
+import { getErrorMessage } from "../lib/errors";
 import { storage } from "../storage";
 import {
   getNationalMarketSummary,
@@ -274,7 +275,7 @@ export function registerSonarRoutes(app: Express): void {
 
       res.json(nationalWithStatus);
     } catch (err) {
-      console.error("[sonar] market-pulse error:", err?.message ?? err);
+      console.error("[sonar] market-pulse error:", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch market pulse" });
     }
   });
@@ -288,7 +289,7 @@ export function registerSonarRoutes(app: Express): void {
       const otris = await getMarketOtris(markets);
       res.json({ otris });
     } catch (err) {
-      console.error("[sonar] market-otris error:", err?.message ?? err);
+      console.error("[sonar] market-otris error:", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch market OTRIs" });
     }
   });
@@ -316,7 +317,7 @@ export function registerSonarRoutes(app: Express): void {
       }
       res.json({ signals: allSignals });
     } catch (err) {
-      console.error("[sonar] lane-signals/batch error:", err?.message ?? err);
+      console.error("[sonar] lane-signals/batch error:", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch lane signals" });
     }
   });
@@ -375,7 +376,7 @@ export function registerSonarRoutes(app: Express): void {
       }
       res.json({ signal, tracSpotRpm });
     } catch (err) {
-      console.error("[sonar] lane-signals error:", err?.message ?? err);
+      console.error("[sonar] lane-signals error:", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch lane signal" });
     }
   });
@@ -399,8 +400,8 @@ export function registerSonarRoutes(app: Express): void {
       const laneTimeouts = getLaneTimeoutStats();
       res.json({ status, dailyAgeHours, laneTimeouts, ...report });
     } catch (err) {
-      console.error("[sonar] health error:", err?.message ?? err);
-      res.status(500).json({ status: "down", error: err?.message ?? "probe failed" });
+      console.error("[sonar] health error:", getErrorMessage(err));
+      res.status(500).json({ status: "down", error: getErrorMessage(err) });
     }
   });
 
@@ -415,8 +416,8 @@ export function registerSonarRoutes(app: Express): void {
       const status = await runDailySonarRefresh();
       res.json({ ok: true, status });
     } catch (err) {
-      console.error("[sonar] manual refresh error:", err?.message ?? err);
-      res.status(500).json({ error: err?.message ?? "refresh failed" });
+      console.error("[sonar] manual refresh error:", getErrorMessage(err));
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 }
