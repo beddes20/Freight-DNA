@@ -22,31 +22,44 @@ import { useQueryClient } from "@tanstack/react-query";
 // already capped, so we don't worry about thundering-herd refreshes.
 const LANE_INBOX_KEY = ["/api/lane-inbox"] as const;
 
+// Today's Priorities (the daily workspace) is sensitive to almost every
+// signal-producing surface — quotes answered, lanes claimed, carrier outreach
+// completed, freight opportunities resolved. Including it in each topic's
+// invalidation list keeps the page live without adding per-write hooks.
+const DAILY_WORKSPACE_KEY = ["/api/nba/daily-workspace"] as const;
+
 const TOPIC_TO_QUERY_KEYS: Record<string, ReadonlyArray<ReadonlyArray<string>>> = {
   freight_opportunity: [
     ["/api/freight-opportunities/cockpit"],
     ["/api/freight-opportunities"],
     LANE_INBOX_KEY,
+    DAILY_WORKSPACE_KEY,
   ],
   recurring_lane: [
     ["/api/recurring-lanes/work-queue"],
     ["/api/recurring-lanes"],
     LANE_INBOX_KEY,
+    DAILY_WORKSPACE_KEY,
   ],
   carrier_outreach: [
     ["/api/carrier-hub"],
     ["/api/recurring-lanes/work-queue"],
     LANE_INBOX_KEY,
+    DAILY_WORKSPACE_KEY,
   ],
   customer_quote: [
     ["/api/customer-quotes/snapshot"],
     ["/api/customer-quotes/list"],
     ["/api/customer-quotes/action-queue"],
     LANE_INBOX_KEY,
+    DAILY_WORKSPACE_KEY,
   ],
   carrier: [
     ["/api/carrier-hub"],
     ["/api/carriers"],
+  ],
+  daily_workspace: [
+    DAILY_WORKSPACE_KEY,
   ],
 };
 

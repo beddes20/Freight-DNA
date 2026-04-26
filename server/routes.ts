@@ -45,6 +45,7 @@ import { registerWebexRoutes } from "./routes/webex";
 import { registerCallTrendlineRoutes } from "./routes/callTrendlines";
 import { registerCustomerQuoteRoutes } from "./routes/customerQuotes";
 import { registerLiveSyncRoutes } from "./routes/liveSync";
+import { publish as publishLiveSync } from "./services/liveSync";
 import { registerLaneInboxRoutes } from "./routes/laneInbox";
 import { registerNotificationRoutes } from "./routes/notifications";
 import { registerContactRoutes } from "./routes/contacts";
@@ -9012,6 +9013,9 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
           metadata: null,
         });
       } catch (e) { console.error("[nba/cards PATCH event]", e); }
+      // Resolving a card removes it from the daily workspace — broadcast so
+      // any open Today's Priorities tabs refresh immediately.
+      publishLiveSync(updated.orgId, "daily_workspace", updated.id);
       res.json(updated);
     } catch (err) {
       console.error("[nba/cards PATCH]", getErrorMessage(err));
@@ -9207,6 +9211,22 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
   // Resets on server restart — acceptable for v1 (no schema change needed).
   const _workspaceDismissed = new Map<string, Set<string>>();
 
+  // 30-second response cache keyed by (orgId, viewerUserId, scopedToUserId).
+  // The endpoint pulls all NBA cards + companies + per-card contact/lane rows,
+  // which is heavy; the daily workspace gets re-queried on every cross-tab
+  // liveSync invalidation, so a small TTL prevents thundering herds without
+  // making the data stale. Entries are evicted lazily.
+  const _workspaceCache = new Map<string, { ts: number; payload: unknown }>();
+  const WORKSPACE_CACHE_TTL_MS = 30_000;
+  const _workspaceCacheKey = (orgId: string, viewerId: string, scopedTo: string | null) =>
+    `${orgId}::${viewerId}::${scopedTo ?? "self"}`;
+  const _invalidateWorkspaceCache = (orgId: string) => {
+    const prefix = `${orgId}::`;
+    for (const k of _workspaceCache.keys()) {
+      if (k.startsWith(prefix)) _workspaceCache.delete(k);
+    }
+  };
+
   // GET /api/nba/daily-workspace — bucketed priority list for Today's Priorities
   // ?repId=<userId>  — admin/director/sales_director may scope to a specific rep
   app.get("/api/nba/daily-workspace", requireAuth, async (req, res) => {
@@ -9229,6 +9249,15 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
         const rep = allOrgUsers.find(u => u.id === repIdParam && u.organizationId === organizationId);
         if (!rep) return res.status(404).json({ error: "Rep not found" });
         targetUserId = repIdParam;
+      }
+
+      // Cache lookup — keyed per (org, viewer, scopedTo). Viewer is part of the
+      // key because the in-memory dismiss set is viewer-scoped.
+      const scopedToKey = targetUserId !== currentUserId ? targetUserId : null;
+      const cacheKey = _workspaceCacheKey(organizationId, currentUserId, scopedToKey);
+      const cached = _workspaceCache.get(cacheKey);
+      if (cached && Date.now() - cached.ts < WORKSPACE_CACHE_TTL_MS) {
+        return res.json(cached.payload);
       }
 
       // Fetch raw cards (all visible, no artificial limit for workspace view)
@@ -9323,11 +9352,13 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       ) as unknown as Record<WorkspaceBucket, ReturnType<typeof projectNbaCard> & { bucket: WorkspaceBucket }[]>;
 
       const totalCards = deduped.length;
-      res.json({
+      const payload = {
         buckets: projectedBuckets,
         totalCards,
         scopedToUserId: targetUserId !== currentUserId ? targetUserId : null,
-      });
+      };
+      _workspaceCache.set(cacheKey, { ts: Date.now(), payload });
+      res.json(payload);
     } catch (err) {
       console.error("[nba/daily-workspace GET]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch daily workspace" });
@@ -9354,6 +9385,10 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
         _workspaceDismissed.set(currentUser.id, set);
       }
       set.add(cardId);
+      // Invalidate the workspace cache for this org so the next fetch
+      // doesn't return the stale (still-includes-the-card) payload.
+      _invalidateWorkspaceCache(currentUser.organizationId);
+      publishLiveSync(currentUser.organizationId, "daily_workspace", cardId);
       res.json({ ok: true, cardId });
     } catch (err) {
       console.error("[nba/dismiss POST]", getErrorMessage(err));

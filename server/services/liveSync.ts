@@ -27,7 +27,8 @@ export type LiveSyncTopic =
   | "recurring_lane"
   | "carrier_outreach"
   | "customer_quote"
-  | "carrier";
+  | "carrier"
+  | "daily_workspace";
 
 export interface LiveSyncEvent {
   topic: LiveSyncTopic;
