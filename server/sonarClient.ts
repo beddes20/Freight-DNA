@@ -233,15 +233,21 @@ async function doWarmMemoryCacheFromDb(): Promise<void> {
       const fetchedAt = new Date(row.fetchedAt).getTime();
 
       if (key === "national_summary" && row.response) {
+        // row.response is a jsonb column written by the Sonar API fetch path;
+        // its structure is guaranteed to match NationalMarketSummary. Safe cast.
         nationalCache = { value: row.response as unknown as NationalMarketSummary, fetchedAt, ttlMs };
         lastKnownNational = row.response as unknown as NationalMarketSummary;
         loaded++;
       } else if (key.startsWith("otri:") && row.response) {
         const marketKey = key.replace("otri:", "");
+        // row.response is a jsonb column written by the Sonar OTRI fetch; shape
+        // matches MarketOtri by construction. Safe cast.
         otriCache.set(marketKey, { value: row.response as unknown as MarketOtri, fetchedAt, ttlMs });
         loaded++;
       } else if (key.startsWith("votri:") && row.response) {
         const qualifier = key.replace("votri:", "");
+        // row.response is a jsonb column written by the Sonar VOTRI fetch; shape
+        // matches LaneVotri by construction. Safe cast.
         votriCache.set(qualifier, { value: row.response as unknown as LaneVotri, fetchedAt, ttlMs });
         loaded++;
       }
@@ -252,6 +258,7 @@ async function doWarmMemoryCacheFromDb(): Promise<void> {
         const allSonarRows = await storage.getAllCachedApiResponses("sonar");
         for (const row of allSonarRows) {
           if (row.cacheKey === "national_summary" && row.response) {
+            // Stale fallback from DB; same jsonb column as the cache-warm path above.
             lastKnownNational = row.response as unknown as NationalMarketSummary;
             if (!nationalCache) {
               const fetchedAt = new Date(row.fetchedAt).getTime();

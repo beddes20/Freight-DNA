@@ -272,6 +272,8 @@ export async function detectAndProcessPatternShifts(
           customerId: customer.id,
           status: "active",
           summary: result.summary,
+          // result.axes is a typed object from the AI service; the DB column is
+          // jsonb, so Drizzle expects Record<string, unknown>. Safe cast.
           axes: result.axes as unknown as Record<string, unknown>,
           lastShiftedAt: now,
           normalizedSince: null,

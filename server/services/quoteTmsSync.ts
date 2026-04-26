@@ -98,8 +98,9 @@ export function decideSyncAction(
     return { kind: "lost", match };
   }
   if (match && match.bucket === "realized") {
-    const cost = num(match.cost as unknown as string | null);
-    const revenue = num(match.revenue as unknown as string | null);
+    // pg-node returns NUMERIC columns as strings; cast explicitly for the num() helper.
+    const cost = num(match.cost != null ? String(match.cost) : null);
+    const revenue = num(match.revenue != null ? String(match.revenue) : null);
     const quoted = num(opp.quotedAmount) || revenue;
     const margin = quoted - cost;
     const lowMargin = quoted > 0 && margin > 0 && margin / quoted < 0.06;
@@ -151,6 +152,8 @@ export async function syncQuoteOutcomesFromTms(orgId: string): Promise<SyncResul
 
   const opps = await db.select().from(quoteOpportunities).where(and(
     eq(quoteOpportunities.organizationId, orgId),
+    // Drizzle's inArray expects the literal union column type; widening to string[]
+    // is safe because ACTIVE_OUTCOMES only contains valid outcomeStatus literals.
     inArray(quoteOpportunities.outcomeStatus, ACTIVE_OUTCOMES as unknown as string[]),
   ));
   if (opps.length === 0) return result;

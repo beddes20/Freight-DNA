@@ -212,6 +212,8 @@ export async function syncMarketSignalNbas(orgId: string, storage: IStorage): Pr
         outcomeType: "grow",
         confidence: signal.severity === "critical" || signal.severity === "high" ? "high" : "medium",
         signalCount: signalSummaryLines.length,
+        // signalSummary is a typed array of objects; the DB column is jsonb so
+        // Drizzle expects the opaque InsertNbaCard["signalSummary"] type. Safe cast.
         signalSummary: [explanation, ...signalSummaryLines] as unknown as InsertNbaCard["signalSummary"],
         whyThisNow: `Market signal detected in ${regionLabel}${equipLabel}: ${signal.signalType} (${signal.severity} severity). ${account.companyName} has activity in this corridor.`,
         suggestedAction: explanation.suggestedOutreachScript,

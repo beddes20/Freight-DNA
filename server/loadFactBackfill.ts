@@ -189,6 +189,8 @@ export function freightOpportunityToInsert(
     cost: null,
     margin: null,
     loadCount: opp.loadCount ?? 1,
+    // opp is a typed FreightOpportunity; rawRow is a jsonb column so it expects
+    // Record<string, unknown>. Safe cast — shape is the full opp object.
     rawRow: opp as unknown as Record<string, unknown>,
     sourceFileName: opp.sourceFileName ?? null,
     sourceKind: "freight_opp_backfill",

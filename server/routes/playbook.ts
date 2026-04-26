@@ -320,7 +320,10 @@ export function registerPlaybookRoutes(app: Express): void {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
         if (!isAuthor(user.role)) return res.status(403).json({ error: "Manager/Admin only" });
-        const file = (req as unknown as { file?: { buffer: Buffer; originalname?: string } }).file;
+        // Multer populates req.file at runtime but doesn't extend Express.Request
+        // in a way tsc resolves without an explicit augmentation; the cast is safe
+        // because playbookUpload.single("file") is the preceding middleware.
+        const file = (req as Request & { file?: { buffer: Buffer; originalname?: string } }).file;
         if (!file?.buffer) return res.status(400).json({ error: "Missing file" });
         const parsed = parsePlaybookSpreadsheet(file.buffer);
         if (parsed.headers.length === 0) return res.status(400).json({ error: "No header row detected" });

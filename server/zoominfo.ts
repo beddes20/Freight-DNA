@@ -159,7 +159,7 @@ export async function searchZoomInfoContacts(
     contacts = data.data as ZoomInfoContact[];
   } else if (data?.data && !Array.isArray(data.data)) {
     const nested = data.data as { result?: Array<{ data?: ZoomInfoContact[] }>; outputFields?: ZoomInfoContact[] };
-    contacts = nested.result?.[0]?.data || (nested.outputFields as unknown as ZoomInfoContact[]) || [];
+    contacts = nested.result?.[0]?.data || nested.outputFields || [];
   }
 
   return contacts;

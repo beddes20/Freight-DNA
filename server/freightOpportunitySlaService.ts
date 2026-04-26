@@ -82,7 +82,7 @@ export function computeSlaState(
   }
   const startMs = opp.awaitingApprovalSince instanceof Date
     ? opp.awaitingApprovalSince.getTime()
-    : new Date(opp.awaitingApprovalSince as unknown as string).getTime();
+    : new Date(String(opp.awaitingApprovalSince)).getTime();
   const ageHours = (now.getTime() - startMs) / 3_600_000;
   let state: SlaState = "ok";
   if (ageHours >= SLA_L2_HOURS) state = "escalated";
@@ -93,7 +93,7 @@ export function computeSlaState(
     ageHours,
     awaitingSince: opp.awaitingApprovalSince instanceof Date
       ? opp.awaitingApprovalSince.toISOString()
-      : (opp.awaitingApprovalSince as unknown as string),
+      : String(opp.awaitingApprovalSince),
   };
 }
 
@@ -172,7 +172,9 @@ async function tryClaimSlaStamp(
       AND approved_at IS NULL
     RETURNING id
   `);
-  // node-pg returns { rows: [...] }; some drivers return the array directly.
+  // db.execute() can return either { rows: [...] } (node-pg shape) or the
+  // array directly depending on the Drizzle driver version in use.
+  // Both branches are safe: we immediately check Array.isArray before use.
   const maybeRows = (result as unknown as { rows?: unknown[] }).rows;
   const rows: unknown[] = Array.isArray(maybeRows)
     ? maybeRows

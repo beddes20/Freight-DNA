@@ -559,6 +559,8 @@ export async function writeLoadFactImportAudit(row: {
     bucketRealized: row.buckets.realized,
     bucketCancelled: row.buckets.cancelled,
     bucketUnknown: row.buckets.unknown,
+    // row.warnings is a jsonb column; Drizzle types it as JsonValue but the
+    // consumer expects a plain object. Safe cast — written by our own audit path.
     warnings: row.warnings as unknown as object,
     actorUserId: row.actorUserId,
     triggeredBy: row.triggeredBy,

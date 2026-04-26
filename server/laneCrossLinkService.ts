@@ -246,6 +246,8 @@ export async function buildOpenOppContextByLaneSig(
     .from(freightOpportunities)
     .where(and(
       eq(freightOpportunities.orgId, orgId),
+      // Drizzle's inArray expects the literal union column type; widening to string[]
+      // is safe because OPEN_OPP_STATUSES only contains valid status literals.
       inArray(freightOpportunities.status, OPEN_OPP_STATUSES as unknown as string[]),
       gte(freightOpportunities.generatedAt, startOfDay),
     ))) as Array<{

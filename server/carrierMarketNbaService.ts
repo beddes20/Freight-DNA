@@ -196,6 +196,8 @@ export async function syncCarrierMarketNbas(orgId: string, storage: IStorage): P
           recommendationType,
           status: existing.status,
           urgencyScore,
+          // explanation is a typed object; the DB column is jsonb so Drizzle
+          // expects Record<string, unknown>. Safe cast — shape is app-controlled.
           explanation: explanation as unknown as Record<string, unknown>,
           suppressionReason: null,
           lastActionAt: null,
@@ -208,6 +210,8 @@ export async function syncCarrierMarketNbas(orgId: string, storage: IStorage): P
           recommendationType,
           status: "pending",
           urgencyScore,
+          // explanation is a typed object; the DB column is jsonb so Drizzle
+          // expects Record<string, unknown>. Safe cast — shape is app-controlled.
           explanation: explanation as unknown as Record<string, unknown>,
           suppressionReason: null,
           lastActionAt: null,

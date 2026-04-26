@@ -7831,6 +7831,8 @@ Respond with valid JSON only:
       `);
 
       const productsMap = new Map<string, ProductEntry>();
+      // db.execute() returns untyped rows; the columns are guaranteed by the
+      // SELECT above which maps exactly to the ProductRow interface.
       for (const row of result.rows as unknown as ProductRow[]) {
         if (!productsMap.has(row.product_id)) {
           productsMap.set(row.product_id, {

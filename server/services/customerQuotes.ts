@@ -3367,7 +3367,7 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
         ? wonAmts.reduce((s, v) => s + v, 0) / wonAmts.length
         : 0;
       const lastWonMs = wonRows
-        .map(r => new Date(r.requestDate as unknown as string).getTime())
+        .map(r => new Date(String(r.requestDate)).getTime())
         .filter(t => Number.isFinite(t))
         .sort((a, b) => b - a)[0];
       const lastWonDays = lastWonMs

@@ -537,6 +537,8 @@ export async function sendOpportunityWave(
         templateKind: draft.templateKind,
         opportunityId,
         opportunityCarrierId: rowId,
+      // The plain-object arrays match the jsonb column shapes exactly; the
+      // insert-schema type is opaque to tsc because the column is jsonb.
       }] as unknown as InsertCarrierOutreachLog["emailDrafts"],
       sentAt: new Date(),
       deliveryStatus: "sent",

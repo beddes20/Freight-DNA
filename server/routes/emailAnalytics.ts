@@ -92,8 +92,8 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
     if (cached) {
       return cached.map((p) => ({
         ...p,
-        inboundAt: new Date(p.inboundAt as unknown as string),
-        outboundAt: p.outboundAt ? new Date(p.outboundAt as unknown as string) : null,
+        inboundAt: new Date(String(p.inboundAt)),
+        outboundAt: p.outboundAt ? new Date(String(p.outboundAt)) : null,
       }));
     }
     const pairs = await fetchResponsePairs(filters);

@@ -2079,6 +2079,8 @@ export function registerIntelRoutes(app: Express): void {
               miles: d.spot.miles ?? null,
               avgRpm30d: d.stats.avgRpm30d?.toString() ?? null,
               avgRpm90d: d.stats.avgRpm90d?.toString() ?? null,
+              // d.forecast is a typed array from the rate-service; the DB column
+              // is jsonb so Drizzle expects Record<string, unknown>[]. Safe cast.
               forecastJson: d.forecast as unknown as Record<string, unknown>[],
               rateAlert: alertResult.alert,
               alertReason: alertResult.reason,
@@ -2113,6 +2115,8 @@ export function registerIntelRoutes(app: Express): void {
           miles: r?.miles ?? null,
           confidenceScore: r ? n(r.confidenceScore) : null,
           loadCount: r?.loadCount ?? null,
+          // forecastJson is a jsonb column written by the rate-service; its
+          // structure is guaranteed to match the inline array type here.
           forecastDays: (r?.forecastJson as unknown as Array<{ date: string; forecastRpm: number | null; forecastIndexValue: number | null }>) ?? [],
           rateAlert: r?.rateAlert ?? null,
           alertReason: r?.alertReason ?? null,
@@ -2225,6 +2229,8 @@ export function registerIntelRoutes(app: Express): void {
         miles: d.spot.miles ?? null,
         avgRpm30d: d.stats.avgRpm30d?.toString() ?? null,
         avgRpm90d: d.stats.avgRpm90d?.toString() ?? null,
+        // d.forecast is a typed array from the rate-service; the DB column
+        // is jsonb so Drizzle expects Record<string, unknown>[]. Safe cast.
         forecastJson: d.forecast as unknown as Record<string, unknown>[],
         rateAlert: alertResult.alert,
         alertReason: alertResult.reason,

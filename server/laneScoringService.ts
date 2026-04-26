@@ -318,6 +318,8 @@ export async function scoreAllEligibleLanes(
       const { score, factors } = await scoreLane(lane, storage);
       await storage.updateRecurringLane(lane.id, {
         laneScore: score,
+        // factors is a typed object from scoreLane; the DB column is jsonb so
+        // Drizzle expects Record<string, unknown>. Safe cast — shape is app-controlled.
         laneScoreFactors: factors as unknown as Record<string, unknown>,
         lastScoredAt: now,
       });

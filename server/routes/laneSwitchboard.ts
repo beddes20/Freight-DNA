@@ -331,6 +331,8 @@ async function fetchLive(
 
   const conds = [
     eq(freightOpportunities.orgId, orgId),
+    // Drizzle's inArray expects the literal union column type; widening to string[]
+    // is safe because OPEN_OPP_STATUSES only contains valid status literals.
     inArray(freightOpportunities.status, OPEN_OPP_STATUSES as unknown as string[]),
     sql`lower(trim(${freightOpportunities.origin})) in (${sql.join(originPatterns.map(p => sql`${p}`), sql`, `)})`,
     sql`lower(trim(${freightOpportunities.destination})) in (${sql.join(destPatterns.map(p => sql`${p}`), sql`, `)})`,
@@ -374,6 +376,9 @@ async function fetchLive(
       destinationState: r.destinationState ?? null,
       equipmentType: r.equipmentType ?? null,
       status: r.status,
+      // Drizzle types the timestamp column as Date, but some query paths return
+      // it as a string. Widening to string | number | Date lets new Date() handle
+      // either form safely — the only use is toISOString() immediately after.
       pickupWindowStart: r.pickupWindowStart
         ? new Date(r.pickupWindowStart as unknown as string | number | Date).toISOString()
         : null,

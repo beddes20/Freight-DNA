@@ -1958,6 +1958,8 @@ export class DatabaseStorage implements IStorage {
       ]
     );
 
+    // pool.query() returns untyped rows; the RETURNING * clause guarantees the
+    // shape matches FinancialUpload (all columns from the financial_uploads table).
     const created = result.rows[0] as unknown as FinancialUpload;
 
     const verifyResult = await pool.query<{ len: string }>(
@@ -8594,6 +8596,8 @@ export class DatabaseStorage implements IStorage {
       WHERE j.id = due.id
       RETURNING j.*
     `);
+    // pool.query() returns untyped rows; RETURNING j.* guarantees the shape
+    // matches WebexCallEnrichmentJob (all columns from webex_call_enrichment_jobs).
     return (result.rows ?? []) as unknown as WebexCallEnrichmentJob[];
   }
 
