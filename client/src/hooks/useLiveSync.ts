@@ -62,10 +62,13 @@ const TOPIC_TO_QUERY_KEYS: Record<string, ReadonlyArray<ReadonlyArray<string>>> 
   // Task #690 — fires when the per-org stale-followup membership changes
   // (a quote ages into the window, gets decided, or is reassigned). Keeps
   // the sidebar badge and the open Customer Quotes page in sync without
-  // either side polling aggressively.
+  // either side polling aggressively. The Customer Quotes page renders
+  // its stale-followups module from the snapshot endpoint (not the list
+  // endpoint), so include the snapshot key here as well.
   customer_quote_followup: [
     ["/api/customer-quotes/stale-followups"],
     ["/api/customer-quotes/stale-followups/count"],
+    ["/api/customer-quotes/snapshot"],
     DAILY_WORKSPACE_KEY,
   ],
   carrier: [

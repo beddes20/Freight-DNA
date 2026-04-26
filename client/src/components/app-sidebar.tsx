@@ -302,6 +302,10 @@ function useStaleFollowupCount() {
     queryKey: ["/api/customer-quotes/stale-followups/count"],
     enabled: !!user && STALE_FOLLOWUP_ROLES.includes(user.role),
     refetchInterval: 90_000,
+    // Keep polling while the tab is hidden so a rep returning to the
+    // window already sees an up-to-date badge instead of waiting for
+    // the next focus-driven refetch.
+    refetchIntervalInBackground: true,
     staleTime: 60_000,
     retry: false,
   });

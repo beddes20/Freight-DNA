@@ -865,6 +865,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   });
 
   // Task #480 — list stale quote follow-ups (on-demand recompute supported via ?force=1).
+  // Task #690 — viewer-scoped: account_manager sees only their own quotes,
+  // managers/directors/admins see the full org list. Scope mirrors
+  // resolveFunnelRepScope so behavior is consistent with the funnel view.
   app.get("/api/customer-quotes/stale-followups", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
@@ -872,7 +875,8 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const forceStr = qStr(req.query.force);
       const force = forceStr === "1" || forceStr === "true";
       if (force) clearStaleFollowUpCache(user.organizationId);
-      const items = await getStaleQuoteFollowUps(user.organizationId, { force });
+      const scope = await resolveFunnelRepScope(user.organizationId, { id: user.id, role: user.role });
+      const items = await getStaleQuoteFollowUps(user.organizationId, { force, scope });
       res.json({ items });
     } catch (err) {
       const msg = getErrorMessage(err);
@@ -881,15 +885,16 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   });
 
   // Task #690 — count-only variant for the sidebar badge. Shares the same
-  // per-org cache as the full list endpoint, so a sidebar poll is free
-  // (cached hit) or triggers a single recompute that the full list view
-  // can immediately reuse. Returns just the integer to keep the payload
-  // tiny across many open tabs.
+  // per-org cache as the full list endpoint (compute is org-wide, then
+  // filtered post-cache per viewer), so a sidebar poll is free (cached hit)
+  // or triggers a single shared recompute. Returns just the integer to keep
+  // the payload tiny across many open tabs.
   app.get("/api/customer-quotes/stale-followups/count", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const count = await getStaleQuoteFollowUpCount(user.organizationId);
+      const scope = await resolveFunnelRepScope(user.organizationId, { id: user.id, role: user.role });
+      const count = await getStaleQuoteFollowUpCount(user.organizationId, { scope });
       res.json({ count });
     } catch (err) {
       const msg = getErrorMessage(err);

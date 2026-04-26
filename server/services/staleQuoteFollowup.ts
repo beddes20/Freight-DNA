@@ -151,12 +151,34 @@ export async function computeCustomerWindows(orgId: string): Promise<Map<string,
   return windows;
 }
 
+/**
+ * Viewer scope mirrors `resolveFunnelRepScope`:
+ *   - `null`           → org-wide (managers/directors/admins)
+ *   - `string`         → only the given QuoteRep id (account_manager)
+ *   - `"__none__"`     → caller is rep-scoped but has no QuoteRep mapping
+ *                        (return empty result without computing).
+ */
+export type StaleFollowUpViewerScope = string | null | "__none__";
+
+function applyViewerScope(
+  items: StaleQuoteFollowUp[],
+  scope: StaleFollowUpViewerScope,
+): StaleQuoteFollowUp[] {
+  if (scope === null) return items;
+  if (scope === "__none__") return [];
+  return items.filter(i => i.repId === scope);
+}
+
 export async function getStaleQuoteFollowUps(
   orgId: string,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; scope?: StaleFollowUpViewerScope } = {},
 ): Promise<StaleQuoteFollowUp[]> {
+  const scope = opts.scope ?? null;
+  if (scope === "__none__") return [];
   const hit = cache.get(orgId);
-  if (!opts.force && hit && Date.now() - hit.ts < TTL_MS) return hit.result;
+  if (!opts.force && hit && Date.now() - hit.ts < TTL_MS) {
+    return applyViewerScope(hit.result, scope);
+  }
 
   const [pending, customers, reps, windows] = await Promise.all([
     db.select().from(quoteOpportunities).where(and(
@@ -208,6 +230,10 @@ export async function getStaleQuoteFollowUps(
   }
 
   items.sort((a, b) => b.rankScore - a.rankScore);
+  // Always cache the org-wide result. Per-viewer scoping happens after
+  // the cache lookup (see applyViewerScope), so a single shared compute
+  // serves both managers (org-wide) and account managers (rep-scoped)
+  // without recomputing per viewer.
   cache.set(orgId, { ts: Date.now(), result: items });
 
   // Membership-transition detection: if the set of stale-quote IDs differs
@@ -231,7 +257,7 @@ export async function getStaleQuoteFollowUps(
     // Pub/sub is advisory only — never let a publish error fail the caller.
   }
 
-  return items;
+  return applyViewerScope(items, scope);
 }
 
 /**
@@ -242,7 +268,7 @@ export async function getStaleQuoteFollowUps(
  */
 export async function getStaleQuoteFollowUpCount(
   orgId: string,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; scope?: StaleFollowUpViewerScope } = {},
 ): Promise<number> {
   const items = await getStaleQuoteFollowUps(orgId, opts);
   return items.length;
