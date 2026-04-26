@@ -462,7 +462,7 @@ export default function TasksPage() {
 
   useEffect(() => {
     if (currentUser) {
-      markRead.mutate();
+      markRead.mutate(undefined);
     }
   }, [currentUser?.id]);
 
@@ -619,12 +619,19 @@ export default function TasksPage() {
     const companyName = getCompanyName(task.companyId);
     const assigneeName = getUserName(task.assignedTo);
     const assignerName = getUserName(task.assignedBy);
-    const procLane = (() => {
+    const procLane = ((): ProcurementLaneInfo | null => {
       if (!Array.isArray(task.attachedLaneData)) return null;
-      return (task.attachedLaneData as Array<Record<string, unknown>>).find(
-        (l): l is ProcurementLaneInfo =>
-          l != null && l.type === "carrier_procurement" && typeof l.lane === "string"
-      ) ?? null;
+      const found = (task.attachedLaneData as Array<Record<string, unknown>>).find(
+        (l) =>
+          l != null &&
+          l.type === "carrier_procurement" &&
+          typeof l.lane === "string" &&
+          typeof l.origin === "string" &&
+          typeof l.destination === "string" &&
+          typeof l.volume === "number" &&
+          typeof l.awardId === "string"
+      );
+      return (found ?? null) as ProcurementLaneInfo | null;
     })();
 
     const isSelected = selectedTaskIds.has(task.id);

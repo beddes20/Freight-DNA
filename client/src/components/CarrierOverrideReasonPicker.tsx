@@ -195,7 +195,7 @@ export function CarrierOverrideReasonPicker({
               </Button>
               <Button
                 size="sm"
-                onClick={() => void submit("other", otherNote.trim() || null)}
+                onClick={() => void submit("other", otherNote.trim() || undefined)}
                 data-testid="button-override-other-save"
               >
                 Save

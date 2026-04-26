@@ -1373,7 +1373,7 @@ RULES FOR YOUR RESPONSES:
       }
       const existing = await storage.getCompanyInOrg((pStr(req.params.id)), currentUser.organizationId);
       if (!existing) return res.status(404).json({ error: "Company not found" });
-      const company = await storage.updateCompany((pStr(req.params.id)), currentUser.organizationId, { ...existing, assignedTo: assignedTo as string });
+      const company = await storage.updateCompany((pStr(req.params.id)), currentUser.organizationId, { assignedTo: assignedTo as string });
       if (!company) return res.status(404).json({ error: "Company not found" });
       // Notify the new assignee if they're different from the actor
       if (assignedTo !== currentUser.id && assignedTo !== existing.assignedTo) {

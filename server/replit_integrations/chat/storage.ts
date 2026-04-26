@@ -1,24 +1,31 @@
 import { db } from "../../storage";
 import { chatConversations, chatMessages } from "@shared/schema";
-import { eq, desc } from "drizzle-orm";
+import { and, eq, desc } from "drizzle-orm";
 
 export interface IChatStorage {
-  getConversation(id: number): Promise<typeof chatConversations.$inferSelect | undefined>;
-  getAllConversations(): Promise<(typeof chatConversations.$inferSelect)[]>;
+  getConversationForUser(id: number, userId: string): Promise<typeof chatConversations.$inferSelect | undefined>;
+  getAllConversationsForUser(userId: string): Promise<(typeof chatConversations.$inferSelect)[]>;
   createConversation(title: string, userId: string): Promise<typeof chatConversations.$inferSelect>;
-  deleteConversation(id: number): Promise<void>;
+  deleteConversationForUser(id: number, userId: string): Promise<boolean>;
   getMessagesByConversation(conversationId: number): Promise<(typeof chatMessages.$inferSelect)[]>;
   createMessage(conversationId: number, role: string, content: string): Promise<typeof chatMessages.$inferSelect>;
 }
 
 export const chatStorage: IChatStorage = {
-  async getConversation(id: number) {
-    const [conversation] = await db.select().from(chatConversations).where(eq(chatConversations.id, id));
+  async getConversationForUser(id: number, userId: string) {
+    const [conversation] = await db
+      .select()
+      .from(chatConversations)
+      .where(and(eq(chatConversations.id, id), eq(chatConversations.userId, userId)));
     return conversation;
   },
 
-  async getAllConversations() {
-    return db.select().from(chatConversations).orderBy(desc(chatConversations.createdAt));
+  async getAllConversationsForUser(userId: string) {
+    return db
+      .select()
+      .from(chatConversations)
+      .where(eq(chatConversations.userId, userId))
+      .orderBy(desc(chatConversations.createdAt));
   },
 
   async createConversation(title: string, userId: string) {
@@ -26,9 +33,15 @@ export const chatStorage: IChatStorage = {
     return conversation;
   },
 
-  async deleteConversation(id: number) {
+  async deleteConversationForUser(id: number, userId: string) {
+    const owned = await db
+      .select({ id: chatConversations.id })
+      .from(chatConversations)
+      .where(and(eq(chatConversations.id, id), eq(chatConversations.userId, userId)));
+    if (owned.length === 0) return false;
     await db.delete(chatMessages).where(eq(chatMessages.conversationId, id));
     await db.delete(chatConversations).where(eq(chatConversations.id, id));
+    return true;
   },
 
   async getMessagesByConversation(conversationId: number) {
@@ -40,4 +53,3 @@ export const chatStorage: IChatStorage = {
     return message;
   },
 };
-

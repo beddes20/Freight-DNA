@@ -65,7 +65,7 @@ interface GoalCardProps {
   goal: Goal;
   currentUserId: string;
   userRole: string;
-  allUsers: Array<{ id: string; name: string }>;
+  allUsers: Array<{ id: string; name: string; role?: string }>;
   allCompanies: Array<{ id: string; name: string }>;
   onEdit: (goal: Goal) => void;
   onDelete: (id: string) => void;

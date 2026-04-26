@@ -252,7 +252,7 @@ export default function FeedbackInboxPage() {
     const type = detectType(item.content);
     if (tab === "resolved") return item.status === "resolved";
     if (tab !== "all" && type !== tab) return false;
-    if (tab !== "resolved" && item.status === "resolved") return false;
+    if (item.status === "resolved") return false;
     if (search) {
       const q = search.toLowerCase();
       return (

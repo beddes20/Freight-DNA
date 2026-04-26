@@ -709,7 +709,6 @@ export default function TeamPerformancePage() {
   // Opportunity / Win summary for current period
   const oppPeriodStart = (() => {
     const now = new Date();
-    if (period === "weekly") { const d = new Date(now); d.setDate(d.getDate() - 7); return d.toISOString().split("T")[0]; }
     if (period === "last") { const d = new Date(now.getFullYear(), now.getMonth() - 1, 1); return d.toISOString().split("T")[0]; }
     if (period === "ytd") { return `${now.getFullYear()}-01-01`; }
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
@@ -1142,7 +1141,7 @@ export default function TeamPerformancePage() {
                           <td className="px-3 py-2">
                             <div className="flex items-center gap-2">
                               <span className="font-medium text-sm">{rep.name}</span>
-                              {isLagging && <Lightbulb className="h-3 w-3 text-amber-500 shrink-0" title="Needs coaching attention" />}
+                              {isLagging && <span title="Needs coaching attention"><Lightbulb className="h-3 w-3 text-amber-500 shrink-0" /></span>}
                             </div>
                             <span className="text-[10px] text-muted-foreground capitalize">{rep.role.replace(/_/g, " ")}</span>
                           </td>

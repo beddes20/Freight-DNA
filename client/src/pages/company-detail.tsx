@@ -79,7 +79,7 @@ import { TrendsDialog } from "./company-detail/components/TrendsDialog";
 import { ImportContactsDialog } from "./company-detail/components/ImportContactsDialog";
 import type { Company, Contact, User, Task, Callout, CalloutReaction, Touchpoint, Rfp, Award } from "@shared/schema";
 import { GrowthScoreBadge } from "@/components/account-growth-portlet";
-import { MomentumScoreDrawer } from "@/components/momentum-score-drawer";
+import { MomentumScoreDrawer, type MomentumScore } from "@/components/momentum-score-drawer";
 import type { MomentumBreakdown } from "@/components/momentum-score-drawer";
 import type {
   TouchLogEntry, MonthBucket, HealthScore, SharedRepEntry, TaskWithCount, AccountPerf,
@@ -213,8 +213,7 @@ export default function CompanyDetail() {
     staleTime: 60_000,
   });
 
-  type GrowthScore = { score: number; band: string; bandLabel: string; bandColor: string; drivers: { label: string; points: number; positive: boolean }[]; breakdown?: MomentumBreakdown; calculatedAt?: string };
-  const { data: growthScore, isLoading: growthScoreLoading } = useQuery<GrowthScore>({
+  const { data: growthScore, isLoading: growthScoreLoading } = useQuery<MomentumScore>({
     queryKey: ["/api/companies", companyId, "growth-score"],
     staleTime: 6 * 60 * 60 * 1000, // 6h — matches server cache window
   });
