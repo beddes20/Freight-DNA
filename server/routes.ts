@@ -9336,6 +9336,12 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
 
   // POST /api/nba/dismiss/:cardId — session-scoped (in-memory) dismiss
   // Does NOT write to DB; card reappears after a server restart.
+  //
+  // Dismiss is keyed by the **current user's ID** (the viewer), not the target
+  // rep. This is intentional: when a director scopes the workspace to a rep via
+  // ?repId=, their "Not now" click hides the card from *their own* session view
+  // of that rep's cards. The rep's own workspace is unaffected. This maintains
+  // clean separation between personal session state and persistent card status.
   app.post("/api/nba/dismiss/:cardId", requireAuth, async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
