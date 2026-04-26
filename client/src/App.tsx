@@ -359,7 +359,16 @@ function useGlobalKeyboardShortcuts(openSwitchboard: () => void) {
       // `?` (Shift+/) — open Lane Switchboard. Checked BEFORE the `/`
       // handler because Shift+/ produces "?" on most US layouts; we
       // explicitly require shiftKey so a bare "/" still focuses search.
-      if (e.key === "?" && e.shiftKey && !isEditable && !e.metaKey && !e.ctrlKey) {
+      // Skip on /daily-priorities so the page-local shortcuts dialog
+      // owns `?` there (otherwise both fire simultaneously).
+      if (
+        e.key === "?" &&
+        e.shiftKey &&
+        !isEditable &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !window.location.pathname.startsWith("/daily-priorities")
+      ) {
         e.preventDefault();
         openSwitchboard();
         return;
