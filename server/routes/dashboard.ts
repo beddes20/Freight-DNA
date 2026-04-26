@@ -283,7 +283,7 @@ export function registerDashboardRoutes(app: Express): void {
         storage.getCompanies(user.organizationId),
         storage.getTouchpoints(),
         storage.getTasks(),
-        storage.getRfps(),
+        storage.getRfpsByOrg(user.organizationId),
       ]);
 
       // Scope to companies this user owns (or all visible for NAM/Director)
@@ -453,7 +453,7 @@ export function registerDashboardRoutes(app: Express): void {
         storage.getCompanies(orgId),
         storage.getUsers(orgId),
         storage.getTouchpointsByOrg(orgId),
-        storage.getContacts(),
+        storage.getContactsByOrg(orgId),
       ]);
 
       // For Director (non-admin)/NAM: scope to their team's companies
@@ -538,7 +538,7 @@ export function registerDashboardRoutes(app: Express): void {
       }
 
       if (type === "relationships") {
-        const allContacts = await storage.getContacts();
+        const allContacts = await storage.getContactsByOrg(orgId);
         const result = allContacts
           .filter(c => c.baseAdvancedAt && c.baseAdvancedAt >= monthStart && scopedCompanyIds.has(c.companyId))
           .sort((a, b) => (b.baseAdvancedAt || "").localeCompare(a.baseAdvancedAt || ""))
@@ -553,7 +553,7 @@ export function registerDashboardRoutes(app: Express): void {
       if (type === "touches" || type === "meaningful") {
         const [allTouchpoints, allContacts] = await Promise.all([
           storage.getTouchpointsByOrg(orgId),
-          storage.getContacts(),
+          storage.getContactsByOrg(orgId),
         ]);
         const contactMap = new Map(allContacts.map(c => [c.id, c]));
         let tps = allTouchpoints.filter(t => t.date === today && scopedCompanyIds.has(t.companyId));
@@ -570,7 +570,7 @@ export function registerDashboardRoutes(app: Express): void {
       }
 
       if (type === "contacts") {
-        const allContacts = await storage.getContacts();
+        const allContacts = await storage.getContactsByOrg(orgId);
         const result = allContacts
           .filter(c => c.createdAt && c.createdAt.slice(0, 10) === today && scopedCompanyIds.has(c.companyId))
           .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
@@ -626,7 +626,7 @@ export function registerDashboardRoutes(app: Express): void {
         scopedCompanyIds = new Set(orgCompanies.map(c => c.id));
       }
 
-      const allContacts = await storage.getContacts();
+      const allContacts = await storage.getContactsByOrg(orgId);
       const advancedCompanyIds = new Set(
         allContacts
           .filter(c => c.baseAdvancedAt && c.baseAdvancedAt >= monthStart && scopedCompanyIds.has(c.companyId))
@@ -813,7 +813,7 @@ export function registerDashboardRoutes(app: Express): void {
       // Fetch companies and contacts in parallel — both independent
       const [allCompanies, allContacts] = await Promise.all([
         storage.getCompanies(orgId),
-        storage.getContacts(),
+        storage.getContactsByOrg(orgId),
       ]);
       // Own accounts = companies where salesPersonId === current user
       const myCompanies = allCompanies.filter(c => c.salesPersonId === user.id);
@@ -1095,7 +1095,7 @@ export function registerDashboardRoutes(app: Express): void {
         byCustomer[key].totalRevenue += revenue;
       }
 
-      const allRfps = await storage.getRfps();
+      const allRfps = await storage.getRfpsByOrg(req.session.organizationId!);
       const rfpsByCompany: Record<string, typeof allRfps> = {};
       for (const rfp of allRfps) {
         if (!rfpsByCompany[rfp.companyId]) rfpsByCompany[rfp.companyId] = [];
@@ -1270,7 +1270,7 @@ export function registerDashboardRoutes(app: Express): void {
       const [urgentRfpsResult, syncAlertResult, missingGoalsResult, streakResult, pendingCountResult] = await Promise.all([
         // --- 1. Urgent RFPs (due within 14 days, excluding closed statuses) ---
         (async () => {
-          const allRfps = await storage.getRfps();
+          const allRfps = await storage.getRfpsByOrg(orgId);
           const orgCompanies = await storage.getCompanies(orgId);
           const orgCompanyIds = new Set(orgCompanies.map((c: any) => c.id));
           const visibleIds = await getVisibleCompanyIds(user);
@@ -1376,7 +1376,7 @@ export function registerDashboardRoutes(app: Express): void {
       if (user.role !== "account_manager") return res.json([]);
 
       const [allAwards, allCompanies, uploads] = await Promise.all([
-        storage.getAwards(),
+        storage.getAwardsByOrg(user.organizationId),
         storage.getCompanies(user.organizationId),
         storage.getFinancialUploadsForOrg(user.organizationId),
       ]);
@@ -1499,7 +1499,7 @@ export function registerDashboardRoutes(app: Express): void {
       if (user.role !== "account_manager") return res.json([]);
 
       const [allRfps, allCompanies] = await Promise.all([
-        storage.getRfps(),
+        storage.getRfpsByOrg(user.organizationId),
         storage.getCompanies(user.organizationId),
       ]);
 

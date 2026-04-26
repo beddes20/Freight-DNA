@@ -675,7 +675,7 @@ async function getAwardedRfpLanesForUser(
     // Load org companies owned by this user and all org awards
     const [allCompanies, allAwards] = await Promise.all([
       storage.getCompanies(orgId),
-      storage.getAwards(),
+      storage.getAwardsByOrg(orgId),
     ]);
     const userCompanyIds = new Set(
       allCompanies

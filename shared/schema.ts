@@ -45,7 +45,11 @@ export const companies = pgTable("companies", {
   operatingHours: text("operating_hours"),
   handoffNotes: text("handoff_notes"),
   onboardingMilestones: jsonb("onboarding_milestones"),
-});
+}, (t) => ({
+  orgIdx: index("companies_org_idx").on(t.organizationId),
+  orgAssignedIdx: index("companies_org_assigned_idx").on(t.organizationId, t.assignedTo),
+  orgNameIdx: index("companies_org_name_idx").on(t.organizationId, t.name),
+}));
 
 export const sharedRepSchema = z.object({
   userId: z.string(),
@@ -101,7 +105,10 @@ export const contacts = pgTable("contacts", {
   roleType: text("role_type"),
   status: text("status").default("active"),
   isPrimary: boolean("is_primary").default(false),
-});
+}, (t) => ({
+  companyIdx: index("contacts_company_idx").on(t.companyId),
+  emailIdx: index("contacts_email_idx").on(t.email),
+}));
 
 export const insertContactSchema = createInsertSchema(contacts).omit({
   id: true,
@@ -254,7 +261,11 @@ export const tasks = pgTable("tasks", {
   updatedAt: text("updated_at"),
   attachedLaneData: jsonb("attached_lane_data"),
   forwardedFrom: varchar("forwarded_from"),
-});
+}, (t) => ({
+  assignedToStatusIdx: index("tasks_assigned_to_status_idx").on(t.assignedTo, t.status),
+  companyIdx: index("tasks_company_idx").on(t.companyId),
+  orgStatusIdx: index("tasks_org_status_idx").on(t.orgId, t.status),
+}));
 
 export const insertTaskSchema = createInsertSchema(tasks).omit({
   id: true,
@@ -398,7 +409,10 @@ export const notifications = pgTable("notifications", {
   read: boolean("read").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   relatedId: varchar("related_id"),
-});
+}, (t) => ({
+  userCreatedIdx: index("notifications_user_created_idx").on(t.userId, t.createdAt),
+  userReadIdx: index("notifications_user_read_idx").on(t.userId, t.read),
+}));
 
 export const insertNotificationSchema = createInsertSchema(notifications).omit({
   id: true,
@@ -458,6 +472,8 @@ export const touchpoints = pgTable("touchpoints", {
   externalId: text("external_id"),
 }, (t) => ({
   externalIdUq: uniqueIndex("touchpoints_external_id_uq").on(t.externalId),
+  companyDateIdx: index("touchpoints_company_date_idx").on(t.companyId, t.date),
+  loggedByIdx: index("touchpoints_logged_by_idx").on(t.loggedById),
 }));
 
 export const insertTouchpointSchema = createInsertSchema(touchpoints).omit({ id: true });
@@ -1328,7 +1344,11 @@ export const carriers = pgTable("carriers", {
   importBatchId: varchar("import_batch_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  orgStatusIdx: index("carriers_org_status_idx").on(t.orgId, t.status),
+  orgNameIdx: index("carriers_org_name_idx").on(t.orgId, t.name),
+  orgCreatedIdx: index("carriers_org_created_idx").on(t.orgId, t.createdAt),
+}));
 export const insertCarrierSchema = createInsertSchema(carriers).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertCarrier = z.infer<typeof insertCarrierSchema>;
 export type Carrier = typeof carriers.$inferSelect;
@@ -1961,7 +1981,12 @@ export const emailConversationThreads = pgTable("email_conversation_threads", {
   snoozedByUserId: varchar("snoozed_by_user_id").references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  orgUpdatedIdx: index("ect_org_updated_idx").on(t.orgId, t.updatedAt),
+  orgWaitingIdx: index("ect_org_waiting_idx").on(t.orgId, t.waitingState),
+  orgOwnerIdx: index("ect_org_owner_idx").on(t.orgId, t.ownerUserId),
+  orgArchivedIdx: index("ect_org_archived_idx").on(t.orgId, t.archivedAt),
+}));
 
 export const insertEmailConversationThreadSchema = createInsertSchema(emailConversationThreads).omit({
   id: true,
@@ -5584,3 +5609,12 @@ export const insertTodayQueueSnoozeSchema = createInsertSchema(todayQueueSnoozes
 });
 export type InsertTodayQueueSnooze = z.infer<typeof insertTodayQueueSnoozeSchema>;
 export type TodayQueueSnooze = typeof todayQueueSnoozes.$inferSelect;
+
+export const graphTenantConsent = pgTable("graph_tenant_consent", {
+  scope: text("scope").primaryKey(),
+  status: text("status").notNull(),
+  lastCheckedAt: timestamp("last_checked_at"),
+  lastError: text("last_error"),
+  mailbox: text("mailbox"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});

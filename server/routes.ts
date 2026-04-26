@@ -45,6 +45,7 @@ import { registerCallTrendlineRoutes } from "./routes/callTrendlines";
 import { registerCustomerQuoteRoutes } from "./routes/customerQuotes";
 import { registerLiveSyncRoutes } from "./routes/liveSync";
 import { registerLaneInboxRoutes } from "./routes/laneInbox";
+import { registerNotificationRoutes } from "./routes/notifications";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
@@ -1560,10 +1561,7 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      let contacts = await storage.getContacts();
-      const orgCompanies = await storage.getCompanies(currentUser.organizationId);
-      const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
-      contacts = contacts.filter(c => orgCompanyIds.has(c.companyId));
+      let contacts = await storage.getContactsByOrg(currentUser.organizationId);
       const visibleIds = await getVisibleCompanyIds(currentUser);
       if (visibleIds !== null) {
         contacts = contacts.filter(c => visibleIds.includes(c.companyId));
@@ -1830,16 +1828,14 @@ RULES FOR YOUR RESPONSES:
       }
 
       // Get all visible RFPs for this org
-      let rfpList = await storage.getRfps();
       const orgCompanies = await storage.getCompanies(currentUser.organizationId);
-      const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
-      rfpList = rfpList.filter(r => orgCompanyIds.has(r.companyId));
+      let rfpList = await storage.getRfpsByOrg(currentUser.organizationId);
       const visibleIds = await getVisibleCompanyIds(currentUser);
       if (visibleIds !== null) {
         rfpList = rfpList.filter(r => visibleIds.includes(r.companyId));
       }
 
-      const companyMap = new Map(orgCompanies.map(c => [c.id, c.name]));
+      const companyMap = new Map<string, string>(orgCompanies.map(c => [c.id, c.name]));
 
       const results: {
         companyId: string;
@@ -1911,10 +1907,7 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      let rfps = await storage.getRfps();
-      const orgCompanies = await storage.getCompanies(currentUser.organizationId);
-      const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
-      rfps = rfps.filter(r => orgCompanyIds.has(r.companyId));
+      let rfps = await storage.getRfpsByOrg(currentUser.organizationId);
       const visibleIds = await getVisibleCompanyIds(currentUser);
       if (visibleIds !== null) {
         rfps = rfps.filter(r => visibleIds.includes(r.companyId));
@@ -2543,7 +2536,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      let allRfps = await storage.getRfps();
+      let allRfps = await storage.getRfpsByOrg(currentUser.organizationId);
       const visibleIds = await getVisibleCompanyIds(currentUser);
       if (visibleIds !== null) {
         allRfps = allRfps.filter(r => visibleIds.includes(r.companyId));
@@ -2587,7 +2580,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   app.get("/api/companies/:id/lane-patterns", requireAuth, async (req, res) => {
     try {
       const companyId = (pStr(req.params.id));
-      const allRfps = await storage.getRfps();
+      const allRfps = await storage.getRfpsByCompanyId(companyId);
 
       const corridorMap = new Map<string, {
         origin: string;
@@ -2729,7 +2722,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   app.get("/api/companies/:id/facility-coverage", requireAuth, async (req, res) => {
     try {
       const companyId = (pStr(req.params.id));
-      const allRfps = await storage.getRfps();
+      const allRfps = await storage.getRfpsByCompanyId(companyId);
       const contacts = await storage.getContactsByCompany(companyId);
 
       const facilityMap = new Map<string, {
@@ -2846,10 +2839,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      let allAwards = await storage.getAwards();
-      const orgCompanies = await storage.getCompanies(currentUser.organizationId);
-      const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
-      allAwards = allAwards.filter(a => orgCompanyIds.has(a.companyId));
+      let allAwards = await storage.getAwardsByOrg(currentUser.organizationId);
       const visibleIds = await getVisibleCompanyIds(currentUser);
       if (visibleIds !== null) {
         allAwards = allAwards.filter(a => visibleIds.includes(a.companyId));
@@ -3254,6 +3244,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerCustomerQuoteRoutes(app);
   registerLiveSyncRoutes(app);
   registerLaneInboxRoutes(app);
+  registerNotificationRoutes(app);
   // Task #478 — periodic lost-streak alerts for customers and lane groups.
   {
     const { initQuoteLostStreakScheduler } = await import("./quoteLostStreakScheduler");
@@ -3398,7 +3389,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   app.get("/api/proximity-matches", requireAuth, async (req, res) => {
     try {
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
-      const rfps = await storage.getRfps();
+      const rfps = await storage.getRfpsByOrg(req.session.organizationId!);
       const companies = await storage.getCompanies(req.session.organizationId!);
       const users = await storage.getUsers(req.session.organizationId!);
 
@@ -3482,7 +3473,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const companyId = (pStr(req.params.id));
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
-      const allRfps = await storage.getRfps();
+      const allRfps = await storage.getRfpsByCompanyId(companyId);
 
       // Build geocoded frequency maps for our deliveries (consignee) and pickups (shipper)
       const ourDeliveryMap: Record<string, { city: string; state: string; count: number; lat: number; lng: number }> = {};
@@ -4037,6 +4028,10 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
       const topicLines = (arr: typeof topics) => arr.map(t => `- [${t.tag?.replace(/_/g, " ") || "topic"}] ${t.text}`).join("\n");
 
+      const sessionSumCacheKey = `session-summary:${pStr(req.params.id)}:${discussed.length}:${pending.length}`;
+      const cachedSessionSum = cacheGet<string>(sessionSumCacheKey);
+      if (cachedSessionSum) return res.json({ summary: cachedSessionSum });
+
       const prompt = `You are summarizing a 1:1 meeting between a manager and a sales rep.
 
 Discussed topics:
@@ -4061,6 +4056,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         max_tokens: 200,
       });
       const summary = completion.choices[0]?.message?.content?.trim() || "";
+      cacheSet(sessionSumCacheKey, summary, 60 * 60 * 1000);
       res.json({ summary });
     } catch (error) {
       console.error("Error generating session summary:", error);
@@ -4087,98 +4083,6 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       res.json(sessionsWithTopics);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch archived sessions" });
-    }
-  });
-
-  // ── Notifications ─────────────────────────────────────────────────────────
-  app.get("/api/notifications", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const notifs = await storage.getNotifications(user.id);
-      res.json(notifs);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to fetch notifications" });
-    }
-  });
-
-  app.patch("/api/notifications/:id/read", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      await storage.markNotificationRead((pStr(req.params.id)));
-      res.json({ ok: true });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to mark notification read" });
-    }
-  });
-
-  app.patch("/api/notifications/read-all", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const { types, ids } = (req.body || {}) as { types?: string[]; ids?: string[] };
-      if (ids && Array.isArray(ids) && ids.length > 0) {
-        await storage.markNotificationsReadByIds(user.id, ids);
-      } else if (types && Array.isArray(types) && types.length > 0) {
-        await storage.markNotificationsReadByTypes(user.id, types);
-      } else {
-        await storage.markAllNotificationsRead(user.id);
-      }
-      res.json({ ok: true });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to mark all notifications read" });
-    }
-  });
-
-  // ── Personal Alerts ──────────────────────────────────────────────────────
-  app.get("/api/alerts", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      await storage.fireDueAlerts(user.id);
-      const alerts = await storage.getPersonalAlerts(user.id);
-      res.json(alerts);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to fetch alerts" });
-    }
-  });
-
-  app.post("/api/alerts", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const { title, notes, scheduledDate, companyId } = req.body;
-      if (!title || !scheduledDate) {
-        return res.status(400).json({ error: "Title and scheduled date are required" });
-      }
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(scheduledDate) || isNaN(new Date(scheduledDate + "T00:00:00").getTime())) {
-        return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD." });
-      }
-      const alert = await storage.createPersonalAlert({
-        userId: user.id,
-        title,
-        notes: notes || null,
-        scheduledDate,
-        companyId: companyId || null,
-        fired: false,
-        createdAt: new Date().toISOString(),
-      });
-      res.status(201).json(alert);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to create alert" });
-    }
-  });
-
-  app.delete("/api/alerts/:id", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const deleted = await storage.deletePersonalAlert((pStr(req.params.id)), user.id);
-      if (!deleted) return res.status(404).json({ error: "Alert not found" });
-      res.status(204).send();
-    } catch (error) {
-      res.status(500).json({ error: "Failed to delete alert" });
     }
   });
 
@@ -4318,7 +4222,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const companiesById: Record<string, typeof allCompanies[0]> = {};
       for (const c of allCompanies) companiesById[c.id] = c;
 
-      const allContacts = await storage.getContacts();
+      const allContacts = await storage.getContactsByOrg(req.session.organizationId!);
       const contactsById: Record<string, typeof allContacts[0]> = {};
       for (const c of allContacts) contactsById[c.id] = c;
 
@@ -4995,8 +4899,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       }
 
       // --- Get company RFPs and extract lane rows from fileData ---
-      const allRfpsForIntel = await storage.getRfps();
-      const companyRfps = allRfpsForIntel.filter(r => r.companyId === contact.companyId);
+      const companyRfps = await storage.getRfpsByCompanyId(contact.companyId);
       type ExtractedLane = { lane: string; origin: string; originState: string; destination: string; destState: string; volume: number; rfpTitle: string; rfpId: string };
       const allExtractedLanes: ExtractedLane[] = [];
 
@@ -5232,8 +5135,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         storage.getCompanyInOrg((pStr(req.params.id)), user.organizationId),
         storage.getTouchpointsByCompany((pStr(req.params.id))),
         storage.getContactsByCompany((pStr(req.params.id))),
-        storage.getRfps(),
-        storage.getAwards(),
+        storage.getRfpsByCompanyId((pStr(req.params.id))),
+        storage.getAwardsByCompanyId((pStr(req.params.id))),
         storage.getFinancialUploadsForOrg(req.session.organizationId!),
       ]);
 
@@ -5630,9 +5533,9 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
 
       const [allCompanies, allContacts, allTouchpoints, openRfps, openTasks, activeGoals] = await Promise.all([
         storage.getCompanies(user.organizationId),
-        storage.getContacts(),
+        storage.getContactsByOrg(user.organizationId),
         storage.getTouchpoints(),
-        storage.getRfps(),
+        storage.getRfpsByOrg(user.organizationId),
         storage.getTasks(),
         storage.getGoals({ amId: user.id }),
       ]);
@@ -5736,6 +5639,10 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const company = await storage.getCompanyInOrg((pStr(req.params.id)), user.organizationId);
       const companyName = company?.name || "this account";
 
+      const narrativeCacheKey = `health-narrative:${pStr(req.params.id)}:${score}:${grade}`;
+      const cachedNarrative = cacheGet<string>(narrativeCacheKey);
+      if (cachedNarrative) return res.json({ narrative: cachedNarrative });
+
       const { default: OpenAI } = await import("openai");
       const openai = new OpenAI({
         apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -5762,6 +5669,7 @@ Write exactly 2 sentences explaining WHY this score is ${score}/100. Be specific
       });
 
       const narrative = resp.choices[0]?.message?.content?.trim() || "";
+      cacheSet(narrativeCacheKey, narrative, 5 * 60 * 1000);
       res.json({ narrative });
     } catch (err) {
       console.error("Health narrative error:", err);
@@ -5789,6 +5697,10 @@ Write exactly 2 sentences explaining WHY this score is ${score}/100. Be specific
 
       if (withNotes.length === 0) return res.json({ summary: null });
 
+      const tpSumCacheKey = `tp-summary:${pStr(req.params.id)}:${withNotes[0]?.id}:${withNotes.length}`;
+      const cachedTpSummary = cacheGet<{ summary: string | null; noteCount: number }>(tpSumCacheKey);
+      if (cachedTpSummary) return res.json(cachedTpSummary);
+
       const { default: OpenAI } = await import("openai");
       const openai = new OpenAI({
         apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -5815,7 +5727,9 @@ Respond with bullet points only (no header, no intro sentence).`;
       });
 
       const summary = resp.choices[0]?.message?.content?.trim() || null;
-      res.json({ summary, noteCount: withNotes.length });
+      const tpSumResult = { summary, noteCount: withNotes.length };
+      cacheSet(tpSumCacheKey, tpSumResult, 30 * 60 * 1000);
+      res.json(tpSumResult);
     } catch (err) {
       console.error("Touchpoint summary error:", err);
       res.status(500).json({ error: "Failed to generate summary" });
@@ -9335,7 +9249,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       });
 
       // All contacts (for contacts-added count)
-      const allContacts = await storage.getContacts();
+      const allContacts = await storage.getContactsByOrg(orgId);
       const orgUserIds = new Set(allUsers.map(u => u.id));
       const contactsThisMonth = allContacts.filter(c => {
         if (!c.createdAt || !c.createdBy || !orgUserIds.has(c.createdBy)) return false;

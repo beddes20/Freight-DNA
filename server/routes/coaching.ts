@@ -322,7 +322,7 @@ export function registerCoachingRoutes(app: Express) {
         });
       }
 
-      const allRfps = await storage.getRfps();
+      const allRfps = await storage.getRfpsByOrg(repUser.organizationId || "");
       const repCompanyIds = new Set(repCompanies.map(c => c.id));
       const urgentRfps = allRfps
         .filter(r => repCompanyIds.has(r.companyId || "") && r.status === "open" && r.dueDate && r.dueDate <= fourteenDaysFromNow && r.dueDate >= todayStr)

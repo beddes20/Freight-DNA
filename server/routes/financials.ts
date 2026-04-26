@@ -264,7 +264,7 @@ export function registerFinancialRoutes(app: Express): void {
       }
 
       const visibleIds = await getVisibleCompanyIds(user);
-      let allRfps = await storage.getRfps();
+      let allRfps = await storage.getRfpsByOrg(req.session.organizationId!);
       if (visibleIds !== null) {
         allRfps = allRfps.filter(r => visibleIds.includes(r.companyId));
       }

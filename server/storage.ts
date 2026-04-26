@@ -431,6 +431,8 @@ export interface IStorage {
   getAccountsManageableForSharing(viewerId: string, viewerRole: string, organizationId: string): Promise<Company[]>;
   
   getContacts(): Promise<Contact[]>;
+  /** Org-scoped: returns only contacts whose company belongs to the given org. */
+  getContactsByOrg(organizationId: string): Promise<Contact[]>;
   getContactsByCompany(companyId: string): Promise<Contact[]>;
   getContactsByCompanyIds(companyIds: string[]): Promise<Contact[]>;
   getContact(id: string): Promise<Contact | undefined>;
@@ -448,6 +450,8 @@ export interface IStorage {
   deleteLaneAttribution(id: string): Promise<boolean>;
   
   getRfps(): Promise<Rfp[]>;
+  /** Org-scoped: returns only RFPs whose company belongs to the given org. */
+  getRfpsByOrg(organizationId: string): Promise<Rfp[]>;
   /** @deprecated Cross-tenant unsafe. Use getRfpInOrg(id, orgId) for any
    *  caller that derives orgId from the session — this returns rows
    *  regardless of organization and was the source of an IDOR fix-pack. */
@@ -463,6 +467,9 @@ export interface IStorage {
   deleteRfp(id: string): Promise<boolean>;
 
   getAwards(): Promise<Award[]>;
+  /** Org-scoped: returns only awards whose company belongs to the given org. */
+  getAwardsByOrg(organizationId: string): Promise<Award[]>;
+  getAwardsByCompanyId(companyId: string): Promise<Award[]>;
   /** @deprecated Cross-tenant unsafe. Use getAwardInOrg(id, orgId). */
   getAward(id: string): Promise<Award | undefined>;
   /** Org-scoped award fetch via companies.organizationId join. */
@@ -1537,7 +1544,18 @@ export class DatabaseStorage implements IStorage {
 
   async bulkCreateCompanies(companiesList: InsertCompany[]): Promise<Company[]> {
     if (companiesList.length === 0) return [];
-    const created = await db.insert(companies).values(companiesList).returning();
+    const firstOrgId = companiesList[0].organizationId;
+    const existing = await db
+      .select({ id: companies.id, name: companies.name })
+      .from(companies)
+      .where(eq(companies.organizationId, firstOrgId));
+    const existingNamesLower = new Map(existing.map(c => [c.name.toLowerCase().trim(), c]));
+    const toInsert = companiesList.filter(c => !existingNamesLower.has(c.name.toLowerCase().trim()));
+    if (toInsert.length === 0) {
+      cacheInvalidatePrefix("companies:");
+      return [];
+    }
+    const created = await db.insert(companies).values(toInsert).returning();
     cacheInvalidatePrefix("companies:");
     return created;
   }
@@ -1672,6 +1690,15 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(contacts);
   }
 
+  async getContactsByOrg(organizationId: string): Promise<Contact[]> {
+    return db
+      .select({ c: contacts })
+      .from(contacts)
+      .innerJoin(companies, eq(companies.id, contacts.companyId))
+      .where(eq(companies.organizationId, organizationId))
+      .then((rows) => rows.map((r) => r.c));
+  }
+
   async getContactsByCompany(companyId: string): Promise<Contact[]> {
     return db.select().from(contacts).where(eq(contacts.companyId, companyId));
   }
@@ -1713,7 +1740,25 @@ export class DatabaseStorage implements IStorage {
 
   async bulkCreateContacts(contactList: InsertContact[]): Promise<Contact[]> {
     if (contactList.length === 0) return [];
-    return db.insert(contacts).values(contactList).returning();
+    const companyIds = [...new Set(contactList.map(c => c.companyId))];
+    const existing = await db
+      .select({ id: contacts.id, companyId: contacts.companyId, email: contacts.email, name: contacts.name })
+      .from(contacts)
+      .where(inArray(contacts.companyId, companyIds));
+    const existingKeys = new Set(
+      existing.map(c => {
+        const emailKey = c.email ? `email:${c.companyId}:${c.email.toLowerCase().trim()}` : null;
+        const nameKey = `name:${c.companyId}:${c.name.toLowerCase().trim()}`;
+        return [emailKey, nameKey].filter(Boolean);
+      }).flat()
+    );
+    const toInsert = contactList.filter(c => {
+      const emailKey = c.email ? `email:${c.companyId}:${c.email.toLowerCase().trim()}` : null;
+      const nameKey = `name:${c.companyId}:${c.name.toLowerCase().trim()}`;
+      return !existingKeys.has(emailKey ?? "") && !existingKeys.has(nameKey);
+    });
+    if (toInsert.length === 0) return [];
+    return db.insert(contacts).values(toInsert).returning();
   }
 
   async updateContact(id: string, contact: InsertContact): Promise<Contact | undefined> {
@@ -1732,6 +1777,15 @@ export class DatabaseStorage implements IStorage {
 
   async getRfps(): Promise<Rfp[]> {
     return db.select().from(rfps);
+  }
+
+  async getRfpsByOrg(organizationId: string): Promise<Rfp[]> {
+    return db
+      .select({ r: rfps })
+      .from(rfps)
+      .innerJoin(companies, eq(companies.id, rfps.companyId))
+      .where(eq(companies.organizationId, organizationId))
+      .then((rows) => rows.map((r) => r.r));
   }
 
   async getRfp(id: string): Promise<Rfp | undefined> {
@@ -1777,9 +1831,22 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(awards);
   }
 
+  async getAwardsByOrg(organizationId: string): Promise<Award[]> {
+    return db
+      .select({ a: awards })
+      .from(awards)
+      .innerJoin(companies, eq(companies.id, awards.companyId))
+      .where(eq(companies.organizationId, organizationId))
+      .then((rows) => rows.map((r) => r.a));
+  }
+
   async getAward(id: string): Promise<Award | undefined> {
     const [award] = await db.select().from(awards).where(eq(awards.id, id));
     return award;
+  }
+
+  async getAwardsByCompanyId(companyId: string): Promise<Award[]> {
+    return db.select().from(awards).where(eq(awards.companyId, companyId));
   }
 
   async getAwardInOrg(id: string, orgId: string): Promise<Award | undefined> {
