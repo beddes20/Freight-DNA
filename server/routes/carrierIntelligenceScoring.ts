@@ -100,10 +100,10 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
       // do NOT silently expand an empty selection to all buckets. Omitting
       // the param entirely defaults to all three.
       const validBuckets = new Set(["realized", "active", "available"]);
-      const rawMs = req.query.moveStatus;
+      const rawMs = qOptStr(req.query.moveStatus);
       const buckets = rawMs === undefined
         ? ["realized", "active", "available"]
-        : String(rawMs).split(",").map(s => s.trim().toLowerCase()).filter(s => validBuckets.has(s));
+        : rawMs.split(",").map(s => s.trim().toLowerCase()).filter(s => validBuckets.has(s));
 
       const loadRows = buckets.length === 0
         ? []

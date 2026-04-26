@@ -676,7 +676,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       }
     } catch (err) {
       console.error("[carrier-seed]", err);
-      return res.status(500).json({ error: "Failed to process file", details: (err as Error)?.message });
+      return res.status(500).json({ error: "Failed to process file", details: getErrorMessage(err) });
     }
   });
 
@@ -909,7 +909,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         },
       });
     } catch (err) {
-      res.status(500).json({ error: (err as Error)?.message ?? "Failed to load work queue" });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -928,7 +928,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       );
       res.json({ count });
     } catch (err) {
-      res.status(500).json({ error: (err as Error)?.message ?? "Failed to get reply count" });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -943,7 +943,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       const meta = raw ? JSON.parse(raw) : null;
       res.json({ meta });
     } catch (err) {
-      res.status(500).json({ error: (err as Error)?.message ?? "Failed to load engine status" });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -1390,7 +1390,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
       res.json(updated);
     } catch (err) {
-      res.status(500).json({ error: (err as Error)?.message ?? "Failed to assign lane" });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -1408,7 +1408,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       // Persist last-run meta so the work queue debug panel can show it without re-running
       await storage.setSetting(`lane_engine_last_run:${user.organizationId}`, JSON.stringify(result.meta));
     } catch (err) {
-      res.status(500).json({ error: (err as Error)?.message ?? "Engine error" });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -1676,7 +1676,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         highFrequencyConfig: isHfLane ? HIGH_FREQUENCY_CONFIG : undefined,
       });
     } catch (err) {
-      const msg = (err as Error)?.message ?? "Failed to rank carriers";
+      const msg = getErrorMessage(err);
       const isTimeout = msg.includes("timed out");
       console.error(`[carrier-suggestions] error for lane ${pStr(req.params.laneId)}: ${msg}`);
       res.status(isTimeout ? 504 : 500).json({
@@ -1792,7 +1792,7 @@ House style — follow every rule:
 
       res.json({ emails });
     } catch (err) {
-      res.status(500).json({ error: (err as Error)?.message ?? "Email drafting failed" });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -2969,8 +2969,8 @@ Rules for suggestions:
       const d = new Date(raw);
       return isNaN(d.getTime()) ? fallback : d;
     };
-    let fromDate = parseDate(req.query.from, defaultFrom);
-    let toDate = parseDate(req.query.to, now);
+    let fromDate = parseDate(qOptStr(req.query.from), defaultFrom);
+    let toDate = parseDate(qOptStr(req.query.to), now);
     if (toDate < fromDate) [fromDate, toDate] = [toDate, fromDate];
     const maxWindowMs = 90 * 24 * 60 * 60 * 1000;
     if (toDate.getTime() - fromDate.getTime() > maxWindowMs) {

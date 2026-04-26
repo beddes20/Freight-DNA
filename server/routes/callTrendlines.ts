@@ -28,7 +28,7 @@ export function registerCallTrendlineRoutes(app: Express) {
       }
 
       const days = clampDays(req.query.days);
-      const repId = typeof req.query.repId === "string" && req.query.repId.trim() ? req.query.repId.trim() : undefined;
+      const repId = qStr(req.query.repId).trim() || undefined;
       const result = await buildCompanyCallTrendline(companyId, days, repId);
       res.json({ ...result, days, repId: repId ?? null });
     } catch (err) {
@@ -54,7 +54,7 @@ export function registerCallTrendlineRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const lane = qStr(req.query.lane) || "".trim();
+      const lane = (qStr(req.query.lane) || "").trim();
       if (!lane) return res.status(400).json({ error: "lane query param required" });
       const days = clampDays(req.query.days);
       const result = await buildLaneCallRollup(user.organizationId, lane, days);

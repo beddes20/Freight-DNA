@@ -973,8 +973,8 @@ export function registerFinancialRoutes(app: Express): void {
   app.get("/api/carriers/lane-search", requireAuth, async (req, res) => {
     try {
       const orgId = req.session.organizationId!;
-      const originQuery = qStr(req.query.origin) || "".trim();
-      const destQuery   = qStr(req.query.destination) || "".trim();
+      const originQuery = (qStr(req.query.origin) || "").trim();
+      const destQuery   = (qStr(req.query.destination) || "").trim();
       const radiusMiles = Math.max(1, Math.min(500, parseFloat(qStr(req.query.radius) || "75") || 75));
       const minLoadsPerMonth = Math.max(1, parseFloat(qStr(req.query.minLoadsPerMonth) || "5") || 5);
 
@@ -1333,8 +1333,8 @@ export function registerFinancialRoutes(app: Express): void {
         allowedMonths = keys;
       }
 
-      const repId = qStr(req.query.repId) || "".toLowerCase().trim();
-      const repName = qStr(req.query.repName) || "".toLowerCase().trim();
+      const repId = (qStr(req.query.repId) || "").toLowerCase().trim();
+      const repName = (qStr(req.query.repName) || "").toLowerCase().trim();
 
       function backendMatchRep2(excelName: string, targetName: string): boolean {
         const a = excelName.toLowerCase().trim();
