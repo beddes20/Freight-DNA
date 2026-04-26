@@ -22,6 +22,7 @@ FreightDNA is built on a React frontend, an Express.js backend, and a PostgreSQL
 -   **Customer Interaction**: Touchpoint logging, recency tracking, and alerts.
 -   **AI-Powered Features**: AI-generated talking points, health score narratives, touchpoint summaries, proactive nudges, AI action execution, and AI email drafting.
 -   **Next Best Action (NBA)**: A recommendation engine driven by freight data rules.
+-   **Daily Priorities Workspace**: Unified "Today's Priorities" page at `/daily-priorities` collecting all active NBA signals into five action buckets (Defend, Quote Now, Follow Up, Grow, Procure Carrier). Each bucket is collapsible, sorted by urgency, deduped per company. Session-scoped dismiss (in-memory, `POST /api/nba/dismiss/:cardId`). Director/admin rep-filter via `?repId=`. Sidebar badge shows live signal count. Bucket mapping constants live in `server/lib/dailyWorkspaceBuckets.ts`. 46-case unit test suite in `tests/daily-priorities-workspace.test.ts`.
 -   **Lane Work Queue (LWQ)**: Assignable lane workflow with carrier outreach and email tracking.
 -   **Spot Quote Search External Layering**: Integration of TRAC market bands, internal won-quote bands, `load_fact` lane traffic, Carrier Hub outreach lists, and geographic corridor chips into search results.
 -   **Visibility Model**: Role and collaboration-based access control for data.

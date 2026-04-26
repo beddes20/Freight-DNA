@@ -36,6 +36,7 @@ import { registerSonarRoutes } from "./routes/sonar";
 import { registerCallIntelligenceRoutes } from "./routes/callIntelligence";
 import { registerAIIntelligenceRoutes } from "./routes/aiIntelligence";
 import { getPlayForRuleType } from "./playsRegistry";
+import { ruleTypeToBucket, BUCKET_ORDER, BUCKET_PRIORITY, type WorkspaceBucket } from "./lib/dailyWorkspaceBuckets";
 import { registerEmailDraftingRoutes } from "./routes/emailDrafting";
 import { registerNbaReadyToActRoutes } from "./routes/nbaReadyToAct";
 import { registerMonitoredMailboxRoutes } from "./routes/monitoredMailboxes";
@@ -9196,6 +9197,161 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
     } catch (err) {
       console.error("[nba/manager-summary GET]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch manager summary" });
+    }
+  });
+
+  // ── Daily Priorities Workspace (Task #674) ────────────────────────────────
+  //
+  // In-memory session-scoped dismiss store.
+  // Key: userId  Value: Set of dismissed cardIds
+  // Resets on server restart — acceptable for v1 (no schema change needed).
+  const _workspaceDismissed = new Map<string, Set<string>>();
+
+  // GET /api/nba/daily-workspace — bucketed priority list for Today's Priorities
+  // ?repId=<userId>  — admin/director/sales_director may scope to a specific rep
+  app.get("/api/nba/daily-workspace", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const { id: currentUserId, role, organizationId } = currentUser;
+
+      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
+      if (!managerRoles.includes(role)) return res.status(403).json({ error: "Not authorized" });
+
+      // Resolve the target user ID for card fetching
+      const repIdParam = qOptStr(req.query.repId);
+      let targetUserId: string = currentUserId;
+      if (repIdParam && repIdParam !== currentUserId) {
+        const canScope = ["admin", "director", "sales_director"].includes(role);
+        if (!canScope) return res.status(403).json({ error: "Only admins/directors may view another rep's workspace" });
+        // Validate rep is in the same org
+        const allOrgUsers = await storage.getUsers(organizationId);
+        const rep = allOrgUsers.find(u => u.id === repIdParam && u.organizationId === organizationId);
+        if (!rep) return res.status(404).json({ error: "Rep not found" });
+        targetUserId = repIdParam;
+      }
+
+      // Fetch raw cards (all visible, no artificial limit for workspace view)
+      const rawCards = await storage.getNbaCardsForUserReadonly(targetUserId, organizationId);
+
+      // Filter session-dismissed cards
+      const dismissedSet = _workspaceDismissed.get(currentUserId) ?? new Set<string>();
+      const cards = rawCards.filter(c => !dismissedSet.has(c.id));
+
+      // Exclude archived companies
+      const orgCompanies = await storage.getCompanies(organizationId);
+      const archivedIds = new Set(orgCompanies.filter(co => co.archivedAt).map(co => co.id));
+      const activeCards = cards.filter(c => !c.companyId || !archivedIds.has(c.companyId));
+
+      // Assign each card a bucket
+      type CardWithBucket = (typeof activeCards)[number] & { bucket: WorkspaceBucket };
+      const withBuckets: CardWithBucket[] = activeCards.map(c => ({
+        ...c,
+        bucket: ruleTypeToBucket(c.ruleType ?? "", c.outcomeType ?? ""),
+      }));
+
+      // De-duplicate by companyId: keep the card with the highest-priority bucket
+      // (lowest BUCKET_PRIORITY number wins). Within the same bucket, keep highest urgencyScore.
+      const companyBest = new Map<string, CardWithBucket>();
+      for (const card of withBuckets) {
+        const key = card.companyId ?? `no-company-${card.id}`;
+        const existing = companyBest.get(key);
+        if (!existing) {
+          companyBest.set(key, card);
+        } else {
+          const existPriority = BUCKET_PRIORITY[existing.bucket];
+          const newPriority = BUCKET_PRIORITY[card.bucket];
+          if (
+            newPriority < existPriority ||
+            (newPriority === existPriority && (card.urgencyScore ?? 0) > (existing.urgencyScore ?? 0))
+          ) {
+            companyBest.set(key, card);
+          }
+        }
+      }
+      const deduped = [...companyBest.values()];
+
+      // Sort within each bucket by urgency score desc
+      const bucketed: Record<WorkspaceBucket, CardWithBucket[]> = {
+        quote_now:       [],
+        follow_up:       [],
+        defend:          [],
+        grow:            [],
+        procure_carrier: [],
+      };
+      for (const card of deduped) {
+        bucketed[card.bucket].push(card);
+      }
+      for (const bucket of BUCKET_ORDER) {
+        bucketed[bucket].sort((a, b) => (b.urgencyScore ?? 0) - (a.urgencyScore ?? 0));
+      }
+
+      // Enrich with contact + lane display info using the canonical projection helper
+      const { contactIds, laneIds } = collectProjectionIds(deduped);
+      const [contactRows, laneRows] = await Promise.all([
+        Promise.all(contactIds.map(id => storage.getContact(id).catch(() => null))),
+        Promise.all(laneIds.map(id => storage.getRecurringLane(id).catch(() => null))),
+      ]);
+      const contacts = new Map<string, Contact>(
+        contactRows.filter((c): c is Contact => !!c).map(c => [c.id, c]),
+      );
+      const lanes = new Map<string, RecurringLane>(
+        laneRows.filter((l): l is RecurringLane => !!l).map(l => [l.id, l]),
+      );
+      const userIds = new Set<string>();
+      for (const c of deduped) {
+        if (c.ruleType !== "recurring_lane_capacity" || !c.linkedLaneId) continue;
+        const lane = lanes.get(c.linkedLaneId);
+        if (!lane) continue;
+        if (lane.ownerUserId) userIds.add(lane.ownerUserId);
+        if (lane.overseerUserId) userIds.add(lane.overseerUserId);
+      }
+      const userRows = await Promise.all([...userIds].map(id => storage.getUser(id)));
+      const userMap = new Map<string, User>(
+        userRows.filter((u): u is User => !!u).map(u => [u.id, u]),
+      );
+
+      // Build projected buckets — each card retains its `.bucket` field
+      const projectedBuckets = Object.fromEntries(
+        BUCKET_ORDER.map(bucket => [
+          bucket,
+          bucketed[bucket].map(c => ({
+            ...projectNbaCard(c, { contacts, lanes, users: userMap }),
+            bucket,
+          })),
+        ]),
+      ) as unknown as Record<WorkspaceBucket, ReturnType<typeof projectNbaCard> & { bucket: WorkspaceBucket }[]>;
+
+      const totalCards = deduped.length;
+      res.json({
+        buckets: projectedBuckets,
+        totalCards,
+        scopedToUserId: targetUserId !== currentUserId ? targetUserId : null,
+      });
+    } catch (err) {
+      console.error("[nba/daily-workspace GET]", getErrorMessage(err));
+      res.status(500).json({ error: "Failed to fetch daily workspace" });
+    }
+  });
+
+  // POST /api/nba/dismiss/:cardId — session-scoped (in-memory) dismiss
+  // Does NOT write to DB; card reappears after a server restart.
+  app.post("/api/nba/dismiss/:cardId", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const cardId = pStr(req.params.cardId);
+      if (!cardId) return res.status(400).json({ error: "cardId required" });
+      let set = _workspaceDismissed.get(currentUser.id);
+      if (!set) {
+        set = new Set<string>();
+        _workspaceDismissed.set(currentUser.id, set);
+      }
+      set.add(cardId);
+      res.json({ ok: true, cardId });
+    } catch (err) {
+      console.error("[nba/dismiss POST]", getErrorMessage(err));
+      res.status(500).json({ error: "Failed to dismiss card" });
     }
   });
 

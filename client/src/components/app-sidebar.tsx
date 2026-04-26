@@ -35,6 +35,7 @@ import vtLogoWhite from "@assets/value-truck-logo-white.png";
 
 const SALES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
 const PROSPECTS_ROLES = ["admin", "sales", "sales_director"];
+const DAILY_PRIORITIES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
 
 type NavItem = {
   title: string;
@@ -64,6 +65,7 @@ const navItems: NavItem[] = [
 ];
 
 const customerFacingItems: NavItem[] = [
+  { title: "Today's Priorities", url: "/daily-priorities", icon: ClipboardList, description: "All active NBA signals bucketed by action type — Defend, Quote Now, Follow Up, Grow, Procure Carrier.", roles: DAILY_PRIORITIES_ROLES },
   { title: "Launchpad",         url: "/prospects",        icon: Crosshair,     description: "Find and qualify new prospects to pursue.", roles: PROSPECTS_ROLES },
   { title: "Customers",         url: "/customers",        icon: Network,       description: "Browse customer accounts and account history.", roles: SALES_ROLES },
   { title: "Customer Quotes",   url: "/customer-quotes",  icon: FileBarChart2, description: "Quote requests, outcomes, and lane performance — drillable analytics across customers and reps.", roles: ["admin", "director", "national_account_manager", "account_manager"] },
@@ -274,6 +276,18 @@ function useConversationsWaitingCount() {
   return data?.count ?? 0;
 }
 
+function useDailyWorkspaceCount() {
+  const { user } = useAuth();
+  const { data } = useQuery<{ totalCards: number }>({
+    queryKey: ["/api/nba/daily-workspace"],
+    enabled: !!user && DAILY_PRIORITIES_ROLES.includes(user.role),
+    refetchInterval: 5 * 60_000,
+    staleTime: 4 * 60_000,
+    retry: false,
+  });
+  return data?.totalCards ?? 0;
+}
+
 const INTEL_REVIEW_ROLES = ["admin", "director"];
 
 function usePendingIntelCount() {
@@ -295,6 +309,7 @@ export function AppSidebar() {
   const unactionedReplyCount = useUnactionedReplyCount();
   const conversationsWaitingCount = useConversationsWaitingCount();
   const pendingIntelCount = usePendingIntelCount();
+  const dailyWorkspaceCount = useDailyWorkspaceCount();
   const tooltipOverrides = useSidebarTooltipOverrides();
   const desc = (key: string, fallback?: string) =>
     resolveDescription(key, fallback ?? SIDEBAR_TOOLTIP_DEFAULT_MAP[key] ?? "", tooltipOverrides);
@@ -447,7 +462,14 @@ export function AppSidebar() {
           return (
             <CollapsibleGroup label="Customer-Facing">
               {visible.map(item => (
-                <NavLink key={item.title} item={item} isActive={isActive(item.url)} overrides={tooltipOverrides} />
+                <NavLink
+                  key={item.title}
+                  item={item}
+                  isActive={isActive(item.url)}
+                  overrides={tooltipOverrides}
+                  badge={item.title === "Today's Priorities" && dailyWorkspaceCount > 0 ? dailyWorkspaceCount : undefined}
+                  badgeColor="green"
+                />
               ))}
             </CollapsibleGroup>
           );
