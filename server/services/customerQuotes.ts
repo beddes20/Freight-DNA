@@ -3539,10 +3539,15 @@ export type FunnelPerformerRow = {
   avgQuoted: number;
 };
 
+export type FunnelPerformerSplit = {
+  best: FunnelPerformerRow[];
+  worst: FunnelPerformerRow[];
+};
+
 export type FunnelPerformers = {
-  lanes: FunnelPerformerRow[];
-  customers: FunnelPerformerRow[];
-  reps: FunnelPerformerRow[];
+  lanes: FunnelPerformerSplit;
+  customers: FunnelPerformerSplit;
+  reps: FunnelPerformerSplit;
 };
 
 export type FunnelSummary = {
@@ -3626,7 +3631,11 @@ function emptyFunnelResult(scopedToRepId: string | null): FunnelResult {
       quoteToBookPct: 0, winRatePct: 0, avgResponseTimeHours: 0, followUpCompliancePct: 0,
     },
     lossReasons: [],
-    performers: { lanes: [], customers: [], reps: [] },
+    performers: {
+      lanes: { best: [], worst: [] },
+      customers: { best: [], worst: [] },
+      reps: { best: [], worst: [] },
+    },
     scopedToRepId,
   };
 }
@@ -3779,7 +3788,11 @@ export async function getFunnel(
     }
   }
 
-  function toRows(buckets: Map<string, Bucket>, minTotal: number, limit: number): FunnelPerformerRow[] {
+  // Materialize all rows from the bucket map. Best/worst splits are computed
+  // from this FULL set so the worst column reflects true bottom performers
+  // even when there are >N decided buckets (prior bug: pre-truncating to top
+  // N by winRate caused worst to be the bottom of the top, not the bottom).
+  function toRows(buckets: Map<string, Bucket>, minTotal: number): FunnelPerformerRow[] {
     return Array.from(buckets.values())
       .filter(b => b.total >= minTotal)
       .map(b => ({
@@ -3790,18 +3803,36 @@ export async function getFunnel(
         lost: b.lost,
         winRate: pct(b.won, b.won + b.lost),
         avgQuoted: b.total > 0 ? b.quotedSum / b.total : 0,
-      }))
-      // Rank by conversion rate (winRate) per spec. Tiebreak by volume so a
-      // 100% winRate single-quote bucket doesn't dominate over a 90%/20-quote
-      // bucket. UI slices best/worst from this ranked list.
-      .sort((a, b) => b.winRate - a.winRate || b.total - a.total)
-      .slice(0, limit);
+      }));
   }
 
+  // Split into top-N best and bottom-N worst using winRate as the primary
+  // sort and total as the tiebreaker. "Decided" rows (won+lost > 0) are the
+  // only meaningful inputs for win-rate ranking; rows with zero decisions
+  // would all tie at 0% and crowd out genuine low performers.
+  function splitBestWorst(
+    rows: FunnelPerformerRow[],
+    n: number,
+  ): FunnelPerformerSplit {
+    const decided = rows.filter(r => r.won + r.lost > 0);
+    const best = decided
+      .slice()
+      .sort((a, b) => b.winRate - a.winRate || b.total - a.total)
+      .slice(0, n);
+    // Worst = lowest winRate first, with the higher-volume bucket breaking
+    // ties so a 0%/8-quote bucket ranks below a 0%/1-quote bucket.
+    const worst = decided
+      .slice()
+      .sort((a, b) => a.winRate - b.winRate || b.total - a.total)
+      .slice(0, n);
+    return { best, worst };
+  }
+
+  const PERFORMER_TOP_N = 5;
   const performers: FunnelPerformers = {
-    lanes: toRows(laneAgg, 1, 20),
-    customers: toRows(customerAgg, 1, 20),
-    reps: toRows(repAgg, 1, 20),
+    lanes: splitBestWorst(toRows(laneAgg, 1), PERFORMER_TOP_N),
+    customers: splitBestWorst(toRows(customerAgg, 1), PERFORMER_TOP_N),
+    reps: splitBestWorst(toRows(repAgg, 1), PERFORMER_TOP_N),
   };
 
   return {

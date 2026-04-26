@@ -55,11 +55,16 @@ type FunnelResult = {
   };
   lossReasons: FunnelLossReason[];
   performers: {
-    lanes: FunnelPerformerRow[];
-    customers: FunnelPerformerRow[];
-    reps: FunnelPerformerRow[];
+    lanes: FunnelPerformerSplit;
+    customers: FunnelPerformerSplit;
+    reps: FunnelPerformerSplit;
   };
   scopedToRepId: string | null;
+};
+
+type FunnelPerformerSplit = {
+  best: FunnelPerformerRow[];
+  worst: FunnelPerformerRow[];
 };
 
 export type FunnelFilters = {
@@ -364,35 +369,31 @@ function PerformerTabs({ performers, onLaneClick }: PerformerTabsProps): JSX.Ele
         <TabsTrigger value="customers" className="text-xs h-7" data-testid="tab-performers-customers">Customers</TabsTrigger>
         <TabsTrigger value="reps" className="text-xs h-7" data-testid="tab-performers-reps">Reps</TabsTrigger>
       </TabsList>
-      <TabsContent value="lanes"><PerformerTable rows={performers.lanes} kind="lanes" firstColLabel="Lane" testId="performers-table-lanes" onLaneClick={onLaneClick} /></TabsContent>
-      <TabsContent value="customers"><PerformerTable rows={performers.customers} kind="customers" firstColLabel="Customer" testId="performers-table-customers" /></TabsContent>
-      <TabsContent value="reps"><PerformerTable rows={performers.reps} kind="reps" firstColLabel="Rep" testId="performers-table-reps" /></TabsContent>
+      <TabsContent value="lanes"><PerformerTable split={performers.lanes} kind="lanes" firstColLabel="Lane" testId="performers-table-lanes" onLaneClick={onLaneClick} /></TabsContent>
+      <TabsContent value="customers"><PerformerTable split={performers.customers} kind="customers" firstColLabel="Customer" testId="performers-table-customers" /></TabsContent>
+      <TabsContent value="reps"><PerformerTable split={performers.reps} kind="reps" firstColLabel="Rep" testId="performers-table-reps" /></TabsContent>
     </Tabs>
   );
 }
 
 interface PerformerTableProps {
-  rows: FunnelPerformerRow[];
+  split: FunnelPerformerSplit;
   kind: PerformerKind;
   firstColLabel: string;
   testId: string;
   onLaneClick?: (laneLabel: string) => void;
 }
 
-function PerformerTable({ rows, kind, firstColLabel, testId, onLaneClick }: PerformerTableProps): JSX.Element {
-  if (rows.length === 0) {
+function PerformerTable({ split, kind, firstColLabel, testId, onLaneClick }: PerformerTableProps): JSX.Element {
+  if (split.best.length === 0 && split.worst.length === 0) {
     return <div className="text-xs text-muted-foreground py-6 text-center" data-testid={`${testId}-empty`}>No data in this slice.</div>;
   }
-  // Backend already ranks by winRate desc with volume as tiebreaker (rows
-  // with no decided outcomes drop to winRate=0). For "Best" we keep that
-  // order; for "Worst" we reverse so the lowest-converting buckets surface.
-  const decided = rows.filter(r => r.won + r.lost > 0);
-  const best = decided.slice(0, 5);
-  const worst = decided.slice().reverse().slice(0, 5);
+  // Backend computes best/worst from the FULL bucket set (sorted by winRate
+  // with volume as tiebreaker), so we just render what the API returns.
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3" data-testid={testId}>
-      <PerformerSubTable title="Best" rows={best} kind={kind} firstColLabel={firstColLabel} testId={`${testId}-best`} onLaneClick={onLaneClick} />
-      <PerformerSubTable title="Worst" rows={worst} kind={kind} firstColLabel={firstColLabel} testId={`${testId}-worst`} onLaneClick={onLaneClick} />
+      <PerformerSubTable title="Best" rows={split.best} kind={kind} firstColLabel={firstColLabel} testId={`${testId}-best`} onLaneClick={onLaneClick} />
+      <PerformerSubTable title="Worst" rows={split.worst} kind={kind} firstColLabel={firstColLabel} testId={`${testId}-worst`} onLaneClick={onLaneClick} />
     </div>
   );
 }

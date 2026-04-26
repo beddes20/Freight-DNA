@@ -187,26 +187,29 @@ async function main(): Promise<void> {
     assert("lossReasons each have count 1", result.lossReasons.every(r => r.count === 1));
 
     // Performers
-    const repLabels = result.performers.reps.map(r => r.label).sort();
-    assert("performers.reps includes Rep A and Rep B", repLabels.includes("Rep A") && repLabels.includes("Rep B"));
-    const repA = result.performers.reps.find(r => r.label === "Rep A");
+    const repLabels = result.performers.reps.best.map(r => r.label).sort();
+    assert("performers.reps.best includes Rep A and Rep B", repLabels.includes("Rep A") && repLabels.includes("Rep B"));
+    const repA = result.performers.reps.best.find(r => r.label === "Rep A");
     assert("Rep A has 2 wins", repA?.won === 2, `got ${repA?.won}`);
     assert("Rep A has 1 loss", repA?.lost === 1, `got ${repA?.lost}`);
 
-    const customerLabels = result.performers.customers.map(c => c.label);
-    assert("performers.customers excludes carrier bucket", !customerLabels.includes("Bad Carrier Inc"));
-    assert("performers.customers includes Acme Foods", customerLabels.includes("Acme Foods"));
+    const customerLabels = result.performers.customers.best.map(c => c.label);
+    assert("performers.customers.best excludes carrier bucket", !customerLabels.includes("Bad Carrier Inc"));
+    assert("performers.customers.best includes Acme Foods", customerLabels.includes("Acme Foods"));
 
-    // Performer ranking: Best Performers should be sorted by win rate
-    // descending. Rep A = 2W/1L = 67%, Rep B = 1W/1L = 50% → Rep A first.
+    // Performer ranking: Best should be sorted by win rate descending.
+    // Rep A = 2W/1L = 67%, Rep B = 1W/1L = 50% → Rep A first in best.
     assert(
-      "performers.reps sorted by winRate desc — Rep A first",
-      result.performers.reps[0]?.label === "Rep A",
-      `got ${result.performers.reps[0]?.label}`,
+      "performers.reps.best sorted by winRate desc — Rep A first",
+      result.performers.reps.best[0]?.label === "Rep A",
+      `got ${result.performers.reps.best[0]?.label}`,
     );
+    // Worst sort is the inverse — lowest winRate first. With only 2 decided
+    // reps in the seed (Rep A 67%, Rep B 50%), worst[0] should be Rep B.
     assert(
-      "performers.reps Rep A winRate > Rep B winRate",
-      (result.performers.reps[0]?.winRate ?? 0) > (result.performers.reps[1]?.winRate ?? 0),
+      "performers.reps.worst sorted by winRate asc — Rep B first",
+      result.performers.reps.worst[0]?.label === "Rep B",
+      `got ${result.performers.reps.worst[0]?.label}`,
     );
 
     assert("scopedToRepId is null for admin", result.scopedToRepId === null);
@@ -248,7 +251,8 @@ async function main(): Promise<void> {
     assert("Rep A lost = 1", result.summary.totalLost === 1, `got ${result.summary.totalLost}`);
     assert("Rep A scopedToRepId echoed", result.scopedToRepId === ctx.repA.id);
     // Performers should never include Rep B for a Rep A viewer.
-    assert("Rep A scope excludes Rep B from performers", !result.performers.reps.some(r => r.label === "Rep B"));
+    const allRepLabels = [...result.performers.reps.best, ...result.performers.reps.worst].map(r => r.label);
+    assert("Rep A scope excludes Rep B from performers", !allRepLabels.includes("Rep B"));
   }
 
   // ── 5. Rep scope with no mapping → empty result ───────────────────────────
@@ -322,6 +326,99 @@ async function main(): Promise<void> {
     const result = await getFunnel(org2.id, {}, null);
     assert("empty org received = 0", result.summary.totalReceived === 0);
     assert("empty org returns 6 stages with zero counts", result.stages.length === 6 && result.stages.every(s => s.count === 0));
+  }
+
+  // ── 8. Worst-performer correctness with >TOP_N customer buckets ──────────
+  // Regression for the bug where toRows() pre-truncated to top-N by winRate
+  // and the UI sliced "worst" from the truncated list — meaning when there
+  // were more than TOP_N decided buckets the worst bucket would be excluded.
+  // We seed 7 customer buckets with distinct winRates and verify the worst
+  // returned by getFunnel matches the bucket with the lowest actual winRate.
+  console.log("\n── 8. Worst performer is true bottom across >5 buckets ──");
+  {
+    const ts = Date.now();
+    const [bigOrg] = await db
+      .insert(organizations)
+      .values({ name: `Big Org ${ts}`, slug: `big-org-${ts}` })
+      .returning();
+    orgIdsToCleanup.push(bigOrg.id);
+
+    // 7 customers with hand-picked W/L distributions:
+    //   c0: 5W/0L  → 100%
+    //   c1: 4W/1L  →  80%
+    //   c2: 3W/2L  →  60%
+    //   c3: 2W/3L  →  40%
+    //   c4: 1W/4L  →  20%
+    //   c5: 0W/5L  →   0%   ← lowest, MUST be worst[0]
+    //   c6: 1W/9L  →  10%   ← second-lowest
+    const dist = [
+      { wins: 5, losses: 0 },
+      { wins: 4, losses: 1 },
+      { wins: 3, losses: 2 },
+      { wins: 2, losses: 3 },
+      { wins: 1, losses: 4 },
+      { wins: 0, losses: 5 },
+      { wins: 1, losses: 9 },
+    ];
+    const [rep] = await db
+      .insert(quoteReps)
+      .values({ organizationId: bigOrg.id, name: "Solo Rep" })
+      .returning();
+    for (let i = 0; i < dist.length; i++) {
+      const [cust] = await db
+        .insert(quoteCustomers)
+        .values({ organizationId: bigOrg.id, name: `Cust ${i}`, partyType: "customer" })
+        .returning();
+      const total = dist[i].wins + dist[i].losses;
+      const rows: Array<typeof quoteOpportunities.$inferInsert> = [];
+      for (let j = 0; j < total; j++) {
+        const isWin = j < dist[i].wins;
+        const now = new Date();
+        rows.push({
+          organizationId: bigOrg.id,
+          customerId: cust.id,
+          repId: rep.id,
+          requestDate: now,
+          equipment: "Van",
+          originCity: "Chicago",
+          originState: "IL",
+          destCity: "Atlanta",
+          destState: "GA",
+          quotedAmount: "1500",
+          outcomeStatus: isWin ? "won" : "lost_price",
+        });
+      }
+      await db.insert(quoteOpportunities).values(rows);
+    }
+
+    const result = await getFunnel(bigOrg.id, {}, null);
+    const cust = result.performers.customers;
+    assert("8: customers.best returns at most 5", cust.best.length <= 5);
+    assert("8: customers.worst returns at most 5", cust.worst.length <= 5);
+    assert(
+      "8: customers.best[0] is c0 (100%)",
+      cust.best[0]?.label === "Cust 0",
+      `got ${cust.best[0]?.label} (winRate ${cust.best[0]?.winRate})`,
+    );
+    assert(
+      "8: customers.worst[0] is c5 (0%) — true bottom, not bottom-of-top",
+      cust.worst[0]?.label === "Cust 5",
+      `got ${cust.worst[0]?.label} (winRate ${cust.worst[0]?.winRate})`,
+    );
+    assert(
+      "8: customers.worst[1] is c6 (10%)",
+      cust.worst[1]?.label === "Cust 6",
+      `got ${cust.worst[1]?.label} (winRate ${cust.worst[1]?.winRate})`,
+    );
+    // The buckets that were "above the cut" but still low (c4 at 20%, c3 at
+    // 40%) should appear in worst BEFORE any best entries do — proving the
+    // worst list is computed independently from best.
+    const worstLabels = cust.worst.map(r => r.label);
+    assert(
+      "8: customers.worst includes c4 (20%) within the top-5 worst",
+      worstLabels.includes("Cust 4"),
+      `worst labels: ${worstLabels.join(", ")}`,
+    );
   }
 
   await cleanup();
