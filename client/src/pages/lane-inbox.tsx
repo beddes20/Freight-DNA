@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
+import { CrossTabBreadcrumb, appendCrossTabFromParam } from "@/components/freight/cross-tab-breadcrumb";
 import {
   Inbox,
   Truck,
@@ -112,6 +113,7 @@ export default function LaneInboxPage() {
 
   return (
     <div className="p-4 sm:p-6 max-w-5xl mx-auto space-y-4" data-testid="page-lane-inbox">
+      <CrossTabBreadcrumb current="lane-inbox" />
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2">
@@ -192,7 +194,7 @@ export default function LaneInboxPage() {
           return (
             <Tooltip key={row.id}>
               <TooltipTrigger asChild>
-                <Link href={row.deepLink}>
+                <Link href={appendCrossTabFromParam(row.deepLink, "lane-inbox", typeof window !== "undefined" ? window.location.search : "")}>
                   <Card
                     className="hover-elevate active-elevate-2 cursor-pointer transition-colors"
                     data-testid={`row-inbox-${row.id}`}

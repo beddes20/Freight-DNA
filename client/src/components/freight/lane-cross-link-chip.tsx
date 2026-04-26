@@ -12,6 +12,7 @@
 import { Link } from "wouter";
 import { Inbox, Truck } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { appendCrossTabFromParam } from "./cross-tab-breadcrumb";
 
 export interface LwqContextChipData {
   laneId: string;
@@ -78,7 +79,11 @@ export function LwqContextChip({
   }
   const link = (
     <Link
-      href={`/lanes/work-queue?laneId=${encodeURIComponent(data.laneId)}`}
+      href={appendCrossTabFromParam(
+        `/lanes/work-queue?laneId=${encodeURIComponent(data.laneId)}`,
+        "available-freight",
+        typeof window !== "undefined" ? window.location.search : "",
+      )}
       onClick={e => e.stopPropagation()}
       className="inline-flex items-center gap-1 text-[10px] py-0.5 px-2 rounded-full border border-blue-500/40 bg-blue-500/10 text-blue-400 hover:border-blue-500 hover:bg-blue-500/20 transition-colors"
       data-testid={testId ?? "chip-lwq-context"}
@@ -138,7 +143,11 @@ export function LiveOppsChip({
   if (pickup) parts.push(`pickup ${pickup}`);
   const link = (
     <Link
-      href={`/available-freight?lane=${encodeURIComponent(data.laneSignature)}`}
+      href={appendCrossTabFromParam(
+        `/available-freight?lane=${encodeURIComponent(data.laneSignature)}`,
+        "lane-work-queue",
+        typeof window !== "undefined" ? window.location.search : "",
+      )}
       onClick={e => e.stopPropagation()}
       className="inline-flex items-center gap-1 text-[10px] py-0.5 px-2 rounded-full border border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:border-emerald-500 hover:bg-emerald-500/20 transition-colors"
       data-testid={testId ?? "chip-live-opps"}

@@ -21,6 +21,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
+import { CrossTabBreadcrumb, appendCrossTabFromParam } from "@/components/freight/cross-tab-breadcrumb";
 import {
   Truck, Building2, Phone, Mail, MapPin, Search, Plus, X, ChevronRight, ChevronLeft,
   AlertTriangle, CheckCircle2, Star, User, Route, Activity, Settings,
@@ -1035,7 +1036,13 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
               data-testid="btn-find-loads-for-carrier"
               title="Open Available Freight filtered to this carrier's claimed lanes + history"
             >
-              <Link href={`/available-freight?carrierId=${encodeURIComponent(carrier.id)}`}>
+              <Link
+                href={appendCrossTabFromParam(
+                  `/available-freight?carrierId=${encodeURIComponent(carrier.id)}`,
+                  "carrier-hub",
+                  typeof window !== "undefined" ? window.location.search : "",
+                )}
+              >
                 <Truck className="w-3.5 h-3.5" />
                 <span>Find loads</span>
               </Link>
@@ -1850,6 +1857,7 @@ export default function CarrierHub() {
     <div className="flex flex-col h-screen overflow-hidden">
       {/* Page header */}
       <div className="border-b border-border bg-background px-6 py-4 shrink-0">
+        <CrossTabBreadcrumb current="carrier-hub" />
         <div className="flex items-center justify-between gap-4">
           <div>
             <h1 className="text-xl font-bold text-foreground flex items-center gap-2">

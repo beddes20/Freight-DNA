@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
+import { CrossTabBreadcrumb } from "@/components/freight/cross-tab-breadcrumb";
 import { useLaneSignals, laneSigKey } from "@/hooks/useLaneSignals";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
@@ -1096,6 +1097,7 @@ export default function AvailableFreightPage() {
 
   return (
     <div className="container mx-auto p-4 space-y-4 max-w-screen-2xl">
+      <CrossTabBreadcrumb current="available-freight" />
       {/* Header + upload */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
