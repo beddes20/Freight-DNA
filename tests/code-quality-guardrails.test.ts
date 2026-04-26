@@ -7,6 +7,9 @@
  *   3. Contacts routes are served from the extracted module (not inline in routes.ts)
  *   4. fanOutCelebration is no longer defined inline in routes.ts
  *   5. Storage Promise<any[]> methods have typed return types
+ *   6. Shared lib files exist (rateLimiter, errors)
+ *   7. Companies routes are served from the extracted module (not inline in routes.ts)
+ *   8. Chat conversation reads are always scoped to the requesting user's id
  *
  * Run with: npx tsx tests/code-quality-guardrails.test.ts
  */
@@ -104,6 +107,21 @@ assert(
   "routes.ts — /api/rfps/preview-headers has aiPreviewRateLimit",
   /app\.post\("\/api\/rfps\/preview-headers".*?aiPreviewRateLimit/.test(mainRoutesContent),
   "aiPreviewRateLimit not found on /api/rfps/preview-headers"
+);
+assert(
+  "routes.ts — /api/rfps/upload has aiPreviewRateLimit",
+  /app\.post\("\/api\/rfps\/upload".*?aiPreviewRateLimit/.test(mainRoutesContent),
+  "aiPreviewRateLimit not found on /api/rfps/upload"
+);
+assert(
+  "routes.ts — /api/awards/parse-lanes has bulkImportRateLimit",
+  /app\.post\("\/api\/awards\/parse-lanes".*?bulkImportRateLimit/.test(mainRoutesContent),
+  "bulkImportRateLimit not found on /api/awards/parse-lanes"
+);
+assert(
+  "routes.ts — /api/companies/:id/market-share/upload has bulkImportRateLimit",
+  /app\.post\("\/api\/companies\/:id\/market-share\/upload".*?bulkImportRateLimit/.test(mainRoutesContent),
+  "bulkImportRateLimit not found on /api/companies/:id/market-share/upload"
 );
 
 // ── 3. Contacts routes are extracted (not inline in routes.ts) ────────────────
@@ -207,6 +225,86 @@ assert(
   errorsContent.includes("export function getErrorMessage"),
   "getErrorMessage not exported from errors.ts"
 );
+
+// ── 7. Companies routes are extracted (not inline in routes.ts) ───────────────
+console.log("\n── 7. Companies routes extracted from routes.ts ──────────────────────\n");
+
+assert(
+  "routes.ts — no inline app.get(\"/api/companies\")",
+  !mainRoutesContent.includes('app.get("/api/companies"'),
+  "Found inline app.get(\"/api/companies\") — should be in server/routes/companies.ts"
+);
+assert(
+  "routes.ts — no inline app.post(\"/api/companies\")",
+  !mainRoutesContent.includes('app.post("/api/companies"'),
+  "Found inline company creation route — should be in server/routes/companies.ts"
+);
+assert(
+  "routes.ts — no inline app.patch(\"/api/companies/:id\")",
+  !mainRoutesContent.includes('app.patch("/api/companies/:id"'),
+  "Found inline company update route — should be in server/routes/companies.ts"
+);
+assert(
+  "routes.ts — registerCompanyRoutes(app) is called",
+  mainRoutesContent.includes("registerCompanyRoutes(app)"),
+  "registerCompanyRoutes not wired in routes.ts"
+);
+assert(
+  "server/routes/companies.ts — file exists",
+  fs.existsSync(path.join(ROOT, "server", "routes", "companies.ts")),
+  "companies.ts not found in server/routes"
+);
+
+const companiesContent = readFile("server/routes/companies.ts");
+assert(
+  "companies.ts — exports registerCompanyRoutes",
+  companiesContent.includes("export function registerCompanyRoutes"),
+  "registerCompanyRoutes not exported from companies.ts"
+);
+assert(
+  "companies.ts — all company routes scope to currentUser.organizationId",
+  companiesContent.includes("currentUser.organizationId"),
+  "companies.ts does not scope queries to the current user's org"
+);
+
+// ── 8. Chat conversation reads are always scoped by userId ────────────────────
+console.log("\n── 8. Chat conversation ownership scoping ────────────────────────────\n");
+
+const chatStorageContent = readFile("server/replit_integrations/chat/storage.ts");
+
+assert(
+  "chat/storage.ts — getConversationForUser filters by userId",
+  /getConversationForUser.*?\{[\s\S]*?eq\(chatConversations\.userId,\s*userId\)/.test(chatStorageContent),
+  "getConversationForUser does not filter chatConversations by userId"
+);
+assert(
+  "chat/storage.ts — deleteConversationForUser checks ownership before delete",
+  /deleteConversationForUser.*?\{[\s\S]*?eq\(chatConversations\.userId,\s*userId\)/.test(chatStorageContent),
+  "deleteConversationForUser does not verify ownership (userId check) before deleting"
+);
+assert(
+  "chat/storage.ts — getAllConversationsForUser filters by userId",
+  /getAllConversationsForUser.*?\{[\s\S]*?eq\(chatConversations\.userId,\s*userId\)/.test(chatStorageContent),
+  "getAllConversationsForUser does not filter by userId"
+);
+
+const chatRoutesDir = path.join(ROOT, "server", "replit_integrations", "chat");
+const chatRouteFiles = fs
+  .readdirSync(chatRoutesDir)
+  .filter(f => f.endsWith(".ts") && f !== "storage.ts")
+  .map(f => fs.readFileSync(path.join(chatRoutesDir, f), "utf-8"));
+
+for (const [i, content] of chatRouteFiles.entries()) {
+  const filename = fs.readdirSync(chatRoutesDir).filter(f => f.endsWith(".ts") && f !== "storage.ts")[i];
+  const hasChatConversationsRead = content.includes("chatConversations");
+  if (hasChatConversationsRead) {
+    assert(
+      `chat/${filename} — uses chatStorage helper (not raw DB) for chatConversations reads`,
+      content.includes("chatStorage.") || content.includes("getConversationForUser") || content.includes("getAllConversationsForUser"),
+      `${filename} queries chatConversations directly — use chatStorage helpers which enforce userId scoping`
+    );
+  }
+}
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);

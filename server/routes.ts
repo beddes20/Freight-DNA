@@ -61,7 +61,7 @@ import { fanOutCelebration } from "./lib/fanOutCelebration";
 import { getErrorMessage } from "./lib/errors";
 import { projectNbaCard, collectProjectionIds } from "./lib/nbaCardProjection";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertCompanySchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable, emailMessages, emailSignals, onboardingMilestoneToggleSchema, type OnboardingMilestones, upsertSidebarTooltipSchema, type Contact, type RecurringLane } from "@shared/schema";
+import { insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, type UserRole, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable, upsertSidebarTooltipSchema, type Contact, type RecurringLane } from "@shared/schema";
 import { normalizeLaneLocation, normalizeEquipmentType } from "@shared/laneFormatters";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";

@@ -62,6 +62,14 @@ args = "test:shared-inbox"
 task = "workflow.run"
 args = "typecheck"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "guardrails"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "storage-integration"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -89,6 +97,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npm run check"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "guardrails"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx tsx tests/code-quality-guardrails.test.ts"
+
+[workflows.workflow.metadata]
+isValidation = true
+
+[[workflows.workflow]]
+name = "storage-integration"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx tsx tests/storage-integration.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
