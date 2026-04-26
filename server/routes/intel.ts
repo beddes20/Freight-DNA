@@ -786,7 +786,9 @@ async function computeMyLanes(
     const { fetchTracForecast } = await import("../tracService");
     const { tracDirectionSignal } = await import("../tracAlertEngine");
     const seen = new Set<string>();
-    const tracInputs: { lane_id: string; origin: string; destination: string; origin_country_code: string; destination_country_code: string; equipment_type: string; key: string }[] = [];
+    type TracForecastInput = { lane_id: string; origin: string; destination: string; origin_country_code: string; destination_country_code: string; equipment_type: "VAN" | "REEFER" | "FLATBED" };
+    const tracInputs: TracForecastInput[] = [];
+    const inputKeys = new Map<string, string>(); // lane_id → key
     for (const lane of dedupedLanes) {
       const o = cityToKma(lane.origin);
       const d = cityToKma(lane.destination);
@@ -794,12 +796,13 @@ async function computeMyLanes(
       const key = `${o.kma}|${d.kma}`;
       if (seen.has(key)) continue;
       seen.add(key);
+      const lane_id = `${o.kma}-${d.kma}-VAN`;
+      inputKeys.set(lane_id, key);
       tracInputs.push({
-        lane_id: `${o.kma}-${d.kma}-VAN`,
+        lane_id,
         origin: o.kma, destination: d.kma,
         origin_country_code: "USA", destination_country_code: "USA",
         equipment_type: "VAN",
-        key,
       });
     }
     if (tracInputs.length) {
@@ -809,7 +812,8 @@ async function computeMyLanes(
         const days = byLaneId.get(input.lane_id) ?? [];
         if (!days.length) continue;
         const { direction } = tracDirectionSignal(days as any);
-        if (direction) tracDirMap.set(input.key, direction);
+        const k = inputKeys.get(input.lane_id);
+        if (direction && k) tracDirMap.set(k, direction);
       }
     }
   } catch {
@@ -1406,7 +1410,7 @@ export async function computeAlertsSection(orgId: string, filterUserId?: string)
       const laneVotri = sonar.votriByQualifier.get(qualifier);
       const originOtri = otriByMarket.get((alert.lane.split(" → ")[0]?.trim() ?? "").toLowerCase())?.otri ?? null;
       const narrative = await getAlertNarrative(
-        alert.lane, alert.signal, alert.action, alert.severity, originOtri,
+        alert.lane, alert.signal, alert.action, alert.severity, originOtri ?? 0,
         laneVotri && !laneVotri.isStale ? laneVotri.votri : null,
       );
       return { ...alert, aiNarrative: narrative };

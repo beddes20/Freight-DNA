@@ -489,7 +489,8 @@ export function registerValueIQRoutes(app: Express) {
         title: (body.title ?? `From ValueIQ: ${thread.title}`).slice(0, 200),
         description: msg.content.slice(0, 2000),
         assignedTo: user.id,
-        createdBy: user.id,
+        assignedBy: user.id,
+        createdAt: new Date().toISOString(),
         companyId: body.companyId ?? null,
         status: "pending",
       };

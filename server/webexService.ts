@@ -1016,6 +1016,21 @@ export function buildWebexCallDeepLink(phoneNumber: string): string {
  * resilient webexFetch retry policy, and yields each item back. Bails on
  * the first terminal failure (returns whatever it accumulated so far).
  */
+/**
+ * Convenience wrapper used by the admin Webex Health/Devices panels —
+ * accepts an options bag (token/accessToken alias + onFailure callback)
+ * and forwards to the lower-level paginator.
+ */
+export async function webexFetchAllPages<T = any>(
+  url: string,
+  opts: { maxItems?: number; itemsKey?: string; token?: string; accessToken?: string; onFailure?: WebexHttpOptions["onFailure"] } = {},
+): Promise<{ items: T[]; lastError: string | null; failed: boolean }> {
+  const tok = opts.token ?? opts.accessToken ?? (await getWebexAccessToken());
+  const r = await paginateWebex<T>(url, tok, opts.itemsKey ?? "items", opts.maxItems ?? 5_000);
+  if (r.failed && opts.onFailure) opts.onFailure({ url, status: 0, body: r.lastError ?? "pagination failed" });
+  return r;
+}
+
 async function paginateWebex<T = any>(
   initialUrl: string,
   token: string,
@@ -1026,18 +1041,18 @@ async function paginateWebex<T = any>(
   let url: string | null = initialUrl;
   let lastError: string | null = null;
   while (url && out.length < max) {
-    const r = await webexFetch<{ [k: string]: any }>(url, { token });
+    const r: WebexFetchResult<{ [k: string]: any }> = await webexFetch<{ [k: string]: any }>(url, { token });
     if (!r.ok || !r.data) {
       lastError = r.error;
       break;
     }
-    const items = (r.data as any)?.[itemsKey] ?? [];
+    const items: any[] = (r.data as any)?.[itemsKey] ?? [];
     for (const it of items) {
       if (out.length >= max) break;
       out.push(it as T);
     }
-    const link = r.response?.headers.get("link") ?? "";
-    const m = link.match(/<([^>]+)>;\s*rel="next"/);
+    const link: string = r.response?.headers.get("link") ?? "";
+    const m: RegExpMatchArray | null = link.match(/<([^>]+)>;\s*rel="next"/);
     url = m ? m[1] : null;
   }
   return { items: out, lastError, failed: !!lastError };

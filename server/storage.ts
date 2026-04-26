@@ -299,7 +299,7 @@ export interface TeamMemberSummary {
 }
 
 export interface RepReportData {
-  rep: { id: string; name: string; role: string; manager: string | null; director: string | null; createdAt: string | null };
+  rep: { id: string; name: string; role: string; manager: string | null; director: string | null; createdAt: string | null; financialRepId: string | null };
   period: { type: string; label: string; start: string; end: string };
   goals: Array<{ id: string; label: string; metric: string; period: string; current: number; target: number; pct: number }>;
   touchpoints: { total: number; call: number; email: number; text: number; site_visit: number; meaningful: number; weeklyTrend: number[] };
@@ -1944,6 +1944,10 @@ export class DatabaseStorage implements IStorage {
       lastLoginAt: users.lastLoginAt,
       financialRepId: users.financialRepId,
       createdAt: users.createdAt,
+      emailSignature: users.emailSignature,
+      clerkUserId: users.clerkUserId,
+      valueiqLandingDisabled: users.valueiqLandingDisabled,
+      defaultToTodayQueue: users.defaultToTodayQueue,
     }).from(users).where(
       and(
         eq(users.organizationId, organizationId),
@@ -2476,7 +2480,7 @@ export class DatabaseStorage implements IStorage {
       )
     ).orderBy(desc(oneOnOneTopics.createdAt));
 
-    const topicsBySession = new Map<number, OneOnOneTopic[]>();
+    const topicsBySession = new Map<string, OneOnOneTopic[]>();
     for (const topic of allTopics) {
       const list = topicsBySession.get(topic.sessionId) ?? [];
       list.push(topic);
