@@ -113,7 +113,7 @@ async function runEscalationCheck(): Promise<void> {
       userId: managerId,
       type: "quote_request_escalation",
       title: `🚨 Quote SLA Breach — ${notif.title.replace("⚡ Quote Request — ", "")}`,
-      body: `${rep.name || rep.email} has not responded to a customer quote request within ${ESCALATION_MINUTES} minutes. Original: ${notif.body}`,
+      body: `${rep.name || rep.username} has not responded to a customer quote request within ${ESCALATION_MINUTES} minutes. Original: ${notif.body}`,
       link: notif.link,
       read: false,
       relatedId: escalationRelatedId,

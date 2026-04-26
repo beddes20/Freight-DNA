@@ -622,8 +622,8 @@ function lookupCompany(idx: CompanyIndex, customerName: string): Company | undef
 function buildUserEmailIndex(users: User[]): Map<string, User> {
   const idx = new Map<string, User>();
   for (const u of users) {
+    // `username` is the email address in this app (see auth flow).
     if (u.username) idx.set(u.username.trim().toLowerCase(), u);
-    if (u.email) idx.set(u.email.trim().toLowerCase(), u);
   }
   return idx;
 }
@@ -1001,7 +1001,7 @@ export async function runImportFromWorkbook(
           return trimmed;
         })();
         if (realOrderId) {
-          const { db } = await import("./db");
+          const { db } = await import("./storage");
           const { loadFact } = await import("@shared/schema");
           const { and, eq, sql: sqlOp } = await import("drizzle-orm");
           try {
@@ -1337,7 +1337,7 @@ export async function recoverLegacyAvailableLoadOrderIds(
 
   const promise = (async (): Promise<RecoverLegacyOrderIdsResult> => {
     try {
-      const { db } = await import("./db");
+      const { db } = await import("./storage");
       const { freightOpportunities, loadFact } = await import("@shared/schema");
       const { and, eq, sql } = await import("drizzle-orm");
 

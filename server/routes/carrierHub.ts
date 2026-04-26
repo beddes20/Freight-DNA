@@ -13,6 +13,7 @@
  */
 
 import type { Express } from "express";
+import { pStr, qStr, qOptStr } from "../lib/req";
 import { requireAuth } from "../auth";
 import { storage, db } from "../storage";
 import {
@@ -190,7 +191,7 @@ export function registerCarrierHubRoutes(app: Express) {
   app.get("/api/carrier-hub/:id/best-lanes", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const { id } = req.params;
+      const id = pStr(req.params.id);
 
       const [carrier] = await db
         .select()
@@ -318,7 +319,7 @@ export function registerCarrierHubRoutes(app: Express) {
   app.get("/api/carrier-hub/:id", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const { id } = req.params;
+      const id = pStr(req.params.id);
 
       // Base carrier record
       const [carrier] = await db
@@ -374,7 +375,7 @@ export function registerCarrierHubRoutes(app: Express) {
   app.get("/api/carrier-hub/:id/activity", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const { id } = req.params;
+      const id = pStr(req.params.id);
 
       // Get full carrier record (need name + payeeCode for TMS history lookup)
       const [c] = await db
@@ -622,7 +623,7 @@ export function registerCarrierHubRoutes(app: Express) {
   app.patch("/api/carrier-hub/:id", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const { id } = req.params;
+      const id = pStr(req.params.id);
       const allowedFields = [
         "name", "legalName", "mcDot", "dotNumber", "status", "phone",
         "city", "state", "primaryEmail", "backupEmail", "notes",
@@ -651,7 +652,7 @@ export function registerCarrierHubRoutes(app: Express) {
   app.post("/api/carrier-hub/:id/contacts", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const { id } = req.params;
+      const id = pStr(req.params.id);
       // Verify org ownership
       const [c] = await db.select({ id: carriers.id }).from(carriers).where(and(eq(carriers.id, id), eq(carriers.orgId, org)));
       if (!c) return res.status(404).json({ error: "Carrier not found" });
@@ -672,7 +673,7 @@ export function registerCarrierHubRoutes(app: Express) {
   app.patch("/api/carrier-hub/:id/contacts/:contactId", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const { id, contactId } = req.params;
+      const id = pStr(req.params.id); const contactId = pStr(req.params.contactId);
       const [c] = await db.select({ id: carriers.id }).from(carriers).where(and(eq(carriers.id, id), eq(carriers.orgId, org)));
       if (!c) return res.status(404).json({ error: "Carrier not found" });
       const allowedFields = ["name", "role", "email", "phone", "extension", "preferredMethod", "notes", "isPrimary", "isActive"] as const;
@@ -700,7 +701,7 @@ export function registerCarrierHubRoutes(app: Express) {
   app.delete("/api/carrier-hub/:id/contacts/:contactId", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const { id, contactId } = req.params;
+      const id = pStr(req.params.id); const contactId = pStr(req.params.contactId);
       const [c] = await db.select({ id: carriers.id }).from(carriers).where(and(eq(carriers.id, id), eq(carriers.orgId, org)));
       if (!c) return res.status(404).json({ error: "Carrier not found" });
       await db.delete(carrierContacts).where(and(eq(carrierContacts.id, contactId), eq(carrierContacts.carrierId, id)));
@@ -715,7 +716,7 @@ export function registerCarrierHubRoutes(app: Express) {
   app.post("/api/carrier-hub/:id/claimed-lanes", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const { id } = req.params;
+      const id = pStr(req.params.id);
       const [c] = await db.select({ id: carriers.id }).from(carriers).where(and(eq(carriers.id, id), eq(carriers.orgId, org)));
       if (!c) return res.status(404).json({ error: "Carrier not found" });
       const parsed = insertCarrierClaimedLaneSchema.safeParse({ ...req.body, carrierId: id });
@@ -731,7 +732,7 @@ export function registerCarrierHubRoutes(app: Express) {
   app.delete("/api/carrier-hub/:id/claimed-lanes/:laneId", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const { id, laneId } = req.params;
+      const id = pStr(req.params.id); const laneId = pStr(req.params.laneId);
       const [c] = await db.select({ id: carriers.id }).from(carriers).where(and(eq(carriers.id, id), eq(carriers.orgId, org)));
       if (!c) return res.status(404).json({ error: "Carrier not found" });
       await db.delete(carrierClaimedLanes).where(and(eq(carrierClaimedLanes.id, laneId), eq(carrierClaimedLanes.carrierId, id)));
@@ -749,7 +750,7 @@ export function registerCarrierHubRoutes(app: Express) {
   app.get("/api/carrier-hub/:id/intelligence", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const { id } = req.params;
+      const id = pStr(req.params.id);
 
       const [carrier] = await db
         .select()
@@ -845,7 +846,7 @@ export function registerCarrierHubRoutes(app: Express) {
   app.patch("/api/carrier-hub/suggestions/:suggestionId/accept", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const { suggestionId } = req.params;
+      const suggestionId = pStr(req.params.suggestionId);
       const { comment } = req.body ?? {};
       const userId = (req as any).session?.userId as string | undefined;
 
@@ -873,7 +874,7 @@ export function registerCarrierHubRoutes(app: Express) {
   app.patch("/api/carrier-hub/suggestions/:suggestionId/reject", requireAuth, async (req, res) => {
     try {
       const org = orgId(req);
-      const { suggestionId } = req.params;
+      const suggestionId = pStr(req.params.suggestionId);
       const { comment } = req.body ?? {};
       const userId = (req as any).session?.userId as string | undefined;
 

@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { pStr, qStr, qOptStr } from "../lib/req";
 import { requireAuth, getCurrentUser } from "../auth";
 import { storage } from "../storage";
 import {
@@ -19,7 +20,7 @@ export function registerCallTrendlineRoutes(app: Express) {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const { companyId } = req.params;
+      const companyId = pStr(req.params.companyId);
       const company = await storage.getCompany(companyId);
       if (!company || company.organizationId !== user.organizationId) {
         return res.status(404).json({ error: "Company not found" });

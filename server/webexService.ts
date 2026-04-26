@@ -803,7 +803,7 @@ export async function fetchCallHistory(
       });
     }
 
-    const linkHeader = r.headers?.get("link") ?? null;
+    const linkHeader = r.response?.headers.get("link") ?? null;
     if (linkHeader) {
       const match = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
       url = match ? match[1] : "";

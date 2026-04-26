@@ -9,6 +9,7 @@
  */
 
 import type { Express } from "express";
+import { pStr, qStr, qOptStr } from "../lib/req";
 import { requireAuth, getCurrentUser } from "../auth";
 import { storage } from "../storage";
 import { z } from "zod";
@@ -35,16 +36,16 @@ export function registerGeographicResponsibilitiesRoutes(app: Express): void {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-        const { accountId } = req.params;
+        const accountId = pStr(req.params.accountId);
         const company = await storage.getCompanyInOrg(accountId, user.organizationId);
         if (!company) return res.status(404).json({ error: "Account not found" });
 
         const filters = {
-          contactId: req.query.contactId as string | undefined,
-          lanePatternId: req.query.lanePatternId as string | undefined,
-          status: req.query.status as string | undefined,
+          contactId: qOptStr(req.query.contactId),
+          lanePatternId: qOptStr(req.query.lanePatternId),
+          status: qOptStr(req.query.status),
           minConfidence: req.query.minConfidence ? Number(req.query.minConfidence) : undefined,
-          responsibilityType: req.query.responsibilityType as string | undefined,
+          responsibilityType: qOptStr(req.query.responsibilityType),
         };
 
         const responsibilities = await storage.getResponsibilitiesByAccount(accountId, filters);
@@ -76,7 +77,7 @@ export function registerGeographicResponsibilitiesRoutes(app: Express): void {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-        const { contactId } = req.params;
+        const contactId = pStr(req.params.contactId);
         const contact = await storage.getContact(contactId);
         if (!contact) return res.status(404).json({ error: "Contact not found" });
 
@@ -85,10 +86,10 @@ export function registerGeographicResponsibilitiesRoutes(app: Express): void {
         if (!company) return res.status(403).json({ error: "Forbidden" });
 
         const filters = {
-          accountId: req.query.accountId as string | undefined,
-          status: req.query.status as string | undefined,
+          accountId: qOptStr(req.query.accountId),
+          status: qOptStr(req.query.status),
           minConfidence: req.query.minConfidence ? Number(req.query.minConfidence) : undefined,
-          responsibilityType: req.query.responsibilityType as string | undefined,
+          responsibilityType: qOptStr(req.query.responsibilityType),
         };
 
         const responsibilities = await storage.getResponsibilitiesByContact(contactId, filters);
@@ -119,7 +120,7 @@ export function registerGeographicResponsibilitiesRoutes(app: Express): void {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-        const { id } = req.params;
+        const id = pStr(req.params.id);
         const row = await storage.getResponsibility(id);
         if (!row) return res.status(404).json({ error: "Not found" });
 
@@ -145,7 +146,7 @@ export function registerGeographicResponsibilitiesRoutes(app: Express): void {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-        const { id } = req.params;
+        const id = pStr(req.params.id);
         const row = await storage.getResponsibility(id);
         if (!row) return res.status(404).json({ error: "Not found" });
 

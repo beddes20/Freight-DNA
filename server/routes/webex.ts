@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { pStr, qStr, qOptStr } from "../lib/req";
 import { requireAuth, getCurrentUser } from "../auth";
 import { storage } from "../storage";
 import {
@@ -795,7 +796,7 @@ export function registerWebexRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const mode = (req.query.mode as string) === "personal" ? "personal" : "org";
+      const mode = (qStr(req.query.mode)) === "personal" ? "personal" : "org";
       if (mode === "org" && user.role !== "admin") {
         return res.status(403).json({ error: "Only admins can authorize the org-level Webex connection" });
       }
@@ -864,19 +865,19 @@ export function registerWebexRoutes(app: Express) {
     };
 
     try {
-      const errParam = req.query.error as string | undefined;
-      const errDesc = req.query.error_description as string | undefined;
+      const errParam = qOptStr(req.query.error);
+      const errDesc = qOptStr(req.query.error_description);
       if (errParam) {
         log(`Callback error from Webex: ${errParam} — ${errDesc ?? ""}`);
         return renderError(400, `Webex returned an error: ${errParam}${errDesc ? ` — ${errDesc}` : ""}`);
       }
 
-      const code = req.query.code as string;
+      const code = qStr(req.query.code);
       if (!code) {
         return renderError(400, "No authorization code was returned by Webex.");
       }
 
-      const stateParam = (req.query.state as string) || "";
+      const stateParam = (qStr(req.query.state)) || "";
       if (stateParam.startsWith("webex_oauth_user")) {
         // Per-user (Task #261) flow — verify signed state, confirm the
         // current browser session matches the initiating user, and consume
@@ -963,7 +964,7 @@ export function registerWebexRoutes(app: Express) {
   });
 
   app.get("/api/webex/deep-link/:phone", requireAuth, async (req: Request, res: Response) => {
-    const phone = req.params.phone;
+    const phone = pStr(req.params.phone);
     if (!phone) return res.status(400).json({ error: "Phone number required" });
     res.json({ deepLink: buildWebexCallDeepLink(phone) });
   });
@@ -974,7 +975,7 @@ export function registerWebexRoutes(app: Express) {
         return res.json({ status: "unknown", configured: false });
       }
 
-      const phone = req.params.phone;
+      const phone = pStr(req.params.phone);
       if (!phone) return res.status(400).json({ error: "Phone number required" });
 
       const cached = presenceCache.get(phone);
@@ -1406,7 +1407,7 @@ export function registerWebexRoutes(app: Express) {
         updates.status = req.body.status;
       }
       if ("notes" in req.body) updates.notes = req.body.notes;
-      const row = await storage.updateWebexUserMapping(req.params.id, user.organizationId, updates);
+      const row = await storage.updateWebexUserMapping(pStr(req.params.id), user.organizationId, updates);
       if (!row) return res.status(404).json({ error: "Mapping not found" });
       res.json(row);
     } catch (err) {
@@ -1419,7 +1420,7 @@ export function registerWebexRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
-      const ok = await storage.deleteWebexUserMapping(req.params.id, user.organizationId);
+      const ok = await storage.deleteWebexUserMapping(pStr(req.params.id), user.organizationId);
       res.json({ deleted: ok });
     } catch (err) {
       log(`Delete mapping error: ${err instanceof Error ? err.message : String(err)}`);
@@ -1448,7 +1449,7 @@ export function registerWebexRoutes(app: Express) {
 
       const daysRaw = Number(req.query.days);
       const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(daysRaw, 90) : 30;
-      const managerFilter = (req.query.managerId as string | undefined)?.trim() || null;
+      const managerFilter = (qOptStr(req.query.managerId))?.trim() || null;
 
       // Fetch CDRs across the window in chunks (Webex caps windows). We page
       // 48h at a time and cap total records to keep the admin call bounded.
@@ -1657,7 +1658,7 @@ export function registerWebexRoutes(app: Express) {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const hours = Math.min(Math.max(parseInt((req.query.hours as string) || "48", 10) || 48, 1), 24 * 14);
+      const hours = Math.min(Math.max(parseInt((qStr(req.query.hours)) || "48", 10) || 48, 1), 24 * 14);
       const sinceIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
       const rows = await storage.getMissedInboundCallsForOrg(user.organizationId, sinceIso);
 
@@ -1721,7 +1722,7 @@ export function registerWebexRoutes(app: Express) {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const missed = await storage.getMissedInboundCall(req.params.id);
+      const missed = await storage.getMissedInboundCall(pStr(req.params.id));
       if (!missed || missed.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Missed call not found" });
       }
@@ -1826,7 +1827,7 @@ export function registerWebexRoutes(app: Express) {
       }
 
       const range = String(req.query.range ?? "7d");
-      const managerId = (req.query.managerId as string | undefined) || null;
+      const managerId = (qOptStr(req.query.managerId)) || null;
 
       const rangeDays = range === "today" ? 1 : range === "30d" ? 30 : range === "90d" ? 90 : 7;
       const now = Date.now();
@@ -2046,7 +2047,7 @@ export function registerWebexRoutes(app: Express) {
       if (!userId) return res.status(400).json({ error: "userId is required" });
 
       const range = String(req.query.range ?? "7d");
-      const managerId = (req.query.managerId as string | undefined) || null;
+      const managerId = (qOptStr(req.query.managerId)) || null;
       const rangeDays = range === "today" ? 1 : range === "30d" ? 30 : range === "90d" ? 90 : 7;
       const now = Date.now();
       let startMs: number;

@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { pStr, qStr, qOptStr } from "../lib/req";
 import { eq, and, desc, sql, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../storage";
@@ -951,7 +952,7 @@ export function registerAgentAdminRoutes(app: Express) {
     const me = await getCurrentUser(req);
     if (!me) return res.status(401).json({ error: "Unauthorized" });
     if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
-    const agent = await loadOrgAgent(req.params.id, me.organizationId);
+    const agent = await loadOrgAgent(pStr(req.params.id), me.organizationId);
     if (!agent) return res.status(404).json({ error: "Not found" });
     const rows = await db.select().from(agentToolsT).where(eq(agentToolsT.agentId, agent.id));
     res.json({
@@ -963,7 +964,7 @@ export function registerAgentAdminRoutes(app: Express) {
     const me = await getCurrentUser(req);
     if (!me) return res.status(401).json({ error: "Unauthorized" });
     if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
-    const agent = await loadOrgAgent(req.params.id, me.organizationId);
+    const agent = await loadOrgAgent(pStr(req.params.id), me.organizationId);
     if (!agent) return res.status(404).json({ error: "Not found" });
     const caps = z.array(z.string()).parse(req.body?.capabilities ?? []);
     const valid = caps.filter((c) => (ALL_CAPABILITIES as string[]).includes(c));
@@ -980,7 +981,7 @@ export function registerAgentAdminRoutes(app: Express) {
     const me = await getCurrentUser(req);
     if (!me) return res.status(401).json({ error: "Unauthorized" });
     if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
-    const agent = await loadOrgAgent(req.params.id, me.organizationId);
+    const agent = await loadOrgAgent(pStr(req.params.id), me.organizationId);
     if (!agent) return res.status(404).json({ error: "Not found" });
     const rows = await db.select().from(agentUserAccessT).where(eq(agentUserAccessT.agentId, agent.id));
     res.json({ userIds: rows.filter((r) => r.enabled).map((r) => r.userId) });
@@ -989,7 +990,7 @@ export function registerAgentAdminRoutes(app: Express) {
     const me = await getCurrentUser(req);
     if (!me) return res.status(401).json({ error: "Unauthorized" });
     if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
-    const agent = await loadOrgAgent(req.params.id, me.organizationId);
+    const agent = await loadOrgAgent(pStr(req.params.id), me.organizationId);
     if (!agent) return res.status(404).json({ error: "Not found" });
     const userIds = z.array(z.string()).parse(req.body?.userIds ?? []);
     // Restrict assigned users to the same org.

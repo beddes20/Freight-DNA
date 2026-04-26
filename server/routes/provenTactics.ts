@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { pStr, qStr, qOptStr } from "../lib/req";
 import { z } from "zod";
 import { requireAuth, getCurrentUser } from "../auth";
 import {
@@ -46,7 +47,7 @@ export function registerProvenTacticsRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const signalType = req.query.signalType as string;
+      const signalType = qStr(req.query.signalType);
       if (!signalType) return res.status(400).json({ error: "signalType is required" });
 
       const tactics = await getProvenTacticsForSignal(user.organizationId, signalType, 5);
@@ -66,7 +67,7 @@ export function registerProvenTacticsRoutes(app: Express): void {
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid body" });
 
-      const tactic = await recordTacticOutcome(req.params.id, parsed.data.outcome, user.organizationId);
+      const tactic = await recordTacticOutcome(pStr(req.params.id), parsed.data.outcome, user.organizationId);
       if (!tactic) return res.status(404).json({ error: "Tactic not found" });
       res.json({ tactic });
     } catch (err) {

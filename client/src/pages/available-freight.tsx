@@ -64,6 +64,9 @@ interface CockpitChip {
   reasons?: string[];
   /** Task #633 — suppression notes, rendered muted at the top of the popover. */
   suppressionReasons?: string[];
+  /** Cross-tab UX (option C) — true when carrier asserts this lane in
+   *  carrier_claimed_lanes; surfaced as a small "claimed" pill. */
+  claimed?: boolean;
 }
 
 interface CockpitItem {

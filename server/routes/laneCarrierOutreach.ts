@@ -28,6 +28,7 @@
  */
 
 import type { Express, Response } from "express";
+import { pStr, qStr, qOptStr } from "../lib/req";
 import multer from "multer";
 import XLSX from "xlsx";
 import { storage, db, CARRIER_DAILY_BUDGET_CONFIG } from "../storage";
@@ -721,7 +722,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     try {
       // Pagination: keyset by (laneScore DESC, laneId). Default page size 50.
       const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? "50"), 10) || 50));
-      const cursor = req.query.cursor as string | undefined; // format: "score:laneId"
+      const cursor = qOptStr(req.query.cursor); // format: "score:laneId"
 
       const { visibleUserIds, canSeeUnassigned, scopeLabel } = await storage.resolveVisibleUserIds(
         user.id, user.organizationId, user.role
@@ -2885,7 +2886,7 @@ Rules for suggestions:
 
   app.post("/api/webhooks/outlook-reply", async (req, res) => {
     // ── Graph validation handshake ──────────────────────────────────────────
-    const validationToken = req.query.validationToken as string | undefined;
+    const validationToken = qOptStr(req.query.validationToken);
     if (validationToken) {
       res.setHeader("Content-Type", "text/plain");
       return res.status(200).send(validationToken);
@@ -2913,7 +2914,7 @@ Rules for suggestions:
   app.get("/api/procurement/:taskId/outreach-logs", requireAuth, async (req, res) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const task = await storage.getTask(req.params.taskId);
+    const task = await storage.getTask(pStr(req.params.taskId));
     if (!task) return res.status(404).json({ error: "Task not found" });
     // Org-scope: the task must belong to the user's org (via task.orgId or linked user)
     let taskOrgId: string | null | undefined = task.orgId;
@@ -2927,7 +2928,7 @@ Rules for suggestions:
     if (!taskOrgId || taskOrgId !== user.organizationId) {
       return res.status(403).json({ error: "Access denied" });
     }
-    const logs = await storage.getCarrierOutreachLogsByProcurementTaskId(user.organizationId, req.params.taskId);
+    const logs = await storage.getCarrierOutreachLogsByProcurementTaskId(user.organizationId, pStr(req.params.taskId));
     return res.json(logs);
   });
 
@@ -3193,7 +3194,7 @@ Rules for suggestions:
   });
 
   app.get("/api/webhooks/outlook-reply", (req, res) => {
-    const validationToken = req.query.validationToken as string | undefined;
+    const validationToken = qOptStr(req.query.validationToken);
     if (validationToken) {
       res.setHeader("Content-Type", "text/plain");
       return res.status(200).send(validationToken);

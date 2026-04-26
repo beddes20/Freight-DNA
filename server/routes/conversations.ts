@@ -15,6 +15,7 @@
  */
 
 import type { Express, Request, Response } from "express";
+import { pStr, qStr, qOptStr } from "../lib/req";
 import { z } from "zod";
 import { inArray, and, eq, asc, sql, gte, isNull, desc } from "drizzle-orm";
 import { storage, db } from "../storage";
@@ -558,7 +559,7 @@ export function registerConversationsRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const thread = await storage.getEmailConversationThreadById(req.params.id);
+      const thread = await storage.getEmailConversationThreadById(pStr(req.params.id));
       if (!thread || thread.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Conversation not found" });
       }
@@ -576,7 +577,7 @@ export function registerConversationsRoutes(app: Express): void {
         waitingSinceAt: null,
         overdueAt: null,
       };
-      const updated = await storage.updateEmailConversationThread(req.params.id, user.organizationId, archiveUpdate);
+      const updated = await storage.updateEmailConversationThread(pStr(req.params.id), user.organizationId, archiveUpdate);
 
       // Audit: record archive on the thread timeline (Task #534).
       await recordThreadEvent({
@@ -616,7 +617,7 @@ export function registerConversationsRoutes(app: Express): void {
         return res.status(400).json({ error: "snoozedUntil must be a future timestamp" });
       }
 
-      const thread = await storage.getEmailConversationThreadById(req.params.id);
+      const thread = await storage.getEmailConversationThreadById(pStr(req.params.id));
       if (!thread || thread.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Conversation not found" });
       }
@@ -627,8 +628,8 @@ export function registerConversationsRoutes(app: Express): void {
         return res.status(400).json({ error: "Archived conversations cannot be snoozed" });
       }
 
-      await snoozeThread(req.params.id, until, user.id, user.organizationId, storage);
-      const updated = await storage.getEmailConversationThreadById(req.params.id);
+      await snoozeThread(pStr(req.params.id), until, user.id, user.organizationId, storage);
+      const updated = await storage.getEmailConversationThreadById(pStr(req.params.id));
       res.json({ thread: updated });
     } catch (err) {
       console.error("[conversations] POST /conversations/:id/snooze error:", err);
@@ -644,7 +645,7 @@ export function registerConversationsRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const thread = await storage.getEmailConversationThreadById(req.params.id);
+      const thread = await storage.getEmailConversationThreadById(pStr(req.params.id));
       if (!thread || thread.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Conversation not found" });
       }
@@ -653,8 +654,8 @@ export function registerConversationsRoutes(app: Express): void {
       }
 
       const { wakeSnoozedThread } = await import("../services/conversationWaitingStateService");
-      await wakeSnoozedThread(req.params.id, user.organizationId, storage);
-      const updated = await storage.getEmailConversationThreadById(req.params.id);
+      await wakeSnoozedThread(pStr(req.params.id), user.organizationId, storage);
+      const updated = await storage.getEmailConversationThreadById(pStr(req.params.id));
       res.json({ thread: updated });
     } catch (err) {
       console.error("[conversations] POST /conversations/:id/unsnooze error:", err);
@@ -834,7 +835,7 @@ export function registerConversationsRoutes(app: Express): void {
       if (!parsed.success) {
         return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
       }
-      const view = await storage.updateConversationSavedView(req.params.id, user.id, parsed.data);
+      const view = await storage.updateConversationSavedView(pStr(req.params.id), user.id, parsed.data);
       if (!view) return res.status(404).json({ error: "Saved view not found" });
       res.json({ view });
     } catch (err) {
@@ -847,7 +848,7 @@ export function registerConversationsRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const ok = await storage.deleteConversationSavedView(req.params.id, user.id);
+      const ok = await storage.deleteConversationSavedView(pStr(req.params.id), user.id);
       if (!ok) return res.status(404).json({ error: "Saved view not found" });
       res.json({ ok: true });
     } catch (err) {
@@ -887,7 +888,7 @@ export function registerConversationsRoutes(app: Express): void {
       // Check access on the existing thread BEFORE the assignment so a rep
       // can't reassign threads outside their visible set (and can't probe
       // for thread existence by issuing reassign requests).
-      const existing = await storage.getEmailConversationThreadById(req.params.id);
+      const existing = await storage.getEmailConversationThreadById(pStr(req.params.id));
       if (!existing || existing.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Conversation not found" });
       }
@@ -896,8 +897,8 @@ export function registerConversationsRoutes(app: Express): void {
       }
 
       const previousOwnerId = existing.ownerUserId;
-      await assignOwner(req.params.id, parsed.data.ownerUserId, user.organizationId, storage);
-      const thread = await storage.getEmailConversationThreadById(req.params.id);
+      await assignOwner(pStr(req.params.id), parsed.data.ownerUserId, user.organizationId, storage);
+      const thread = await storage.getEmailConversationThreadById(pStr(req.params.id));
       if (!thread || thread.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Conversation not found" });
       }
@@ -955,7 +956,7 @@ export function registerConversationsRoutes(app: Express): void {
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
 
-      const existing = await storage.getEmailConversationThreadById(req.params.id);
+      const existing = await storage.getEmailConversationThreadById(pStr(req.params.id));
       if (!existing || existing.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Conversation not found" });
       }
@@ -964,8 +965,8 @@ export function registerConversationsRoutes(app: Express): void {
       }
 
       const previousState = existing.waitingState;
-      await setWaitingState(req.params.id, parsed.data.waitingState, user.organizationId, storage);
-      const thread = await storage.getEmailConversationThreadById(req.params.id);
+      await setWaitingState(pStr(req.params.id), parsed.data.waitingState, user.organizationId, storage);
+      const thread = await storage.getEmailConversationThreadById(pStr(req.params.id));
       if (!thread || thread.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Conversation not found" });
       }
@@ -1187,7 +1188,7 @@ export function registerConversationsRoutes(app: Express): void {
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
 
-      const existing = await storage.getEmailConversationThreadById(req.params.id);
+      const existing = await storage.getEmailConversationThreadById(pStr(req.params.id));
       if (!existing || existing.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Conversation not found" });
       }
@@ -1196,8 +1197,8 @@ export function registerConversationsRoutes(app: Express): void {
       }
 
       const previousPriority = existing.responsePriority;
-      await setPriority(req.params.id, parsed.data.responsePriority, user.organizationId, storage);
-      const thread = await storage.getEmailConversationThreadById(req.params.id);
+      await setPriority(pStr(req.params.id), parsed.data.responsePriority, user.organizationId, storage);
+      const thread = await storage.getEmailConversationThreadById(pStr(req.params.id));
       if (!thread || thread.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Conversation not found" });
       }
@@ -1391,7 +1392,7 @@ export function registerConversationsRoutes(app: Express): void {
       try {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
-        const threadIdParam = req.params.id;
+        const threadIdParam = pStr(req.params.id);
 
         // :id is an Outlook conversationId (used by other GET endpoints
         // such as /messages). Verify the thread is org-scoped.
@@ -1442,7 +1443,7 @@ export function registerConversationsRoutes(app: Express): void {
       try {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
-        const threadIdParam = req.params.id;
+        const threadIdParam = pStr(req.params.id);
 
         const thread = await storage.getEmailConversationThreadByThreadId(user.organizationId, threadIdParam);
         if (!thread) return res.status(404).json({ error: "Thread not found" });

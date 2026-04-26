@@ -139,7 +139,7 @@ export function kickOffOrgBackfill(orgId: string, daysBack: number = MAX_BACKFIL
           lastErrorAt: null,
         });
         log(`CDR backfill done for org=${orgId}: ${JSON.stringify({
-          touchpointsBackfilled: result.touchpointsBackfilled ?? 0,
+          touchpointsBackfilled: result.touchpoints.reassigned ?? 0,
           chunkFetches: result.chunkFetches,
         })}`);
       } catch (err) {

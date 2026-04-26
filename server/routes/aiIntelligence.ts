@@ -1,4 +1,5 @@
 import { Router, type Express } from "express";
+import { pStr, qStr, qOptStr } from "../lib/req";
 import { requireAuth, getCurrentUser } from "../auth";
 import {
   generateMeetingPrepBrief, getRecentBriefs,
@@ -37,7 +38,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const brief = await generateMeetingPrepBrief(user.organizationId, req.params.companyId, user.id);
+      const brief = await generateMeetingPrepBrief(user.organizationId, pStr(req.params.companyId), user.id);
       res.json(brief);
     } catch (err: any) {
       console.error("[ai-intelligence] meeting-prep error:", err);
@@ -49,7 +50,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const briefs = await getRecentBriefs(user.organizationId, req.params.companyId);
+      const briefs = await getRecentBriefs(user.organizationId, pStr(req.params.companyId));
       res.json({ briefs });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -60,7 +61,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const result = await analyzeContactSentiment(user.organizationId, req.params.companyId, req.params.contactId);
+      const result = await analyzeContactSentiment(user.organizationId, pStr(req.params.companyId), pStr(req.params.contactId));
       res.json(result);
     } catch (err: any) {
       console.error("[ai-intelligence] sentiment error:", err);
@@ -72,7 +73,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const data = await getCompanySentiment(user.organizationId, req.params.companyId);
+      const data = await getCompanySentiment(user.organizationId, pStr(req.params.companyId));
       const contactIds = [...new Set(data.map(d => d.contactId).filter(Boolean))];
       let contactMap: Record<string, string> = {};
       if (contactIds.length) {
@@ -93,7 +94,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const result = await analyzeFollowUpTiming(user.organizationId, req.params.companyId, req.params.contactId);
+      const result = await analyzeFollowUpTiming(user.organizationId, pStr(req.params.companyId), pStr(req.params.contactId));
       res.json(result);
     } catch (err: any) {
       console.error("[ai-intelligence] follow-up error:", err);
@@ -105,7 +106,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = qOptStr(req.query.companyId);
       const data = await getFollowUpRecommendations(user.organizationId, companyId);
       const contactIds = [...new Set(data.map(d => d.contactId).filter(Boolean))];
       let contactMap: Record<string, string> = {};
@@ -127,7 +128,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const results = await bulkAnalyzeCompanySentiment(user.organizationId, req.params.companyId);
+      const results = await bulkAnalyzeCompanySentiment(user.organizationId, pStr(req.params.companyId));
       res.json({ results });
     } catch (err: any) {
       console.error("[ai-intelligence] bulk sentiment error:", err);
@@ -139,7 +140,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const results = await bulkAnalyzeCompanyFollowUps(user.organizationId, req.params.companyId);
+      const results = await bulkAnalyzeCompanyFollowUps(user.organizationId, pStr(req.params.companyId));
       res.json({ results });
     } catch (err: any) {
       console.error("[ai-intelligence] bulk follow-up error:", err);
@@ -151,7 +152,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const insights = await generateRelationshipCoaching(user.organizationId, req.params.companyId);
+      const insights = await generateRelationshipCoaching(user.organizationId, pStr(req.params.companyId));
       res.json({ insights });
     } catch (err: any) {
       console.error("[ai-intelligence] coaching error:", err);
@@ -163,7 +164,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const insights = await getRelationshipCoaching(user.organizationId, req.params.companyId);
+      const insights = await getRelationshipCoaching(user.organizationId, pStr(req.params.companyId));
       res.json({ insights });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -174,7 +175,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const gaps = await analyzeOrgChartGaps(user.organizationId, req.params.companyId);
+      const gaps = await analyzeOrgChartGaps(user.organizationId, pStr(req.params.companyId));
       res.json({ gaps });
     } catch (err: any) {
       console.error("[ai-intelligence] org-gaps error:", err);
@@ -186,7 +187,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const gaps = await getOrgChartGaps(user.organizationId, req.params.companyId);
+      const gaps = await getOrgChartGaps(user.organizationId, pStr(req.params.companyId));
       res.json({ gaps });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -210,7 +211,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const suggestions = await findWarmIntroPaths(user.organizationId, req.params.companyId);
+      const suggestions = await findWarmIntroPaths(user.organizationId, pStr(req.params.companyId));
       res.json({ suggestions });
     } catch (err: any) {
       console.error("[ai-intelligence] warm-intros error:", err);
@@ -222,7 +223,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const matches = await findLookAlikes(user.organizationId, req.params.companyId);
+      const matches = await findLookAlikes(user.organizationId, pStr(req.params.companyId));
       res.json({ matches });
     } catch (err: any) {
       console.error("[ai-intelligence] look-alikes error:", err);
@@ -234,7 +235,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const opportunities = await analyzeCrossSellOpportunities(user.organizationId, req.params.companyId);
+      const opportunities = await analyzeCrossSellOpportunities(user.organizationId, pStr(req.params.companyId));
       res.json({ opportunities });
     } catch (err: any) {
       console.error("[ai-intelligence] cross-sell error:", err);
@@ -259,7 +260,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const play = await generateWalletSharePlay(user.organizationId, req.params.companyId);
+      const play = await generateWalletSharePlay(user.organizationId, pStr(req.params.companyId));
       res.json(play);
     } catch (err: any) {
       console.error("[ai-intelligence] wallet-share error:", err);
@@ -310,7 +311,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const signals = await detectCompetitiveSignals(user.organizationId, req.params.companyId);
+      const signals = await detectCompetitiveSignals(user.organizationId, pStr(req.params.companyId));
       res.json({ signals });
     } catch (err: any) {
       console.error("[ai-intelligence] competitive error:", err);
@@ -322,7 +323,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const companyId = req.query.companyId as string | undefined;
+      const companyId = qOptStr(req.query.companyId);
       const signals = await getCompetitiveSignals(user.organizationId, companyId);
       res.json({ signals });
     } catch (err: any) {

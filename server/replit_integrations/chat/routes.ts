@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { pStr, qStr, qOptStr } from "../../lib/req";
 import OpenAI from "openai";
 import { chatStorage } from "./storage";
 
@@ -22,7 +23,7 @@ export function registerChatRoutes(app: Express): void {
   // Get single conversation with messages
   app.get("/api/conversations/:id", async (req: Request, res: Response) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(pStr(req.params.id));
       const conversation = await chatStorage.getConversation(id);
       if (!conversation) {
         return res.status(404).json({ error: "Conversation not found" });
@@ -50,7 +51,7 @@ export function registerChatRoutes(app: Express): void {
   // Delete conversation
   app.delete("/api/conversations/:id", async (req: Request, res: Response) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(pStr(req.params.id));
       await chatStorage.deleteConversation(id);
       res.status(204).send();
     } catch (error) {
@@ -62,7 +63,7 @@ export function registerChatRoutes(app: Express): void {
   // Send message and get AI response (streaming)
   app.post("/api/conversations/:id/messages", async (req: Request, res: Response) => {
     try {
-      const conversationId = parseInt(req.params.id);
+      const conversationId = parseInt(pStr(req.params.id));
       const { content } = req.body;
 
       // Save user message

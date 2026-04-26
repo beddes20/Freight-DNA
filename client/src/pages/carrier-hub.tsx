@@ -31,6 +31,7 @@ import { InfoTooltip } from "@/components/info-tooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ConversationThreadBadges } from "@/components/conversation-thread-badges";
 import { resolveLaneLocationWithConfidence } from "@/lib/laneLocationNormalizer";
+import { Link } from "wouter";
 import { LaneLocationFeedback, EMPTY_NORM_STATE, type FieldNormState } from "@/components/lane-location-feedback";
 import { CityAutocompleteInput } from "@/components/city-autocomplete-input";
 import { MoveStatusFilter, sumByMoveStatus, type MoveStatus } from "@/components/move-status-filter";

@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from "express";
+import { pStr, qStr, qOptStr } from "./lib/req";
 import { clerkMiddleware, getAuth, clerkClient } from "@clerk/express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
@@ -158,7 +159,7 @@ export function setupAuth(app: any) {
       : await storage.getUser(actingId);
     if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admin only" });
 
-    const target = await storage.getUser(req.params.userId);
+    const target = await storage.getUser(pStr(req.params.userId));
     if (!target) return res.status(404).json({ error: "User not found" });
     if (target.role === "admin") return res.status(400).json({ error: "Cannot impersonate another admin" });
     if (target.organizationId !== admin.organizationId) return res.status(403).json({ error: "Cross-org impersonation denied" });

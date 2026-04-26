@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { pStr, qStr, qOptStr } from "../lib/req";
 import { requireAuth, getCurrentUser, canAccessCompany } from "../auth";
 import { storage } from "../storage";
 import { analyzeTouchpointNote } from "../aiTouchpoint";
@@ -29,7 +30,7 @@ export function registerCallIntelligenceRoutes(app: Express) {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const companyId = req.params.companyId;
+      const companyId = pStr(req.params.companyId);
       if (!(await canAccessCompany(user, companyId)))
         return res.status(403).json({ error: "Access denied" });
 
@@ -42,7 +43,7 @@ export function registerCallIntelligenceRoutes(app: Express) {
         storage.getContactsByCompany(companyId),
         storage.getTouchpointsByCompany(companyId),
         storage.getTasksByCompany(companyId),
-        storage.getRfpsByCompany(companyId),
+        storage.getRfpsByCompanyId(companyId),
         storage.getVisibleNbaCards(user.id, 10),
       ]);
 

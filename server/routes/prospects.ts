@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import { pStr, qStr, qOptStr } from "../lib/req";
 import { storage } from "../storage";
 import { getCurrentUser, requireAuth } from "../auth";
 import { db } from "../storage";
@@ -274,7 +275,7 @@ export function registerProspectRoutes(app: Express) {
         return res.status(403).json({ error: "Access restricted" });
       }
 
-      const range = (req.query.range as string) || "month";
+      const range = (qStr(req.query.range)) || "month";
       const now = new Date();
       const thisYear = now.getFullYear();
       const thisMonth = now.getMonth();
@@ -796,7 +797,7 @@ export function registerProspectRoutes(app: Express) {
       if (req.body.accountStatus !== undefined && !VALID_ACCOUNT_STATUSES.includes(req.body.accountStatus)) {
         return res.status(400).json({ error: `Invalid account status: ${req.body.accountStatus}` });
       }
-      const id = parseInt(req.params.id);
+      const id = parseInt(pStr(req.params.id));
       const existing = await storage.getProspect(id);
       if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
       if (user.role === "sales" && existing.ownerId !== user.id) return res.status(403).json({ error: "Forbidden" });
@@ -826,7 +827,7 @@ export function registerProspectRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const id = parseInt(req.params.id);
+      const id = parseInt(pStr(req.params.id));
       const existing = await storage.getProspect(id);
       if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
       if (user.role === "sales" && existing.ownerId !== user.id) return res.status(403).json({ error: "Forbidden" });
@@ -842,7 +843,7 @@ export function registerProspectRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const id = parseInt(req.params.id);
+      const id = parseInt(pStr(req.params.id));
       const existing = await storage.getProspect(id);
       if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
       const activities = await storage.getProspectActivities(id);
@@ -862,7 +863,7 @@ export function registerProspectRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const id = parseInt(req.params.id);
+      const id = parseInt(pStr(req.params.id));
       const existing = await storage.getProspect(id);
       if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
       const activity = await storage.createProspectActivity({
@@ -884,7 +885,7 @@ export function registerProspectRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const id = parseInt(req.params.id);
+      const id = parseInt(pStr(req.params.id));
       const existing = await storage.getProspect(id);
       if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
       const contacts = await storage.getProspectContacts(id);
@@ -899,7 +900,7 @@ export function registerProspectRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const id = parseInt(req.params.id);
+      const id = parseInt(pStr(req.params.id));
       const existing = await storage.getProspect(id);
       if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
       const contact = await storage.createProspectContact({ ...req.body, prospectId: id });
@@ -914,8 +915,8 @@ export function registerProspectRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const id = parseInt(req.params.id);
-      const contactId = parseInt(req.params.contactId);
+      const id = parseInt(pStr(req.params.id));
+      const contactId = parseInt(pStr(req.params.contactId));
       const existing = await storage.getProspect(id);
       if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
       const updated = await storage.updateProspectContact(id, contactId, req.body);
@@ -931,8 +932,8 @@ export function registerProspectRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const id = parseInt(req.params.id);
-      const contactId = parseInt(req.params.contactId);
+      const id = parseInt(pStr(req.params.id));
+      const contactId = parseInt(pStr(req.params.contactId));
       const existing = await storage.getProspect(id);
       if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
       const deleted = await storage.deleteProspectContact(id, contactId);
@@ -950,7 +951,7 @@ export function registerProspectRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const id = parseInt(req.params.id);
+      const id = parseInt(pStr(req.params.id));
       const prospect = await storage.getProspect(id);
       if (!prospect || prospect.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
 
@@ -1074,7 +1075,7 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const id = parseInt(req.params.id);
+      const id = parseInt(pStr(req.params.id));
       const existing = await storage.getProspect(id);
       if (!existing || existing.organizationId !== user.organizationId) return res.status(404).json({ error: "Not found" });
       const { assignedNamId } = req.body;
@@ -1171,7 +1172,7 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
 
   app.get("/api/prospects/:id/opportunities", requireAuth, requireProspectRole, async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(pStr(req.params.id));
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const prospect = await storage.getProspect(id);
@@ -1187,7 +1188,7 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
 
   app.post("/api/prospects/:id/opportunities", requireAuth, requireProspectRole, async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(pStr(req.params.id));
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const prospect = await storage.getProspect(id);
@@ -1226,8 +1227,8 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
 
   app.patch("/api/prospects/:id/opportunities/:oppId", requireAuth, requireProspectRole, async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
-      const oppId = parseInt(req.params.oppId);
+      const id = parseInt(pStr(req.params.id));
+      const oppId = parseInt(pStr(req.params.oppId));
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const existing = await storage.getCrmOpportunityById(oppId);
@@ -1262,8 +1263,8 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
 
   app.delete("/api/prospects/:id/opportunities/:oppId", requireAuth, requireProspectRole, async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
-      const oppId = parseInt(req.params.oppId);
+      const id = parseInt(pStr(req.params.id));
+      const oppId = parseInt(pStr(req.params.oppId));
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const existing = await storage.getCrmOpportunityById(oppId);
@@ -1301,7 +1302,7 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
 
   app.post("/api/prospects/:id/ownership-request", requireAuth, requireProspectRole, async (req, res) => {
     try {
-      const id = parseInt(req.params.id);
+      const id = parseInt(pStr(req.params.id));
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const prospect = await storage.getProspect(id);
@@ -1343,7 +1344,7 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
 
   app.patch("/api/launchpad/ownership-requests/:id/review", requireAuth, async (req, res) => {
     try {
-      const reqId = parseInt(req.params.id);
+      const reqId = parseInt(pStr(req.params.id));
       const user = await getCurrentUser(req);
       if (!user || !["admin", "sales_director", "director"].includes(user.role)) {
         return res.status(403).json({ error: "Unauthorized" });
@@ -1402,7 +1403,7 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const id = parseInt(req.params.id);
+      const id = parseInt(pStr(req.params.id));
       const prospect = await storage.getProspect(id);
       if (!prospect || prospect.organizationId !== user.organizationId) {
         return res.status(404).json({ error: "Not found" });
@@ -1468,7 +1469,7 @@ Write a Sales Intel Brief using EXACTLY these 4 sections with bullet points. Be 
       if (!["admin", "sales_director", "director"].includes(user.role)) {
         return res.status(403).json({ error: "Admin only" });
       }
-      const id = parseInt(req.params.id);
+      const id = parseInt(pStr(req.params.id));
       const { newOwnerId } = req.body;
       if (!newOwnerId) return res.status(400).json({ error: "newOwnerId required" });
       const existing = await storage.getProspect(id);

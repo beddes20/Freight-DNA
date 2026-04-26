@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import { pStr, qStr, qOptStr } from "./lib/req";
 import { createServer, type Server } from "http";
 import { registerChatbotRoutes } from "./chatbot";
 import { registerTaskRoutes } from "./routes/tasks";
@@ -677,7 +678,7 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const q = (req.query.q as string || "").trim();
+      const q = (qStr(req.query.q) || "").trim();
       if (!q) return res.json({ accounts: [], accountManagers: [], nationalAccountManagers: [], contacts: [], rfps: [], tasks: [], carriers: [] });
       const [matchedCompanies, matchedUsers, matchedContacts, matchedRfps, matchedTasks, allCompanies, matchedCarriers] = await Promise.all([
         storage.searchCompanies(q, req.session.organizationId!),
@@ -850,7 +851,7 @@ RULES FOR YOUR RESPONSES:
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       if (currentUser.role !== "admin") return res.status(403).json({ error: "Admin access required" });
 
-      const type = req.params.type as string;
+      const type = pStr(req.params.type);
       const XLSX = await import("xlsx");
       let wb: any;
 
@@ -1013,7 +1014,7 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const isSelf = (req.params.id as string) === currentUser.id;
+      const isSelf = (pStr(req.params.id)) === currentUser.id;
       // Any authenticated user can update their own profile (name, email signature, etc.)
       // Editing another user requires manager-level access
       if (!isSelf) {
@@ -1021,7 +1022,7 @@ RULES FOR YOUR RESPONSES:
         // Managers can only edit their own team members (not arbitrary users)
         if (!isAdmin(currentUser)) {
           const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
-          if (!teamIds.includes((req.params.id as string))) {
+          if (!teamIds.includes((pStr(req.params.id)))) {
             return res.status(403).json({ error: "Cannot edit this user" });
           }
         }
@@ -1042,7 +1043,7 @@ RULES FOR YOUR RESPONSES:
         if (req.body.managerId !== undefined) data.managerId = req.body.managerId;
         if (req.body.financialRepId !== undefined) data.financialRepId = req.body.financialRepId || null;
       }
-      const user = await storage.updateUser((req.params.id as string), currentUser.organizationId, data);
+      const user = await storage.updateUser((pStr(req.params.id)), currentUser.organizationId, data);
       if (!user) return res.status(404).json({ error: "User not found" });
       // Invalidate financial summary caches when financialRepId changes so team performance
       // immediately reflects the updated rep attribution without waiting for TTL expiry.
@@ -1068,14 +1069,14 @@ RULES FOR YOUR RESPONSES:
       }
       if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales" || currentUser.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
-        if (!teamIds.includes((req.params.id as string)) || (req.params.id as string) === currentUser.id) {
+        if (!teamIds.includes((pStr(req.params.id))) || (pStr(req.params.id)) === currentUser.id) {
           return res.status(403).json({ error: "Cannot delete this user" });
         }
       }
-      if ((req.params.id as string) === currentUser.id) {
+      if ((pStr(req.params.id)) === currentUser.id) {
         return res.status(400).json({ error: "Cannot delete yourself" });
       }
-      const deleted = await storage.deleteUser((req.params.id as string), currentUser.organizationId);
+      const deleted = await storage.deleteUser((pStr(req.params.id)), currentUser.organizationId);
       if (!deleted) return res.status(404).json({ error: "User not found" });
       res.status(204).send();
     } catch (error) {
@@ -1108,7 +1109,7 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const company = await storage.getCompanyInOrg((req.params.id as string), currentUser.organizationId);
+      const company = await storage.getCompanyInOrg((pStr(req.params.id)), currentUser.organizationId);
       if (!company) {
         return res.status(404).json({ error: "Company not found" });
       }
@@ -1126,7 +1127,7 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const company = await storage.getCompanyInOrg(req.params.id, currentUser.organizationId);
+      const company = await storage.getCompanyInOrg(pStr(req.params.id), currentUser.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
       if (!(await canAccessCompany(currentUser, company.id))) return res.status(403).json({ error: "Access denied" });
       const reps = (company.sharedReps || []) as SharedRep[];
@@ -1148,7 +1149,7 @@ RULES FOR YOUR RESPONSES:
       if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
         return res.status(403).json({ error: "Only admins and NAMs can manage shared reps" });
       }
-      const company = await storage.getCompanyInOrg(req.params.id, currentUser.organizationId);
+      const company = await storage.getCompanyInOrg(pStr(req.params.id), currentUser.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
       const parsed = sharedRepSchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
@@ -1176,7 +1177,7 @@ RULES FOR YOUR RESPONSES:
       if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
         return res.status(403).json({ error: "Only admins and NAMs can manage shared reps" });
       }
-      const company = await storage.getCompanyInOrg(req.params.id, currentUser.organizationId);
+      const company = await storage.getCompanyInOrg(pStr(req.params.id), currentUser.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
       const existing = (company.sharedReps || []) as SharedRep[];
       const updated = existing.filter(r => r.userId !== req.params.userId);
@@ -1298,7 +1299,7 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
+      if (!(await canAccessCompany(currentUser, (pStr(req.params.id))))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const parsed = insertCompanySchema.omit({ organizationId: true }).partial().safeParse(req.body);
@@ -1309,7 +1310,7 @@ RULES FOR YOUR RESPONSES:
       if (currentUser.role !== "admin") {
         delete (data as any).assignedTo;
       }
-      const company = await storage.updateCompany((req.params.id as string), currentUser.organizationId, data);
+      const company = await storage.updateCompany((pStr(req.params.id)), currentUser.organizationId, data);
       if (!company) {
         return res.status(404).json({ error: "Company not found" });
       }
@@ -1324,11 +1325,11 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
+      if (!(await canAccessCompany(currentUser, (pStr(req.params.id))))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const { financialAlias } = req.body;
-      const company = await storage.updateCompany((req.params.id as string), currentUser.organizationId, { financialAlias: financialAlias || null });
+      const company = await storage.updateCompany((pStr(req.params.id)), currentUser.organizationId, { financialAlias: financialAlias || null });
       if (!company) return res.status(404).json({ error: "Company not found" });
       res.json(company);
     } catch (error) {
@@ -1340,11 +1341,11 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
+      if (!(await canAccessCompany(currentUser, (pStr(req.params.id))))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const { salesPersonId } = req.body;
-      const company = await storage.updateCompany((req.params.id as string), currentUser.organizationId, { salesPersonId: salesPersonId || null });
+      const company = await storage.updateCompany((pStr(req.params.id)), currentUser.organizationId, { salesPersonId: salesPersonId || null });
       if (!company) return res.status(404).json({ error: "Company not found" });
       res.json(company);
     } catch (error) {
@@ -1356,7 +1357,7 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
+      if (!(await canAccessCompany(currentUser, (pStr(req.params.id))))) {
         return res.status(403).json({ error: "Access denied" });
       }
       if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales" && currentUser.role !== "sales_director") {
@@ -1370,9 +1371,9 @@ RULES FOR YOUR RESPONSES:
           return res.status(403).json({ error: "Can only assign to team members" });
         }
       }
-      const existing = await storage.getCompanyInOrg((req.params.id as string), currentUser.organizationId);
+      const existing = await storage.getCompanyInOrg((pStr(req.params.id)), currentUser.organizationId);
       if (!existing) return res.status(404).json({ error: "Company not found" });
-      const company = await storage.updateCompany((req.params.id as string), currentUser.organizationId, { ...existing, assignedTo });
+      const company = await storage.updateCompany((pStr(req.params.id)), currentUser.organizationId, { ...existing, assignedTo });
       if (!company) return res.status(404).json({ error: "Company not found" });
       // Notify the new assignee if they're different from the actor
       if (assignedTo !== currentUser.id && assignedTo !== existing.assignedTo) {
@@ -1397,11 +1398,11 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const companyId = req.params.id as string;
+      const companyId = pStr(req.params.id);
       if (!(await canAccessCompany(currentUser, companyId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const limit = Math.min(parseInt((req.query.limit as string) ?? "50", 10), 200);
+      const limit = Math.min(parseInt((qStr(req.query.limit)) ?? "50", 10), 200);
       const rows = await db
         .select({
           signalId: emailSignals.id,
@@ -1435,10 +1436,10 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
+      if (!(await canAccessCompany(currentUser, (pStr(req.params.id))))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const deleted = await storage.deleteCompany((req.params.id as string), currentUser.organizationId);
+      const deleted = await storage.deleteCompany((pStr(req.params.id)), currentUser.organizationId);
       if (!deleted) {
         return res.status(404).json({ error: "Company not found" });
       }
@@ -1465,7 +1466,7 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const companyId = req.params.companyId as string;
+      const companyId = pStr(req.params.companyId);
       if (!(await canAccessCompany(currentUser, companyId))) {
         return res.status(403).json({ error: "Access denied" });
       }
@@ -1486,7 +1487,7 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const companyId = req.params.companyId as string;
+      const companyId = pStr(req.params.companyId);
       await storage.unpinCompany(currentUser.id, companyId);
       res.json({ success: true });
     } catch (error) {
@@ -1498,10 +1499,10 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
+      if (!(await canAccessCompany(currentUser, (pStr(req.params.id))))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const updated = await storage.archiveCompany((req.params.id as string), currentUser.organizationId);
+      const updated = await storage.archiveCompany((pStr(req.params.id)), currentUser.organizationId);
       if (!updated) return res.status(404).json({ error: "Company not found" });
       res.json(updated);
     } catch (error) {
@@ -1513,10 +1514,10 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
+      if (!(await canAccessCompany(currentUser, (pStr(req.params.id))))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const updated = await storage.unarchiveCompany((req.params.id as string), currentUser.organizationId);
+      const updated = await storage.unarchiveCompany((pStr(req.params.id)), currentUser.organizationId);
       if (!updated) return res.status(404).json({ error: "Company not found" });
       res.json(updated);
     } catch (error) {
@@ -1529,7 +1530,7 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, req.params.id))) {
+      if (!(await canAccessCompany(currentUser, pStr(req.params.id)))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const parsed = onboardingMilestoneToggleSchema.safeParse(req.body);
@@ -1537,7 +1538,7 @@ RULES FOR YOUR RESPONSES:
         return res.status(400).json({ error: "Invalid milestone payload", details: parsed.error.flatten() });
       }
       const { milestoneId, completed } = parsed.data;
-      const existing = await storage.getCompany(req.params.id);
+      const existing = await storage.getCompany(pStr(req.params.id));
       if (!existing) return res.status(404).json({ error: "Company not found" });
       const stored = existing.onboardingMilestones;
       const current: OnboardingMilestones =
@@ -1545,7 +1546,7 @@ RULES FOR YOUR RESPONSES:
           ? { ...(stored as OnboardingMilestones) }
           : {};
       current[milestoneId] = completed;
-      const updated = await storage.updateCompany(req.params.id, currentUser.organizationId, {
+      const updated = await storage.updateCompany(pStr(req.params.id), currentUser.organizationId, {
         onboardingMilestones: current,
       });
       if (!updated) return res.status(404).json({ error: "Company not found" });
@@ -1578,10 +1579,10 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (req.params.companyId as string)))) {
+      if (!(await canAccessCompany(currentUser, (pStr(req.params.companyId))))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const contacts = await storage.getContactsByCompany((req.params.companyId as string));
+      const contacts = await storage.getContactsByCompany((pStr(req.params.companyId)));
       res.json(contacts);
     } catch (error) {
       console.error("Error fetching contacts:", error);
@@ -1593,12 +1594,12 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (req.params.companyId as string)))) {
+      if (!(await canAccessCompany(currentUser, (pStr(req.params.companyId))))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const contactData = {
         ...req.body,
-        companyId: (req.params.companyId as string),
+        companyId: (pStr(req.params.companyId)),
         createdAt: new Date().toISOString(),
         createdBy: currentUser.id,
       };
@@ -1608,12 +1609,12 @@ RULES FOR YOUR RESPONSES:
       }
       const contact = await storage.createContact(parsed.data);
       const _orgIdForFanOut1 = req.session.organizationId!;
-      storage.getCompanyInOrg((req.params.companyId as string), _orgIdForFanOut1).then(co => {
+      storage.getCompanyInOrg((pStr(req.params.companyId)), _orgIdForFanOut1).then(co => {
         fanOutCelebration(
           "new_contact",
           `🎉 New contact: ${contact.name}`,
           `${currentUser.name} added ${contact.name}${contact.title ? ` (${contact.title})` : ""} at ${co?.name ?? "an account"}.`,
-          `/companies/${(req.params.companyId as string)}`,
+          `/companies/${(pStr(req.params.companyId))}`,
           contact.id,
           currentUser.id,
           _orgIdForFanOut1
@@ -1630,7 +1631,7 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (req.params.companyId as string)))) {
+      if (!(await canAccessCompany(currentUser, (pStr(req.params.companyId))))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const rows: any[] = req.body.contacts;
@@ -1639,7 +1640,7 @@ RULES FOR YOUR RESPONSES:
       }
       const now = new Date().toISOString();
       const toInsert = rows.map(r => ({
-        companyId: (req.params.companyId as string),
+        companyId: (pStr(req.params.companyId)),
         name: (r.name || "").trim(),
         title: r.title?.trim() || null,
         email: r.email?.trim() || null,
@@ -1662,7 +1663,7 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getContact((req.params.id as string));
+      const existing = await storage.getContact((pStr(req.params.id)));
       if (!existing) {
         return res.status(404).json({ error: "Contact not found" });
       }
@@ -1700,7 +1701,7 @@ RULES FOR YOUR RESPONSES:
               `🎉 Relationship advanced: ${parsed.data.name ?? existing.name}`,
               `${currentUser.name} moved ${parsed.data.name ?? existing.name} at ${co?.name ?? "an account"} from ${existing.relationshipBase ?? "no base"} → ${parsed.data.relationshipBase}.`,
               `/companies/${existing.companyId}`,
-              (req.params.id as string),
+              (pStr(req.params.id)),
               currentUser.id,
               _orgIdForFanOut2
             );
@@ -1708,18 +1709,18 @@ RULES FOR YOUR RESPONSES:
         }
         // Log history
         storage.logContactBaseHistory(
-          req.params.id as string,
+          pStr(req.params.id),
           existing.relationshipBase ?? null,
           parsed.data.relationshipBase!,
           currentUser.id
         ).catch(() => {});
       }
-      const contact = await storage.updateContact((req.params.id as string), parsed.data);
+      const contact = await storage.updateContact((pStr(req.params.id)), parsed.data);
       // B3 fix: if company changed, re-attribute historical touchpoints then refresh growth scores
       // Must await the cascade before recomputing so scores reflect the correct touchpoint set.
       if (newCompanyId !== existing.companyId) {
         try {
-          await storage.updateTouchpointCompanyByContact((req.params.id as string), newCompanyId);
+          await storage.updateTouchpointCompanyByContact((pStr(req.params.id)), newCompanyId);
         } catch (err) {
           console.error("[contact-update] touchpoint company cascade failed:", err);
         }
@@ -1747,14 +1748,14 @@ RULES FOR YOUR RESPONSES:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getContact((req.params.id as string));
+      const existing = await storage.getContact((pStr(req.params.id)));
       if (!existing) {
         return res.status(404).json({ error: "Contact not found" });
       }
       if (!(await canAccessCompany(currentUser, existing.companyId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const deleted = await storage.deleteContact((req.params.id as string));
+      const deleted = await storage.deleteContact((pStr(req.params.id)));
       if (!deleted) {
         return res.status(404).json({ error: "Contact not found" });
       }
@@ -1768,7 +1769,7 @@ RULES FOR YOUR RESPONSES:
   // T003: Relationship advancement history
   app.get("/api/contacts/:id/base-history", requireAuth, async (req, res) => {
     try {
-      const history = await storage.getContactBaseHistory(req.params.id as string);
+      const history = await storage.getContactBaseHistory(pStr(req.params.id));
       res.json(history);
     } catch (e) {
       console.error("Error fetching base history:", e);
@@ -2466,7 +2467,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       // Org-scoped lookup — cross-org IDs hit the 404 branch instead of
       // silently returning a foreign tenant's RFP.
-      const existing = await storage.getRfpInOrg(req.params.id as string, currentUser.organizationId);
+      const existing = await storage.getRfpInOrg(pStr(req.params.id), currentUser.organizationId);
       if (!existing) {
         return res.status(404).json({ error: "RFP not found" });
       }
@@ -2487,7 +2488,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       // becomes one, build a dedicated /reassign endpoint that validates
       // the target.
       const safeData = { ...parsed.data, companyId: existing.companyId };
-      const rfp = await storage.updateRfp((req.params.id as string), safeData);
+      const rfp = await storage.updateRfp((pStr(req.params.id)), safeData);
       res.json(rfp);
     } catch (error) {
       console.error("Error updating RFP:", error);
@@ -2499,7 +2500,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const rfp = await storage.getRfpInOrg(req.params.id as string, currentUser.organizationId);
+      const rfp = await storage.getRfpInOrg(pStr(req.params.id), currentUser.organizationId);
       if (!rfp) {
         return res.status(404).json({ error: "RFP not found" });
       }
@@ -2507,7 +2508,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         return res.status(403).json({ error: "Access denied" });
       }
 
-      const laneIndex = parseInt((req.params.laneIndex as string));
+      const laneIndex = parseInt((pStr(req.params.laneIndex)));
       if (isNaN(laneIndex) || laneIndex < 0) {
         return res.status(400).json({ error: "Invalid lane index" });
       }
@@ -2527,7 +2528,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         fileData.highVolumeLanes[laneIndex].contactId = contactId;
       }
 
-      const updated = await storage.updateRfp((req.params.id as string), { ...rfp, fileData } as any);
+      const updated = await storage.updateRfp((pStr(req.params.id)), { ...rfp, fileData } as any);
       res.json(updated);
     } catch (error) {
       console.error("Error updating lane status:", error);
@@ -2544,7 +2545,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (visibleIds !== null) {
         allRfps = allRfps.filter(r => visibleIds.includes(r.companyId));
       }
-      const companyFilter = req.query.companyId as string | undefined;
+      const companyFilter = qOptStr(req.query.companyId);
       const tasks: any[] = [];
 
       for (const rfp of allRfps) {
@@ -2582,7 +2583,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.get("/api/companies/:id/lane-patterns", requireAuth, async (req, res) => {
     try {
-      const companyId = (req.params.id as string);
+      const companyId = (pStr(req.params.id));
       const allRfps = await storage.getRfps();
 
       const corridorMap = new Map<string, {
@@ -2724,7 +2725,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.get("/api/companies/:id/facility-coverage", requireAuth, async (req, res) => {
     try {
-      const companyId = (req.params.id as string);
+      const companyId = (pStr(req.params.id));
       const allRfps = await storage.getRfps();
       const contacts = await storage.getContactsByCompany(companyId);
 
@@ -2827,7 +2828,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   app.delete("/api/rfps/:id", requireAuth, async (req, res) => {
     try {
-      const deleted = await storage.deleteRfp((req.params.id as string));
+      const deleted = await storage.deleteRfp((pStr(req.params.id)));
       if (!deleted) {
         return res.status(404).json({ error: "RFP not found" });
       }
@@ -2920,7 +2921,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getAwardInOrg(req.params.id as string, currentUser.organizationId);
+      const existing = await storage.getAwardInOrg(pStr(req.params.id), currentUser.organizationId);
       if (!existing) {
         return res.status(404).json({ error: "Award not found" });
       }
@@ -2933,7 +2934,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       }
       // SECURITY: pin companyId server-side — see RFP PATCH for rationale.
       const safeData = { ...parsed.data, companyId: existing.companyId };
-      const award = await storage.updateAward((req.params.id as string), safeData);
+      const award = await storage.updateAward((pStr(req.params.id)), safeData);
       res.json(award);
     } catch (error) {
       console.error("Error updating award:", error);
@@ -2948,14 +2949,14 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       // Previously this route had ZERO auth check beyond requireAuth — any
       // authenticated user could delete any award by guessing IDs. Lock it
       // down with the standard org+visibility gate before mutating.
-      const existing = await storage.getAwardInOrg(req.params.id as string, currentUser.organizationId);
+      const existing = await storage.getAwardInOrg(pStr(req.params.id), currentUser.organizationId);
       if (!existing) {
         return res.status(404).json({ error: "Award not found" });
       }
       if (!(await canAccessCompany(currentUser, existing.companyId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const deleted = await storage.deleteAward(req.params.id as string);
+      const deleted = await storage.deleteAward(pStr(req.params.id));
       if (!deleted) {
         return res.status(404).json({ error: "Award not found" });
       }
@@ -2972,7 +2973,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const entries = await storage.getMarketShareEntries((req.params.id as string));
+      const entries = await storage.getMarketShareEntries((pStr(req.params.id)));
       res.json(entries);
     } catch (error) {
       console.error("Error fetching market share:", error);
@@ -2985,7 +2986,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
+      const company = await storage.getCompanyInOrg((pStr(req.params.id)), user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
       const customerAliases = company.financialAlias
@@ -3043,7 +3044,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const entry = await storage.createMarketShareEntry({
         ...req.body,
-        companyId: (req.params.id as string),
+        companyId: (pStr(req.params.id)),
         createdAt: new Date().toISOString(),
         createdBy: user.id,
       });
@@ -3095,7 +3096,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         const totalMarketLoads = totalStr ? parseInt(totalStr.replace(/,/g, ""), 10) || null : null;
 
         const entry = await storage.createMarketShareEntry({
-          companyId: (req.params.id as string),
+          companyId: (pStr(req.params.id)),
           entryType: entryType === "rfp_cycle" ? "rfp_cycle" : "monthly",
           periodLabel,
           periodStart: periodStart || null,
@@ -3122,7 +3123,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const updated = await storage.updateMarketShareEntry((req.params.id as string), req.body);
+      const updated = await storage.updateMarketShareEntry((pStr(req.params.id)), req.body);
       if (!updated) return res.status(404).json({ error: "Entry not found" });
       res.json(updated);
     } catch (error) {
@@ -3135,7 +3136,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const deleted = await storage.deleteMarketShareEntry((req.params.id as string));
+      const deleted = await storage.deleteMarketShareEntry((pStr(req.params.id)));
       if (!deleted) return res.status(404).json({ error: "Entry not found" });
       res.status(204).send();
     } catch (error) {
@@ -3302,7 +3303,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
+      const company = await storage.getCompanyInOrg((pStr(req.params.id)), user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
@@ -3476,7 +3477,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // ── Lane Matching (company-specific: our history vs their RFP lanes) ─────────
   app.get("/api/companies/:id/lane-matching", requireAuth, async (req, res) => {
     try {
-      const companyId = (req.params.id as string);
+      const companyId = (pStr(req.params.id));
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const allRfps = await storage.getRfps();
 
@@ -3893,12 +3894,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getTopic((req.params.id as string));
+      const existing = await storage.getTopic((pStr(req.params.id)));
       if (!existing) return res.status(404).json({ error: "Topic not found" });
       if (!(await canAccessSession(currentUser, existing.sessionId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const topic = await storage.toggleTopicStatus((req.params.id as string));
+      const topic = await storage.toggleTopicStatus((pStr(req.params.id)));
       if (!topic) return res.status(404).json({ error: "Topic not found" });
       res.json(topic);
     } catch (error) {
@@ -3910,12 +3911,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getTopic((req.params.id as string));
+      const existing = await storage.getTopic((pStr(req.params.id)));
       if (!existing) return res.status(404).json({ error: "Topic not found" });
       if (!(await canAccessSession(currentUser, existing.sessionId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const deleted = await storage.deleteTopic((req.params.id as string));
+      const deleted = await storage.deleteTopic((pStr(req.params.id)));
       if (!deleted) return res.status(404).json({ error: "Topic not found" });
       res.status(204).send();
     } catch (error) {
@@ -3928,9 +3929,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const topic = await storage.getTopic((req.params.id as string));
+      const topic = await storage.getTopic((pStr(req.params.id)));
       if (!topic) return res.status(404).json({ error: "Topic not found" });
-      const replies = await storage.getTopicReplies((req.params.id as string));
+      const replies = await storage.getTopicReplies((pStr(req.params.id)));
       res.json(replies);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch replies" });
@@ -3941,12 +3942,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const topic = await storage.getTopic((req.params.id as string));
+      const topic = await storage.getTopic((pStr(req.params.id)));
       if (!topic) return res.status(404).json({ error: "Topic not found" });
       const { text } = req.body;
       if (!text?.trim()) return res.status(400).json({ error: "Text required" });
       const reply = await storage.addTopicReply({
-        topicId: (req.params.id as string),
+        topicId: (pStr(req.params.id)),
         authorId: currentUser.id,
         text: text.trim(),
         createdAt: new Date().toISOString(),
@@ -3977,7 +3978,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const deleted = await storage.deleteTopicReply((req.params.id as string));
+      const deleted = await storage.deleteTopicReply((pStr(req.params.id)));
       if (!deleted) return res.status(404).json({ error: "Reply not found" });
       res.status(204).send();
     } catch (error) {
@@ -3989,11 +3990,11 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessSession(currentUser, (req.params.id as string)))) {
+      if (!(await canAccessSession(currentUser, (pStr(req.params.id))))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const closedSession = await storage.getSession((req.params.id as string));
-      const newSession = await storage.closeSession((req.params.id as string));
+      const closedSession = await storage.getSession((pStr(req.params.id)));
+      const newSession = await storage.closeSession((pStr(req.params.id)));
       if (!newSession) return res.status(404).json({ error: "Session not found" });
       // Notify the other party that the session was closed
       if (closedSession) {
@@ -4021,12 +4022,12 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const session = await storage.getSession(req.params.id as string);
+      const session = await storage.getSession(pStr(req.params.id));
       if (!session) return res.status(404).json({ error: "Session not found" });
-      if (!(await canAccessSession(currentUser, req.params.id as string))) {
+      if (!(await canAccessSession(currentUser, pStr(req.params.id)))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const topics = await storage.getTopicsBySession(req.params.id as string);
+      const topics = await storage.getTopicsBySession(pStr(req.params.id));
       const discussed = topics.filter(t => t.status === "discussed");
       const pending = topics.filter(t => t.status === "pending");
       const notes = session.notes || "";
@@ -4102,7 +4103,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      await storage.markNotificationRead((req.params.id as string));
+      await storage.markNotificationRead((pStr(req.params.id)));
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to mark notification read" });
@@ -4170,7 +4171,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const deleted = await storage.deletePersonalAlert((req.params.id as string), user.id);
+      const deleted = await storage.deletePersonalAlert((pStr(req.params.id)), user.id);
       if (!deleted) return res.status(404).json({ error: "Alert not found" });
       res.status(204).send();
     } catch (error) {
@@ -4183,7 +4184,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const activity = await storage.getCompanyActivity((req.params.id as string));
+      const activity = await storage.getCompanyActivity((pStr(req.params.id)));
       res.json(activity);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch activity" });
@@ -4207,7 +4208,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
 
       const now = new Date();
       const todayStr = now.toISOString().split("T")[0];
-      const period = (req.query.period as string) || "current";
+      const period = (qStr(req.query.period)) || "current";
       let startDate: string;
       let endDate: string;
       if (period === "last") {
@@ -4279,8 +4280,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const amEquivRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
       if (amEquivRoles.includes(user.role)) return res.status(403).json({ error: "Access denied" });
 
-      const metric = req.params.metric as string;
-      const period = (req.query.period as string) || "current";
+      const metric = pStr(req.params.metric);
+      const period = (qStr(req.query.period)) || "current";
       const now = new Date();
       const todayStr = now.toISOString().split("T")[0];
       let startDate: string;
@@ -4515,7 +4516,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const restrictedRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
       if (restrictedRoles.includes(user.role)) return res.status(403).json({ error: "Access denied" });
-      const days = parseInt((req.query.days as string) || "30", 10);
+      const days = parseInt((qStr(req.query.days)) || "30", 10);
       const result = await storage.pool.query<{
         company_id: string; company_name: string; rep_id: string; rep_name: string;
         last_touchpoint_at: string | null; days_since: number | null;
@@ -4749,7 +4750,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const tp = await storage.getTouchpoint(req.params.id as string);
+      const tp = await storage.getTouchpoint(pStr(req.params.id));
       if (!tp) return res.status(404).json({ error: "Touchpoint not found" });
       const updates: { isMeaningful?: boolean; notes?: string } = {};
       if (req.body.isMeaningful !== undefined) updates.isMeaningful = req.body.isMeaningful === true;
@@ -4869,7 +4870,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
       const { userId } = req.params as Record<string, string>;
-      const period = (req.query.period as string) === "monthly" ? "monthly" : "weekly";
+      const period = (qStr(req.query.period)) === "monthly" ? "monthly" : "weekly";
       // Harden against ID-guessing — viewer must have rep-visibility on the
       // requested user (own ID, or in their reporting tree). Task #525.
       if (!(await canSeeRepUser(viewer, userId))) {
@@ -4933,7 +4934,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const contact = await storage.getContact(req.params.id as string);
+      const contact = await storage.getContact(pStr(req.params.id));
       if (!contact) return res.status(404).json({ error: "Contact not found" });
 
       // --- Build geography fingerprint from this contact ---
@@ -5146,7 +5147,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const tps = await storage.getTouchpointsByContact((req.params.id as string));
+      const tps = await storage.getTouchpointsByContact((pStr(req.params.id)));
       res.json(tps);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch touchpoints" });
@@ -5157,12 +5158,12 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const contact = await storage.getContact((req.params.id as string));
+      const contact = await storage.getContact((pStr(req.params.id)));
       if (!contact) return res.status(404).json({ error: "Contact not found" });
       const now = new Date();
       const notes: string | null = req.body.notes || null;
       const tp = await storage.createTouchpoint({
-        contactId: (req.params.id as string),
+        contactId: (pStr(req.params.id)),
         companyId: contact.companyId,
         type: req.body.type || "call",
         date: req.body.date || now.toISOString().split("T")[0],
@@ -5210,7 +5211,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       if (!allowedRoles.includes(user.role)) {
         return res.status(403).json({ error: "Only admins and directors can delete touchpoints" });
       }
-      await storage.deleteTouchpoint((req.params.id as string));
+      await storage.deleteTouchpoint((pStr(req.params.id)));
       cacheInvalidatePrefix(`cold-contacts:${user.id}`);
       cacheInvalidatePrefix(`meaningful-overdue:${user.id}`);
       res.json({ ok: true });
@@ -5225,9 +5226,9 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
       const [company, touchpoints, contacts, allRfps, allAwards, uploads] = await Promise.all([
-        storage.getCompanyInOrg((req.params.id as string), user.organizationId),
-        storage.getTouchpointsByCompany((req.params.id as string)),
-        storage.getContactsByCompany((req.params.id as string)),
+        storage.getCompanyInOrg((pStr(req.params.id)), user.organizationId),
+        storage.getTouchpointsByCompany((pStr(req.params.id))),
+        storage.getContactsByCompany((pStr(req.params.id))),
         storage.getRfps(),
         storage.getAwards(),
         storage.getFinancialUploadsForOrg(req.session.organizationId!),
@@ -5273,8 +5274,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       else if (contactCount === 1) contactScore = 5;
 
       // Factor 4: Active RFP or Award (15 pts)
-      const companyRfps = allRfps.filter(r => r.companyId === (req.params.id as string));
-      const companyAwards = allAwards.filter(a => a.companyId === (req.params.id as string));
+      const companyRfps = allRfps.filter(r => r.companyId === (pStr(req.params.id)));
+      const companyAwards = allAwards.filter(a => a.companyId === (pStr(req.params.id)));
       const activeRfp = companyRfps.find(r => r.status === "open" || r.status === "pending");
       const hasAward = companyAwards.length > 0;
       const rfpScore = activeRfp ? 10 : 0;
@@ -5362,7 +5363,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const companyId = req.params.id as string;
+      const companyId = pStr(req.params.id);
       const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString().slice(0, 16);
 
       const cached = await storage.getGrowthScore(companyId);
@@ -5476,7 +5477,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const companyId = req.params.id as string;
+      const companyId = pStr(req.params.id);
 
       // Verify company exists and belongs to this user's organisation.
       const company = await storage.getCompanyInOrg(companyId, user.organizationId);
@@ -5729,7 +5730,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
 
       if (!factors?.length) return res.status(400).json({ error: "Factors required" });
 
-      const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
+      const company = await storage.getCompanyInOrg((pStr(req.params.id)), user.organizationId);
       const companyName = company?.name || "this account";
 
       const { default: OpenAI } = await import("openai");
@@ -5772,8 +5773,8 @@ Write exactly 2 sentences explaining WHY this score is ${score}/100. Be specific
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
       const [company, allTouchpoints] = await Promise.all([
-        storage.getCompanyInOrg((req.params.id as string), user.organizationId),
-        storage.getTouchpointsByCompany((req.params.id as string)),
+        storage.getCompanyInOrg((pStr(req.params.id)), user.organizationId),
+        storage.getTouchpointsByCompany((pStr(req.params.id))),
       ]);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
@@ -5823,7 +5824,7 @@ Respond with bullet points only (no header, no intro sentence).`;
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
+      const company = await storage.getCompanyInOrg((pStr(req.params.id)), user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
       const { corridors } = req.body as { corridors: Array<{ lane: string; totalVolume: number; originState?: string; destinationState?: string }> };
@@ -5871,7 +5872,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const tps = await storage.getTouchpointsByCompany((req.params.id as string));
+      const tps = await storage.getTouchpointsByCompany((pStr(req.params.id)));
       res.json(tps);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch company touchpoints" });
@@ -5882,10 +5883,10 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(user, (req.params.id as string)))) return res.status(403).json({ error: "Access denied" });
-      const tps = await storage.getTouchpointsByCompany((req.params.id as string));
+      if (!(await canAccessCompany(user, (pStr(req.params.id))))) return res.status(403).json({ error: "Access denied" });
+      const tps = await storage.getTouchpointsByCompany((pStr(req.params.id)));
       const allUsers = await storage.getUsers(req.session.organizationId!);
-      const contactsList = await storage.getContactsByCompany((req.params.id as string));
+      const contactsList = await storage.getContactsByCompany((pStr(req.params.id)));
       const enriched = tps.map(tp => ({
         ...tp,
         loggedByName: allUsers.find(u => u.id === tp.loggedById)?.name || "Unknown",
@@ -6174,8 +6175,8 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const entityType = req.query.entityType as string;
-      const entityIds = (req.query.entityIds as string || "").split(",").filter(Boolean);
+      const entityType = qStr(req.query.entityType);
+      const entityIds = (qStr(req.query.entityIds) || "").split(",").filter(Boolean);
       if (!entityType || entityIds.length === 0) return res.json([]);
       const authorizedIds: string[] = [];
       for (const eid of entityIds) {
@@ -6196,7 +6197,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const att = await storage.getAttachment((req.params.id as string));
+      const att = await storage.getAttachment((pStr(req.params.id)));
       if (!att) return res.status(404).json({ error: "Attachment not found" });
       if (!(await canAccessAttachmentEntity(user, att.entityType, att.entityId))) {
         return res.status(403).json({ error: "Access denied" });
@@ -6215,12 +6216,12 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const att = await storage.getAttachment((req.params.id as string));
+      const att = await storage.getAttachment((pStr(req.params.id)));
       if (!att) return res.status(404).json({ error: "Attachment not found" });
       if (!(await canAccessAttachmentEntity(user, att.entityType, att.entityId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      await storage.deleteAttachment((req.params.id as string));
+      await storage.deleteAttachment((pStr(req.params.id)));
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete attachment" });
@@ -6231,10 +6232,10 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
+      if (!(await canAccessCompany(currentUser, (pStr(req.params.id))))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const rows = await storage.getVendorRoutedByCompany((req.params.id as string));
+      const rows = await storage.getVendorRoutedByCompany((pStr(req.params.id)));
       const keys = rows.map(r => r.rowKey);
       res.json(keys);
     } catch (error) {
@@ -6246,14 +6247,14 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
+      if (!(await canAccessCompany(currentUser, (pStr(req.params.id))))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const { rowKey } = req.body;
       if (!rowKey || typeof rowKey !== "string") {
         return res.status(400).json({ error: "rowKey is required" });
       }
-      const result = await storage.toggleVendorRouted((req.params.id as string), rowKey);
+      const result = await storage.toggleVendorRouted((pStr(req.params.id)), rowKey);
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: "Failed to toggle vendor routed" });
@@ -6336,12 +6337,12 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoffInOrg(req.params.id as string, currentUser.organizationId);
+      const passoff = await storage.getPtoPassoffInOrg(pStr(req.params.id), currentUser.organizationId);
       if (!passoff) return res.status(404).json({ error: "Not found" });
       if (passoff.createdById !== currentUser.id && !isAdmin(currentUser)) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const updated = await storage.updatePtoPassoff((req.params.id as string), req.body);
+      const updated = await storage.updatePtoPassoff((pStr(req.params.id)), req.body);
       // Notify new covering person if coveringUserId changed
       const newCovering = req.body.coveringUserId;
       if (newCovering && newCovering !== passoff.coveringUserId && newCovering !== currentUser.id) {
@@ -6379,12 +6380,12 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoffInOrg(req.params.id as string, currentUser.organizationId);
+      const passoff = await storage.getPtoPassoffInOrg(pStr(req.params.id), currentUser.organizationId);
       if (!passoff) return res.status(404).json({ error: "Not found" });
       if (passoff.createdById !== currentUser.id && !isAdmin(currentUser)) {
         return res.status(403).json({ error: "Access denied" });
       }
-      await storage.deletePtoPassoff((req.params.id as string));
+      await storage.deletePtoPassoff((pStr(req.params.id)));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete PTO passoff" });
@@ -6395,7 +6396,7 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoffInOrg(req.params.id as string, currentUser.organizationId);
+      const passoff = await storage.getPtoPassoffInOrg(pStr(req.params.id), currentUser.organizationId);
       if (!passoff) return res.status(404).json({ error: "Not found" });
       if (passoff.createdById !== currentUser.id && !isAdmin(currentUser)) {
         return res.status(403).json({ error: "Access denied" });
@@ -6407,7 +6408,7 @@ Respond with valid JSON only:
         if (!owning) return res.status(404).json({ error: "Company not found" });
       }
       const item = await storage.createPtoPassoffItem({
-        passoffId: (req.params.id as string),
+        passoffId: (pStr(req.params.id)),
         companyId: req.body.companyId || null,
         priority: req.body.priority || "medium",
         spotFreightHandler: req.body.spotFreightHandler || null,
@@ -6427,7 +6428,7 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoffInOrg(req.params.id as string, currentUser.organizationId);
+      const passoff = await storage.getPtoPassoffInOrg(pStr(req.params.id), currentUser.organizationId);
       if (!passoff) return res.status(404).json({ error: "Not found" });
       const isCovering = passoff.coveringUserId === currentUser.id;
       const isOwner = passoff.createdById === currentUser.id;
@@ -6437,20 +6438,20 @@ Respond with valid JSON only:
       // otherwise a user authorized on passoff A could mutate items owned
       // by passoff B (different rep, possibly different org) by guessing
       // an itemId.
-      const items = await storage.getPtoPassoffItems(req.params.id as string);
-      const targetItem = items.find(i => i.id === (req.params.itemId as string));
+      const items = await storage.getPtoPassoffItems(pStr(req.params.id));
+      const targetItem = items.find(i => i.id === (pStr(req.params.itemId)));
       if (!targetItem) return res.status(404).json({ error: "Item not found" });
       // Covering user can update acknowledged + coveringNotes; owner/admin can update all
       const allowedFields = isOwner || isCallerAdmin
         ? req.body
         : { acknowledged: req.body.acknowledged, coveringNotes: req.body.coveringNotes };
-      const updated = await storage.updatePtoPassoffItem((req.params.itemId as string), allowedFields);
+      const updated = await storage.updatePtoPassoffItem((pStr(req.params.itemId)), allowedFields);
       // Notify passoff owner when covering person acknowledges an account
       const justAcknowledged = req.body.acknowledged === true && isCovering && !isOwner;
       if (justAcknowledged && passoff.createdById !== currentUser.id) {
         (async () => {
-          const items = await storage.getPtoPassoffItems((req.params.id as string));
-          const item = items.find(i => i.id === (req.params.itemId as string));
+          const items = await storage.getPtoPassoffItems((pStr(req.params.id)));
+          const item = items.find(i => i.id === (pStr(req.params.itemId)));
           let body = "Account acknowledged in your passoff";
           if (item?.companyId) {
             const company = await storage.getCompanyInOrg(item.companyId, currentUser.organizationId);
@@ -6477,18 +6478,18 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoffInOrg(req.params.id as string, currentUser.organizationId);
+      const passoff = await storage.getPtoPassoffInOrg(pStr(req.params.id), currentUser.organizationId);
       if (!passoff) return res.status(404).json({ error: "Not found" });
       if (passoff.createdById !== currentUser.id && !isAdmin(currentUser)) {
         return res.status(403).json({ error: "Access denied" });
       }
       // Cross-record guard: itemId must belong to this passoff. Same
       // rationale as the PATCH handler above.
-      const items = await storage.getPtoPassoffItems(req.params.id as string);
-      if (!items.some(i => i.id === (req.params.itemId as string))) {
+      const items = await storage.getPtoPassoffItems(pStr(req.params.id));
+      if (!items.some(i => i.id === (pStr(req.params.itemId)))) {
         return res.status(404).json({ error: "Item not found" });
       }
-      await storage.deletePtoPassoffItem((req.params.itemId as string));
+      await storage.deletePtoPassoffItem((pStr(req.params.itemId)));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete passoff item" });
@@ -6500,7 +6501,7 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoffInOrg(req.params.id as string, currentUser.organizationId);
+      const passoff = await storage.getPtoPassoffInOrg(pStr(req.params.id), currentUser.organizationId);
       if (!passoff) return res.status(404).json({ error: "Not found" });
       const isCovering = passoff.coveringUserId === currentUser.id;
       const isOwner = passoff.createdById === currentUser.id;
@@ -6672,7 +6673,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
-      const deleted = await storage.deletePromotionCriteria((req.params.id as string));
+      const deleted = await storage.deletePromotionCriteria((pStr(req.params.id)));
       if (!deleted) return res.status(404).json({ error: "Criteria not found" });
       res.json({ success: true });
     } catch (err) {
@@ -6736,10 +6737,10 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      if (user.id !== (req.params.nomineeId as string) && !nominationAllowedRoles.includes(user.role)) {
+      if (user.id !== (pStr(req.params.nomineeId)) && !nominationAllowedRoles.includes(user.role)) {
         return res.status(403).json({ error: "Not authorized" });
       }
-      const nominations = await storage.getNominationsByNominee((req.params.nomineeId as string));
+      const nominations = await storage.getNominationsByNominee((pStr(req.params.nomineeId)));
       res.json(nominations);
     } catch (err) {
       res.status(500).json({ error: "Failed to load nominations" });
@@ -6822,7 +6823,7 @@ Respond with valid JSON only:
       if (status && ["active", "approved", "declined"].includes(status)) allowedFields.status = status;
       if (typeof notes === "string") allowedFields.notes = notes;
       if (Object.keys(allowedFields).length === 0) return res.status(400).json({ error: "No valid fields to update" });
-      const updated = await storage.updatePromotionNomination((req.params.id as string), allowedFields);
+      const updated = await storage.updatePromotionNomination((pStr(req.params.id)), allowedFields);
       if (!updated) return res.status(404).json({ error: "Nomination not found" });
       res.json(updated);
     } catch (err) {
@@ -6835,7 +6836,7 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       if (!nominationAllowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized" });
-      const deleted = await storage.deletePromotionNomination((req.params.id as string));
+      const deleted = await storage.deletePromotionNomination((pStr(req.params.id)));
       if (!deleted) return res.status(404).json({ error: "Nomination not found" });
       res.json({ success: true });
     } catch (err) {
@@ -6880,7 +6881,7 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Forbidden" });
-      const link = await storage.updateToolLink((req.params.id as string), req.body);
+      const link = await storage.updateToolLink((pStr(req.params.id)), req.body);
       if (!link) return res.status(404).json({ error: "Not found" });
       res.json(link);
     } catch (error) {
@@ -6893,7 +6894,7 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Forbidden" });
-      await storage.deleteToolLink((req.params.id as string));
+      await storage.deleteToolLink((pStr(req.params.id)));
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete tool link" });
@@ -6905,7 +6906,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
+      const company = await storage.getCompanyInOrg((pStr(req.params.id)), user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
       const now = new Date();
       const notes: string | null = req.body.notes || null;
@@ -6917,13 +6918,13 @@ Respond with valid JSON only:
       // recompute / NBA cache invalidation) to a contact from another org.
       if (contactId) {
         if (!contact) return res.status(404).json({ error: "Contact not found" });
-        if (contact.companyId !== (req.params.id as string)) {
+        if (contact.companyId !== (pStr(req.params.id))) {
           return res.status(400).json({ error: "Contact does not belong to this company" });
         }
       }
       const tp = await storage.createTouchpointWithDefaults({
         contactId,
-        companyId: req.params.id as string,
+        companyId: pStr(req.params.id),
         type: req.body.type || "call",
         date: req.body.date || undefined,
         notes,
@@ -6939,16 +6940,16 @@ Respond with valid JSON only:
       if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
         try {
           const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
-          autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId: req.params.id as string, contactId: contactId || null, createdAt: now.toISOString() });
+          autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId: pStr(req.params.id), contactId: contactId || null, createdAt: now.toISOString() });
         } catch (taskError) {
           console.error("Failed to create auto follow-up task for company touchpoint:", taskError);
         }
       }
       _nbaCache.delete(`nba:${req.params.id}`);
       try {
-        const gs = await computeGrowthScore(req.params.id as string, user.organizationId, storage);
-        const savedGs = await storage.upsertGrowthScore({ companyId: req.params.id as string, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
-        checkAndFireMomentumDropNotification(req.params.id as string, gs.band, savedGs.previousBand, storage).catch(() => {});
+        const gs = await computeGrowthScore(pStr(req.params.id), user.organizationId, storage);
+        const savedGs = await storage.upsertGrowthScore({ companyId: pStr(req.params.id), organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+        checkAndFireMomentumDropNotification(pStr(req.params.id), gs.band, savedGs.previousBand, storage).catch(() => {});
       } catch (gsErr) {
         console.error("[company-touchpoint] growth score refresh failed:", gsErr);
       }
@@ -7298,7 +7299,7 @@ Respond with valid JSON only:
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
       const { userId } = req.params as { userId: string };
-      const period = (req.query.period as string) || "2weeks";
+      const period = (qStr(req.query.period)) || "2weeks";
 
       const isSelf = userId === user.id;
       const isManager = ["admin","director","national_account_manager","account_manager","sales_director"].includes(user.role);
@@ -7412,7 +7413,7 @@ Respond with valid JSON only:
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-    const companyName = req.query.companyName as string;
+    const companyName = qStr(req.query.companyName);
     if (!companyName?.trim()) return res.status(400).json({ error: "companyName is required" });
 
     const ziConfigured = !!(
@@ -7524,7 +7525,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const attributions = await storage.getLaneAttributionsByContact(req.params.id as string);
+      const attributions = await storage.getLaneAttributionsByContact(pStr(req.params.id));
       res.json(attributions);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -7535,11 +7536,11 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const contact = await storage.getContact(req.params.id as string);
+      const contact = await storage.getContact(pStr(req.params.id));
       if (!contact) return res.status(404).json({ error: "Contact not found" });
       const { originCity, originState, destinationCity, destinationState, source, notes } = req.body;
       const attrib = await storage.createLaneAttribution({
-        contactId: req.params.id as string,
+        contactId: pStr(req.params.id),
         companyId: contact.companyId,
         originCity: originCity?.trim() || null,
         originState: originState?.trim()?.toUpperCase() || null,
@@ -7559,7 +7560,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const ok = await storage.deleteLaneAttribution(req.params.id as string);
+      const ok = await storage.deleteLaneAttribution(pStr(req.params.id));
       if (!ok) return res.status(404).json({ error: "Attribution not found" });
       res.json({ success: true });
     } catch (e: any) {
@@ -7827,7 +7828,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const company = await storage.getCompanyInOrg(req.params.id as string, user.organizationId);
+      const company = await storage.getCompanyInOrg(pStr(req.params.id), user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
       const [contacts, allAttributions, upload] = await Promise.all([
@@ -8845,7 +8846,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const { awardId } = req.params;
+      const awardId = pStr(req.params.awardId);
       if (!(await verifyAwardAccess(user, awardId))) return res.status(403).json({ error: "Access denied" });
       // Count tasks by awardId directly — not gated by current parseable lanes
       const taskCount = await storage.countProcurementTasksByAward(awardId);
@@ -8860,7 +8861,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const { awardId } = req.params;
+      const awardId = pStr(req.params.awardId);
       if (!(await verifyAwardAccess(user, awardId))) return res.status(403).json({ error: "Access denied" });
       // lanes is optional — if omitted, all award qualifying lanes are processed server-side
       const { lanes } = (req.body ?? {}) as { lanes?: Array<{ lane: string }> };
@@ -9042,8 +9043,8 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await verifyTaskAccess(user, req.params.taskId))) return res.status(403).json({ error: "Access denied" });
-      const carriers = await storage.getLaneCarriersByTask(req.params.taskId);
+      if (!(await verifyTaskAccess(user, pStr(req.params.taskId)))) return res.status(403).json({ error: "Access denied" });
+      const carriers = await storage.getLaneCarriersByTask(pStr(req.params.taskId));
       res.json(carriers);
     } catch (err) {
       res.status(500).json({ error: "Failed to fetch lane carriers" });
@@ -9055,8 +9056,8 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await verifyAwardAccess(user, req.params.awardId))) return res.status(403).json({ error: "Access denied" });
-      const carriers = await storage.getLaneCarriersByAward(req.params.awardId);
+      if (!(await verifyAwardAccess(user, pStr(req.params.awardId)))) return res.status(403).json({ error: "Access denied" });
+      const carriers = await storage.getLaneCarriersByAward(pStr(req.params.awardId));
       res.json(carriers);
     } catch (err) {
       res.status(500).json({ error: "Failed to fetch lane carriers" });
@@ -9128,7 +9129,7 @@ Respond with valid JSON only:
       if (req.body.status && !LANE_CARRIER_STATUS_ENUM.includes(req.body.status as LaneCarrierStatus)) {
         return res.status(400).json({ error: `status must be one of: ${LANE_CARRIER_STATUS_ENUM.join(", ")}` });
       }
-      const existing = await storage.getLaneCarrier(req.params.id);
+      const existing = await storage.getLaneCarrier(pStr(req.params.id));
       if (!existing) return res.status(404).json({ error: "Lane carrier not found" });
       if (!(await verifyAwardAccess(user, existing.awardId))) return res.status(403).json({ error: "Access denied" });
       // Only allow updating mutable fields — never allow changing taskId/awardId/lane/createdAt
@@ -9147,7 +9148,7 @@ Respond with valid JSON only:
       if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
       let carrier;
       try {
-        carrier = await storage.updateLaneCarrier(req.params.id, parsed.data);
+        carrier = await storage.updateLaneCarrier(pStr(req.params.id), parsed.data);
       } catch (updateErr: unknown) {
         const msg = updateErr instanceof Error ? updateErr.message : String(updateErr);
         if (msg.includes("unique") || msg.includes("duplicate")) {
@@ -9167,10 +9168,10 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getLaneCarrier(req.params.id);
+      const existing = await storage.getLaneCarrier(pStr(req.params.id));
       if (!existing) return res.status(404).json({ error: "Lane carrier not found" });
       if (!(await verifyAwardAccess(user, existing.awardId))) return res.status(403).json({ error: "Access denied" });
-      const ok = await storage.deleteLaneCarrier(req.params.id);
+      const ok = await storage.deleteLaneCarrier(pStr(req.params.id));
       if (!ok) return res.status(404).json({ error: "Lane carrier not found" });
       res.json({ ok: true });
     } catch (err) {
@@ -9281,7 +9282,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const reps = allUsers.filter(u => repRoles.includes(u.role ?? ""));
 
       const now = new Date();
-      const range = (req.query.range as string) || "last_week";
+      const range = (qStr(req.query.range)) || "last_week";
 
       let rangeStart: Date;
       let rangeEnd: Date = new Date(now);
@@ -9398,7 +9399,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const reps = allUsers.filter(u => repRoles.includes(u.role ?? ""));
 
       const now = new Date();
-      const range = (req.query.range as string) || "last_week";
+      const range = (qStr(req.query.range)) || "last_week";
 
       let rangeStart: Date;
       let rangeEnd: Date = new Date(now);
@@ -9504,7 +9505,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
       if (!managerRoles.includes(currentUser.role)) return res.status(403).json({ error: "Manager access required" });
       const orgId = req.session.organizationId!;
-      const weekStart = (req.query.weekStart as string) || getWeekStart();
+      const weekStart = (qStr(req.query.weekStart)) || getWeekStart();
       const rows = await storage.getTeamWeeklyCommitments(orgId, weekStart);
       res.json(rows);
     } catch (err: any) {
@@ -9518,7 +9519,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const orgId = req.session.organizationId!;
-      const weekStart = req.query.weekStart as string | undefined;
+      const weekStart = qOptStr(req.query.weekStart);
       const rows = await storage.getWeeklyCommitments(currentUser.id, orgId, weekStart);
       res.json(rows);
     } catch (err: any) {
@@ -9578,7 +9579,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const { status } = req.body;
       if (!["pending", "completed", "missed"].includes(status)) return res.status(400).json({ error: "Invalid status" });
-      const row = await storage.updateWeeklyCommitmentStatus(req.params.id, currentUser.id, status);
+      const row = await storage.updateWeeklyCommitmentStatus(pStr(req.params.id), currentUser.id, status);
       if (!row) return res.status(404).json({ error: "Commitment not found" });
       res.json(row);
     } catch (err: any) {
@@ -9591,7 +9592,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const ok = await storage.deleteWeeklyCommitment(req.params.id, currentUser.id);
+      const ok = await storage.deleteWeeklyCommitment(pStr(req.params.id), currentUser.id);
       if (!ok) return res.status(404).json({ error: "Commitment not found" });
       res.json({ success: true });
     } catch (err: any) {
@@ -9609,10 +9610,10 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       // Enforce company-visibility — cards for foreign-org companies were
       // previously returned to anyone authenticated who guessed the ID.
-      if (!(await canAccessCompany(currentUser, req.params.companyId))) {
+      if (!(await canAccessCompany(currentUser, pStr(req.params.companyId)))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const card = await storage.getNbaCardForCompany(req.params.companyId);
+      const card = await storage.getNbaCardForCompany(pStr(req.params.companyId));
       if (!card) return res.json(null);
 
       // Project to the canonical wire shape so this endpoint matches the
@@ -9732,7 +9733,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       // recurring_lane_capacity cards can only be completed via outreach threshold
       // or preferred-carrier program toggle — block direct manual resolution
       if (action === "actioned") {
-        const card = await storage.getNbaCard(req.params.id);
+        const card = await storage.getNbaCard(pStr(req.params.id));
         if (card?.ruleType === "recurring_lane_capacity") {
           return res.status(409).json({ error: "Lane capacity cards complete automatically when outreach threshold is reached or a preferred-carrier program is activated" });
         }
@@ -9747,7 +9748,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       if (linkedTouchpointId)      updateData.linkedTouchpointId = linkedTouchpointId;
       if (linkedTaskId)            updateData.linkedTaskId = linkedTaskId;
 
-      const updated = await storage.resolveNbaCard(req.params.id, currentUser.id, updateData);
+      const updated = await storage.resolveNbaCard(pStr(req.params.id), currentUser.id, updateData);
       if (!updated) return res.status(404).json({ error: "Card not found or not yours" });
       // Task #374: lifecycle events — both the action-specific event and a
       // generic "resolved" event so analytics can reason about resolution
@@ -9784,7 +9785,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const updated = await storage.markNbaCardViewed(req.params.id, currentUser.id, currentUser.organizationId);
+      const updated = await storage.markNbaCardViewed(pStr(req.params.id), currentUser.id, currentUser.organizationId);
       if (!updated) return res.status(404).json({ error: "Card not found or not yours" });
       res.json({ ok: true, firstViewedAt: updated.firstViewedAt });
     } catch (err: any) {
@@ -9812,7 +9813,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
         status: "actioned",
         resolutionAction: "link_outcome",
       };
-      const updated = await storage.resolveNbaCard(req.params.id, currentUser.id, updateData);
+      const updated = await storage.resolveNbaCard(pStr(req.params.id), currentUser.id, updateData);
       if (!updated) return res.status(404).json({ error: "Card not found or not yours" });
       try {
         // link-outcome implicitly resolves the card as "acted". Emit the same
@@ -9912,7 +9913,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const { role, organizationId } = currentUser;
       const allowed = ["admin", "director", "national_account_manager", "sales", "sales_director"];
       if (!allowed.includes(role)) return res.status(403).json({ error: "Not authorized" });
-      const repId = req.params.repId;
+      const repId = pStr(req.params.repId);
       const allUsers = await storage.getUsers(organizationId);
       const rep = allUsers.find(u => u.id === repId);
       if (!rep || rep.organizationId !== organizationId) {
@@ -10112,7 +10113,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
           return res.status(403).json({ error: "You don't have access to this account's suggestions." });
         }
       }
-      const status = req.query.status as string | undefined;
+      const status = qOptStr(req.query.status);
       const suggestions = await storage.getAccountContactSuggestions(accountId, status);
       // Only return pending / snoozed suggestions (exclude accepted/ignored/never_suggest unless explicitly requested)
       const filtered = status ? suggestions : suggestions.filter(s => s.status === "pending" || s.status === "snoozed");
@@ -10348,7 +10349,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       if (currentUser.role !== "admin") return res.status(403).json({ error: "Admin access required" });
-      await storage.deleteSidebarTooltip(currentUser.organizationId, req.params.itemKey);
+      await storage.deleteSidebarTooltip(currentUser.organizationId, pStr(req.params.itemKey));
       res.json({ ok: true });
     } catch (err: any) {
       console.error("[sidebar-tooltips DELETE]", err?.message ?? err);

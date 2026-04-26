@@ -12,6 +12,7 @@
  */
 
 import type { Express, Request, Response } from "express";
+import { pStr, qStr, qOptStr } from "../lib/req";
 import { z } from "zod";
 import { storage } from "../storage";
 import { requireAuth, getCurrentUser } from "../auth";
@@ -274,7 +275,7 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const existing = await storage.getMonitoredMailbox(req.params.id);
+      const existing = await storage.getMonitoredMailbox(pStr(req.params.id));
       if (!existing || existing.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Monitored mailbox not found" });
       }
@@ -285,7 +286,7 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
 
-      const updated = await storage.updateMonitoredMailbox(req.params.id, parsed.data);
+      const updated = await storage.updateMonitoredMailbox(pStr(req.params.id), parsed.data);
 
       if (parsed.data.enabled === true && !existing.enabled) {
         registerMailboxSubscription(existing.email, existing.id).catch(err => {
@@ -310,7 +311,7 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const existing = await storage.getMonitoredMailbox(req.params.id);
+      const existing = await storage.getMonitoredMailbox(pStr(req.params.id));
       if (!existing || existing.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Monitored mailbox not found" });
       }
@@ -320,7 +321,7 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
         await removeMailboxSubscription(primarySubId, existing.id).catch(() => {});
       }
 
-      await storage.deleteMonitoredMailbox(req.params.id);
+      await storage.deleteMonitoredMailbox(pStr(req.params.id));
       res.json({ ok: true });
     } catch (err) {
       console.error("[monitoredMailboxes] DELETE error:", err);
@@ -333,7 +334,7 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const existing = await storage.getMonitoredMailbox(req.params.id);
+      const existing = await storage.getMonitoredMailbox(pStr(req.params.id));
       if (!existing || existing.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Monitored mailbox not found" });
       }
@@ -420,7 +421,7 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const mailbox = await storage.getMonitoredMailbox(req.params.id);
+      const mailbox = await storage.getMonitoredMailbox(pStr(req.params.id));
       if (!mailbox || mailbox.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Monitored mailbox not found" });
       }
@@ -459,7 +460,7 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const mailbox = await storage.getMonitoredMailbox(req.params.id);
+      const mailbox = await storage.getMonitoredMailbox(pStr(req.params.id));
       if (!mailbox || mailbox.orgId !== user.organizationId) {
         return res.status(404).json({ error: "Monitored mailbox not found" });
       }
@@ -676,7 +677,7 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       try {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
-        const mailbox = await storage.getMonitoredMailbox(req.params.id);
+        const mailbox = await storage.getMonitoredMailbox(pStr(req.params.id));
         if (!mailbox || mailbox.orgId !== user.organizationId) {
           return res.status(404).json({ error: "Mailbox not found" });
         }

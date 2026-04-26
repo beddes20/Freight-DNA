@@ -24,6 +24,7 @@
  * existing client SSE consumer can be reused.
  */
 import type { Express, Request, Response } from "express";
+import { pStr, qStr, qOptStr } from "../lib/req";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import multer from "multer";
@@ -305,7 +306,7 @@ export function registerValueIQRoutes(app: Express) {
   app.get("/api/valueiq/threads/:id/messages", requireAuth, async (req: Request, res: Response) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const thread = await loadThread(req.params.id, user.id);
+    const thread = await loadThread(pStr(req.params.id), user.id);
     if (!thread) return res.status(404).json({ error: "Not found" });
     const rows = await db.select().from(threadMessages)
       .where(eq(threadMessages.threadId, thread.id))
@@ -322,7 +323,7 @@ export function registerValueIQRoutes(app: Express) {
   app.post("/api/valueiq/threads/:id/messages", requireAuth, async (req: Request, res: Response) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const thread = await loadThread(req.params.id, user.id);
+    const thread = await loadThread(pStr(req.params.id), user.id);
     if (!thread) return res.status(404).json({ error: "Not found" });
     let body: z.infer<typeof sendSchema>;
     try { body = sendSchema.parse(req.body); }
@@ -514,7 +515,7 @@ export function registerValueIQRoutes(app: Express) {
   app.post("/api/valueiq/threads/:id/attach", requireAuth, upload.single("file"), async (req: Request, res: Response) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const thread = await loadThread(req.params.id, user.id);
+    const thread = await loadThread(pStr(req.params.id), user.id);
     if (!thread) return res.status(404).json({ error: "Not found" });
     const file = (req as any).file as Express.Multer.File | undefined;
     if (!file) return res.status(400).json({ error: "No file" });
@@ -712,7 +713,7 @@ export function registerValueIQRoutes(app: Express) {
   app.delete("/api/valueiq/library/:id", requireAuth, async (req: Request, res: Response) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const ok = await deleteLibraryItem(user.id, req.params.id);
+    const ok = await deleteLibraryItem(user.id, pStr(req.params.id));
     res.json({ ok });
   });
 

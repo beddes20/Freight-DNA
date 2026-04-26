@@ -16,6 +16,7 @@ import cron from "node-cron";
 import { storage } from "./storage";
 import { runPhase1EngineForOrg, evalR13MarketTightening, evalR14MarketLoosening } from "./nbaPhase1Engine";
 import { runRecurringLaneEngineForOrg } from "./recurringLaneCapacityEngine";
+import type { RecurringLane } from "@shared/schema";
 import { scoreAllEligibleLanes } from "./laneScoringService";
 import { evaluatePlayTriggersForOrg } from "./routes/playbook";
 import { syncMarketSignalNbas } from "./marketNbaService";

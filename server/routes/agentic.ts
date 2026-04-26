@@ -2,6 +2,7 @@
  * /api/agentic — workflow agent fleet, HITL inbox, pods, adapters, runs.
  */
 import type { Express, Request, Response } from "express";
+import { pStr, qStr, qOptStr } from "../lib/req";
 import { db } from "../storage";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, getCurrentUser } from "../auth";
@@ -36,7 +37,7 @@ export function registerAgenticRoutes(app: Express) {
   app.get("/api/agentic/agents/:slug", requireAuth, async (req, res) => {
     const ctx = await ctxFor(req, res); if (!ctx) return;
     await ensureWorkflowAgentsForOrg(ctx.organizationId);
-    const agent = await getWorkflowAgent(ctx.organizationId, req.params.slug);
+    const agent = await getWorkflowAgent(ctx.organizationId, pStr(req.params.slug));
     if (!agent) return res.status(404).json({ error: "not_found" });
     const def = AGENT_DEFS[agent.slug as AgentSlug];
     const stats = await agentStats(ctx.organizationId, agent.id, 30);
@@ -54,7 +55,7 @@ export function registerAgenticRoutes(app: Express) {
     if (ctx.role && !["admin", "manager"].includes(ctx.role)) {
       return res.status(403).json({ error: "forbidden" });
     }
-    const agent = await getWorkflowAgent(ctx.organizationId, req.params.slug);
+    const agent = await getWorkflowAgent(ctx.organizationId, pStr(req.params.slug));
     if (!agent) return res.status(404).json({ error: "not_found" });
     const allowed: any = {};
     for (const k of ["autonomy", "enabled", "scope", "guardrails", "triggers", "personaOverlay", "model", "killSwitch", "name", "description"]) {
@@ -67,7 +68,7 @@ export function registerAgenticRoutes(app: Express) {
 
   app.post("/api/agentic/agents/:slug/run", requireAuth, async (req, res) => {
     const ctx = await ctxFor(req, res); if (!ctx) return;
-    const agent = await getWorkflowAgent(ctx.organizationId, req.params.slug);
+    const agent = await getWorkflowAgent(ctx.organizationId, pStr(req.params.slug));
     if (!agent) return res.status(404).json({ error: "not_found" });
     if (!AGENT_SLUGS.includes(agent.slug as AgentSlug)) return res.status(400).json({ error: "unsupported_slug" });
     try {
@@ -83,8 +84,8 @@ export function registerAgenticRoutes(app: Express) {
   // ─── HITL Inbox / Approvals ───────────────────────────────
   app.get("/api/agentic/inbox", requireAuth, async (req, res) => {
     const ctx = await ctxFor(req, res); if (!ctx) return;
-    const status = (req.query.status as string)?.split(",").filter(Boolean) as any[] | undefined;
-    const podId = req.query.podId as string | undefined;
+    const status = (qStr(req.query.status))?.split(",").filter(Boolean) as any[] | undefined;
+    const podId = qOptStr(req.query.podId);
     const items = await listInbox(ctx.organizationId, { status: status?.length ? status : ["pending"], podId, limit: 200 });
     const counts = await inboxCounts(ctx.organizationId);
     res.json({ items, counts });
@@ -95,7 +96,7 @@ export function registerAgenticRoutes(app: Express) {
     const { decision, decisionNote, payloadOverride } = req.body ?? {};
     if (!["approved", "rejected", "edited"].includes(decision)) return res.status(400).json({ error: "bad_decision" });
     const row = await decide({
-      id: req.params.id, organizationId: ctx.organizationId,
+      id: pStr(req.params.id), organizationId: ctx.organizationId,
       decidedByUserId: ctx.userId, decision, decisionNote, payloadOverride,
     });
     if (!row) return res.status(404).json({ error: "not_found" });

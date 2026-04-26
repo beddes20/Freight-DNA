@@ -291,7 +291,7 @@ async function sendDailyIntelEmails(): Promise<void> {
 
     for (const org of allOrgs) {
       const allUsers = await storage.getUsers(org.id);
-      const adminUsers = allUsers.filter(u => u.role === "admin" && u.email);
+      const adminUsers = allUsers.filter(u => u.role === "admin" && u.username);
 
       if (adminUsers.length === 0) continue;
 
@@ -594,12 +594,12 @@ async function sendDailyIntelEmails(): Promise<void> {
         });
 
         const sent = await sendEmail({
-          to: admin.email!,
+          to: admin.username!,
           subject: `Freight DNA: Daily Market Intel — ${today.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}`,
           html,
         });
 
-        logIntel(sent ? `Daily intel sent to ${admin.email}` : `Failed to send daily intel to ${admin.email}`);
+        logIntel(sent ? `Daily intel sent to ${admin.username}` : `Failed to send daily intel to ${admin.username}`);
       }
     }
   } catch (err: any) {
@@ -632,7 +632,7 @@ async function sendBiweeklyScorecardEmails(): Promise<void> {
 
     for (const org of allOrgs) {
       const allUsers = await storage.getUsers(org.id);
-      const adminUsers = allUsers.filter(u => u.role === "admin" && u.email);
+      const adminUsers = allUsers.filter(u => u.role === "admin" && u.username);
       if (adminUsers.length === 0) continue;
 
       const uploads = await storage.getFinancialUploadsForOrg(org.id);
@@ -776,12 +776,12 @@ async function sendBiweeklyScorecardEmails(): Promise<void> {
         });
 
         const sent = await sendEmail({
-          to: admin.email!,
+          to: admin.username!,
           subject: `Freight DNA: Bi-Weekly Lane Scorecard — ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`,
           html,
         });
 
-        logIntel(sent ? `Bi-weekly scorecard sent to ${admin.email}` : `Failed to send scorecard to ${admin.email}`);
+        logIntel(sent ? `Bi-weekly scorecard sent to ${admin.username}` : `Failed to send scorecard to ${admin.username}`);
       }
     }
   } catch (err: any) {
@@ -795,7 +795,7 @@ export async function sendIntelNowForOrg(orgId: string): Promise<void> {
   logIntel(`Manual send triggered for org ${orgId}`);
 
   const allUsers = await storage.getUsers(orgId);
-  const adminUsers = allUsers.filter(u => u.role === "admin" && u.email);
+  const adminUsers = allUsers.filter(u => u.role === "admin" && u.username);
   if (adminUsers.length === 0) {
     logIntel("No admin users with email — skipping manual send");
     return;
@@ -915,7 +915,7 @@ export async function sendIntelNowForOrg(orgId: string): Promise<void> {
     });
 
     const sent = await sendEmail({
-      to: admin.email!,
+      to: admin.username!,
       subject: `Freight DNA: Manual Intel Report — ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`,
       html: combinedHtml,
     });
@@ -930,12 +930,12 @@ export async function sendIntelNowForOrg(orgId: string): Promise<void> {
       lanesHtml,
     });
     await sendEmail({
-      to: admin.email!,
+      to: admin.username!,
       subject: `Freight DNA: Lane Scorecard (On-Demand) — ${new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`,
       html: scorecardHtml,
     });
 
-    logIntel(sent ? `Manual intel sent to ${admin.email}` : `Failed to send manual intel to ${admin.email}`);
+    logIntel(sent ? `Manual intel sent to ${admin.username}` : `Failed to send manual intel to ${admin.username}`);
   }
 }
 

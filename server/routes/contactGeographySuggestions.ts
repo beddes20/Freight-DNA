@@ -9,6 +9,7 @@
  */
 
 import type { Express } from "express";
+import { pStr, qStr, qOptStr } from "../lib/req";
 import { requireAuth, getCurrentUser } from "../auth";
 import { storage } from "../storage";
 
@@ -24,13 +25,13 @@ export function registerContactGeographySuggestionRoutes(app: Express): void {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-        const { accountId } = req.params;
+        const accountId = pStr(req.params.accountId);
         const company = await storage.getCompanyInOrg(accountId, user.organizationId);
         if (!company) return res.status(404).json({ error: "Account not found" });
 
         const filters = {
-          contactId: req.query.contactId as string | undefined,
-          status: req.query.status as string | undefined,
+          contactId: qOptStr(req.query.contactId),
+          status: qOptStr(req.query.status),
         };
 
         const suggestions = await storage.getContactGeographySuggestions(accountId, filters);
@@ -62,7 +63,7 @@ export function registerContactGeographySuggestionRoutes(app: Express): void {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-        const { contactId } = req.params;
+        const contactId = pStr(req.params.contactId);
         const contact = await storage.getContact(contactId);
         if (!contact) return res.status(404).json({ error: "Contact not found" });
 
@@ -86,7 +87,7 @@ export function registerContactGeographySuggestionRoutes(app: Express): void {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-        const { id } = req.params;
+        const id = pStr(req.params.id);
         const suggestion = await storage.getContactGeographySuggestion(id);
         if (!suggestion) return res.status(404).json({ error: "Not found" });
 
@@ -129,7 +130,7 @@ export function registerContactGeographySuggestionRoutes(app: Express): void {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-        const { id } = req.params;
+        const id = pStr(req.params.id);
         const suggestion = await storage.getContactGeographySuggestion(id);
         if (!suggestion) return res.status(404).json({ error: "Not found" });
 
@@ -153,7 +154,7 @@ export function registerContactGeographySuggestionRoutes(app: Express): void {
         const user = await getCurrentUser(req);
         if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-        const { id } = req.params;
+        const id = pStr(req.params.id);
         const suggestion = await storage.getContactGeographySuggestion(id);
         if (!suggestion) return res.status(404).json({ error: "Not found" });
 

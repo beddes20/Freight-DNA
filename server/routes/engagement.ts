@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import { pStr, qStr, qOptStr } from "../lib/req";
 import { storage } from "../storage";
 import { getCurrentUser, canAccessCompany, getVisibleCompanyIds, requireAuth } from "../auth";
 import { type Callout, internalPosts as internalPostsTable, type InsertCrmOpportunity } from "@shared/schema";
@@ -111,10 +112,10 @@ export function registerEngagementRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(user, (req.params.companyId as string)))) {
+      if (!(await canAccessCompany(user, (pStr(req.params.companyId))))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const companyCallouts = await storage.getCalloutsByCompany((req.params.companyId as string));
+      const companyCallouts = await storage.getCalloutsByCompany((pStr(req.params.companyId)));
       res.json(companyCallouts);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch company callouts" });
@@ -186,12 +187,12 @@ export function registerEngagementRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const callout = await storage.getCallout((req.params.id as string));
+      const callout = await storage.getCallout((pStr(req.params.id)));
       if (!callout) return res.status(404).json({ error: "Callout not found" });
       if (callout.authorId !== user.id && user.role !== "admin") {
         return res.status(403).json({ error: "Only the author or admin can delete callouts" });
       }
-      await storage.deleteCallout((req.params.id as string));
+      await storage.deleteCallout((pStr(req.params.id)));
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete callout" });
@@ -341,7 +342,7 @@ export function registerEngagementRoutes(app: Express) {
         return res.status(403).json({ error: "Not authorized" });
       }
       const { description } = req.body;
-      const updated = await storage.updateOpportunityLog(req.params.id as string, { description: description ?? null });
+      const updated = await storage.updateOpportunityLog(pStr(req.params.id), { description: description ?? null });
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to update opportunity log" });
@@ -356,7 +357,7 @@ export function registerEngagementRoutes(app: Express) {
       const log = logs.find(l => l.id === req.params.id);
       if (!log) return res.status(404).json({ error: "Not found" });
       if (log.repId !== user.id && user.role !== "admin") return res.status(403).json({ error: "Not authorized" });
-      await storage.deleteOpportunityLog(req.params.id as string);
+      await storage.deleteOpportunityLog(pStr(req.params.id));
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete opportunity log" });
@@ -470,12 +471,12 @@ export function registerEngagementRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const post = await storage.getFeedPost((req.params.id as string));
+      const post = await storage.getFeedPost((pStr(req.params.id)));
       if (!post) return res.status(404).json({ error: "Post not found" });
       if (post.authorId !== user.id && user.role !== "admin") {
         return res.status(403).json({ error: "Only the author or admin can delete posts" });
       }
-      await storage.deleteFeedPost((req.params.id as string));
+      await storage.deleteFeedPost((pStr(req.params.id)));
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete feed post" });
@@ -488,9 +489,9 @@ export function registerEngagementRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const canPin = ["admin", "director", "national_account_manager", "sales_director"].includes(user.role);
       if (!canPin) return res.status(403).json({ error: "Only admins and managers can pin posts" });
-      const post = await storage.getFeedPost((req.params.id as string));
+      const post = await storage.getFeedPost((pStr(req.params.id)));
       if (!post) return res.status(404).json({ error: "Post not found" });
-      const updated = await storage.pinFeedPost((req.params.id as string), !!req.body.pinned);
+      const updated = await storage.pinFeedPost((pStr(req.params.id)), !!req.body.pinned);
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to pin post" });
@@ -552,7 +553,7 @@ export function registerEngagementRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const isLeadership = user.role === "admin" || user.role === "director";
       if (!isLeadership) return res.status(403).json({ error: "Only admins and directors can delete posts" });
-      await storage.deleteInternalPost((req.params.id as string));
+      await storage.deleteInternalPost((pStr(req.params.id)));
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete internal post" });
@@ -565,7 +566,7 @@ export function registerEngagementRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const ids = req.query.ids;
+      const ids = qOptStr(req.query.ids);
       if (!ids || typeof ids !== "string") return res.json([]);
       const requestedIds = ids.split(",").filter(Boolean);
       if (requestedIds.length === 0) return res.json([]);
@@ -603,9 +604,9 @@ export function registerEngagementRoutes(app: Express) {
       if (!emoji || !validEmojis.includes(emoji)) {
         return res.status(400).json({ error: "Invalid emoji" });
       }
-      const callout = await storage.getCallout((req.params.id as string));
+      const callout = await storage.getCallout((pStr(req.params.id)));
       if (!callout) return res.status(404).json({ error: "Callout not found" });
-      const result = await storage.toggleReaction((req.params.id as string), user.id, emoji);
+      const result = await storage.toggleReaction((pStr(req.params.id)), user.id, emoji);
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: "Failed to toggle reaction" });
@@ -618,7 +619,7 @@ export function registerEngagementRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const ids = req.query.ids;
+      const ids = qOptStr(req.query.ids);
       if (!ids || typeof ids !== "string") return res.json([]);
       const requestedIds = ids.split(",").filter(Boolean);
       if (requestedIds.length === 0) return res.json([]);
@@ -645,7 +646,7 @@ export function registerEngagementRoutes(app: Express) {
       if (!emoji || !validEmojis.includes(emoji)) {
         return res.status(400).json({ error: "Invalid emoji" });
       }
-      const post = await storage.getFeedPost((req.params.id as string));
+      const post = await storage.getFeedPost((pStr(req.params.id)));
       if (!post) return res.status(404).json({ error: "Feed post not found" });
       if (post.parentId) return res.status(400).json({ error: "Reactions are only allowed on top-level posts" });
 
@@ -654,7 +655,7 @@ export function registerEngagementRoutes(app: Express) {
         return res.status(403).json({ error: "Access denied" });
       }
 
-      const result = await storage.toggleFeedPostReaction((req.params.id as string), user.id, emoji);
+      const result = await storage.toggleFeedPostReaction((pStr(req.params.id)), user.id, emoji);
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: "Failed to toggle feed reaction" });
@@ -667,7 +668,7 @@ export function registerEngagementRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const companyId = req.params.id as string;
+      const companyId = pStr(req.params.id);
       const canAccess = await canAccessCompany(user, companyId);
       if (!canAccess) return res.status(403).json({ error: "Forbidden" });
       const rows = await storage.getCrmOpportunitiesByCompanyId(companyId);
@@ -682,7 +683,7 @@ export function registerEngagementRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const companyId = req.params.id as string;
+      const companyId = pStr(req.params.id);
       const canAccess = await canAccessCompany(user, companyId);
       if (!canAccess) return res.status(403).json({ error: "Forbidden" });
       const { name, stage, amount, closeDate, probability, notes, lostReason, outcome } = req.body;
@@ -715,8 +716,8 @@ export function registerEngagementRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const companyId = req.params.id as string;
-      const oppId = parseInt(req.params.oppId);
+      const companyId = pStr(req.params.id);
+      const oppId = parseInt(pStr(req.params.oppId));
       const canAccess = await canAccessCompany(user, companyId);
       if (!canAccess) return res.status(403).json({ error: "Forbidden" });
       const existing = await storage.getCrmOpportunityById(oppId);
@@ -745,8 +746,8 @@ export function registerEngagementRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const companyId = req.params.id as string;
-      const oppId = parseInt(req.params.oppId);
+      const companyId = pStr(req.params.id);
+      const oppId = parseInt(pStr(req.params.oppId));
       const canAccess = await canAccessCompany(user, companyId);
       if (!canAccess) return res.status(403).json({ error: "Forbidden" });
       const existing = await storage.getCrmOpportunityById(oppId);

@@ -73,7 +73,7 @@ export async function coverFreightOpportunity(args: {
   let carrierName: string | null = payload.carrierName?.trim() || null;
   if (!carrierName && payload.carrierId) {
     const c = await storage.getCarrier(payload.carrierId);
-    if (c && c.organizationId !== org) {
+    if (c && c.orgId !== org) {
       return { ok: false, status: 403, error: "Carrier does not belong to your organization" };
     }
     carrierName = c?.name ?? null;
@@ -196,7 +196,7 @@ export async function coverFreightOpportunity(args: {
       destinationCity: opp.destination,
       destinationState: opp.destinationState ?? null,
       destinationZip: null,
-      accountManager: rep.name ?? rep.email ?? null,
+      accountManager: rep.name ?? rep.username ?? null,
       dispatcher: null,
       equipmentType: opp.equipmentType ?? null,
       pickupDate: opp.pickupWindowStart ?? null,
