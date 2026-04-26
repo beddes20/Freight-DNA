@@ -3578,6 +3578,13 @@ export async function runMigrations() {
     await clientWca.query(`CREATE UNIQUE INDEX IF NOT EXISTS webex_analytics_org_call_idx ON webex_call_analytics(org_id, call_id)`);
     await clientWca.query(`CREATE INDEX IF NOT EXISTS webex_analytics_user_time_idx ON webex_call_analytics(user_id, start_time)`);
     await clientWca.query(`CREATE INDEX IF NOT EXISTS webex_analytics_org_time_idx ON webex_call_analytics(org_id, start_time)`);
+    // Task #691 — composite index for the Call Performance Hub. The
+    // call-quality scorecard and drill endpoints filter by
+    // (org_id, start_time, user_id, quality_grade). The earlier
+    // org_time / user_time indexes only cover the first two columns; this
+    // composite lets postgres satisfy the per-rep + grade filters from the
+    // index alone as analytics history grows.
+    await clientWca.query(`CREATE INDEX IF NOT EXISTS webex_analytics_org_time_user_grade_idx ON webex_call_analytics(org_id, start_time, user_id, quality_grade)`);
     console.log("[migrations] webex_call_analytics table ensured (Task #315)");
   } catch (err) {
     console.error("[migrations] webex_call_analytics migration error:", err);

@@ -150,6 +150,130 @@ export async function buildCompanyCallTrendline(
   };
 }
 
+export interface OrgTrendline {
+  totals: { inbound: number; outbound: number; missed: number; total: number };
+  weeks: WeekBucket[];
+  byRep: RepBucket[];
+}
+
+/**
+ * Org-wide call trendline used by the Call Performance Hub (`/calls`). Mirrors
+ * `buildCompanyCallTrendline` but scopes to every company in the org so a
+ * single page can render team-level pace + per-rep breakdown for the picker
+ * window. Optional `repId` narrows to a single rep across the whole org.
+ */
+export async function buildOrgCallTrendline(
+  orgId: string,
+  days: number,
+  repId?: string,
+): Promise<OrgTrendline> {
+  const sinceDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const sinceIso = sinceDate.toISOString();
+  const sinceDay = sinceIso.slice(0, 10);
+
+  const orgCompanies = await db
+    .select({ id: companies.id })
+    .from(companies)
+    .where(eq(companies.organizationId, orgId));
+  if (orgCompanies.length === 0) {
+    return {
+      totals: { inbound: 0, outbound: 0, missed: 0, total: 0 },
+      weeks: buildEmptyWeeks(days, new Date()),
+      byRep: [],
+    };
+  }
+  const companyIds = orgCompanies.map(c => c.id);
+
+  const tpConds = [
+    inArray(touchpoints.companyId, companyIds),
+    eq(touchpoints.type, "call"),
+    gte(touchpoints.date, sinceDay),
+  ];
+  if (repId) tpConds.push(eq(touchpoints.loggedById, repId));
+
+  const cardConds = [
+    eq(nbaCards.orgId, orgId),
+    eq(nbaCards.ruleType, "webex_missed_call"),
+    gte(nbaCards.createdAt, sinceIso),
+  ];
+  if (repId) cardConds.push(eq(nbaCards.userId, repId));
+
+  const [tps, missedCards] = await Promise.all([
+    db
+      .select({
+        loggedById: touchpoints.loggedById,
+        date: touchpoints.date,
+        notes: touchpoints.notes,
+      })
+      .from(touchpoints)
+      .where(and(...tpConds)),
+    db
+      .select({
+        userId: nbaCards.userId,
+        createdAt: nbaCards.createdAt,
+      })
+      .from(nbaCards)
+      .where(and(...cardConds)),
+  ]);
+
+  const weeks = buildEmptyWeeks(days, new Date());
+  const weekIndex = new Map<string, number>();
+  weeks.forEach((w, i) => weekIndex.set(w.weekStart, i));
+
+  const byRepMap = new Map<string, RepBucket>();
+  const ensureRep = (id: string) => {
+    let r = byRepMap.get(id);
+    if (!r) {
+      r = { repId: id, repName: "", inbound: 0, outbound: 0, missed: 0, total: 0 };
+      byRepMap.set(id, r);
+    }
+    return r;
+  };
+
+  let totalIn = 0, totalOut = 0, totalMissed = 0;
+
+  for (const tp of tps) {
+    if (!isWebexTouchpoint(tp.notes)) continue;
+    const dir = detectDirection(tp.notes);
+    if (!dir) continue;
+    const wkKey = isoDay(startOfWeek(new Date(tp.date + "T00:00:00Z")));
+    const idx = weekIndex.get(wkKey);
+    if (idx == null) continue;
+    weeks[idx][dir]++;
+    if (dir === "inbound") totalIn++; else totalOut++;
+    const rep = ensureRep(tp.loggedById);
+    rep[dir]++;
+    rep.total++;
+  }
+
+  for (const card of missedCards) {
+    const wkKey = isoDay(startOfWeek(new Date(card.createdAt)));
+    const idx = weekIndex.get(wkKey);
+    if (idx == null) continue;
+    weeks[idx].missed++;
+    totalMissed++;
+    const rep = ensureRep(card.userId);
+    rep.missed++;
+    rep.total++;
+  }
+
+  const repIds = Array.from(byRepMap.keys());
+  if (repIds.length > 0) {
+    const userRows = await db
+      .select({ id: users.id, name: users.name })
+      .from(users)
+      .where(inArray(users.id, repIds));
+    const nameMap = new Map(userRows.map(u => [u.id, u.name]));
+    for (const r of byRepMap.values()) r.repName = nameMap.get(r.repId) || "Unknown";
+  }
+
+  return {
+    totals: { inbound: totalIn, outbound: totalOut, missed: totalMissed, total: totalIn + totalOut + totalMissed },
+    weeks,
+    byRep: Array.from(byRepMap.values()).sort((a, b) => b.total - a.total),
+  };
+}
+
 export interface CallPaceRow {
   companyId: string;
   companyName: string;

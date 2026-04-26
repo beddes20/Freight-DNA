@@ -72,6 +72,7 @@ import LmCheckinHistoryPage from "@/pages/lm-checkin-history";
 import { PortletErrorBoundary } from "@/components/portlet-error-boundary";
 import LaneWorkQueuePage from "@/pages/lane-work-queue";
 import LaneInboxPage from "@/pages/lane-inbox";
+import CallsPage from "@/pages/calls";
 import TodayQueuePage from "@/pages/today";
 import MyProcurementPage from "@/pages/my-procurement";
 import ConversationsPage from "@/pages/conversations";
@@ -238,6 +239,7 @@ function Router() {
       </Route>
       <Route path="/lanes/work-queue" component={LaneWorkQueuePage} />
       <Route path="/lane-inbox" component={LaneInboxPage} />
+      <Route path="/calls" component={CallsPage} />
       <Route path="/available-freight" component={AvailableFreightPage} />
       <Route path="/available-freight/:id" component={AvailableFreightDetailPage} />
       <Route path="/admin/available-freight/imports" component={AdminAvailableFreightImports} />

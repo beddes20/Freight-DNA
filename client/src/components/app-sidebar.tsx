@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, BrainCircuit, Lightbulb, Brain, MailCheck, ChevronDown, Sparkles, Activity, Compass, GitMerge, Filter, type LucideIcon } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, PhoneCall, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, BrainCircuit, Lightbulb, Brain, MailCheck, ChevronDown, Sparkles, Activity, Compass, GitMerge, Filter, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -137,6 +137,7 @@ const carrierFacingItems: NavItem[] = [
     roles: ["admin", "director", "national_account_manager", "logistics_manager", "account_manager"],
   },
   { title: "Phone Usage",     url: "/phone-usage",     icon: Phone,    description: "Org-wide phone usage trends and rep activity.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
+  { title: "Call Performance", url: "/calls",          icon: PhoneCall, description: "Org-wide call pace, weekly trendline, and quality scorecard under one shared window.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
   { title: "LM Check-In Log", url: "/lm-checkin-history", icon: History, description: "History of logistics manager check-ins.", roles: ["admin", "director", "national_account_manager", "account_manager", "sales_director"] },
   {
     title: "Carrier Scorecard", url: "/carrier-intelligence/scorecard", icon: Trophy,

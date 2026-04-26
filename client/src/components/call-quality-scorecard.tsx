@@ -207,9 +207,21 @@ type SortKey =
  * Full Call Quality panel for Exec Analytics. Shows team rollup KPIs and a
  * sortable per-rep table with drill-in to the underlying call list.
  */
-export function CallQualityPanel() {
+export function CallQualityPanel({
+  days: daysProp,
+  onDaysChange,
+}: {
+  days?: number;
+  onDaysChange?: (days: number) => void;
+} = {}) {
   const { toast } = useToast();
-  const [days, setDays] = useState(30);
+  const [internalDays, setInternalDays] = useState(30);
+  const days = daysProp ?? internalDays;
+  const setDays = (n: number) => {
+    if (onDaysChange) onDaysChange(n);
+    else setInternalDays(n);
+  };
+  const externallyControlled = daysProp !== undefined;
   const [sortKey, setSortKey] = useState<SortKey>("attention");
   const [sortDesc, setSortDesc] = useState(true);
   const [drillUserId, setDrillUserId] = useState<string | null>(null);
@@ -293,17 +305,19 @@ export function CallQualityPanel() {
             Webex talk-time, quality, and activity metrics
           </p>
         </div>
-        <Select value={String(days)} onValueChange={(v) => setDays(parseInt(v, 10))}>
-          <SelectTrigger className="w-[110px]" data-testid="select-days">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="7">Last 7 days</SelectItem>
-            <SelectItem value="30">Last 30 days</SelectItem>
-            <SelectItem value="60">Last 60 days</SelectItem>
-            <SelectItem value="90">Last 90 days</SelectItem>
-          </SelectContent>
-        </Select>
+        {!externallyControlled && (
+          <Select value={String(days)} onValueChange={(v) => setDays(parseInt(v, 10))}>
+            <SelectTrigger className="w-[110px]" data-testid="select-days">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="7">Last 7 days</SelectItem>
+              <SelectItem value="30">Last 30 days</SelectItem>
+              <SelectItem value="60">Last 60 days</SelectItem>
+              <SelectItem value="90">Last 90 days</SelectItem>
+            </SelectContent>
+          </Select>
+        )}
         <Button
           variant="outline"
           size="sm"

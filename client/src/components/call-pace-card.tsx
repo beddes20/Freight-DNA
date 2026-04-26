@@ -36,9 +36,24 @@ function Sparkline({ points }: { points: number[] }) {
   );
 }
 
-export function CallPaceCard() {
+// `days` and `onDaysChange` allow a parent (e.g. the Call Performance Hub)
+// to drive the days picker from a single shared state. When omitted, the
+// card manages its own days locally so existing call sites keep working.
+export function CallPaceCard({
+  days: daysProp,
+  onDaysChange,
+}: {
+  days?: number;
+  onDaysChange?: (days: number) => void;
+} = {}) {
   const [, navigate] = useLocation();
-  const [days, setDays] = useState(90);
+  const [internalDays, setInternalDays] = useState(90);
+  const days = daysProp ?? internalDays;
+  const setDays = (n: number) => {
+    if (onDaysChange) onDaysChange(n);
+    else setInternalDays(n);
+  };
+  const externallyControlled = daysProp !== undefined;
   const [sortKey, setSortKey] = useState<SortKey>("total");
 
   const { data, isLoading } = useQuery<{ days: number; rows: PaceRow[] }>({
@@ -63,14 +78,16 @@ export function CallPaceCard() {
         <h2 className="font-semibold text-foreground">Call Pace</h2>
         <span className="text-xs text-muted-foreground">Webex CDR activity per shipper</span>
         <div className="ml-auto flex items-center gap-1.5">
-          <Select value={String(days)} onValueChange={(v) => setDays(parseInt(v, 10))}>
-            <SelectTrigger className="h-7 text-xs w-[90px]" data-testid="select-pace-days"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="30">30 days</SelectItem>
-              <SelectItem value="60">60 days</SelectItem>
-              <SelectItem value="90">90 days</SelectItem>
-            </SelectContent>
-          </Select>
+          {!externallyControlled && (
+            <Select value={String(days)} onValueChange={(v) => setDays(parseInt(v, 10))}>
+              <SelectTrigger className="h-7 text-xs w-[90px]" data-testid="select-pace-days"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="30">30 days</SelectItem>
+                <SelectItem value="60">60 days</SelectItem>
+                <SelectItem value="90">90 days</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
           <Select value={sortKey} onValueChange={(v) => setSortKey(v as SortKey)}>
             <SelectTrigger className="h-7 text-xs w-[120px]" data-testid="select-pace-sort"><SelectValue /></SelectTrigger>
             <SelectContent>

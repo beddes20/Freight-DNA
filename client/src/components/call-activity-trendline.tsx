@@ -8,7 +8,7 @@ import { PhoneCall, PhoneIncoming, PhoneOutgoing, PhoneMissed } from "lucide-rea
 type WeekBucket = { weekStart: string; inbound: number; outbound: number; missed: number };
 type RepBucket = { repId: string; repName: string; inbound: number; outbound: number; missed: number; total: number };
 type Trendline = {
-  companyId: string;
+  companyId?: string;
   days: number;
   totals: { inbound: number; outbound: number; missed: number; total: number };
   weeks: WeekBucket[];
@@ -23,17 +23,40 @@ const DIR_COLORS: Record<Exclude<Direction, "all">, string> = {
   missed: "bg-red-500",
 };
 
-export function CallActivityTrendline({ companyId }: { companyId: string }) {
-  const [days, setDays] = useState(90);
+// Either a per-company trendline (provide `companyId`) or an org-wide
+// rollup used by the Call Performance Hub (`scope="org"`). When `days` is
+// supplied by a parent, the internal days picker is hidden so the
+// page-level shared picker can drive every section in lockstep.
+type CallActivityTrendlineProps =
+  | { companyId: string; scope?: "company"; days?: number; onDaysChange?: (n: number) => void }
+  | { scope: "org"; companyId?: undefined; days?: number; onDaysChange?: (n: number) => void };
+
+export function CallActivityTrendline(props: CallActivityTrendlineProps) {
+  const { companyId, days: daysProp, onDaysChange } = props;
+  const scope = props.scope ?? "company";
+  const [internalDays, setInternalDays] = useState(90);
+  const days = daysProp ?? internalDays;
+  const setDays = (n: number) => {
+    if (onDaysChange) onDaysChange(n);
+    else setInternalDays(n);
+  };
+  const externallyControlled = daysProp !== undefined;
   const [direction, setDirection] = useState<Direction>("all");
   const [repFilter, setRepFilter] = useState<string>("all");
 
+  const endpointBase = scope === "org"
+    ? `/api/calls/trendline/org`
+    : `/api/calls/trendline/company/${companyId}`;
+  const queryKeyBase: (string | undefined)[] = scope === "org"
+    ? ["/api/calls/trendline/org"]
+    : ["/api/calls/trendline/company", companyId];
+
   const { data, isLoading } = useQuery<Trendline>({
-    queryKey: ["/api/calls/trendline/company", companyId, days, repFilter],
+    queryKey: [...queryKeyBase, days, repFilter],
     queryFn: async () => {
       const qs = new URLSearchParams({ days: String(days) });
       if (repFilter !== "all") qs.set("repId", repFilter);
-      const res = await fetch(`/api/calls/trendline/company/${companyId}?${qs.toString()}`, { credentials: "include" });
+      const res = await fetch(`${endpointBase}?${qs.toString()}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load call trendline");
       return res.json();
     },
@@ -44,9 +67,9 @@ export function CallActivityTrendline({ companyId }: { companyId: string }) {
   // a rep (which scopes the main query server-side) doesn't cause other reps
   // to disappear from the list.
   const { data: allRepsData } = useQuery<Trendline>({
-    queryKey: ["/api/calls/trendline/company", companyId, days, "__allReps"],
+    queryKey: [...queryKeyBase, days, "__allReps"],
     queryFn: async () => {
-      const res = await fetch(`/api/calls/trendline/company/${companyId}?days=${days}`, { credentials: "include" });
+      const res = await fetch(`${endpointBase}?days=${days}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load rep list");
       return res.json();
     },
@@ -105,14 +128,16 @@ export function CallActivityTrendline({ companyId }: { companyId: string }) {
             <span className="text-xs text-muted-foreground font-normal">({days}d · weekly)</span>
           </CardTitle>
           <div className="flex items-center gap-1.5">
-            <Select value={String(days)} onValueChange={(v) => setDays(parseInt(v, 10))}>
-              <SelectTrigger className="h-7 text-xs w-[90px]" data-testid="select-call-trend-days"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="30">30 days</SelectItem>
-                <SelectItem value="60">60 days</SelectItem>
-                <SelectItem value="90">90 days</SelectItem>
-              </SelectContent>
-            </Select>
+            {!externallyControlled && (
+              <Select value={String(days)} onValueChange={(v) => setDays(parseInt(v, 10))}>
+                <SelectTrigger className="h-7 text-xs w-[90px]" data-testid="select-call-trend-days"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="30">30 days</SelectItem>
+                  <SelectItem value="60">60 days</SelectItem>
+                  <SelectItem value="90">90 days</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
             <Select value={direction} onValueChange={(v) => setDirection(v as Direction)}>
               <SelectTrigger className="h-7 text-xs w-[110px]" data-testid="select-call-trend-direction"><SelectValue /></SelectTrigger>
               <SelectContent>
