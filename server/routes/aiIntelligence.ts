@@ -200,7 +200,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       await db.update(orgChartGaps)
         .set({ status: "dismissed" })
-        .where(and(eq(orgChartGaps.id, req.params.gapId), eq(orgChartGaps.orgId, user.organizationId)));
+        .where(and(eq(orgChartGaps.id, pStr(req.params.gapId)), eq(orgChartGaps.orgId, user.organizationId)));
       res.json({ ok: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -249,7 +249,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const opps = await db.select()
         .from(crossSellOpportunities)
-        .where(and(eq(crossSellOpportunities.orgId, user.organizationId), eq(crossSellOpportunities.companyId, req.params.companyId)));
+        .where(and(eq(crossSellOpportunities.orgId, user.organizationId), eq(crossSellOpportunities.companyId, pStr(req.params.companyId))));
       res.json({ opportunities: opps });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -274,7 +274,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const plays = await db.select()
         .from(walletSharePlays)
-        .where(and(eq(walletSharePlays.orgId, user.organizationId), eq(walletSharePlays.companyId, req.params.companyId)));
+        .where(and(eq(walletSharePlays.orgId, user.organizationId), eq(walletSharePlays.companyId, pStr(req.params.companyId))));
       res.json({ plays });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -337,7 +337,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       await db.update(competitiveSignals)
         .set({ status: "dismissed" })
-        .where(and(eq(competitiveSignals.id, req.params.signalId), eq(competitiveSignals.orgId, user.organizationId)));
+        .where(and(eq(competitiveSignals.id, pStr(req.params.signalId)), eq(competitiveSignals.orgId, user.organizationId)));
       res.json({ ok: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -351,7 +351,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
       const { status } = req.body;
       await db.update(crossSellOpportunities)
         .set({ status })
-        .where(and(eq(crossSellOpportunities.id, req.params.oppId), eq(crossSellOpportunities.orgId, user.organizationId)));
+        .where(and(eq(crossSellOpportunities.id, pStr(req.params.oppId)), eq(crossSellOpportunities.orgId, user.organizationId)));
       res.json({ ok: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -364,7 +364,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       await db.update(relationshipCoachingInsights)
         .set({ status: "dismissed" })
-        .where(and(eq(relationshipCoachingInsights.id, req.params.insightId), eq(relationshipCoachingInsights.orgId, user.organizationId)));
+        .where(and(eq(relationshipCoachingInsights.id, pStr(req.params.insightId)), eq(relationshipCoachingInsights.orgId, user.organizationId)));
       res.json({ ok: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });

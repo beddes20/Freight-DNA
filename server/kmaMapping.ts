@@ -58,7 +58,9 @@ const CITY_TO_KMA: Record<string, KmaEntry> = {
   "oakland": { kma: "OAK", label: "Oakland, CA" },
   "hayward": { kma: "OAK", label: "Oakland, CA" },
   "fremont": { kma: "OAK", label: "Oakland, CA" },
-  "richmond": { kma: "OAK", label: "Oakland, CA" },
+  // Note: "richmond" alone resolves to Richmond, VA below. Richmond, CA
+  // (kma OAK) is reachable via the partial-match fallback in cityToKma.
+
   "stockton": { kma: "SCK", label: "Stockton, CA" },
   "lodi": { kma: "SCK", label: "Stockton, CA" },
   "tracy": { kma: "SCK", label: "Stockton, CA" },
@@ -87,7 +89,9 @@ const CITY_TO_KMA: Record<string, KmaEntry> = {
   "twin falls": { kma: "TWF", label: "Twin Falls, ID" },
   "pocatello": { kma: "PIH", label: "Pocatello, ID" },
   "denver": { kma: "DEN", label: "Denver, CO" },
-  "aurora": { kma: "DEN", label: "Denver, CO" },
+  // Note: "aurora" alone resolves to Aurora, IL (kma ORD) below. Aurora, CO
+  // (kma DEN) is reachable via the partial-match fallback in cityToKma.
+
   "arvada": { kma: "DEN", label: "Denver, CO" },
   "westminster": { kma: "DEN", label: "Denver, CO" },
   "thornton": { kma: "DEN", label: "Denver, CO" },

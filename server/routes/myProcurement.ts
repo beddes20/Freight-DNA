@@ -110,7 +110,7 @@ export function registerMyProcurementRoutes(app: Express) {
           }
         }
         user = target;
-        viewing = { id: target.id, name: target.name ?? target.email ?? target.id, isOther: true };
+        viewing = { id: target.id, name: target.name ?? target.username ?? target.id, isOther: true };
       }
 
       // Pagination params — default page size 50, max 200
@@ -848,7 +848,7 @@ export function registerMyProcurementRoutes(app: Express) {
         if (!t || t.organizationId !== user.organizationId) {
           return res.status(404).json({ error: "Target user not found in this org" });
         }
-        target = { id: t.id, name: t.name ?? t.email ?? null };
+        target = { id: t.id, name: t.name ?? t.username ?? null };
       }
 
       const updated = await storage.updateFreightOpportunity(user.organizationId, opp.id, {
@@ -938,7 +938,7 @@ export function registerMyProcurementRoutes(app: Express) {
           kind: "assigned",
           from: opp.ownerUserId,
           to: target.id,
-          targetName: target.name ?? target.email ?? null,
+          targetName: target.name ?? target.username ?? null,
           previousDelegate: opp.delegatedToUserId,
         },
       });

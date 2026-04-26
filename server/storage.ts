@@ -455,6 +455,9 @@ export interface IStorage {
   /** Org-scoped RFP fetch. Joins through companies.organizationId since
    *  rfps has no orgId column directly. Returns undefined for cross-org IDs. */
   getRfpInOrg(id: string, orgId: string): Promise<Rfp | undefined>;
+  /** Org-scoped: callers must validate `companyId` belongs to their org first
+   *  (via getCompanyInOrg/canAccessCompany). Returns all RFPs for the company. */
+  getRfpsByCompanyId(companyId: string): Promise<Rfp[]>;
   createRfp(rfp: InsertRfp): Promise<Rfp>;
   updateRfp(id: string, rfp: InsertRfp): Promise<Rfp | undefined>;
   deleteRfp(id: string): Promise<boolean>;
@@ -1745,6 +1748,10 @@ export class DatabaseStorage implements IStorage {
       .innerJoin(companies, eq(companies.id, rfps.companyId))
       .where(and(eq(rfps.id, id), eq(companies.organizationId, orgId)));
     return row?.r;
+  }
+
+  async getRfpsByCompanyId(companyId: string): Promise<Rfp[]> {
+    return db.select().from(rfps).where(eq(rfps.companyId, companyId));
   }
 
   async createRfp(rfp: InsertRfp): Promise<Rfp> {

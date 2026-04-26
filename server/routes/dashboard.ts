@@ -283,7 +283,7 @@ export function registerDashboardRoutes(app: Express): void {
         storage.getCompanies(user.organizationId),
         storage.getTouchpoints(),
         storage.getTasks(),
-        storage.getRfps(user.organizationId),
+        storage.getRfps(),
       ]);
 
       // Scope to companies this user owns (or all visible for NAM/Director)
@@ -311,8 +311,8 @@ export function registerDashboardRoutes(app: Express): void {
       // Build open-RFP deadline urgency per company
       const rfpUrgent: Record<string, boolean> = {};
       for (const rfp of allRfps) {
-        if (rfp.companyId && rfp.status === "open" && rfp.deadline) {
-          const daysLeft = Math.ceil((new Date(rfp.deadline).getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        if (rfp.companyId && rfp.status === "open" && rfp.dueDate) {
+          const daysLeft = Math.ceil((new Date(rfp.dueDate).getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
           if (daysLeft <= 14) rfpUrgent[rfp.companyId] = true;
         }
       }
@@ -1240,7 +1240,7 @@ export function registerDashboardRoutes(app: Express): void {
         const repId = (company as any).salesPersonId || (company as any).assignedTo;
         if (repId) {
           const rep = (await storage.getUsers(req.session.organizationId!)).find(u => u.id === repId);
-          repName = rep ? `${rep.firstName} ${rep.lastName}` : null;
+          repName = rep ? rep.name : null;
         }
 
         results.push({ companyId: company.id, companyName: company.name, repName, curLoads, priorLoads, dropPct });

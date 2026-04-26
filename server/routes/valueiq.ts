@@ -63,8 +63,13 @@ async function extractTextFromUpload(file: Express.Multer.File): Promise<string 
   try {
     if (isTextLike) return file.buffer.toString("utf-8").slice(0, 100_000);
     if (mime === "application/pdf" || /\.pdf$/i.test(name)) {
-      const pdfParse = (await import("pdf-parse")).default;
-      const result = await pdfParse(file.buffer);
+      // pdf-parse v2 exposes a class API (`new PDFParse({ data }).getText()`)
+      // instead of the v1 default-export function. The Buffer is converted
+      // to a Uint8Array because pdfjs-dist (v2's underlying engine) only
+      // accepts BufferSource, not raw Node Buffers.
+      const { PDFParse } = await import("pdf-parse");
+      const parser = new PDFParse({ data: new Uint8Array(file.buffer) });
+      const result = await parser.getText();
       return (result.text ?? "").slice(0, 100_000);
     }
     if (
@@ -187,7 +192,7 @@ export function registerValueIQRoutes(app: Express) {
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     const body = projectSchema.partial().parse(req.body);
     const [row] = await db.update(threadProjects).set({ ...body, updatedAt: new Date() })
-      .where(and(eq(threadProjects.id, req.params.id), eq(threadProjects.userId, user.id))).returning();
+      .where(and(eq(threadProjects.id, pStr(req.params.id)), eq(threadProjects.userId, user.id))).returning();
     if (!row) return res.status(404).json({ error: "Not found" });
     res.json(row);
   });
@@ -195,8 +200,8 @@ export function registerValueIQRoutes(app: Express) {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     await db.update(threadsTable).set({ projectId: null })
-      .where(and(eq(threadsTable.userId, user.id), eq(threadsTable.projectId, req.params.id)));
-    await db.delete(threadProjects).where(and(eq(threadProjects.id, req.params.id), eq(threadProjects.userId, user.id)));
+      .where(and(eq(threadsTable.userId, user.id), eq(threadsTable.projectId, pStr(req.params.id))));
+    await db.delete(threadProjects).where(and(eq(threadProjects.id, pStr(req.params.id)), eq(threadProjects.userId, user.id)));
     res.json({ ok: true });
   });
 
@@ -290,7 +295,7 @@ export function registerValueIQRoutes(app: Express) {
     if (body.defaultAgentId !== undefined) patch.defaultAgentId = body.defaultAgentId;
     if (body.archived !== undefined) patch.archivedAt = body.archived ? new Date() : null;
     const [row] = await db.update(threadsTable).set(patch)
-      .where(and(eq(threadsTable.id, req.params.id), eq(threadsTable.userId, user.id))).returning();
+      .where(and(eq(threadsTable.id, pStr(req.params.id)), eq(threadsTable.userId, user.id))).returning();
     if (!row) return res.status(404).json({ error: "Not found" });
     res.json(row);
   });
@@ -298,7 +303,7 @@ export function registerValueIQRoutes(app: Express) {
   app.delete("/api/valueiq/threads/:id", requireAuth, async (req: Request, res: Response) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    await db.delete(threadsTable).where(and(eq(threadsTable.id, req.params.id), eq(threadsTable.userId, user.id)));
+    await db.delete(threadsTable).where(and(eq(threadsTable.id, pStr(req.params.id)), eq(threadsTable.userId, user.id)));
     res.json({ ok: true });
   });
 
@@ -438,12 +443,12 @@ export function registerValueIQRoutes(app: Express) {
     if (![1, -1, 0].includes(rating)) return res.status(400).json({ error: "Invalid rating" });
     // Verify message belongs to a thread the user owns
     const [msg] = await db.select({ id: threadMessages.id, threadId: threadMessages.threadId })
-      .from(threadMessages).where(eq(threadMessages.id, req.params.id)).limit(1);
+      .from(threadMessages).where(eq(threadMessages.id, pStr(req.params.id))).limit(1);
     if (!msg) return res.status(404).json({ error: "Not found" });
     const thread = await loadThread(msg.threadId, user.id);
     if (!thread) return res.status(404).json({ error: "Not found" });
     await db.update(threadMessages).set({ rating: rating === 0 ? null : rating })
-      .where(eq(threadMessages.id, req.params.id));
+      .where(eq(threadMessages.id, pStr(req.params.id)));
     res.json({ ok: true });
   });
 
@@ -457,7 +462,7 @@ export function registerValueIQRoutes(app: Express) {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
     const body = saveSchema.parse(req.body ?? {});
-    const [msg] = await db.select().from(threadMessages).where(eq(threadMessages.id, req.params.id)).limit(1);
+    const [msg] = await db.select().from(threadMessages).where(eq(threadMessages.id, pStr(req.params.id))).limit(1);
     if (!msg) return res.status(404).json({ error: "Not found" });
     const thread = await loadThread(msg.threadId, user.id);
     if (!thread) return res.status(404).json({ error: "Not found" });
@@ -480,7 +485,7 @@ export function registerValueIQRoutes(app: Express) {
 
     if (body.target === "task") {
       const taskInput: InsertTask = {
-        organizationId: user.organizationId,
+        orgId: user.organizationId,
         title: (body.title ?? `From ValueIQ: ${thread.title}`).slice(0, 200),
         description: msg.content.slice(0, 2000),
         assignedTo: user.id,

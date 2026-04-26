@@ -252,8 +252,11 @@ function parseLaneString(laneStr: string, awardId: string): ProcurementLaneInfo 
 
 function getHighVolumeLanes(award: Award, customerName?: string): ProcurementLaneInfo[] {
   if (!award.lanes || award.lanes.length === 0) return [];
+  // Annotate each mapped element so the type-predicate filter can prove
+  // ProcurementLaneInfo membership; the spread of `parsed` plus the extra
+  // metadata fields is otherwise inferred too widely.
   return award.lanes
-    .map(l => {
+    .map((l): ProcurementLaneInfo | null => {
       const parsed = parseLaneString(l, award.id);
       if (!parsed) return null;
       return { ...parsed, awardTitle: award.title, customerName };
@@ -307,7 +310,7 @@ function AwardCard({ award, company, onEdit, onDelete }: AwardCardProps) {
       const failedCount = results.filter(r => r.failed).length;
       const taskByLane = Object.fromEntries(successResults.map(r => [r.lane, r.taskId]));
       const createdLanes: ProcurementLaneInfo[] = highVolumeLanes
-        .map(lane => {
+        .map((lane): ProcurementLaneInfo | null => {
           const normalizedLane = lane.lane.trim().replace(/\s+/g, " ").toLowerCase();
           const taskId = taskByLane[normalizedLane] ?? taskByLane[lane.lane];
           return taskId ? { ...lane, taskId } : null;
@@ -501,6 +504,9 @@ interface HighVolumeLane {
   equipment?: string;
   status?: string;
   contactId?: string;
+  /** Optional driving distance for the lane; surfaced in the sortable
+   *  high-volume-lanes table when present. */
+  miles?: number | null;
 }
 
 interface Facility {
@@ -1860,7 +1866,7 @@ export default function RfpAwards() {
       const failedCount = results.filter(r => r.failed).length;
       const taskByLane = Object.fromEntries(successResults.map(r => [r.lane, r.taskId]));
       const createdLanes: ProcurementLaneInfo[] = procurementPromptLanes
-        .map(lane => {
+        .map((lane): ProcurementLaneInfo | null => {
           const normalizedLane = lane.lane.trim().replace(/\s+/g, " ").toLowerCase();
           const taskId = taskByLane[normalizedLane] ?? taskByLane[lane.lane];
           return taskId ? { ...lane, taskId } : null;

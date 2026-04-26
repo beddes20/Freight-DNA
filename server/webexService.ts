@@ -35,11 +35,28 @@ export interface WebexFetchResult<T = any> {
   response: Response | null;
 }
 
+/**
+ * Shared HTTP option bag for higher-level Webex helpers (fetchCallHistory,
+ * listWebexDevices, etc). `accessToken` is an alias for `token` kept so
+ * existing callers don't have to be retyped. `onFailure` is invoked once
+ * per terminal failure (after retries are exhausted) so the admin Health
+ * panel can surface the underlying status/body.
+ */
+export interface WebexHttpOptions {
+  token?: string;
+  /** Convenience alias for `token` — the admin/CDR helpers historically
+   *  passed the raw access token under this name. */
+  accessToken?: string;
+  maxRetries?: number;
+  onFailure?: (info: { url: string; status: number; body: string }) => void;
+}
+
 export async function webexFetch<T = any>(
   url: string,
-  init: RequestInit & { token?: string; maxRetries?: number } = {},
+  init: RequestInit & WebexHttpOptions = {},
 ): Promise<WebexFetchResult<T>> {
-  const { token, maxRetries = 4, headers, ...rest } = init;
+  const { token: rawToken, accessToken, maxRetries = 4, headers, onFailure, ...rest } = init;
+  const token = rawToken ?? accessToken;
   const finalHeaders: Record<string, string> = {
     ...(headers as Record<string, string> | undefined),
   };
@@ -81,6 +98,7 @@ export async function webexFetch<T = any>(
     // 401 is terminal — caller should refresh token / mark reauth.
     if (res.status === 401 || res.status === 403) {
       const text = await safeReadText(res);
+      onFailure?.({ url, status: res.status, body: text });
       return { ok: false, status: res.status, data: null, error: text || `HTTP ${res.status}`, retried: attempt, response: res };
     }
 
@@ -107,9 +125,11 @@ export async function webexFetch<T = any>(
 
     // 4xx other than 401/403/429: terminal client error.
     const text = await safeReadText(res);
+    onFailure?.({ url, status: res.status, body: text });
     return { ok: false, status: res.status, data: null, error: text || `HTTP ${res.status}`, retried: attempt, response: res };
   }
 
+  onFailure?.({ url, status: lastStatus, body: lastError || "fetch failed" });
   return { ok: false, status: lastStatus, data: null, error: lastError || "fetch failed", retried: attempt, response: lastResponse };
 }
 

@@ -1960,8 +1960,11 @@ RULES FOR YOUR RESPONSES:
       // PDF path: extract text via pdf-parse, then use AI to extract lane data
       if (fileExt === ".pdf") {
         try {
-          const pdfParse = (await import("pdf-parse")).default;
-          const pdfData = await pdfParse(req.file.buffer);
+          // pdf-parse v2 class API; see comment in server/routes/valueiq.ts
+          // for the v1→v2 migration note. Buffer→Uint8Array is required.
+          const { PDFParse } = await import("pdf-parse");
+          const parser = new PDFParse({ data: new Uint8Array(req.file.buffer) });
+          const pdfData = await parser.getText();
           const pdfText = pdfData.text?.trim() || "";
 
           if (!pdfText) {
@@ -9371,9 +9374,9 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
           weeklyMeaningful,
           contactsAdded,
           relationshipsMoved,
-          touchpointGoalTarget: touchpointGoal?.targetValue != null ? Number(touchpointGoal.targetValue) : null,
-          meaningfulGoalTarget: meaningfulGoal?.targetValue != null ? Number(meaningfulGoal.targetValue) : null,
-          contactsGoalTarget: contactsGoal?.targetValue != null ? Number(contactsGoal.targetValue) : null,
+          touchpointGoalTarget: touchpointGoal?.target != null ? Number(touchpointGoal.target) : null,
+          meaningfulGoalTarget: meaningfulGoal?.target != null ? Number(meaningfulGoal.target) : null,
+          contactsGoalTarget: contactsGoal?.target != null ? Number(contactsGoal.target) : null,
         };
       }));
 
