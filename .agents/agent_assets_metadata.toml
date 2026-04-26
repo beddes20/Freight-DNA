@@ -24,3 +24,9 @@ id = "xeUi4oEVrvsHe7eklHnlL"
 uri = "file://exports/ReplitDailyUpload.xlsx"
 type = "table"
 title = "ReplitDailyUpload.xlsx (Available Freight = 412 uncovered loads)"
+
+[[outputs]]
+id = "3gx5rwViu3Op6p60ZhX_K"
+uri = "file://FreightDNA_Platform_Report.md"
+type = "text"
+title = "FreightDNA Platform Report — April 26, 2026"
