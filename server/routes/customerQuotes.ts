@@ -546,6 +546,12 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       // Cross-tab UX (option A) — bulk flip mutates many rows; one
       // org-wide hint is enough to refresh the list / snapshot / queue.
       publishLiveSync(user.organizationId, "customer_quote");
+      // Task #690 — bulk status flip (e.g., ignored ↔ pending) can drop
+      // many quotes out of, or back into, the stale-followup window in
+      // one shot. Bust the cache so the next badge poll recomputes and
+      // the membership tracker fires `customer_quote_followup` if the
+      // set actually changed.
+      clearStaleFollowUpCache(user.organizationId);
       res.json(result);
     } catch (err) {
       const msg = getErrorMessage(err);

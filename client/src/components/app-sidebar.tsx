@@ -306,6 +306,10 @@ function useStaleFollowupCount() {
     // window already sees an up-to-date badge instead of waiting for
     // the next focus-driven refetch.
     refetchIntervalInBackground: true,
+    // Force a refetch every time the rep refocuses the window so the
+    // badge reflects work taken in another tab (or another device)
+    // even if the cached value isn't yet considered stale.
+    refetchOnWindowFocus: "always",
     staleTime: 60_000,
     retry: false,
   });
