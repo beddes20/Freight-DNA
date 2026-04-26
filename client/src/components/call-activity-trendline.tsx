@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { PhoneCall, PhoneIncoming, PhoneOutgoing, PhoneMissed } from "lucide-react";
 
 type WeekBucket = { weekStart: string; inbound: number; outbound: number; missed: number };
@@ -51,7 +53,7 @@ export function CallActivityTrendline(props: CallActivityTrendlineProps) {
     ? ["/api/calls/trendline/org"]
     : ["/api/calls/trendline/company", companyId];
 
-  const { data, isLoading } = useQuery<Trendline>({
+  const { data, isLoading, isError, refetch } = useQuery<Trendline>({
     queryKey: [...queryKeyBase, days, repFilter],
     queryFn: async () => {
       const qs = new URLSearchParams({ days: String(days) });
@@ -102,6 +104,26 @@ export function CallActivityTrendline(props: CallActivityTrendlineProps) {
     );
   }
 
+  if (isError) {
+    return (
+      <Card data-testid="card-call-activity-trendline">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <PhoneCall className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+            Call Activity
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <ErrorBanner
+            compact
+            message="Couldn't load call activity."
+            onRetry={() => refetch()}
+          />
+        </CardContent>
+      </Card>
+    );
+  }
+
   if (!data || data.totals.total === 0) {
     return (
       <Card data-testid="card-call-activity-trendline">
@@ -112,7 +134,13 @@ export function CallActivityTrendline(props: CallActivityTrendlineProps) {
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
-          <p className="text-xs text-muted-foreground">No Webex calls recorded in the last {days} days.</p>
+          <EmptyState
+            icon={PhoneCall}
+            title="No call activity"
+            description={`No Webex calls recorded in the last ${days} days.`}
+            compact
+            testId="empty-call-trendline"
+          />
         </CardContent>
       </Card>
     );

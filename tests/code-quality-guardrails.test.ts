@@ -372,6 +372,93 @@ assert(
   "daily-priorities.tsx does not have a data-testid=error-workspace error state"
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 10: Shared loading/empty/error UI primitives (Task #694)
+// Make sure the shared <EmptyState /> and <ErrorBanner /> components exist in
+// client/src/components/ui/ and are wired into the surfaces the recent
+// code-quality pass (Task #676) touched. Future pages should reach for these
+// instead of hand-rolling empty divs or raw destructive banners.
+// ─────────────────────────────────────────────────────────────────────────────
+assert(
+  "ui/empty-state.tsx — shared EmptyState component exists",
+  fs.existsSync(path.join(ROOT, "client", "src", "components", "ui", "empty-state.tsx")),
+  "client/src/components/ui/empty-state.tsx not found"
+);
+
+const emptyStateContent = fs.existsSync(path.join(ROOT, "client", "src", "components", "ui", "empty-state.tsx"))
+  ? readFile("client/src/components/ui/empty-state.tsx")
+  : "";
+
+assert(
+  "ui/empty-state.tsx — exports EmptyState",
+  emptyStateContent.includes("export function EmptyState"),
+  "EmptyState is not exported from empty-state.tsx"
+);
+
+assert(
+  "ui/error-banner.tsx — shared ErrorBanner alias exists",
+  fs.existsSync(path.join(ROOT, "client", "src", "components", "ui", "error-banner.tsx")),
+  "client/src/components/ui/error-banner.tsx not found"
+);
+
+const errorBannerContent = fs.existsSync(path.join(ROOT, "client", "src", "components", "ui", "error-banner.tsx"))
+  ? readFile("client/src/components/ui/error-banner.tsx")
+  : "";
+
+assert(
+  "ui/error-banner.tsx — re-exports QueryError as ErrorBanner",
+  errorBannerContent.includes("QueryError as ErrorBanner"),
+  "error-banner.tsx does not alias QueryError as ErrorBanner"
+);
+
+const lwqContent = readFile("client/src/pages/lane-work-queue.tsx");
+assert(
+  "lane-work-queue page — uses QueryError for error state",
+  lwqContent.includes("QueryError"),
+  "lane-work-queue.tsx no longer uses QueryError"
+);
+
+const laneInboxContent = readFile("client/src/pages/lane-inbox.tsx");
+assert(
+  "lane-inbox page — uses ErrorBanner + EmptyState",
+  laneInboxContent.includes("ErrorBanner") && laneInboxContent.includes("EmptyState"),
+  "lane-inbox.tsx is missing ErrorBanner or EmptyState"
+);
+
+const customerQuotesContent = readFile("client/src/pages/customer-quotes.tsx");
+assert(
+  "customer-quotes page — uses ErrorBanner for query errors",
+  customerQuotesContent.includes("ErrorBanner") && customerQuotesContent.includes("snapshotQuery.isError"),
+  "customer-quotes.tsx is missing ErrorBanner wiring on snapshot/list queries"
+);
+
+assert(
+  "customer-quotes page — uses EmptyState for empty filtered table",
+  customerQuotesContent.includes("EmptyState") && customerQuotesContent.includes("empty-quote-rows"),
+  "customer-quotes.tsx VirtualTable does not use EmptyState for empty results"
+);
+
+const callPaceContent = readFile("client/src/components/call-pace-card.tsx");
+assert(
+  "call-pace-card — uses EmptyState + ErrorBanner",
+  callPaceContent.includes("EmptyState") && callPaceContent.includes("ErrorBanner"),
+  "call-pace-card.tsx is missing standardized empty/error states"
+);
+
+const callTrendContent = readFile("client/src/components/call-activity-trendline.tsx");
+assert(
+  "call-activity-trendline — uses EmptyState + ErrorBanner",
+  callTrendContent.includes("EmptyState") && callTrendContent.includes("ErrorBanner"),
+  "call-activity-trendline.tsx is missing standardized empty/error states"
+);
+
+const callQualityContent = readFile("client/src/components/call-quality-scorecard.tsx");
+assert(
+  "call-quality-scorecard — uses EmptyState + ErrorBanner",
+  callQualityContent.includes("EmptyState") && callQualityContent.includes("ErrorBanner"),
+  "call-quality-scorecard.tsx is missing standardized empty/error states"
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

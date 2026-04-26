@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { PhoneCall, ArrowUpDown } from "lucide-react";
 import { useLocation } from "wouter";
 
@@ -56,7 +58,7 @@ export function CallPaceCard({
   const externallyControlled = daysProp !== undefined;
   const [sortKey, setSortKey] = useState<SortKey>("total");
 
-  const { data, isLoading } = useQuery<{ days: number; rows: PaceRow[] }>({
+  const { data, isLoading, isError, refetch } = useQuery<{ days: number; rows: PaceRow[] }>({
     queryKey: ["/api/calls/pace", days],
     queryFn: async () => {
       const res = await fetch(`/api/calls/pace?days=${days}`, { credentials: "include" });
@@ -101,9 +103,21 @@ export function CallPaceCard({
       </div>
 
       {isLoading ? (
-        <div className="h-40 animate-pulse rounded bg-muted" />
+        <div className="h-40 animate-pulse rounded bg-muted" data-testid="skeleton-call-pace" />
+      ) : isError ? (
+        <ErrorBanner
+          compact
+          message="Couldn't load call pace data."
+          onRetry={() => refetch()}
+        />
       ) : sortedRows.length === 0 ? (
-        <p className="text-sm text-muted-foreground text-center py-6">No Webex call activity logged in the last {days} days.</p>
+        <EmptyState
+          icon={PhoneCall}
+          title="No call activity"
+          description={`No Webex calls logged in the last ${days} days.`}
+          compact
+          testId="empty-call-pace"
+        />
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

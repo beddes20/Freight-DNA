@@ -42,6 +42,14 @@ FreightDNA is built on a React frontend, an Express.js backend, and a PostgreSQL
 ### System Design Choices
 The codebase maintains a zero-error typecheck baseline. All Express handlers normalize `req.params` and `req.query` using helpers. AI chat conversation endpoints are user-scoped to prevent data leaks. The database schema includes tables for caching, contact suggestions, lane patterns, email conversations, proven tactics, and Webex integration. `freight_opportunities` and `load_fact` are canonical freight data sources. Performance is optimized via dashboard query optimization, server-side caching, and in-memory caching. Engineering patterns include visibility expansion, multi-layered caching, keyset pagination, rate-limited external calls, background workers, and webhook-driven reactivity. Customer sender domain learning is implemented, and the Carrier Ranker integrates history from `financial_uploads` and `load_fact`.
 
+#### Shared loading / empty / error UI primitives
+Pages and cards use three shared primitives so loading, empty, and error states feel consistent:
+-   **`<Skeleton />`** (`@/components/ui/skeleton`) — shimmer placeholder. Compose multiple skeletons that mirror the final layout.
+-   **`<EmptyState />`** (`@/components/ui/empty-state`) — friendly explanation with optional icon, title, description, and action button (`onClick` or `href`). Supports a `compact` variant for inline contexts (table rows, small cards). Always pass `testId` for e2e selectors.
+-   **`<ErrorBanner />`** (`@/components/ui/error-banner`) — alias re-export of the existing `QueryError` component (`client/src/components/query-error.tsx`). Renders an amber banner with retry button; supports a `compact` variant. Wire `onRetry={() => refetch()}` so users recover without a page reload.
+
+Surfaces standardized in Task #694: `/daily-priorities`, `/customer-quotes` (snapshot/list error + empty filtered table), `/lane-inbox`, `/lanes/work-queue`, plus `CallActivityTrendline`, `CallPaceCard`, `CallQualityPanel`, `CallQualityPortlet`, and `CallQualityDrillIn` on `/calls`. Future pages should import from `@/components/ui/empty-state` and `@/components/ui/error-banner` rather than hand-rolling empty divs or destructive banners. Section 10 of `tests/code-quality-guardrails.test.ts` enforces presence of these components and their wiring on the standardized surfaces.
+
 ## External Dependencies
 -   **PostgreSQL**: Primary database.
 -   **xlsx (SheetJS)**: Excel and CSV parsing.

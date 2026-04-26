@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Dialog,
@@ -582,7 +583,7 @@ export default function DailyPrioritiesPage() {
     dismissMutation.mutate(cardId);
   };
 
-  const { data, isLoading, error } = workspaceQuery;
+  const { data, isLoading, error, refetch } = workspaceQuery;
   const totalCards = data?.totalCards ?? 0;
 
   const repOptions: OrgUser[] = (usersQuery.data ?? []).filter(u =>
@@ -772,11 +773,11 @@ export default function DailyPrioritiesPage() {
 
       {/* Error state */}
       {error && !isLoading && (
-        <div
-          className="rounded-lg border border-destructive/30 bg-destructive/10 p-6 text-center text-sm text-destructive"
-          data-testid="error-workspace"
-        >
-          Failed to load your priorities. Please try refreshing.
+        <div data-testid="error-workspace">
+          <ErrorBanner
+            message="We couldn't load your priorities. This is usually temporary — try again in a moment."
+            onRetry={() => refetch()}
+          />
         </div>
       )}
 

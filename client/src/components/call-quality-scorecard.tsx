@@ -7,6 +7,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
@@ -127,7 +129,7 @@ function attentionColor(score: number): string {
  * a one-click link to the full Exec Analytics panel.
  */
 export function CallQualityPortlet({ days = 30, topN = 5 }: { days?: number; topN?: number }) {
-  const { data, isLoading } = useQuery<CallQualityScorecard>({
+  const { data, isLoading, isError, refetch } = useQuery<CallQualityScorecard>({
     queryKey: ["/api/webex/call-quality/scorecard", days],
     queryFn: async () => {
       const res = await fetch(`/api/webex/call-quality/scorecard?days=${days}`, { credentials: "include" });
@@ -164,10 +166,20 @@ export function CallQualityPortlet({ days = 30, topN = 5 }: { days?: number; top
               <Skeleton key={i} className="h-10 w-full" />
             ))}
           </div>
+        ) : isError ? (
+          <ErrorBanner
+            compact
+            message="Couldn't load call quality scorecards."
+            onRetry={() => refetch()}
+          />
         ) : !hasData ? (
-          <p className="text-sm text-muted-foreground py-6 text-center">
-            No Webex call activity in the last {days} days.
-          </p>
+          <EmptyState
+            icon={PhoneCall}
+            title="No call quality data"
+            description={`No Webex call activity in the last ${days} days.`}
+            compact
+            testId="empty-call-quality-portlet"
+          />
         ) : (
           <ul className="divide-y" data-testid="list-attention-reps">
             {top.map((rep) => (
@@ -227,7 +239,7 @@ export function CallQualityPanel({
   const [drillUserId, setDrillUserId] = useState<string | null>(null);
   const [drillRepName, setDrillRepName] = useState<string>("");
 
-  const { data, isLoading, refetch } = useQuery<CallQualityScorecard>({
+  const { data, isLoading, isError, refetch } = useQuery<CallQualityScorecard>({
     queryKey: ["/api/webex/call-quality/scorecard", days],
     queryFn: async () => {
       const res = await fetch(`/api/webex/call-quality/scorecard?days=${days}`, { credentials: "include" });
@@ -331,14 +343,22 @@ export function CallQualityPanel({
       </div>
 
       {isLoading ? (
-        <div className="space-y-2">
+        <div className="space-y-2" data-testid="skeleton-call-quality-panel">
           <Skeleton className="h-24 w-full" />
           <Skeleton className="h-64 w-full" />
         </div>
+      ) : isError ? (
+        <ErrorBanner
+          message="We couldn't load call quality scorecards. This is usually temporary — try again."
+          onRetry={() => refetch()}
+        />
       ) : !data || data.team.totalCalls === 0 ? (
-        <div className="py-10 text-center text-sm text-muted-foreground">
-          No Webex call data yet for this window. Once your team's Webex calls sync, quality metrics will appear here.
-        </div>
+        <EmptyState
+          icon={PhoneCall}
+          title="No call quality data yet"
+          description={`Once your team's Webex calls sync, quality metrics will appear here for the last ${days} days.`}
+          testId="empty-call-quality-panel"
+        />
       ) : (
         <>
           {/* Team rollup */}
@@ -431,7 +451,7 @@ function CallQualityDrillIn({
 }: {
   userId: string; repName: string; days: number; onClose: () => void;
 }) {
-  const { data, isLoading } = useQuery<{ calls: CallQualityCall[]; total: number; days: number }>({
+  const { data, isLoading, isError, refetch } = useQuery<{ calls: CallQualityCall[]; total: number; days: number }>({
     queryKey: ["/api/webex/call-quality/calls", userId, days],
     queryFn: async () => {
       const res = await fetch(`/api/webex/call-quality/calls?userId=${encodeURIComponent(userId)}&days=${days}&limit=200`, {
@@ -463,13 +483,25 @@ function CallQualityDrillIn({
         </div>
         <div className="flex-1 overflow-auto p-4">
           {isLoading ? (
-            <div className="space-y-2">
+            <div className="space-y-2" data-testid="skeleton-call-drill-in">
               {Array.from({ length: 10 }).map((_, i) => (
                 <Skeleton key={i} className="h-8 w-full" />
               ))}
             </div>
+          ) : isError ? (
+            <ErrorBanner
+              compact
+              message="Couldn't load this rep's call detail."
+              onRetry={() => refetch()}
+            />
           ) : (data?.calls ?? []).length === 0 ? (
-            <p className="text-sm text-muted-foreground py-8 text-center">No calls in this window.</p>
+            <EmptyState
+              icon={PhoneCall}
+              title="No calls in this window"
+              description={`This rep had no Webex calls in the last ${days} days.`}
+              compact
+              testId="empty-call-drill-in"
+            />
           ) : (
             <table className="w-full text-xs">
               <thead>

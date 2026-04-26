@@ -9,6 +9,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ErrorBanner } from "@/components/ui/error-banner";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Inbox as InboxIcon } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -860,8 +863,13 @@ function CustomerQuotesPageInner(): JSX.Element {
 
       {/* Body */}
       <div className="flex-1 overflow-auto px-6 py-4 space-y-4">
-        {snapshotQuery.isLoading || !data ? (
-          <div className="space-y-3">
+        {snapshotQuery.isError || listQuery.isError ? (
+          <ErrorBanner
+            message="We couldn't load your customer quotes. This is usually temporary — try again."
+            onRetry={() => { snapshotQuery.refetch(); listQuery.refetch(); }}
+          />
+        ) : snapshotQuery.isLoading || !data ? (
+          <div className="space-y-3" data-testid="skeleton-customer-quotes">
             <Skeleton className="h-20 w-full bg-card" />
             <Skeleton className="h-64 w-full bg-card" />
             <Skeleton className="h-96 w-full bg-card" />
@@ -1608,7 +1616,17 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
         </thead>
         <tbody>
           {!isLoading && rows.length === 0 && (
-            <tr><td colSpan={COLUMNS.length + 1} className="text-center py-8 text-muted-foreground">No quote opportunities match these filters.</td></tr>
+            <tr>
+              <td colSpan={COLUMNS.length + 1} className="p-0">
+                <EmptyState
+                  icon={InboxIcon}
+                  title="No quote opportunities match these filters"
+                  description="Try clearing a filter or expanding the date range to see more quote requests."
+                  testId="empty-quote-rows"
+                  compact
+                />
+              </td>
+            </tr>
           )}
           {padTop > 0 && <tr style={{ height: padTop }} aria-hidden="true"><td colSpan={COLUMNS.length + 1} /></tr>}
           {visible.map(q => {

@@ -14,6 +14,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ErrorBanner } from "@/components/ui/error-banner";
+import { EmptyState } from "@/components/ui/empty-state";
 import { CrossTabBreadcrumb, appendCrossTabFromParam } from "@/components/freight/cross-tab-breadcrumb";
 import {
   Inbox,
@@ -93,7 +95,7 @@ export default function LaneInboxPage() {
     return params.toString();
   }, [scope, surface]);
 
-  const { data, isLoading, isError } = useQuery<LaneInboxResponse>({
+  const { data, isLoading, isError, refetch } = useQuery<LaneInboxResponse>({
     // The query key is split so the global useLiveSync hook can invalidate
     // by prefix (`["/api/lane-inbox"]`) and refetch with whatever filters
     // are currently active.
@@ -175,16 +177,20 @@ export default function LaneInboxPage() {
           </>
         )}
         {isError && (
-          <Card>
-            <CardContent className="p-4 text-sm text-destructive">
-              Couldn't load the inbox. Please try again in a moment.
-            </CardContent>
-          </Card>
+          <ErrorBanner
+            message="We couldn't load the lane inbox. This is usually temporary — try again."
+            onRetry={() => refetch()}
+          />
         )}
         {!isLoading && !isError && rows.length === 0 && (
           <Card>
-            <CardContent className="p-8 text-center text-sm text-muted-foreground">
-              No events match the current filters yet.
+            <CardContent className="p-0">
+              <EmptyState
+                icon={Inbox}
+                title="No lane activity yet"
+                description="No events match the current filters. Try a different surface chip or check back after teammates take action."
+                testId="empty-lane-inbox"
+              />
             </CardContent>
           </Card>
         )}
