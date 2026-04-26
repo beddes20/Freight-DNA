@@ -480,11 +480,11 @@ function computeExecutiveReport(allLanes: LaneData[], allUsers: any[], sixWeekKe
     .slice(0, 10);
 
   // ─ Lane health distribution ────────────────────────────────────────────────
-  const distribution = { SCALE: 0, GROW: 0, WATCH: 0, HOLD: 0 };
+  const distribution: Record<string, number> = { SCALE: 0, GROW: 0, WATCH: 0, HOLD: 0 };
   for (const lane of allLanes) {
     const marginPct = lane.totalRevenue > 0 ? ((lane.totalRevenue - lane.totalCarrierPay) / lane.totalRevenue) * 100 : 0;
     const { status } = getScorecardStatus(marginPct);
-    (distribution as any)[status] = ((distribution as any)[status] ?? 0) + 1;
+    distribution[status] = (distribution[status] ?? 0) + 1;
   }
   const totalLanesCount = allLanes.length || 1;
   const healthDistribution = {
@@ -812,7 +812,7 @@ async function computeMyLanes(
       for (const input of tracInputs) {
         const days = byLaneId.get(input.lane_id) ?? [];
         if (!days.length) continue;
-        const { direction } = tracDirectionSignal(days as any);
+        const { direction } = tracDirectionSignal(days);
         const k = inputKeys.get(input.lane_id);
         if (direction && k) tracDirMap.set(k, direction);
       }
@@ -832,7 +832,7 @@ async function computeMyLanes(
     const dKma = cityToKma(lane.destination);
     const dirKey = oKma && dKma ? `${oKma.kma}|${dKma.kma}` : null;
     const tracDir = dirKey ? tracDirMap.get(dirKey) : null;
-    if (tracDir) signal = tracDir as any;
+    if (tracDir) signal = tracDir as "hot" | "warm" | "stable" | "cool";
 
     const avgMiles = 500;
     const avgCustomerRatePerMile = lane.avgPayPerLoad > 0 ? lane.avgPayPerLoad / avgMiles : null;

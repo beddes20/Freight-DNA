@@ -463,7 +463,7 @@ export function registerCoachingRoutes(app: Express) {
       const activeGoals = amGoals.filter(g => g.startDate <= todayStr && g.endDate >= todayStr);
       const goalSummary = activeGoals.map(g => ({
         metric: g.metric,
-        label: (g as any).customLabel || g.metric,
+        label: g.customLabel || g.metric,
         current: Number(g.currentValue ?? 0),
         target: Number(g.target ?? 0),
         pct: g.target && Number(g.target) > 0 ? Math.min(Math.round((Number(g.currentValue ?? 0) / Number(g.target)) * 100), 100) : 0,

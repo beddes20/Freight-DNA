@@ -266,7 +266,7 @@ export async function buildCockpitRow(
       if (caches.carriers?.has(row.carrierId)) {
         carrier = caches.carriers.get(row.carrierId)!;
       } else {
-        carrier = (await storage.getCarrier(row.carrierId)) ?? null;
+        carrier = (await storage.getCarrierInOrg(row.carrierId, org)) ?? null;
         caches.carriers?.set(row.carrierId, carrier);
       }
       // Task #632 — bench tier-0 chip data is stamped on `responsivenessSnapshot`
@@ -1081,7 +1081,7 @@ export function registerFreightCockpitRoutes(app: Express) {
           const allRows = [...oppEntry.candidates, ...oppEntry.suppressed];
           await Promise.all(allRows.map(async (row) => {
             if (carrierCache.has(row.carrierId)) return;
-            carrierCache.set(row.carrierId, (await storage.getCarrier(row.carrierId)) ?? null);
+            carrierCache.set(row.carrierId, (await storage.getCarrierInOrg(row.carrierId, org)) ?? null);
           }));
           const carrierName = (id: string) => carrierCache.get(id)?.name ?? "(unknown)";
 

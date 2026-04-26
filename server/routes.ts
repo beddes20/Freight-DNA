@@ -834,7 +834,7 @@ RULES FOR YOUR RESPONSES:
           skipped.push(name);
           continue;
         }
-        await storage.createUser({ organizationId: req.session.organizationId!, username: email, password: hashedPassword, name, role: (role as any), managerId: null });
+        await storage.createUser({ organizationId: req.session.organizationId!, username: email, password: hashedPassword, name, role: role as UserRole, managerId: null });
         created.push(name);
       }
 
@@ -1181,7 +1181,7 @@ RULES FOR YOUR RESPONSES:
       const company = await storage.getCompanyInOrg(pStr(req.params.id), currentUser.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
       const existing = (company.sharedReps || []) as SharedRep[];
-      const updated = existing.filter(r => r.userId !== req.params.userId);
+      const updated = existing.filter(r => r.userId !== pStr(req.params.userId));
       await storage.updateCompany(company.id, currentUser.organizationId, { sharedReps: updated });
       res.json({ success: true });
     } catch (error) {
@@ -4165,7 +4165,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
           name: u?.name || "Unknown",
           role: u?.role || "account_manager",
           managerId: u?.managerId,
-          financialRepId: (u as any)?.financialRepId || null,
+          financialRepId: u?.financialRepId ?? null,
           createdAt: u?.createdAt || null,
           prevCallTouchpoints: prev?.callTouchpoints ?? 0,
           prevTextTouchpoints: prev?.textTouchpoints ?? 0,
@@ -4722,7 +4722,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
 
       const recipients = targetIds.map(id => {
         const u = allUsers.find(u => u.id === id)!;
-        return { id: u.id, name: u.name, role: u.role, email: (u as any).email || u.username };
+        return { id: u.id, name: u.name, role: u.role, email: u.username };
       }).sort((a, b) => a.name.localeCompare(b.name));
 
       res.json({ recipients, total: recipients.length });
@@ -5221,7 +5221,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const sixtyDaysAgo = new Date(now); sixtyDaysAgo.setDate(now.getDate() - 60);
       const sixtyDaysStr = sixtyDaysAgo.toISOString().slice(0, 10);
       const prevPeriodCount = touchpoints.filter(t => t.date >= sixtyDaysStr && t.date < thirtyDaysStr).length;
-      const meaningfulRecent = touchpoints.filter(t => t.date >= thirtyDaysStr && (t as any).isMeaningful).length;
+      const meaningfulRecent = touchpoints.filter(t => t.date >= thirtyDaysStr && t.isMeaningful).length;
 
       let momentum: "up" | "flat" | "down";
       let momentumLabel: string;
@@ -5273,8 +5273,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString().slice(0, 16);
 
       const cached = await storage.getGrowthScore(companyId);
-      // Only use cache if it's fresh AND already contains breakdown data
-      if (cached && cached.calculatedAt >= thirtyMinAgo && (cached as any).breakdown) {
+      if (cached && cached.calculatedAt >= thirtyMinAgo) {
         return res.json(cached);
       }
 
@@ -5903,9 +5902,9 @@ Respond with valid JSON only:
       const contactIds = [...new Set(filteredTps.map(t => t.contactId).filter(Boolean))] as string[];
       let contactMap = new Map<string, string>();
       if (contactIds.length > 0) {
-        const contactResults = await Promise.all(contactIds.map(id => storage.getContact(id)));
+        const contactResults = await storage.getContactsByIds(contactIds);
         for (const c of contactResults) {
-          if (c) contactMap.set(c.id, c.name);
+          contactMap.set(c.id, c.name);
         }
       }
 
@@ -5962,7 +5961,7 @@ Respond with valid JSON only:
         byUser[tp.loggedById].total++;
         const t = tp.type as "call" | "email" | "text" | "site_visit";
         if (t in byUser[tp.loggedById]) byUser[tp.loggedById][t]++;
-        if ((tp as any).isMeaningful) byUser[tp.loggedById].meaningful++;
+        if (tp.isMeaningful) byUser[tp.loggedById].meaningful++;
       }
 
       const results = Object.values(byUser).sort((a, b) => b.total - a.total);
@@ -6018,7 +6017,7 @@ Respond with valid JSON only:
         if (!tp.contactId) return false;
         const contact = await storage.getContact(tp.contactId);
         if (!contact) return false;
-        return canAccessCompany(user as any, contact.companyId);
+        return canAccessCompany(user, contact.companyId);
       }
       if (entityType === "one_on_one_topic") {
         const topic = await storage.getTopic(entityId);
@@ -6027,7 +6026,7 @@ Respond with valid JSON only:
       }
       if (entityType === "scorecard") {
         if (user.role === "admin") return true;
-        return canAccessCompany(user as any, entityId);
+        return canAccessCompany(user, entityId);
       }
       if (entityType === "internal_post") {
         return isAdminOrDirector(user);
@@ -6862,7 +6861,7 @@ Respond with valid JSON only:
           console.error("Failed to create auto follow-up task for company touchpoint:", taskError);
         }
       }
-      _nbaCache.delete(`nba:${req.params.id}`);
+      _nbaCache.delete(`nba:${pStr(req.params.id)}`);
       try {
         const gs = await computeGrowthScore(pStr(req.params.id), user.organizationId, storage);
         const savedGs = await storage.upsertGrowthScore({ companyId: pStr(req.params.id), organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
@@ -9347,17 +9346,17 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const allTps = await storage.getTouchpointsSince(rangeStartStr);
       const rangeTps = allTps.filter((t: any) => !t.date || t.date <= rangeEndStr);
 
-      const taggedTps = rangeTps.filter((t: any) => t.playLabel);
+      const taggedTps = rangeTps.filter(t => t.playLabel);
 
       const playCountMap = new Map<string, { total: number; byRep: Map<string, number> }>();
       for (const tp of taggedTps) {
-        const label = (tp as any).playLabel as string;
+        const label = tp.playLabel!;
         if (!playCountMap.has(label)) {
           playCountMap.set(label, { total: 0, byRep: new Map() });
         }
         const entry = playCountMap.get(label)!;
         entry.total++;
-        const repId = (tp as any).loggedById as string;
+        const repId = tp.loggedById;
         entry.byRep.set(repId, (entry.byRep.get(repId) ?? 0) + 1);
       }
 
@@ -9375,10 +9374,10 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
         .sort((a, b) => b.totalUsed - a.totalUsed);
 
       const repPlayStats = reps.map(rep => {
-        const repTagged = taggedTps.filter((t: any) => t.loggedById === rep.id);
+        const repTagged = taggedTps.filter(t => t.loggedById === rep.id);
         const repPlays = new Map<string, number>();
         for (const tp of repTagged) {
-          const label = (tp as any).playLabel as string;
+          const label = tp.playLabel!;
           repPlays.set(label, (repPlays.get(label) ?? 0) + 1);
         }
         return {

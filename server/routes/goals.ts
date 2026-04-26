@@ -51,7 +51,7 @@ export function registerGoalRoutes(app: Express): void {
           computedValue = await storage.getMeaningfulTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
         } else if (goal.metric === "margin" && latestUpload) {
           const amUser = allUsers.find(u => u.id === goal.amId);
-          const repKey = amUser ? (amUser as any).financialRepId as string | null : null;
+          const repKey = amUser ? amUser.financialRepId as string | null : null;
           const isLMUser = amUser?.role === "logistics_manager" || amUser?.role === "logistics_coordinator";
           if (repKey && isLMUser) {
             // LMs: margin is in the Dispatcher column — use shared helper
@@ -97,7 +97,7 @@ export function registerGoalRoutes(app: Express): void {
         }
         if ((goal.metric === "loads_booked" || goal.metric === "margin_pct") && latestUpload) {
           const amUser = allUsers.find(u => u.id === goal.amId);
-          const repKey = amUser ? (amUser as any).financialRepId as string | null : null;
+          const repKey = amUser ? amUser.financialRepId as string | null : null;
           if (repKey) {
             const isLM = amUser?.role === "logistics_manager" || amUser?.role === "logistics_coordinator";
             const txRows: any[] = (latestUpload.rows as any[]) || [];
@@ -166,8 +166,8 @@ export function registerGoalRoutes(app: Express): void {
         } else if (goal.metric === "meaningful_touchpoints") {
           effectiveValue = await storage.getMeaningfulTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
         } else if (goal.metric === "margin" && latestUpload) {
-          const repKey = (amUser as any).financialRepId as string | null;
-          const isLMUser = (amUser as any).role === "logistics_manager" || (amUser as any).role === "logistics_coordinator";
+          const repKey = amUser.financialRepId as string | null;
+          const isLMUser = amUser.role === "logistics_manager" || amUser.role === "logistics_coordinator";
           if (repKey && isLMUser) {
             // LMs: margin is in Dispatcher column
             const txRows: any[] = (latestUpload.rows as any[]) || [];
@@ -211,9 +211,9 @@ export function registerGoalRoutes(app: Express): void {
           }
         }
         if ((goal.metric === "loads_booked" || goal.metric === "margin_pct") && latestUpload) {
-          const repKey = (amUser as any).financialRepId as string | null;
+          const repKey = amUser.financialRepId as string | null;
           if (repKey) {
-            const isLM = (amUser as any).role === "logistics_manager" || (amUser as any).role === "logistics_coordinator";
+            const isLM = amUser.role === "logistics_manager" || amUser.role === "logistics_coordinator";
             const txRows: any[] = (latestUpload.rows as any[]) || [];
             const lbCols = resolveColumns(txRows);
             const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
@@ -549,7 +549,7 @@ export function registerGoalRoutes(app: Express): void {
         }
       } else if (goal.metric === "loads_booked" || goal.metric === "margin_pct" || (goal.metric === "margin" && isLMGoal)) {
         // loads_booked / margin_pct / LM margin — LMs use Dispatcher col; AMs use Ops User col
-        const repKey = targetUser ? (targetUser as any).financialRepId as string | null : null;
+        const repKey = targetUser ? targetUser.financialRepId as string | null : null;
         if (repKey) {
           const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
           if (uploads.length) {
@@ -565,7 +565,7 @@ export function registerGoalRoutes(app: Express): void {
         }
       } else if (goal.metric === "margin") {
         if (targetUser) {
-          const repKey = (targetUser as any).financialRepId as string | null;
+          const repKey = targetUser.financialRepId as string | null;
           if (repKey) {
             const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
             if (uploads.length) {
@@ -628,7 +628,7 @@ export function registerGoalRoutes(app: Express): void {
       if (!goal) return res.status(404).json({ error: "Goal not found" });
       const allUsers = await storage.getUsers(req.session.organizationId!);
       const amUser = allUsers.find(u => u.id === goal.amId);
-      const repKey = amUser ? (amUser as any).financialRepId as string | null : null;
+      const repKey = amUser ? amUser.financialRepId as string | null : null;
       if (!repKey) return res.json({ months: [] });
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (!uploads.length) return res.json({ months: [] });

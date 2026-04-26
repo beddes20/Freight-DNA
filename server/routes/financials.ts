@@ -1224,7 +1224,7 @@ export function registerFinancialRoutes(app: Express): void {
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (!uploads.length) return res.json({ uploadedAt: null, fileName: null });
       const latest = uploads[uploads.length - 1];
-      res.json({ uploadedAt: latest.uploadedAt, fileName: (latest as any).fileName || null });
+      res.json({ uploadedAt: latest.uploadedAt, fileName: latest.fileName });
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch upload info" });
     }
@@ -1259,7 +1259,7 @@ export function registerFinancialRoutes(app: Express): void {
       function matchesAnyUser(name: string): boolean {
         const nameLower = name.toLowerCase().trim();
         return allUsers.some(u => {
-          const frid = (u as any).financialRepId;
+          const frid = u.financialRepId;
           if (frid && frid.toLowerCase() === nameLower) return true;
           return backendMatchRep(name, u.name);
         });
@@ -1297,7 +1297,7 @@ export function registerFinancialRoutes(app: Express): void {
         .sort((a, b) => b.loads - a.loads);
 
       const usersMissingId = allUsers
-        .filter(u => !(u as any).financialRepId)
+        .filter(u => !u.financialRepId)
         .map(u => ({ id: u.id, name: u.name, role: u.role }));
 
       res.json({ opsUserGaps, dispatcherGaps, salespersonGaps, usersMissingId });

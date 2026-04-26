@@ -435,6 +435,7 @@ export interface IStorage {
   getContactsByOrg(organizationId: string): Promise<Contact[]>;
   getContactsByCompany(companyId: string): Promise<Contact[]>;
   getContactsByCompanyIds(companyIds: string[]): Promise<Contact[]>;
+getContactsByIds(ids: string[]): Promise<Contact[]>;
   getContact(id: string): Promise<Contact | undefined>;
   logContactBaseHistory(contactId: string, fromBase: string | null, toBase: string, changedById: string): Promise<void>;
   getContactBaseHistory(contactId: string): Promise<any[]>;
@@ -867,6 +868,7 @@ export interface IStorage {
   getCarriers(orgId: string): Promise<Carrier[]>;
   getCarrier(id: string): Promise<Carrier | undefined>;
   getCarriersByIds(ids: string[], orgId: string): Promise<Carrier[]>;
+getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined>;
   createCarrier(data: InsertCarrier): Promise<Carrier>;
   bulkCreateCarriers(data: InsertCarrier[]): Promise<number>;
   updateCarrier(id: string, orgId: string, data: Partial<Omit<InsertCarrier, 'orgId'>>): Promise<Carrier | undefined>;
@@ -1706,6 +1708,11 @@ export class DatabaseStorage implements IStorage {
   async getContactsByCompanyIds(companyIds: string[]): Promise<Contact[]> {
     if (companyIds.length === 0) return [];
     return db.select().from(contacts).where(inArray(contacts.companyId, companyIds));
+  }
+
+  async getContactsByIds(ids: string[]): Promise<Contact[]> {
+    if (ids.length === 0) return [];
+    return db.select().from(contacts).where(inArray(contacts.id, ids));
   }
 
   async logContactBaseHistory(contactId: string, fromBase: string | null, toBase: string, changedById: string): Promise<void> {
@@ -5018,6 +5025,11 @@ export class DatabaseStorage implements IStorage {
   async getCarriersByIds(ids: string[], orgId: string): Promise<Carrier[]> {
     if (ids.length === 0) return [];
     return db.select().from(carriers).where(and(inArray(carriers.id, ids), eq(carriers.orgId, orgId)));
+  }
+
+  async getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined> {
+    const [row] = await db.select().from(carriers).where(and(eq(carriers.id, id), eq(carriers.orgId, orgId)));
+    return row;
   }
 
   async createCarrier(data: InsertCarrier): Promise<Carrier> {
