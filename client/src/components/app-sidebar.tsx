@@ -1,5 +1,5 @@
 import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, PhoneCall, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, BrainCircuit, Lightbulb, Brain, MailCheck, ChevronDown, Sparkles, Activity, Compass, GitMerge, Filter, type LucideIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import {
@@ -65,7 +65,6 @@ const navItems: NavItem[] = [
 ];
 
 const customerFacingItems: NavItem[] = [
-  { title: "Today's Priorities", url: "/daily-priorities", icon: ClipboardList, description: "All active NBA signals bucketed by action type — Defend, Quote Now, Follow Up, Grow, Procure Carrier.", roles: DAILY_PRIORITIES_ROLES },
   { title: "Launchpad",         url: "/prospects",        icon: Crosshair,     description: "Find and qualify new prospects to pursue.", roles: PROSPECTS_ROLES },
   { title: "Customers",         url: "/customers",        icon: Network,       description: "Browse customer accounts and account history.", roles: SALES_ROLES },
   { title: "Customer Quotes",   url: "/customer-quotes",  icon: FileBarChart2, description: "Quote requests, outcomes, and lane performance — drillable analytics across customers and reps.", roles: ["admin", "director", "national_account_manager", "account_manager"] },
@@ -73,13 +72,6 @@ const customerFacingItems: NavItem[] = [
   { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           description: "High-value opportunities ranked by potential impact.", roles: SALES_ROLES },
   { title: "RFP & Awards",    url: "/rfp-awards",      icon: Trophy,   description: "Active RFPs and awarded business tracking." },
   { title: "RFP Calendar",    url: "/rfp-calendar",    icon: Calendar, description: "Upcoming RFP deadlines and key dates." },
-  {
-    title: "ValueIQ",
-    url: "/valueiq",
-    icon: Brain,
-    description: "Daily AI briefing on your top accounts.",
-    roles: ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"],
-  },
   {
     title: "Email Intelligence",
     url: "/email-intelligence",
@@ -110,6 +102,18 @@ const customerFacingItems: NavItem[] = [
   },
   { title: "Coaching",        url: "/coaching",        icon: Sparkles, description: "Coaching notes and rep development plans.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
   { title: "Rep Scorecard",   url: "/rep-scorecard",   icon: Medal,    description: "Compare reps and review performance metrics.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
+];
+
+// AI workspace group — Today's Priorities, ValueIQ, and AI Center live
+// together so reps don't have to hunt across Customer-Facing and Admin
+// to find the AI surface they need. Each item keeps its own role list.
+const VALUEIQ_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
+const AI_CENTER_ROLES = ["admin", "manager", "director", "national_account_manager", "sales_director"];
+
+const aiItems: NavItem[] = [
+  { title: "Today's Priorities", url: "/daily-priorities", icon: ClipboardList, description: "All active NBA signals bucketed by action type — Defend, Quote Now, Follow Up, Grow, Procure Carrier.", roles: DAILY_PRIORITIES_ROLES },
+  { title: "ValueIQ",            url: "/valueiq",          icon: Brain,         description: "Daily AI briefing on your top accounts.", roles: VALUEIQ_ROLES },
+  { title: "AI Center",          url: "/ai",               icon: Sparkles,      description: "Configure AI agents, approvals, and adapters.", roles: AI_CENTER_ROLES },
 ];
 
 const carrierFacingItems: NavItem[] = [
@@ -172,13 +176,46 @@ const ROLE_LABELS: Record<string, string> = {
   logistics_coordinator: "Logistics Coordinator",
 };
 
-function CollapsibleGroup({ label, children, defaultOpen = true }: { label: string; children: React.ReactNode; defaultOpen?: boolean }) {
+function CollapsibleGroup({
+  label,
+  children,
+  defaultOpen = true,
+  storageKey,
+}: {
+  label: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+  storageKey?: string;
+}) {
+  // When `storageKey` is provided, the open/closed state is persisted in
+  // localStorage so the rep's preference survives page reloads. Reading
+  // happens in useEffect to avoid SSR/hydration mismatch — initial render
+  // always uses `defaultOpen`, then we sync once on mount.
   const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => {
+    if (!storageKey || typeof window === "undefined") return;
+    try {
+      const v = window.localStorage.getItem(storageKey);
+      if (v === "1") setOpen(true);
+      else if (v === "0") setOpen(false);
+    } catch {
+      // localStorage may be blocked in private mode — fall back to default.
+    }
+  }, [storageKey]);
+  const toggle = () => {
+    setOpen(prev => {
+      const next = !prev;
+      if (storageKey && typeof window !== "undefined") {
+        try { window.localStorage.setItem(storageKey, next ? "1" : "0"); } catch { /* ignore */ }
+      }
+      return next;
+    });
+  };
   return (
     <SidebarGroup>
       <SidebarGroupLabel
         className="cursor-pointer select-none flex items-center justify-between pr-2 hover:text-sidebar-foreground/80 transition-colors"
-        onClick={() => setOpen(v => !v)}
+        onClick={toggle}
         data-testid={`toggle-group-${label.toLowerCase().replace(/[\s/]+/g, "-")}`}
       >
         <span>{label}</span>
@@ -374,8 +411,12 @@ export function AppSidebar() {
   const isActive = (url: string) =>
     url === "/"
       ? location === "/"
-      : location.startsWith(url) || (url === "/customers" && location.startsWith("/companies/")) ||
-        (url === "/research-tasks" && (location.startsWith("/research-tasks") || location.startsWith("/rfp-lane-search") || location.startsWith("/carrier-lane-search")));
+      : url === "/ai"
+        // /ai must not match sibling-prefixed routes like /ai-intelligence,
+        // /ai-intelligence-legacy, or /ai-agent. Use path-boundary check.
+        ? location === "/ai" || location.startsWith("/ai/")
+        : location.startsWith(url) || (url === "/customers" && location.startsWith("/companies/")) ||
+          (url === "/research-tasks" && (location.startsWith("/research-tasks") || location.startsWith("/rfp-lane-search") || location.startsWith("/carrier-lane-search")));
 
   return (
     <>
@@ -511,6 +552,26 @@ export function AppSidebar() {
           );
         })()}
 
+        {/* ── AI ── */}
+        {(() => {
+          const visible = aiItems.filter(item => !item.roles || (user?.role && item.roles.includes(user.role)));
+          if (visible.length === 0) return null;
+          return (
+            <CollapsibleGroup label="AI" storageKey="sidebar-ai-open" defaultOpen>
+              {visible.map(item => (
+                <NavLink
+                  key={item.title}
+                  item={item}
+                  isActive={isActive(item.url)}
+                  overrides={tooltipOverrides}
+                  badge={item.title === "Today's Priorities" && dailyWorkspaceCount > 0 ? dailyWorkspaceCount : undefined}
+                  badgeColor="green"
+                />
+              ))}
+            </CollapsibleGroup>
+          );
+        })()}
+
         {/* ── Carrier-Facing ── */}
         {(() => {
           const visible = carrierFacingItems.filter(item => !item.roles || (user?.role && item.roles.includes(user.role)));
@@ -622,19 +683,10 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
-                {/* AI Center — single consolidated entry point for all AI management
-                    (agents, approvals, pods, adapters, admin). Replaces the previous
-                    four separate sidebar entries. ValueIQ stays its own rep workspace. */}
-                {["admin", "manager", "director", "national_account_manager", "sales_director"].includes(user?.role ?? "") && (
-                  <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={location.startsWith("/ai")} tooltip={navTooltip("AI Center", "Configure AI agents, approvals, and adapters.")}>
-                      <Link href="/ai" data-testid="link-ai-center">
-                        <Sparkles className="h-4 w-4" />
-                        <span>AI Center</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                )}
+                {/* AI Center moved to the new top-level "AI" sidebar group
+                    (alongside Today's Priorities and ValueIQ) so reps don't
+                    have to hunt across Customer-Facing and Admin to find
+                    the AI surface they need. */}
                 <SidebarMenuItem>
                   <SidebarMenuButton asChild isActive={location === "/financials"} tooltip={navTooltip("Financials", "Revenue, margin, and financial reports.")}>
                     <Link href="/financials" data-testid="link-financials">
