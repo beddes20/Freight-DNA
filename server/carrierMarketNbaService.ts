@@ -196,7 +196,7 @@ export async function syncCarrierMarketNbas(orgId: string, storage: IStorage): P
           recommendationType,
           status: existing.status,
           urgencyScore,
-          explanation: explanation as Record<string, unknown>,
+          explanation: explanation as unknown as Record<string, unknown>,
           suppressionReason: null,
           lastActionAt: null,
         });
@@ -208,7 +208,7 @@ export async function syncCarrierMarketNbas(orgId: string, storage: IStorage): P
           recommendationType,
           status: "pending",
           urgencyScore,
-          explanation: explanation as Record<string, unknown>,
+          explanation: explanation as unknown as Record<string, unknown>,
           suppressionReason: null,
           lastActionAt: null,
         });

@@ -273,9 +273,9 @@ async function buildRecommendationForOpp(
   // diverge significantly from the historical benchmark).  When sonarBenchmark
   // is unavailable, lookupBinForRate returns null and we fall back to defaults.
   const tiers: RecommendationTier[] = built.tiers.map(({ name, rate }) => {
-    const bin = lookupBinForRate(rate, benchmark, intel.bins);
+    const bin = lookupBinForRate(rate, benchmark ?? 0, intel.bins);
     const wp = resolveWinProb(name, bin);
-    const floorEval = evaluateFloor(rate, miles, floorRpm);
+    const floorEval = evaluateFloor(rate, miles ?? 0, floorRpm);
     return {
       name,
       rate,

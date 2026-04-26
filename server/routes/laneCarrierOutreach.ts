@@ -778,7 +778,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           items.map(item => ({
             ...item,
             isHighFrequency: isHighFrequencyLaneFromIndex(
-              { origin: item.origin, originState: item.originState ?? undefined, destination: item.destination, destinationState: item.destinationState ?? undefined },
+              { origin: item.origin, destination: item.destination, avgLoadsPerWeek: null },
               hfIndex
             ),
           }));
@@ -1582,7 +1582,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
       function checkClaimedMatch(
         claimed: Array<{ originState: string | null; destState: string | null; equipment: string | null }>,
-        l: typeof lane
+        l: NonNullable<typeof lane>
       ): boolean {
         const lOrig = (l.originState ?? "").toLowerCase().trim();
         const lDest = (l.destinationState ?? "").toLowerCase().trim();
@@ -3424,6 +3424,9 @@ async function processSingleOutlookReply(
           waitingState: "waiting_on_them",
           responsePriority: "normal",
           archivedAt: null,
+          snoozedUntil: null,
+          snoozedFromState: null,
+          snoozedByUserId: null,
           lastMessageId: null,
           lastIncomingAt: null,
           lastOutgoingAt: null,

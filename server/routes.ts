@@ -648,7 +648,7 @@ RULES FOR YOUR RESPONSES:
       }
       // Safety: cap conversation history to last 20 messages, content to 2000 chars each
       const safeMessages = messages.slice(-20).map((m: any) => ({
-        role: m.role === "user" ? "user" : "assistant",
+        role: (m.role === "user" ? "user" : "assistant") as "user" | "assistant",
         content: String(m.content ?? "").slice(0, 2000),
       }));
 
@@ -1373,7 +1373,7 @@ RULES FOR YOUR RESPONSES:
       }
       const existing = await storage.getCompanyInOrg((pStr(req.params.id)), currentUser.organizationId);
       if (!existing) return res.status(404).json({ error: "Company not found" });
-      const company = await storage.updateCompany((pStr(req.params.id)), currentUser.organizationId, { ...existing, assignedTo });
+      const company = await storage.updateCompany((pStr(req.params.id)), currentUser.organizationId, { ...existing, assignedTo: assignedTo as string });
       if (!company) return res.status(404).json({ error: "Company not found" });
       // Notify the new assignee if they're different from the actor
       if (assignedTo !== currentUser.id && assignedTo !== existing.assignedTo) {
@@ -3034,7 +3034,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         };
       });
 
-      res.json({ months: result, totalRows: matchedRows.length, customerName });
+      res.json({ months: result, totalRows: matchedRows.length, customerName: company.name });
     } catch (error) {
       console.error("Error auto-calculating market share:", error);
       res.status(500).json({ error: "Failed to calculate from financial data" });
@@ -5634,7 +5634,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         storage.getTouchpoints(),
         storage.getRfps(),
         storage.getTasks(),
-        storage.getGoals(),
+        storage.getGoals({ amId: user.id }),
       ]);
 
       const myCompanies = allCompanies.filter((c: any) => c.assignedTo === user.id);
@@ -7841,7 +7841,7 @@ Respond with valid JSON only:
       ]);
 
       const companyNames = [company.name, ...(company.financialAlias ? company.financialAlias.split(",").map((a: string) => a.trim()) : [])].filter(Boolean);
-      const rawRows: any[] = upload?.rows ?? [];
+      const rawRows: any[] = (upload?.rows ?? []) as any[];
       const cols = rawRows.length ? resolveColumns(rawRows) : {} as any;
 
       const BASE_LABELS: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run" };
@@ -8041,7 +8041,7 @@ Respond with valid JSON only:
       const allContacts = await storage.getContactsByCompanyIds(visibleCompanyIds);
       const allAttributionsList = await storage.getLaneAttributionsByCompanyIds(visibleCompanyIds);
 
-      const rawRows: any[] = upload?.rows ?? [];
+      const rawRows: any[] = (upload?.rows ?? []) as any[];
       const cols = rawRows.length ? resolveColumns(rawRows) : {} as any;
       const marginK = cols.marginDollar ?? "Margin $";
 
@@ -8389,7 +8389,7 @@ Respond with valid JSON only:
       const companyNameMap: Record<string, string[]> = {};
       for (const c of allCompanies) companyNameMap[c.id] = [c.name, ...(c.financialAlias ? c.financialAlias.split(",").map((a: string) => a.trim()) : [])].filter(Boolean);
 
-      const rawRows: any[] = upload?.rows ?? [];
+      const rawRows: any[] = (upload?.rows ?? []) as any[];
       const cols = rawRows.length ? resolveColumns(rawRows) : {} as any;
       const BASE_LABELS_S: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run" };
       const BASE_ORDER_S = ["1st", "2nd", "3rd", "hr"];
@@ -8598,7 +8598,7 @@ Respond with valid JSON only:
       `);
 
       const productsMap = new Map<string, ProductEntry>();
-      for (const row of result.rows as ProductRow[]) {
+      for (const row of result.rows as unknown as ProductRow[]) {
         if (!productsMap.has(row.product_id)) {
           productsMap.set(row.product_id, {
             id: row.product_id,

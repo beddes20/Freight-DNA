@@ -925,6 +925,7 @@ type ConversationNbaStorage = Pick<
   | "getRecentNbaCardByType"
   | "createNbaCard"
   | "getUser"
+  | "getCompany"
 >;
 
 /**
@@ -995,12 +996,19 @@ export async function generateConversationOwnershipNbas(
       const companyId = thread.linkedAccountId ?? thread.linkedCarrierId;
       if (!companyId) continue;
 
+      // Route the card to the company's salesperson; skip if none assigned.
+      const company = thread.linkedAccountId
+        ? await storageInstance.getCompany(thread.linkedAccountId)
+        : null;
+      const fallbackUserId = company?.assignedTo ?? null;
+      if (!fallbackUserId) continue;
+
       const dedupKey = `conv_unowned_waiting_${thread.id}`;
       const existing = await storageInstance.getRecentNbaCardByType(companyId, dedupKey, 3);
       if (!existing) {
         await storageInstance.createNbaCard({
           companyId,
-          userId: null,
+          userId: fallbackUserId,
           orgId,
           ruleType: dedupKey,
           outcomeType: "execute",

@@ -28,6 +28,7 @@ import {
 import {
   getBlendConfig, setBlendConfig,
   getThresholds, setThresholds,
+  type ScoringThresholds,
 } from "../carrierIntelligenceSettings";
 import { listScorecards, getScorecardForCarrier } from "../carrierScorecardService";
 import { getBlendedRate } from "../pricingBlendService";
@@ -427,7 +428,9 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
       if (!parsed.success) return res.status(400).json({ error: "Invalid payload", details: parsed.error.flatten() });
       const [blend, thresholds] = await Promise.all([
         parsed.data.blend ? setBlendConfig(ctx.orgId, parsed.data.blend) : getBlendConfig(ctx.orgId),
-        parsed.data.thresholds ? setThresholds(ctx.orgId, parsed.data.thresholds) : getThresholds(ctx.orgId),
+        parsed.data.thresholds
+          ? setThresholds(ctx.orgId, parsed.data.thresholds as Partial<ScoringThresholds>)
+          : getThresholds(ctx.orgId),
       ]);
       return res.json({ ok: true, blend, thresholds });
     } catch (err) {

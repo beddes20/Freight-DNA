@@ -894,7 +894,7 @@ export function registerAgentAdminRoutes(app: Express) {
       if (body.allowedRoles !== undefined) patch.allowedRoles = body.allowedRoles ?? null;
       if (body.status !== undefined) patch.status = body.status;
       const [row] = await db.update(agentsTable).set(patch)
-        .where(and(eq(agentsTable.id, req.params.id), eq(agentsTable.organizationId, me.organizationId)))
+        .where(and(eq(agentsTable.id, pStr(req.params.id)), eq(agentsTable.organizationId, me.organizationId)))
         .returning();
       if (!row) return res.status(404).json({ error: "Not found" });
       invalidateAgentRuntime(row.id);
@@ -911,7 +911,7 @@ export function registerAgentAdminRoutes(app: Express) {
       if (!me) return res.status(401).json({ error: "Unauthorized" });
       if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
       const [row] = await db.select().from(agentsTable)
-        .where(and(eq(agentsTable.id, req.params.id), eq(agentsTable.organizationId, me.organizationId))).limit(1);
+        .where(and(eq(agentsTable.id, pStr(req.params.id)), eq(agentsTable.organizationId, me.organizationId))).limit(1);
       if (!row) return res.status(404).json({ error: "Not found" });
       if (row.isDefault) return res.status(400).json({ error: "Cannot archive the default agent" });
       const [updated] = await db.update(agentsTable).set({ status: "archived", updatedAt: new Date() })
@@ -929,7 +929,7 @@ export function registerAgentAdminRoutes(app: Express) {
       if (!me) return res.status(401).json({ error: "Unauthorized" });
       if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
       const [updated] = await db.update(agentsTable).set({ status: "published", updatedAt: new Date() })
-        .where(and(eq(agentsTable.id, req.params.id), eq(agentsTable.organizationId, me.organizationId))).returning();
+        .where(and(eq(agentsTable.id, pStr(req.params.id)), eq(agentsTable.organizationId, me.organizationId))).returning();
       if (!updated) return res.status(404).json({ error: "Not found" });
       invalidateAgentRuntime(updated.id);
       res.json(updated);

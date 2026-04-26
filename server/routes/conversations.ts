@@ -26,6 +26,7 @@ import {
   monitoredMailboxes,
   users,
   InsertEmailConversationThread,
+  type User,
 } from "@shared/schema";
 import { requireAuth, getCurrentUser, canSeeRepUser, getVisibleRepUserIds } from "../auth";
 import { setWaitingState, setPriority, snoozeThread } from "../services/conversationWaitingStateService";
@@ -537,7 +538,7 @@ export function registerConversationsRoutes(app: Express): void {
   //   - unowned thread on an account whose salesperson is in the caller's
   //     reporting tree (covers auto-synced inbound that hasn't been claimed)
   const canAccessThread = async (
-    requester: { id: string; role: string; organizationId: string },
+    requester: User,
     thread: { ownerUserId: string | null; orgId: string; linkedAccountId: string | null },
   ): Promise<boolean> => {
     if (thread.orgId !== requester.organizationId) return false;
@@ -1097,7 +1098,7 @@ export function registerConversationsRoutes(app: Express): void {
   //      writing read state. This prevents a tenant from creating read
   //      markers against arbitrary conversation IDs they don't own.
   const resolveAndAuthorizeReadTarget = async (
-    user: { id: string; role: string; organizationId: string },
+    user: User,
     idParam: string,
   ): Promise<
     | { ok: true; conversationId: string }
@@ -1627,7 +1628,7 @@ export function registerConversationsRoutes(app: Express): void {
   // pattern used by the messages endpoint so smart-pane endpoints are safe
   // for orphan threads too.
   const resolveSmartPaneTarget = async (
-    user: { id: string; role: string; organizationId: string },
+    user: User,
     idParam: string,
   ): Promise<
     | { ok: true; threadId: string; recordId: string | null }

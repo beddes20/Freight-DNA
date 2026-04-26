@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { pStr, qStr, qOptStr } from "../../lib/req";
 import OpenAI from "openai";
 import { chatStorage } from "./storage";
+import { getCurrentUser } from "../../auth";
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -39,8 +40,10 @@ export function registerChatRoutes(app: Express): void {
   // Create new conversation
   app.post("/api/conversations", async (req: Request, res: Response) => {
     try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { title } = req.body;
-      const conversation = await chatStorage.createConversation(title || "New Chat");
+      const conversation = await chatStorage.createConversation(title || "New Chat", user.id);
       res.status(201).json(conversation);
     } catch (error) {
       console.error("Error creating conversation:", error);

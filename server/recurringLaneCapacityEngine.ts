@@ -205,7 +205,7 @@ export async function identifyRecurringLanes(
   const effectiveAnchor = anchor < sixtyDaysAgo ? new Date() : anchor;
 
   const targetWeeks = getWeekKeys(LANE_CONFIG.lookbackWeeks, effectiveAnchor);
-  if (targetWeeks.length === 0) return [];
+  if (targetWeeks.length === 0) return { lanes: [], meta: emptyMeta };
 
   // Lane aggregation: key = "origin|destination|equipment|companyNorm"
   const laneWeekly = new Map<string, {

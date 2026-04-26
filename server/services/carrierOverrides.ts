@@ -149,6 +149,7 @@ export async function getCarrierOverridesForLane(
     positiveCount: string | number;
     lastNegativeReason: string | null;
     lastOccurredAt: string | Date | null;
+    [k: string]: unknown;
   }
   // Soft-fail: ranker is hot-path; a DB hiccup should degrade to
   // "no prior", not break the rank pass (mirrors getCarrierLaneOutcomesForLane).

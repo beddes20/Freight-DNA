@@ -7448,8 +7448,10 @@ export class DatabaseStorage implements IStorage {
         searchConditions.push(inArray(emailConversationThreads.linkedCarrierId, carrierIds.map(c => c.id)));
       }
       if (matchingMsgThreadIds.length > 0) {
-        const uniqueThreadIds = [...new Set(matchingMsgThreadIds.map(m => m.threadId))];
-        searchConditions.push(inArray(emailConversationThreads.threadId, uniqueThreadIds));
+        const uniqueThreadIds = [...new Set(matchingMsgThreadIds.map(m => m.threadId))].filter((t): t is string => t !== null);
+        if (uniqueThreadIds.length > 0) {
+          searchConditions.push(inArray(emailConversationThreads.threadId, uniqueThreadIds));
+        }
       }
 
       if (searchConditions.length > 0) {

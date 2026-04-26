@@ -9,6 +9,7 @@
  */
 
 import type { Express, Request, Response } from "express";
+import { pStr } from "../lib/req";
 import { db, storage } from "../storage";
 import { eq, and, gte } from "drizzle-orm";
 import { intelTrackedLanes, intelLaneRates, recurringLanes } from "../../shared/schema";
@@ -1436,7 +1437,7 @@ export async function computeAlertsSection(orgId: string, filterUserId?: string)
       const effectiveRate = votriVal ?? originMarketOtri;
       const buyRate = computeBuyRateRange(lane.carrierPays, lane.totalLoads, effectiveRate);
       const rationale = await getBuyRateRationale(
-        `${lane.origin} → ${lane.destination}`, buyRate.low, buyRate.high, originMarketOtri, votriVal,
+        `${lane.origin} → ${lane.destination}`, buyRate.low, buyRate.high, originMarketOtri ?? 0, votriVal,
       );
       return {
         lane: `${lane.origin} → ${lane.destination}`,
@@ -1501,7 +1502,7 @@ export async function computeScorecardLanesSection(orgId: string, filterUserId?:
     lane: e.lane, avg6WkMarginPct: e.avg6WkMarginPct, marginTrend: e._marginTrend,
     weeklyMarginPcts: e._marginPcts, totalLoads: e.totalLoads, votri: e.votri, destOtri: e.destOtri,
   }));
-  const narratives = await getLaneNarrativesBatch(narrativeInputs);
+  const narratives = await getLaneNarrativesBatch(narrativeInputs.map(n => ({ ...n, destOtri: n.destOtri ?? 0 })));
   const scorecardEntries = scorecardBase.map((e, i) => {
     const { _marginTrend: _mt, _marginPcts: _mp, ...rest } = e;
     return { ...rest, aiNarrative: narratives[i] ?? null };
@@ -1767,11 +1768,11 @@ export function registerIntelRoutes(app: Express): void {
         return {
           origin: l.origin,
           destination: l.destination,
-          votri: votri?.votri,
-          votriWoW: votri?.votriWoW,
+          votri: votri?.votri ?? undefined,
+          votriWoW: votri?.votriWoW ?? undefined,
           // Per-market OTRI for origin market context
-          marketOtri: marketOtriData.find(m => m.market.toLowerCase().trim() === l.origin.toLowerCase().trim())?.otri,
-          marketOtriWoW: marketOtriData.find(m => m.market.toLowerCase().trim() === l.origin.toLowerCase().trim())?.otriWoW,
+          marketOtri: marketOtriData.find(m => m.market.toLowerCase().trim() === l.origin.toLowerCase().trim())?.otri ?? undefined,
+          marketOtriWoW: marketOtriData.find(m => m.market.toLowerCase().trim() === l.origin.toLowerCase().trim())?.otriWoW ?? undefined,
         };
       });
 
@@ -1892,7 +1893,7 @@ export function registerIntelRoutes(app: Express): void {
       }
 
       const allMyLanes = [...myLanes, ...rfpRows];
-      allMyLanes.sort((a, b) => b.votri !== a.votri ? b.votri - a.votri : b.totalLoads - a.totalLoads);
+      allMyLanes.sort((a, b) => (b.votri ?? 0) !== (a.votri ?? 0) ? (b.votri ?? 0) - (a.votri ?? 0) : b.totalLoads - a.totalLoads);
 
       const payload = {
         lanes: allMyLanes,
@@ -2189,7 +2190,7 @@ export function registerIntelRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const { trackedLaneId } = req.params;
+      const trackedLaneId = pStr(req.params.trackedLaneId);
       const [tracked] = await db
         .select()
         .from(intelTrackedLanes)
@@ -2198,7 +2199,7 @@ export function registerIntelRoutes(app: Express): void {
 
       if (!tracked) return res.status(404).json({ error: "Lane not found" });
 
-      const equip = tracked.equipmentType as "VAN" | "REEFER" | "FLATBED";
+      const equip = (tracked.equipmentType ?? "VAN") as "VAN" | "REEFER" | "FLATBED";
       const inputs = [{ origin: tracked.origin, destination: tracked.destination, equipment: equip, laneId: tracked.id }];
       const [d] = await fetchFullLaneBatch(inputs);
       if (!d) return res.status(502).json({ error: "TRAC returned no data" });

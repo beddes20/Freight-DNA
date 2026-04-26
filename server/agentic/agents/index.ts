@@ -150,7 +150,7 @@ async function runRisk({ agent, organizationId, trigger }: RunInput): Promise<Ru
   const v = vet.data!;
   const sug = await recordSuggestion({
     organizationId, workflowAgentId: agent.id, loopStep: "vet_carrier",
-    inputContext: trigger, suggestion: v,
+    inputContext: trigger, suggestion: v as unknown as Record<string, unknown>,
     reasoning: `Risk score ${v.riskScore}/100. Flags: ${v.flags.join(", ") || "none"}.`,
     confidence: 90, model: agent.model, adapterMode: vet.mode,
   });

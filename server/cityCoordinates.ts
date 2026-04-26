@@ -204,7 +204,6 @@ const CITY_COORDS: Record<string, [number, number]> = {
   // ── New Mexico ───────────────────────────────────────────────────────────
   "albuquerque, nm":     [35.0844, -106.6504],
   "santa fe, nm":        [35.6870, -105.9378],
-  "el paso, tx":         [31.7619, -106.4850],
   // ── Texas ────────────────────────────────────────────────────────────────
   "houston, tx":         [29.7604, -95.3698],
   "dallas, tx":          [32.7767, -96.7970],
@@ -216,7 +215,6 @@ const CITY_COORDS: Record<string, [number, number]> = {
   "grand prairie, tx":   [32.7460, -97.0197],
   "irving, tx":          [32.8140, -96.9489],
   "mesquite, tx":        [32.7668, -96.5992],
-  "garland, tx":         [32.9126, -96.6389],
   "carrollton, tx":      [32.9537, -96.8903],
   "mckinney, tx":        [33.1972, -96.6397],
   "plano, tx":           [33.0198, -96.6989],

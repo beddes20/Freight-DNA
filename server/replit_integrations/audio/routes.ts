@@ -2,6 +2,7 @@ import express, { type Express, type Request, type Response } from "express";
 import { pStr, qStr, qOptStr } from "../../lib/req";
 import { chatStorage } from "../chat/storage";
 import { openai, speechToText, ensureCompatibleFormat } from "./client";
+import { getCurrentUser } from "../../auth";
 
 // Body parser with 50MB limit for audio payloads
 const audioBodyParser = express.json({ limit: "50mb" });
@@ -37,8 +38,10 @@ export function registerAudioRoutes(app: Express): void {
   // Create new conversation
   app.post("/api/conversations", async (req: Request, res: Response) => {
     try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { title } = req.body;
-      const conversation = await chatStorage.createConversation(title || "New Chat");
+      const conversation = await chatStorage.createConversation(title || "New Chat", user.id);
       res.status(201).json(conversation);
     } catch (error) {
       console.error("Error creating conversation:", error);

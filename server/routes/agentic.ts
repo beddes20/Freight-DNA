@@ -155,7 +155,7 @@ export function registerAgenticRoutes(app: Express) {
   app.get("/api/agentic/pods/:id", requireAuth, async (req, res) => {
     const ctx = await ctxFor(req, res); if (!ctx) return;
     const [pod] = await db.select().from(pods)
-      .where(and(eq(pods.id, req.params.id), eq(pods.organizationId, ctx.organizationId))).limit(1);
+      .where(and(eq(pods.id, pStr(req.params.id)), eq(pods.organizationId, ctx.organizationId))).limit(1);
     if (!pod) return res.status(404).json({ error: "not_found" });
     const members = await db.select().from(podMembers).where(eq(podMembers.podId, pod.id));
     const agentLinks = await db.select().from(podAgents).where(eq(podAgents.podId, pod.id));

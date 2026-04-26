@@ -127,6 +127,7 @@ interface RawImportAuditRow {
   triggered_by: string;
   error: string | null;
   created_at: Date | string;
+  [k: string]: unknown;
 }
 
 export async function listAvailableFreightImports(

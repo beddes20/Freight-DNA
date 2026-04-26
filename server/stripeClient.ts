@@ -82,7 +82,7 @@ let stripeSync: StripeSyncInstance | null = null;
 
 export async function getStripeSync(): Promise<StripeSyncInstance> {
   if (!stripeSync) {
-    const { StripeSync } = await import('stripe-replit-sync') as { StripeSync: new (opts: object) => StripeSyncInstance };
+    const { StripeSync } = await import('stripe-replit-sync') as unknown as { StripeSync: new (opts: object) => StripeSyncInstance };
     const secretKey = await getStripeSecretKey();
 
     stripeSync = new StripeSync({

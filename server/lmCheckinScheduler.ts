@@ -31,7 +31,7 @@ async function fireCheckinAlerts(checkType: "morning" | "afternoon") {
   try {
     // Find all users who have logistics_managers or logistics_coordinators directly
     // reporting to them. Targets: admin, director, NAM, AM, sales, sales_director.
-    const result = await pool.query<{ id: string; name: string; organization_id: string }>(`
+    const result = await pool.query(`
       SELECT DISTINCT u.id, u.name, u.organization_id
       FROM users u
       WHERE u.organization_id IS NOT NULL

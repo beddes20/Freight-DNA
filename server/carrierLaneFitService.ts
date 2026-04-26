@@ -70,6 +70,7 @@ interface CountsRow {
   exact_eq_runs: string;
   nearby_runs: string;
   customer_lane_runs: string;
+  [k: string]: unknown;
 }
 
 export async function scoreCarrierLaneFit(input: FitInput): Promise<FitResult> {

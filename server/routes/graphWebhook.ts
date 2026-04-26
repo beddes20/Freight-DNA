@@ -614,7 +614,10 @@ async function processUserMailboxEmail(params: {
         waitingState: "waiting_on_us",
         responsePriority: "normal", lastMessageId: null,
         lastIncomingAt: null, lastOutgoingAt: null,
-        waitingSinceAt: null, overdueAt: null, createdAt: now, updatedAt: now,
+        waitingSinceAt: null, overdueAt: null,
+        archivedAt: null,
+        snoozedUntil: null, snoozedFromState: null, snoozedByUserId: null,
+        createdAt: now, updatedAt: now,
       };
 
       const update = applyMessageToThread(threadBase, message, now);

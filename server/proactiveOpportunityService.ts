@@ -165,6 +165,11 @@ export async function loadEffectivePolicy(
     approvedCarrierIds: PAFOE_DEFAULTS.policy.approvedCarrierIds,
     doNotAutomate: PAFOE_DEFAULTS.policy.doNotAutomate,
     specialNotes: null,
+    autoSendEnabled: false,
+    autoSendHourCt: 8,
+    autoSendTopN: 3,
+    autoSendMaxPerDay: 10,
+    autoSendLastRunAt: null,
     updatedAt: new Date(0),
     updatedById: null,
   };

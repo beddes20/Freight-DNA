@@ -1405,7 +1405,7 @@ export async function rankCarriersForLane(
       if (overlaps(carrier.equipmentTypes, laneEquip)) {
         equipmentMatch = true;
         // Reduced from +20/+5 to +12/+3
-        if (historyMatch === "none" || historyMatch === "region") {
+        if (historyMatch === "none") {
           fitScore += 12;
         } else {
           fitScore += 3; // smaller bonus when history already gives the edge
