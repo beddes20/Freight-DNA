@@ -1168,6 +1168,27 @@ function computeAcceptedIntelScores(
  *
  * Side-effect: emits a structured JSON metrics log entry to stdout after ranking completes.
  */
+/**
+ * Optional caller-supplied predicate that pre-narrows the catalog candidate
+ * pool BEFORE the heavy per-carrier scoring loop runs. When supplied, any
+ * catalog carrier for which the predicate returns false is skipped entirely
+ * — it never enters the result set and never pays the scoring cost.
+ *
+ * This is the high-leverage perf knob for narrow filter combinations
+ * (e.g. exactOnly + hasEmail) that the endpoint applies after ranking. The
+ * predicate gets the carrier and its (possibly undefined) history bucket so
+ * it can do history-aware filtering without re-deriving anything.
+ *
+ * History-only / TMS-derived carriers (those without a row in the org's
+ * carrier catalog) are NOT subject to this predicate — they are always
+ * scored. Most narrow filters (hasEmail, activeOnly without history…) would
+ * exclude them anyway, so the endpoint's post-filter still handles them.
+ */
+export type CarrierRankPrefilter = (
+  carrier: import("@shared/schema").Carrier,
+  hist: { exactLoads: number; nearbyLoads: number; lastUsedMonth: string | null } | undefined,
+) => boolean;
+
 export async function rankCarriersForLane(
   lane: RecurringLane,
   storage: IStorage,
@@ -1175,6 +1196,7 @@ export async function rankCarriersForLane(
   coverageProfile?: LaneCoverageProfile | null,
   coverageCarriers?: LaneCoverageProfileCarrier[],
   debugMode = false,
+  prefilter?: CarrierRankPrefilter,
 ): Promise<RankedCarrier[]> {
   const [catalogCarriers, uploads] = await Promise.all([
     storage.getCarriers(lane.orgId),
@@ -1339,6 +1361,13 @@ export async function rankCarriersForLane(
   for (const carrier of catalogCarriers) {
     const carrierNorm = normStr(carrier.name);
     const hist = history.get(carrierNorm);
+    // Pre-narrow: when the caller passed a predicate, skip the heavy scoring
+    // loop entirely for carriers it rejects. The predicate sees only the
+    // cheap-to-derive fields (catalog Carrier row + raw history bucket) so it
+    // can short-circuit on filters like exactOnly / hasEmail / activeOnly
+    // without paying the cost of intel scoring, recency decay, AI overrides,
+    // claimed-lane lookups, etc.
+    if (prefilter && !prefilter(carrier, hist)) continue;
     let fitScore = 0;
     const reasons: string[] = [];
     let historyMatch: RankedCarrier["historyMatch"] = "none";

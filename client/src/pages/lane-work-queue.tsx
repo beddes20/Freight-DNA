@@ -63,6 +63,7 @@ import {
   Trash2,
   Pencil,
   MessageCircle,
+  X,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -1902,13 +1903,59 @@ function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, i
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
+// Read filter state from URL query string on first render so direct links
+// and rep-to-rep handoffs preserve the filter context. Default to today's
+// "no filters" behavior on a bare /lane-work-queue load.
+function readUrlFilters(): { highFreqOnly: boolean; manualOnly: boolean; customerFilter: string } {
+  if (typeof window === "undefined") {
+    return { highFreqOnly: false, manualOnly: false, customerFilter: "__all__" };
+  }
+  const params = new URLSearchParams(window.location.search);
+  return {
+    highFreqOnly: params.get("highFreq") === "1",
+    manualOnly: params.get("manual") === "1",
+    customerFilter: params.get("customer") || "__all__",
+  };
+}
+
 export default function LaneWorkQueuePage() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [openLaneId, setOpenLaneId] = useState<string | null>(null);
-  const [highFreqOnly, setHighFreqOnly] = useState(false);
-  const [manualOnly, setManualOnly] = useState(false);
-  const [customerFilter, setCustomerFilter] = useState<string>("__all__");
+  // Lazy initializers seed from URL once so a refresh / shared link replays
+  // the same filtered view the rep was looking at. URL is updated below as
+  // filters change so the back-button gives a sensible history of states.
+  const [highFreqOnly, setHighFreqOnly] = useState(() => readUrlFilters().highFreqOnly);
+  const [manualOnly, setManualOnly] = useState(() => readUrlFilters().manualOnly);
+  const [customerFilter, setCustomerFilter] = useState<string>(() => readUrlFilters().customerFilter);
+
+  // Sync filter state → URL (replaceState so we don't spam history with
+  // every toggle). Strips empty params so /lane-work-queue stays clean
+  // when no filters are active.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (highFreqOnly) params.set("highFreq", "1"); else params.delete("highFreq");
+    if (manualOnly) params.set("manual", "1"); else params.delete("manual");
+    if (customerFilter && customerFilter !== "__all__") params.set("customer", customerFilter);
+    else params.delete("customer");
+    const qs = params.toString();
+    const newUrl = `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`;
+    if (newUrl !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
+      window.history.replaceState(null, "", newUrl);
+    }
+  }, [highFreqOnly, manualOnly, customerFilter]);
+
+  // Active filter count drives whether the "Clear all" affordance shows.
+  const activeFilterCount =
+    (highFreqOnly ? 1 : 0) + (manualOnly ? 1 : 0) + (customerFilter !== "__all__" ? 1 : 0);
+
+  const clearAllFilters = () => {
+    setHighFreqOnly(false);
+    setManualOnly(false);
+    setCustomerFilter("__all__");
+  };
+
   const [buildLaneOpen, setBuildLaneOpen] = useState(false);
   // Task #653 — prefill payload for the Build Lane dialog when the rep
   // arrives here via "Make this recurring" on an Available Freight row.
@@ -2339,6 +2386,64 @@ export default function LaneWorkQueuePage() {
           </div>
         ) : (
           <>
+            {/* Active filter chip strip — surfaces every active filter in one
+                place with inline remove buttons, plus a Clear all when ≥ 2
+                are active. Hidden entirely when no filters are on so it
+                doesn't take vertical space on the default view. */}
+            {activeFilterCount > 0 && (
+              <div
+                className="flex gap-2 flex-wrap items-center mb-4"
+                data-testid="active-filter-chips"
+              >
+                <span className="text-xs text-muted-foreground mr-1">Filters:</span>
+                {highFreqOnly && (
+                  <button
+                    onClick={() => setHighFreqOnly(false)}
+                    className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs hover:bg-amber-500/25 transition-colors"
+                    data-testid="chip-filter-high-freq"
+                    title="Remove 2+/week filter"
+                  >
+                    <Zap className="w-3 h-3" />
+                    <span>2+/week</span>
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+                {manualOnly && (
+                  <button
+                    onClick={() => setManualOnly(false)}
+                    className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-500/30 text-blue-300 text-xs hover:bg-blue-500/25 transition-colors"
+                    data-testid="chip-filter-manual"
+                    title="Remove Manual filter"
+                  >
+                    <PlusCircle className="w-3 h-3" />
+                    <span>Manual only</span>
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+                {customerFilter !== "__all__" && (
+                  <button
+                    onClick={() => setCustomerFilter("__all__")}
+                    className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-purple-500/15 border border-purple-500/30 text-purple-300 text-xs hover:bg-purple-500/25 transition-colors max-w-[260px]"
+                    data-testid="chip-filter-customer"
+                    title="Remove customer filter"
+                  >
+                    <Filter className="w-3 h-3 shrink-0" />
+                    <span className="truncate">{formatCustomerName(customerFilter)}</span>
+                    <X className="w-3 h-3 shrink-0" />
+                  </button>
+                )}
+                {activeFilterCount >= 2 && (
+                  <button
+                    onClick={clearAllFilters}
+                    className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline ml-1"
+                    data-testid="btn-clear-all-filters"
+                  >
+                    Clear all
+                  </button>
+                )}
+              </div>
+            )}
+
             {/* Summary stat chips — reflect filtered counts */}
             {filteredQueue && (
               <div className="flex gap-3 flex-wrap mb-6">

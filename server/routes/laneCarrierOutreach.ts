@@ -1417,6 +1417,22 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
   const _rankingCache = new Map<string, { ranked: Awaited<ReturnType<typeof rankCarriersForLane>>; isHfLane: boolean; expiresAt: number }>();
   const RANKING_CACHE_TTL = 3 * 60 * 1000;
   const RANKING_TIMEOUT_MS = 25_000;
+  const ACTIVE_RECENCY_MS = 90 * 24 * 60 * 60 * 1000;
+
+  // Centralized filter predicates. Both the pre-rank prefilter (which sees a
+  // raw catalog carrier + history bucket) and the post-rank filters (which
+  // see a fully ranked carrier) call into the SAME predicates so they cannot
+  // drift. Each predicate accepts a minimal structural shape so it can be
+  // called from either site.
+  const passesExactOnly = (c: { historyMatch: string }) =>
+    c.historyMatch === "exact" || c.historyMatch === "nearby";
+  const passesHasEmail = (c: { primaryEmail?: string | null; backupEmail?: string | null }) =>
+    !!(c.primaryEmail || c.backupEmail);
+  const passesActiveOnly = (c: { lastUsedMonth: string | null }) => {
+    if (!c.lastUsedMonth) return false;
+    const lastDate = new Date(c.lastUsedMonth + "-01");
+    return Date.now() - lastDate.getTime() <= ACTIVE_RECENCY_MS;
+  };
 
   app.get("/api/lanes/:laneId/carrier-suggestions", async (req, res) => {
     const user = await getCurrentUser(req);
@@ -1440,7 +1456,19 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       const debugMode = qStr(req.query.debug) === "true";
       const forceRefresh = qStr(req.query.refresh) === "true";
 
-      const cacheKey = `${pStr(req.params.laneId)}::${user.organizationId}`;
+      // Filter signature is part of the cache key. Two reps requesting
+      // different filter combinations now memoize independently — same
+      // filters share warm cache, different filters each cache their own
+      // pre-narrowed result set rather than re-running the ranker.
+      // The signature is order-stable (alphabetical) so URL param order
+      // doesn't fragment the cache.
+      const filterSig = [
+        exactOnly ? "ex=1" : "",
+        hasEmail ? "em=1" : "",
+        activeOnly ? "ac=1" : "",
+        includeNewProspects ? "" : "np=0",
+      ].filter(Boolean).sort().join("&") || "all";
+      const cacheKey = `${pStr(req.params.laneId)}::${user.organizationId}::${filterSig}`;
       const cached = _rankingCache.get(cacheKey);
       let ranked: Awaited<ReturnType<typeof rankCarriersForLane>>;
       let isHfLane: boolean;
@@ -1467,7 +1495,32 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           } catch {
           }
 
-          const r = await rankCarriersForLane(lane, storage, bench, coverageProfile, coverageCarriers, debugMode);
+          // Build a candidate prefilter that the ranker can use to skip
+          // expensive scoring for carriers the endpoint would discard
+          // anyway. We only include filters that are decidable from the
+          // catalog row + raw history bucket — `notRecentlyContacted`
+          // depends on the bench/suppression reasons computed inside the
+          // ranker, so it must remain a post-filter. The prefilter calls the
+          // SAME centralized predicates as the post-filter, eliminating any
+          // chance of drift between pre- and post-rank filtering semantics.
+          const needsPrefilter = exactOnly || hasEmail || activeOnly;
+          const prefilter = needsPrefilter
+            ? (carrier: import("@shared/schema").Carrier, hist: { exactLoads: number; nearbyLoads: number; lastUsedMonth: string | null } | undefined) => {
+                // Derive the same `historyMatch` shape the ranker would
+                // assign so `passesExactOnly` returns identical results
+                // before and after ranking.
+                const derivedHistoryMatch =
+                  hist && hist.exactLoads > 0 ? "exact"
+                    : hist && hist.nearbyLoads > 0 ? "nearby"
+                      : "none";
+                if (exactOnly && !passesExactOnly({ historyMatch: derivedHistoryMatch })) return false;
+                if (hasEmail && !passesHasEmail(carrier)) return false;
+                if (activeOnly && !passesActiveOnly({ lastUsedMonth: hist?.lastUsedMonth ?? null })) return false;
+                return true;
+              }
+            : undefined;
+
+          const r = await rankCarriersForLane(lane, storage, bench, coverageProfile, coverageCarriers, debugMode, prefilter);
           const hf = isHighFrequencyLane(lane, suggUploads);
           return { ranked: r, isHfLane: hf };
         })();
@@ -1488,13 +1541,16 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       ranked = ranked.filter(c => !c.isDoNotUse);
 
       // ── Filtering ────────────────────────────────────────────────────────
+      // exactOnly / hasEmail / activeOnly all delegate to the SAME centralized
+      // predicates the prefilter uses, so pre- and post-rank semantics cannot
+      // drift. "Nearby" is included in exactOnly because carriers with loads
+      // within 100mi of both lane endpoints are operationally proven on this
+      // corridor even if not the exact city pair.
       if (exactOnly) {
-        // Include "nearby" as well — carriers with loads within 100mi of both lane endpoints
-        // are operationally proven on this corridor even if not the exact city pair.
-        ranked = ranked.filter(c => c.historyMatch === "exact" || c.historyMatch === "nearby");
+        ranked = ranked.filter(passesExactOnly);
       }
       if (hasEmail) {
-        ranked = ranked.filter(c => !!(c.primaryEmail || c.backupEmail));
+        ranked = ranked.filter(passesHasEmail);
       }
       if (notRecentlyContacted && !overrideRecentlyContacted) {
         ranked = ranked.filter(c =>
@@ -1502,11 +1558,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         );
       }
       if (activeOnly) {
-        ranked = ranked.filter(c => {
-          if (!c.lastUsedMonth) return false;
-          const lastDate = new Date(c.lastUsedMonth + "-01");
-          return Date.now() - lastDate.getTime() <= 90 * 24 * 60 * 60 * 1000;
-        });
+        ranked = ranked.filter(passesActiveOnly);
       }
       if (!includeNewProspects) {
         ranked = ranked.filter(c => !c.isNewProspect);
