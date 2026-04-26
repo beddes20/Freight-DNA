@@ -29,7 +29,7 @@ import {
   setMarginFloors,
 } from "../services/quotePricingRecommendation";
 import { QUOTE_OUTCOME_STATUSES, QUOTE_SOURCES, companies, contacts, quoteReps, spotQuoteCreateSchema } from "@shared/schema";
-import { getStaleQuoteFollowUps, clearStaleFollowUpCache } from "../services/staleQuoteFollowup";
+import { getStaleQuoteFollowUps, getStaleQuoteFollowUpCount, clearStaleFollowUpCache } from "../services/staleQuoteFollowup";
 import { publish as publishLiveSync } from "../services/liveSync";
 import { db } from "../storage";
 import { and as andSql, eq as eqSql, sql as sqlExpr } from "drizzle-orm";
@@ -246,6 +246,13 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       // event covers all three (the client maps the topic to all three
       // query keys).
       publishLiveSync(user.organizationId, "customer_quote", opp.id);
+      // Task #690 — any edit that could change a quote's outcome status
+      // (won / lost / expired) drops it out of the stale-followup window;
+      // any edit that revives a previously-decided quote could put one back
+      // in. Bust the cache so the next sidebar badge poll (or page load)
+      // recomputes; the membership tracker inside the service will then
+      // publish `customer_quote_followup` if the set actually changed.
+      clearStaleFollowUpCache(user.organizationId);
       res.json(detail);
     } catch (err) {
       const msg = getErrorMessage(err);
@@ -869,6 +876,24 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       res.json({ items });
     } catch (err) {
       const msg = getErrorMessage(err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Task #690 — count-only variant for the sidebar badge. Shares the same
+  // per-org cache as the full list endpoint, so a sidebar poll is free
+  // (cached hit) or triggers a single recompute that the full list view
+  // can immediately reuse. Returns just the integer to keep the payload
+  // tiny across many open tabs.
+  app.get("/api/customer-quotes/stale-followups/count", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const count = await getStaleQuoteFollowUpCount(user.organizationId);
+      res.json({ count });
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      console.error("[customer-quotes] stale-followups count error:", err);
       res.status(500).json({ error: msg });
     }
   });

@@ -51,7 +51,21 @@ const TOPIC_TO_QUERY_KEYS: Record<string, ReadonlyArray<ReadonlyArray<string>>> 
     ["/api/customer-quotes/snapshot"],
     ["/api/customer-quotes/list"],
     ["/api/customer-quotes/action-queue"],
+    // A quote outcome edit can also drop a quote out of (or back into) the
+    // stale-followup window, so refresh the badge + page list on every
+    // customer_quote event without waiting for the dedicated topic to fire.
+    ["/api/customer-quotes/stale-followups"],
+    ["/api/customer-quotes/stale-followups/count"],
     LANE_INBOX_KEY,
+    DAILY_WORKSPACE_KEY,
+  ],
+  // Task #690 — fires when the per-org stale-followup membership changes
+  // (a quote ages into the window, gets decided, or is reassigned). Keeps
+  // the sidebar badge and the open Customer Quotes page in sync without
+  // either side polling aggressively.
+  customer_quote_followup: [
+    ["/api/customer-quotes/stale-followups"],
+    ["/api/customer-quotes/stale-followups/count"],
     DAILY_WORKSPACE_KEY,
   ],
   carrier: [

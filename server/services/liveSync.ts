@@ -27,6 +27,7 @@ export type LiveSyncTopic =
   | "recurring_lane"
   | "carrier_outreach"
   | "customer_quote"
+  | "customer_quote_followup"
   | "carrier"
   | "daily_workspace";
 

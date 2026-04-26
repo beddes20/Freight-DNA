@@ -18,6 +18,7 @@ import {
   quoteOpportunities, quoteEvents, quoteCustomers, quoteReps,
   type QuoteOpportunity, type QuoteCustomer, type QuoteRep,
 } from "@shared/schema";
+import { publish as publishLiveSync } from "./liveSync";
 
 const FLOOR_HOURS = 24;
 const CEILING_HOURS = 14 * 24;
@@ -55,11 +56,29 @@ export type StaleQuoteFollowUp = {
 
 type CacheEntry = { ts: number; result: StaleQuoteFollowUp[] };
 const cache = new Map<string, CacheEntry>();
-const TTL_MS = 60 * 60 * 1000; // 1h
+// 60s TTL — short enough that the sidebar badge poll picks up newly-stale
+// quotes within ~90s and that decided quotes drop off the badge promptly,
+// long enough that repeated badge polls from multiple open tabs are cheap.
+const TTL_MS = 60 * 1000;
+
+// Per-org snapshot of the last published stale-quote ID set. Used to detect
+// membership transitions (a quote entering or exiting the stale window)
+// between recomputes so we can fire a `customer_quote_followup` SSE event
+// only when something actually changed — avoiding noisy empty broadcasts.
+const lastPublishedIds = new Map<string, Set<string>>();
 
 export function clearStaleFollowUpCache(orgId?: string): void {
-  if (orgId) cache.delete(orgId);
-  else cache.clear();
+  if (orgId) {
+    cache.delete(orgId);
+    // Also drop the per-org membership snapshot so the next recompute is
+    // free to re-publish without the prior snapshot suppressing it. This
+    // keeps the map from growing unbounded over a long-lived process that
+    // sees many transient orgs (e.g. test orgs, deactivated tenants).
+    lastPublishedIds.delete(orgId);
+  } else {
+    cache.clear();
+    lastPublishedIds.clear();
+  }
 }
 
 const num = (v: string | null | undefined): number => {
@@ -190,5 +209,41 @@ export async function getStaleQuoteFollowUps(
 
   items.sort((a, b) => b.rankScore - a.rankScore);
   cache.set(orgId, { ts: Date.now(), result: items });
+
+  // Membership-transition detection: if the set of stale-quote IDs differs
+  // from the previous broadcast, fire a `customer_quote_followup` SSE event
+  // so open clients (sidebar badge, Customer Quotes page) refresh. This
+  // covers both passive transitions (a quote ages into the window between
+  // recomputes) and explicit ones (a quote was decided and dropped off).
+  // First-time recompute always publishes so initial sidebar mounts pick up
+  // the count without waiting for a transition.
+  try {
+    const newIds = new Set(items.map(i => i.quoteId));
+    const prev = lastPublishedIds.get(orgId);
+    const changed = !prev
+      || prev.size !== newIds.size
+      || [...newIds].some(id => !prev.has(id));
+    if (changed) {
+      lastPublishedIds.set(orgId, newIds);
+      publishLiveSync(orgId, "customer_quote_followup");
+    }
+  } catch {
+    // Pub/sub is advisory only — never let a publish error fail the caller.
+  }
+
   return items;
+}
+
+/**
+ * Lightweight count helper for the sidebar badge. Reuses the same per-org
+ * cache as `getStaleQuoteFollowUps`, so a badge poll either hits the warm
+ * cached list (cheap) or triggers exactly one shared recompute that the
+ * full Customer Quotes page can also consume.
+ */
+export async function getStaleQuoteFollowUpCount(
+  orgId: string,
+  opts: { force?: boolean } = {},
+): Promise<number> {
+  const items = await getStaleQuoteFollowUps(orgId, opts);
+  return items.length;
 }

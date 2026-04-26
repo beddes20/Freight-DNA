@@ -192,9 +192,9 @@ function CollapsibleGroup({ label, children, defaultOpen = true }: { label: stri
   );
 }
 
-function NotificationBadge({ count, color = "red" }: { count: number; color?: "red" | "green" }) {
+function NotificationBadge({ count, color = "red" }: { count: number; color?: "red" | "green" | "amber" }) {
   if (count <= 0) return null;
-  const bg = color === "green" ? "bg-green-600" : "bg-red-500";
+  const bg = color === "green" ? "bg-green-600" : color === "amber" ? "bg-amber-500" : "bg-red-500";
   return (
     <span
       className={`ml-auto flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full ${bg} px-1 text-[10px] font-semibold leading-none text-white group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:-top-1 group-data-[collapsible=icon]:-right-1 group-data-[collapsible=icon]:h-4 group-data-[collapsible=icon]:min-w-4 group-data-[collapsible=icon]:text-[9px]`}
@@ -236,7 +236,7 @@ function resolveDescription(key: string, fallback: string, overrides?: Record<st
   return fallback;
 }
 
-function NavLink({ item, isActive, badge, badgeColor, overrides }: { item: NavItem; isActive: boolean; badge?: number; badgeColor?: "red" | "green"; overrides?: Record<string, string> }) {
+function NavLink({ item, isActive, badge, badgeColor, overrides }: { item: NavItem; isActive: boolean; badge?: number; badgeColor?: "red" | "green" | "amber"; overrides?: Record<string, string> }) {
   const Icon = item.icon;
   const description = resolveDescription(item.title, item.description, overrides);
   return (
@@ -288,6 +288,26 @@ function useDailyWorkspaceCount() {
   return data?.totalCards ?? 0;
 }
 
+// Task #690 — sidebar badge for the Customer Quotes entry. Shows the number
+// of stale quote follow-ups for the current org, polled every 90s and
+// refreshed on tab focus. The endpoint is count-only and shares the
+// list endpoint's per-org cache, so polling is cheap even with many open
+// tabs. Live-sync invalidates this query on `customer_quote` and
+// `customer_quote_followup` topics so a quote answered in another tab
+// drops the badge within ~2s.
+const STALE_FOLLOWUP_ROLES = ["admin", "director", "national_account_manager", "account_manager"];
+function useStaleFollowupCount() {
+  const { user } = useAuth();
+  const { data } = useQuery<{ count: number }>({
+    queryKey: ["/api/customer-quotes/stale-followups/count"],
+    enabled: !!user && STALE_FOLLOWUP_ROLES.includes(user.role),
+    refetchInterval: 90_000,
+    staleTime: 60_000,
+    retry: false,
+  });
+  return data?.count ?? 0;
+}
+
 const INTEL_REVIEW_ROLES = ["admin", "director"];
 
 function usePendingIntelCount() {
@@ -310,6 +330,7 @@ export function AppSidebar() {
   const conversationsWaitingCount = useConversationsWaitingCount();
   const pendingIntelCount = usePendingIntelCount();
   const dailyWorkspaceCount = useDailyWorkspaceCount();
+  const staleFollowupCount = useStaleFollowupCount();
   const tooltipOverrides = useSidebarTooltipOverrides();
   const desc = (key: string, fallback?: string) =>
     resolveDescription(key, fallback ?? SIDEBAR_TOOLTIP_DEFAULT_MAP[key] ?? "", tooltipOverrides);
@@ -467,8 +488,14 @@ export function AppSidebar() {
                   item={item}
                   isActive={isActive(item.url)}
                   overrides={tooltipOverrides}
-                  badge={item.title === "Today's Priorities" && dailyWorkspaceCount > 0 ? dailyWorkspaceCount : undefined}
-                  badgeColor="green"
+                  badge={
+                    item.title === "Today's Priorities" && dailyWorkspaceCount > 0
+                      ? dailyWorkspaceCount
+                      : item.title === "Customer Quotes" && staleFollowupCount > 0
+                        ? staleFollowupCount
+                        : undefined
+                  }
+                  badgeColor={item.title === "Customer Quotes" ? "amber" : "green"}
                 />
               ))}
             </CollapsibleGroup>
