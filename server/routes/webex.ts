@@ -60,6 +60,7 @@ import { and, eq, lte, inArray, sql } from "drizzle-orm";
 import OpenAI from "openai";
 import cron from "node-cron";
 import crypto from "crypto";
+import { getErrorMessage } from "../lib/errors";
 
 const WEBEX_STATE_TTL_MS = 10 * 60 * 1000;
 const WEBEX_STATE_RUNTIME_SECRET = crypto.randomBytes(32).toString("hex");
@@ -182,7 +183,7 @@ async function persistCallAnalytics(
       touchpointId: null,
     });
   } catch (err) {
-    log(`persistCallAnalytics failed for CDR ${record.id}: ${err instanceof Error ? err.message : String(err)}`);
+    log(`persistCallAnalytics failed for CDR ${record.id}: ${getErrorMessage(err)}`);
   }
 }
 
@@ -442,7 +443,7 @@ async function syncCallsForOrg(
 
         log(`Created missed-call NBA card for ${matchedContact.name}`);
       } catch (err) {
-        log(`Failed to create missed-call NBA card: ${err instanceof Error ? err.message : String(err)}`);
+        log(`Failed to create missed-call NBA card: ${getErrorMessage(err)}`);
       }
       continue;
     }
@@ -679,7 +680,7 @@ async function maybeAutoBackfillOnConnect(orgId: string): Promise<void> {
     try {
       existing = await storage.getWebexSyncStatesForOrg(orgId);
     } catch (err) {
-      log(`Auto-backfill sync-state lookup failed for org=${orgId}: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Auto-backfill sync-state lookup failed for org=${orgId}: ${getErrorMessage(err)}`);
     }
     const cdrRow = existing.find(
       (r) => r.dataSource === "cdr_history" && r.backfillCompletedAt,
@@ -691,7 +692,7 @@ async function maybeAutoBackfillOnConnect(orgId: string): Promise<void> {
     log(`Auto-backfill triggered for org=${orgId} (first Webex connect)`);
     kickOffOrgBackfill(orgId, MAX_BACKFILL_DAYS);
   } catch (err) {
-    log(`Auto-backfill error org=${orgId}: ${err instanceof Error ? err.message : String(err)}`);
+    log(`Auto-backfill error org=${orgId}: ${getErrorMessage(err)}`);
   } finally {
     // Clear the in-flight marker after a short delay so future explicit
     // reconnects can retrigger if the prior run truly failed before
@@ -812,7 +813,7 @@ export function registerWebexRoutes(app: Express) {
       log(`Authorize (${mode}) → redirect_uri=${info.redirectUri} (source=${info.source})`);
       res.redirect(authUrl);
     } catch (err) {
-      log(`Authorize error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Authorize error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Failed to generate authorization URL" });
     }
   });
@@ -940,7 +941,7 @@ export function registerWebexRoutes(app: Express) {
         </body></html>
       `);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = getErrorMessage(err);
       log(`Callback error: ${msg}`);
       log(`Callback error context — redirect_uri=${info.redirectUri} (source=${info.source})`);
       renderError(500, msg);
@@ -994,7 +995,7 @@ export function registerWebexRoutes(app: Express) {
 
       res.json({ status, configured: true });
     } catch (err) {
-      log(`Presence error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Presence error: ${getErrorMessage(err)}`);
       res.json({ status: "unknown", configured: true });
     }
   });
@@ -1025,7 +1026,7 @@ export function registerWebexRoutes(app: Express) {
         scopeUpgradeAvailable,
       });
     } catch (err) {
-      log(`my-connection error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`my-connection error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Failed to load personal Webex connection" });
     }
   });
@@ -1038,7 +1039,7 @@ export function registerWebexRoutes(app: Express) {
       log(`User ${user.id} disconnected their personal Webex account (deleted=${deleted})`);
       res.json({ deleted });
     } catch (err) {
-      log(`my-connection delete error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`my-connection delete error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Failed to disconnect Webex" });
     }
   });
@@ -1170,7 +1171,7 @@ export function registerWebexRoutes(app: Express) {
         inventory,
       });
     } catch (err) {
-      log(`webex health error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`webex health error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Failed to load Webex health" });
     }
   });
@@ -1197,8 +1198,8 @@ export function registerWebexRoutes(app: Express) {
         nbaCards: result.nbaCards,
       });
     } catch (err) {
-      log(`sync-my-calls error: ${err instanceof Error ? err.message : String(err)}`);
-      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to sync personal Webex calls" });
+      log(`sync-my-calls error: ${getErrorMessage(err)}`);
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -1271,7 +1272,7 @@ export function registerWebexRoutes(app: Express) {
         nbaCards: totalNbaCards,
       });
     } catch (err) {
-      log(`Sync error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Sync error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Failed to sync Webex calls" });
     }
   });
@@ -1311,8 +1312,8 @@ export function registerWebexRoutes(app: Express) {
           "Backfill scheduled. Watch the admin Webex Health panel (Sync State) for per-data-source progress.",
       });
     } catch (err) {
-      log(`backfill-history error: ${err instanceof Error ? err.message : String(err)}`);
-      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to backfill history" });
+      log(`backfill-history error: ${getErrorMessage(err)}`);
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -1329,7 +1330,7 @@ export function registerWebexRoutes(app: Express) {
         users: orgUsers.map(u => ({ id: u.id, name: u.name, username: u.username, role: u.role })),
       });
     } catch (err) {
-      log(`List mappings error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`List mappings error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Failed to load Webex user mappings" });
     }
   });
@@ -1341,7 +1342,7 @@ export function registerWebexRoutes(app: Express) {
       const result = await seedWebexUserMappings(user.organizationId);
       res.json(result);
     } catch (err) {
-      log(`Seed mappings error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Seed mappings error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Failed to seed Webex user mappings" });
     }
   });
@@ -1372,8 +1373,8 @@ export function registerWebexRoutes(app: Express) {
       }
       res.json(result);
     } catch (err) {
-      log(`Backfill attribution error: ${err instanceof Error ? err.message : String(err)}`);
-      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to backfill attribution" });
+      log(`Backfill attribution error: ${getErrorMessage(err)}`);
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -1388,8 +1389,8 @@ export function registerWebexRoutes(app: Express) {
       const row = await storage.upsertWebexUserMapping(parsed);
       res.json(row);
     } catch (err) {
-      log(`Upsert mapping error: ${err instanceof Error ? err.message : String(err)}`);
-      res.status(400).json({ error: err instanceof Error ? err.message : "Invalid mapping data" });
+      log(`Upsert mapping error: ${getErrorMessage(err)}`);
+      res.status(400).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -1411,7 +1412,7 @@ export function registerWebexRoutes(app: Express) {
       if (!row) return res.status(404).json({ error: "Mapping not found" });
       res.json(row);
     } catch (err) {
-      log(`Update mapping error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Update mapping error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Failed to update mapping" });
     }
   });
@@ -1423,7 +1424,7 @@ export function registerWebexRoutes(app: Express) {
       const ok = await storage.deleteWebexUserMapping(pStr(req.params.id), user.organizationId);
       res.json({ deleted: ok });
     } catch (err) {
-      log(`Delete mapping error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Delete mapping error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Failed to delete mapping" });
     }
   });
@@ -1644,8 +1645,8 @@ export function registerWebexRoutes(app: Express) {
         managers,
       });
     } catch (err) {
-      log(`device-usage error: ${err instanceof Error ? err.message : String(err)}`);
-      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to load device usage" });
+      log(`device-usage error: ${getErrorMessage(err)}`);
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -1708,7 +1709,7 @@ export function registerWebexRoutes(app: Express) {
 
       res.json({ calls: hydrated, windowHours: hours });
     } catch (err) {
-      log(`Missed inbound list error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Missed inbound list error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Failed to load missed inbound calls" });
     }
   });
@@ -1809,7 +1810,7 @@ export function registerWebexRoutes(app: Express) {
           : { kind: "unknown", phone: missed.callingNumber },
       });
     } catch (err) {
-      log(`Missed inbound callback error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Missed inbound callback error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Failed to create callback" });
     }
   });
@@ -2018,7 +2019,7 @@ export function registerWebexRoutes(app: Express) {
         teams,
       });
     } catch (err) {
-      log(`Usage report error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Usage report error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Failed to load Webex usage report" });
     }
   });
@@ -2147,7 +2148,7 @@ export function registerWebexRoutes(app: Express) {
         calls,
       });
     } catch (err) {
-      log(`Rep call drill-down error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Rep call drill-down error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Failed to load rep call detail" });
     }
   });
@@ -2193,7 +2194,7 @@ export function registerWebexRoutes(app: Express) {
 
       res.json({ presenceMap, configured: true });
     } catch (err) {
-      log(`Presence batch error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Presence batch error: ${getErrorMessage(err)}`);
       res.json({ presenceMap: {}, configured: true });
     }
   });
@@ -2371,7 +2372,7 @@ export function registerWebexRoutes(app: Express) {
         reps,
       });
     } catch (err) {
-      log(`Call quality scorecard error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Call quality scorecard error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Failed to build call quality scorecard" });
     }
   });
@@ -2418,7 +2419,7 @@ export function registerWebexRoutes(app: Express) {
       const { rows } = await storage.pool.query(sql, params);
       res.json({ calls: rows, days, total: rows.length });
     } catch (err) {
-      log(`Call quality drill-in error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Call quality drill-in error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Failed to load call list" });
     }
   });
@@ -2463,7 +2464,7 @@ export function registerWebexRoutes(app: Express) {
 
       res.json({ ok: true, days, newTouchpoints: synced });
     } catch (err) {
-      log(`Call quality backfill error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Call quality backfill error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Backfill failed" });
     }
   });
@@ -2494,7 +2495,7 @@ export function initWebexSyncScheduler(): void {
     } catch (err) {
       // refreshWebexAccessToken already handles invalid_grant -> needs_reauth.
       // Transient failures are logged inside the helper; nothing more to do here.
-      log(`Proactive refresh error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Proactive refresh error: ${getErrorMessage(err)}`);
     }
   });
 
@@ -2514,7 +2515,7 @@ export function initWebexSyncScheduler(): void {
         );
       }
     } catch (err) {
-      log(`Enrichment sweep error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Enrichment sweep error: ${getErrorMessage(err)}`);
     }
   });
   log("Webex enrichment-job sweep scheduler started (every 5 minutes)");
@@ -2578,7 +2579,7 @@ export function initWebexSyncScheduler(): void {
       }
       log("Background call sync complete");
     } catch (err) {
-      log(`Background sync error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Background sync error: ${getErrorMessage(err)}`);
     }
   });
 
@@ -2614,7 +2615,7 @@ export function initWebexSyncScheduler(): void {
         }
       }
     } catch (err) {
-      log(`Bootstrap seed scheduling error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Bootstrap seed scheduling error: ${getErrorMessage(err)}`);
     }
   }, 15_000);
 

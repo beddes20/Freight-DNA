@@ -24,6 +24,7 @@ import { threads as threadsTable, threadMessages, type AccountReview, type User 
 import { ensureDefaultAgent } from "../agent/persona";
 import { runAgentTurn } from "../agent/core";
 import type { AgentContext } from "../agent/tools";
+import { getErrorMessage } from "../lib/errors";
 
 /** Roles with implicit cross-rep visibility (still org-scoped). */
 const MANAGER_ROLES = new Set(["admin", "director", "sales_director", "national_account_manager"]);
@@ -98,7 +99,7 @@ export function registerAccountReviewRoutes(app: Express): void {
       const rows = await storage.getAccountReviewsByCompany(companyId, user.organizationId, limit);
       res.json(rows);
     } catch (err) {
-      res.status(500).json({ error: (err instanceof Error ? err.message : null) || "Failed to load account reviews" });
+      res.status(500).json({ error: getErrorMessage(err) || "Failed to load account reviews" });
     }
   });
 
@@ -129,7 +130,7 @@ export function registerAccountReviewRoutes(app: Express): void {
 
       res.json(rows.map(r => ({ ...r, companyName: nameById.get(r.companyId) || null })));
     } catch (err) {
-      res.status(500).json({ error: (err instanceof Error ? err.message : null) || "Failed to load account reviews" });
+      res.status(500).json({ error: getErrorMessage(err) || "Failed to load account reviews" });
     }
   });
 
@@ -174,7 +175,7 @@ export function registerAccountReviewRoutes(app: Express): void {
       if (!review) return res.status(404).json({ error: "Company not found or could not be summarized." });
       res.json(review);
     } catch (err) {
-      res.status(500).json({ error: (err instanceof Error ? err.message : null) || "Failed to generate review" });
+      res.status(500).json({ error: getErrorMessage(err) || "Failed to generate review" });
     }
   });
 
@@ -187,7 +188,7 @@ export function registerAccountReviewRoutes(app: Express): void {
       const totals = await runWeeklyAccountReviews(weekOf);
       res.json({ weekOf, ...totals });
     } catch (err) {
-      res.status(500).json({ error: (err instanceof Error ? err.message : null) || "Failed to run batch" });
+      res.status(500).json({ error: getErrorMessage(err) || "Failed to run batch" });
     }
   });
 
@@ -226,7 +227,7 @@ export function registerAccountReviewRoutes(app: Express): void {
       await storage.rateAccountReview(review.id, user.organizationId, numericRating);
       res.json({ ok: true, rating: body.data.rating });
     } catch (err) {
-      res.status(500).json({ error: (err instanceof Error ? err.message : null) || "Failed to rate review" });
+      res.status(500).json({ error: getErrorMessage(err) || "Failed to rate review" });
     }
   });
 
@@ -311,7 +312,7 @@ export function registerAccountReviewRoutes(app: Express): void {
 
       res.json({ threadId, userMessage: userMsg, assistantMessage: assistantMsg });
     } catch (err) {
-      res.status(500).json({ error: (err instanceof Error ? err.message : null) || "Failed to add follow-up" });
+      res.status(500).json({ error: getErrorMessage(err) || "Failed to add follow-up" });
     }
   });
 
@@ -330,7 +331,7 @@ export function registerAccountReviewRoutes(app: Express): void {
         .where(and(eq(threadMessages.threadId, review.followUpThreadId)));
       res.json({ threadId: review.followUpThreadId, messages: rows });
     } catch (err) {
-      res.status(500).json({ error: (err instanceof Error ? err.message : null) || "Failed to load follow-ups" });
+      res.status(500).json({ error: getErrorMessage(err) || "Failed to load follow-ups" });
     }
   });
 }

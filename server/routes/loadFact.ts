@@ -30,6 +30,7 @@ import {
 import { performLoadFactImport } from "../loadFactPowerBIImporter";
 import { backfillAll, backfillFromFinancialUploads, backfillFromFreightOpportunities } from "../loadFactBackfill";
 import { runParityHarness } from "../loadFactParity";
+import { getErrorMessage } from "../lib/errors";
 
 export function registerLoadFactRoutes(app: Express): void {
   // ── Settings: PowerBI URL ────────────────────────────────────────────────
@@ -161,7 +162,7 @@ export function registerLoadFactRoutes(app: Express): void {
       });
       return res.json({ ok: true, summary });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = getErrorMessage(err);
       console.error("[load-fact/import]", msg);
       return res.status(400).json({ error: msg });
     }
@@ -207,7 +208,7 @@ export function registerLoadFactRoutes(app: Express): void {
       const result = await backfillAll(orgId, user.id);
       return res.json({ ok: true, result });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = getErrorMessage(err);
       console.error("[load-fact/backfill]", msg);
       return res.status(500).json({ error: msg });
     }

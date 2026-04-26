@@ -1900,7 +1900,7 @@ House style — follow every rule:
         updatedAt: new Date().toISOString(),
       });
     } catch (err) {
-      console.error("[ensureHotFollowUpTask] failed:", err instanceof Error ? err.message : err);
+      console.error("[ensureHotFollowUpTask] failed:", getErrorMessage(err));
     }
   }
 

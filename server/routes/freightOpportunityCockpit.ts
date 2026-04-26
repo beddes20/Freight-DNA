@@ -33,6 +33,7 @@ import {
 import { getCarrierCoverableLanes } from "../services/carrierCoverableLanes";
 import { db } from "../storage";
 import { publish as publishLiveSync } from "../services/liveSync";
+import { getErrorMessage } from "../lib/errors";
 
 function orgId(req: Express.Request): string {
   return (req as any).session?.organizationId as string;
@@ -1319,7 +1320,7 @@ export function registerFreightCockpitRoutes(app: Express) {
       res.json({ opportunity, results });
     } catch (err) {
       console.error("[auto-pilot] approve-now failed:", err);
-      const msg = err instanceof Error ? err.message : "Failed to approve and send";
+      const msg = getErrorMessage(err);
       res.status(400).json({ error: msg });
     }
   });

@@ -17,6 +17,7 @@ import type { Express, Request, Response } from "express";
 import { storage } from "../storage";
 import type { EmailConversationThread, EmailMessage } from "@shared/schema";
 import type { ConversationOwnershipStorage } from "../services/conversationOwnershipService";
+import { getErrorMessage } from "../lib/errors";
 
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -170,7 +171,7 @@ async function fetchGraphMessage(resource: string): Promise<GraphMessageDetails 
     log(`Graph message fetch error ${res.status}: ${errText}`);
     return null;
   } catch (err) {
-    log(`Graph message fetch exception: ${err instanceof Error ? err.message : String(err)}`);
+    log(`Graph message fetch exception: ${getErrorMessage(err)}`);
     return null;
   }
 }
@@ -256,7 +257,7 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
         );
       } catch (err) {
         log(
-          `[pod-intake] error processing msg=${providerMessageId}: ${err instanceof Error ? err.message : String(err)}`,
+          `[pod-intake] error processing msg=${providerMessageId}: ${getErrorMessage(err)}`,
         );
       }
       return;
@@ -829,7 +830,7 @@ export async function processGraphNotifications(body: unknown): Promise<void> {
     }
 
     processNotification(notification, orgId).catch(err => {
-      log(`processNotification error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`processNotification error: ${getErrorMessage(err)}`);
     });
   }
 }

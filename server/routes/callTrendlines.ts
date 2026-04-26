@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { pStr, qStr, qOptStr } from "../lib/req";
 import { requireAuth, getCurrentUser } from "../auth";
 import { storage } from "../storage";
+import { getErrorMessage } from "../lib/errors";
 import {
   buildCompanyCallTrendline,
   buildOrgCallPace,
@@ -32,7 +33,7 @@ export function registerCallTrendlineRoutes(app: Express) {
       res.json({ ...result, days, repId: repId ?? null });
     } catch (err) {
       console.error("[call-trendline] company error:", err);
-      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to build trendline" });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -45,7 +46,7 @@ export function registerCallTrendlineRoutes(app: Express) {
       res.json({ days, rows });
     } catch (err) {
       console.error("[call-trendline] pace error:", err);
-      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to build call pace" });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -60,7 +61,7 @@ export function registerCallTrendlineRoutes(app: Express) {
       res.json(result);
     } catch (err) {
       console.error("[call-trendline] lane error:", err);
-      res.status(500).json({ error: err instanceof Error ? err.message : "Failed to build lane rollup" });
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 }

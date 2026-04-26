@@ -39,6 +39,7 @@ import {
   type FreightOutreachTemplateKind,
   type InsertCompanyOutreachPolicy,
 } from "@shared/schema";
+import { getErrorMessage } from "../lib/errors";
 
 function orgId(req: Express.Request): string {
   return (req as any).session?.organizationId as string;
@@ -71,7 +72,7 @@ function runOrJoinRank(opp: import("@shared/schema").FreightOpportunity) {
       );
       return result;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = getErrorMessage(err);
       console.error(`[freight-opps] inline rank ${opp.id} failed after ${Date.now() - started}ms:`, message);
       return { ranked: false, carriers: [] as any[], error: message };
     } finally {
@@ -133,7 +134,7 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       res.json(summary);
     } catch (err) {
       console.error("[freight-opps] upload error:", err);
-      const message = err instanceof Error ? err.message : "Failed to import available freight";
+      const message = getErrorMessage(err);
       res.status(500).json({ error: message });
     }
   });
@@ -704,7 +705,7 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       });
       res.json(out);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = getErrorMessage(err);
       console.error("[freight-opps] send error:", msg);
       res.status(400).json({ error: msg });
     }
@@ -884,7 +885,7 @@ export function registerProactiveOpportunityRoutes(app: Express) {
         loops: outcome.loops,
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = getErrorMessage(err);
       console.error("[freight-opps] cover failed:", msg);
       return res.status(500).json({ error: "Failed to cover opportunity" });
     }

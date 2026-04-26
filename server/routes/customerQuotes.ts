@@ -43,6 +43,7 @@ import {
   MAX_INTAKE_IMAGE_BYTES,
   MAX_INTAKE_TEXT_BYTES,
 } from "../services/spotQuoteIntake";
+import { getErrorMessage } from "../lib/errors";
 
 // Minimum margin % guardrail when estimatedCost is supplied. Env-tunable.
 const SPOT_MIN_MARGIN_PCT: number = (() => {
@@ -127,7 +128,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const snap = await getSnapshot(user.organizationId, filters);
       res.json(snap);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] snapshot error:", err);
       res.status(500).json({ error: msg });
     }
@@ -157,7 +158,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const result = await getFunnel(user.organizationId, filters, scope);
       res.json(result);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] funnel error:", err);
       res.status(500).json({ error: msg });
     }
@@ -178,7 +179,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const result = await listQuotes(user.organizationId, filters, sortKey, sortDir, d.offset, d.limit);
       res.json(result);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] list error:", err);
       res.status(500).json({ error: msg });
     }
@@ -226,7 +227,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const detail = await getQuoteDetail(user.organizationId, opp.id);
       res.status(201).json(detail);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Invalid input";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] create error:", err);
       res.status(400).json({ error: msg });
     }
@@ -246,7 +247,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       publishLiveSync(user.organizationId, "customer_quote", opp.id);
       res.json(detail);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Invalid input";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] update error:", err);
       res.status(400).json({ error: msg });
     }
@@ -265,7 +266,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const customer = await createQuoteCustomer(user.organizationId, data.name, data.segment ?? null);
       res.json(customer);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Invalid input";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] create customer error:", err);
       res.status(400).json({ error: msg });
     }
@@ -289,7 +290,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       clearPartyTypeBackfillCache(user.organizationId);
       res.json(updated);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Invalid input";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] set party-type error:", err);
       res.status(400).json({ error: msg });
     }
@@ -303,7 +304,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       if (!detail) return res.status(404).json({ error: "Not found" });
       res.json(detail);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] detail error:", err);
       res.status(500).json({ error: msg });
     }
@@ -329,7 +330,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const intel = await getPricingIntelligence(user.organizationId, parsed.data);
       res.json(intel);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] pricing intel error:", err);
       res.status(500).json({ error: msg });
     }
@@ -344,7 +345,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const rec = await getPricingRecommendation(user.organizationId, String(req.params.id));
       res.json(rec);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] recommendation error:", err);
       res.status(500).json({ error: msg });
     }
@@ -358,7 +359,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const floors = await getMarginFloors(user.organizationId);
       res.json({ floors });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] pricing-floors get error:", err);
       res.status(500).json({ error: msg });
     }
@@ -378,7 +379,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const saved = await setMarginFloors(user.organizationId, parsed.data.floors, user.id);
       res.json({ floors: saved });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] pricing-floors patch error:", err);
       res.status(500).json({ error: msg });
     }
@@ -397,7 +398,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const mappings = await listMappings(user.organizationId);
       res.json({ mappings });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] sender-mappings list error:", err);
       res.status(500).json({ error: msg });
     }
@@ -419,7 +420,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       if (!result.deleted) return res.status(404).json({ error: "Mapping not found" });
       res.json({ deleted: true });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] sender-mappings delete error:", err);
       res.status(500).json({ error: msg });
     }
@@ -440,7 +441,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const enabled = await getAutoWonQuoteAfHandoffEnabled(user.organizationId);
       res.json({ enabled });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] auto-af-handoff get error:", err);
       res.status(500).json({ error: msg });
     }
@@ -458,7 +459,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       await setAutoWonQuoteAfHandoffEnabled(user.organizationId, parsed.data.enabled);
       res.json({ enabled: parsed.data.enabled });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] auto-af-handoff put error:", err);
       res.status(500).json({ error: msg });
     }
@@ -483,7 +484,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const queue = await getActionQueue(user.organizationId, { limit: parsed.data.limit });
       res.json(queue);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] action-queue error:", err);
       res.status(500).json({ error: msg });
     }
@@ -511,7 +512,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       clearPartyTypeBackfillCache(user.organizationId);
       res.json(result);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Invalid input";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] bulk-reassign error:", err);
       res.status(400).json({ error: msg });
     }
@@ -539,7 +540,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       publishLiveSync(user.organizationId, "customer_quote");
       res.json(result);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Invalid input";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] bulk-status error:", err);
       res.status(400).json({ error: msg });
     }
@@ -570,7 +571,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const result = await searchSpotQuote(user.organizationId, parsed.data);
       res.json(result);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] spot search error:", err);
       res.status(500).json({ error: msg });
     }
@@ -639,7 +640,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
         if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
           return res.status(413).json({ error: "File is too large — please upload under 8 MB." });
         }
-        const msg = err instanceof Error ? err.message : "Internal error";
+        const msg = getErrorMessage(err);
         console.error("[customer-quotes] spot-intake error:", err);
         res.status(500).json({ error: msg });
       }
@@ -685,7 +686,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const view = await createSavedView(user.organizationId, user.id, data.name, data.filters);
       res.json(view);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Invalid input";
+      const msg = getErrorMessage(err);
       res.status(400).json({ error: msg });
     }
   });
@@ -746,7 +747,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       }, user.id);
       res.status(201).json(opp);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Invalid input";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] spot create error:", err);
       res.status(400).json({ error: msg });
     }
@@ -832,7 +833,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const subject = `Spot Quote: ${lane}`;
       res.json({ subject, body, to: toEmails });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Invalid input";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] spot email-draft error:", err);
       res.status(500).json({ error: msg });
     }
@@ -849,7 +850,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const result = await syncQuoteOutcomesFromTms(user.organizationId);
       res.json(result);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] tms sync error:", err);
       res.status(500).json({ error: msg });
     }
@@ -865,7 +866,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const items = await getStaleQuoteFollowUps(user.organizationId, { force });
       res.json({ items });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       res.status(500).json({ error: msg });
     }
   });
@@ -878,7 +879,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const items = await getStaleQuoteFollowUps(user.organizationId, { force: true });
       res.json({ ok: true, count: items.length });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       res.status(500).json({ error: msg });
     }
   });
@@ -893,7 +894,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       res.setHeader("Content-Disposition", `attachment; filename="customer-quotes-${new Date().toISOString().slice(0, 10)}.csv"`);
       res.send(csv);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       res.status(500).json({ error: msg });
     }
   });
@@ -908,7 +909,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const status = getEmailBackfillStatus(user.organizationId);
       res.json({ ok: true, organizationId: user.organizationId, status });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] email-backfill-status error:", err);
       res.status(500).json({ error: msg });
     }
@@ -931,7 +932,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       });
       res.json({ ok: true, summary });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] backfill error:", err);
       res.status(500).json({ error: msg });
     }
@@ -952,7 +953,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const summary = await purgeDemoSeed(allOrgs ? undefined : user.organizationId);
       res.json({ ok: true, summary });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Internal error";
+      const msg = getErrorMessage(err);
       console.error("[customer-quotes] purge-demo-seed error:", err);
       res.status(500).json({ error: msg });
     }

@@ -34,6 +34,7 @@ import { listScorecards, getScorecardForCarrier } from "../carrierScorecardServi
 import { getBlendedRate } from "../pricingBlendService";
 import { recommendCarriersForLoad } from "../carrierRecommendationEngine";
 import { recomputeCarrierIntelligence } from "../carrierIntelligenceRecompute";
+import { getErrorMessage } from "../lib/errors";
 
 function orgOf(req: any): string | null {
   return (req?.session?.organizationId as string) ?? null;
@@ -355,7 +356,7 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
       const fresh = await recommendCarriersForLoad(orgId, load.id, { limit });
       return res.json(fresh);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = getErrorMessage(err);
       console.error("[carrier-intel/available-loads/:orderId/recs]", msg);
       return res.status(500).json({ error: msg });
     }
@@ -449,7 +450,7 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
       });
       return res.json({ ok: true, summary });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = getErrorMessage(err);
       console.error("[admin/carrier-intel/recompute]", msg);
       return res.status(500).json({ error: msg });
     }

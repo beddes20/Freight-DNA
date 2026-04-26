@@ -35,6 +35,7 @@ import { db } from "../storage";
 import { quoteOpportunities, emailMessages } from "@shared/schema";
 import { classifyCoverage } from "../services/coverageClassifier";
 import { and, eq, gte, sql } from "drizzle-orm";
+import { getErrorMessage } from "../lib/errors";
 
 // Roles whose users get a mailbox auto-enrolled by enroll-all and are
 // counted as "eligible" for the coverage banner. Kept in one place so the
@@ -214,7 +215,7 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
           const errCode = err && typeof err === "object" && "code" in err
             ? String((err as { code?: unknown }).code ?? "")
             : "";
-          const errMsg = err instanceof Error ? err.message : "";
+          const errMsg = getErrorMessage(err);
           const isUniqueViolation =
             errCode === "23505" ||
             /duplicate key|unique constraint/i.test(errMsg);

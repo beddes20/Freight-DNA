@@ -27,6 +27,7 @@ import { performAvailableFreightImport, listAvailableFreightImports, availableFr
 import { notifyFreightDelegated, notifyFreightApproved } from "../freightOpportunityNotifications";
 import { computeSlaState, countOverSlaForOrg, SLA_L1_HOURS, SLA_L2_HOURS } from "../freightOpportunitySlaService";
 import { z } from "zod";
+import { getErrorMessage } from "../lib/errors";
 
 const APPROVER_ROLES = new Set([
   "admin",
@@ -124,7 +125,7 @@ export function registerMyProcurementRoutes(app: Express) {
       // ops can see *which* sub-query broke without hunting prod logs.
       const bucketErrors: string[] = [];
       const noteFailure = (bucket: string, err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = getErrorMessage(err);
         console.error(`[my-procurement] bucket=${bucket} viewer=${viewer.id} target=${user.id} role=${viewer.role}:`, err);
         bucketErrors.push(`${bucket}: ${msg}`);
       };
@@ -1077,7 +1078,7 @@ export function registerMyProcurementRoutes(app: Express) {
       const summary = await performAvailableFreightImport(user.organizationId, user.id, "manual");
       return res.json({ ok: true, summary });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = getErrorMessage(err);
       console.error("[available-freight/import]", msg);
       return res.status(400).json({ error: msg });
     }
@@ -1235,7 +1236,7 @@ export function registerMyProcurementRoutes(app: Express) {
 
       return res.json({ ok: true, opportunity: created });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = getErrorMessage(err);
       console.error("[available-freight/manual]", msg);
       return res.status(500).json({ error: "Failed to create manual freight opportunity" });
     }
@@ -1382,7 +1383,7 @@ export function registerMyProcurementRoutes(app: Express) {
         return res.status(400).json({
           ok: false,
           status: 0,
-          message: `Failed to acquire Graph token: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Failed to acquire Graph token: ${getErrorMessage(err)}`,
         });
       }
 
@@ -1407,7 +1408,7 @@ export function registerMyProcurementRoutes(app: Express) {
         message: "OneDrive source is reachable.",
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = getErrorMessage(err);
       console.error("[available-freight/onedrive-url/test]", msg);
       return res.status(500).json({ ok: false, status: 0, message: msg });
     }

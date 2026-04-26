@@ -55,6 +55,7 @@ import {
   dismissSuggestion,
   recordSuggestionFeedback,
 } from "../services/conversationThreadSuggestionService";
+import { getErrorMessage } from "../lib/errors";
 
 export function registerConversationsRoutes(app: Express): void {
 
@@ -764,7 +765,7 @@ export function registerConversationsRoutes(app: Express): void {
           results.push({
             id,
             ok: false,
-            error: err instanceof Error ? err.message : "Unknown error",
+            error: getErrorMessage(err),
           });
         }
       }
@@ -1469,7 +1470,7 @@ export function registerConversationsRoutes(app: Express): void {
         });
       } catch (err) {
         console.error("[conversations] POST /recheck error:", err);
-        res.status(500).json({ error: err instanceof Error ? err.message : "Recheck failed" });
+        res.status(500).json({ error: getErrorMessage(err) });
       }
     },
   );

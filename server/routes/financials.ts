@@ -23,6 +23,7 @@ import { performOneDriveSync } from "../monthlyDataRefreshScheduler";
 import { azureCredentialsConfigured } from "../graphService";
 import { geocodeCity, haversineDistance } from "../geocoding";
 import { cacheGet, cacheSet, cacheInvalidatePrefix } from "../cache";
+import { getErrorMessage } from "../lib/errors";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -675,7 +676,7 @@ export function registerFinancialRoutes(app: Express): void {
       }
     } catch (error) {
       console.error("Error uploading financials:", error);
-      const message = error instanceof Error ? error.message : "Failed to upload financials";
+      const message = getErrorMessage(error);
       res.status(500).json({ error: message });
     }
   });
@@ -1461,7 +1462,7 @@ export function registerFinancialRoutes(app: Express): void {
       res.json(result);
     } catch (error) {
       console.error("Error syncing from OneDrive:", error);
-      const message = (error instanceof Error ? error.message : null) || "Failed to sync from OneDrive. Please check the share link and try again.";
+      const message = getErrorMessage(error) || "Failed to sync from OneDrive. Please check the share link and try again.";
       res.status(500).json({ error: message });
     }
   });

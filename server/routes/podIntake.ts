@@ -35,6 +35,7 @@ import {
   downloadGraphAttachments,
   type PodCandidateAttachment,
 } from "../services/podIntakeService";
+import { getErrorMessage } from "../lib/errors";
 
 function requireAdmin(req: Request, res: Response, next: () => void) {
   getCurrentUser(req)
@@ -325,7 +326,7 @@ export function registerPodIntakeRoutes(app: Express): void {
         } catch (err) {
           console.warn(
             "[pod-intake] reforward attachment fetch failed:",
-            err instanceof Error ? err.message : String(err),
+            getErrorMessage(err),
           );
         }
 
@@ -460,7 +461,7 @@ export function registerPodIntakeRoutes(app: Express): void {
     } catch (err) {
       console.warn(
         `[my-pods] customer-name lookup failed: ${
-          err instanceof Error ? err.message : String(err)
+          getErrorMessage(err)
         }`,
       );
     }
@@ -488,7 +489,7 @@ export function registerPodIntakeRoutes(app: Express): void {
     } catch (err) {
       console.warn(
         `[my-pods] freight-opportunity lookup failed: ${
-          err instanceof Error ? err.message : String(err)
+          getErrorMessage(err)
         }`,
       );
     }
