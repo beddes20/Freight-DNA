@@ -1,4 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, BrainCircuit, Lightbulb, Brain, MailCheck, ChevronDown, Sparkles, Activity, Compass, GitMerge, type LucideIcon } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, BrainCircuit, Lightbulb, Brain, MailCheck, ChevronDown, Sparkles, Activity, Compass, GitMerge, Filter, type LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -67,6 +67,7 @@ const customerFacingItems: NavItem[] = [
   { title: "Launchpad",         url: "/prospects",        icon: Crosshair,     description: "Find and qualify new prospects to pursue.", roles: PROSPECTS_ROLES },
   { title: "Customers",         url: "/customers",        icon: Network,       description: "Browse customer accounts and account history.", roles: SALES_ROLES },
   { title: "Customer Quotes",   url: "/customer-quotes",  icon: FileBarChart2, description: "Quote requests, outcomes, and lane performance — drillable analytics across customers and reps.", roles: ["admin", "director", "national_account_manager", "account_manager"] },
+  { title: "Freight Capture",   url: "/freight-capture",  icon: Filter,        description: "Quote-to-book funnel: stages from request received through win, with loss reasons and best/worst performers.", roles: ["admin", "director", "sales_director", "national_account_manager", "account_manager"] },
   { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           description: "High-value opportunities ranked by potential impact.", roles: SALES_ROLES },
   { title: "RFP & Awards",    url: "/rfp-awards",      icon: Trophy,   description: "Active RFPs and awarded business tracking." },
   { title: "RFP Calendar",    url: "/rfp-calendar",    icon: Calendar, description: "Upcoming RFP deadlines and key dates." },

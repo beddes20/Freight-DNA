@@ -102,6 +102,7 @@ import CarrierIntelligenceLanePricingPage from "@/pages/carrier-intelligence-lan
 import CarrierIntelligenceSettingsPage from "@/pages/carrier-intelligence-settings";
 import AdminSidebarTooltipsPage from "@/pages/admin-sidebar-tooltips";
 import CustomerQuotesPage from "@/pages/customer-quotes";
+import FreightCapturePage from "@/pages/freight-capture";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -181,6 +182,7 @@ function Router() {
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/customers" component={Customers} />
       <Route path="/customer-quotes" component={CustomerQuotesPage} />
+      <Route path="/freight-capture" component={FreightCapturePage} />
       <Route path="/companies/:id" component={CompanyDetail} />
       <Route path="/rfp-awards" component={RfpAwards} />
       <Route path="/rfp-lane-search" component={RfpLaneSearch} />

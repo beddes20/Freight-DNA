@@ -3491,3 +3491,308 @@ export async function laneAutocomplete(
 
   return [...history, ...cityMatches.slice(0, CITY_LIMIT)];
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task #673 — Freight Capture Funnel
+//
+// A sliceable funnel view of quote opportunities by stage:
+//   Request Received → Quoted → Follow-up Sent → Booked / Won
+//   plus parallel exits: Lost, Stale / No Response.
+//
+// Reuses `loadContext` + `applyFilters` so the same Customer/Rep/Equipment/
+// Outcome/Date filters that drive the snapshot work the same way here.
+// Stale = pending and >14 days old, OR explicitly no_response/expired.
+// Follow-up signal = a quote_events row with eventType in (revised, followup)
+// for the quote.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const STALE_AGE_DAYS = 14;
+const FUNNEL_FOLLOWUP_EVENT_TYPES = ["revised", "followup"] as const;
+
+export type FunnelStageKey =
+  | "received"
+  | "quoted"
+  | "followup"
+  | "won"
+  | "lost"
+  | "stale";
+
+export type FunnelStage = {
+  key: FunnelStageKey;
+  label: string;
+  count: number;
+  // Percent of the immediately preceding stage. Null on the first stage.
+  conversionPct: number | null;
+  // Percent of "received" so the UI can show absolute funnel share.
+  shareOfReceivedPct: number;
+};
+
+export type FunnelLossReason = { reasonId: string | null; label: string; count: number };
+
+export type FunnelPerformerRow = {
+  id: string;
+  label: string;
+  total: number;
+  won: number;
+  lost: number;
+  winRate: number;
+  avgQuoted: number;
+};
+
+export type FunnelPerformers = {
+  lanes: FunnelPerformerRow[];
+  customers: FunnelPerformerRow[];
+  reps: FunnelPerformerRow[];
+};
+
+export type FunnelSummary = {
+  totalReceived: number;
+  totalQuoted: number;
+  totalWon: number;
+  totalLost: number;
+  totalStale: number;
+  // Quote-to-Book = won / received.
+  quoteToBookPct: number;
+  // Win rate among decided quotes (won + lost).
+  winRatePct: number;
+  // Average response time across the filtered set.
+  avgResponseTimeHours: number;
+  // % of quoted that received a follow-up touch.
+  followUpCompliancePct: number;
+};
+
+export type FunnelResult = {
+  stages: FunnelStage[];
+  summary: FunnelSummary;
+  lossReasons: FunnelLossReason[];
+  performers: FunnelPerformers;
+  // Echoes the rep id the server scoped the data to (when an account_manager
+  // is the viewer). Null for admins/directors who see the full org.
+  scopedToRepId: string | null;
+};
+
+/**
+ * Resolve the QuoteRep row that a non-admin viewer should be scoped to.
+ * Returns null if the role does not require scoping; returns the rep id
+ * when the user is mapped to a QuoteRep; returns the sentinel "__none__"
+ * when the user is in a scoped role but has no rep mapping (so the caller
+ * can short-circuit to an empty result).
+ */
+export async function resolveFunnelRepScope(
+  orgId: string,
+  user: { id: string; role: string },
+): Promise<string | null | "__none__"> {
+  const elevated = new Set(["admin", "director", "sales_director"]);
+  if (elevated.has(user.role)) return null;
+  const [rep] = await db
+    .select({ id: quoteReps.id })
+    .from(quoteReps)
+    .where(and(eq(quoteReps.organizationId, orgId), eq(quoteReps.userId, user.id)))
+    .limit(1);
+  return rep?.id ?? "__none__";
+}
+
+function pct(num: number, den: number): number {
+  if (den <= 0) return 0;
+  return (num / den) * 100;
+}
+
+function emptyFunnelResult(scopedToRepId: string | null): FunnelResult {
+  const stages: FunnelStage[] = [
+    { key: "received", label: "Request Received", count: 0, conversionPct: null, shareOfReceivedPct: 0 },
+    { key: "quoted", label: "Quoted", count: 0, conversionPct: 0, shareOfReceivedPct: 0 },
+    { key: "followup", label: "Follow-up Sent", count: 0, conversionPct: 0, shareOfReceivedPct: 0 },
+    { key: "won", label: "Booked / Won", count: 0, conversionPct: 0, shareOfReceivedPct: 0 },
+    { key: "lost", label: "Lost", count: 0, conversionPct: 0, shareOfReceivedPct: 0 },
+    { key: "stale", label: "Stale / No Response", count: 0, conversionPct: 0, shareOfReceivedPct: 0 },
+  ];
+  return {
+    stages,
+    summary: {
+      totalReceived: 0, totalQuoted: 0, totalWon: 0, totalLost: 0, totalStale: 0,
+      quoteToBookPct: 0, winRatePct: 0, avgResponseTimeHours: 0, followUpCompliancePct: 0,
+    },
+    lossReasons: [],
+    performers: { lanes: [], customers: [], reps: [] },
+    scopedToRepId,
+  };
+}
+
+export async function getFunnel(
+  orgId: string,
+  filters: QuoteFilters,
+  scopedRepId: string | null | "__none__" = null,
+): Promise<FunnelResult> {
+  if (scopedRepId === "__none__") {
+    return emptyFunnelResult(null);
+  }
+
+  const ctx = await loadContext(orgId);
+  const allOpps = await db
+    .select()
+    .from(quoteOpportunities)
+    .where(eq(quoteOpportunities.organizationId, orgId))
+    .orderBy(desc(quoteOpportunities.requestDate));
+
+  const nonCustomerIds = nonCustomerCustomerIdsFromMap(ctx.customerMap);
+  // Compose viewer scoping with caller filters. We OR the rep filter onto
+  // the existing filters so an admin can still drill into a rep view via
+  // the UI filter bar, while a scoped rep cannot see anyone else.
+  const effectiveFilters: QuoteFilters = scopedRepId
+    ? { ...filters, repId: scopedRepId }
+    : filters;
+  const filtered = applyFilters(allOpps, effectiveFilters, nonCustomerIds);
+
+  if (filtered.length === 0) {
+    return emptyFunnelResult(scopedRepId ?? null);
+  }
+
+  // Look up which of the filtered quotes have a follow-up event. Done in a
+  // single batched query to avoid N+1.
+  const filteredIds = filtered.map(r => r.id);
+  const followupRows = await db
+    .select({ quoteId: quoteEvents.quoteId })
+    .from(quoteEvents)
+    .where(and(
+      inArray(quoteEvents.quoteId, filteredIds),
+      inArray(quoteEvents.eventType, FUNNEL_FOLLOWUP_EVENT_TYPES as unknown as string[]),
+    ));
+  const followupSet = new Set<string>(followupRows.map(r => r.quoteId));
+
+  const now = Date.now();
+  const staleMs = STALE_AGE_DAYS * 24 * 3600 * 1000;
+
+  let received = 0;
+  let quoted = 0;
+  let followup = 0;
+  let won = 0;
+  let lost = 0;
+  let stale = 0;
+  let responseSum = 0;
+  let responseCount = 0;
+  const lossReasonAgg = new Map<string, number>();
+
+  for (const r of filtered) {
+    received++;
+    const hasQuoted = num(r.quotedAmount) > 0;
+    if (hasQuoted) quoted++;
+    if (followupSet.has(r.id)) followup++;
+    if (isWon(r.outcomeStatus)) won++;
+    if (isLost(r.outcomeStatus)) {
+      lost++;
+      const key = r.outcomeReasonId ?? "__none__";
+      lossReasonAgg.set(key, (lossReasonAgg.get(key) ?? 0) + 1);
+    }
+    const ageMs = now - r.requestDate.getTime();
+    const isStaleByAge = r.outcomeStatus === "pending" && ageMs > staleMs;
+    if (isStaleByAge || r.outcomeStatus === "no_response" || r.outcomeStatus === "expired") {
+      stale++;
+    }
+    const rt = num(r.responseTimeHours);
+    if (rt > 0) { responseSum += rt; responseCount++; }
+  }
+
+  const stages: FunnelStage[] = [
+    { key: "received", label: "Request Received", count: received, conversionPct: null, shareOfReceivedPct: 100 },
+    { key: "quoted", label: "Quoted", count: quoted, conversionPct: pct(quoted, received), shareOfReceivedPct: pct(quoted, received) },
+    { key: "followup", label: "Follow-up Sent", count: followup, conversionPct: pct(followup, quoted), shareOfReceivedPct: pct(followup, received) },
+    { key: "won", label: "Booked / Won", count: won, conversionPct: pct(won, quoted), shareOfReceivedPct: pct(won, received) },
+    { key: "lost", label: "Lost", count: lost, conversionPct: pct(lost, quoted), shareOfReceivedPct: pct(lost, received) },
+    { key: "stale", label: "Stale / No Response", count: stale, conversionPct: pct(stale, quoted), shareOfReceivedPct: pct(stale, received) },
+  ];
+
+  const decided = won + lost;
+  const summary: FunnelSummary = {
+    totalReceived: received,
+    totalQuoted: quoted,
+    totalWon: won,
+    totalLost: lost,
+    totalStale: stale,
+    quoteToBookPct: pct(won, received),
+    winRatePct: pct(won, decided),
+    avgResponseTimeHours: responseCount > 0 ? responseSum / responseCount : 0,
+    followUpCompliancePct: pct(followup, quoted),
+  };
+
+  const lossReasons: FunnelLossReason[] = Array.from(lossReasonAgg.entries())
+    .map(([reasonId, count]) => {
+      if (reasonId === "__none__") {
+        return { reasonId: null, label: "Reason not set", count };
+      }
+      const reason = ctx.reasonMap.get(reasonId);
+      return { reasonId, label: reason?.label ?? "Unknown", count };
+    })
+    .sort((a, b) => b.count - a.count);
+
+  // Performers: bucket by lane, customer, rep. Wins / total drive ranking;
+  // we surface both ends (best + worst by total) so the UI tabs can show the
+  // most active and most struggling lanes/customers/reps.
+  type Bucket = { id: string; label: string; total: number; won: number; lost: number; quotedSum: number };
+  const laneAgg = new Map<string, Bucket>();
+  const customerAgg = new Map<string, Bucket>();
+  const repAgg = new Map<string, Bucket>();
+
+  for (const r of filtered) {
+    const laneKey = `${r.originCity}, ${r.originState} → ${r.destCity}, ${r.destState}`;
+    const lane = laneAgg.get(laneKey) ?? { id: laneKey, label: laneKey, total: 0, won: 0, lost: 0, quotedSum: 0 };
+    lane.total++;
+    if (isWon(r.outcomeStatus)) lane.won++;
+    if (isLost(r.outcomeStatus)) lane.lost++;
+    lane.quotedSum += num(r.quotedAmount);
+    laneAgg.set(laneKey, lane);
+
+    const cust = customerAgg.get(r.customerId) ?? {
+      id: r.customerId,
+      label: ctx.customerMap.get(r.customerId)?.name ?? "—",
+      total: 0, won: 0, lost: 0, quotedSum: 0,
+    };
+    cust.total++;
+    if (isWon(r.outcomeStatus)) cust.won++;
+    if (isLost(r.outcomeStatus)) cust.lost++;
+    cust.quotedSum += num(r.quotedAmount);
+    customerAgg.set(r.customerId, cust);
+
+    if (r.repId) {
+      const rep = repAgg.get(r.repId) ?? {
+        id: r.repId,
+        label: ctx.repMap.get(r.repId)?.name ?? "—",
+        total: 0, won: 0, lost: 0, quotedSum: 0,
+      };
+      rep.total++;
+      if (isWon(r.outcomeStatus)) rep.won++;
+      if (isLost(r.outcomeStatus)) rep.lost++;
+      rep.quotedSum += num(r.quotedAmount);
+      repAgg.set(r.repId, rep);
+    }
+  }
+
+  function toRows(buckets: Map<string, Bucket>, minTotal: number, limit: number): FunnelPerformerRow[] {
+    return Array.from(buckets.values())
+      .filter(b => b.total >= minTotal)
+      .map(b => ({
+        id: b.id,
+        label: b.label,
+        total: b.total,
+        won: b.won,
+        lost: b.lost,
+        winRate: pct(b.won, b.won + b.lost),
+        avgQuoted: b.total > 0 ? b.quotedSum / b.total : 0,
+      }))
+      .sort((a, b) => b.total - a.total || b.winRate - a.winRate)
+      .slice(0, limit);
+  }
+
+  const performers: FunnelPerformers = {
+    lanes: toRows(laneAgg, 1, 20),
+    customers: toRows(customerAgg, 1, 20),
+    reps: toRows(repAgg, 1, 20),
+  };
+
+  return {
+    stages,
+    summary,
+    lossReasons,
+    performers,
+    scopedToRepId: scopedRepId ?? null,
+  };
+}

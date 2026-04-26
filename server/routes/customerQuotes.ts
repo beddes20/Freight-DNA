@@ -16,6 +16,8 @@ import {
   bulkSetQuoteStatus,
   getAutoWonQuoteAfHandoffEnabled,
   setAutoWonQuoteAfHandoffEnabled,
+  getFunnel,
+  resolveFunnelRepScope,
   type QuoteFilters, type ListSortKey,
 } from "../services/customerQuotes";
 import { QUOTE_PARTY_TYPES } from "@shared/schema";
@@ -127,6 +129,34 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Internal error";
       console.error("[customer-quotes] snapshot error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Task #673 — Freight Capture Funnel.
+  // Sliceable funnel view of quote opportunities. Reuses parseFilters so the
+  // existing filter UI (customer/rep/equipment/date/outcome) works identically.
+  // RBAC: account_manager / national_account_manager get auto-scoped to the
+  // QuoteRep that maps to their user id; admin/director/sales_director see all.
+  // Page-level access still belongs to QUOTE_OPPORTUNITIES_ROLES on the client.
+  app.get("/api/customer-quotes/funnel", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const allowed = new Set([
+        "admin", "director", "sales_director",
+        "national_account_manager", "account_manager",
+      ]);
+      if (!allowed.has(user.role)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const filters = parseFilters(req);
+      const scope = await resolveFunnelRepScope(user.organizationId, { id: user.id, role: user.role });
+      const result = await getFunnel(user.organizationId, filters, scope);
+      res.json(result);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Internal error";
+      console.error("[customer-quotes] funnel error:", err);
       res.status(500).json({ error: msg });
     }
   });

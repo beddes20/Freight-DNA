@@ -70,6 +70,10 @@ args = "guardrails"
 task = "workflow.run"
 args = "storage-integration"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "test:freight-capture-funnel"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -122,6 +126,17 @@ args = "npx tsx tests/storage-integration.test.ts"
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "test:freight-capture-funnel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx tsx tests/freight-capture-funnel.test.ts"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [postMerge]
 path = "scripts/post-merge.sh"
