@@ -44,7 +44,7 @@ import {
   MAX_INTAKE_TEXT_BYTES,
 } from "../services/spotQuoteIntake";
 import { getErrorMessage } from "../lib/errors";
-import { pStr } from "../lib/req";
+import { pStr, qStr } from "../lib/req";
 
 // Minimum margin % guardrail when estimatedCost is supplied. Env-tunable.
 const SPOT_MIN_MARGIN_PCT: number = (() => {
@@ -862,7 +862,8 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const force = req.query.force === "1" || req.query.force === "true";
+      const forceStr = qStr(req.query.force);
+      const force = forceStr === "1" || forceStr === "true";
       if (force) clearStaleFollowUpCache(user.organizationId);
       const items = await getStaleQuoteFollowUps(user.organizationId, { force });
       res.json({ items });

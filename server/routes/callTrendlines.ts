@@ -27,7 +27,7 @@ export function registerCallTrendlineRoutes(app: Express) {
         return res.status(404).json({ error: "Company not found" });
       }
 
-      const days = clampDays(req.query.days);
+      const days = clampDays(qOptStr(req.query.days));
       const repId = qStr(req.query.repId).trim() || undefined;
       const result = await buildCompanyCallTrendline(companyId, days, repId);
       res.json({ ...result, days, repId: repId ?? null });
@@ -41,7 +41,7 @@ export function registerCallTrendlineRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const days = clampDays(req.query.days);
+      const days = clampDays(qOptStr(req.query.days));
       const rows = await buildOrgCallPace(user.organizationId, days);
       res.json({ days, rows });
     } catch (err) {
@@ -56,7 +56,7 @@ export function registerCallTrendlineRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const lane = (qStr(req.query.lane) || "").trim();
       if (!lane) return res.status(400).json({ error: "lane query param required" });
-      const days = clampDays(req.query.days);
+      const days = clampDays(qOptStr(req.query.days));
       const result = await buildLaneCallRollup(user.organizationId, lane, days);
       res.json(result);
     } catch (err) {

@@ -3075,7 +3075,7 @@ Rules for suggestions:
     // the set of recipient addresses this rep contacted in the window.
     // Managers may pass ?includeOrgUnmatched=true to see all unmatched
     // org-wide for global mailbox triage.
-    const includeOrgUnmatched = req.query.includeOrgUnmatched === "true" && isManager;
+    const includeOrgUnmatched = qStr(req.query.includeOrgUnmatched) === "true" && isManager;
     const repRecipientEmails = new Set(
       outboundRows
         .map(r => (r.toEmail ?? "").trim().toLowerCase())
