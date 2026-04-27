@@ -10,6 +10,7 @@ import { initMonthlyDataRefreshScheduler } from "./monthlyDataRefreshScheduler";
 import { initAvailableFreightImportScheduler } from "./availableFreightScheduler";
 import { initLoadFactScheduler } from "./loadFactScheduler";
 import { initRfpDeadlineScheduler } from "./rfpDeadlineScheduler";
+import { initPerfBudgetBreachScheduler } from "./perfBudgetBreachScheduler";
 import { initDailyDigestScheduler } from "./dailyDigestScheduler";
 import { initRepReportScheduler } from "./repReportScheduler";
 import { initOneOnOneReminderScheduler } from "./oneOnOneReminderScheduler";
@@ -433,6 +434,7 @@ process.on("uncaughtException", (err) => {
       initAvailableFreightImportScheduler();
       initLoadFactScheduler();
       initRfpDeadlineScheduler();
+      initPerfBudgetBreachScheduler();
       initDailyDigestScheduler();
       initRepReportScheduler();
       initOneOnOneReminderScheduler();

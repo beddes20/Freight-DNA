@@ -718,6 +718,98 @@ assert(
   "getSonarCircuitBreakerStatus no longer reads from the shared httpRetry breaker — the bespoke breaker should have been removed in Task #706."
 );
 
+// ──────────────────────────────────────────────────────────────────────────
+// 14. Endpoint perf budgets coverage (Task #705)
+// ──────────────────────────────────────────────────────────────────────────
+console.log("\n── 14. Endpoint perf budgets coverage (Task #705) ────────────────\n");
+
+const perfBudgetsSrc = readFile("server/perfBudgets.ts");
+const endpointPerfSrc = readFile("server/routes/endpointPerf.ts");
+const breachSchedulerSrc = readFile("server/perfBudgetBreachScheduler.ts");
+const indexSrc = readFile("server/index.ts");
+const routesSrc = readFile("server/routes.ts");
+const cacheSrc = readFile("server/cache.ts");
+const dbCacheSrc = readFile("server/dbCache.ts");
+const perfHintsSrc = readFile("server/lib/perfHints.ts");
+
+// 14a. ENDPOINT_BUDGETS lists all 12 routes called out in the task plan.
+const REQUIRED_BUDGET_KEYS = [
+  "/api/daily-priorities",
+  "/api/nba/cards",
+  "/api/lane-inbox",
+  "/api/available-freight",
+  "/api/lanes/work-queue",
+  "/api/carrier-hub",
+  "/api/customer-quotes",
+  "/api/conversations",
+  "/api/dashboard/summary",
+  "/api/calls/trendline",
+  "/api/ai-center/summary",
+  "/api/valueiq/today",
+];
+for (const key of REQUIRED_BUDGET_KEYS) {
+  assert(
+    `perfBudgets.ts — ENDPOINT_BUDGETS includes ${key}`,
+    perfBudgetsSrc.includes(`"GET ${key}"`),
+    `Missing budget for ${key}. Add a row to ENDPOINT_BUDGETS in server/perfBudgets.ts.`,
+  );
+}
+
+// 14b. Middleware + admin routes wired into the server.
+assert(
+  "server/routes.ts — perfTimingMiddleware is mounted",
+  /app\.use\(perfTimingMiddleware\)/.test(routesSrc),
+  "perfTimingMiddleware is no longer registered. Sample collection is broken.",
+);
+assert(
+  "server/routes.ts — registerEndpointPerfRoutes is called",
+  /registerEndpointPerfRoutes\(app\)/.test(routesSrc),
+  "registerEndpointPerfRoutes(app) is missing — admin perf endpoints will 404.",
+);
+assert(
+  "endpointPerf.ts — exposes both overview and timeseries endpoints",
+  endpointPerfSrc.includes("/api/admin/endpoint-perf/overview") &&
+    endpointPerfSrc.includes("/api/admin/endpoint-perf/timeseries"),
+  "Admin perf API surface is incomplete (missing overview or timeseries).",
+);
+
+// 14c. Breach scheduler exists and is wired into boot.
+assert(
+  "perfBudgetBreachScheduler.ts — exports init + run + find helpers",
+  /export\s+function\s+initPerfBudgetBreachScheduler/.test(breachSchedulerSrc) &&
+    /export\s+async\s+function\s+runPerfBudgetBreachCheck/.test(breachSchedulerSrc) &&
+    /export\s+async\s+function\s+findBudgetBreaches/.test(breachSchedulerSrc),
+  "Breach scheduler is missing one of its public helpers.",
+);
+assert(
+  "server/index.ts — initPerfBudgetBreachScheduler is called at boot",
+  /initPerfBudgetBreachScheduler\(\)/.test(indexSrc),
+  "initPerfBudgetBreachScheduler() is not called in server/index.ts — daily breach notifier is dormant.",
+);
+assert(
+  "perfBudgetBreachScheduler.ts — throttles by relatedId within 24h",
+  /relatedId/.test(breachSchedulerSrc) && /perf_budget_breach/.test(breachSchedulerSrc),
+  "Breach scheduler is missing the per-route throttle. It will spam admins.",
+);
+
+// 14d. Cache layers expose req-aware tagging via the shared perfHints helper.
+assert(
+  "server/lib/perfHints.ts — exports markCacheHint + getCacheHint",
+  /export\s+function\s+markCacheHint/.test(perfHintsSrc) &&
+    /export\s+function\s+getCacheHint/.test(perfHintsSrc),
+  "perfHints helper is missing one of its exports.",
+);
+assert(
+  "server/cache.ts — cacheGet accepts an optional req and tags it",
+  /markCacheHint/.test(cacheSrc) && /req\?: Request/.test(cacheSrc),
+  "cacheGet no longer accepts req — cold/warm cache hint coverage is broken.",
+);
+assert(
+  "server/dbCache.ts — getDbCached accepts an optional req and tags it",
+  /markCacheHint/.test(dbCacheSrc) && /req\?: Request/.test(dbCacheSrc),
+  "getDbCached no longer accepts req — cold/warm cache hint coverage is broken.",
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

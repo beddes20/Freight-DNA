@@ -18,11 +18,50 @@ interface RouteRow {
   routeKey: string;
   requests: number;
   errors: number;
+  warmHits: number;
+  coldHits: number;
+  warmPct: number | null;
   p50: number;
   p95: number;
   p99: number;
   budget: number | null;
   pass: boolean | null;
+}
+
+interface TimeseriesPoint { day: string; p95: number; count: number }
+interface TimeseriesResp { routeKey: string; days: number; budget: number | null; points: TimeseriesPoint[] }
+
+function Sparkline({ routeKey, days, budget }: { routeKey: string; days: number; budget: number | null }) {
+  const { data } = useQuery<TimeseriesResp>({
+    queryKey: ["/api/admin/endpoint-perf/timeseries", { routeKey, days }],
+    queryFn: async () => {
+      const r = await fetch(
+        `/api/admin/endpoint-perf/timeseries?routeKey=${encodeURIComponent(routeKey)}&days=${days}`,
+        { credentials: "include" },
+      );
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    },
+    refetchInterval: 60_000,
+  });
+  const points = data?.points ?? [];
+  if (points.length === 0) return <span className="text-xs text-muted-foreground">—</span>;
+  const max = Math.max(...points.map((p) => p.p95), budget ?? 0, 1);
+  const w = 90;
+  const h = 24;
+  const step = points.length > 1 ? w / (points.length - 1) : 0;
+  const path = points
+    .map((p, i) => `${i === 0 ? "M" : "L"}${(i * step).toFixed(2)},${(h - (p.p95 / max) * h).toFixed(2)}`)
+    .join(" ");
+  const budgetY = budget != null ? (h - (Math.min(budget, max) / max) * h).toFixed(2) : null;
+  return (
+    <svg width={w} height={h} className="inline-block" data-testid={`sparkline-${routeKey.replace(/[^\w]/g, "_")}`}>
+      {budgetY != null && (
+        <line x1={0} x2={w} y1={budgetY} y2={budgetY} stroke="currentColor" strokeOpacity={0.25} strokeDasharray="2,2" />
+      )}
+      <path d={path} fill="none" stroke="currentColor" strokeWidth={1.5} className="text-foreground" />
+    </svg>
+  );
 }
 
 export default function AdminEndpointPerfPage() {
@@ -109,10 +148,12 @@ export default function AdminEndpointPerfPage() {
                     <th className="text-left py-2 pr-3">Route</th>
                     <th className="text-right py-2 px-3">Requests</th>
                     <th className="text-right py-2 px-3">Errors</th>
+                    <th className="text-right py-2 px-3">Warm</th>
                     <th className="text-right py-2 px-3">p50 (ms)</th>
                     <th className="text-right py-2 px-3">p95 (ms)</th>
                     <th className="text-right py-2 px-3">p99 (ms)</th>
                     <th className="text-right py-2 px-3">Budget</th>
+                    <th className="text-center py-2 px-3">Trend</th>
                     <th className="text-center py-2 pl-3">Status</th>
                   </tr>
                 </thead>
@@ -122,10 +163,16 @@ export default function AdminEndpointPerfPage() {
                       <td className="py-2 pr-3 font-mono text-xs">{r.routeKey}</td>
                       <td className="text-right py-2 px-3 tabular-nums">{r.requests.toLocaleString()}</td>
                       <td className="text-right py-2 px-3 tabular-nums">{r.errors > 0 ? <span className="text-red-600 dark:text-red-400">{r.errors}</span> : 0}</td>
+                      <td className="text-right py-2 px-3 tabular-nums text-muted-foreground" data-testid={`text-warm-${r.routeKey.replace(/[^\w]/g, "_")}`}>
+                        {r.warmPct == null ? "—" : `${r.warmPct}%`}
+                      </td>
                       <td className="text-right py-2 px-3 tabular-nums">{r.p50}</td>
                       <td className="text-right py-2 px-3 tabular-nums font-medium">{r.p95}</td>
                       <td className="text-right py-2 px-3 tabular-nums">{r.p99}</td>
                       <td className="text-right py-2 px-3 tabular-nums text-muted-foreground">{r.budget ?? "—"}</td>
+                      <td className="text-center py-2 px-3">
+                        {r.requests > 0 ? <Sparkline routeKey={r.routeKey} days={days} budget={r.budget} /> : <span className="text-xs text-muted-foreground">—</span>}
+                      </td>
                       <td className="text-center py-2 pl-3">
                         {r.pass === true && <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"><CheckCircle2 className="h-3 w-3 mr-1" />Pass</Badge>}
                         {r.pass === false && <Badge className="bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30"><AlertTriangle className="h-3 w-3 mr-1" />Over</Badge>}

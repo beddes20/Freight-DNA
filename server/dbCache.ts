@@ -7,7 +7,9 @@
  * (lane build cache, rate positioning cache).
  */
 
+import type { Request } from "express";
 import { storage } from "./storage";
+import { markCacheHint } from "./lib/perfHints";
 
 interface MemEntry<T> {
   value: T;
@@ -17,20 +19,31 @@ interface MemEntry<T> {
 
 const mem = new Map<string, MemEntry<unknown>>();
 
-export async function getDbCached<T>(key: string): Promise<T | null> {
+export async function getDbCached<T>(key: string, req?: Request): Promise<T | null> {
   const m = mem.get(key);
-  if (m && Date.now() - m.fetchedAt < m.ttlMs) return m.value as T;
+  if (m && Date.now() - m.fetchedAt < m.ttlMs) {
+    if (req) markCacheHint(req, "warm");
+    return m.value as T;
+  }
 
   try {
     const row = await storage.getCachedApiResponse(key);
-    if (!row) return null;
+    if (!row) {
+      if (req) markCacheHint(req, "cold");
+      return null;
+    }
     const value = row.response as T;
     const ttlMs = row.ttlSeconds * 1000;
     const fetchedAt = new Date(row.fetchedAt).getTime();
     mem.set(key, { value, fetchedAt, ttlMs });
-    if (Date.now() - fetchedAt >= ttlMs) return null;
+    if (Date.now() - fetchedAt >= ttlMs) {
+      if (req) markCacheHint(req, "cold");
+      return null;
+    }
+    if (req) markCacheHint(req, "warm");
     return value;
   } catch {
+    if (req) markCacheHint(req, "cold");
     return null;
   }
 }
