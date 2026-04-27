@@ -415,6 +415,29 @@ export default function AdminMonitoredMailboxesPage() {
     },
   });
 
+  // Task #727 — One-shot admin button: re-materialize any missing
+  // email_conversation_threads rows AND drop linked_carrier_id on threads /
+  // user-mailbox-lane messages where a linked_account_id is set (customer
+  // wins). Used after a bulk historical backfill so messages immediately
+  // appear correctly classified on the Email Intelligence tab.
+  const rebuildClassMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/internal/admin/monitored-mailboxes/rebuild-thread-classification");
+      return res.json() as Promise<{
+        backfill: { scanned: number; inserted: number; durationMs: number };
+        reclassify: { threadsRepaired: number; threadsPromoted: number; messagesRepaired: number; durationMs: number };
+      }>;
+    },
+    onSuccess: (r) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/admin/monitored-mailboxes"] });
+      toast({
+        title: "Thread classification rebuilt",
+        description: `${r.backfill.inserted} thread(s) materialized, ${r.reclassify.threadsRepaired} carrier-link cleared, ${r.reclassify.threadsPromoted} thread(s) promoted to customer.`,
+      });
+    },
+    onError: (err: Error) => toast({ title: "Rebuild failed", description: err.message, variant: "destructive" }),
+  });
+
   const backfillAllMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/internal/admin/monitored-mailboxes/backfill-all");
@@ -492,6 +515,18 @@ export default function AdminMonitoredMailboxesPage() {
               ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               : <History className="h-4 w-4 mr-2" />}
             Backfill last 30 days (all)
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => rebuildClassMutation.mutate()}
+            disabled={rebuildClassMutation.isPending}
+            title="Rebuild missing email conversation threads and force customer-vs-carrier classification (customer wins)"
+            data-testid="button-rebuild-thread-classification"
+          >
+            {rebuildClassMutation.isPending
+              ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              : <Wand2 className="h-4 w-4 mr-2" />}
+            Rebuild thread classification
           </Button>
           {(() => {
             const enrolledUserIds = new Set(mailboxes.map(m => m.userId));
@@ -826,6 +861,7 @@ export default function AdminMonitoredMailboxesPage() {
                 {(mb.syncStatus === "partial" || mb.syncStatus === "error") && (
                   <MailboxFailuresSection mailboxId={mb.id} />
                 )}
+                <MailboxDiagnosticsSection mailboxId={mb.id} />
               </CardContent>
             </Card>
           ))}
@@ -1105,6 +1141,183 @@ function MailReadConsentDot({ mailboxId }: { mailboxId: string }): JSX.Element |
       title={label}
       aria-label={label}
     />
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Task #727 — Per-mailbox diagnostics panel.
+//
+// Collapsible section shown under each mailbox card. Calls the new
+// /diagnostics endpoint on demand (when the section is opened) and renders
+// subscription health, last sync timestamps, ingest counts split by
+// 7d/30d and customer/carrier, latest backfill summary, and unresolved
+// failure count. Designed as the operator's "is this mailbox healthy?"
+// pane so a director can answer that question from one screen.
+// ----------------------------------------------------------------------------
+interface MailboxDiagnosticsResp {
+  mailbox: {
+    id: string;
+    email: string;
+    enabled: boolean;
+    syncStatus: string;
+    syncError: string | null;
+    lastSyncAt: string | null;
+    lastSentItemsNotificationAt: string | null;
+    lastOutboundCapturedAt: string | null;
+  };
+  subscription: {
+    inboxSubscriptionId: string | null;
+    sentItemsSubscriptionId: string | null;
+    expiresAt: string | null;
+    expired: boolean | null;
+  };
+  ingest: {
+    last7d: { total: number; customerLinked: number; carrierLinked: number; outbound: number };
+    last30d: { total: number; customerLinked: number; carrierLinked: number; outbound: number };
+  };
+  latestBackfill: {
+    status: string;
+    messagesIngested: number;
+    messagesDuplicate: number;
+    messagesFetched: number;
+    errorsCount: number;
+    completedAt: string | null;
+    lastError: string | null;
+  } | null;
+  unresolvedFailures: number;
+  recentFailures: Array<{
+    id: string;
+    providerMessageId: string;
+    errorCategory: string;
+    errorMessage: string;
+    attemptCount: number;
+    lastAttemptAt: string | null;
+  }>;
+}
+
+function fmtTime(ts: string | null): string {
+  return ts ? new Date(ts).toLocaleString() : "never";
+}
+
+function MailboxDiagnosticsSection({ mailboxId }: { mailboxId: string }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const { data, isLoading, refetch, isFetching } = useQuery<MailboxDiagnosticsResp>({
+    queryKey: ["/api/internal/admin/monitored-mailboxes", mailboxId, "diagnostics"],
+    enabled: open,
+    refetchOnWindowFocus: false,
+  });
+
+  return (
+    <div className="mt-3 pt-3 border-t" data-testid={`diagnostics-section-${mailboxId}`}>
+      <button
+        type="button"
+        className="flex items-center gap-1 text-sm font-medium hover:underline"
+        onClick={() => setOpen(o => !o)}
+        data-testid={`button-toggle-diagnostics-${mailboxId}`}
+      >
+        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        Diagnostics
+      </button>
+      {open && (
+        <div className="mt-2">
+          {(isLoading || (!data && isFetching)) && (
+            <div className="text-xs text-muted-foreground flex items-center gap-2">
+              <Loader2 className="h-3 w-3 animate-spin" /> Loading diagnostics…
+            </div>
+          )}
+          {data && (
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs" data-testid={`diagnostics-content-${mailboxId}`}>
+              <div data-testid={`diag-subscription-${mailboxId}`}>
+                <div className="text-muted-foreground">Subscription</div>
+                <div className="font-medium">
+                  Inbox: {data.subscription.inboxSubscriptionId ? "active" : "missing"}
+                  {" / "}
+                  SentItems: {data.subscription.sentItemsSubscriptionId ? "active" : "missing"}
+                </div>
+                <div className="text-muted-foreground">
+                  expires {fmtTime(data.subscription.expiresAt)}
+                  {data.subscription.expired ? " · expired!" : ""}
+                </div>
+              </div>
+              <div data-testid={`diag-last-sync-${mailboxId}`}>
+                <div className="text-muted-foreground">Last delta sync</div>
+                <div className="font-medium">{fmtTime(data.mailbox.lastSyncAt)}</div>
+                <div className="text-muted-foreground">
+                  outbound captured {fmtTime(data.mailbox.lastOutboundCapturedAt)}
+                </div>
+              </div>
+              <div data-testid={`diag-failures-${mailboxId}`}>
+                <div className="text-muted-foreground">Unresolved failures</div>
+                <div className={`font-medium ${data.unresolvedFailures > 0 ? "text-red-600 dark:text-red-400" : ""}`}>
+                  {data.unresolvedFailures}
+                </div>
+              </div>
+              <div data-testid={`diag-ingest-7d-${mailboxId}`}>
+                <div className="text-muted-foreground">Ingest (7d)</div>
+                <div className="font-medium">
+                  {data.ingest.last7d.total} total · {data.ingest.last7d.outbound} sent
+                </div>
+                <div className="text-muted-foreground">
+                  customer {data.ingest.last7d.customerLinked} · carrier {data.ingest.last7d.carrierLinked}
+                </div>
+              </div>
+              <div data-testid={`diag-ingest-30d-${mailboxId}`}>
+                <div className="text-muted-foreground">Ingest (30d)</div>
+                <div className="font-medium">
+                  {data.ingest.last30d.total} total · {data.ingest.last30d.outbound} sent
+                </div>
+                <div className="text-muted-foreground">
+                  customer {data.ingest.last30d.customerLinked} · carrier {data.ingest.last30d.carrierLinked}
+                </div>
+              </div>
+              <div data-testid={`diag-backfill-${mailboxId}`}>
+                <div className="text-muted-foreground">Latest backfill</div>
+                {data.latestBackfill ? (
+                  <>
+                    <div className="font-medium capitalize">{data.latestBackfill.status}</div>
+                    <div className="text-muted-foreground">
+                      {data.latestBackfill.messagesIngested} new · {data.latestBackfill.messagesDuplicate} dup
+                      {data.latestBackfill.errorsCount > 0 ? ` · ${data.latestBackfill.errorsCount} err` : ""}
+                    </div>
+                    {data.latestBackfill.completedAt && (
+                      <div className="text-muted-foreground">finished {fmtTime(data.latestBackfill.completedAt)}</div>
+                    )}
+                  </>
+                ) : (
+                  <div className="font-medium">never</div>
+                )}
+              </div>
+              {data.recentFailures.length > 0 && (
+                <div className="md:col-span-3" data-testid={`diag-recent-failures-${mailboxId}`}>
+                  <div className="text-muted-foreground mb-1">Recent unresolved failures</div>
+                  <ul className="space-y-1">
+                    {data.recentFailures.map(f => (
+                      <li key={f.id} className="text-xs">
+                        <span className="font-medium">{f.errorCategory}</span>
+                        <span className="text-muted-foreground"> · attempt {f.attemptCount} · {fmtTime(f.lastAttemptAt)}</span>
+                        <div className="truncate text-muted-foreground" title={f.errorMessage}>{f.errorMessage}</div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div className="md:col-span-3">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => refetch()}
+                  disabled={isFetching}
+                  data-testid={`button-refresh-diagnostics-${mailboxId}`}
+                >
+                  {isFetching ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                  Refresh
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -176,6 +176,13 @@ async function ingestHistoricalMessage(
 }
 
 export interface BackfillTriggerOptions {
+  /**
+   * Task #727 — when true, skip the post-backfill finalize step
+   * (org-wide thread materialization + customer-wins reclassify).
+   * Used by the bulk "Backfill all" caller so finalize runs once at
+   * the end of the loop instead of N times.
+   */
+  skipFinalize?: boolean;
   triggeredBy?: "auto" | "admin" | "admin_bulk";
   triggeredByUserId?: string | null;
   days?: number;
@@ -299,6 +306,19 @@ export async function runBackfillForMailbox(
       log(`Delta seed after backfill failed for ${mailbox.email}: ${seedErr instanceof Error ? seedErr.message : String(seedErr)}`);
     }
 
+    // Task #727 — finalize thread classification for the org (materialize
+    // missing threads + drop linked_carrier_id where customer evidence
+    // exists). Default behaviour so the auto-backfill triggered on first
+    // mailbox enrollment also lands correctly classified without an
+    // operator pressing "Rebuild thread classification". Bulk callers
+    // opt out via skipFinalize so the org-wide work runs once at the
+    // end of the loop, not N times.
+    if (!opts.skipFinalize) {
+      await finalizeThreadClassificationForOrg(mailbox.orgId);
+    }
+
+
+
     const finalStatus = errorsCount > 0 && messagesIngested === 0 ? "failed" : "completed";
     await storage.updateMailboxHistoricalBackfill(row.id, {
       status: finalStatus,
@@ -382,13 +402,44 @@ export async function runBackfillForAllEnabledMailboxes(
   let failed = 0;
   let skipped = 0;
   for (const mb of orgMailboxes) {
-    const r = await runBackfillForMailbox(mb.id, { triggeredBy: opts.triggeredBy ?? "admin_bulk", triggeredByUserId: opts.triggeredByUserId ?? null });
+    const r = await runBackfillForMailbox(mb.id, { triggeredBy: opts.triggeredBy ?? "admin_bulk", triggeredByUserId: opts.triggeredByUserId ?? null, skipFinalize: true });
     results.push(r);
     if (r.status === "completed") completed++;
     else if (r.status === "failed") failed++;
     else skipped++;
   }
+
+  // Task #727 — run thread materialization + customer-wins reclassify
+  // exactly ONCE for the whole bulk job (not per-mailbox), so we don't
+  // do N full-org scans. The single-mailbox /:id/backfill admin endpoint
+  // runs the same finalize step independently.
+  await finalizeThreadClassificationForOrg(orgId);
+
   return { total: orgMailboxes.length, completed, failed, skipped, results };
+}
+
+/**
+ * Org-scoped finalize step: materialize any missing
+ * email_conversation_threads rows for the org and then drop
+ * linked_carrier_id on threads/messages where linked_account_id is set
+ * (customer-wins precedence). Safe to call from bulk-backfill, the
+ * single-mailbox backfill admin endpoint, or after a self-heal sweep.
+ * Failures are logged and swallowed — finalize must never break the
+ * caller flow.
+ */
+export async function finalizeThreadClassificationForOrg(orgId: string): Promise<void> {
+  try {
+    const { backfillMissingConversationThreads, reclassifyThreadsCustomerWins } =
+      await import("./conversationThreadBackfillService");
+    const tb = await backfillMissingConversationThreads({ orgId });
+    log(`Org thread backfill (${orgId}): scanned=${tb.scanned} inserted=${tb.inserted}`);
+    const fx = await reclassifyThreadsCustomerWins({ orgId });
+    if (fx.threadsRepaired > 0 || fx.threadsPromoted > 0 || fx.messagesRepaired > 0) {
+      log(`Org customer-wins reclassify (${orgId}): threadsRepaired=${fx.threadsRepaired} threadsPromoted=${fx.threadsPromoted} messages=${fx.messagesRepaired}`);
+    }
+  } catch (err) {
+    log(`Org thread classification finalize failed for ${orgId}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 export type { MailboxHistoricalBackfill };

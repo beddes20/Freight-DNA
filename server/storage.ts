@@ -6760,6 +6760,17 @@ export class DatabaseStorage implements IStorage {
   async upsertInboundEmailMessage(
     data: InsertEmailMessage,
   ): Promise<{ message: EmailMessage; created: boolean }> {
+    // Task #727 — write-time customer-vs-carrier precedence guard.
+    // The user-mailbox lane (processUserMailboxEmail) is the only
+    // path that supplies linkedAccountId. If a caller ever supplies
+    // BOTH a linked account and a linked carrier we drop the carrier
+    // here so the customer lane always wins. The shared-mailbox
+    // carrier path (logInboundCarrierEmail) doesn't supply
+    // linkedAccountId at all so this is a no-op for it.
+    if (data.linkedAccountId && data.linkedCarrierId) {
+      data = { ...data, linkedCarrierId: null };
+    }
+
     // No provider key — fall back to plain insert (cannot dedupe)
     if (!data.providerMessageId) {
       const msg = await this.insertEmailMessage(data);
@@ -7350,8 +7361,27 @@ export class DatabaseStorage implements IStorage {
     const existing = await this.getEmailConversationThreadByThreadId(data.orgId, data.threadId);
 
     if (existing) {
+      // Task #727 — customer-wins precedence on the UPDATE branch.
+      // The caller supplies the latest evidence as data.linkedAccountId /
+      // data.linkedCarrierId. Without this block the existing-row branch
+      // ignored both and a thread that was first created as carrier-linked
+      // (e.g. in the shared-mailbox lane) would never adopt customer
+      // linkage even after later customer-evidence messages arrived. Rules:
+      //   - If new evidence supplies a customer account AND the existing
+      //     row has none, adopt it and force the carrier to NULL.
+      //   - If the existing row already has any customer account
+      //     (whether the new evidence supplies one or not), keep that
+      //     account and force the carrier to NULL — customer always wins.
+      //   - Otherwise leave linkage as-is.
+      const linkPatch: { linkedAccountId?: string | null; linkedCarrierId?: string | null } = {};
+      if (data.linkedAccountId && !existing.linkedAccountId) {
+        linkPatch.linkedAccountId = data.linkedAccountId;
+        linkPatch.linkedCarrierId = null;
+      } else if (existing.linkedAccountId && existing.linkedCarrierId) {
+        linkPatch.linkedCarrierId = null;
+      }
       const [updated] = await db.update(emailConversationThreads)
-        .set({ ...data.update, updatedAt: new Date() })
+        .set({ ...data.update, ...linkPatch, updatedAt: new Date() })
         .where(eq(emailConversationThreads.id, existing.id))
         .returning();
       return updated;

@@ -49,6 +49,34 @@ export const ELIGIBLE_ROLES: ReadonlyArray<string> = [
   "logistics_manager",
 ];
 
+async function persistSubscriptionFailure(
+  mailbox: { id: string; orgId: string },
+  err: unknown,
+): Promise<void> {
+  const errMsg = getErrorMessage(err);
+  try {
+    await storage.updateMonitoredMailbox(mailbox.id, {
+      syncStatus: "error",
+      syncError: `Subscription registration failed: ${errMsg}`,
+    });
+  } catch (uErr) {
+    console.error("[monitoredMailboxes] sub-failure persist (mailbox) error:", uErr);
+  }
+  try {
+    await storage.upsertMailboxSyncFailure({
+      orgId: mailbox.orgId,
+      mailboxId: mailbox.id,
+      folder: "subscription",
+      providerMessageId: `subscription:${mailbox.id}`,
+      errorCategory: "subscription",
+      errorMessage: errMsg,
+      nextAttemptAt: null,
+    });
+  } catch (uErr) {
+    console.error("[monitoredMailboxes] sub-failure persist (failures table) error:", uErr);
+  }
+}
+
 function requireAdmin(req: Request, res: Response, next: () => void) {
   getCurrentUser(req).then(user => {
     if (!user) return res.status(401).json({ error: "Unauthorized" });
@@ -122,8 +150,9 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       });
 
       if (mailbox.enabled) {
-        registerMailboxSubscription(mailbox.email, mailbox.id).catch(err => {
+        registerMailboxSubscription(mailbox.email, mailbox.id).catch(async err => {
           console.error("[monitoredMailboxes] Subscription registration error:", err);
+          await persistSubscriptionFailure(mailbox, err);
         });
         // Task #508 — auto-trigger 30-day historical backfill on first
         // monitored-mailbox insert. Runs in the background so the HTTP
@@ -242,8 +271,14 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       // Subscription failures must NOT block enrollment of remaining users.
       for (const mailbox of created) {
         if (mailbox.enabled) {
-          registerMailboxSubscription(mailbox.email, mailbox.id).catch(err => {
+          // Subscription registration is fire-and-forget so a single
+          // failing user doesn't block the rest of the batch — but on
+          // failure we now persist the error onto monitored_mailboxes so
+          // the admin can see it on the mailbox card and the new
+          // diagnostics panel without grepping logs (Task #727 — review).
+          registerMailboxSubscription(mailbox.email, mailbox.id).catch(async err => {
             console.error("[monitoredMailboxes] enroll-all subscription error:", err);
+            await persistSubscriptionFailure(mailbox, err);
           });
           triggerBackfillInBackground(mailbox.id, { triggeredBy: "auto" });
         }
@@ -290,8 +325,9 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       const updated = await storage.updateMonitoredMailbox(pStr(req.params.id), parsed.data);
 
       if (parsed.data.enabled === true && !existing.enabled) {
-        registerMailboxSubscription(existing.email, existing.id).catch(err => {
+        registerMailboxSubscription(existing.email, existing.id).catch(async err => {
           console.error("[monitoredMailboxes] Subscription registration error:", err);
+          await persistSubscriptionFailure(existing, err);
         });
       } else if (parsed.data.enabled === false && existing.enabled && (existing.subscriptionId || existing.sentItemsSubscriptionId)) {
         const primarySubId = existing.subscriptionId ?? existing.sentItemsSubscriptionId!;
@@ -431,6 +467,10 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       }
       // Run synchronously so the admin gets back final counts. The window is
       // capped (10k messages per folder) and per-mailbox runs are bounded.
+      // Task #727 — runBackfillForMailbox now finalizes thread
+      // classification for the org by default (so auto-backfill on
+      // enrollment also lands correctly classified). The bulk caller
+      // opts out via skipFinalize.
       const result = await runBackfillForMailbox(mailbox.id, {
         triggeredBy: "admin",
         triggeredByUserId: user.id,
@@ -489,6 +529,158 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       res.status(500).json({ error: "Failed to fetch backfills" });
     }
   });
+
+  // -----------------------------------------------------------------------
+  // Task #727 — Per-mailbox sync diagnostics.
+  //
+  // Returns a one-shot health snapshot for a single monitored mailbox so an
+  // admin can answer "is this mailbox actually flowing?" without grepping
+  // logs. Pulls together everything from monitored_mailboxes itself, the
+  // latest mailbox_historical_backfills row, the unresolved-failure count,
+  // and 7-day / 30-day ingest counts (split by direction + customer/carrier
+  // linkage) from email_messages.
+  // -----------------------------------------------------------------------
+  app.get(
+    "/api/internal/admin/monitored-mailboxes/:id/diagnostics",
+    requireAuth,
+    requireAdmin,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const mailbox = await storage.getMonitoredMailbox(pStr(req.params.id));
+        if (!mailbox || mailbox.orgId !== user.organizationId) {
+          return res.status(404).json({ error: "Mailbox not found" });
+        }
+
+        const now = Date.now();
+        const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
+        const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
+
+        // Per-mailbox ingest counts via email recipient (delta sync writes
+        // are scoped by recipient address — same join used by
+        // /quote-stats above). Split by window so the UI can show 7d / 30d
+        // side by side, and by customer-vs-carrier linkage so admins can
+        // immediately see whether the customer lane is actually flowing.
+        const lowerEmail = mailbox.email.toLowerCase();
+        const counts = await db.execute(sql`
+          SELECT
+            COUNT(*) FILTER (WHERE em.created_at >= ${sevenDaysAgo})::int                                                    AS total_7d,
+            COUNT(*) FILTER (WHERE em.created_at >= ${sevenDaysAgo} AND em.linked_account_id IS NOT NULL)::int               AS customer_7d,
+            COUNT(*) FILTER (WHERE em.created_at >= ${sevenDaysAgo} AND em.linked_carrier_id IS NOT NULL AND em.linked_account_id IS NULL)::int AS carrier_7d,
+            COUNT(*) FILTER (WHERE em.created_at >= ${sevenDaysAgo} AND em.direction = 'outbound')::int                       AS outbound_7d,
+            COUNT(*) FILTER (WHERE em.created_at >= ${thirtyDaysAgo})::int                                                   AS total_30d,
+            COUNT(*) FILTER (WHERE em.created_at >= ${thirtyDaysAgo} AND em.linked_account_id IS NOT NULL)::int              AS customer_30d,
+            COUNT(*) FILTER (WHERE em.created_at >= ${thirtyDaysAgo} AND em.linked_carrier_id IS NOT NULL AND em.linked_account_id IS NULL)::int AS carrier_30d,
+            COUNT(*) FILTER (WHERE em.created_at >= ${thirtyDaysAgo} AND em.direction = 'outbound')::int                      AS outbound_30d
+          FROM email_messages em
+          WHERE em.org_id = ${user.organizationId}
+            AND (
+              LOWER(em.to_email) = ${lowerEmail}
+              OR LOWER(em.from_email) = ${lowerEmail}
+            )
+        `);
+        type Row = { rows?: Array<Record<string, unknown>> };
+        const raw = counts as unknown as Row;
+        const r = raw.rows?.[0] ?? {};
+        const num = (v: unknown) => Number((v as number | string | null) ?? 0);
+
+        const latestBackfill = await storage.getLatestMailboxHistoricalBackfill(mailbox.id);
+        const unresolvedFailures = await storage
+          .countUnresolvedMailboxSyncFailures(mailbox.id)
+          .catch(() => 0);
+
+        // Surface the most recent unresolved failure so the operator can
+        // triage from the diagnostics panel without opening the failures
+        // table separately. Cap to 3 rows to keep the payload small.
+        const recentFailures = await storage
+          .getUnresolvedMailboxSyncFailures(mailbox.id)
+          .then(rows => rows.slice(0, 3).map(f => ({
+            id: f.id,
+            providerMessageId: f.providerMessageId,
+            errorCategory: f.errorCategory,
+            errorMessage: f.errorMessage,
+            attemptCount: f.attemptCount,
+            lastAttemptAt: f.lastAttemptAt,
+          })))
+          .catch(() => []);
+
+        res.json({
+          mailbox: {
+            id: mailbox.id,
+            email: mailbox.email,
+            enabled: mailbox.enabled,
+            syncStatus: mailbox.syncStatus,
+            syncError: mailbox.syncError,
+            lastSyncAt: mailbox.lastSyncAt,
+            lastSentItemsNotificationAt: mailbox.lastSentItemsNotificationAt,
+            lastOutboundCapturedAt: mailbox.lastOutboundCapturedAt,
+          },
+          subscription: {
+            inboxSubscriptionId: mailbox.subscriptionId,
+            sentItemsSubscriptionId: mailbox.sentItemsSubscriptionId,
+            expiresAt: mailbox.subscriptionExpiresAt,
+            expired: mailbox.subscriptionExpiresAt
+              ? mailbox.subscriptionExpiresAt.getTime() < now
+              : null,
+          },
+          ingest: {
+            last7d: {
+              total: num(r.total_7d),
+              customerLinked: num(r.customer_7d),
+              carrierLinked: num(r.carrier_7d),
+              outbound: num(r.outbound_7d),
+            },
+            last30d: {
+              total: num(r.total_30d),
+              customerLinked: num(r.customer_30d),
+              carrierLinked: num(r.carrier_30d),
+              outbound: num(r.outbound_30d),
+            },
+          },
+          latestBackfill: latestBackfill ?? null,
+          unresolvedFailures,
+          recentFailures,
+        });
+      } catch (err) {
+        console.error("[monitoredMailboxes] GET /diagnostics error:", err);
+        res.status(500).json({ error: "Failed to load diagnostics" });
+      }
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // Task #727 — Rebuild thread classification.
+  //
+  // One-button admin action that:
+  //   1. Materializes any missing email_conversation_threads rows for the
+  //      org (covers messages that were ingested before threads existed).
+  //   2. Drops linked_carrier_id on threads / user-mailbox-lane email
+  //      messages where a linked_account_id is set — customer lane wins.
+  //
+  // Intended to be run after a bulk "Backfill last 30 days (all)" so any
+  // historical messages that came in mis-classified are normalised in one
+  // pass without reprocessing the inbox.
+  // -----------------------------------------------------------------------
+  app.post(
+    "/api/internal/admin/monitored-mailboxes/rebuild-thread-classification",
+    requireAuth,
+    requireAdmin,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const { backfillMissingConversationThreads, reclassifyThreadsCustomerWins } =
+          await import("../services/conversationThreadBackfillService");
+        const backfill = await backfillMissingConversationThreads({ orgId: user.organizationId });
+        const reclassify = await reclassifyThreadsCustomerWins({ orgId: user.organizationId });
+        res.json({ backfill, reclassify });
+      } catch (err) {
+        console.error("[monitoredMailboxes] POST /rebuild-thread-classification error:", err);
+        res.status(500).json({ error: "Failed to rebuild thread classification" });
+      }
+    },
+  );
 
   app.post("/api/internal/admin/monitored-mailboxes/:id/failures/:failureId/dismiss", requireAuth, requireAdmin, async (req: Request, res: Response) => {
     try {

@@ -19,12 +19,107 @@
  * inserts safe.
  */
 
-import { storage } from "../storage";
+import { storage, db } from "../storage";
+import { sql } from "drizzle-orm";
 
 export interface BackfillResult {
   scanned: number;
   inserted: number;
   durationMs: number;
+}
+
+export interface ReclassifyResult {
+  /** Threads where linked_carrier_id was NULLed because the row already had a customer account. */
+  threadsRepaired: number;
+  /** Threads where linked_account_id was promoted from message-level evidence and the carrier link dropped. */
+  threadsPromoted: number;
+  messagesRepaired: number;
+  durationMs: number;
+}
+
+/**
+ * Task #727 — Customer-vs-carrier precedence fixup. Drops linked_carrier_id
+ * on any existing thread (and any user-mailbox-lane email_message) where a
+ * linked_account_id is set. The user-mailbox lane is identified by an
+ * ingested_via value in ('delta','backfill','self_heal') — i.e., not a
+ * shared-mailbox carrier-outreach insert. This is a one-time pass invoked
+ * from the admin "Rebuild thread classification" action.
+ */
+export async function reclassifyThreadsCustomerWins(opts: {
+  orgId?: string;
+} = {}): Promise<ReclassifyResult> {
+  const startedAt = Date.now();
+  const orgId = opts.orgId ?? null;
+
+  // Step 1: drop carrier id on threads that already have a customer account.
+  const threadFix = await db.execute(sql`
+    UPDATE email_conversation_threads
+       SET linked_carrier_id = NULL,
+           updated_at = NOW()
+     WHERE linked_account_id IS NOT NULL
+       AND linked_carrier_id IS NOT NULL
+       AND (${orgId}::text IS NULL OR org_id = ${orgId})
+  `);
+
+  // Step 2: promote linked_account_id from message-level evidence onto
+  // threads that currently have only carrier linkage but contain at
+  // least one message with a linked_account_id. This is the historical
+  // mixed-evidence case: a thread was created carrier-first via the
+  // shared-mailbox lane, then a later message carries customer evidence
+  // (e.g. arrived through the user-mailbox lane). Without this step
+  // those threads would stay incorrectly carrier-only and never appear
+  // on the Email Intelligence customer leaderboard.
+  const threadPromote = await db.execute(sql`
+    UPDATE email_conversation_threads ect
+       SET linked_account_id = m.account_id,
+           linked_carrier_id = NULL,
+           updated_at = NOW()
+      FROM (
+        SELECT em.org_id,
+               em.thread_id,
+               (ARRAY_AGG(em.linked_account_id ORDER BY em.created_at DESC)
+                  FILTER (WHERE em.linked_account_id IS NOT NULL))[1] AS account_id
+          FROM email_messages em
+         WHERE em.linked_account_id IS NOT NULL
+           AND em.thread_id IS NOT NULL
+           AND (${orgId}::text IS NULL OR em.org_id = ${orgId})
+         GROUP BY em.org_id, em.thread_id
+      ) m
+     WHERE ect.org_id = m.org_id
+       AND ect.thread_id = m.thread_id
+       AND ect.linked_account_id IS NULL
+       AND ect.linked_carrier_id IS NOT NULL
+  `);
+
+  // Lane discriminator: the carrier shared-inbox lane (logInboundCarrierEmail)
+  // always sets linked_outreach_log_id; the user-mailbox lane never does. Using
+  // that as the gate (rather than ingested_via) means legacy rows that were
+  // ingested before ingested_via existed (NULL) are also repaired. The
+  // ingested_via fallback remains as a belt-and-braces signal in case a
+  // future code path writes to email_messages without an outreach link.
+  const msgFix = await db.execute(sql`
+    UPDATE email_messages
+       SET linked_carrier_id = NULL
+     WHERE linked_account_id IS NOT NULL
+       AND linked_carrier_id IS NOT NULL
+       AND linked_outreach_log_id IS NULL
+       AND (${orgId}::text IS NULL OR org_id = ${orgId})
+  `);
+
+  // node-postgres returns rowCount; drizzle's pg driver passes it through.
+  type ExecResult = { rowCount?: number | null };
+  const tCount = (threadFix as unknown as ExecResult).rowCount ?? 0;
+  const mCount = (msgFix as unknown as ExecResult).rowCount ?? 0;
+
+  type ExecResult2 = { rowCount?: number | null };
+  const pCount = (threadPromote as unknown as ExecResult2).rowCount ?? 0;
+
+  return {
+    threadsRepaired: tCount,
+    threadsPromoted: pCount,
+    messagesRepaired: mCount,
+    durationMs: Date.now() - startedAt,
+  };
 }
 
 /**
@@ -93,7 +188,11 @@ export async function backfillMissingConversationThreads(opts: {
         m.org_id,
         m.thread_id,
         m.linked_account_id,
-        m.linked_carrier_id,
+        -- Task #727 — customer-vs-carrier precedence: when a thread has any
+        -- linked_account_id evidence the carrier link is dropped. The
+        -- customer lane always wins; carrier-only threads keep their id.
+        CASE WHEN m.linked_account_id IS NOT NULL THEN NULL
+             ELSE m.linked_carrier_id END AS linked_carrier_id,
         -- Inherit account owner if the account has one assigned to the same org.
         (
           SELECT c.assigned_to FROM companies c
@@ -194,7 +293,9 @@ export async function materializeConversationThreadIfMissing(
       agg.org_id,
       agg.thread_id,
       agg.linked_account_id,
-      agg.linked_carrier_id,
+      -- Task #727 — customer wins over carrier on mixed evidence.
+      CASE WHEN agg.linked_account_id IS NOT NULL THEN NULL
+           ELSE agg.linked_carrier_id END,
       (
         SELECT c.assigned_to FROM companies c
         JOIN users u ON u.id = c.assigned_to
