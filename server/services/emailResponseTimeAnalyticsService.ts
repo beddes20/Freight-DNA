@@ -423,7 +423,15 @@ export async function fetchResponsePairs(filters: ResponseTimeFilters): Promise<
       AND COALESCE(em.provider_sent_at, em.created_at) < $3
       AND em.linked_carrier_id IS NULL
       AND (ect.linked_carrier_id IS NULL OR ect.id IS NULL)
-      AND (COALESCE(ect.linked_account_id, em.linked_account_id) IS NOT NULL)
+      -- Lane discriminator: customer-mailbox lane vs carrier-outreach lane.
+      -- The user-mailbox ingest lane never sets linked_outreach_log_id; the
+      -- carrier-outreach send-grid lane always does. We previously required
+      -- COALESCE(ect.linked_account_id, em.linked_account_id) IS NOT NULL,
+      -- but linked_account_id is rarely populated on outbound rows (and the
+      -- thread tag depends on contact-match having succeeded on a prior
+      -- inbound), so legitimate replies were silently dropped from today's
+      -- leaderboard whenever inbound contact-match hadn't run yet.
+      AND em.linked_outreach_log_id IS NULL
       ${accountFilter}
     ORDER BY COALESCE(em.provider_sent_at, em.created_at) DESC
     LIMIT $${params.push(PAIR_ROW_LIMIT)}
@@ -470,7 +478,8 @@ export async function fetchResponsePairs(filters: ResponseTimeFilters): Promise<
       AND COALESCE(inb.provider_sent_at, inb.created_at) < $3
       AND inb.linked_carrier_id IS NULL
       AND (ect.linked_carrier_id IS NULL OR ect.id IS NULL)
-      AND (COALESCE(ect.linked_account_id, inb.linked_account_id) IS NOT NULL)
+      -- Same lane discriminator as the replies query above — see comment.
+      AND inb.linked_outreach_log_id IS NULL
       ${repFilterW}
       ${accountFilterW}
     ORDER BY inb.thread_id, COALESCE(inb.provider_sent_at, inb.created_at) DESC

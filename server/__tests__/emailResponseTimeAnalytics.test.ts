@@ -575,6 +575,84 @@ describe("fetchResponsePairs waiting-clear semantics", () => {
     expect(pairs[0].senderUserId).toBe("u-alice");
   });
 
+  it("includes today's customer-mailbox replies even when linked_account_id is null (Task #749 — leaderboard attribution gap)", async () => {
+    // Regression: prior to #749 the SQL filter required
+    //   COALESCE(ect.linked_account_id, em.linked_account_id) IS NOT NULL
+    // which dropped almost every "today" reply because contact-match hadn't
+    // tagged the thread with a CRM company yet — leaving the leaderboard
+    // crediting a single rep while many reps had clearly replied. The fix
+    // switches the lane discriminator to em.linked_outreach_log_id IS NULL,
+    // so we assert the SQL that's actually issued contains the new filter
+    // and that rows from multiple senders without account_id flow through.
+    let repliesSqlCaptured: string | null = null;
+    let inboundsSqlCaptured: string | null = null;
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM users WHERE organization_id")) {
+        return {
+          rows: [
+            { id: "u-alice", name: "Alice", username: "alice@acme.com" },
+            { id: "u-bob",   name: "Bob",   username: "bob@acme.com" },
+          ],
+        };
+      }
+      if (sql.includes("FROM monitored_mailboxes")) return { rows: [] };
+      if (sql.includes("FROM email_messages em")) {
+        repliesSqlCaptured = sql;
+        return {
+          rows: [
+            {
+              row_id: "out-A", thread_id: "th-A",
+              outbound_at: "2026-04-27T15:00:00Z",
+              from_email: "alice@acme.com", subject: "Re: hello",
+              account_id: null,            // ← contact-match never ran
+              owner_user_id: "u-alice", owner_name: "Alice",
+              account_name: null,
+              inbound_at: "2026-04-27T14:00:00Z",
+            },
+            {
+              row_id: "out-B", thread_id: "th-B",
+              outbound_at: "2026-04-27T15:30:00Z",
+              from_email: "bob@acme.com", subject: "Re: world",
+              account_id: null,            // ← contact-match never ran
+              owner_user_id: "u-bob", owner_name: "Bob",
+              account_name: null,
+              inbound_at: "2026-04-27T15:00:00Z",
+            },
+          ],
+        };
+      }
+      if (sql.includes("DISTINCT ON (inb.thread_id)")) {
+        inboundsSqlCaptured = sql;
+        return { rows: [] };
+      }
+      if (sql.includes("AND direction = 'outbound'")) return { rows: [] };
+      throw new Error(`unexpected query: ${sql.slice(0, 80)}`);
+    });
+
+    const pairs = await fetchResponsePairs({
+      orgId: "org-1",
+      start: new Date("2026-04-27T04:00:00Z"), // ~midnight ET
+      end: new Date("2026-04-27T20:00:00Z"),
+      businessHours: false,
+    });
+
+    // Both reps' replies should be present.
+    expect(pairs.map((p) => p.threadId).sort()).toEqual(["th-A", "th-B"]);
+    expect(pairs.every((p) => p.outboundAt !== null)).toBe(true);
+
+    // SQL must use the new lane discriminator and must NOT still gate on
+    // linked_account_id IS NOT NULL. Strip SQL comments so the regression
+    // assertion isn't fooled by the explanatory comment we left in place.
+    const stripComments = (sql: string | null) =>
+      (sql ?? "").split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
+    const repliesSql = stripComments(repliesSqlCaptured);
+    const inboundsSql = stripComments(inboundsSqlCaptured);
+    expect(repliesSql).toContain("em.linked_outreach_log_id IS NULL");
+    expect(repliesSql).not.toMatch(/em\.linked_account_id\)\s*IS NOT NULL/);
+    expect(inboundsSql).toContain("inb.linked_outreach_log_id IS NULL");
+    expect(inboundsSql).not.toMatch(/inb\.linked_account_id\)\s*IS NOT NULL/);
+  });
+
   it("keeps the thread in waiting when there is no post-inbound outbound at all", async () => {
     setupMocks({
       users: [],

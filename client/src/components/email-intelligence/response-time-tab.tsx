@@ -32,12 +32,15 @@ import {
   Collapsible, CollapsibleContent, CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import {
+  Tooltip as UITooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import {
   Clock, ArrowDown, ArrowUp, Filter, ChevronRight, Mail, Inbox, AlertTriangle,
   Activity, RefreshCw, ShieldAlert, Target, ChevronDown, UserPlus, UserCheck,
-  Settings,
+  Settings, Info,
 } from "lucide-react";
 import { formatDistanceToNow, formatDistanceToNowStrict } from "date-fns";
 import { ThreadDetailPanel, type ConversationThread } from "@/pages/conversations";
@@ -1057,7 +1060,25 @@ export default function ResponseTimeTab() {
       {/* ── Leaderboard ───────────────────────────────────────────────────── */}
       <Card data-testid="card-rt-leaderboard">
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm font-medium">Per-rep leaderboard</CardTitle>
+          <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
+            <span>Per-rep leaderboard</span>
+            <span
+              className="text-xs text-muted-foreground font-normal"
+              data-testid="text-rt-leaderboard-clock"
+            >
+              · {businessHours
+                ? "Business hours (M–F 8a–6p ET)"
+                : "Wall-clock"}
+            </span>
+            {freshness.data?.asOf && (
+              <span
+                className={`ml-auto text-[10px] font-normal ${freshness.data.stale ? "text-amber-400" : "text-muted-foreground"}`}
+                data-testid="text-rt-leaderboard-asof"
+              >
+                Data as of {formatDistanceToNowStrict(new Date(freshness.data.asOf), { addSuffix: true })}
+              </span>
+            )}
+          </CardTitle>
         </CardHeader>
         <CardContent>
           {leaderboard.isLoading ? (
@@ -1067,12 +1088,57 @@ export default function ResponseTimeTab() {
               No replies in this range
             </div>
           ) : (
+            <TooltipProvider delayDuration={200}>
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead className="cursor-pointer" onClick={() => toggleSort("name")} data-testid="th-rt-name">Rep</TableHead>
-                  <TableHead className="cursor-pointer text-right" onClick={() => toggleSort("avg")} data-testid="th-rt-avg">Avg</TableHead>
-                  <TableHead className="cursor-pointer text-right" onClick={() => toggleSort("median")} data-testid="th-rt-median">Median</TableHead>
+                  <TableHead className="cursor-pointer text-right" onClick={() => toggleSort("avg")} data-testid="th-rt-avg">
+                    <span className="inline-flex items-center gap-1 justify-end">
+                      Avg
+                      <UITooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center justify-center p-1 -m-1 text-muted-foreground hover:text-foreground"
+                            aria-label="Avg column info"
+                            data-testid="tooltip-trigger-rt-avg"
+                          >
+                            <Info className="w-3 h-3" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs text-xs" data-testid="tooltip-rt-avg">
+                          Average reply time using {businessHours
+                            ? "business hours only (Mon–Fri 8a–6p ET)"
+                            : "wall-clock elapsed time"}.
+                        </TooltipContent>
+                      </UITooltip>
+                    </span>
+                  </TableHead>
+                  <TableHead className="cursor-pointer text-right" onClick={() => toggleSort("median")} data-testid="th-rt-median">
+                    <span className="inline-flex items-center gap-1 justify-end">
+                      Median
+                      <UITooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center justify-center p-1 -m-1 text-muted-foreground hover:text-foreground"
+                            aria-label="Median column info"
+                            data-testid="tooltip-trigger-rt-median"
+                          >
+                            <Info className="w-3 h-3" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs text-xs" data-testid="tooltip-rt-median">
+                          Median reply time using {businessHours
+                            ? "business hours only (Mon–Fri 8a–6p ET)"
+                            : "wall-clock elapsed time"}.
+                        </TooltipContent>
+                      </UITooltip>
+                    </span>
+                  </TableHead>
                   <TableHead className="cursor-pointer text-right" onClick={() => toggleSort("count")} data-testid="th-rt-count">Replies</TableHead>
                   <TableHead className="text-right">Waiting</TableHead>
                 </TableRow>
@@ -1112,6 +1178,7 @@ export default function ResponseTimeTab() {
                 })}
               </TableBody>
             </Table>
+            </TooltipProvider>
           )}
         </CardContent>
       </Card>
