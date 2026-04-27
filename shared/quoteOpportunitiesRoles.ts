@@ -25,9 +25,16 @@
 // is preserved and existing quotes remain visible on the page.
 //
 // `quote_reps` rows with a NULL `user_id` (legacy / email-signature only
-// reps that pre-date the user system) are kept in the rep universe — they
-// have no role to check, and removing them would erase historical
-// attribution on quotes booked before the user system existed.
+// reps that pre-date the user system) are kept in the rep universe by the
+// ingestion-side predicate `isCustomerFacingQuoteRep` — they have no role
+// to check, and removing them would erase historical attribution.
+//
+// Task #752 — A SECOND, stricter predicate `isFunnelEligibleRep` is used on
+// the Freight Capture funnel display path: a rep is eligible only when its
+// linked user is AM/NAM AND its admin-controlled `suppressed` flag is
+// false. Unlinked reps (and reps marked Not customer-facing by an admin)
+// are excluded from the funnel rep dropdown / rankings / quote-row rep
+// column. Their underlying quotes still count toward customer/lane totals.
 
 import { type UserRole } from "./schema";
 
@@ -52,11 +59,43 @@ export function isQuoteOpportunitiesRole(role: string | null | undefined): boole
   return QUOTE_OPPORTUNITIES_ROLES.has(role as UserRole);
 }
 
-// Predicate for the rep filter / pickers / rep ranking: a `quote_reps` row
-// qualifies when it has no linked user (legacy) OR its linked user has one
-// of the strictly customer-facing roles above. Managers are filtered out
-// from the rep universe even though they retain page access.
+// Predicate for the INGESTION-side rep-create gate. Used by quoteEmailIngestion
+// to decide whether a fresh sender email should be persisted as a `quote_reps`
+// row. Returns true when there is no linked user (we don't have enough info
+// to reject — fall back to "create") OR when the linked user has a strictly
+// customer-facing role. Managers / carrier-facing roles are rejected here so
+// their signatures don't keep growing the rep table.
 export function isCustomerFacingQuoteRep(linkedUserRole: string | null | undefined): boolean {
   if (linkedUserRole == null) return true;
   return QUOTE_REP_UNIVERSE_ROLES.has(linkedUserRole as UserRole);
+}
+
+// Task #752 — DISPLAY-side predicate for the Freight Capture funnel rep
+// dropdown / rankings / quote-row rep column. Strict: requires the rep to
+// be linked to a user with a customer-facing role AND to NOT be flagged
+// as suppressed by an admin. Unlinked reps and suppressed reps are
+// excluded from the funnel display surface (their underlying quote rows
+// still count toward customer/lane totals — only the rep buckets are hidden).
+export function isFunnelEligibleRep(input: {
+  linkedUserRole: string | null | undefined;
+  suppressed: boolean | null | undefined;
+}): boolean {
+  if (input.suppressed === true) return false;
+  if (input.linkedUserRole == null) return false;
+  return QUOTE_REP_UNIVERSE_ROLES.has(input.linkedUserRole as UserRole);
+}
+
+// Task #752 — Per-row status badge for the rep-audit admin page. Pure
+// function so the same labels live in tests and in the client.
+export type FunnelRepAuditStatus = "ok" | "wrong_role" | "unlinked" | "suppressed";
+
+export function classifyRepAuditStatus(input: {
+  linkedUserRole: string | null | undefined;
+  suppressed: boolean | null | undefined;
+  hasLinkedUser: boolean;
+}): FunnelRepAuditStatus {
+  if (input.suppressed === true) return "suppressed";
+  if (!input.hasLinkedUser) return "unlinked";
+  if (input.linkedUserRole && QUOTE_REP_UNIVERSE_ROLES.has(input.linkedUserRole as UserRole)) return "ok";
+  return "wrong_role";
 }

@@ -638,6 +638,17 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
+                {/* Task #752 — Freight Capture rep audit (admin-only by spec) */}
+                {user?.role === "admin" && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/freight-capture-rep-audit"} tooltip={navTooltip("Freight Capture rep audit", "Audit names appearing as 'Rep' on the Freight Capture funnel and link, suppress, or merge them.")}>
+                      <Link href="/admin/freight-capture-rep-audit" data-testid="link-admin-freight-capture-rep-audit">
+                        <Filter className="h-4 w-4" />
+                        <span>FC Rep Audit</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
                 {(user?.role === "admin" || user?.role === "director" || user?.role === "sales_director") && (
                   <SidebarMenuItem>
                     <SidebarMenuButton asChild isActive={location === "/admin/pod-intake"} tooltip={navTooltip("POD Intake", "AR mailbox proof-of-delivery routing.")}>

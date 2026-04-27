@@ -12,7 +12,7 @@ import {
   type InsertFreightOpportunity,
 } from "@shared/schema";
 import { UNKNOWN_CUSTOMER_NAME, classifyPartyType } from "./customerNameResolver";
-import { isCustomerFacingQuoteRep } from "@shared/quoteOpportunitiesRoles";
+import { isFunnelEligibleRep } from "@shared/quoteOpportunitiesRoles";
 import { users } from "@shared/schema";
 import { learnFromReassign } from "./quoteSenderMappings";
 import type { QuotePartyType } from "@shared/schema";
@@ -699,15 +699,24 @@ function enrich(
   repMap: Map<string, QuoteRep>,
   carrierMap: Map<string, QuoteCarrier>,
   reasonMap: Map<string, QuoteOutcomeReason>,
-  opts: { now?: number } = {},
+  opts: { now?: number; funnelEligibleRepIds?: Set<string> } = {},
 ): EnrichedQuote[] {
   const now = opts.now ?? Date.now();
+  const eligible = opts.funnelEligibleRepIds;
   return rows.map(r => {
     const sla = computeQuoteSla(r.requestDate, r.outcomeStatus, { now });
+    // Task #752 — when the caller passes a `funnelEligibleRepIds` set
+    // (loadContext-derived AM/NAM-linked + non-suppressed reps), hide the
+    // rep's display name for any quote attributed to a non-eligible rep.
+    // The repId is preserved on the row so the audit page can still
+    // resolve who the rep was.
+    const repHidden = eligible !== undefined && r.repId !== null && r.repId !== undefined && !eligible.has(r.repId);
     return {
       ...r,
       customerName: customerMap.get(r.customerId)?.name ?? "—",
-      repName: r.repId ? repMap.get(r.repId)?.name ?? "—" : "—",
+      repName: repHidden
+        ? "—"
+        : r.repId ? repMap.get(r.repId)?.name ?? "—" : "—",
       carrierName: r.carrierId ? carrierMap.get(r.carrierId)?.name ?? null : null,
       outcomeReasonLabel: r.outcomeReasonId ? reasonMap.get(r.outcomeReasonId)?.label ?? null : null,
       slaState: sla.state,
@@ -720,9 +729,16 @@ async function loadContext(orgId: string) {
   // Task #714 — left-join `users` so we can hide reps whose linked user is
   // a non-customer-facing role (logistics_manager, logistics_coordinator,
   // generic "sales", etc.) from the Quote Opportunities pickers and the
-  // funnel rep performance breakdown. Reps with NULL `user_id` (legacy /
-  // email-signature only) are kept since they pre-date the user system
-  // and removing them would erase historical attribution.
+  // funnel rep performance breakdown.
+  //
+  // Task #752 — the funnel-display predicate `isFunnelEligibleRep` is now
+  // STRICT: a rep qualifies only when (a) it's linked to a user with an
+  // AM/NAM role AND (b) its admin-controlled `suppressed` flag is false.
+  // Unlinked reps (NULL user_id — typically extracted from an email
+  // signature without ever being linked to a real user) and reps flagged
+  // by an admin via the rep-audit page are excluded. The full repMap is
+  // still kept so individual quote rows can resolve a display name when
+  // needed elsewhere.
   const [customers, repsJoined, reasons, laneGroups, carriers] = await Promise.all([
     db.select().from(quoteCustomers).where(eq(quoteCustomers.organizationId, orgId)).orderBy(asc(quoteCustomers.name)),
     db
@@ -732,6 +748,7 @@ async function loadContext(orgId: string) {
         userId: quoteReps.userId,
         name: quoteReps.name,
         email: quoteReps.email,
+        suppressed: quoteReps.suppressed,
         linkedUserRole: users.role,
       })
       .from(quoteReps)
@@ -745,10 +762,10 @@ async function loadContext(orgId: string) {
   // `allReps` powers `repMap` so individual quote rows can still resolve a
   // rep's display name even when that rep is hidden from the dropdowns.
   // `reps` is the public-facing list returned to the client (snapshot.reps)
-  // and is filtered to customer-facing reps only.
+  // and is filtered to funnel-eligible reps only (Task #752).
   const allReps: QuoteRep[] = repsJoined.map(({ linkedUserRole: _r, ...rest }) => rest);
   const customerFacingReps: QuoteRep[] = repsJoined
-    .filter(r => isCustomerFacingQuoteRep(r.linkedUserRole))
+    .filter(r => isFunnelEligibleRep({ linkedUserRole: r.linkedUserRole, suppressed: r.suppressed }))
     .map(({ linkedUserRole: _r, ...rest }) => rest);
   const customerFacingRepIds = new Set<string>(customerFacingReps.map(r => r.id));
   return {
@@ -778,7 +795,9 @@ export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: 
     .where(eq(quoteOpportunities.organizationId, orgId));
   const nonCustomerIds = nonCustomerCustomerIdsFromMap(ctx.customerMap);
   const filtered = applyFilters(all, filters, nonCustomerIds);
-  const enriched = enrich(filtered, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
+  const enriched = enrich(filtered, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, {
+    funnelEligibleRepIds: ctx.customerFacingRepIds,
+  });
 
   const dir = sortDir === "asc" ? 1 : -1;
   enriched.sort((a, b) => {
@@ -906,7 +925,10 @@ export async function getActionQueue(
     r.outcomeStatus === "pending" && !nonCustomerIds.has(r.customerId)
   );
 
-  const enriched = enrich(pending, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, { now });
+  const enriched = enrich(pending, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, {
+    now,
+    funnelEligibleRepIds: ctx.customerFacingRepIds,
+  });
 
   const slaBreaching = enriched
     .filter(r => r.slaState === "breached")

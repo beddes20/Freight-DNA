@@ -24,6 +24,18 @@ import {
   resolveFunnelRepScope,
   markQuoteOutcome,
 } from "../server/services/customerQuotes";
+import {
+  getFreightCaptureRepAudit,
+  setRepSuppressed,
+  linkRepToUser,
+  mergeReps,
+  searchOrgUsers,
+  REP_AUDIT_LOOKBACK_DAYS,
+} from "../server/services/freightCaptureRepAudit";
+import {
+  classifyRepAuditStatus,
+  isFunnelEligibleRep,
+} from "../shared/quoteOpportunitiesRoles";
 
 let passed = 0;
 let failed = 0;
@@ -426,16 +438,20 @@ async function main(): Promise<void> {
     );
   }
 
-  // ── 9. Customer-facing rep filter (Task #714 + follow-up) ───────────────
+  // ── 9. Customer-facing rep filter (Task #714 + Task #752) ──────────────
   // The rep dropdown / pickers / funnel rep ranking is restricted to the
   // strict "customer-facing rep" universe — currently national_account_manager
   // and account_manager. Carrier-facing roles (logistics_manager,
   // logistics_coordinator, generic "sales") AND management roles
   // (admin, director, sales_director) are hidden from the public rep list
   // returned by `getSnapshot` and from the funnel performers.reps ranking.
-  // Reps with a NULL `user_id` (legacy / email-signature only) keep appearing
-  // so historical attribution is preserved.
-  console.log("\n── 9. Customer-facing rep filter (Task #714) ──");
+  //
+  // Task #752 — Reps with a NULL `user_id` (typically email-signature
+  // extractions like "Brianna Adams") and reps with the admin-controlled
+  // `suppressed=true` flag are now ALSO excluded from the funnel display
+  // surface. Their underlying quotes are still counted in stage totals so
+  // attribution is preserved; the rep buckets themselves just disappear.
+  console.log("\n── 9. Customer-facing rep filter (Task #714 + #752) ──");
   {
     const ts = Date.now();
     const [org9] = await db
@@ -545,9 +561,12 @@ async function main(): Promise<void> {
       "9a: snapshot.reps excludes Rep Sales (generic sales)",
       !snapRepNames.includes("Rep Sales"),
     );
+    // Task #752 — unlinked reps (NULL user_id) are now EXCLUDED from the
+    // funnel display surface. Their underlying quote rows still count
+    // toward stage totals (asserted below in 9d).
     assert(
-      "9c: snapshot.reps still includes Rep Legacy (null user_id)",
-      snapRepNames.includes("Rep Legacy"),
+      "9c: snapshot.reps EXCLUDES Rep Legacy (null user_id) — Task #752",
+      !snapRepNames.includes("Rep Legacy"),
       `got ${snapRepNames.join(", ")}`,
     );
 
@@ -581,9 +600,12 @@ async function main(): Promise<void> {
       perfLabels.includes("Rep AM"),
       `got ${perfLabels.join(", ")}`,
     );
+    // Task #752 — strict funnel filter now drops unlinked reps from
+    // performers.reps too. Their quotes still feed the stage totals
+    // asserted below (9d).
     assert(
-      "9c: performers.reps includes Rep Legacy (null user_id)",
-      perfLabels.includes("Rep Legacy"),
+      "9c: performers.reps EXCLUDES Rep Legacy (null user_id) — Task #752",
+      !perfLabels.includes("Rep Legacy"),
       `got ${perfLabels.join(", ")}`,
     );
     // The non-customer-facing reps' QUOTES are still counted in stage totals —
@@ -910,6 +932,243 @@ async function main(): Promise<void> {
       assert("12h.2: cross-org reasonId rejected as 'invalid_reason'",
         crossOrgResult.status === "invalid_reason", `got ${crossOrgResult.status}`);
     }
+  }
+
+  // ── 13. Task #752 — Freight Capture rep audit + suppression ────────────
+  // Covers the new admin surface end-to-end at the service layer:
+  //   13a — pure status classifier + funnel-eligibility predicate
+  //   13b — getFreightCaptureRepAudit returns a row per rep with the
+  //         right status/quote count and a sane summary
+  //   13c — `suppressed=true` removes a rep from snapshot.reps and
+  //         performers.reps, but the rep's quotes still feed stage totals
+  //   13d — linkRepToUser flips status from "wrong_role" to "ok"
+  //   13e — mergeReps reassigns quotes and deletes the source rep
+  console.log("\n── 13. Freight Capture rep audit (Task #752) ──");
+  {
+    // 13a — pure helpers, no DB needed.
+    assert(
+      "13a: classifyRepAuditStatus(suppressed) → 'suppressed'",
+      classifyRepAuditStatus({ linkedUserRole: "account_manager", suppressed: true, hasLinkedUser: true }) === "suppressed",
+    );
+    assert(
+      "13a: classifyRepAuditStatus(unlinked) → 'unlinked'",
+      classifyRepAuditStatus({ linkedUserRole: null, suppressed: false, hasLinkedUser: false }) === "unlinked",
+    );
+    assert(
+      "13a: classifyRepAuditStatus(linked + AM role) → 'ok'",
+      classifyRepAuditStatus({ linkedUserRole: "account_manager", suppressed: false, hasLinkedUser: true }) === "ok",
+    );
+    assert(
+      "13a: classifyRepAuditStatus(linked + admin role) → 'wrong_role'",
+      classifyRepAuditStatus({ linkedUserRole: "admin", suppressed: false, hasLinkedUser: true }) === "wrong_role",
+    );
+    assert(
+      "13a: isFunnelEligibleRep(suppressed AM) === false",
+      isFunnelEligibleRep({ linkedUserRole: "account_manager", suppressed: true }) === false,
+    );
+    assert(
+      "13a: isFunnelEligibleRep(unlinked) === false",
+      isFunnelEligibleRep({ linkedUserRole: null, suppressed: false }) === false,
+    );
+    assert(
+      "13a: isFunnelEligibleRep(linked AM, not suppressed) === true",
+      isFunnelEligibleRep({ linkedUserRole: "account_manager", suppressed: false }) === true,
+    );
+
+    assert(
+      "13a: REP_AUDIT_LOOKBACK_DAYS = 90",
+      REP_AUDIT_LOOKBACK_DAYS === 90,
+    );
+
+    // 13b/c/d/e — seed a fresh org so we can mutate freely.
+    const ts = Date.now();
+    const [org13] = await db
+      .insert(organizations)
+      .values({ name: `Rep Audit ${ts}`, slug: `rep-audit-${ts}` })
+      .returning();
+    orgIdsToCleanup.push(org13.id);
+
+    const [amU, adminU, otherAmU] = await db
+      .insert(users)
+      .values([
+        { organizationId: org13.id, name: "Audit AM",       username: `audit-am-${ts}@x.com`,    role: "account_manager", password: "x", managerId: null },
+        { organizationId: org13.id, name: "Audit Admin",    username: `audit-adm-${ts}@x.com`,   role: "admin",           password: "x", managerId: null },
+        { organizationId: org13.id, name: "Audit AM Other", username: `audit-am2-${ts}@x.com`,   role: "account_manager", password: "x", managerId: null },
+      ])
+      .returning();
+
+    // Three reps:
+    //  - repOk     → linked to an AM (status=ok)
+    //  - repWrong  → linked to admin (status=wrong_role)
+    //  - repUn     → unlinked (status=unlinked)
+    // Suppression is exercised in 13c by flipping repOk.
+    const [repOk, repWrong, repUn] = await db
+      .insert(quoteReps)
+      .values([
+        { organizationId: org13.id, name: "Rep OK",      userId: amU.id },
+        { organizationId: org13.id, name: "Rep Wrong",   userId: adminU.id },
+        { organizationId: org13.id, name: "Rep Unliked", userId: null },
+      ])
+      .returning();
+
+    const [cust13] = await db
+      .insert(quoteCustomers)
+      .values({ organizationId: org13.id, name: "Acme 13", partyType: "customer" })
+      .returning();
+
+    // Recent quotes (well within 90d window) — 2 for repOk, 3 for repWrong,
+    // 1 for repUn. quoteCount in 13b is asserted against these.
+    const now = new Date();
+    await db.insert(quoteOpportunities).values([
+      { organizationId: org13.id, customerId: cust13.id, repId: repOk.id, requestDate: now, equipment: "Van", originCity: "Dallas", originState: "TX", destCity: "Atlanta", destState: "GA", quotedAmount: "1000", outcomeStatus: "won", carrierPaid: "800" },
+      { organizationId: org13.id, customerId: cust13.id, repId: repOk.id, requestDate: now, equipment: "Van", originCity: "Dallas", originState: "TX", destCity: "Atlanta", destState: "GA", quotedAmount: "1100", outcomeStatus: "lost_price" },
+      { organizationId: org13.id, customerId: cust13.id, repId: repWrong.id, requestDate: now, equipment: "Van", originCity: "Dallas", originState: "TX", destCity: "Atlanta", destState: "GA", quotedAmount: "1200", outcomeStatus: "won", carrierPaid: "900" },
+      { organizationId: org13.id, customerId: cust13.id, repId: repWrong.id, requestDate: now, equipment: "Van", originCity: "Dallas", originState: "TX", destCity: "Atlanta", destState: "GA", quotedAmount: "1300", outcomeStatus: "won", carrierPaid: "950" },
+      { organizationId: org13.id, customerId: cust13.id, repId: repWrong.id, requestDate: now, equipment: "Van", originCity: "Dallas", originState: "TX", destCity: "Atlanta", destState: "GA", quotedAmount: "1400", outcomeStatus: "lost_price" },
+      { organizationId: org13.id, customerId: cust13.id, repId: repUn.id,    requestDate: now, equipment: "Van", originCity: "Dallas", originState: "TX", destCity: "Atlanta", destState: "GA", quotedAmount: "1500", outcomeStatus: "lost_price" },
+    ]);
+
+    // 13b — getFreightCaptureRepAudit happy path.
+    const audit = await getFreightCaptureRepAudit(org13.id);
+    const byName = new Map(audit.rows.map(r => [r.name, r]));
+    assert(
+      "13b: audit returns one row per rep with quotes in window",
+      audit.rows.length === 3 && byName.has("Rep OK") && byName.has("Rep Wrong") && byName.has("Rep Unliked"),
+      `got ${audit.rows.map(r => r.name).join(", ")}`,
+    );
+    assert(
+      "13b: Rep OK status === 'ok' with quoteCount=2",
+      byName.get("Rep OK")?.status === "ok" && byName.get("Rep OK")?.quoteCount === 2,
+      `got status=${byName.get("Rep OK")?.status} count=${byName.get("Rep OK")?.quoteCount}`,
+    );
+    assert(
+      "13b: Rep Wrong status === 'wrong_role' with quoteCount=3",
+      byName.get("Rep Wrong")?.status === "wrong_role" && byName.get("Rep Wrong")?.quoteCount === 3,
+      `got status=${byName.get("Rep Wrong")?.status} count=${byName.get("Rep Wrong")?.quoteCount}`,
+    );
+    assert(
+      "13b: Rep Unliked status === 'unlinked' with quoteCount=1",
+      byName.get("Rep Unliked")?.status === "unlinked" && byName.get("Rep Unliked")?.quoteCount === 1,
+      `got status=${byName.get("Rep Unliked")?.status} count=${byName.get("Rep Unliked")?.quoteCount}`,
+    );
+    assert(
+      "13b: summary counts match per-row tallies",
+      audit.summary.total === 3 && audit.summary.ok === 1 && audit.summary.wrongRole === 1 && audit.summary.unlinked === 1 && audit.summary.suppressed === 0,
+      JSON.stringify(audit.summary),
+    );
+    // Sort: actionable buckets (wrong_role, unlinked) come before ok.
+    assert(
+      "13b: rows sorted with actionable items first",
+      audit.rows[0].status !== "ok",
+      `first row status was ${audit.rows[0].status}`,
+    );
+
+    // 13c — Suppressing the only customer-facing rep removes it from
+    // snapshot.reps + performers.reps but leaves stage totals intact.
+    const snapBefore = await getSnapshot(org13.id, {});
+    assert(
+      "13c: pre-suppress snapshot.reps includes Rep OK",
+      snapBefore.reps.some(r => r.name === "Rep OK"),
+      `got ${snapBefore.reps.map(r => r.name).join(", ")}`,
+    );
+
+    const supRes = await setRepSuppressed(org13.id, repOk.id, true);
+    assert("13c: setRepSuppressed returns ok", supRes.status === "ok", JSON.stringify(supRes));
+
+    const snapAfter = await getSnapshot(org13.id, {});
+    assert(
+      "13c: post-suppress snapshot.reps EXCLUDES Rep OK",
+      !snapAfter.reps.some(r => r.name === "Rep OK"),
+      `got ${snapAfter.reps.map(r => r.name).join(", ")}`,
+    );
+    const funnelAfter = await getFunnel(org13.id, {}, null);
+    const funnelLabels = [
+      ...funnelAfter.performers.reps.best,
+      ...funnelAfter.performers.reps.worst,
+    ].map(r => r.label);
+    assert(
+      "13c: post-suppress performers.reps EXCLUDES Rep OK",
+      !funnelLabels.includes("Rep OK"),
+      `got ${funnelLabels.join(", ")}`,
+    );
+    assert(
+      "13c: stage totals still count suppressed rep's quotes (received=6, won=3)",
+      funnelAfter.summary.totalReceived === 6 && funnelAfter.summary.totalWon === 3,
+      `received=${funnelAfter.summary.totalReceived} won=${funnelAfter.summary.totalWon}`,
+    );
+
+    // 13c.2 — audit row reports status='suppressed' after the flip.
+    const audit2 = await getFreightCaptureRepAudit(org13.id);
+    assert(
+      "13c: audit row for Rep OK now status === 'suppressed'",
+      audit2.rows.find(r => r.name === "Rep OK")?.status === "suppressed",
+    );
+
+    // 13d — linkRepToUser flips Rep Wrong from wrong_role → ok by linking
+    // it to a customer-facing user. Also exercise the "user must be in
+    // org" guard and the "no two reps to one user" conflict.
+    const linkRes = await linkRepToUser(org13.id, repWrong.id, otherAmU.id);
+    assert("13d: linkRepToUser to AM returns ok", linkRes.status === "ok", JSON.stringify(linkRes));
+
+    const audit3 = await getFreightCaptureRepAudit(org13.id);
+    assert(
+      "13d: post-link Rep Wrong status === 'ok'",
+      audit3.rows.find(r => r.name === "Rep Wrong")?.status === "ok",
+    );
+
+    const conflictRes = await linkRepToUser(org13.id, repUn.id, otherAmU.id);
+    assert(
+      "13d: linking a second rep to the same user returns invalid",
+      conflictRes.status === "invalid",
+      JSON.stringify(conflictRes),
+    );
+
+    const notFoundRes = await linkRepToUser(org13.id, "00000000-0000-0000-0000-000000000000", otherAmU.id);
+    assert(
+      "13d: link with bogus repId returns not_found",
+      notFoundRes.status === "not_found",
+    );
+
+    // 13d.2 — searchOrgUsers basic behaviour (used by the link dropdown).
+    const searched = await searchOrgUsers(org13.id, "audit-am2");
+    assert(
+      "13d: searchOrgUsers filters by username substring",
+      searched.length === 1 && searched[0].id === otherAmU.id,
+      `got ${searched.map(s => s.username).join(", ")}`,
+    );
+
+    // 13e — mergeReps moves quotes from source → target and deletes source.
+    // Pre-state: Rep Unliked has 1 quote, Rep OK has 2 quotes.
+    const mergeRes = await mergeReps(org13.id, repUn.id, repOk.id);
+    assert(
+      "13e: mergeReps returns ok with reassigned=1",
+      mergeRes.status === "ok" && (mergeRes as { reassigned?: number }).reassigned === 1,
+      JSON.stringify(mergeRes),
+    );
+    const remaining = await db.select({ id: quoteReps.id })
+      .from(quoteReps)
+      .where(and(eq(quoteReps.organizationId, org13.id), eq(quoteReps.id, repUn.id)));
+    assert(
+      "13e: source rep deleted after merge",
+      remaining.length === 0,
+    );
+    const repOkQuotes = await db.select({ id: quoteOpportunities.id })
+      .from(quoteOpportunities)
+      .where(and(
+        eq(quoteOpportunities.organizationId, org13.id),
+        eq(quoteOpportunities.repId, repOk.id),
+      ));
+    assert(
+      "13e: target rep absorbed source's quote (now has 3)",
+      repOkQuotes.length === 3,
+      `got ${repOkQuotes.length}`,
+    );
+
+    const sameRes = await mergeReps(org13.id, repOk.id, repOk.id);
+    assert(
+      "13e: mergeReps with source === target returns invalid",
+      sameRes.status === "invalid",
+    );
   }
 
   await cleanup();

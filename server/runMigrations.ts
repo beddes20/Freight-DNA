@@ -3923,6 +3923,7 @@ export async function runMigrations() {
       )
     `);
     await client468.query(`ALTER TABLE quote_reps ADD COLUMN IF NOT EXISTS user_id varchar REFERENCES users(id) ON DELETE SET NULL`);
+    await client468.query(`ALTER TABLE quote_reps ADD COLUMN IF NOT EXISTS suppressed boolean NOT NULL DEFAULT false`);
     await client468.query(`CREATE INDEX IF NOT EXISTS quote_reps_org_idx ON quote_reps (organization_id)`);
 
     await client468.query(`

@@ -32,6 +32,14 @@ import {
   setMarginFloors,
 } from "../services/quotePricingRecommendation";
 import { QUOTE_OUTCOME_STATUSES, QUOTE_SOURCES, companies, contacts, quoteReps, spotQuoteCreateSchema } from "@shared/schema";
+import {
+  getFreightCaptureRepAudit,
+  linkRepToUser,
+  setRepSuppressed,
+  mergeReps,
+  searchOrgUsers,
+  REP_AUDIT_LOOKBACK_DAYS,
+} from "../services/freightCaptureRepAudit";
 import { getStaleQuoteFollowUps, getStaleQuoteFollowUpCount, clearStaleFollowUpCache } from "../services/staleQuoteFollowup";
 import { publish as publishLiveSync } from "../services/liveSync";
 import { db } from "../storage";
@@ -47,7 +55,7 @@ import {
   MAX_INTAKE_TEXT_BYTES,
 } from "../services/spotQuoteIntake";
 import { getErrorMessage } from "../lib/errors";
-import { pStr, qStr } from "../lib/req";
+import { pStr, qStr, qInt } from "../lib/req";
 
 // Minimum margin % guardrail when estimatedCost is supplied. Env-tunable.
 const SPOT_MIN_MARGIN_PCT: number = (() => {
@@ -1031,6 +1039,126 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] backfill error:", err);
       res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── Task #752 — Freight Capture Rep Audit (admin-only) ──────────────────
+  // GET  /api/customer-quotes/rep-audit          → table + summary counters
+  // GET  /api/customer-quotes/rep-audit/users    → user search for the link picker
+  // POST /api/customer-quotes/rep-audit/:repId/link     { userId: string|null }
+  // POST /api/customer-quotes/rep-audit/:repId/suppress { suppressed: boolean }
+  // POST /api/customer-quotes/rep-audit/merge    { sourceRepId, targetRepId }
+  function isRepAuditAdmin(role: string | undefined): boolean {
+    // Task #752 — admin-only by spec. Mutates rep identity (link / suppress /
+    // merge) and changes who appears in the funnel rep dropdown / column /
+    // rankings, so we keep this strictly tighter than the rest of the
+    // customer-quotes admin surface (which allows admin/director/sales_director).
+    return role === "admin";
+  }
+
+  app.get("/api/customer-quotes/rep-audit", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      if (!isRepAuditAdmin(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const lookbackDays = Math.max(
+        1,
+        Math.min(365, qInt(req.query.lookbackDays, REP_AUDIT_LOOKBACK_DAYS)),
+      );
+      const result = await getFreightCaptureRepAudit(user.organizationId, { lookbackDays });
+      res.json({ ok: true, ...result });
+    } catch (err) {
+      console.error("[customer-quotes] rep-audit list error:", err);
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  app.get("/api/customer-quotes/rep-audit/users", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      if (!isRepAuditAdmin(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const q = qStr(req.query.q);
+      const rows = await searchOrgUsers(user.organizationId, q, 50);
+      res.json({ ok: true, users: rows });
+    } catch (err) {
+      console.error("[customer-quotes] rep-audit users error:", err);
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  const linkBodySchema = z.object({
+    userId: z.string().min(1).nullable(),
+  });
+  app.post("/api/customer-quotes/rep-audit/:repId/link", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      if (!isRepAuditAdmin(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const repId = pStr(req.params.repId);
+      if (!repId) return res.status(400).json({ error: "Missing repId" });
+      const parsed = linkBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      const result = await linkRepToUser(user.organizationId, repId, parsed.data.userId);
+      if (result.status === "not_found") return res.status(404).json({ error: "Rep not found" });
+      if (result.status === "invalid") return res.status(400).json({ error: result.message });
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[customer-quotes] rep-audit link error:", err);
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  const suppressBodySchema = z.object({ suppressed: z.boolean() });
+  app.post("/api/customer-quotes/rep-audit/:repId/suppress", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      if (!isRepAuditAdmin(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const repId = pStr(req.params.repId);
+      if (!repId) return res.status(400).json({ error: "Missing repId" });
+      const parsed = suppressBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      const result = await setRepSuppressed(user.organizationId, repId, parsed.data.suppressed);
+      if (result.status === "not_found") return res.status(404).json({ error: "Rep not found" });
+      if (result.status === "invalid") return res.status(400).json({ error: result.message });
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[customer-quotes] rep-audit suppress error:", err);
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  const mergeBodySchema = z.object({
+    sourceRepId: z.string().min(1),
+    targetRepId: z.string().min(1),
+  });
+  app.post("/api/customer-quotes/rep-audit/merge", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      if (!isRepAuditAdmin(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const parsed = mergeBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      const { sourceRepId, targetRepId } = parsed.data;
+      const result = await mergeReps(user.organizationId, sourceRepId, targetRepId);
+      if (result.status === "not_found") return res.status(404).json({ error: "One or both reps not found" });
+      if (result.status === "invalid") return res.status(400).json({ error: result.message });
+      res.json({ ok: true, reassigned: result.reassigned ?? 0 });
+    } catch (err) {
+      console.error("[customer-quotes] rep-audit merge error:", err);
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 

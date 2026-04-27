@@ -5172,6 +5172,11 @@ export const quoteReps = pgTable("quote_reps", {
   userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
   name: text("name").notNull(),
   email: text("email"),
+  // Task #752 — admin-controlled flag. When true, the rep is hidden from the
+  // Freight Capture funnel rep dropdown / rankings / quote-row rep column,
+  // even if they have a linked customer-facing user. Existing quote rows
+  // remain in stage / lane / customer totals (attribution preserved).
+  suppressed: boolean("suppressed").notNull().default(false),
 });
 export const insertQuoteRepSchema = createInsertSchema(quoteReps).omit({ id: true });
 export type InsertQuoteRep = z.infer<typeof insertQuoteRepSchema>;
