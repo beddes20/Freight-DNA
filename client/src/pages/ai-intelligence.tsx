@@ -16,6 +16,24 @@ import {
   DollarSign, Crosshair, Swords, FileText, Lightbulb, X
 } from "lucide-react";
 
+interface MeetingBriefContent {
+  executiveSummary?: string;
+  keyTalkingPoints?: string[];
+  riskAlerts?: string[];
+  opportunities?: string[];
+  suggestedAgenda?: string[];
+}
+
+interface MeetingBrief {
+  id: string;
+  createdAt: string;
+  briefContent?: MeetingBriefContent;
+}
+
+interface MeetingBriefsResponse {
+  briefs: MeetingBrief[];
+}
+
 export default function AIIntelligencePage() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -95,23 +113,24 @@ export default function AIIntelligencePage() {
     enabled: !!selectedCompany,
   });
 
-  const { data: briefsData } = useQuery<any>({
+  const { data: briefsData } = useQuery<MeetingBriefsResponse>({
     queryKey: ["/api/ai-intelligence/meeting-prep", selectedCompany],
     enabled: !!selectedCompany,
   });
 
   // Task #700 — meeting_brief impression each time briefs are loaded for an account.
+  const briefCount = briefsData?.briefs?.length ?? 0;
   useEffect(() => {
-    if (selectedCompany && (briefsData as any)?.briefs?.length) {
+    if (selectedCompany && briefCount > 0) {
       recordAiEvent({
         surface: "meeting_brief",
         eventType: "impression",
         feature: "list",
         targetId: selectedCompany,
-        meta: { count: (briefsData as any).briefs.length },
+        meta: { count: briefCount },
       });
     }
-  }, [selectedCompany, (briefsData as any)?.briefs?.length]);
+  }, [selectedCompany, briefCount]);
 
   const genBriefMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/ai-intelligence/meeting-prep/${selectedCompany}`),
@@ -410,7 +429,7 @@ export default function AIIntelligencePage() {
                       Generate Brief
                     </Button>
                   </div>
-                  {briefsData?.briefs?.map((brief: any) => (
+                  {briefsData?.briefs?.map((brief) => (
                     <Card key={brief.id} data-testid={`brief-card-${brief.id}`}>
                       <CardHeader className="pb-2 cursor-pointer" onClick={() => toggleExpand(brief.id)}>
                         <div className="flex items-center justify-between">
@@ -435,31 +454,31 @@ export default function AIIntelligencePage() {
                               ))}
                             </ul>
                           </div>
-                          {brief.briefContent?.riskAlerts?.length > 0 && (
+                          {(brief.briefContent?.riskAlerts?.length ?? 0) > 0 && (
                             <div>
                               <h4 className="font-medium text-sm text-red-500 mb-1">Risk Alerts</h4>
                               <ul className="list-disc pl-5 space-y-1">
-                                {brief.briefContent.riskAlerts.map((r: string, i: number) => (
+                                {brief.briefContent?.riskAlerts?.map((r: string, i: number) => (
                                   <li key={i} className="text-sm text-red-600 dark:text-red-400">{r}</li>
                                 ))}
                               </ul>
                             </div>
                           )}
-                          {brief.briefContent?.opportunities?.length > 0 && (
+                          {(brief.briefContent?.opportunities?.length ?? 0) > 0 && (
                             <div>
                               <h4 className="font-medium text-sm text-green-500 mb-1">Opportunities</h4>
                               <ul className="list-disc pl-5 space-y-1">
-                                {brief.briefContent.opportunities.map((o: string, i: number) => (
+                                {brief.briefContent?.opportunities?.map((o: string, i: number) => (
                                   <li key={i} className="text-sm text-green-600 dark:text-green-400">{o}</li>
                                 ))}
                               </ul>
                             </div>
                           )}
-                          {brief.briefContent?.suggestedAgenda?.length > 0 && (
+                          {(brief.briefContent?.suggestedAgenda?.length ?? 0) > 0 && (
                             <div>
                               <h4 className="font-medium text-sm text-muted-foreground mb-1">Suggested Agenda</h4>
                               <ol className="list-decimal pl-5 space-y-1">
-                                {brief.briefContent.suggestedAgenda.map((a: string, i: number) => (
+                                {brief.briefContent?.suggestedAgenda?.map((a: string, i: number) => (
                                   <li key={i} className="text-sm">{a}</li>
                                 ))}
                               </ol>
