@@ -44,10 +44,8 @@ import PrivacyPage from "@/pages/privacy";
 import TermsPage from "@/pages/terms";
 import AdminUsers from "@/pages/admin-users";
 import AdminFreightCaptureRepAuditPage from "@/pages/admin-freight-capture-rep-audit";
-import AdminCopilotAnalyticsPage from "@/pages/admin-copilot-analytics";
 import AdminCarriers from "@/pages/admin-carriers";
 import AdminWebexHealth from "@/pages/admin-webex-health";
-import AdminAiEngagementPage from "@/pages/admin-ai-engagement";
 import AdminIntegrationsHealthPage from "@/pages/admin-integrations-health";
 import AdminEndpointPerfPage from "@/pages/admin-endpoint-perf";
 import RepCustomers from "@/pages/rep-customers";
@@ -80,14 +78,11 @@ import CallsPage from "@/pages/calls";
 import TodayQueuePage from "@/pages/today";
 import MyProcurementPage from "@/pages/my-procurement";
 import ConversationsPage from "@/pages/conversations";
-import ContactSuggestionsPage from "@/pages/contact-suggestions";
-import EmailIntelligencePage from "@/pages/email-intelligence";
 import ProvenTacticsPage from "@/pages/proven-tactics";
 import PlaybookPage from "@/pages/playbook";
 import CoachingPage from "@/pages/coaching";
 import PlaybookAnalyticsPage from "@/pages/playbook-analytics";
 import AIIntelligencePage from "@/pages/ai-intelligence";
-import ValueIQPage from "@/pages/valueiq";
 import AdminMonitoredMailboxesPage from "@/pages/admin-monitored-mailboxes";
 import AdminPodIntakePage from "@/pages/admin-pod-intake";
 import MyPodsPage from "@/pages/my-pods";
@@ -96,7 +91,6 @@ import AdminCarrierIntelligencePage from "@/pages/admin-carrier-intelligence";
 import AdminCarrierIntelligenceScoringPage from "@/pages/admin-carrier-intelligence-scoring";
 import ProfilePage from "@/pages/profile";
 import AiAgentPortal from "@/pages/ai-agent";
-import AiCenterPage from "@/pages/ai-center";
 import AvailableFreightPage from "@/pages/available-freight";
 import AvailableFreightDetailPage from "@/pages/available-freight-detail";
 import AdminAvailableFreightImports from "@/pages/admin-available-freight-imports";
@@ -108,7 +102,7 @@ import CarrierIntelligenceSettingsPage from "@/pages/carrier-intelligence-settin
 import AdminSidebarTooltipsPage from "@/pages/admin-sidebar-tooltips";
 import CustomerQuotesPage from "@/pages/customer-quotes";
 import FreightCapturePage from "@/pages/freight-capture";
-import DailyPrioritiesPage from "@/pages/daily-priorities";
+import AiHubPage from "@/pages/ai-hub";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -189,7 +183,10 @@ function Router() {
       <Route path="/customers" component={Customers} />
       <Route path="/customer-quotes" component={CustomerQuotesPage} />
       <Route path="/freight-capture" component={FreightCapturePage} />
-      <Route path="/daily-priorities" component={DailyPrioritiesPage} />
+      {/* Task #742 — AI Hub. The seven legacy AI URLs all resolve to the hub
+          with the matching tab pre-selected (see resolveAiHubTab). */}
+      <Route path="/ai-hub" component={AiHubPage} />
+      <Route path="/daily-priorities" component={AiHubPage} />
       <Route path="/companies/:id" component={CompanyDetail} />
       <Route path="/rfp-awards" component={RfpAwards} />
       <Route path="/rfp-lane-search" component={RfpLaneSearch} />
@@ -199,10 +196,10 @@ function Router() {
       <Route path="/admin/users" component={AdminUsers} />
       <Route path="/admin/freight-capture-rep-audit" component={AdminFreightCaptureRepAuditPage} />
       <Route path="/admin/sidebar-tooltips" component={AdminSidebarTooltipsPage} />
-      <Route path="/admin/copilot-analytics" component={AdminCopilotAnalyticsPage} />
+      <Route path="/admin/copilot-analytics" component={AiHubPage} />
       <Route path="/admin/carriers" component={AdminCarriers} />
       <Route path="/admin/webex-health" component={AdminWebexHealth} />
-      <Route path="/admin/ai-engagement" component={AdminAiEngagementPage} />
+      <Route path="/admin/ai-engagement" component={AiHubPage} />
       <Route path="/admin/integrations-health" component={AdminIntegrationsHealthPage} />
       <Route path="/admin/endpoint-perf" component={AdminEndpointPerfPage} />
       <Route path="/admin/monitored-mailboxes" component={AdminMonitoredMailboxesPage} />
@@ -254,26 +251,28 @@ function Router() {
       <Route path="/my-procurement" component={MyProcurementPage} />
       <Route path="/intel">{() => { window.location.replace("/valueiq?tab=insights"); return null; }}</Route>
       <Route path="/conversations" component={ConversationsPage} />
-      <Route path="/contact-suggestions" component={ContactSuggestionsPage} />
-      <Route path="/email-intelligence" component={EmailIntelligencePage} />
+      <Route path="/contact-suggestions" component={AiHubPage} />
+      <Route path="/email-intelligence" component={AiHubPage} />
       <Route path="/proven-tactics" component={ProvenTacticsPage} />
       <Route path="/playbook" component={PlaybookPage} />
       <Route path="/coaching" component={CoachingPage} />
       <Route path="/playbook/analytics" component={PlaybookAnalyticsPage} />
-      <Route path="/valueiq" component={ValueIQPage} />
+      <Route path="/valueiq" component={AiHubPage} />
       <Route path="/ai-intelligence">{() => { window.location.replace("/valueiq?tab=insights"); return null; }}</Route>
       <Route path="/ai-intelligence-legacy" component={AIIntelligencePage} />
       <Route path="/privacy" component={PrivacyPage} />
       <Route path="/terms" component={TermsPage} />
       <Route path="/profile" component={ProfilePage} />
-      {/* Unified AI Center — single management module for every AI capability. */}
-      <Route path="/ai" component={AiCenterPage} />
-      <Route path="/ai/agents" component={AiCenterPage} />
-      <Route path="/ai/agents/:slug" component={AiCenterPage} />
-      <Route path="/ai/approvals" component={AiCenterPage} />
-      <Route path="/ai/pods" component={AiCenterPage} />
-      <Route path="/ai/adapters" component={AiCenterPage} />
-      <Route path="/ai/admin" component={AiCenterPage} />
+      {/* Unified AI Center — mounted as the "AI Center" tab inside the AI Hub
+          (Task #742). The hub component delegates to AiCenterPage which
+          continues to drive its own /ai/<sub-tab> routing. */}
+      <Route path="/ai" component={AiHubPage} />
+      <Route path="/ai/agents" component={AiHubPage} />
+      <Route path="/ai/agents/:slug" component={AiHubPage} />
+      <Route path="/ai/approvals" component={AiHubPage} />
+      <Route path="/ai/pods" component={AiHubPage} />
+      <Route path="/ai/adapters" component={AiHubPage} />
+      <Route path="/ai/admin" component={AiHubPage} />
 
       {/* Legacy redirects — old standalone pages now live as AI Center tabs. */}
       <Route path="/ai-agent">{() => { window.location.replace("/ai/admin"); return null; }}</Route>

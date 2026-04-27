@@ -1,4 +1,5 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, PhoneCall, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, BrainCircuit, Lightbulb, Brain, MailCheck, ChevronDown, Sparkles, Activity, Compass, GitMerge, Filter, type LucideIcon } from "lucide-react";
+import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, PhoneCall, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, BrainCircuit, Lightbulb, Brain, MailCheck, ChevronDown, Sparkles, Activity, Compass, GitMerge, Filter, BotMessageSquare, type LucideIcon } from "lucide-react";
+import { AI_HUB_ANY_TAB_ROLES } from "@/pages/ai-hub";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -77,20 +78,9 @@ const customerFacingItems: NavItem[] = [
   { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           description: "High-value opportunities ranked by potential impact.", roles: SALES_ROLES },
   { title: "RFP & Awards",    url: "/rfp-awards",      icon: Trophy,   description: "Active RFPs and awarded business tracking." },
   { title: "RFP Calendar",    url: "/rfp-calendar",    icon: Calendar, description: "Upcoming RFP deadlines and key dates." },
-  {
-    title: "Email Intelligence",
-    url: "/email-intelligence",
-    icon: BrainCircuit,
-    description: "AI insights pulled from your inbound emails.",
-    roles: ["admin", "director", "national_account_manager", "sales_director"],
-  },
-  {
-    title: "Contact Suggestions",
-    url: "/contact-suggestions",
-    icon: UserPlus,
-    description: "Suggested new contacts to add to accounts.",
-    roles: ["admin", "director", "sales_director", "national_account_manager", "account_manager", "logistics_manager"],
-  },
+  // Task #742 — Email Intelligence and Contact Suggestions moved into the
+  // unified AI Hub (sidebar row "AI" → /ai-hub) so reps don't have to hunt
+  // across Customer-Facing and Admin to find the AI surface they need.
   {
     title: "Proven Tactics",
     url: "/proven-tactics",
@@ -109,19 +99,21 @@ const customerFacingItems: NavItem[] = [
   { title: "Rep Scorecard",   url: "/rep-scorecard",   icon: Medal,    description: "Compare reps and review performance metrics.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
 ];
 
-// AI workspace group — Today's Priorities, ValueIQ, and AI Center live
-// together so reps don't have to hunt across Customer-Facing and Admin
-// to find the AI surface they need. Each item keeps its own role list.
-const VALUEIQ_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
-const AI_CENTER_ROLES = ["admin", "manager", "director", "national_account_manager", "sales_director"];
-
-const aiItems: NavItem[] = [
-  { title: "Today's Priorities", url: "/daily-priorities", icon: ClipboardList, description: "All active NBA signals bucketed by action type — Defend, Quote Now, Follow Up, Grow, Procure Carrier.", roles: DAILY_PRIORITIES_ROLES },
-  { title: "ValueIQ",            url: "/valueiq",          icon: Brain,         description: "Daily AI briefing on your top accounts.", roles: VALUEIQ_ROLES },
-  { title: "AI Center",          url: "/ai",               icon: Sparkles,      description: "Configure AI agents, approvals, and adapters.", roles: AI_CENTER_ROLES },
-  // Task #700 — engagement instrumentation admin page (admin-only)
-  { title: "AI Engagement",      url: "/admin/ai-engagement", icon: Activity,    description: "Per-surface impressions, CTR, accept rate, and zero-engagement candidates.", roles: ["admin", "director", "sales_director"] },
-];
+// Task #742 — every AI surface (Today's Priorities, ValueIQ, Email
+// Intelligence, Contact Suggestions, AI Center, Engagement, Copilot
+// Analytics) lives behind a single sidebar entry that opens the AI Hub
+// (/ai-hub) — a tabbed page mounting the existing page components
+// unchanged. Visibility is the union of every tab's role list (see
+// AI_HUB_ANY_TAB_ROLES); tab-level role gating happens inside the hub
+// so a user only sees the tabs they have access to. Future AI surfaces
+// should extend the hub instead of earning their own sidebar row.
+const aiHubItem: NavItem = {
+  title: "AI",
+  url: "/ai-hub",
+  icon: Sparkles,
+  description: "Today's Priorities, ValueIQ, Email Intelligence, Contact Suggestions, AI Center, Engagement, and Copilot Analytics — all in one tabbed page.",
+  roles: AI_HUB_ANY_TAB_ROLES,
+};
 
 const carrierFacingItems: NavItem[] = [
   { title: "Lane Intelligence",  url: "/research-tasks",  icon: ClipboardList, description: "Research lanes and gather pricing intelligence." },
@@ -557,25 +549,37 @@ export function AppSidebar() {
           );
         })()}
 
-        {/* ── AI ── */}
-        {(() => {
-          const visible = aiItems.filter(item => !item.roles || (user?.role && item.roles.includes(user.role)));
-          if (visible.length === 0) return null;
-          return (
-            <CollapsibleGroup label="AI" storageKey="sidebar-ai-open" defaultOpen>
-              {visible.map(item => (
-                <NavLink
-                  key={item.title}
-                  item={item}
-                  isActive={isActive(item.url)}
-                  overrides={tooltipOverrides}
-                  badge={item.title === "Today's Priorities" && dailyWorkspaceCount > 0 ? dailyWorkspaceCount : undefined}
-                  badgeColor="green"
-                />
-              ))}
-            </CollapsibleGroup>
-          );
-        })()}
+        {/* ── AI (single hub entry — Task #742) ── */}
+        {/* All seven AI surfaces collapse into one row that opens the AI Hub
+            tabbed page. The Today's Priorities count surfaces here as the
+            row badge so reps still see actionable signal volume at a glance,
+            even though the priority list now lives one click deeper. We
+            render this as a label-less SidebarGroup so it sits as a single
+            clean row between the Customer-Facing and Carrier-Facing groups
+            without earning its own collapsible header. */}
+        {aiHubItem.roles!.some(r => user?.role === r) && (
+          <SidebarGroup>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={isActive(aiHubItem.url) || isActive("/daily-priorities") || isActive("/valueiq") || isActive("/email-intelligence") || isActive("/contact-suggestions") || location.startsWith("/ai/") || location === "/ai" || isActive("/admin/ai-engagement") || isActive("/admin/copilot-analytics")}
+                    tooltip={navTooltip(aiHubItem.title, resolveDescription(aiHubItem.title, aiHubItem.description, tooltipOverrides))}
+                  >
+                    <Link href={aiHubItem.url} data-testid="link-ai-hub" data-tour="tour-ai-hub" className="relative">
+                      <BotMessageSquare className="h-4 w-4" />
+                      <span>{aiHubItem.title}</span>
+                      {dailyWorkspaceCount > 0 && DAILY_PRIORITIES_ROLES.includes(user?.role ?? "") && (
+                        <NotificationBadge count={dailyWorkspaceCount} color="green" />
+                      )}
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
 
         {/* ── Carrier-Facing ── */}
         {(() => {
@@ -679,16 +683,7 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
-                {["admin", "director", "sales_director"].includes(user?.role ?? "") && (
-                  <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={location === "/admin/copilot-analytics"}>
-                      <Link href="/admin/copilot-analytics" data-testid="link-copilot-analytics">
-                        <Activity className="h-4 w-4" />
-                        <span>Copilot Analytics</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                )}
+                {/* Task #742 — Copilot Analytics now lives in the AI Hub. */}
                 {user?.role === "admin" && (
                   <SidebarMenuItem>
                     <SidebarMenuButton asChild isActive={location === "/admin/webex-health"} tooltip={navTooltip("Webex Health", "Scope coverage, backfill progress, and enrichment-job retry queue.")}>

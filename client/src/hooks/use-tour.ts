@@ -148,6 +148,21 @@ export const TOUR_STEPS: TourStep[] = [
     target: "tour-dna-guru",
   },
   {
+    id: "ai-hub",
+    title: "AI Hub — Every AI Surface, One Click Away",
+    emoji: "✨",
+    description:
+      "The AI sidebar entry opens the AI Hub — a tabbed page that consolidates every AI experience in Freight DNA. No more hunting across the sidebar to find Today's Priorities, ValueIQ, Email Intelligence, Contact Suggestions, the AI Center, AI Engagement, or Copilot Analytics. They're all here.",
+    bullets: [
+      "Tabs you can see are gated by your role — reps see the surfaces relevant to selling, admins see Engagement and Copilot Analytics too",
+      "The badge on the AI sidebar row shows your unread Today's Priorities count so you know when new signals are waiting",
+      "Old URLs still work and land you on the right tab — bookmarks won't break",
+    ],
+    tip: "Start your day on the Today's Priorities tab. Then jump to ValueIQ for the briefing on your top accounts.",
+    route: "/ai-hub",
+    target: "tour-ai-hub",
+  },
+  {
     id: "rfp-awards",
     title: "RFP & Awards",
     emoji: "📋",

@@ -288,6 +288,30 @@ const MODULES: TrainingModule[] = [
 
   // ── Analytics & Intelligence ───────────────────────────────────────────────
   {
+    id: "ai-hub",
+    category: "Analytics & Intelligence",
+    title: "AI Hub",
+    icon: Bot,
+    description:
+      "The AI Hub (sidebar → AI) is the single home for every AI surface in Freight DNA. Instead of hunting across the sidebar, all seven AI experiences live as tabs in one tabbed page at /ai-hub. Your role controls which tabs you see — reps see Today's Priorities and Email Intelligence; directors and admins also see Engagement and Copilot Analytics.",
+    capabilities: [
+      "Today's Priorities — every NBA signal bucketed by Defend / Quote Now / Follow Up / Grow / Procure Carrier",
+      "ValueIQ — daily AI briefing on your top accounts with insights, risks, and recommended plays",
+      "Email Intelligence — inbound-email signals (intent, sentiment, requests) extracted from monitored mailboxes",
+      "Contact Suggestions — accounts where the platform recommends adding a new contact based on activity gaps",
+      "AI Center — manage agents, approvals, pods, and adapter configuration",
+      "AI Engagement — per-surface impressions, CTR, and accept rate (admin/director/sales-director)",
+      "Copilot Analytics — usage and adoption metrics for the in-app AI assistant (admin/director/sales-director)",
+    ],
+    tips: [
+      "Old URLs (/daily-priorities, /valueiq, /email-intelligence, /contact-suggestions, /ai, /admin/ai-engagement, /admin/copilot-analytics) still work — they open the hub on the matching tab",
+      "The badge on the AI sidebar row shows your unread Today's Priorities count, so you don't have to open the hub to see when new signals land",
+      "Tabs you can't see are hidden by your role, not missing — ask an admin if you think you should have access",
+    ],
+    path: "/ai-hub",
+    isNew: true,
+  },
+  {
     id: "top-opportunities",
     category: "Analytics & Intelligence",
     title: "Top Opportunities",

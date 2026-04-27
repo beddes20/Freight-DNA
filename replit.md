@@ -35,6 +35,7 @@ FreightDNA is built on a React frontend, an Express.js backend, and a PostgreSQL
 -   **Webex Calling Integration**: Click-to-Call, call history synchronization, recording transcription with AI analysis, and real-time presence.
 -   **Call Performance Hub**: Unified org-wide telephony page for managers.
 -   **AI Center**: A consolidated admin module for managing AI agents, approvals, and adapters.
+-   **AI Hub** (Task #742): Single tabbed page at `/ai-hub` consolidating all seven AI surfaces (Today's Priorities, ValueIQ, Email Intelligence, Contact Suggestions, AI Center, AI Engagement, Copilot Analytics) under one sidebar entry "AI". Tab visibility is role-gated per surface; the union of every tab's role list (`AI_HUB_ANY_TAB_ROLES`) controls whether the sidebar row appears at all. The seven legacy URLs (`/daily-priorities`, `/valueiq`, `/email-intelligence`, `/contact-suggestions`, `/ai`, `/admin/ai-engagement`, `/admin/copilot-analytics`) all resolve to the hub with the matching tab pre-selected via `resolveAiHubTab(pathname, search)` — no redirects, no breaking bookmarks. Composition-only: each tab mounts the existing page component unchanged.
 -   **Available Freight Cockpit**: A triage cockpit for freight opportunities.
 -   **Schema-Drift Guard**: Compares Drizzle schema against `information_schema` at boot.
 -   **Cross-Tab UX Layer**: Hover-card previews, deep-linking, SSE pub/sub for real-time updates across tabs, and a unified Lane Inbox feed with cross-tab navigation.
