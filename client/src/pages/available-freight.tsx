@@ -364,7 +364,7 @@ export default function AvailableFreightPage() {
   const [statusFilter, setStatusFilter] = useState<string>("active");
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [grouping, setGrouping] = useState<CockpitPrefs["grouping"]>("none");
-  const [sort, setSort] = useState<CockpitPrefs["sort"]>("urgency");
+  const [sort, setSort] = useState<CockpitPrefs["sort"]>("pickup_soonest");
   const [layout, setLayout] = useState<CockpitPrefs["layout"]>("table");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [focusIndex, setFocusIndex] = useState<number>(-1);

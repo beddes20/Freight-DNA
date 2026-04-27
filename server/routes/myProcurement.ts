@@ -29,6 +29,7 @@ import { computeSlaState, countOverSlaForOrg, SLA_L1_HOURS, SLA_L2_HOURS } from 
 import { z } from "zod";
 import { getErrorMessage } from "../lib/errors";
 import { pStr, qOptStr, qStr } from "../lib/req";
+import { todayIsoInOrgTz } from "../lib/orgLocalDate";
 
 const APPROVER_ROLES = new Set([
   "admin",
@@ -533,13 +534,17 @@ export function registerMyProcurementRoutes(app: Express) {
       // ── Available Freight bucket (task #354) ──────────────────────────────
       // Today's open freight opportunities owned by — or delegated to — this
       // rep, surfaced in the new "Available Freight" tab. "Today's open loads"
-      // is defined as: status in (new, ready_to_send) AND the pickup window
-      // hasn't already closed (pickupWindowEnd >= today, or null when the
-      // spreadsheet didn't supply one).
-      // pickupWindowEnd is a text column storing ISO date strings (YYYY-MM-DD),
+      // is defined as: status in (new, ready_to_send, …) AND the pickup window
+      // hasn't already started in the past — i.e. pickupWindowStart >= today
+      // (or null when the spreadsheet didn't supply one). This matches the
+      // past-pickup filter applied on the Available Freight cockpit (Task #750)
+      // so the My Procurement tab badge agrees with what the cockpit shows.
+      // pickupWindowStart is a text column storing ISO date strings (YYYY-MM-DD),
       // so we compare against today's date as a string for correct lexical
-      // ordering.
-      const todayIso = new Date().toISOString().slice(0, 10);
+      // ordering. "Today" is computed in the org's local timezone (CT) so we
+      // don't drop loads that are still "today" for the rep when the server's
+      // UTC clock has already rolled over.
+      const todayIso = todayIsoInOrgTz();
       // Managers viewing their own queue also see imports that didn't match
       // any rep email (ownerUserId IS NULL AND delegatedToUserId IS NULL).
       // This is the "unassigned import queue" — they need a single place to
@@ -620,8 +625,8 @@ export function registerMyProcurementRoutes(app: Express) {
             "partially_covered",
           ]),
           or(
-            isNull(freightOpportunities.pickupWindowEnd),
-            gte(freightOpportunities.pickupWindowEnd, todayIso),
+            isNull(freightOpportunities.pickupWindowStart),
+            gte(freightOpportunities.pickupWindowStart, todayIso),
           ),
           ownershipFilter,
         ))

@@ -4180,7 +4180,7 @@ export const userFreightCockpitPrefs = pgTable("user_freight_cockpit_prefs", {
   activeViewId: varchar("active_view_id").references(() => freightOpportunitySavedViews.id, { onDelete: "set null" }),
   layout: text("layout").notNull().default("table"),
   grouping: text("grouping").notNull().default("none"),
-  sort: text("sort").notNull().default("urgency"),
+  sort: text("sort").notNull().default("pickup_soonest"),
   autopilotMutedUntil: timestamp("autopilot_muted_until"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => ({

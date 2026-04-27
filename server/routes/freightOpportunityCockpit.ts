@@ -35,6 +35,7 @@ import { db } from "../storage";
 import { publish as publishLiveSync } from "../services/liveSync";
 import { getErrorMessage } from "../lib/errors";
 import { pStr } from "../lib/req";
+import { todayIsoInOrgTz } from "../lib/orgLocalDate";
 
 function orgId(req: Express.Request): string {
   return (req as any).session?.organizationId as string;
@@ -469,7 +470,7 @@ export function registerFreightCockpitRoutes(app: Express) {
       if (!org) return res.status(400).json({ error: "No organization" });
 
       const user = await getCurrentUser(req);
-      const { companyId, status, limit = "100", grouping = "none", sort = "urgency", lane: laneFilter, carrierId: carrierFilter } = req.query as Record<string, string>;
+      const { companyId, status, limit = "100", grouping = "none", sort = "pickup_soonest", lane: laneFilter, carrierId: carrierFilter } = req.query as Record<string, string>;
       const statusList = (status ?? "")
         .split(",")
         .map(s => s.trim())
@@ -487,11 +488,31 @@ export function registerFreightCockpitRoutes(app: Express) {
       const now = new Date();
       // Hide snoozed rows whose snooze hasn't expired so the cockpit stays
       // focused. Snoozed rows are still reachable via /api/freight-opportunities.
+      // Also drop rows whose pickup window start is before today (Task #750).
+      // Reps can't act on freight that was supposed to move days ago, and
+      // these rows would otherwise bury today's real work. Rows with no
+      // pickup date set are kept (they're not "past"). The underlying rows
+      // remain reachable via /api/freight-opportunities and the audit log.
+      // pickupWindowStart is a text column storing ISO date strings
+      // (YYYY-MM-DD or full ISO) so we slice the first 10 chars and compare
+      // lexicographically against today's date in the org's local
+      // timezone (CT — see server/lib/orgLocalDate.ts). UTC midnight lands
+      // at 6 PM the prior CT day, so deriving "today" from UTC would hide
+      // loads that are still "today" for the rep.
+      const todayIso = todayIsoInOrgTz(now);
+      const startOfToday = new Date(now);
+      startOfToday.setHours(0, 0, 0, 0);
+      const startOfTodayMs = startOfToday.getTime();
       const visibleRows = rows.filter(r => {
-        if (!r.snoozedUntil) return true;
-        const t = new Date(r.snoozedUntil).getTime();
-        if (!Number.isFinite(t)) return true;
-        return t <= now.getTime();
+        if (r.snoozedUntil) {
+          const t = new Date(r.snoozedUntil).getTime();
+          if (Number.isFinite(t) && t > now.getTime()) return false;
+        }
+        if (r.pickupWindowStart) {
+          const pickupIso = String(r.pickupWindowStart).slice(0, 10);
+          if (pickupIso && pickupIso < todayIso) return false;
+        }
+        return true;
       });
       const caches: CockpitLookupCaches = {
         carriers: new Map<string, Carrier | null>(),
@@ -556,7 +577,7 @@ export function registerFreightCockpitRoutes(app: Express) {
 
       // Re-sort per request (the storage layer already sorts by urgencyScore desc;
       // the cockpit's "urgency" sort uses the just-recomputed score).
-      const sortKey = (FREIGHT_COCKPIT_SORTS as readonly string[]).includes(sort) ? sort : "urgency";
+      const sortKey = (FREIGHT_COCKPIT_SORTS as readonly string[]).includes(sort) ? sort : "pickup_soonest";
       const confidenceRank = (c: string | null | undefined) => {
         switch ((c ?? "").toLowerCase()) {
           case "high": return 3;
@@ -611,14 +632,14 @@ export function registerFreightCockpitRoutes(app: Express) {
       //   atRiskPickup24h      — pickup ≤ 24h away AND not yet covered/closed
       //   coveredToday         — opportunity moved to a covered state today
       // We also retain `total` and `avgFreshnessMinutes` as supporting context.
-      const startOfDay = new Date(now);
-      startOfDay.setHours(0, 0, 0, 0);
+      // `startOfToday` (computed above for the past-pickup filter) doubles as
+      // our "since 00:00 today" reference for these KPIs.
       const closedStatuses = new Set(["covered", "partially_covered", "expired", "cancelled"]);
       // `coveredToday` is sourced from the audit log so we report ACTUAL state
       // transitions today (independent of which rows happen to still be in the
       // cockpit feed). Falls back to 0 if the helper errors.
       const coveredTodayCount = await storage
-        .countFreightOpportunitiesCoveredSince(org, startOfDay)
+        .countFreightOpportunitiesCoveredSince(org, startOfToday)
         .catch((err) => {
           console.error("[freight-cockpit] coveredToday count error:", err);
           return 0;
@@ -627,7 +648,7 @@ export function registerFreightCockpitRoutes(app: Express) {
         total: items.length,
         generatedToday: items.filter(i => {
           const t = i.opportunity.generatedAt ? new Date(i.opportunity.generatedAt).getTime() : NaN;
-          return Number.isFinite(t) && t >= startOfDay.getTime();
+          return Number.isFinite(t) && t >= startOfTodayMs;
         }).length,
         readyToSend: items.filter(i => i.opportunity.status === "ready_to_send").length,
         sentAwaitingCarrier: items.filter(i => i.coverage.sent > 0 && i.coverage.responded === 0).length,
@@ -1045,7 +1066,7 @@ export function registerFreightCockpitRoutes(app: Express) {
       activeViewId: parsed.data.activeViewId !== undefined ? parsed.data.activeViewId : existing?.activeViewId ?? null,
       layout: (parsed.data.layout ?? existing?.layout ?? "table") as (typeof FREIGHT_COCKPIT_LAYOUTS)[number],
       grouping: (parsed.data.grouping ?? existing?.grouping ?? "none") as (typeof FREIGHT_COCKPIT_GROUPINGS)[number],
-      sort: (parsed.data.sort ?? existing?.sort ?? "urgency") as (typeof FREIGHT_COCKPIT_SORTS)[number],
+      sort: (parsed.data.sort ?? existing?.sort ?? "pickup_soonest") as (typeof FREIGHT_COCKPIT_SORTS)[number],
       autopilotMutedUntil: parsed.data.autopilotMutedUntil !== undefined
         ? (parsed.data.autopilotMutedUntil ? new Date(parsed.data.autopilotMutedUntil) : null)
         : existing?.autopilotMutedUntil ?? null,
