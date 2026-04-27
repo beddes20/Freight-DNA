@@ -6,34 +6,16 @@
  * flushed in small batches so the surface itself feels no latency.
  *
  * Failures are swallowed silently — analytics must never break a UI.
+ *
+ * Surface and event-type unions are sourced from `@shared/schema` so the
+ * client and server share a single registry — adding a new surface in one
+ * place automatically extends both producers and the ingest validator,
+ * eliminating drift between client emitters and the server allow-list.
  */
 
-export type AiEngagementSurface =
-  | "nba_card"
-  | "daily_priorities"
-  | "valueiq"
-  | "ai_center"
-  | "ai_intelligence_hub"
-  | "proactive_nudge"
-  | "talking_points"
-  | "health_narrative"
-  | "touchpoint_summary"
-  | "meeting_brief"
-  | "weekly_account_review"
-  | "ai_email_draft"
-  | "ready_to_act"
-  | "carrier_recommendation"
-  | "spot_quote_intel";
+import type { AiEngagementSurface, AiEngagementEventType } from "@shared/schema";
 
-export type AiEngagementEventType =
-  | "impression"
-  | "click"
-  | "accept"
-  | "apply"
-  | "copy"
-  | "dismiss"
-  | "thumbs_up"
-  | "thumbs_down";
+export type { AiEngagementSurface, AiEngagementEventType };
 
 export interface AiEvent {
   surface: AiEngagementSurface;
