@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { decideSyncAction } from "../services/quoteTmsSync";
+import {
+  decideSyncAction,
+  customerMatchTier,
+  normalizeCity,
+  normalizeCustomerName,
+} from "../services/quoteTmsSync";
 import type { LoadFact, QuoteOpportunity } from "@shared/schema";
 
 function fact(over: Partial<LoadFact> = {}): LoadFact {
@@ -126,11 +131,15 @@ describe("decideSyncAction", () => {
     expect(d.kind).toBe("won");
   });
 
-  it("does not match when pickupDate is more than 14 days from requestDate", () => {
+  it("does not auto-flip when pickupDate is more than 14 days from requestDate", () => {
+    // Task #723: outside-window matches now surface as "probable" so the
+    // diagnostics panel can show them — but they MUST NOT auto-flip the
+    // pending quote to won/lost.
     const f = fact({ pickupDate: "2026-06-01" });
     const o = opp(); // requestDate 2026-04-19
     const d = decideSyncAction(o, "Acme Logistics", [f], NOW);
-    expect(d.kind).toBe("unchanged");
+    expect(d.kind).not.toBe("won");
+    expect(d.kind).not.toBe("lost");
   });
 
   it("does not match when lane differs", () => {
@@ -144,6 +153,100 @@ describe("decideSyncAction", () => {
     const f = fact({ bucket: "active" });
     const o = opp({ sourceReference: "ORD-100" });
     const d = decideSyncAction(o, "Acme Logistics", [f], NOW);
-    expect(d.kind).toBe("unchanged");
+    // Task #723: orderId-only match outside the realized/cancelled buckets
+    // is still strong enough to surface as "probable" so admins can see it
+    // in the diagnostics panel — but it MUST NOT auto-flip the quote.
+    expect(d.kind).not.toBe("won");
+    expect(d.kind).not.toBe("lost");
+  });
+});
+
+// ─── Task #723 — alias / city / date-window matching + probable tier ─────────
+
+describe("Task #723 — TMS matcher tolerance", () => {
+  describe("normalizeCustomerName", () => {
+    it("strips Inc / LLC / Corp", () => {
+      expect(normalizeCustomerName("Acme Logistics Inc")).toBe("acme logistics");
+      expect(normalizeCustomerName("Acme Logistics, LLC")).toBe("acme logistics");
+      expect(normalizeCustomerName("Acme Corp")).toBe("acme");
+    });
+    it("strips a leading 'The'", () => {
+      expect(normalizeCustomerName("The Acme Group")).toBe("acme");
+    });
+    it("collapses whitespace and punctuation", () => {
+      expect(normalizeCustomerName("  ACME-Foods  ")).toBe("acme foods");
+    });
+  });
+
+  describe("normalizeCity", () => {
+    it("treats 'Saint Louis' and 'St. Louis' the same", () => {
+      expect(normalizeCity("Saint Louis")).toBe(normalizeCity("St. Louis"));
+      expect(normalizeCity("Saint Louis")).toBe(normalizeCity("st louis"));
+    });
+  });
+
+  describe("customerMatchTier", () => {
+    it("returns 'exact' for case-insensitive equality", () => {
+      expect(customerMatchTier("Acme Logistics", fact({ customerName: "ACME LOGISTICS" }))).toBe("exact");
+    });
+    it("returns 'alias' when only legal suffix differs", () => {
+      expect(customerMatchTier("Acme Logistics", fact({ customerName: "Acme Logistics, Inc." }))).toBe("alias");
+    });
+    it("returns 'none' when names truly differ", () => {
+      expect(customerMatchTier("Acme Logistics", fact({ customerName: "Globex" }))).toBe("none");
+    });
+  });
+
+  it("auto-flips on alias customer match (Inc vs. plain)", () => {
+    const o = opp(); // requestDate 2026-04-19, no sourceReference
+    const f = fact({ customerName: "Acme Logistics, Inc." });
+    const d = decideSyncAction(o, "Acme Logistics", [f], NOW);
+    expect(d.kind).toBe("won");
+    if (d.kind === "won") expect(d.matchTier).toBe("alias");
+  });
+
+  it("auto-flips when origin city differs only by Saint vs. St. spelling", () => {
+    const f = fact({ originCity: "Saint Louis", originState: "MO" });
+    const o = opp({ originCity: "St. Louis", originState: "MO" });
+    const d = decideSyncAction(o, "Acme Logistics", [f], NOW);
+    expect(d.kind).toBe("won");
+  });
+
+  it("returns 'probable' (NOT won/lost) when pickup is just outside the date window", () => {
+    // requestDate = 2026-04-19; pickup 2026-05-10 = 21 days out, beyond the
+    // 14-day default window but with same customer + lane.
+    const f = fact({ pickupDate: "2026-05-10" });
+    const o = opp();
+    const d = decideSyncAction(o, "Acme Logistics", [f], NOW);
+    expect(d.kind).toBe("probable");
+    if (d.kind === "probable") {
+      expect(d.reason).toBe("outside-date-window");
+      expect(d.match.id).toBe(f.id);
+    }
+  });
+
+  it("returns 'probable' when an alias-matched load is still active in the TMS", () => {
+    const f = fact({ bucket: "active", customerName: "Acme Logistics, LLC" });
+    const o = opp(); // no sourceReference, in-window pickup
+    const d = decideSyncAction(o, "Acme Logistics", [f], NOW);
+    expect(d.kind).toBe("probable");
+    if (d.kind === "probable") expect(d.reason).toBe("still-active-in-tms");
+  });
+
+  it("respects the QUOTE_TMS_MATCH_WINDOW_DAYS override via opts.matchWindowDays", () => {
+    // Same case as the "outside-date-window" probable test, but bumping the
+    // window to 30 days flips it back to a confident "won".
+    const f = fact({ pickupDate: "2026-05-10" });
+    const o = opp();
+    const d = decideSyncAction(o, "Acme Logistics", [f], NOW, { matchWindowDays: 30 });
+    expect(d.kind).toBe("won");
+  });
+
+  it("does NOT downgrade an exact in-window match to 'probable'", () => {
+    // Exact match should still win; probable is only the fallback path.
+    const f = fact();
+    const o = opp();
+    const d = decideSyncAction(o, "Acme Logistics", [f], NOW);
+    expect(d.kind).toBe("won");
   });
 });

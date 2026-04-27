@@ -17,7 +17,10 @@ import {
   getAutoWonQuoteAfHandoffEnabled,
   setAutoWonQuoteAfHandoffEnabled,
   getFunnel,
+  getFunnelDiagnostics,
   resolveFunnelRepScope,
+  markQuoteOutcome,
+  type ManualMarkOutcomeStatus,
   type QuoteFilters, type ListSortKey,
 } from "../services/customerQuotes";
 import { QUOTE_PARTY_TYPES } from "@shared/schema";
@@ -822,6 +825,95 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     } catch (err) {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] spot email-draft error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Task #723 — Capture funnel diagnostics. Admin-only panel that reports
+  // the most recent TMS sync (scanned / matched / probable / won-lost-
+  // expired counts) plus a window of email-classifier outcomes (won / lost
+  // / neither inbound replies) plus near-miss TMS candidates surfaced by
+  // the looser matcher. Scoped to the same filter slice the funnel uses.
+  app.get("/api/customer-quotes/funnel-diagnostics", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const elevated = new Set(["admin", "director", "sales_director"]);
+      if (!elevated.has(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const filters = parseFilters(req);
+      const scope = await resolveFunnelRepScope(user.organizationId, { id: user.id, role: user.role });
+      const diagnostics = await getFunnelDiagnostics(user.organizationId, filters, scope);
+      res.json(diagnostics);
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      console.error("[customer-quotes] funnel-diagnostics error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Task #723 — manual mark-outcome action. Lets reps resolve a pending
+  // quote in-page with one click. Same write-path the auto-detectors use:
+  // updates outcomeStatus + reasonId, writes manual_won / manual_lost
+  // quote_event, fires the customer touchpoint. Idempotent — bails when
+  // the quote is already in a terminal status.
+  //
+  // Authorization: allowed roles are the ones that can see the funnel.
+  // Rep-scoped roles (account_manager etc.) are further restricted by
+  // resolveFunnelRepScope to their own quotes — mirrors the GET /list and
+  // /funnel scoping so a rep can never act on another rep's row.
+  const markOutcomeSchema = z.object({
+    outcomeStatus: z.enum([
+      "won", "won_low_margin",
+      "lost_price", "lost_service", "lost_timing", "lost_incumbent",
+      "no_response",
+    ]),
+    outcomeReasonId: z.string().min(1).nullable().optional(),
+  });
+  app.post("/api/customer-quotes/quote/:id/mark-outcome", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const allowed = new Set([
+        "admin", "director", "sales_director",
+        "national_account_manager", "sales",
+        "account_manager", "logistics_manager", "logistics_coordinator",
+      ]);
+      if (!allowed.has(user.role)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const id = pStr(req.params.id);
+      if (!id) return res.status(400).json({ error: "Missing quote id" });
+      const parsed = markOutcomeSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", issues: parsed.error.issues });
+      }
+      const { outcomeStatus, outcomeReasonId } = parsed.data;
+
+      // Resolve per-rep scope. Elevated roles get null (no rep restriction);
+      // scoped roles get their rep id, which the service uses to bail with
+      // status="forbidden" on cross-rep attempts. The "__none__" sentinel
+      // means the user is in a scoped role with no rep mapping at all —
+      // they can't have any quotes, so reject up-front.
+      const scope = await resolveFunnelRepScope(user.organizationId, { id: user.id, role: user.role });
+      if (scope === "__none__") {
+        return res.status(403).json({ error: "No rep mapping — cannot mark quotes" });
+      }
+
+      const result = await markQuoteOutcome(
+        user.organizationId,
+        id,
+        outcomeStatus as ManualMarkOutcomeStatus,
+        outcomeReasonId ?? null,
+        actorName(user),
+        { enforceRepScope: scope ?? undefined },
+      );
+      if (result.status === "not_found") return res.status(404).json({ error: "Quote not found" });
+      if (result.status === "forbidden") return res.status(403).json({ error: "Quote belongs to another rep" });
+      if (result.status === "invalid_reason") return res.status(400).json({ error: "Unknown outcomeReasonId for this org" });
+      res.json(result);
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      console.error("[customer-quotes] mark-outcome error:", err);
       res.status(500).json({ error: msg });
     }
   });

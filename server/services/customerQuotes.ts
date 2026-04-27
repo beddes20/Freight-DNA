@@ -17,6 +17,11 @@ import { users } from "@shared/schema";
 import { learnFromReassign } from "./quoteSenderMappings";
 import type { QuotePartyType } from "@shared/schema";
 import { getStaleQuoteFollowUps } from "./staleQuoteFollowup";
+import {
+  LOST_INCUMBENT, LOST_PRICE, LOST_SERVICE, LOST_TIMING,
+  findOrCreateLostReasonExported,
+  type LostReason,
+} from "./quoteEmailIngestion";
 import { getActivePatternAlertsForOrg } from "./quotePatternShift";
 import { computeQuoteSla } from "@shared/quoteSla";
 import { normalizeEquipmentType } from "@shared/laneFormatters";
@@ -1032,6 +1037,141 @@ export async function bulkSetQuoteStatus(
     .returning({ id: quoteOpportunities.id });
   return { updated: result.length };
 }
+
+// ─── Task #723: manual mark-outcome (rep inline action on Freight Capture) ───
+//
+// Mirrors what the auto-detectors (TMS sync + email classifier) do when they
+// flip a pending quote: update outcomeStatus, attach a reason, write a typed
+// quote_event (manual_won / manual_lost) and log a customer-facing
+// touchpoint. Idempotent — bails when the quote is already in a terminal
+// status (would otherwise overwrite history).
+
+export type ManualMarkOutcomeStatus = Extract<
+  QuoteOutcomeStatus,
+  "won" | "won_low_margin" | "lost_price" | "lost_service" | "lost_timing" | "lost_incumbent" | "no_response"
+>;
+
+export interface MarkOutcomeResult {
+  // "forbidden" — caller is rep-scoped and the quote isn't theirs.
+  // "invalid_reason" — caller passed an outcomeReasonId that doesn't exist
+  //   in this org. Distinguished from a generic 400 so the route can return
+  //   a precise error and the caller can re-fetch the reasons list.
+  status: "updated" | "already_terminal" | "not_found" | "forbidden" | "invalid_reason";
+  quoteId: string;
+  outcomeStatus?: QuoteOutcomeStatus;
+  outcomeReasonId?: string | null;
+}
+
+export interface MarkQuoteOutcomeOptions {
+  /**
+   * When set, restricts the operation to quotes owned by this rep id. Used
+   * by the route to enforce per-rep authorization for scoped roles
+   * (account_manager, logistics_manager, logistics_coordinator). Undefined
+   * means "no rep restriction" — admins/directors/national_account_managers.
+   */
+  enforceRepScope?: string;
+}
+
+export async function markQuoteOutcome(
+  orgId: string,
+  quoteId: string,
+  outcomeStatus: ManualMarkOutcomeStatus,
+  outcomeReasonId: string | null,
+  actor: string,
+  opts?: MarkQuoteOutcomeOptions,
+): Promise<MarkOutcomeResult> {
+  const [opp] = await db.select().from(quoteOpportunities).where(and(
+    eq(quoteOpportunities.organizationId, orgId),
+    eq(quoteOpportunities.id, quoteId),
+  )).limit(1);
+  if (!opp) return { status: "not_found", quoteId };
+
+  // Per-rep authorization (Task #723 review fix). Rep-scoped users may
+  // only mark their own quotes; bail before any writes if the caller is
+  // scoped and the row belongs to a different rep. Returning "forbidden"
+  // (vs "not_found") lets the route surface a precise 403 — but we only
+  // do this *after* the org match so we never reveal the existence of a
+  // quote in another org.
+  if (opts?.enforceRepScope && opp.repId !== opts.enforceRepScope) {
+    return { status: "forbidden", quoteId };
+  }
+
+  // Idempotency: never overwrite a terminal status. Lets a rep harmlessly
+  // re-click the same action without us re-firing the touchpoint.
+  if (opp.outcomeStatus !== "pending") {
+    return { status: "already_terminal", quoteId, outcomeStatus: opp.outcomeStatus as QuoteOutcomeStatus };
+  }
+
+  // The reason is required for losses and ignored for wins (the won_low_margin
+  // tier is decided by margin math elsewhere — manual won maps to plain "won").
+  const isWonStatus = outcomeStatus === "won" || outcomeStatus === "won_low_margin";
+  const eventType = isWonStatus ? "manual_won" : "manual_lost";
+
+  // ── Loss-reason resolution (Task #723 review fix) ────────────────────────
+  // The UI used to send `outcomeReasonId: null` even for lost_* statuses,
+  // which left the row with no reason and collapsed the "Why we lose"
+  // breakdown into "Reason not set". Resolve a real reason row here so
+  // manual losses participate in the same aggregation as auto-detected
+  // ones (which use `findOrCreateLostReason` from quoteEmailIngestion):
+  //   - If the caller passed an explicit ID, validate it belongs to this
+  //     org and return "invalid_reason" if not (so the route can 400 cleanly).
+  //   - Otherwise, when the status maps to a known LOST_* code, look it up
+  //     (or create it) by code so the row always lands with a real id.
+  //   - For "no_response" (which is a non-canonical loss), null is OK —
+  //     it has its own stage in the funnel.
+  let resolvedReasonId: string | null = null;
+  if (!isWonStatus) {
+    if (outcomeReasonId) {
+      const [reasonRow] = await db.select().from(quoteOutcomeReasons).where(and(
+        eq(quoteOutcomeReasons.organizationId, orgId),
+        eq(quoteOutcomeReasons.id, outcomeReasonId),
+      )).limit(1);
+      if (!reasonRow) return { status: "invalid_reason", quoteId };
+      resolvedReasonId = reasonRow.id;
+    } else if (outcomeStatus !== "no_response") {
+      const canonical = CANONICAL_LOST_REASON_BY_STATUS[outcomeStatus];
+      if (canonical) {
+        resolvedReasonId = await findOrCreateLostReasonExported(orgId, canonical);
+      }
+    }
+  }
+
+  await db.update(quoteOpportunities).set({
+    outcomeStatus,
+    outcomeReasonId: isWonStatus ? null : resolvedReasonId,
+  }).where(eq(quoteOpportunities.id, opp.id));
+
+  const occurredAt = new Date();
+  const [ev] = await db.insert(quoteEvents).values({
+    quoteId: opp.id,
+    eventType,
+    occurredAt,
+    actor,
+    payload: {
+      source: "manual",
+      previousStatus: opp.outcomeStatus,
+      newStatus: outcomeStatus,
+      outcomeReasonId: isWonStatus ? null : resolvedReasonId,
+    },
+  }).returning();
+
+  await logQuoteTouchpointFromEvent({
+    orgId, oppId: opp.id, eventId: ev.id,
+    eventType: ev.eventType, occurredAt: ev.occurredAt,
+  });
+
+  return { status: "updated", quoteId: opp.id, outcomeStatus, outcomeReasonId: resolvedReasonId };
+}
+
+// Status → canonical LostReason mapping. Drives the auto-resolve branch in
+// markQuoteOutcome above so the manual mark-outcome path lands on the same
+// reason rows the email/TMS auto-detectors create.
+const CANONICAL_LOST_REASON_BY_STATUS: Partial<Record<ManualMarkOutcomeStatus, LostReason>> = {
+  lost_price: LOST_PRICE,
+  lost_service: LOST_SERVICE,
+  lost_timing: LOST_TIMING,
+  lost_incumbent: LOST_INCUMBENT,
+};
 
 export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise<Snapshot> {
   // Task #597 — see listQuotes; lazy classifier keeps the snapshot honest
@@ -3580,12 +3720,28 @@ export type FunnelPerformerRow = {
 export type FunnelPerformerSplit = {
   best: FunnelPerformerRow[];
   worst: FunnelPerformerRow[];
+  // Task #723 — true when the bucket has no decided outcomes yet and we
+  // fell back to ranking by total volume. The client renders a different
+  // subtitle ("Decided outcomes pending — showing volume") so reps know the
+  // table is showing activity, not win-rate.
+  volumeFallback: boolean;
 };
 
 export type FunnelPerformers = {
   lanes: FunnelPerformerSplit;
   customers: FunnelPerformerSplit;
   reps: FunnelPerformerSplit;
+};
+
+// Task #723 — when the slice has no decided losses, the "Why we lose"
+// portlet still has useful signal: how many quotes exited as stale, expired
+// or no-response. Always returned (cheap to compute) so the client can
+// render the fallback purely client-side without a second round trip.
+export type FunnelQuietBreakdown = {
+  stale: number;
+  expired: number;
+  noResponse: number;
+  total: number;
 };
 
 export type FunnelSummary = {
@@ -3609,6 +3765,9 @@ export type FunnelResult = {
   summary: FunnelSummary;
   lossReasons: FunnelLossReason[];
   performers: FunnelPerformers;
+  // Task #723 — exit-type breakdown used by the "Why they go quiet" fallback
+  // when the slice has no decided losses but does have stale/expired exits.
+  quietBreakdown: FunnelQuietBreakdown;
   // Echoes the rep id the server scoped the data to (when an account_manager
   // is the viewer). Null for admins/directors who see the full org.
   scopedToRepId: string | null;
@@ -3670,10 +3829,11 @@ function emptyFunnelResult(scopedToRepId: string | null): FunnelResult {
     },
     lossReasons: [],
     performers: {
-      lanes: { best: [], worst: [] },
-      customers: { best: [], worst: [] },
-      reps: { best: [], worst: [] },
+      lanes: { best: [], worst: [], volumeFallback: false },
+      customers: { best: [], worst: [], volumeFallback: false },
+      reps: { best: [], worst: [], volumeFallback: false },
     },
+    quietBreakdown: { stale: 0, expired: 0, noResponse: 0, total: 0 },
     scopedToRepId,
   };
 }
@@ -3728,6 +3888,14 @@ export async function getFunnel(
   let won = 0;
   let lost = 0;
   let stale = 0;
+  // Task #723 — split out the three "quiet exit" buckets so the loss-reasons
+  // portlet can fall back to a "Why they go quiet" view when no decided
+  // losses exist. `staleByAge` only counts pending rows aged past threshold
+  // (the no_response / expired statuses are tracked separately so we don't
+  // double-count when a quote is BOTH old AND already flipped).
+  let staleByAge = 0;
+  let noResponseExit = 0;
+  let expiredExit = 0;
   let responseSum = 0;
   let responseCount = 0;
   const lossReasonAgg = new Map<string, number>();
@@ -3745,6 +3913,9 @@ export async function getFunnel(
     }
     const ageMs = now - r.requestDate.getTime();
     const isStaleByAge = r.outcomeStatus === "pending" && ageMs > staleMs;
+    if (isStaleByAge) staleByAge++;
+    if (r.outcomeStatus === "no_response") noResponseExit++;
+    if (r.outcomeStatus === "expired") expiredExit++;
     if (isStaleByAge || r.outcomeStatus === "no_response" || r.outcomeStatus === "expired") {
       stale++;
     }
@@ -3855,11 +4026,29 @@ export async function getFunnel(
   // sort and total as the tiebreaker. "Decided" rows (won+lost > 0) are the
   // only meaningful inputs for win-rate ranking; rows with zero decisions
   // would all tie at 0% and crowd out genuine low performers.
+  //
+  // Task #723 — when no rows in this bucket have any decisions yet, fall
+  // back to a volume-ranked list (most active first, with a placeholder for
+  // "Worst" so the table layout stays balanced). The flag tells the client
+  // to swap the column header / subtitle.
   function splitBestWorst(
     rows: FunnelPerformerRow[],
     n: number,
   ): FunnelPerformerSplit {
     const decided = rows.filter(r => r.won + r.lost > 0);
+    if (decided.length === 0) {
+      // Volume fallback: rank everyone by total quote count, descending.
+      // We split the top N into halves so the existing two-column UI still
+      // renders something useful — left = "Most active", right = "Least
+      // active among the top tier" (the rows are still ranked by total so
+      // the right column is the back end of the same list).
+      const ranked = rows.slice().sort((a, b) => b.total - a.total);
+      return {
+        best: ranked.slice(0, n),
+        worst: [],
+        volumeFallback: true,
+      };
+    }
     const best = decided
       .slice()
       .sort((a, b) => b.winRate - a.winRate || b.total - a.total)
@@ -3870,7 +4059,7 @@ export async function getFunnel(
       .slice()
       .sort((a, b) => a.winRate - b.winRate || b.total - a.total)
       .slice(0, n);
-    return { best, worst };
+    return { best, worst, volumeFallback: false };
   }
 
   const PERFORMER_TOP_N = 5;
@@ -3880,11 +4069,151 @@ export async function getFunnel(
     reps: splitBestWorst(toRows(repAgg, 1), PERFORMER_TOP_N),
   };
 
+  const quietBreakdown: FunnelQuietBreakdown = {
+    stale: staleByAge,
+    expired: expiredExit,
+    noResponse: noResponseExit,
+    total: staleByAge + expiredExit + noResponseExit,
+  };
+
   return {
     stages,
     summary,
     lossReasons,
     performers,
+    quietBreakdown,
     scopedToRepId: scopedRepId ?? null,
+  };
+}
+
+// ─── Task #723: Funnel diagnostics (admin-only Capture funnel diagnostics) ──
+//
+// Combines (a) the per-org TMS sync stats kept in-memory by quoteTmsSync,
+// (b) a count of inbound emails that landed Won/Lost/neither over the recent
+// window, and (c) the top "near-miss" TMS candidates (probable matches the
+// new looser matcher found but didn't auto-flip). Scoped to the same filter
+// shape the funnel uses so an admin filtering "this rep, last 30 days" sees
+// matching diagnostics.
+
+export interface EmailClassifierCounts {
+  windowDays: number;
+  won: number;
+  lost: number;
+  neither: number;
+}
+
+export interface FunnelDiagnostics {
+  scopedToRepId: string | null;
+  lastSync: import("./quoteTmsSync").SyncStats | null;
+  emailClassifier: EmailClassifierCounts;
+  /** Subset of the latest sync's probable candidates that pass the current
+   *  filter slice (rep / customer / equipment / lane / dates). */
+  nearMissCandidates: import("./quoteTmsSync").ProbableCandidate[];
+}
+
+export async function getFunnelDiagnostics(
+  orgId: string,
+  filters: QuoteFilters,
+  scopedRepId: string | null | "__none__",
+  opts: { emailWindowDays?: number } = {},
+): Promise<FunnelDiagnostics> {
+  const { getLastSyncStats } = await import("./quoteTmsSync");
+  const windowDays = opts.emailWindowDays ?? 14;
+
+  if (scopedRepId === "__none__") {
+    return {
+      scopedToRepId: null,
+      lastSync: null,
+      emailClassifier: { windowDays, won: 0, lost: 0, neither: 0 },
+      nearMissCandidates: [],
+    };
+  }
+
+  // Filter the cached probable-match candidates against the same filter
+  // slice the funnel uses. Need the org's quote rows + customer map to do
+  // the matching; if the cache is empty we still return a useful shell.
+  const lastSync = getLastSyncStats(orgId);
+  const ctx = await loadContext(orgId);
+  const allOpps = await db.select().from(quoteOpportunities)
+    .where(eq(quoteOpportunities.organizationId, orgId));
+
+  const nonCustomerIds = nonCustomerCustomerIdsFromMap(ctx.customerMap);
+  const effectiveFilters: QuoteFilters = scopedRepId
+    ? { ...filters, repId: scopedRepId }
+    : filters;
+  const filtered = applyFilters(allOpps, effectiveFilters, nonCustomerIds);
+  const filteredIdSet = new Set(filtered.map(o => o.id));
+  const filteredIds = Array.from(filteredIdSet);
+
+  const nearMissCandidates = (lastSync?.probableCandidates ?? [])
+    .filter(c => filteredIdSet.has(c.quoteId))
+    .slice(0, 20);
+
+  // Email classifier counts: count quote_events of type email_won /
+  // email_lost in the recent window for the filtered slice. Anything inbound
+  // on a quote thread that produced NEITHER is "neither". We approximate
+  // "neither" by counting inbound email_messages on threads associated with
+  // these quotes (via sourceReference) minus the won+lost count. That's a
+  // bounded-cost query: we restrict to quotes in the filtered slice, not
+  // every quote in the org.
+  let emailWon = 0;
+  let emailLost = 0;
+  let emailTotalInbound = 0;
+  if (filteredIds.length > 0) {
+    const since = new Date(Date.now() - windowDays * 24 * 3600 * 1000);
+    const events = await db.select({
+      eventType: quoteEvents.eventType,
+    }).from(quoteEvents).where(and(
+      inArray(quoteEvents.quoteId, filteredIds),
+      sql`${quoteEvents.occurredAt} >= ${since}`,
+    ));
+    for (const e of events) {
+      if (e.eventType === "email_won") emailWon++;
+      else if (e.eventType === "email_lost") emailLost++;
+    }
+
+    // Approximate "neither" — inbound email replies on the quote threads
+    // that did NOT trigger a won/lost event. For each filtered quote with a
+    // sourceReference, look up the email_messages on the same thread.
+    const refs = Array.from(new Set(
+      filtered
+        .map(o => o.sourceReference)
+        .filter((v): v is string => !!v),
+    ));
+    if (refs.length > 0) {
+      const seedMsgs = await db.select({
+        threadId: emailMessages.threadId,
+      }).from(emailMessages).where(and(
+        eq(emailMessages.orgId, orgId),
+        inArray(emailMessages.providerMessageId, refs),
+      ));
+      const threadIds = Array.from(new Set(
+        seedMsgs.map(m => m.threadId).filter((v): v is string => !!v),
+      ));
+      if (threadIds.length > 0) {
+        const inbound = await db.select({ id: emailMessages.id })
+          .from(emailMessages).where(and(
+            eq(emailMessages.orgId, orgId),
+            eq(emailMessages.direction, "inbound"),
+            inArray(emailMessages.threadId, threadIds),
+            sql`${emailMessages.providerSentAt} >= ${since}`,
+          ));
+        emailTotalInbound = inbound.length;
+      }
+    }
+  }
+
+  const neither = Math.max(0, emailTotalInbound - emailWon - emailLost);
+
+  return {
+    scopedToRepId: scopedRepId ?? null,
+    lastSync: lastSync ?? null,
+    emailClassifier: {
+      windowDays,
+      won: emailWon,
+      lost: emailLost,
+      neither,
+    },
+    nearMissCandidates,
   };
 }

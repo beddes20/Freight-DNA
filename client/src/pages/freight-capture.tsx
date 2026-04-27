@@ -7,7 +7,7 @@
  * Customer Quotes page; the funnel API additionally scopes account_managers
  * to their own quotes.
  */
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,6 +15,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { FreightCaptureFunnel, type FunnelFilters } from "@/components/customer-quotes/FreightCaptureFunnel";
+import { FreightCaptureDiagnostics } from "@/components/customer-quotes/FreightCaptureDiagnostics";
+import { PendingQuotesQuickList } from "@/components/customer-quotes/PendingQuotesQuickList";
 
 // Mirror of the role gate on /customer-quotes — reps outside this set don't
 // see the Capture Funnel sidebar entry, but a direct URL still lands here so
@@ -107,10 +109,34 @@ export default function FreightCapturePage(): JSX.Element {
     );
   }
 
-  return <FreightCapturePageInner />;
+  const role = (user as { role: string }).role;
+  return <FreightCapturePageInner role={role} />;
 }
 
-function FreightCapturePageInner(): JSX.Element {
+interface FreightCapturePageInnerProps { role: string; }
+function FreightCapturePageInner({ role }: FreightCapturePageInnerProps): JSX.Element {
+  // Task #723 — only admin / director / sales_director see the diagnostics
+  // panel and the inline mark-outcome action surface. Reps still get the
+  // funnel itself; the manual mark-outcome row table is hidden so we don't
+  // tempt account_managers into resolving quotes that aren't theirs.
+  const elevated = new Set(["admin", "director", "sales_director"]);
+  const isElevated = elevated.has(role);
+  const canMarkOutcome = isElevated || role === "national_account_manager" || role === "account_manager" || role === "sales";
+
+  // Diagnostics open state lifted here so the funnel's "Why they go quiet"
+  // fallback card can pop the panel open via a footer link (Task #723
+  // review fix). The ref is used to scroll the panel into view after toggle.
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState<boolean>(false);
+  const diagnosticsRef = useRef<HTMLDivElement | null>(null);
+  const showDiagnostics = (): void => {
+    setDiagnosticsOpen(true);
+    // Wait a tick so the panel has expanded before scrolling — otherwise
+    // we scroll to the collapsed header and miss the freshly-opened content.
+    setTimeout(() => {
+      diagnosticsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  };
+
   const [period, setPeriod] = useState<TimePeriodKey>("30d");
   const [customStart, setCustomStart] = useState<string>("");
   const [customEnd, setCustomEnd] = useState<string>("");
@@ -270,8 +296,21 @@ function FreightCapturePageInner(): JSX.Element {
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto px-6 py-4">
-        <FreightCaptureFunnel filters={filters} onLaneClick={onLaneClick} />
+      <div className="flex-1 overflow-auto px-6 py-4 space-y-4">
+        <FreightCaptureFunnel
+          filters={filters}
+          onLaneClick={onLaneClick}
+          onShowDiagnostics={isElevated ? showDiagnostics : undefined}
+        />
+        <div ref={diagnosticsRef}>
+          <FreightCaptureDiagnostics
+            filters={filters}
+            enabled={isElevated}
+            open={diagnosticsOpen}
+            onOpenChange={setDiagnosticsOpen}
+          />
+        </div>
+        {canMarkOutcome && <PendingQuotesQuickList filters={filters} />}
       </div>
     </div>
   );

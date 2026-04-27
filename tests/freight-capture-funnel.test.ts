@@ -17,8 +17,13 @@ import {
   quoteCustomers, quoteReps, quoteOutcomeReasons,
   quoteOpportunities, quoteEvents,
 } from "../shared/schema";
-import { eq, inArray } from "drizzle-orm";
-import { getFunnel, getSnapshot, resolveFunnelRepScope } from "../server/services/customerQuotes";
+import { eq, inArray, and } from "drizzle-orm";
+import {
+  getFunnel,
+  getSnapshot,
+  resolveFunnelRepScope,
+  markQuoteOutcome,
+} from "../server/services/customerQuotes";
 
 let passed = 0;
 let failed = 0;
@@ -594,6 +599,317 @@ async function main(): Promise<void> {
     // Touch references so unused-binding lints don't fire on the destructure.
     void repAM; void repNAM; void repAdmin; void repDir; void repSalesDir;
     void repLM; void repLC; void repSales; void repLegacy;
+  }
+
+  // ── 10. Task #723 — quietBreakdown is always populated ───────────────────
+  // The "Why we lose" portlet falls back to "Why they go quiet" when there
+  // are no decided losses; the client needs the breakdown unconditionally,
+  // so the field must be present on every funnel response.
+  console.log("\n── 10. quietBreakdown is always present ──");
+  {
+    const result = await getFunnel(ctx.org.id, {}, null);
+    assert("quietBreakdown is defined", result.quietBreakdown != null);
+    assert(
+      "quietBreakdown has stale + expired + noResponse + total fields",
+      typeof result.quietBreakdown.stale === "number"
+        && typeof result.quietBreakdown.expired === "number"
+        && typeof result.quietBreakdown.noResponse === "number"
+        && typeof result.quietBreakdown.total === "number",
+    );
+    assert(
+      "quietBreakdown.total = stale + expired + noResponse",
+      result.quietBreakdown.total
+        === result.quietBreakdown.stale + result.quietBreakdown.expired + result.quietBreakdown.noResponse,
+    );
+    // The seed has 1 row 20+ days old that is "stale by age" + 1 explicit
+    // no_response status row → quietBreakdown.total should be at least 1.
+    assert(
+      "quietBreakdown.total >= 1 with seeded stale/no-response rows",
+      result.quietBreakdown.total >= 1,
+      `got ${result.quietBreakdown.total}`,
+    );
+  }
+
+  // ── 11. Task #723 — performers volumeFallback when no decisions ──────────
+  // A brand-new org with only pending quotes (no won/lost) should return
+  // performers with volumeFallback=true and a non-empty `best` ranked by
+  // total quote count, so the UI can still surface "Most active" customers
+  // / lanes / reps instead of an empty card.
+  console.log("\n── 11. Performers volume fallback (no decisions yet) ──");
+  {
+    const ts = Date.now();
+    const [pendingOrg] = await db
+      .insert(organizations)
+      .values({ name: `Pending Org ${ts}`, slug: `pending-org-${ts}` })
+      .returning();
+    orgIdsToCleanup.push(pendingOrg.id);
+
+    const [pendingRep] = await db
+      .insert(quoteReps)
+      .values({ organizationId: pendingOrg.id, name: "Pending Rep", isPrimary: true, userId: null })
+      .returning();
+    const [pendingCustHigh, pendingCustLow] = await db
+      .insert(quoteCustomers)
+      .values([
+        { organizationId: pendingOrg.id, name: "High Volume Co", partyType: "customer" },
+        { organizationId: pendingOrg.id, name: "Low Volume Co", partyType: "customer" },
+      ])
+      .returning();
+
+    // 5 pending quotes for High Volume, 1 for Low Volume — none decided.
+    const today = new Date();
+    const baseRow = {
+      organizationId: pendingOrg.id,
+      repId: pendingRep.id,
+      originCity: "Dallas", originState: "TX",
+      destCity: "Atlanta", destState: "GA",
+      equipment: "Van",
+      requestDate: today,
+      validThrough: new Date(today.getTime() + 7 * 24 * 3600 * 1000),
+      outcomeStatus: "pending" as const,
+      quotedAmount: "1000",
+      source: "email" as const,
+    };
+    await db.insert(quoteOpportunities).values([
+      { ...baseRow, customerId: pendingCustHigh.id },
+      { ...baseRow, customerId: pendingCustHigh.id },
+      { ...baseRow, customerId: pendingCustHigh.id },
+      { ...baseRow, customerId: pendingCustHigh.id },
+      { ...baseRow, customerId: pendingCustHigh.id },
+      { ...baseRow, customerId: pendingCustLow.id },
+    ]);
+
+    const result = await getFunnel(pendingOrg.id, {}, null);
+    assert(
+      "pending-only org: customers.volumeFallback = true",
+      result.performers.customers.volumeFallback === true,
+    );
+    assert(
+      "pending-only org: customers.best is non-empty (ranked by volume)",
+      result.performers.customers.best.length > 0,
+      `got ${result.performers.customers.best.length}`,
+    );
+    assert(
+      "pending-only org: highest-volume customer is first",
+      result.performers.customers.best[0]?.label === "High Volume Co",
+      `got ${result.performers.customers.best[0]?.label}`,
+    );
+    assert(
+      "pending-only org: customers.worst is empty in fallback mode",
+      result.performers.customers.worst.length === 0,
+    );
+    assert(
+      "pending-only org: reps.volumeFallback = true",
+      result.performers.reps.volumeFallback === true,
+    );
+
+    // Sanity: the existing seeded org (which has decisions) should NOT be in
+    // fallback mode for customers. Guards against accidentally setting the
+    // flag on every result.
+    const seededResult = await getFunnel(ctx.org.id, {}, null);
+    assert(
+      "seeded org with decisions: customers.volumeFallback = false",
+      seededResult.performers.customers.volumeFallback === false,
+    );
+  }
+
+  // ── 12. Task #723 — markQuoteOutcome service ──────────────────────────────
+  // Reps need an inline "mark as won/lost" affordance on the pending list.
+  // The service must flip status, write a manual_won/manual_lost event, and
+  // be idempotent on already-terminal rows.
+  console.log("\n── 12. markQuoteOutcome service ──");
+  {
+    const ts = Date.now();
+    const [markOrg] = await db
+      .insert(organizations)
+      .values({ name: `Mark Org ${ts}`, slug: `mark-org-${ts}` })
+      .returning();
+    orgIdsToCleanup.push(markOrg.id);
+
+    const [markRep] = await db
+      .insert(quoteReps)
+      .values({ organizationId: markOrg.id, name: "Mark Rep", isPrimary: true, userId: null })
+      .returning();
+    const [markCust] = await db
+      .insert(quoteCustomers)
+      .values({ organizationId: markOrg.id, name: "Mark Cust", partyType: "customer" })
+      .returning();
+    const [markReason] = await db
+      .insert(quoteOutcomeReasons)
+      .values({ organizationId: markOrg.id, code: "lost_price", label: "Price too high", category: "lost" })
+      .returning();
+
+    const baseRow = {
+      organizationId: markOrg.id,
+      customerId: markCust.id,
+      repId: markRep.id,
+      originCity: "Dallas", originState: "TX",
+      destCity: "Atlanta", destState: "GA",
+      equipment: "Van",
+      requestDate: new Date(),
+      outcomeStatus: "pending" as const,
+      quotedAmount: "1500",
+      source: "email" as const,
+    };
+    const [pendingOpp1, pendingOpp2, alreadyTerminalOpp] = await db
+      .insert(quoteOpportunities)
+      .values([baseRow, baseRow, { ...baseRow, outcomeStatus: "won" }])
+      .returning();
+
+    // 12a. Pending → won writes a manual_won event.
+    const wonResult = await markQuoteOutcome(markOrg.id, pendingOpp1.id, "won", null, "rep@example.com");
+    assert("12a: markQuoteOutcome won returns updated", wonResult.status === "updated", `got ${wonResult.status}`);
+    assert("12a: outcomeStatus echoed in result", wonResult.outcomeStatus === "won");
+
+    const [reloadedWon] = await db.select().from(quoteOpportunities)
+      .where(eq(quoteOpportunities.id, pendingOpp1.id)).limit(1);
+    assert("12a: row outcomeStatus = won in DB", reloadedWon.outcomeStatus === "won", `got ${reloadedWon.outcomeStatus}`);
+
+    const wonEvents = await db.select().from(quoteEvents)
+      .where(and(eq(quoteEvents.quoteId, pendingOpp1.id), eq(quoteEvents.eventType, "manual_won")));
+    assert("12a: exactly one manual_won event written", wonEvents.length === 1, `got ${wonEvents.length}`);
+    assert("12a: event actor recorded", wonEvents[0]?.actor === "rep@example.com");
+
+    // 12b. Pending → lost_price with a reason writes manual_lost + records reason.
+    const lostResult = await markQuoteOutcome(markOrg.id, pendingOpp2.id, "lost_price", markReason.id, "rep@example.com");
+    assert("12b: markQuoteOutcome lost_price returns updated", lostResult.status === "updated");
+
+    const [reloadedLost] = await db.select().from(quoteOpportunities)
+      .where(eq(quoteOpportunities.id, pendingOpp2.id)).limit(1);
+    assert("12b: row outcomeStatus = lost_price", reloadedLost.outcomeStatus === "lost_price");
+    assert("12b: outcomeReasonId persisted on row", reloadedLost.outcomeReasonId === markReason.id, `got ${reloadedLost.outcomeReasonId}`);
+
+    const lostEvents = await db.select().from(quoteEvents)
+      .where(and(eq(quoteEvents.quoteId, pendingOpp2.id), eq(quoteEvents.eventType, "manual_lost")));
+    assert("12b: exactly one manual_lost event written", lostEvents.length === 1, `got ${lostEvents.length}`);
+
+    // 12c. Idempotent on already-terminal — no overwrite, no second event.
+    const idempotent = await markQuoteOutcome(markOrg.id, alreadyTerminalOpp.id, "lost_price", markReason.id, "rep@example.com");
+    assert("12c: already-terminal returns 'already_terminal'", idempotent.status === "already_terminal", `got ${idempotent.status}`);
+    const [stillWon] = await db.select().from(quoteOpportunities)
+      .where(eq(quoteOpportunities.id, alreadyTerminalOpp.id)).limit(1);
+    assert("12c: terminal row not overwritten", stillWon.outcomeStatus === "won", `got ${stillWon.outcomeStatus}`);
+    const overwriteEvents = await db.select().from(quoteEvents)
+      .where(eq(quoteEvents.quoteId, alreadyTerminalOpp.id));
+    assert("12c: no event written for already-terminal row", overwriteEvents.length === 0, `got ${overwriteEvents.length}`);
+
+    // 12d. Re-marking a now-won row is also a no-op (full idempotency).
+    const reMark = await markQuoteOutcome(markOrg.id, pendingOpp1.id, "won", null, "rep@example.com");
+    assert("12d: re-marking a won row returns 'already_terminal'", reMark.status === "already_terminal");
+    const wonEventsAfter = await db.select().from(quoteEvents)
+      .where(and(eq(quoteEvents.quoteId, pendingOpp1.id), eq(quoteEvents.eventType, "manual_won")));
+    assert("12d: still exactly one manual_won event after re-mark", wonEventsAfter.length === 1, `got ${wonEventsAfter.length}`);
+
+    // 12e. Cross-org isolation — wrong org id MUST return not_found.
+    const otherOrgResult = await markQuoteOutcome(ctx.org.id, pendingOpp2.id, "won", null, "rep@example.com");
+    assert("12e: cross-org markQuoteOutcome returns not_found", otherOrgResult.status === "not_found", `got ${otherOrgResult.status}`);
+
+    // 12f. Per-rep scoping (Task #723 review fix). When the route enforces
+    // a rep scope and the row belongs to a different rep, the service must
+    // bail with status="forbidden" before any write — that's how the route
+    // returns 403. Build a third rep + their own pending row, then try to
+    // mark a row that doesn't belong to them.
+    const [otherRep] = await db.insert(quoteReps)
+      .values({ organizationId: markOrg.id, name: "Other Rep", isPrimary: false, userId: null })
+      .returning();
+    const [otherRepOpp] = await db.insert(quoteOpportunities)
+      .values({ ...baseRow, repId: otherRep.id })
+      .returning();
+    const scopedToOther = await markQuoteOutcome(
+      markOrg.id, otherRepOpp.id, "won", null, "scoped@example.com",
+      { enforceRepScope: markRep.id },
+    );
+    assert("12f: cross-rep scoped mark returns 'forbidden'",
+      scopedToOther.status === "forbidden", `got ${scopedToOther.status}`);
+    const [stillPending] = await db.select().from(quoteOpportunities)
+      .where(eq(quoteOpportunities.id, otherRepOpp.id)).limit(1);
+    assert("12f: forbidden bail does NOT mutate the row",
+      stillPending.outcomeStatus === "pending", `got ${stillPending.outcomeStatus}`);
+    const noEvents = await db.select().from(quoteEvents)
+      .where(eq(quoteEvents.quoteId, otherRepOpp.id));
+    assert("12f: forbidden bail writes no event",
+      noEvents.length === 0, `got ${noEvents.length}`);
+
+    // 12f.2. Same scope, scoped user marking their *own* row works.
+    const ownRepOpp = await db.insert(quoteOpportunities)
+      .values({ ...baseRow, repId: markRep.id })
+      .returning();
+    const scopedToOwn = await markQuoteOutcome(
+      markOrg.id, ownRepOpp[0].id, "won", null, "scoped@example.com",
+      { enforceRepScope: markRep.id },
+    );
+    assert("12f: in-scope mark on own row returns 'updated'",
+      scopedToOwn.status === "updated", `got ${scopedToOwn.status}`);
+
+    // 12g. Lost-status reason auto-resolution (Task #723 review fix). When
+    // the caller passes outcomeReasonId=null with a lost_* status, the
+    // service must auto-resolve to a canonical LOST_* reason row so the
+    // "Why we lose" breakdown gets a real bucket instead of "Reason not set".
+    // We test all four canonical mappings + verify the reason row's code
+    // matches the LOST_* constant exported from quoteEmailIngestion.
+    const autoResolveCases: Array<{ status: "lost_price" | "lost_service" | "lost_timing" | "lost_incumbent"; expectedCode: string }> = [
+      { status: "lost_price", expectedCode: "lost_price" },
+      { status: "lost_service", expectedCode: "lost_service" },
+      { status: "lost_timing", expectedCode: "lost_timing" },
+      { status: "lost_incumbent", expectedCode: "lost_incumbent" },
+    ];
+    for (const tc of autoResolveCases) {
+      const [opp] = await db.insert(quoteOpportunities).values(baseRow).returning();
+      const result = await markQuoteOutcome(markOrg.id, opp.id, tc.status, null, "auto@example.com");
+      assert(`12g: ${tc.status} with null reasonId returns 'updated'`,
+        result.status === "updated", `got ${result.status}`);
+      assert(`12g: ${tc.status} echoes resolved outcomeReasonId`,
+        typeof result.outcomeReasonId === "string" && result.outcomeReasonId !== null,
+        `got ${result.outcomeReasonId}`);
+      const [row] = await db.select().from(quoteOpportunities)
+        .where(eq(quoteOpportunities.id, opp.id)).limit(1);
+      assert(`12g: ${tc.status} row outcomeReasonId is non-null`,
+        row.outcomeReasonId !== null, `got ${row.outcomeReasonId}`);
+      const [reasonRow] = await db.select().from(quoteOutcomeReasons)
+        .where(eq(quoteOutcomeReasons.id, row.outcomeReasonId!)).limit(1);
+      assert(`12g: ${tc.status} resolves to canonical code "${tc.expectedCode}"`,
+        reasonRow?.code === tc.expectedCode, `got ${reasonRow?.code}`);
+      assert(`12g: ${tc.status} reason row scoped to org`,
+        reasonRow?.organizationId === markOrg.id, `got ${reasonRow?.organizationId}`);
+    }
+
+    // 12g.2. no_response is *not* a lost_* status — null reasonId stays null
+    // (no_response has its own funnel stage, no canonical reason needed).
+    const [noRespOpp] = await db.insert(quoteOpportunities).values(baseRow).returning();
+    const noRespResult = await markQuoteOutcome(markOrg.id, noRespOpp.id, "no_response", null, "auto@example.com");
+    assert("12g.2: no_response returns 'updated'", noRespResult.status === "updated");
+    const [noRespRow] = await db.select().from(quoteOpportunities)
+      .where(eq(quoteOpportunities.id, noRespOpp.id)).limit(1);
+    assert("12g.2: no_response row outcomeReasonId remains null",
+      noRespRow.outcomeReasonId === null, `got ${noRespRow.outcomeReasonId}`);
+
+    // 12h. Invalid outcomeReasonId returns 'invalid_reason' instead of
+    // silently writing a dangling FK or 500ing.
+    const [bogusOpp] = await db.insert(quoteOpportunities).values(baseRow).returning();
+    const bogusResult = await markQuoteOutcome(
+      markOrg.id, bogusOpp.id, "lost_price",
+      "00000000-0000-0000-0000-000000000000", "auto@example.com",
+    );
+    assert("12h: bogus reasonId returns 'invalid_reason'",
+      bogusResult.status === "invalid_reason", `got ${bogusResult.status}`);
+    const [bogusReloaded] = await db.select().from(quoteOpportunities)
+      .where(eq(quoteOpportunities.id, bogusOpp.id)).limit(1);
+    assert("12h: invalid_reason bail does NOT mutate the row",
+      bogusReloaded.outcomeStatus === "pending", `got ${bogusReloaded.outcomeStatus}`);
+
+    // 12h.2. Cross-org reasonId — passing a reason that exists but in a
+    // different org must also be rejected (otherwise it's a tenant-isolation
+    // hole). Use ctx.org's reason set vs markOrg's row.
+    const [otherOrgReason] = await db.select().from(quoteOutcomeReasons)
+      .where(eq(quoteOutcomeReasons.organizationId, ctx.org.id)).limit(1);
+    if (otherOrgReason) {
+      const [crossOrgOpp] = await db.insert(quoteOpportunities).values(baseRow).returning();
+      const crossOrgResult = await markQuoteOutcome(
+        markOrg.id, crossOrgOpp.id, "lost_price", otherOrgReason.id, "auto@example.com",
+      );
+      assert("12h.2: cross-org reasonId rejected as 'invalid_reason'",
+        crossOrgResult.status === "invalid_reason", `got ${crossOrgResult.status}`);
+    }
   }
 
   await cleanup();

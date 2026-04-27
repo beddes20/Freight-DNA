@@ -729,10 +729,23 @@ export interface LostReason {
   status: Extract<QuoteOutcomeStatus, "lost_price" | "lost_timing" | "lost_incumbent" | "lost_service">;
 }
 
-const LOST_INCUMBENT: LostReason = { code: "lost_incumbent", label: "Customer covered with another carrier", status: "lost_incumbent" };
-const LOST_PRICE: LostReason     = { code: "lost_price",     label: "Lost on price",                          status: "lost_price" };
-const LOST_TIMING: LostReason    = { code: "lost_timing",    label: "Load cancelled or no longer needed",     status: "lost_timing" };
-const LOST_SERVICE: LostReason   = { code: "lost_service",   label: "Lost on service / fit",                  status: "lost_service" };
+// Exported for reuse by the manual mark-outcome path (Task #723) so the
+// canonical reason rows are shared between auto-detected losses and rep-
+// initiated ones — keeps the "Why we lose" portlet from collapsing into
+// "Reason not set" buckets.
+export const LOST_INCUMBENT: LostReason = { code: "lost_incumbent", label: "Customer covered with another carrier", status: "lost_incumbent" };
+export const LOST_PRICE: LostReason     = { code: "lost_price",     label: "Lost on price",                          status: "lost_price" };
+export const LOST_TIMING: LostReason    = { code: "lost_timing",    label: "Load cancelled or no longer needed",     status: "lost_timing" };
+export const LOST_SERVICE: LostReason   = { code: "lost_service",   label: "Lost on service / fit",                  status: "lost_service" };
+
+/**
+ * Look up (or insert + return) the canonical reason row for the given
+ * org × code. Exported for the manual mark-outcome path so its writes
+ * land on the same reason rows the email/TMS auto-detectors use.
+ */
+export function findOrCreateLostReasonExported(orgId: string, reason: LostReason): Promise<string> {
+  return findOrCreateLostReason(orgId, reason);
+}
 
 /**
  * Pure mapping from the customer's loss-language phrase to a reason code.
@@ -851,6 +864,127 @@ export async function applyClosedLostToOpenQuote(
   });
 
   return { status: "closed_lost", quoteId: open.id, reasonCode: reason.code };
+}
+
+// ─── Task #723: closed_won_indicator → flip pending quote to won ─────────────
+//
+// Mirrors the closed-lost path so a customer reply that reads as a Won
+// confirmation closes the matching pending quote with an `email_won` event
+// (vs forcing the rep to mark it manually). Won-language detection is
+// regex-only — high precision is more important than recall here because the
+// downside of a false positive is auto-marking a real opportunity as won.
+
+const WON_LANGUAGE_PATTERNS: RegExp[] = [
+  /\byou(\s+have\s+|'?ve\s+|\s+)got\s+it\b/i,
+  /\bgo(?:\s+ahead)?\s+(?:and\s+)?(?:book|cover|tender|dispatch)\b/i,
+  /\b(?:please\s+)?(?:book|cover|tender|dispatch)\s+(?:it|this|the\s+(?:load|freight|order))\b/i,
+  /\bwe(?:'?ll|\s+will|\s+are\s+going\s+to)?\s+(?:use|go\s+with|tender\s+to|book\s+with)\s+you\b/i,
+  /\b(?:we\s+)?(?:are\s+)?(?:covered\s+with\s+you|going\s+with\s+you)\b/i,
+  /\bload\s+(?:is\s+)?(?:yours|covered\s+with\s+you|booked\s+with\s+you)\b/i,
+  /\b(?:you'?re|you\s+are)\s+(?:covered|booked|tendered|awarded)\b/i,
+  /\bawarded\s+(?:to\s+you|the\s+load|this\s+lane)\b/i,
+  /\bconfirmed[, ]+(?:please\s+)?(?:book|tender|cover)\b/i,
+  /\bp\.?\s*o\.?\s*#?\s*[A-Z0-9-]{3,}/i,
+  /\b(?:rate|load)\s+confirmation\b/i,
+];
+
+/**
+ * Pure detector — true when the email body/subject matches our Won-language
+ * patterns. Exposed for unit testing. Does NOT inspect direction or thread —
+ * those are checked by `applyClosedWonToOpenQuote`.
+ */
+export function isWonLanguage(text: string | null | undefined): boolean {
+  const s = (text ?? "").trim();
+  if (!s) return false;
+  return WON_LANGUAGE_PATTERNS.some(re => re.test(s));
+}
+
+export interface CloseWonResult {
+  status:
+    | "closed_won"
+    | "skipped_outbound"
+    | "skipped_no_thread"
+    | "skipped_no_open_quote"
+    | "skipped_already_closed"
+    | "skipped_no_won_language";
+  quoteId?: string;
+}
+
+/**
+ * Mirror of `applyClosedLostToOpenQuote` for Won language. When a customer
+ * reply on a pending quote thread carries Won language (e.g. "you got it",
+ * "go ahead and book", "PO #…"), flip the matching quote to `won` and
+ * record an `email_won` quote_event. Idempotent: a second Won signal on the
+ * same thread is a no-op.
+ */
+export async function applyClosedWonToOpenQuote(
+  message: EmailMessage,
+  opts?: { extractedData?: Record<string, unknown> | null; intentSubtype?: string | null },
+): Promise<CloseWonResult> {
+  if (message.direction !== "inbound") return { status: "skipped_outbound" };
+  if (!message.threadId) return { status: "skipped_no_thread" };
+
+  // The classifier upstream may have already determined this is a won
+  // signal (intentSubtype === "closed_won_indicator"). When called directly
+  // we still verify Won language is present in either the structured
+  // extractedData hint or the raw message body — failing closed protects
+  // against a noisy signal accidentally winning a quote.
+  const wonLanguageHint = pickStr(opts?.extractedData ?? {}, ["winLanguage", "win_language", "wonLanguage", "won_language"]);
+  const intentSubtype = opts?.intentSubtype ?? null;
+  const intentLooksWon = intentSubtype === "closed_won_indicator" || intentSubtype === "won";
+  const bodyMatches = isWonLanguage(message.body) || isWonLanguage(message.subject) || isWonLanguage(wonLanguageHint);
+  if (!intentLooksWon && !bodyMatches) {
+    return { status: "skipped_no_won_language" };
+  }
+
+  const threadMsgs = await db.select({
+    id: emailMessages.id,
+    providerMessageId: emailMessages.providerMessageId,
+  }).from(emailMessages).where(and(
+    eq(emailMessages.orgId, message.orgId),
+    eq(emailMessages.threadId, message.threadId),
+  ));
+  if (threadMsgs.length === 0) return { status: "skipped_no_open_quote" };
+
+  const refs = Array.from(new Set(
+    threadMsgs.flatMap(m => [m.providerMessageId, m.id]).filter((v): v is string => !!v),
+  ));
+  if (refs.length === 0) return { status: "skipped_no_open_quote" };
+
+  const candidates = await db.select().from(quoteOpportunities).where(and(
+    eq(quoteOpportunities.organizationId, message.orgId),
+    eq(quoteOpportunities.source, "email"),
+    inArray(quoteOpportunities.sourceReference, refs),
+  ));
+  if (candidates.length === 0) return { status: "skipped_no_open_quote" };
+
+  const pending = candidates
+    .filter(c => c.outcomeStatus === "pending")
+    .sort((a, b) => b.requestDate.getTime() - a.requestDate.getTime());
+  const open = pending[0];
+  if (!open) return { status: "skipped_already_closed", quoteId: candidates[0].id };
+
+  await db.update(quoteOpportunities).set({
+    outcomeStatus: "won",
+  }).where(eq(quoteOpportunities.id, open.id));
+
+  const occurredAt = message.providerSentAt ?? message.createdAt ?? new Date();
+  await db.insert(quoteEvents).values({
+    quoteId: open.id,
+    eventType: "email_won",
+    occurredAt,
+    actor: message.fromEmail ?? "customer",
+    payload: {
+      source: "email",
+      messageId: message.id,
+      providerMessageId: message.providerMessageId,
+      threadId: message.threadId,
+      winLanguage: wonLanguageHint ?? null,
+      intentSubtype,
+    },
+  });
+
+  return { status: "closed_won", quoteId: open.id };
 }
 
 function pickStr(data: Record<string, unknown>, keys: string[]): string | null {

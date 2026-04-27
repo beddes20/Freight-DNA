@@ -11,8 +11,12 @@ const EVENT_TYPE_TO_TOUCHPOINT: Record<string, QuoteTouchpointType> = {
   quoted: "quote_sent",
   won: "quote_won",
   tms_won: "quote_won",
+  email_won: "quote_won",
+  manual_won: "quote_won",
   lost: "quote_lost",
   tms_lost: "quote_lost",
+  email_lost: "quote_lost",
+  manual_lost: "quote_lost",
 };
 
 const TOUCHPOINT_LABELS: Record<QuoteTouchpointType, string> = {

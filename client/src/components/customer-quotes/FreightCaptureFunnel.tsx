@@ -40,6 +40,13 @@ type FunnelPerformerRow = {
   avgQuoted: number;
 };
 
+type FunnelQuietBreakdown = {
+  stale: number;
+  expired: number;
+  noResponse: number;
+  total: number;
+};
+
 type FunnelResult = {
   stages: FunnelStage[];
   summary: {
@@ -59,12 +66,17 @@ type FunnelResult = {
     customers: FunnelPerformerSplit;
     reps: FunnelPerformerSplit;
   };
+  quietBreakdown?: FunnelQuietBreakdown;
   scopedToRepId: string | null;
 };
 
 type FunnelPerformerSplit = {
   best: FunnelPerformerRow[];
   worst: FunnelPerformerRow[];
+  /** Task #723 — when there are zero decided rows in this bucket, the
+   *  backend ranks by volume instead of win-rate; client swaps the heading
+   *  so users understand they're seeing "Most active" not "Best win rate". */
+  volumeFallback?: boolean;
 };
 
 export type FunnelFilters = {
@@ -80,6 +92,13 @@ export type FunnelFilters = {
 interface Props {
   filters: FunnelFilters;
   onLaneClick?: (laneLabel: string) => void;
+  /**
+   * Optional jump-to-diagnostics handler. When provided (admin/director/
+   * sales_director only), the "Why they go quiet" fallback card renders a
+   * footer link that scrolls the diagnostics panel into view — gives
+   * elevated users a clear path from "no decisions visible" to "here's why".
+   */
+  onShowDiagnostics?: () => void;
 }
 
 const STAGE_ICONS: Record<StageKey, JSX.Element> = {
@@ -128,7 +147,7 @@ function buildQueryString(filters: FunnelFilters): string {
   return s ? `?${s}` : "";
 }
 
-export function FreightCaptureFunnel({ filters, onLaneClick }: Props): JSX.Element {
+export function FreightCaptureFunnel({ filters, onLaneClick, onShowDiagnostics }: Props): JSX.Element {
   const qs = buildQueryString(filters);
   const queryKey = useMemo(() => ["/api/customer-quotes/funnel", filters] as const, [filters]);
 
@@ -262,37 +281,12 @@ export function FreightCaptureFunnel({ filters, onLaneClick }: Props): JSX.Eleme
 
       {/* Loss reasons + Performers */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_1.4fr] gap-4" data-testid="funnel-detail-grid">
-        <Card data-testid="funnel-loss-reasons-card">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <TrendingDown className="h-4 w-4 text-rose-500" /> Why we lose
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {data.lossReasons.length === 0 ? (
-              <div className="text-xs text-muted-foreground py-6 text-center" data-testid="funnel-loss-empty">
-                No losses in this slice. Nice.
-              </div>
-            ) : (
-              <ul className="space-y-1.5" data-testid="funnel-loss-list">
-                {data.lossReasons.map(r => {
-                  const widthPct = maxLossCount > 0 ? (r.count / maxLossCount) * 100 : 0;
-                  return (
-                    <li key={r.reasonId ?? "__none__"} className="text-xs" data-testid={`funnel-loss-row-${r.reasonId ?? "none"}`}>
-                      <div className="flex items-center justify-between gap-2 mb-0.5">
-                        <span className="text-foreground truncate">{r.label}</span>
-                        <span className="text-muted-foreground tabular-nums shrink-0">{r.count}</span>
-                      </div>
-                      <div className="h-1.5 bg-muted/60 rounded-full overflow-hidden">
-                        <div className="h-full bg-rose-500/70" style={{ width: `${widthPct}%` }} />
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </CardContent>
-        </Card>
+        <LossReasonsOrQuietExitsCard
+          lossReasons={data.lossReasons}
+          quietBreakdown={data.quietBreakdown}
+          maxLossCount={maxLossCount}
+          onShowDiagnostics={onShowDiagnostics}
+        />
 
         <Card data-testid="funnel-performers-card">
           <CardHeader className="pb-2">
@@ -304,6 +298,111 @@ export function FreightCaptureFunnel({ filters, onLaneClick }: Props): JSX.Eleme
         </Card>
       </div>
     </div>
+  );
+}
+
+// Task #723 — when no decided losses exist for the slice, fall back to a
+// "Why they go quiet" view that breaks down the three exit-without-decision
+// buckets (stale-pending, expired, no-response). Reps still get a useful
+// signal — "we have 14 quotes that just stopped responding" — instead of
+// the misleading "no losses, nice" empty state.
+interface LossOrQuietProps {
+  lossReasons: FunnelLossReason[];
+  quietBreakdown?: FunnelQuietBreakdown;
+  maxLossCount: number;
+  onShowDiagnostics?: () => void;
+}
+function LossReasonsOrQuietExitsCard({ lossReasons, quietBreakdown, maxLossCount, onShowDiagnostics }: LossOrQuietProps): JSX.Element {
+  const hasLosses = lossReasons.length > 0;
+  const quietTotal = quietBreakdown?.total ?? 0;
+  const showQuiet = !hasLosses && quietTotal > 0;
+
+  if (showQuiet && quietBreakdown) {
+    const quietRows: Array<{ key: string; label: string; count: number }> = [
+      { key: "stale", label: "Pending past 14 days", count: quietBreakdown.stale },
+      { key: "noResponse", label: "Customer never replied", count: quietBreakdown.noResponse },
+      { key: "expired", label: "Expired before decision", count: quietBreakdown.expired },
+    ];
+    const maxQuiet = quietRows.reduce((m, r) => Math.max(m, r.count), 0);
+    return (
+      <Card data-testid="funnel-quiet-exits-card">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <Clock className="h-4 w-4 text-amber-500" /> Why they go quiet
+          </CardTitle>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            No Won/Lost decisions yet — these quotes exited without a verdict.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <ul className="space-y-1.5" data-testid="funnel-quiet-list">
+            {quietRows.map(r => {
+              const widthPct = maxQuiet > 0 ? (r.count / maxQuiet) * 100 : 0;
+              return (
+                <li key={r.key} className="text-xs" data-testid={`funnel-quiet-row-${r.key}`}>
+                  <div className="flex items-center justify-between gap-2 mb-0.5">
+                    <span className="text-foreground truncate">{r.label}</span>
+                    <span className="text-muted-foreground tabular-nums shrink-0">{r.count}</span>
+                  </div>
+                  <div className="h-1.5 bg-muted/60 rounded-full overflow-hidden">
+                    <div className="h-full bg-amber-500/70" style={{ width: `${widthPct}%` }} />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          {/* Task #723 review fix: when the fallback view is showing, give
+              elevated users a clear path to the diagnostics panel that
+              explains *why* decisions aren't landing (matcher misses, no
+              Won-language emails seen, etc). Hidden for non-elevated roles
+              who don't have access to the panel anyway. */}
+          {onShowDiagnostics && (
+            <button
+              type="button"
+              onClick={onShowDiagnostics}
+              className="mt-3 text-[11px] text-amber-700 dark:text-amber-400 hover:underline focus:outline-none focus:underline"
+              data-testid="funnel-quiet-show-diagnostics"
+            >
+              Why aren't decisions firing? Open diagnostics →
+            </button>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card data-testid="funnel-loss-reasons-card">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <TrendingDown className="h-4 w-4 text-rose-500" /> Why we lose
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {!hasLosses ? (
+          <div className="text-xs text-muted-foreground py-6 text-center" data-testid="funnel-loss-empty">
+            No losses in this slice. Nice.
+          </div>
+        ) : (
+          <ul className="space-y-1.5" data-testid="funnel-loss-list">
+            {lossReasons.map(r => {
+              const widthPct = maxLossCount > 0 ? (r.count / maxLossCount) * 100 : 0;
+              return (
+                <li key={r.reasonId ?? "__none__"} className="text-xs" data-testid={`funnel-loss-row-${r.reasonId ?? "none"}`}>
+                  <div className="flex items-center justify-between gap-2 mb-0.5">
+                    <span className="text-foreground truncate">{r.label}</span>
+                    <span className="text-muted-foreground tabular-nums shrink-0">{r.count}</span>
+                  </div>
+                  <div className="h-1.5 bg-muted/60 rounded-full overflow-hidden">
+                    <div className="h-full bg-rose-500/70" style={{ width: `${widthPct}%` }} />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -387,6 +486,26 @@ interface PerformerTableProps {
 function PerformerTable({ split, kind, firstColLabel, testId, onLaneClick }: PerformerTableProps): JSX.Element {
   if (split.best.length === 0 && split.worst.length === 0) {
     return <div className="text-xs text-muted-foreground py-6 text-center" data-testid={`${testId}-empty`}>No data in this slice.</div>;
+  }
+  // Task #723 — when the backend has no decided rows it sends a volume-
+  // ranked single list with `volumeFallback: true`. Render it as a single
+  // "Most active" column instead of the misleading Best/Worst split.
+  if (split.volumeFallback) {
+    return (
+      <div data-testid={`${testId}-volume-fallback`}>
+        <p className="text-[11px] text-muted-foreground mb-2" data-testid={`${testId}-volume-fallback-note`}>
+          No Won/Lost decisions yet — ranked by quote volume instead.
+        </p>
+        <PerformerSubTable
+          title="Most active"
+          rows={split.best}
+          kind={kind}
+          firstColLabel={firstColLabel}
+          testId={`${testId}-best`}
+          onLaneClick={onLaneClick}
+        />
+      </div>
+    );
   }
   // Backend computes best/worst from the FULL bucket set (sorted by winRate
   // with volume as tiebreaker), so we just render what the API returns.
