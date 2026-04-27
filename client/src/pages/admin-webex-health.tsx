@@ -1,10 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, Activity, HardDrive } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, Activity, HardDrive, Webhook, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { queryClient } from "@/lib/queryClient";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 type HealthUser = {
   userId: string;
@@ -45,6 +46,35 @@ type EnrichmentFailure = {
 
 type InventoryRow = { kind: string; count: number; lastUpdatedAt: string | null };
 
+type WebhookSubscriptionRow = {
+  id: string;
+  scope: string;
+  userId: string | null;
+  resource: string;
+  event: string;
+  webhookId: string | null;
+  targetUrl: string;
+  status: string;
+  lastError: string | null;
+  lastErrorAt: string | null;
+  lastEventAt: string | null;
+  eventsReceived: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type WebhookHealth = {
+  mode: "push" | "polling";
+  expectedTargetUrl: string;
+  lastEventAt: string | null;
+  ageMs: number | null;
+  eventsLast7d: number;
+  eventsLast24h: number;
+  eventsLast15m: number;
+  failedLast24h: number;
+  subscriptions: WebhookSubscriptionRow[];
+};
+
 type HealthResponse = {
   currentScopeVersion: number;
   requiredScopes: string[];
@@ -56,6 +86,7 @@ type HealthResponse = {
     recentFailures: EnrichmentFailure[];
   };
   inventory: InventoryRow[];
+  webhooks?: WebhookHealth;
 };
 
 function formatTime(value: string | null): string {
@@ -80,9 +111,35 @@ function relTime(value: string | null): string {
 }
 
 export default function AdminWebexHealth() {
+  const { toast } = useToast();
   const { data, isLoading, isFetching, error } = useQuery<HealthResponse>({
     queryKey: ["/api/webex/health"],
     refetchInterval: 30_000,
+  });
+
+  const subscribeMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/webex/webhooks/subscribe"),
+    onSuccess: () => {
+      toast({ title: "Webhooks subscribed", description: "Real-time push notifications enabled." });
+      queryClient.invalidateQueries({ queryKey: ["/api/webex/health"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Subscribe failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const refreshMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/webex/webhooks/refresh");
+      return res.json() as Promise<{ checked: number; recreated: number; errors: number }>;
+    },
+    onSuccess: (data) => {
+      toast({ title: "Webhooks refreshed", description: `Checked ${data?.checked ?? 0}, recreated ${data?.recreated ?? 0}.` });
+      queryClient.invalidateQueries({ queryKey: ["/api/webex/health"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Refresh failed", description: err.message, variant: "destructive" });
+    },
   });
 
   if (isLoading) {
@@ -182,6 +239,131 @@ export default function AdminWebexHealth() {
             </div>
           </CardContent>
         )}
+      </Card>
+
+      {/* Real-time webhooks (Task #741) */}
+      <Card data-testid="card-webhooks">
+        <CardHeader className="flex flex-row items-center justify-between gap-2">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Webhook className="h-4 w-4" /> Real-time webhooks
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              Push notifications from Webex for telephony_calls + voicemails. When healthy, polling backs off automatically.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => refreshMutation.mutate()}
+              disabled={refreshMutation.isPending}
+              data-testid="button-refresh-webhooks"
+            >
+              <RefreshCw className={`h-4 w-4 mr-1 ${refreshMutation.isPending ? "animate-spin" : ""}`} /> Refresh
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => subscribeMutation.mutate()}
+              disabled={subscribeMutation.isPending}
+              data-testid="button-subscribe-webhooks"
+            >
+              <Zap className={`h-4 w-4 mr-1 ${subscribeMutation.isPending ? "animate-spin" : ""}`} /> Subscribe / re-subscribe
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {!data.webhooks ? (
+            <p className="text-sm text-muted-foreground">Webhook health unavailable.</p>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                <div className={`rounded-md border p-3 text-center ${
+                  data.webhooks.mode === "push"
+                    ? "text-green-700 bg-green-50 border-green-200 dark:bg-green-950/30 dark:text-green-300 dark:border-green-800"
+                    : "text-amber-700 bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300 dark:border-amber-800"
+                }`} data-testid="stat-webhook-mode">
+                  <p className="text-xs uppercase tracking-wide opacity-80">mode</p>
+                  <p className="text-2xl font-bold mt-1">{data.webhooks.mode}</p>
+                </div>
+                <div className="rounded-md border p-3 text-center" data-testid="stat-webhook-7d">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">events 7d</p>
+                  <p className="text-2xl font-bold mt-1">{data.webhooks.eventsLast7d}</p>
+                </div>
+                <div className="rounded-md border p-3 text-center" data-testid="stat-webhook-24h">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">events 24h</p>
+                  <p className="text-2xl font-bold mt-1">{data.webhooks.eventsLast24h}</p>
+                </div>
+                <div className="rounded-md border p-3 text-center" data-testid="stat-webhook-15m">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">events 15m</p>
+                  <p className="text-2xl font-bold mt-1">{data.webhooks.eventsLast15m}</p>
+                </div>
+                <div className={`rounded-md border p-3 text-center ${
+                  data.webhooks.failedLast24h > 0
+                    ? "text-red-700 bg-red-50 border-red-200 dark:bg-red-950/30 dark:text-red-300 dark:border-red-800"
+                    : "text-muted-foreground bg-muted/40 border-muted"
+                }`} data-testid="stat-webhook-failed">
+                  <p className="text-xs uppercase tracking-wide opacity-80">failed 24h</p>
+                  <p className="text-2xl font-bold mt-1">{data.webhooks.failedLast24h}</p>
+                </div>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Last event: <strong>{relTime(data.webhooks.lastEventAt)}</strong>{" "}
+                · Receiver URL: <code className="font-mono bg-muted/40 px-1 py-0.5 rounded">{data.webhooks.expectedTargetUrl}</code>
+              </div>
+              {data.webhooks.subscriptions.length === 0 ? (
+                <p className="text-sm text-amber-700 dark:text-amber-300" data-testid="text-no-webhooks">
+                  No webhook subscriptions yet. Click <strong>Subscribe</strong> to register telephony_calls + voicemails on
+                  Webex's side. They'll auto-register on the next OAuth connect too.
+                </p>
+              ) : (
+                <div className="rounded-md border overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead className="bg-muted/40">
+                      <tr>
+                        <th className="text-left p-2">Scope</th>
+                        <th className="text-left p-2">Resource</th>
+                        <th className="text-left p-2">Event</th>
+                        <th className="text-left p-2">Status</th>
+                        <th className="text-left p-2">Last event</th>
+                        <th className="text-left p-2">Received</th>
+                        <th className="text-left p-2">Last error</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.webhooks.subscriptions.map(s => (
+                        <tr key={s.id} className="border-t" data-testid={`row-webhook-${s.id}`}>
+                          <td className="p-2">
+                            <Badge variant="outline" className="text-[10px]">{s.scope}</Badge>
+                            {s.userId && <span className="ml-1 text-[10px] font-mono text-muted-foreground">{s.userId.slice(0, 8)}…</span>}
+                          </td>
+                          <td className="p-2 font-mono">{s.resource}</td>
+                          <td className="p-2 font-mono">{s.event}</td>
+                          <td className="p-2">
+                            {s.status === "active" ? (
+                              <Badge className="text-[10px] bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300">
+                                <CheckCircle2 className="h-3 w-3 mr-1" /> active
+                              </Badge>
+                            ) : (
+                              <Badge className="text-[10px] bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300">
+                                <AlertTriangle className="h-3 w-3 mr-1" /> {s.status}
+                              </Badge>
+                            )}
+                          </td>
+                          <td className="p-2">{relTime(s.lastEventAt)}</td>
+                          <td className="p-2">{s.eventsReceived}</td>
+                          <td className="p-2 text-red-700 dark:text-red-300 max-w-[200px] truncate" title={s.lastError ?? ""}>
+                            {s.lastError ?? "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </CardContent>
       </Card>
 
       {/* Sync state per data source */}

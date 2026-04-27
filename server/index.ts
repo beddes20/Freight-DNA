@@ -197,6 +197,44 @@ app.post(
   }
 );
 
+// Webex webhook receiver — registered BEFORE express.json() so we can verify
+// HMAC-SHA1 of the raw body. We acknowledge 200 immediately (Webex retries
+// aggressively if we take longer than ~5s) and dispatch processing async.
+// Task #741.
+app.post(
+  '/api/webhooks/webex',
+  express.raw({ type: '*/*', limit: '5mb' }),
+  async (req, res) => {
+    const rawBody: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body ?? ''));
+    const signatureHeader = (req.headers['x-spark-signature'] as string | undefined)
+      ?? (req.headers['X-Spark-Signature'] as unknown as string | undefined);
+
+    let notification: Record<string, unknown> = {};
+    try {
+      notification = rawBody.length > 0 ? JSON.parse(rawBody.toString('utf8')) : {};
+    } catch {
+      // Malformed JSON — Webex always sends well-formed JSON, so this is
+      // either a probe or noise. Acknowledge to keep them quiet.
+      res.status(200).json({ received: true, parseError: true });
+      return;
+    }
+
+    // Acknowledge fast.
+    res.status(200).json({ received: true });
+
+    try {
+      const { receiveWebexNotification } = await import('./webexWebhookService');
+      await receiveWebexNotification({
+        rawBody,
+        signatureHeader,
+        notification: notification as never,
+      });
+    } catch (err) {
+      console.error('[webex-webhook] receive error:', err instanceof Error ? err.message : String(err));
+    }
+  }
+);
+
 app.use(
   express.json({
     limit: "15mb",

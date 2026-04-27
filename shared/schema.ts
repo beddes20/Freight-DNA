@@ -4807,6 +4807,84 @@ export const insertWebexInventorySchema = createInsertSchema(webexInventory).omi
 export type InsertWebexInventory = z.infer<typeof insertWebexInventorySchema>;
 export type WebexInventory = typeof webexInventory.$inferSelect;
 
+// ─── Webex Real-Time Webhooks (Task #741) ───────────────────────────────────
+//
+// Webex push us telephony_calls / voicemails events instead of having us poll.
+// Each subscription is a row in `webex_webhook_subscriptions` (org-level or
+// per-user, scoped to one resource+event). Each delivered notification lands
+// in `webex_webhook_events` for HMAC verification, dedupe, and replay debug.
+export const webexWebhookSubscriptions = pgTable(
+  "webex_webhook_subscriptions",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }),
+    scope: text("scope").notNull().default("org"),
+    resource: text("resource").notNull(),
+    event: text("event").notNull().default("all"),
+    webhookId: text("webhook_id"),
+    targetUrl: text("target_url").notNull(),
+    secret: text("secret").notNull(),
+    status: text("status").notNull().default("active"),
+    lastError: text("last_error"),
+    lastErrorAt: timestamp("last_error_at"),
+    lastEventAt: timestamp("last_event_at"),
+    eventsReceived: integer("events_received").notNull().default(0),
+    expiresAt: timestamp("expires_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("webex_webhook_sub_user_unique_idx")
+      .on(table.orgId, table.userId, table.resource, table.event)
+      .where(sql`${table.userId} IS NOT NULL`),
+    uniqueIndex("webex_webhook_sub_org_unique_idx")
+      .on(table.orgId, table.resource, table.event)
+      .where(sql`${table.userId} IS NULL`),
+    index("webex_webhook_sub_org_idx").on(table.orgId),
+    index("webex_webhook_sub_status_idx").on(table.status),
+  ],
+);
+export const insertWebexWebhookSubscriptionSchema = createInsertSchema(webexWebhookSubscriptions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertWebexWebhookSubscription = z.infer<typeof insertWebexWebhookSubscriptionSchema>;
+export type WebexWebhookSubscription = typeof webexWebhookSubscriptions.$inferSelect;
+
+export const webexWebhookEvents = pgTable(
+  "webex_webhook_events",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    /** Webex's notification id (top-level `id` field in payload). Unique to dedupe replays. */
+    eventId: text("event_id").notNull(),
+    subscriptionId: varchar("subscription_id").references(() => webexWebhookSubscriptions.id, { onDelete: "set null" }),
+    orgId: varchar("org_id").references(() => organizations.id, { onDelete: "set null" }),
+    userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
+    resource: text("resource").notNull(),
+    event: text("event").notNull(),
+    /** Webex's `id` for the resource that changed (e.g. callId, voicemailId). */
+    resourceId: text("resource_id"),
+    payload: jsonb("payload").notNull(),
+    signatureValid: boolean("signature_valid").notNull().default(false),
+    processedAt: timestamp("processed_at"),
+    processError: text("process_error"),
+    receivedAt: timestamp("received_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("webex_webhook_event_id_unique_idx").on(table.eventId),
+    index("webex_webhook_event_org_received_idx").on(table.orgId, table.receivedAt),
+    index("webex_webhook_event_resource_idx").on(table.resource, table.receivedAt),
+  ],
+);
+export const insertWebexWebhookEventSchema = createInsertSchema(webexWebhookEvents).omit({
+  id: true,
+  receivedAt: true,
+});
+export type InsertWebexWebhookEvent = z.infer<typeof insertWebexWebhookEventSchema>;
+export type WebexWebhookEvent = typeof webexWebhookEvents.$inferSelect;
+
 
 // ─── Carrier Intelligence: Scoring & Pricing (Task #369) ────────────────────
 //

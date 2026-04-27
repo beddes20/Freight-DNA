@@ -228,6 +228,12 @@ import {
   webexInventory,
   type WebexInventory,
   type InsertWebexInventory,
+  webexWebhookSubscriptions,
+  type WebexWebhookSubscription,
+  type InsertWebexWebhookSubscription,
+  webexWebhookEvents,
+  type WebexWebhookEvent,
+  type InsertWebexWebhookEvent,
   apiResponseCache,
   type ApiResponseCache,
   accountReviews,
@@ -1316,6 +1322,31 @@ getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined>;
   upsertWebexVoicemail(data: InsertWebexVoicemail): Promise<WebexVoicemail>;
   upsertWebexInventoryItems(items: InsertWebexInventory[]): Promise<number>;
   getWebexInventoryByKind(orgId: string, kind: string): Promise<WebexInventory[]>;
+
+  // Webex real-time webhooks (Task #741)
+  listWebexWebhookSubscriptions(orgId: string): Promise<WebexWebhookSubscription[]>;
+  getWebexWebhookSubscription(id: string): Promise<WebexWebhookSubscription | undefined>;
+  findWebexWebhookSubscription(args: {
+    orgId: string;
+    userId: string | null;
+    resource: string;
+    event: string;
+  }): Promise<WebexWebhookSubscription | undefined>;
+  upsertWebexWebhookSubscription(data: InsertWebexWebhookSubscription): Promise<WebexWebhookSubscription>;
+  updateWebexWebhookSubscription(id: string, updates: Partial<InsertWebexWebhookSubscription>): Promise<WebexWebhookSubscription | undefined>;
+  recordWebexWebhookHit(id: string, receivedAt: Date): Promise<void>;
+  deleteWebexWebhookSubscription(id: string): Promise<void>;
+  insertWebexWebhookEvent(data: InsertWebexWebhookEvent): Promise<{ row: WebexWebhookEvent; inserted: boolean }>;
+  markWebexWebhookEventProcessed(id: string, error?: string | null): Promise<void>;
+  getWebexWebhookHealth(orgId: string): Promise<{
+    subscriptions: WebexWebhookSubscription[];
+    lastEventAt: Date | null;
+    eventsLast7d: number;
+    eventsLast24h: number;
+    eventsLast15m: number;
+    failedLast24h: number;
+  }>;
+  getLatestWebexWebhookEventAt(orgId: string): Promise<Date | null>;
 
   // API cache methods (Task #231)
   getCachedApiResponse(key: string): Promise<ApiResponseCache | undefined>;
@@ -8868,6 +8899,155 @@ export class DatabaseStorage implements IStorage {
   async getWebexInventoryByKind(orgId: string, kind: string): Promise<WebexInventory[]> {
     return db.select().from(webexInventory)
       .where(and(eq(webexInventory.orgId, orgId), eq(webexInventory.kind, kind)));
+  }
+
+  // ── Webex Webhook Subscriptions / Events (Task #741) ────────────────────────
+
+  async listWebexWebhookSubscriptions(orgId: string): Promise<WebexWebhookSubscription[]> {
+    return db.select().from(webexWebhookSubscriptions)
+      .where(eq(webexWebhookSubscriptions.orgId, orgId))
+      .orderBy(asc(webexWebhookSubscriptions.resource), asc(webexWebhookSubscriptions.event));
+  }
+
+  async getWebexWebhookSubscription(id: string): Promise<WebexWebhookSubscription | undefined> {
+    const [row] = await db.select().from(webexWebhookSubscriptions)
+      .where(eq(webexWebhookSubscriptions.id, id))
+      .limit(1);
+    return row;
+  }
+
+  async findWebexWebhookSubscription(args: {
+    orgId: string;
+    userId: string | null;
+    resource: string;
+    event: string;
+  }): Promise<WebexWebhookSubscription | undefined> {
+    const conds = [
+      eq(webexWebhookSubscriptions.orgId, args.orgId),
+      eq(webexWebhookSubscriptions.resource, args.resource),
+      eq(webexWebhookSubscriptions.event, args.event),
+      args.userId === null
+        ? isNull(webexWebhookSubscriptions.userId)
+        : eq(webexWebhookSubscriptions.userId, args.userId),
+    ];
+    const [row] = await db.select().from(webexWebhookSubscriptions)
+      .where(and(...conds))
+      .limit(1);
+    return row;
+  }
+
+  async upsertWebexWebhookSubscription(data: InsertWebexWebhookSubscription): Promise<WebexWebhookSubscription> {
+    const existing = await this.findWebexWebhookSubscription({
+      orgId: data.orgId,
+      userId: data.userId ?? null,
+      resource: data.resource,
+      event: data.event ?? "all",
+    });
+    if (existing) {
+      const [row] = await db.update(webexWebhookSubscriptions)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(webexWebhookSubscriptions.id, existing.id))
+        .returning();
+      return row;
+    }
+    const [row] = await db.insert(webexWebhookSubscriptions).values(data).returning();
+    return row;
+  }
+
+  async updateWebexWebhookSubscription(id: string, updates: Partial<InsertWebexWebhookSubscription>): Promise<WebexWebhookSubscription | undefined> {
+    const [row] = await db.update(webexWebhookSubscriptions)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(webexWebhookSubscriptions.id, id))
+      .returning();
+    return row;
+  }
+
+  async recordWebexWebhookHit(id: string, receivedAt: Date): Promise<void> {
+    await db.update(webexWebhookSubscriptions)
+      .set({
+        lastEventAt: receivedAt,
+        eventsReceived: sql`${webexWebhookSubscriptions.eventsReceived} + 1`,
+        status: "active",
+        lastError: null,
+        lastErrorAt: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(webexWebhookSubscriptions.id, id));
+  }
+
+  async deleteWebexWebhookSubscription(id: string): Promise<void> {
+    await db.delete(webexWebhookSubscriptions).where(eq(webexWebhookSubscriptions.id, id));
+  }
+
+  async insertWebexWebhookEvent(data: InsertWebexWebhookEvent): Promise<{ row: WebexWebhookEvent; inserted: boolean }> {
+    const inserted = await db.insert(webexWebhookEvents)
+      .values(data)
+      .onConflictDoNothing({ target: webexWebhookEvents.eventId })
+      .returning();
+    if (inserted.length > 0) return { row: inserted[0], inserted: true };
+    const [existing] = await db.select().from(webexWebhookEvents)
+      .where(eq(webexWebhookEvents.eventId, data.eventId))
+      .limit(1);
+    return { row: existing, inserted: false };
+  }
+
+  async markWebexWebhookEventProcessed(id: string, error?: string | null): Promise<void> {
+    await db.update(webexWebhookEvents)
+      .set({ processedAt: new Date(), processError: error ?? null })
+      .where(eq(webexWebhookEvents.id, id));
+  }
+
+  async getLatestWebexWebhookEventAt(orgId: string): Promise<Date | null> {
+    // Task #741: only count successfully-processed, signature-valid events
+    // for adaptive-poller backoff. We don't want a stream of bad-signature
+    // or failed-dispatch notifications to suppress polling, since that
+    // would silently drop call ingestion. processedAt IS NOT NULL +
+    // process_error IS NULL means the dispatcher actually ran the
+    // ingestion path (CDR upsert / voicemail upsert) successfully.
+    const rows = await db.select({ at: sql<Date | null>`MAX(${webexWebhookEvents.receivedAt})` })
+      .from(webexWebhookEvents)
+      .where(and(
+        eq(webexWebhookEvents.orgId, orgId),
+        eq(webexWebhookEvents.signatureValid, true),
+        sql`${webexWebhookEvents.processedAt} IS NOT NULL`,
+        sql`${webexWebhookEvents.processError} IS NULL`,
+      ));
+    const v = rows[0]?.at;
+    return v ? new Date(v as unknown as string) : null;
+  }
+
+  async getWebexWebhookHealth(orgId: string): Promise<{
+    subscriptions: WebexWebhookSubscription[];
+    lastEventAt: Date | null;
+    eventsLast7d: number;
+    eventsLast24h: number;
+    eventsLast15m: number;
+    failedLast24h: number;
+  }> {
+    const subscriptions = await this.listWebexWebhookSubscriptions(orgId);
+    const now = new Date();
+    const ago7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const ago24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const ago15m = new Date(now.getTime() - 15 * 60 * 1000);
+
+    const [counts] = await db.select({
+      total7d: sql<number>`COUNT(*) FILTER (WHERE ${webexWebhookEvents.receivedAt} >= ${ago7d})`,
+      total24h: sql<number>`COUNT(*) FILTER (WHERE ${webexWebhookEvents.receivedAt} >= ${ago24h})`,
+      total15m: sql<number>`COUNT(*) FILTER (WHERE ${webexWebhookEvents.receivedAt} >= ${ago15m})`,
+      failed24h: sql<number>`COUNT(*) FILTER (WHERE ${webexWebhookEvents.receivedAt} >= ${ago24h} AND ${webexWebhookEvents.processError} IS NOT NULL)`,
+      lastAt: sql<Date | null>`MAX(${webexWebhookEvents.receivedAt})`,
+    })
+      .from(webexWebhookEvents)
+      .where(eq(webexWebhookEvents.orgId, orgId));
+
+    return {
+      subscriptions,
+      lastEventAt: counts?.lastAt ? new Date(counts.lastAt as unknown as string) : null,
+      eventsLast7d: Number(counts?.total7d ?? 0),
+      eventsLast24h: Number(counts?.total24h ?? 0),
+      eventsLast15m: Number(counts?.total15m ?? 0),
+      failedLast24h: Number(counts?.failed24h ?? 0),
+    };
   }
 
   // ── API Response Cache (Task #231) ──────────────────────────────────────────

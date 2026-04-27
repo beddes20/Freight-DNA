@@ -4712,4 +4712,76 @@ export async function runMigrations() {
   } finally {
     clientObservability.release();
   }
+
+  // ─── Task #741: Webex real-time webhooks ────────────────────────────────
+  // Two new tables to drive push-based Webex telephony_calls / voicemails:
+  //   • webex_webhook_subscriptions — one row per (org, [user], resource, event)
+  //     with the Webex-side webhook id, signing secret, status, and last-event
+  //     timestamp. Used by the receiver to look up secrets and by the adaptive
+  //     poller to decide whether webhooks are healthy enough to back off.
+  //   • webex_webhook_events — append-only log of every notification that hits
+  //     /webhooks/webex. event_id is unique to dedupe Webex retries.
+  // CREATE-IF-NOT-EXISTS, idempotent on every boot.
+  const clientWebexWebhooks = await pool.connect();
+  try {
+    await clientWebexWebhooks.query(`
+      CREATE TABLE IF NOT EXISTS webex_webhook_subscriptions (
+        id               varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id           varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id          varchar REFERENCES users(id) ON DELETE CASCADE,
+        scope            text NOT NULL DEFAULT 'org',
+        resource         text NOT NULL,
+        event            text NOT NULL DEFAULT 'all',
+        webhook_id       text,
+        target_url       text NOT NULL,
+        secret           text NOT NULL,
+        status           text NOT NULL DEFAULT 'active',
+        last_error       text,
+        last_error_at    timestamp,
+        last_event_at    timestamp,
+        events_received  integer NOT NULL DEFAULT 0,
+        expires_at       timestamp,
+        created_at       timestamp NOT NULL DEFAULT NOW(),
+        updated_at       timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientWebexWebhooks.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS webex_webhook_sub_user_unique_idx
+        ON webex_webhook_subscriptions (org_id, user_id, resource, event)
+        WHERE user_id IS NOT NULL
+    `);
+    await clientWebexWebhooks.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS webex_webhook_sub_org_unique_idx
+        ON webex_webhook_subscriptions (org_id, resource, event)
+        WHERE user_id IS NULL
+    `);
+    await clientWebexWebhooks.query(`CREATE INDEX IF NOT EXISTS webex_webhook_sub_org_idx ON webex_webhook_subscriptions (org_id)`);
+    await clientWebexWebhooks.query(`CREATE INDEX IF NOT EXISTS webex_webhook_sub_status_idx ON webex_webhook_subscriptions (status)`);
+
+    await clientWebexWebhooks.query(`
+      CREATE TABLE IF NOT EXISTS webex_webhook_events (
+        id               varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        event_id         text NOT NULL,
+        subscription_id  varchar REFERENCES webex_webhook_subscriptions(id) ON DELETE SET NULL,
+        org_id           varchar REFERENCES organizations(id) ON DELETE SET NULL,
+        user_id          varchar REFERENCES users(id) ON DELETE SET NULL,
+        resource         text NOT NULL,
+        event            text NOT NULL,
+        resource_id      text,
+        payload          jsonb NOT NULL,
+        signature_valid  boolean NOT NULL DEFAULT false,
+        processed_at     timestamp,
+        process_error    text,
+        received_at      timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientWebexWebhooks.query(`CREATE UNIQUE INDEX IF NOT EXISTS webex_webhook_event_id_unique_idx ON webex_webhook_events (event_id)`);
+    await clientWebexWebhooks.query(`CREATE INDEX IF NOT EXISTS webex_webhook_event_org_received_idx ON webex_webhook_events (org_id, received_at)`);
+    await clientWebexWebhooks.query(`CREATE INDEX IF NOT EXISTS webex_webhook_event_resource_idx ON webex_webhook_events (resource, received_at)`);
+    console.log("[migrations] Task #741: webex webhook tables ensured");
+  } catch (err) {
+    console.error("[migrations] Task #741 webex webhook migration error:", err);
+  } finally {
+    clientWebexWebhooks.release();
+  }
 }

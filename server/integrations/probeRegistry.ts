@@ -14,6 +14,7 @@ import { azureCredentialsConfigured } from "../graphService";
 import { getMailReadConsentStatus } from "../graphSubscriptionService";
 import { getWebexAuthState, webexNeedsReauth } from "../webexService";
 import { testZoomInfoConnection } from "../zoominfo";
+import { storage } from "../storage";
 
 export const INTEGRATION_SOURCES = [
   "sonar",
@@ -252,7 +253,41 @@ async function probeWebex(_opts: ProbeOptions): Promise<IntegrationHealthSnapsho
   }
   const needsReauth = webexNeedsReauth();
   const fresh = freshnessHealthState("webex");
-  const healthState: HealthState = needsReauth ? "degraded" : fresh.healthState;
+
+  // Task #741 — fold webhook-subscription health into the integration probe
+  // so /api/integrations/health/snapshot reflects whether real-time push is
+  // working. We aggregate across all orgs that have any webhook rows and
+  // mark the source as "degraded" if any subscription is in `error` status,
+  // or if zero events have been received in the last 24h despite having
+  // active subscriptions.
+  let webhookDetail: Record<string, unknown> = { active: 0, errored: 0, lastEventAt: null, eventsLast24h: 0 };
+  let webhookDegraded = false;
+  try {
+    const orgs = await storage.getOrganizations();
+    let active = 0, errored = 0, last: Date | null = null, vol24 = 0;
+    for (const org of orgs) {
+      const h = await storage.getWebexWebhookHealth(org.id);
+      for (const s of h.subscriptions) {
+        if (s.status === "error") errored++; else active++;
+      }
+      vol24 += h.eventsLast24h;
+      if (h.lastEventAt && (!last || h.lastEventAt > last)) last = h.lastEventAt;
+    }
+    if (errored > 0) webhookDegraded = true;
+    if (active > 0 && vol24 === 0) {
+      // Subscribed but silent for 24h — soft-degraded (might just be quiet).
+      // We surface the fact, but only flip overall state to degraded if no
+      // sync activity is happening either.
+      webhookDegraded = webhookDegraded || fresh.healthState === "degraded";
+    }
+    webhookDetail = { active, errored, lastEventAt: last, eventsLast24h: vol24 };
+  } catch (err) {
+    webhookDetail = { error: err instanceof Error ? err.message : String(err) };
+  }
+
+  const healthState: HealthState = needsReauth
+    ? "degraded"
+    : (webhookDegraded ? "degraded" : fresh.healthState);
   return {
     source: "webex",
     connected: !needsReauth && auth.hasRefreshToken,
@@ -268,6 +303,7 @@ async function probeWebex(_opts: ProbeOptions): Promise<IntegrationHealthSnapsho
       hasRefreshToken: auth.hasRefreshToken,
       accessTokenExpiresAt: auth.accessTokenExpiresAt,
       lastRefreshAt: auth.lastRefreshAt,
+      webhooks: webhookDetail,
     },
   };
 }

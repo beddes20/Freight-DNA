@@ -55,6 +55,16 @@ import {
 } from "../webexUserTokenService";
 import { enqueueEnrichmentJob, runEnrichmentSweep } from "../webexEnrichmentWorker";
 import { kickOffOrgBackfill, MAX_BACKFILL_DAYS } from "../webexBackfillOrchestrator";
+import {
+  subscribeWebhooksForOrg,
+  subscribeWebhooksForUser,
+  revokeWebhooksForOrg,
+  revokeWebhooksForUser,
+  revokeSingleWebhookSubscription,
+  refreshExpiringWebhooks,
+  webhooksHealthy,
+  resolveWebhookTargetUrl,
+} from "../webexWebhookService";
 import { insertWebexUserMappingSchema, touchpoints, type WebexSyncState } from "@shared/schema";
 import { and, eq, lte, inArray, sql } from "drizzle-orm";
 import OpenAI from "openai";
@@ -187,7 +197,7 @@ async function persistCallAnalytics(
   }
 }
 
-async function syncCallsForOrg(
+export async function syncCallsForOrg(
   orgId: string,
   hoursBack: number,
   customEndMs?: number,
@@ -991,6 +1001,11 @@ export function registerWebexRoutes(app: Express) {
         // Task #466: kick off the full 13-month / max-window backfill across
         // CDRs + workspaces + locations + devices + queues + hunt groups.
         kickOffOrgBackfill(u.organizationId, MAX_BACKFILL_DAYS);
+        // Task #741: subscribe per-user webhooks (telephony_calls + voicemails)
+        // so this rep gets push notifications immediately.
+        void subscribeWebhooksForUser(u.organizationId, u.id, { req }).catch(e => {
+          log(`subscribeWebhooksForUser(${u.id}) failed: ${e instanceof Error ? e.message : String(e)}`);
+        });
         return res.send(`
           <html><body style="font-family:sans-serif;text-align:center;padding:60px">
             <h2>Your Webex account is connected!</h2>
@@ -1011,6 +1026,11 @@ export function registerWebexRoutes(app: Express) {
       if (sessionUser?.organizationId) {
         void maybeAutoBackfillOnConnect(sessionUser.organizationId);
         kickOffOrgBackfill(sessionUser.organizationId, MAX_BACKFILL_DAYS);
+        // Task #741: subscribe org-wide webhooks for telephony_calls + voicemails.
+        // Idempotent — re-runs reuse existing rows / secrets.
+        void subscribeWebhooksForOrg(sessionUser.organizationId, { req }).catch(e => {
+          log(`subscribeWebhooksForOrg(${sessionUser.organizationId}) failed: ${e instanceof Error ? e.message : String(e)}`);
+        });
       }
       res.send(`
         <html><body style="font-family:sans-serif;text-align:center;padding:60px">
@@ -1113,6 +1133,11 @@ export function registerWebexRoutes(app: Express) {
   app.delete("/api/webex/my-connection", requireUser, async (req: Request, res: Response) => {
     try {
       const user = req.user!;
+      // Task #741: revoke per-user webhooks BEFORE we delete the token row, so
+      // we still have the access token available to call Webex DELETE.
+      try { await revokeWebhooksForUser(user.id); } catch (e) {
+        log(`revokeWebhooksForUser(${user.id}) error: ${e instanceof Error ? e.message : String(e)}`);
+      }
       const deleted = await disconnectUserWebex(user.id);
       log(`User ${user.id} disconnected their personal Webex account (deleted=${deleted})`);
       res.json({ deleted });
@@ -1229,6 +1254,14 @@ export function registerWebexRoutes(app: Express) {
         lastUpdatedAt: row.last_updated_at,
       }));
 
+      // Task #741 — webhook health: per-subscription status, last event time,
+      // 7d/24h/15m volume, and a derived "mode" (push|polling) so the UI can
+      // make the adaptive backoff visible.
+      const webhookHealth = await storage.getWebexWebhookHealth(user.organizationId);
+      const ageMs = webhookHealth.lastEventAt ? Date.now() - webhookHealth.lastEventAt.getTime() : null;
+      const mode = ageMs !== null && ageMs < 15 * 60_000 ? "push" : "polling";
+      const expectedTargetUrl = resolveWebhookTargetUrl(req);
+
       res.json({
         currentScopeVersion: WEBEX_SCOPES_VERSION,
         requiredScopes,
@@ -1246,10 +1279,128 @@ export function registerWebexRoutes(app: Express) {
           })),
         },
         inventory,
+        webhooks: {
+          mode,
+          expectedTargetUrl,
+          lastEventAt: webhookHealth.lastEventAt,
+          ageMs,
+          eventsLast7d: webhookHealth.eventsLast7d,
+          eventsLast24h: webhookHealth.eventsLast24h,
+          eventsLast15m: webhookHealth.eventsLast15m,
+          failedLast24h: webhookHealth.failedLast24h,
+          subscriptions: webhookHealth.subscriptions.map(s => ({
+            id: s.id,
+            scope: s.scope,
+            userId: s.userId,
+            resource: s.resource,
+            event: s.event,
+            webhookId: s.webhookId,
+            targetUrl: s.targetUrl,
+            status: s.status,
+            lastError: s.lastError,
+            lastErrorAt: s.lastErrorAt,
+            lastEventAt: s.lastEventAt,
+            eventsReceived: s.eventsReceived,
+            createdAt: s.createdAt,
+            updatedAt: s.updatedAt,
+          })),
+        },
       });
     } catch (err) {
       log(`webex health error: ${getErrorMessage(err)}`);
       res.status(500).json({ error: "Failed to load Webex health" });
+    }
+  });
+
+  // ── Webhook management (Task #741) ──────────────────────────────────────
+  // List + manually re-subscribe + revoke webex webhooks for the admin's org.
+  app.get("/api/webex/webhooks", requireUser, async (req: Request, res: Response) => {
+    try {
+      const user = req.user!;
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const health = await storage.getWebexWebhookHealth(user.organizationId);
+      res.json({
+        targetUrl: resolveWebhookTargetUrl(req),
+        lastEventAt: health.lastEventAt,
+        eventsLast7d: health.eventsLast7d,
+        eventsLast24h: health.eventsLast24h,
+        eventsLast15m: health.eventsLast15m,
+        failedLast24h: health.failedLast24h,
+        subscriptions: health.subscriptions,
+      });
+    } catch (err) {
+      log(`list webhooks error: ${getErrorMessage(err)}`);
+      res.status(500).json({ error: "Failed to load webhooks" });
+    }
+  });
+
+  app.post("/api/webex/webhooks/subscribe", requireUser, async (req: Request, res: Response) => {
+    try {
+      const user = req.user!;
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const orgResult = await subscribeWebhooksForOrg(user.organizationId, { req });
+      // Best-effort per-user re-subscribe for every connected rep in the org.
+      const userResults: Array<{ userId: string; results: unknown }> = [];
+      const userTokens = await storage.getWebexUserTokensForOrg(user.organizationId);
+      for (const t of userTokens) {
+        if (t.needsReauth) continue;
+        const r = await subscribeWebhooksForUser(user.organizationId, t.userId, { req }).catch(e => {
+          log(`subscribe user ${t.userId} failed: ${e instanceof Error ? e.message : String(e)}`);
+          return [];
+        });
+        userResults.push({ userId: t.userId, results: r });
+      }
+      res.json({ org: orgResult, users: userResults });
+    } catch (err) {
+      log(`subscribe webhooks error: ${getErrorMessage(err)}`);
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  app.post("/api/webex/webhooks/refresh", requireUser, async (req: Request, res: Response) => {
+    try {
+      const user = req.user!;
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      // Tenant scoping: an admin in org A may only trigger reconciliation
+      // for org A's own subscriptions. The unscoped path is reserved for
+      // the 15-min internal cron. (Task #741 defect #11.)
+      const summary = await refreshExpiringWebhooks(user.organizationId);
+      res.json(summary);
+    } catch (err) {
+      log(`refresh webhooks error: ${getErrorMessage(err)}`);
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  app.delete("/api/webex/webhooks/:id", requireUser, async (req: Request, res: Response) => {
+    try {
+      const user = req.user!;
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const id = pStr(req.params.id);
+      const sub = await storage.getWebexWebhookSubscription(id);
+      if (!sub || sub.orgId !== user.organizationId) {
+        return res.status(404).json({ error: "Not found" });
+      }
+      // Single-subscription removal that matches the endpoint contract —
+      // does NOT bulk-revoke other rows for the same user/org. The bulk
+      // revoke helpers are reserved for OAuth disconnect flows.
+      // (Task #741 defect #12.)
+      await revokeSingleWebhookSubscription(sub.id);
+      res.json({ ok: true });
+    } catch (err) {
+      log(`delete webhook error: ${getErrorMessage(err)}`);
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  app.get("/api/webex/webhooks/health-quick", requireUser, async (req: Request, res: Response) => {
+    try {
+      const user = req.user!;
+      if (!user.organizationId) return res.status(400).json({ error: "no org" });
+      const healthy = await webhooksHealthy(user.organizationId);
+      res.json({ healthy });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 
@@ -2649,6 +2800,16 @@ export function initWebexSyncScheduler(): void {
       // Webex account and pull their personal call history. Runs regardless
       // of org-level token state.
       for (const org of orgs) {
+        // Task #741 — adaptive backoff: if real-time webhooks are healthy
+        // for this org (i.e. we received any push event in the last
+        // 15 minutes), we skip the polling sweep entirely. The sweep
+        // automatically snaps back the next time webhooks go quiet for
+        // >15min — no separate "snap back" cron needed.
+        const skipPolling = await webhooksHealthy(org.id).catch(() => false);
+        if (skipPolling) {
+          log(`Org ${org.id}: skipping polling sweep — webhooks healthy (push mode)`);
+          continue;
+        }
         try {
           const tokens = await storage.getWebexUserTokensForOrg(org.id);
           for (const t of tokens) {
@@ -2682,6 +2843,11 @@ export function initWebexSyncScheduler(): void {
           log("Aborting remaining org syncs — Webex flipped to needs-reauth mid-run");
           break;
         }
+        // Task #741 — adaptive backoff (org token branch). Same rule as
+        // the per-user branch above: skip the polling sweep if push events
+        // arrived in the last 15 minutes.
+        const skipPolling = await webhooksHealthy(org.id).catch(() => false);
+        if (skipPolling) continue;
         try {
           const result = await syncCallsForOrg(org.id, 1);
           if (result.touchpoints.length > 0 || result.nbaCards.length > 0) {
@@ -2745,6 +2911,73 @@ export function initWebexSyncScheduler(): void {
   });
 
   log("Webex re-auth reminder scheduler started (hourly check, ~24h cadence)");
+
+  // Task #741 — Webhook subscription refresh. Every 15 minutes we walk our
+  // webex_webhook_subscriptions rows and:
+  //   1. List Webex's view of our webhooks (GET /v1/webhooks)
+  //   2. For any of our rows whose webhook_id isn't in Webex's list (purged
+  //      by them, or never created because of a transient error), recreate.
+  //   3. For rows in `error` status, retry creation.
+  // The receiver itself doesn't depend on this — it's only a guardrail
+  // against silent webhook expiry.
+  cron.schedule("*/15 * * * *", async () => {
+    try {
+      const summary = await refreshExpiringWebhooks();
+      if (summary.recreated > 0 || summary.errors > 0) {
+        log(`Webhook refresh: checked=${summary.checked} recreated=${summary.recreated} errors=${summary.errors}`);
+      }
+    } catch (err) {
+      log(`Webhook refresh cron error: ${getErrorMessage(err)}`);
+    }
+  });
+  log("Webex webhook refresh scheduler started (every 15 minutes)");
+
+  // Best-effort: subscribe webhooks for any org/user that already has a
+  // valid Webex connection but no webhook rows yet. Runs once at startup.
+  //
+  // Tenant-isolation rules (Task #741, post code-review):
+  //  • Only orgs with at least one actively-connected Webex user are
+  //    eligible — we do NOT auto-subscribe orgs that have never touched
+  //    Webex, otherwise events would fan out across unrelated tenants.
+  //  • Org-level subscriptions are also gated by a global singleton
+  //    inside `subscribeWebhooksForOrg` (the global org token is
+  //    single-tenant). The first eligible org wins; the rest become
+  //    no-ops at the service layer.
+  //  • Per-user subscriptions are inherently tenant-safe because each
+  //    user's Webex token is bound to their own user record (and via it
+  //    to a specific internal org).
+  setTimeout(async () => {
+    try {
+      const { db } = await import("../storage");
+      const { organizations } = await import("../../shared/schema");
+      const orgs = await db.select().from(organizations);
+      let orgSingletonClaimed = false;
+      for (const org of orgs) {
+        const tokens = await storage.getWebexUserTokensForOrg(org.id);
+        const usableUserTokens = tokens.filter(t => !t.needsReauth);
+        if (usableUserTokens.length === 0) continue; // skip orgs that have never connected Webex
+        const existing = await storage.listWebexWebhookSubscriptions(org.id);
+        const existingByKey = new Set(existing.map(s => `${s.scope}:${s.userId ?? ""}:${s.resource}:${s.event}`));
+        const orgAlreadyHasOrgScope = existing.some(s => s.scope === "org" && s.status === "active");
+        if (orgAlreadyHasOrgScope) orgSingletonClaimed = true;
+        if (
+          hasWebexTokens() &&
+          !webexNeedsReauth() &&
+          !existingByKey.has("org::telephony_calls:all") &&
+          !orgSingletonClaimed
+        ) {
+          orgSingletonClaimed = true; // optimistic claim; service-layer guard is authoritative
+          void subscribeWebhooksForOrg(org.id).catch(e => log(`startup org subscribe ${org.id}: ${e instanceof Error ? e.message : String(e)}`));
+        }
+        for (const t of usableUserTokens) {
+          if (existingByKey.has(`user:${t.userId}:telephony_calls:all`)) continue;
+          void subscribeWebhooksForUser(org.id, t.userId).catch(e => log(`startup user subscribe ${t.userId}: ${e instanceof Error ? e.message : String(e)}`));
+        }
+      }
+    } catch (err) {
+      log(`Startup webhook subscribe sweep error: ${getErrorMessage(err)}`);
+    }
+  }, 25_000);
 
   // NOTE: Earlier #466 work introduced a 2-minute enrichment sweep, a
   // nightly snapshot-refresh cron, and a backfill-resume init block here.
