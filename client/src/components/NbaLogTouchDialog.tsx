@@ -119,6 +119,16 @@ export function NbaLogTouchDialog({
       await apiRequest("PATCH", `/api/nba/cards/${cardId}/resolve`, { action: "actioned" });
     },
     onSuccess: () => {
+      // Invalidate only what *this* save actually changed:
+      //  - invalidateAfterTouchpoint: today's touchpoints + the per-company
+      //    timeline / NBA card / growth score band (already tightened — no
+      //    longer touches the org-wide /api/growth-scores or
+      //    /api/next-best-actions; those refresh via the live-sync
+      //    `daily_workspace` event the server publishes once the background
+      //    growth score recompute finishes).
+      //  - /api/nba/cards: the card we just resolved literally moves out of
+      //    the active list, so this org-wide list must refetch immediately.
+      //  - /api/nba/company/:id/card: the per-company card view.
       invalidateAfterTouchpoint(companyId);
       queryClient.invalidateQueries({ queryKey: ["/api/nba/cards"] });
       if (companyId) {

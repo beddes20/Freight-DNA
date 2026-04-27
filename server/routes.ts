@@ -4423,32 +4423,52 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         playLabel: typeof req.body.playLabel === "string" ? req.body.playLabel || null : null,
         createdAt: now.toISOString(),
       });
-      const company = contact.companyId ? await storage.getCompanyInOrg(contact.companyId, user.organizationId) : null;
-      const aiInsights = await analyzeTouchpointNote(notes || "", contact.name, company?.name).catch(() => null);
-      let autoTask = null;
-      if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
+      // Respond immediately with the saved touchpoint. AI enrichment, growth
+      // score recompute, cache busting, and live-sync broadcast all happen in
+      // a detached async block below so the dialog can close right away.
+      res.json(tp);
+
+      const userId = user.id;
+      const orgId = user.organizationId;
+      const contactCompanyId = contact.companyId;
+      const contactName = contact.name;
+      const contactId = contact.id;
+      setImmediate(async () => {
         try {
-          const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
-          autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId: contact.companyId || null, contactId: contact.id, createdAt: now.toISOString() });
-        } catch (taskError) {
-          console.error("Failed to create auto follow-up task for contact touchpoint:", taskError);
+          const company = contactCompanyId ? await storage.getCompanyInOrg(contactCompanyId, orgId).catch((err: unknown) => {
+            console.error("[contact-touchpoint] getCompanyInOrg failed for company", contactCompanyId, "—", err instanceof Error ? err.stack : err);
+            return null;
+          }) : null;
+          const aiInsights = await analyzeTouchpointNote(notes || "", contactName, company?.name).catch((err: unknown) => {
+            console.error("[contact-touchpoint] analyzeTouchpointNote failed for contact", contactId, "—", err instanceof Error ? err.stack : err);
+            return null;
+          });
+          if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
+            try {
+              const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
+              await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: userId, assignedBy: userId, companyId: contactCompanyId || null, contactId, createdAt: now.toISOString() });
+            } catch (taskError) {
+              console.error("[contact-touchpoint] auto follow-up task failed:", taskError instanceof Error ? taskError.stack : taskError);
+            }
+          }
+          cacheInvalidatePrefix(`cold-contacts:${userId}`);
+          cacheInvalidatePrefix(`meaningful-overdue:${userId}`);
+          if (contactCompanyId) {
+            _nbaCache.delete(`nba:${contactCompanyId}`);
+            try {
+              const gs = await computeGrowthScore(contactCompanyId, orgId, storage);
+              await storage.upsertGrowthScore({ companyId: contactCompanyId, organizationId: orgId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+            } catch (gsErr) {
+              console.error("[contact-touchpoint] growth score refresh failed for company", contactCompanyId, "—", gsErr instanceof Error ? gsErr.stack : gsErr);
+            }
+          }
+          // Logging a touchpoint changes recency / NBA signals — broadcast so any
+          // open Today's Priorities tabs refresh and the cache busts in lockstep.
+          publishLiveSync(orgId, "daily_workspace", contactCompanyId ?? undefined);
+        } catch (bgErr) {
+          console.error("[contact-touchpoint] background enrichment failed:", bgErr instanceof Error ? bgErr.stack : bgErr);
         }
-      }
-      cacheInvalidatePrefix(`cold-contacts:${user.id}`);
-      cacheInvalidatePrefix(`meaningful-overdue:${user.id}`);
-      if (contact.companyId) {
-        _nbaCache.delete(`nba:${contact.companyId}`);
-        try {
-          const gs = await computeGrowthScore(contact.companyId!, user.organizationId, storage);
-          await storage.upsertGrowthScore({ companyId: contact.companyId!, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
-        } catch (gsErr) {
-          console.error("[contact-touchpoint] growth score refresh failed for company", contact.companyId, "—", gsErr instanceof Error ? gsErr.stack : gsErr);
-        }
-      }
-      // Logging a touchpoint changes recency / NBA signals — broadcast so any
-      // open Today's Priorities tabs refresh and the cache busts in lockstep.
-      publishLiveSync(user.organizationId, "daily_workspace", contact.companyId ?? undefined);
-      res.json({ ...tp, aiInsights, autoTask });
+      });
     } catch (error) {
       console.error("Failed to create touchpoint:", error);
       res.status(500).json({ error: "Failed to create touchpoint" });
@@ -6184,9 +6204,10 @@ Respond with valid JSON only:
           return res.status(400).json({ error: "Contact does not belong to this company" });
         }
       }
+      const companyIdStr = pStr(req.params.id);
       const tp = await storage.createTouchpointWithDefaults({
         contactId,
-        companyId: pStr(req.params.id),
+        companyId: companyIdStr,
         type: req.body.type || "call",
         date: req.body.date || undefined,
         notes,
@@ -6197,27 +6218,46 @@ Respond with valid JSON only:
         playLabel: typeof req.body.playLabel === "string" ? req.body.playLabel || null : null,
         createdAt: now.toISOString(),
       });
-      const aiInsights = await analyzeTouchpointNote(notes || "", contact?.name, company.name).catch(() => null);
-      let autoTask = null;
-      if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
+      // Respond immediately. AI enrichment, growth score recompute, momentum
+      // drop notification, NBA cache bust, and live-sync broadcast all happen
+      // in a detached async block below so the dialog can close right away.
+      res.json(tp);
+
+      const userId = user.id;
+      const orgId = user.organizationId;
+      const contactName = contact?.name;
+      const companyName = company.name;
+      setImmediate(async () => {
         try {
-          const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
-          autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId: pStr(req.params.id), contactId: contactId || null, createdAt: now.toISOString() });
-        } catch (taskError) {
-          console.error("Failed to create auto follow-up task for company touchpoint:", taskError);
+          const aiInsights = await analyzeTouchpointNote(notes || "", contactName, companyName).catch((err: unknown) => {
+            console.error("[company-touchpoint] analyzeTouchpointNote failed for company", companyIdStr, "—", err instanceof Error ? err.stack : err);
+            return null;
+          });
+          if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
+            try {
+              const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
+              await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: userId, assignedBy: userId, companyId: companyIdStr, contactId: contactId || null, createdAt: now.toISOString() });
+            } catch (taskError) {
+              console.error("[company-touchpoint] auto follow-up task failed:", taskError instanceof Error ? taskError.stack : taskError);
+            }
+          }
+          _nbaCache.delete(`nba:${companyIdStr}`);
+          try {
+            const gs = await computeGrowthScore(companyIdStr, orgId, storage);
+            const savedGs = await storage.upsertGrowthScore({ companyId: companyIdStr, organizationId: orgId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+            checkAndFireMomentumDropNotification(companyIdStr, gs.band, savedGs.previousBand, storage).catch((err: unknown) => {
+              console.error("[company-touchpoint] momentum drop notification failed:", err instanceof Error ? err.stack : err);
+            });
+          } catch (gsErr) {
+            console.error("[company-touchpoint] growth score refresh failed for company", companyIdStr, "—", gsErr instanceof Error ? gsErr.stack : gsErr);
+          }
+          // Broadcast after background work so connected clients refetch the
+          // refreshed growth score / NBA card without the user reloading.
+          publishLiveSync(orgId, "daily_workspace", companyIdStr);
+        } catch (bgErr) {
+          console.error("[company-touchpoint] background enrichment failed:", bgErr instanceof Error ? bgErr.stack : bgErr);
         }
-      }
-      _nbaCache.delete(`nba:${pStr(req.params.id)}`);
-      try {
-        const gs = await computeGrowthScore(pStr(req.params.id), user.organizationId, storage);
-        const savedGs = await storage.upsertGrowthScore({ companyId: pStr(req.params.id), organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
-        checkAndFireMomentumDropNotification(pStr(req.params.id), gs.band, savedGs.previousBand, storage).catch(() => {});
-      } catch (gsErr) {
-        console.error("[company-touchpoint] growth score refresh failed:", gsErr);
-      }
-      // Logging a company touchpoint changes the daily workspace signals.
-      publishLiveSync(user.organizationId, "daily_workspace", pStr(req.params.id));
-      res.json({ ...tp, aiInsights, autoTask });
+      });
     } catch (error) {
       console.error("Failed to log touchpoint (company route):", error);
       res.status(500).json({ error: "Failed to log touchpoint" });
@@ -6263,28 +6303,47 @@ Respond with valid JSON only:
         playLabel: typeof playLabel === "string" ? playLabel || null : null,
         createdAt: now.toISOString(),
       });
-      const aiInsights = await analyzeTouchpointNote(cleanNotes || "", contact?.name, company.name).catch(() => null);
-      let autoTask = null;
-      if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
+      // Respond immediately. AI enrichment, growth score recompute, momentum
+      // drop notification, NBA cache bust, and live-sync broadcast all happen
+      // in a detached async block below so the dialog can close right away.
+      res.json(tp);
+
+      const userId = user.id;
+      const orgId = user.organizationId;
+      const contactName = contact?.name;
+      const companyName = company.name;
+      setImmediate(async () => {
         try {
-          const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
-          autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(cleanNotes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId, contactId: contactId || null, createdAt: now.toISOString() });
-        } catch (taskError) {
-          console.error("Failed to create auto follow-up task for touch-log:", taskError);
+          const aiInsights = await analyzeTouchpointNote(cleanNotes || "", contactName, companyName).catch((err: unknown) => {
+            console.error("[touch-logs] analyzeTouchpointNote failed for company", companyId, "—", err instanceof Error ? err.stack : err);
+            return null;
+          });
+          if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
+            try {
+              const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
+              await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(cleanNotes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: userId, assignedBy: userId, companyId, contactId: contactId || null, createdAt: now.toISOString() });
+            } catch (taskError) {
+              console.error("[touch-logs] auto follow-up task failed:", taskError instanceof Error ? taskError.stack : taskError);
+            }
+          }
+          _nbaCache.delete(`nba:${companyId}`);
+          try {
+            const gs = await computeGrowthScore(companyId, orgId, storage);
+            const savedGs = await storage.upsertGrowthScore({ companyId, organizationId: orgId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
+            checkAndFireMomentumDropNotification(companyId, gs.band, savedGs.previousBand, storage).catch((err: unknown) => {
+              console.error("[touch-logs] momentum drop notification failed:", err instanceof Error ? err.stack : err);
+            });
+          } catch (gsErr) {
+            // Log full stack so transient failures are visible in server logs
+            console.error("[touch-logs] growth score refresh failed for company", companyId, "—", gsErr instanceof Error ? gsErr.stack : gsErr);
+          }
+          // Broadcast after background work so connected clients refetch the
+          // refreshed growth score / NBA card without the user reloading.
+          publishLiveSync(orgId, "daily_workspace", companyId);
+        } catch (bgErr) {
+          console.error("[touch-logs] background enrichment failed:", bgErr instanceof Error ? bgErr.stack : bgErr);
         }
-      }
-      _nbaCache.delete(`nba:${companyId}`);
-      try {
-        const gs = await computeGrowthScore(companyId, user.organizationId, storage);
-        const savedGs = await storage.upsertGrowthScore({ companyId, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
-        checkAndFireMomentumDropNotification(companyId, gs.band, savedGs.previousBand, storage).catch(() => {});
-      } catch (gsErr) {
-        // Log full stack so transient failures are visible in server logs
-        console.error("[touch-logs] growth score refresh failed for company", companyId, "—", gsErr instanceof Error ? gsErr.stack : gsErr);
-      }
-      // Logging a touch from /touch-logs changes daily workspace signals.
-      publishLiveSync(user.organizationId, "daily_workspace", companyId);
-      res.json({ ...tp, aiInsights, autoTask });
+      });
     } catch (error) {
       console.error("Failed to log touch:", error);
       res.status(500).json({ error: "Failed to log touch" });

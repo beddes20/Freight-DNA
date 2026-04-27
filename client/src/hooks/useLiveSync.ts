@@ -80,6 +80,21 @@ const TOPIC_TO_QUERY_KEYS: Record<string, ReadonlyArray<ReadonlyArray<string>>> 
   ],
 };
 
+// Topics that ship a per-company `key` and need per-company caches
+// refreshed in addition to the topic-wide prefixes above. Touchpoint POSTs
+// respond before background AI/growth-score work finishes; the trailing
+// `daily_workspace` event is what surfaces those updates per company.
+const PER_COMPANY_TOPICS: ReadonlySet<string> = new Set(["daily_workspace"]);
+const buildPerCompanyKeys = (companyId: string): ReadonlyArray<ReadonlyArray<string>> => [
+  ["/api/companies", companyId, "growth-score"],
+  ["/api/companies", companyId, "next-best-action"],
+  ["/api/companies", companyId, "touchpoints"],
+  ["/api/companies", companyId, "touch-logs"],
+  ["/api/nba/company", companyId, "card"],
+  ["/api/tasks"],
+  ["/api/tasks/company", companyId],
+];
+
 interface LiveSyncEvent {
   type?: string;
   topic?: string;
@@ -125,6 +140,11 @@ export function useLiveSync(topics?: ReadonlyArray<string>): void {
           // signature here expects a mutable array. The runtime ignores
           // mutability, so the cast is safe.
           queryClient.invalidateQueries({ queryKey: prefix as unknown as unknown[] });
+        }
+        if (evt.key && PER_COMPANY_TOPICS.has(evt.topic)) {
+          for (const prefix of buildPerCompanyKeys(evt.key)) {
+            queryClient.invalidateQueries({ queryKey: prefix as unknown as unknown[] });
+          }
         }
       };
 

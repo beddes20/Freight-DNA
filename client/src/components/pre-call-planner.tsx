@@ -351,6 +351,8 @@ export function PreCallPlanner({
       invalidateAfterTouchpoint(company.id);
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       toast({ title: "Touch logged!" });
+      // Fast response: aiInsights/autoTask now arrive via background work
+      // (live-sync). buildAiToasts no-ops until then; see follow-up #790.
       buildAiToasts(data?.aiInsights, data?.autoTask, toast);
       setLogOpen(false);
       setLogNote("");
