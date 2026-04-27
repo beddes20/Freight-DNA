@@ -358,3 +358,64 @@ export function isLegacyFreeMailCustomerName(name: string | null | undefined): b
   }
   return false;
 }
+
+/**
+ * Task #753 — broader sibling of `isLegacyFreeMailCustomerName`. Returns
+ * true for ANY string that's effectively a free-mail provider as a
+ * customer name:
+ *   - Bare provider root: "Gmail", "yahoo", "Outlook", "Mac", "Pm" …
+ *   - Full provider domain: "gmail.com", "icloud.com", "Proton.me" …
+ *   - Decorated provider: "Gmail Mail", "Yahoo Inc", "Hotmail.com LLC" …
+ *
+ * Used as the safety net at every customer-creation chokepoint
+ * (`findOrCreateCustomer` for email ingestion, `createQuoteCustomer` for
+ * manual entry) and by the broadened cleanup in
+ * `backfillFreeMailCustomerNames`.
+ */
+export function isFreeMailProviderName(name: string | null | undefined): boolean {
+  if (!name) return false;
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  const lower = trimmed.toLowerCase();
+
+  // Direct full-domain hit ("gmail.com", "icloud.com", …).
+  if (FREE_MAIL_PROVIDERS.has(lower)) return true;
+
+  // Bare provider root ("gmail", "yahoo", "outlook", …).
+  if (isLegacyFreeMailCustomerName(trimmed)) return true;
+
+  // Decorated provider — strip generic suffix tokens ("mail", "com",
+  // "inc", "llc", "corp", "co") and re-check the remainder. Catches
+  // "Gmail Mail", "Yahoo Inc", "Outlook.com Co", etc. that the simpler
+  // checks above would miss. The token list intentionally excludes
+  // freight-business tokens ("logistics", "freight", "express", …) so
+  // a real shipper named e.g. "Gmail Logistics" is NOT silently
+  // rebucketed.
+  const stripped = lower
+    .replace(/[.,]/g, " ")
+    .replace(/\b(mail|com|inc|llc|corp|co)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (stripped && stripped !== lower) {
+    if (FREE_MAIL_PROVIDERS.has(stripped)) return true;
+    if (isLegacyFreeMailCustomerName(stripped)) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Task #753 — final safety net at every customer-creation chokepoint.
+ * Returns the trimmed input, or the shared `UNKNOWN_CUSTOMER_NAME`
+ * bucket when the input is empty or matches a free-mail provider name.
+ *
+ * Centralizes the "no provider names on the funnel" rule so every
+ * ingestion path (email, manual entry, future bulk-import paths) lands
+ * the same way without each call site having to remember the rule.
+ */
+export function sanitizeCustomerName(name: string | null | undefined): string {
+  const trimmed = (name ?? "").trim().replace(/\s+/g, " ");
+  if (!trimmed) return UNKNOWN_CUSTOMER_NAME;
+  if (isFreeMailProviderName(trimmed)) return UNKNOWN_CUSTOMER_NAME;
+  return trimmed;
+}

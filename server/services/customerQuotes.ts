@@ -11,7 +11,7 @@ import {
   type QuoteCarrier, type QuoteLaneGroup, type QuoteOutcomeReason, type QuoteSavedView,
   type InsertFreightOpportunity,
 } from "@shared/schema";
-import { UNKNOWN_CUSTOMER_NAME, classifyPartyType } from "./customerNameResolver";
+import { UNKNOWN_CUSTOMER_NAME, classifyPartyType, sanitizeCustomerName, isFreeMailProviderName } from "./customerNameResolver";
 import { isFunnelEligibleRep } from "@shared/quoteOpportunitiesRoles";
 import { users } from "@shared/schema";
 import { learnFromReassign } from "./quoteSenderMappings";
@@ -1956,9 +1956,15 @@ export async function createQuoteCustomer(
   rawName: string,
   segment?: string | null,
 ): Promise<QuoteCustomer> {
-  const name = rawName.trim().replace(/\s+/g, " ");
-  if (!name) throw new Error("Customer name is required");
-  if (name.length > 120) throw new Error("Customer name is too long");
+  const trimmed = rawName.trim().replace(/\s+/g, " ");
+  if (!trimmed) throw new Error("Customer name is required");
+  if (trimmed.length > 120) throw new Error("Customer name is too long");
+  // Task #753 — manual-entry chokepoint runs through the same safety net
+  // as the email ingestion path. A rep typing "Gmail" / "yahoo.com" into
+  // the inline reassign popover lands in the shared
+  // "Unknown — needs review" bucket instead of forking a provider-named
+  // customer row onto the dashboard.
+  const name = sanitizeCustomerName(trimmed);
   const [existing] = await db.select().from(quoteCustomers).where(and(
     eq(quoteCustomers.organizationId, orgId),
     sql`lower(${quoteCustomers.name}) = lower(${name})`,
@@ -1968,12 +1974,19 @@ export async function createQuoteCustomer(
   // calls this for net-new "real" customers, so default to `customer` when
   // the name doesn't look like a carrier.
   const partyType = classifyPartyType({ name });
+  // Task #753 — when sanitization rebucketed the rep's input into the
+  // shared Unknown bucket, persist the row as `unknown` partyType so the
+  // standard "non-customer" filter keeps it off the customer feed.
+  const isUnknownBucket = name === UNKNOWN_CUSTOMER_NAME;
+  const finalPartyType: QuotePartyType = isUnknownBucket
+    ? "unknown"
+    : (partyType === "unknown" ? "customer" : partyType);
   const [row] = await db.insert(quoteCustomers)
     .values({
       organizationId: orgId,
       name,
       segment: segment && segment.trim() ? segment.trim().slice(0, 80) : null,
-      partyType: partyType === "unknown" ? "customer" : partyType,
+      partyType: finalPartyType,
     })
     .returning();
   return row;
@@ -4124,6 +4137,19 @@ export interface EmailClassifierCounts {
   neither: number;
 }
 
+/** Task #753 — surfaces the size of the "needs review" backlog so admins
+ *  can spot leak regressions before the cleanup script catches them. */
+export interface NeedsReviewCounts {
+  /** Customer rows in the org currently named `UNKNOWN_CUSTOMER_NAME` OR
+   *  matching a free-mail provider name (Gmail / yahoo.com / Outlook …). */
+  customers: number;
+  /** Quote opportunities in the current filter slice linked to one of
+   *  those rows. The slice ignores the customer-only chokepoint so the
+   *  unknown-bucket opps are visible here even though they're hidden from
+   *  the main funnel. */
+  opportunities: number;
+}
+
 export interface FunnelDiagnostics {
   scopedToRepId: string | null;
   lastSync: import("./quoteTmsSync").SyncStats | null;
@@ -4131,6 +4157,7 @@ export interface FunnelDiagnostics {
   /** Subset of the latest sync's probable candidates that pass the current
    *  filter slice (rep / customer / equipment / lane / dates). */
   nearMissCandidates: import("./quoteTmsSync").ProbableCandidate[];
+  needsReview: NeedsReviewCounts;
 }
 
 export async function getFunnelDiagnostics(
@@ -4148,6 +4175,7 @@ export async function getFunnelDiagnostics(
       lastSync: null,
       emailClassifier: { windowDays, won: 0, lost: 0, neither: 0 },
       nearMissCandidates: [],
+      needsReview: { customers: 0, opportunities: 0 },
     };
   }
 
@@ -4227,6 +4255,32 @@ export async function getFunnelDiagnostics(
 
   const neither = Math.max(0, emailTotalInbound - emailWon - emailLost);
 
+  // Task #753 — needs-review counter. Counts customer rows (org-wide) and
+  // opportunities (in the slice, BUT bypassing the customer-only chokepoint
+  // since the unknown-bucket rows are non-customer by definition) that
+  // currently sit in the shared `UNKNOWN_CUSTOMER_NAME` bucket OR carry a
+  // free-mail provider name. Provider-named rows would normally have been
+  // sanitized away at insert time; if any show up here it's a regression
+  // signal worth surfacing to admins.
+  const needsReviewCustomerIds = new Set<string>();
+  ctx.customerMap.forEach((c, id) => {
+    const n = (c.name ?? "").trim();
+    if (!n) { needsReviewCustomerIds.add(id); return; }
+    if (n.toLowerCase() === UNKNOWN_CUSTOMER_NAME.toLowerCase()) {
+      needsReviewCustomerIds.add(id);
+      return;
+    }
+    if (isFreeMailProviderName(n)) needsReviewCustomerIds.add(id);
+  });
+  // Re-run the slice filter WITHOUT the non-customer chokepoint so the
+  // unknown-bucket opportunities are visible here. Without this, the
+  // opportunities count would always be 0 because `applyFilters` already
+  // excludes them above.
+  const sliceWithoutChokepoint = applyFilters(allOpps, effectiveFilters);
+  const needsReviewOppCount = needsReviewCustomerIds.size === 0
+    ? 0
+    : sliceWithoutChokepoint.filter(o => o.customerId && needsReviewCustomerIds.has(o.customerId)).length;
+
   return {
     scopedToRepId: scopedRepId ?? null,
     lastSync: lastSync ?? null,
@@ -4237,5 +4291,9 @@ export async function getFunnelDiagnostics(
       neither,
     },
     nearMissCandidates,
+    needsReview: {
+      customers: needsReviewCustomerIds.size,
+      opportunities: needsReviewOppCount,
+    },
   };
 }

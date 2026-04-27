@@ -53,6 +53,11 @@ type DiagnosticsResult = {
   lastSync: SyncStats | null;
   emailClassifier: { windowDays: number; won: number; lost: number; neither: number };
   nearMissCandidates: ProbableCandidate[];
+  /** Task #753 — count of "Unknown — needs review" / free-mail-provider
+   *  customer rows in the org plus the opportunities in this slice that
+   *  point at them. Surfaced as its own tile so admins can spot a leak
+   *  regression before the cleanup script runs. */
+  needsReview: { customers: number; opportunities: number };
 };
 
 interface Props {
@@ -175,6 +180,18 @@ export function FreightCaptureDiagnostics({ filters, enabled, open: openProp, on
                     No TMS sync has run in this process yet.
                   </p>
                 )}
+              </DiagnosticTile>
+
+              <DiagnosticTile title="Needs review" testId="diag-needs-review">
+                <div className="text-[11px] text-muted-foreground mb-1.5">
+                  Customers in the shared "Unknown" / free-mail bucket that need a real name.
+                </div>
+                <KvGrid
+                  items={[
+                    { label: "Customer rows", value: data.needsReview.customers },
+                    { label: "Opps in slice", value: data.needsReview.opportunities },
+                  ]}
+                />
               </DiagnosticTile>
 
               <DiagnosticTile title="Email classifier" testId="diag-email">

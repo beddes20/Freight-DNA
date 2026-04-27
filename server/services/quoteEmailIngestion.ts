@@ -29,6 +29,8 @@ import {
   resolveCustomerName,
   UNKNOWN_CUSTOMER_NAME,
   isLegacyFreeMailCustomerName,
+  isFreeMailProviderName,
+  sanitizeCustomerName,
   classifyPartyType,
   type ResolvedCustomer,
 } from "./customerNameResolver";
@@ -502,18 +504,24 @@ export async function parseQuoteEmailAi(input: {
  * the cheaper background pass which has access to the carriers table.
  */
 async function findOrCreateCustomer(orgId: string, name: string, fromEmail?: string | null): Promise<string> {
-  const trimmed = name.trim();
+  // Task #753 — final safety net before we touch the table. Anything that
+  // resolved to a free-mail provider name (the bug Task #578 was supposed
+  // to kill) is silently rebucketed into the shared
+  // "Unknown — needs review" row so the funnel can never surface "Gmail"
+  // / "Yahoo" / "outlook.com" again, no matter which upstream call site
+  // got it wrong.
+  const sanitized = sanitizeCustomerName(name);
   const existing = await db.select().from(quoteCustomers).where(and(
     eq(quoteCustomers.organizationId, orgId),
-    sql`lower(${quoteCustomers.name}) = lower(${trimmed})`,
+    sql`lower(${quoteCustomers.name}) = lower(${sanitized})`,
   )).limit(1);
   if (existing.length > 0) return existing[0].id;
   // Cheap, no-DB classification at insert time. The background backfill will
   // upgrade unknown -> carrier later if the carriers table grows.
-  const partyType = classifyPartyType({ name: trimmed, fromEmail: fromEmail ?? null });
+  const partyType = classifyPartyType({ name: sanitized, fromEmail: fromEmail ?? null });
   const [row] = await db.insert(quoteCustomers).values({
     organizationId: orgId,
-    name: trimmed,
+    name: sanitized,
     partyType,
   }).returning();
   return row.id;
@@ -1167,7 +1175,12 @@ export async function backfillFreeMailCustomerNames(
   const affectedCustomerIds = new Set<string>();
 
   for (const row of candidates) {
-    if (!isLegacyFreeMailCustomerName(row.customerName)) continue;
+    // Task #753 — broaden detection to catch every shape of provider-leak
+    // we've seen in the wild: bare provider roots ("Gmail", "Yahoo"),
+    // full provider domains ("gmail.com"), and decorated provider names
+    // ("Gmail Inc"). The narrower legacy check is kept above only as a
+    // documented sub-case.
+    if (!isFreeMailProviderName(row.customerName) && !isLegacyFreeMailCustomerName(row.customerName)) continue;
     summary.scanned++;
     affectedCustomerIds.add(row.customerId);
 

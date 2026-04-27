@@ -5,12 +5,16 @@ import {
   resolveCustomerName,
   isFreeMailDomain,
   isLegacyFreeMailCustomerName,
+  isFreeMailProviderName,
+  sanitizeCustomerName,
   nameFromBusinessDomain,
   extractCompanyFromText,
   parseFromHeader,
   UNKNOWN_CUSTOMER_NAME,
   FREE_MAIL_PROVIDERS,
 } from "../services/customerNameResolver";
+import { backfillFreeMailCustomerNames } from "../services/quoteEmailIngestion";
+import { createQuoteCustomer } from "../services/customerQuotes";
 import { db } from "../storage";
 import {
   emailMessages, quoteOpportunities, quoteCustomers, quoteEvents, quoteReps,
@@ -433,6 +437,70 @@ describe("resolveCustomerName (Task #578)", () => {
     }, 30_000);
   });
 
+  /**
+   * Task #753 — broader sibling check used by every customer-creation
+   * chokepoint AND by the cleanup script. Must catch the bare provider
+   * roots the legacy bug produced PLUS the full-domain / decorated shapes
+   * that appeared in the wild after Task #578 went out.
+   */
+  describe("isFreeMailProviderName (Task #753)", () => {
+    it("flags every bare provider root", () => {
+      for (const name of ["Gmail", "gmail", "Yahoo", "Outlook", "Hotmail", "Aol", "Icloud", "Mac", "Pm", "Proton", "Gmx", "Mail", "Zoho"]) {
+        expect(isFreeMailProviderName(name), `bare='${name}'`).toBe(true);
+      }
+    });
+
+    it("flags every full provider domain", () => {
+      for (const d of FREE_MAIL_PROVIDERS) {
+        expect(isFreeMailProviderName(d), `domain='${d}'`).toBe(true);
+        expect(isFreeMailProviderName(d.toUpperCase()), `domain='${d.toUpperCase()}'`).toBe(true);
+      }
+    });
+
+    it("flags decorated provider names", () => {
+      for (const name of ["Gmail Mail", "Yahoo Inc", "Outlook.com Co", "Hotmail LLC", "gmail.com inc", "Yahoo, Inc."]) {
+        expect(isFreeMailProviderName(name), `decorated='${name}'`).toBe(true);
+      }
+    });
+
+    it("does NOT flag real freight-business names that share a token", () => {
+      // The strip-list intentionally excludes freight tokens so a real
+      // shipper like "Gmail Logistics" is preserved verbatim.
+      expect(isFreeMailProviderName("Patriot Haulers LLC")).toBe(false);
+      expect(isFreeMailProviderName("Cascade Logistics")).toBe(false);
+      expect(isFreeMailProviderName("Northwind Industrial")).toBe(false);
+      expect(isFreeMailProviderName("Heartland Express")).toBe(false);
+      expect(isFreeMailProviderName(UNKNOWN_CUSTOMER_NAME)).toBe(false);
+    });
+
+    it("returns false for empty / null / whitespace", () => {
+      expect(isFreeMailProviderName(null)).toBe(false);
+      expect(isFreeMailProviderName(undefined)).toBe(false);
+      expect(isFreeMailProviderName("")).toBe(false);
+      expect(isFreeMailProviderName("   ")).toBe(false);
+    });
+  });
+
+  describe("sanitizeCustomerName (Task #753)", () => {
+    it("returns the trimmed name for legitimate inputs", () => {
+      expect(sanitizeCustomerName("  Patriot Haulers LLC  ")).toBe("Patriot Haulers LLC");
+      expect(sanitizeCustomerName("Cascade   Logistics")).toBe("Cascade Logistics");
+    });
+
+    it("rebuckets every provider-shaped name into UNKNOWN", () => {
+      for (const bad of ["Gmail", "yahoo.com", "Outlook", "Hotmail Mail", "icloud.com Inc"]) {
+        expect(sanitizeCustomerName(bad), `bad='${bad}'`).toBe(UNKNOWN_CUSTOMER_NAME);
+      }
+    });
+
+    it("returns UNKNOWN for empty / null / whitespace", () => {
+      expect(sanitizeCustomerName(null)).toBe(UNKNOWN_CUSTOMER_NAME);
+      expect(sanitizeCustomerName(undefined)).toBe(UNKNOWN_CUSTOMER_NAME);
+      expect(sanitizeCustomerName("")).toBe(UNKNOWN_CUSTOMER_NAME);
+      expect(sanitizeCustomerName("   ")).toBe(UNKNOWN_CUSTOMER_NAME);
+    });
+  });
+
   describe("isLegacyFreeMailCustomerName", () => {
     it("flags every legacy provider-root name", () => {
       for (const name of ["Gmail", "gmail", "Yahoo", "Outlook", "Hotmail", "Live", "Aol", "Icloud", "Mac", "Me", "Pm", "Proton", "Protonmail", "Gmx", "Mail", "Zoho"]) {
@@ -556,4 +624,236 @@ describe("ingestQuoteFromEmail rep-create gate (Task #721)", () => {
       }
     }
   }, 30_000);
+});
+
+/**
+ * Task #753 — DB-level lock-in for the "no provider names on the funnel"
+ * rule across every customer-creation chokepoint and the cleanup path.
+ *
+ * Covers:
+ *   1. Email ingestion safety net — a Display Name of "Gmail" on a
+ *      yahoo.com sender lands in the shared Unknown bucket, NOT a
+ *      "Gmail"-named customer row.
+ *   2. Manual entry safety net — `createQuoteCustomer("Gmail")` returns
+ *      the shared Unknown row instead of forking a new "Gmail" customer.
+ *   3. Broadened cleanup — `backfillFreeMailCustomerNames` rebuckets a
+ *      legacy "gmail.com" / "Yahoo Inc"-named customer (full-domain and
+ *      decorated shapes) that the original Task #578 narrow check would
+ *      have skipped.
+ *   4. Idempotency — a second back-to-back run is a true no-op.
+ */
+describe("free-mail provider safety net (Task #753)", () => {
+  it("email ingestion routes a 'Gmail' display name to the shared Unknown bucket", async () => {
+    const orgRow = await db.select({ id: organizations.id }).from(organizations).limit(1);
+    if (orgRow.length === 0) return;
+    const orgId = orgRow[0].id;
+    const tag = `t753-ing-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const messageIds: string[] = [];
+    const ingestedIds: string[] = [];
+    let leakedCustomerIds: string[] = [];
+    try {
+      // Display-name "Gmail" on a yahoo sender — the resolver already
+      // rejects this, but the safety net at findOrCreateCustomer is what
+      // we actually want to lock in.
+      const [row] = await db.insert(emailMessages).values({
+        orgId,
+        providerMessageId: `${tag}-msg`,
+        direction: "inbound",
+        fromEmail: '"Gmail" <someone@yahoo.com>',
+        toEmail: "ops@example.com",
+        subject: `${tag} Quote needed`,
+        body: "Need a rate from Chicago, IL to Atlanta, GA next Tuesday. Thanks.",
+      }).returning();
+      messageIds.push(row.id);
+
+      const [msg] = await db.select().from(emailMessages).where(eq(emailMessages.id, row.id)).limit(1);
+      const result = await ingestQuoteFromEmail(msg, { useAiFallback: false });
+      expect(result.status).toBe("ingested");
+      ingestedIds.push(result.quoteId!);
+
+      const [opp] = await db.select({ customerId: quoteOpportunities.customerId })
+        .from(quoteOpportunities).where(eq(quoteOpportunities.id, result.quoteId!));
+      const [customer] = await db.select({ id: quoteCustomers.id, name: quoteCustomers.name })
+        .from(quoteCustomers).where(eq(quoteCustomers.id, opp.customerId));
+      expect(customer.name).toBe(UNKNOWN_CUSTOMER_NAME);
+      // Belt + suspenders: no provider-named row for this org.
+      const leaks = await db.select({ id: quoteCustomers.id })
+        .from(quoteCustomers)
+        .where(and(
+          eq(quoteCustomers.organizationId, orgId),
+          inArray(quoteCustomers.name, ["Gmail", "gmail.com", "Yahoo", "yahoo.com"]),
+        ));
+      leakedCustomerIds = leaks.map((l) => l.id);
+      expect(leaks.length).toBe(0);
+    } finally {
+      if (ingestedIds.length > 0) {
+        await db.delete(quoteEvents).where(inArray(quoteEvents.quoteId, ingestedIds));
+        await db.delete(quoteOpportunities).where(inArray(quoteOpportunities.id, ingestedIds));
+      }
+      if (messageIds.length > 0) {
+        await db.delete(emailMessages).where(inArray(emailMessages.id, messageIds));
+      }
+      if (leakedCustomerIds.length > 0) {
+        // Defensive — only deletes anything if the safety net regressed.
+        await db.delete(quoteCustomers).where(inArray(quoteCustomers.id, leakedCustomerIds));
+      }
+    }
+  }, 30_000);
+
+  it("createQuoteCustomer rebuckets every provider name into the shared Unknown row", async () => {
+    const orgRow = await db.select({ id: organizations.id }).from(organizations).limit(1);
+    if (orgRow.length === 0) return;
+    const orgId = orgRow[0].id;
+    const tag = `t753-mc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    let createdIds: string[] = [];
+    try {
+      const a = await createQuoteCustomer(orgId, "Gmail");
+      const b = await createQuoteCustomer(orgId, "yahoo.com");
+      const c = await createQuoteCustomer(orgId, "Hotmail Mail");
+      createdIds = [a.id, b.id, c.id];
+
+      // All three resolved to the SAME shared Unknown row.
+      expect(a.name).toBe(UNKNOWN_CUSTOMER_NAME);
+      expect(b.name).toBe(UNKNOWN_CUSTOMER_NAME);
+      expect(c.name).toBe(UNKNOWN_CUSTOMER_NAME);
+      expect(a.id).toBe(b.id);
+      expect(b.id).toBe(c.id);
+      expect(a.partyType).toBe("unknown");
+
+      // No provider-named rows in the org as a side-effect.
+      const leaks = await db.select({ id: quoteCustomers.id })
+        .from(quoteCustomers)
+        .where(and(
+          eq(quoteCustomers.organizationId, orgId),
+          inArray(quoteCustomers.name, ["Gmail", "yahoo.com", "Hotmail Mail"]),
+        ));
+      expect(leaks.length).toBe(0);
+
+      // Real names still go through cleanly.
+      const real = await createQuoteCustomer(orgId, `${tag} Patriot Haulers LLC`);
+      createdIds.push(real.id);
+      expect(real.name).toBe(`${tag} Patriot Haulers LLC`);
+      expect(real.partyType).not.toBe("unknown");
+    } finally {
+      // Only delete the test-tagged real customer; leave the shared
+      // Unknown bucket intact for other tests / production data.
+      const taggedIds = createdIds.filter((_id, idx) => idx === 3);
+      if (taggedIds.length > 0) {
+        await db.delete(quoteCustomers).where(inArray(quoteCustomers.id, taggedIds));
+      }
+    }
+  }, 30_000);
+
+  it("backfillFreeMailCustomerNames cleans full-domain & decorated provider rows and is idempotent", async () => {
+    const orgRow = await db.select({ id: organizations.id }).from(organizations).limit(1);
+    if (orgRow.length === 0) return;
+    const orgId = orgRow[0].id;
+    const tag = `t753-bf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const customerIds: string[] = [];
+    const messageIds: string[] = [];
+    const oppIds: string[] = [];
+    try {
+      // Seed two leaked customer rows that the original narrow detector
+      // would have skipped: a full-domain "gmail.com" and a decorated
+      // "Yahoo Inc". Bypass the safety net by going straight to the table.
+      const [c1] = await db.insert(quoteCustomers).values({
+        organizationId: orgId, name: "gmail.com", partyType: "unknown",
+      }).returning();
+      const [c2] = await db.insert(quoteCustomers).values({
+        organizationId: orgId, name: "Yahoo Inc", partyType: "unknown",
+      }).returning();
+      customerIds.push(c1.id, c2.id);
+
+      // Seed an inbound email + opp pointing at c1 so the backfill has a
+      // real `from` to re-resolve. The opp pointing at c2 has no email
+      // source so it falls through to the Unknown bucket directly.
+      const [m1] = await db.insert(emailMessages).values({
+        orgId,
+        providerMessageId: `${tag}-cleanup-1`,
+        direction: "inbound",
+        fromEmail: "intern@gmail.com",
+        toEmail: "ops@example.com",
+        subject: `${tag} Quote`,
+        body: "Quote on behalf of Heartland Express Inc from Chicago, IL to Atlanta, GA.",
+      }).returning();
+      messageIds.push(m1.id);
+
+      const [o1] = await db.insert(quoteOpportunities).values({
+        organizationId: orgId, customerId: c1.id,
+        requestDate: new Date(),
+        originCity: "Chicago", originState: "IL",
+        destCity: "Atlanta", destState: "GA",
+        equipment: "Dry Van",
+        outcomeStatus: "pending",
+        source: "email",
+        sourceReference: m1.providerMessageId,
+      }).returning();
+      const [o2] = await db.insert(quoteOpportunities).values({
+        organizationId: orgId, customerId: c2.id,
+        requestDate: new Date(),
+        originCity: "Houston", originState: "TX",
+        destCity: "Boston", destState: "MA",
+        equipment: "Reefer",
+        outcomeStatus: "pending",
+        source: "manual",
+        sourceReference: null,
+      }).returning();
+      oppIds.push(o1.id, o2.id);
+
+      const summary = await backfillFreeMailCustomerNames(orgId);
+      expect(summary.scanned).toBe(2);
+      // o1 should have been re-resolved to a real company from the body.
+      // o2 should have moved to the shared Unknown bucket.
+      expect(summary.relinked + summary.movedToUnknown).toBe(2);
+
+      // Both opps now point at non-leaked customer rows.
+      const opps = await db.select({
+        id: quoteOpportunities.id, customerId: quoteOpportunities.customerId,
+      }).from(quoteOpportunities).where(inArray(quoteOpportunities.id, oppIds));
+      const newCustomerIds = Array.from(new Set(opps.map((o) => o.customerId)));
+      const newCustomers = await db.select({ id: quoteCustomers.id, name: quoteCustomers.name })
+        .from(quoteCustomers).where(inArray(quoteCustomers.id, newCustomerIds));
+      // Track these for cleanup (other than the original leaked rows we
+      // seeded). Heartland Express / Unknown bucket are persistent, so we
+      // only delete the rows we own (the original leak rows + any new
+      // tag-prefixed ones — there are none here, but the orphan-row delete
+      // inside the backfill should already have removed c1/c2).
+      for (const c of newCustomers) {
+        expect(isFreeMailProviderName(c.name)).toBe(false);
+        expect(c.name.toLowerCase()).not.toBe("gmail.com");
+        expect(c.name.toLowerCase()).not.toBe("yahoo inc");
+      }
+
+      // Original leaked rows must be deleted by the orphan-row sweep
+      // (no remaining opps point at them).
+      const stillThere = await db.select({ id: quoteCustomers.id })
+        .from(quoteCustomers).where(inArray(quoteCustomers.id, [c1.id, c2.id]));
+      expect(stillThere.length).toBe(0);
+      // Don't try to clean them up below — they're already gone.
+      customerIds.length = 0;
+
+      // Idempotency: a second run scans nothing (no provider-named rows
+      // remain) and changes nothing.
+      const summary2 = await backfillFreeMailCustomerNames(orgId);
+      expect(summary2.scanned).toBe(0);
+      expect(summary2.relinked).toBe(0);
+      expect(summary2.movedToUnknown).toBe(0);
+      expect(summary2.unchanged).toBe(0);
+      expect(summary2.customerRowsDeleted).toBe(0);
+    } finally {
+      if (oppIds.length > 0) {
+        await db.delete(quoteEvents).where(inArray(quoteEvents.quoteId, oppIds));
+        await db.delete(quoteOpportunities).where(inArray(quoteOpportunities.id, oppIds));
+      }
+      if (messageIds.length > 0) {
+        await db.delete(emailMessages).where(inArray(emailMessages.id, messageIds));
+      }
+      if (customerIds.length > 0) {
+        await db.delete(quoteCustomers).where(inArray(quoteCustomers.id, customerIds));
+      }
+    }
+  }, 60_000);
 });
