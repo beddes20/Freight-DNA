@@ -26,7 +26,7 @@ import { z } from "zod";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { storage, db } from "../storage";
 import { loadFact, freightOpportunities } from "@shared/schema";
-import { getCurrentUser, requireAuth, requireUser } from "../auth";
+import { requireAuth, requireUser } from "../auth";
 import {
   matchOrderIdToLoad,
   resolveRecipients,
@@ -39,15 +39,12 @@ import { getErrorMessage } from "../lib/errors";
 import { pStr, qStr } from "../lib/req";
 
 function requireAdmin(req: Request, res: Response, next: () => void) {
-  getCurrentUser(req)
-    .then((user) => {
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
-      if (!["admin", "director", "sales_director"].includes(user.role)) {
-        return res.status(403).json({ error: "Admin access required" });
-      }
-      next();
-    })
-    .catch(() => res.status(500).json({ error: "Auth error" }));
+  const user = req.user;
+  if (!user) return res.status(401).json({ error: "Unauthorized" });
+  if (!["admin", "director", "sales_director"].includes(user.role)) {
+    return res.status(403).json({ error: "Admin access required" });
+  }
+  next();
 }
 
 const bucketSchema = z.enum([

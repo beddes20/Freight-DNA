@@ -16,7 +16,7 @@
 import type { Express } from "express";
 import { z } from "zod";
 import { eq, and, desc, inArray, sql, or } from "drizzle-orm";
-import { getCurrentUser, requireUser } from "../auth";
+import { requireUser } from "../auth";
 import { db } from "../storage";
 import {
   carrierScorecardFact,
@@ -42,7 +42,7 @@ function orgOf(req: any): string | null {
 }
 
 async function requireAdmin(req: any, res: any): Promise<{ orgId: string; userId: string } | null> {
-  const user = await getCurrentUser(req);
+  const user = req.user;
   if (!user) { res.status(401).json({ error: "Unauthorized" }); return null; }
   if (user.role !== "admin") { res.status(403).json({ error: "Admin access required" }); return null; }
   return { orgId: user.organizationId, userId: user.id };

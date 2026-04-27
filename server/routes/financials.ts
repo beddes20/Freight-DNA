@@ -2,7 +2,7 @@ import type { Express } from "express";
 import multer from "multer";
 import XLSX from "xlsx";
 import { storage } from "../storage";
-import { getCurrentUser, getVisibleCompanyIds, requireAuth, requireUser } from "../auth";
+import { getVisibleCompanyIds, requireUser } from "../auth";
 import { runRecurringLaneEngineForOrg } from "../recurringLaneCapacityEngine";
 import { runImportFromWorkbook as runAvailableFreightImportFromWorkbook } from "../availableFreightImporter";
 import {
@@ -499,8 +499,8 @@ export function registerFinancialRoutes(app: Express): void {
 
   app.get("/api/financials", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager" && user.role !== "sales" && user.role !== "sales_director")) {
+      const user = req.user!;
+      if (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager" && user.role !== "sales" && user.role !== "sales_director") {
         return res.status(403).json({ error: "Forbidden" });
       }
       const upload = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
@@ -532,8 +532,8 @@ export function registerFinancialRoutes(app: Express): void {
 
   app.get("/api/financials/uploads", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") {
+      const user = req.user!;
+      if (user.role !== "admin") {
         return res.status(403).json({ error: "Forbidden" });
       }
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
@@ -545,8 +545,8 @@ export function registerFinancialRoutes(app: Express): void {
 
   app.get("/api/financials/uploads/:id/download", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+      const user = req.user!;
+      if (user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
       const upload = await storage.getFinancialUploadById(pStr(req.params.id));
       if (!upload) return res.status(404).json({ error: "Upload not found" });
 
@@ -585,8 +585,8 @@ export function registerFinancialRoutes(app: Express): void {
    */
   app.post("/api/financials/upload", requireUser, upload.single("file"), async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") {
+      const user = req.user!;
+      if (user.role !== "admin") {
         return res.status(403).json({ error: "Forbidden" });
       }
       if (!req.file) return res.status(400).json({ error: "No file uploaded" });
@@ -677,8 +677,8 @@ export function registerFinancialRoutes(app: Express): void {
 
   app.delete("/api/financials/uploads/:id", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") {
+      const user = req.user!;
+      if (user.role !== "admin") {
         return res.status(403).json({ error: "Forbidden" });
       }
       await storage.deleteFinancialUpload(pStr(req.params.id));
@@ -1228,8 +1228,8 @@ export function registerFinancialRoutes(app: Express): void {
   // ── Attribution Gaps ──────────────────────────────────────────────────────────
   app.get("/api/financials/attribution-gaps", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const user = req.user!;
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
 
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (!uploads.length) return res.json({ opsUserGaps: [], dispatcherGaps: [], salespersonGaps: [], usersMissingId: [] });
@@ -1390,8 +1390,8 @@ export function registerFinancialRoutes(app: Express): void {
 
   app.get("/api/settings/onedrive-url", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || (user.role !== "admin" && user.role !== "national_account_manager" && user.role !== "sales")) {
+      const user = req.user!;
+      if (user.role !== "admin" && user.role !== "national_account_manager" && user.role !== "sales") {
         return res.status(403).json({ error: "Forbidden" });
       }
       const url = await storage.getSetting("onedrive_url");
@@ -1403,8 +1403,8 @@ export function registerFinancialRoutes(app: Express): void {
 
   app.patch("/api/settings/onedrive-url", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") {
+      const user = req.user!;
+      if (user.role !== "admin") {
         return res.status(403).json({ error: "Forbidden" });
       }
       const { url } = req.body;
@@ -1419,8 +1419,8 @@ export function registerFinancialRoutes(app: Express): void {
   // Admin-only endpoint to import financial rows in chunks (for DB cloning)
   app.post("/api/admin/import-financial-rows", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+      const user = req.user!;
+      if (user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
       const { uploadId, rows } = req.body;
       if (!uploadId || !Array.isArray(rows)) return res.status(400).json({ error: "uploadId and rows required" });
       await storage.appendFinancialRows(uploadId, rows);
@@ -1432,8 +1432,8 @@ export function registerFinancialRoutes(app: Express): void {
 
   app.post("/api/financials/sync-onedrive", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || (user.role !== "admin" && user.role !== "national_account_manager" && user.role !== "sales")) {
+      const user = req.user!;
+      if (user.role !== "admin" && user.role !== "national_account_manager" && user.role !== "sales") {
         return res.status(403).json({ error: "Forbidden" });
       }
 
@@ -1462,8 +1462,8 @@ export function registerFinancialRoutes(app: Express): void {
 
   app.get("/api/sync-alert", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") {
+      const user = req.user!;
+      if (user.role !== "admin") {
         return res.json({ failed: false });
       }
       const failedMonth = await storage.getSetting("monthly_sync_failed");
@@ -1479,8 +1479,8 @@ export function registerFinancialRoutes(app: Express): void {
 
   app.post("/api/sync-alert/dismiss", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") {
+      const user = req.user!;
+      if (user.role !== "admin") {
         return res.status(403).json({ error: "Forbidden" });
       }
       await storage.setSetting("monthly_sync_failed", "");

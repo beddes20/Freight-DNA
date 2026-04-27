@@ -818,8 +818,8 @@ export function registerWebexRoutes(app: Express) {
   });
 
   app.get("/api/webex/debug-config", requireUser, async (req: Request, res: Response) => {
-    const user = await getCurrentUser(req);
-    if (!user || user.role !== "admin") {
+    const user = req.user!;
+    if (user.role !== "admin") {
       return res.status(403).json({ error: "Admin only" });
     }
     const info = getWebexRedirectUriInfo(req);
@@ -1314,8 +1314,8 @@ export function registerWebexRoutes(app: Express) {
 
   app.get("/api/webex/user-mappings", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const user = req.user!;
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
       const mappings = await storage.getWebexUserMappings(user.organizationId);
       const orgUsers = await storage.getUsers(user.organizationId);
       res.json({
@@ -1330,8 +1330,8 @@ export function registerWebexRoutes(app: Express) {
 
   app.post("/api/webex/user-mappings/seed", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const user = req.user!;
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
       const result = await seedWebexUserMappings(user.organizationId);
       res.json(result);
     } catch (err) {
@@ -1342,8 +1342,8 @@ export function registerWebexRoutes(app: Express) {
 
   app.post("/api/webex/backfill-attribution", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const user = req.user!;
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
       if (!webexCredentialsConfigured()) {
         return res.status(400).json({ error: "Webex credentials not configured" });
       }
@@ -1373,8 +1373,8 @@ export function registerWebexRoutes(app: Express) {
 
   app.post("/api/webex/user-mappings", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const user = req.user!;
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
       const parsed = insertWebexUserMappingSchema.parse({
         ...req.body,
         orgId: user.organizationId,
@@ -1389,8 +1389,8 @@ export function registerWebexRoutes(app: Express) {
 
   app.patch("/api/webex/user-mappings/:id", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const user = req.user!;
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
       const ALLOWED_STATUS = new Set(["needs_review", "auto_matched", "confirmed", "ignored"]);
       const updates: any = {};
       if ("userId" in req.body) updates.userId = req.body.userId || null;
@@ -1412,8 +1412,8 @@ export function registerWebexRoutes(app: Express) {
 
   app.delete("/api/webex/user-mappings/:id", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const user = req.user!;
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
       const ok = await storage.deleteWebexUserMapping(pStr(req.params.id), user.organizationId);
       res.json({ deleted: ok });
     } catch (err) {
@@ -1429,8 +1429,8 @@ export function registerWebexRoutes(app: Express) {
   // webex_user_mappings table (CDR personId/email -> internal userId).
   app.get("/api/webex/device-usage", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+      const user = req.user!;
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
       if (!webexCredentialsConfigured()) {
         return res.status(400).json({ error: "Webex credentials not configured" });
       }
