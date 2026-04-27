@@ -47,31 +47,49 @@ interface MappedSuggestion {
   payload: Record<string, unknown>;
 }
 
-const AUTO_ACCEPT_THRESHOLD = 75;
+// Configurable via env so ops can re-tune without a code deploy.
+// Default 75 keeps existing behavior; raise to be more conservative.
+export const AUTO_ACCEPT_THRESHOLD = parseInt(
+  process.env.CARRIER_INTEL_AUTO_ACCEPT_THRESHOLD ?? "75",
+  10,
+);
 
+// High-confidence types that may auto-accept at AUTO_ACCEPT_THRESHOLD.
+// Task #751: equipment_capability + region_preference moved here so the
+// learning pipeline actually accepts the bulk of carrier intel signals
+// instead of dropping every one of them into a manual queue nobody clears.
 const AUTO_ACCEPT_TYPES: Set<SuggestionType> = new Set([
   "lane_preference",
   "capacity_available",
   "capacity_unavailable",
+  "equipment_capability",
+  "region_preference",
 ]);
 
-const ALWAYS_MANUAL_TYPES: Set<SuggestionType> = new Set([
-  "region_preference",
+// "Risky" types — only auto-accept at very-high confidence, otherwise
+// always manual. Misreading a price pushback or a service issue has
+// real reputational/contractual cost.
+const VERY_HIGH_CONFIDENCE_THRESHOLD = 95;
+const RISKY_TYPES: Set<SuggestionType> = new Set([
   "price_sensitivity",
   "service_risk",
-  "equipment_capability",
 ]);
 
 function shouldAutoAccept(mapped: MappedSuggestion): boolean {
-  if (mapped.confidenceScore < AUTO_ACCEPT_THRESHOLD) return false;
-  if (ALWAYS_MANUAL_TYPES.has(mapped.suggestionType)) return false;
+  if (RISKY_TYPES.has(mapped.suggestionType)) {
+    return mapped.confidenceScore >= VERY_HIGH_CONFIDENCE_THRESHOLD;
+  }
   if (!AUTO_ACCEPT_TYPES.has(mapped.suggestionType)) return false;
+  if (mapped.confidenceScore < AUTO_ACCEPT_THRESHOLD) return false;
 
   if (mapped.suggestionType === "lane_preference") {
+    // Loosened (Task #751): accept when origin OR destination is present.
+    // Carrier "we run a lot out of Atlanta" is still useful intel even
+    // without a destination city; the suggestion payload preserves nulls.
     const p = mapped.payload;
     const hasOrigin = typeof p.origin === "string" && p.origin.trim().length > 0;
     const hasDestination = typeof p.destination === "string" && p.destination.trim().length > 0;
-    if (!hasOrigin || !hasDestination) return false;
+    if (!hasOrigin && !hasDestination) return false;
   }
 
   return true;
@@ -176,6 +194,49 @@ function mapSignalToSuggestion(signal: EmailSignal): MappedSuggestion | null {
           notes: data.notes ?? null,
         },
       };
+
+    // Task #751: previously unmapped — carriers telling us "we just bought
+    // 10 reefers" or "we now run lanes out of Dallas" was thrown away.
+    // Route to equipment_capability when payload mentions equipment, or
+    // region_preference when it mentions a region/origin/destination.
+    // Falls back to region_preference when both are present (region tends
+    // to be the more actionable signal for lane scoring).
+    case "new_equipment_or_region": {
+      const equipment = data.equipment ?? data.equipment_type ?? data.equipmentType ?? null;
+      const region = data.region ?? data.origin ?? data.destination
+        ?? data.origin_state ?? data.originState
+        ?? data.dest_state ?? data.destState ?? null;
+
+      if (region) {
+        return {
+          suggestionType: "region_preference",
+          confidenceScore: confidence,
+          payload: {
+            region,
+            origin: data.origin ?? null,
+            destination: data.destination ?? null,
+            originState: data.origin_state ?? data.originState ?? null,
+            destState: data.dest_state ?? data.destState ?? null,
+            equipment,
+            notes: data.notes ?? null,
+            intentType: signal.intentType,
+          },
+        };
+      }
+      if (equipment) {
+        return {
+          suggestionType: "equipment_capability",
+          confidenceScore: confidence,
+          payload: {
+            equipment,
+            count: data.count ?? null,
+            notes: data.notes ?? null,
+            intentType: signal.intentType,
+          },
+        };
+      }
+      return null;
+    }
 
     default:
       return null;

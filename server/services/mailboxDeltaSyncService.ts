@@ -226,7 +226,7 @@ async function ingestMessage(
     allToRecipients: [...allToRecipients, ...allCcRecipients],
     subject,
     bodyPreview,
-    bodyFull: bodyFull.slice(0, 5000),
+    bodyFull: bodyFull.slice(0, 8000),
     conversationId,
     providerMessageId,
     receivedAt,

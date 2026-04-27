@@ -40,6 +40,7 @@ import { ruleTypeToBucket, BUCKET_ORDER, BUCKET_PRIORITY, type WorkspaceBucket }
 import { registerEmailDraftingRoutes } from "./routes/emailDrafting";
 import { registerNbaReadyToActRoutes } from "./routes/nbaReadyToAct";
 import { registerMonitoredMailboxRoutes } from "./routes/monitoredMailboxes";
+import { registerEmailPipelineOpsRoutes } from "./routes/emailPipelineOps";
 import { registerPodIntakeRoutes } from "./routes/podIntake";
 import { registerWebexRoutes } from "./routes/webex";
 import { registerCallTrendlineRoutes } from "./routes/callTrendlines";
@@ -2565,6 +2566,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerEmailDraftingRoutes(app);
   registerNbaReadyToActRoutes(app);
   registerMonitoredMailboxRoutes(app);
+  registerEmailPipelineOpsRoutes(app);
   registerPodIntakeRoutes(app);
   registerWebexRoutes(app);
   registerCallTrendlineRoutes(app);

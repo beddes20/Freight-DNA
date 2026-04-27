@@ -157,7 +157,7 @@ async function ingestHistoricalMessage(
     allToRecipients: [...allToRecipients, ...allCcRecipients],
     subject: msg.subject ?? "",
     bodyPreview: msg.bodyPreview?.slice(0, 255) ?? "",
-    bodyFull: (msg.body?.content ?? msg.bodyPreview ?? "").slice(0, 5000),
+    bodyFull: (msg.body?.content ?? msg.bodyPreview ?? "").slice(0, 8000),
     conversationId: msg.conversationId ?? null,
     providerMessageId: msg.id,
     receivedAt: msg.sentDateTime

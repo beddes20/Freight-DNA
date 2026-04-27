@@ -192,8 +192,12 @@ export function stripEmailBoilerplate(raw: string): string {
   // 4. Collapse blank lines and trim
   text = text.replace(/\n{3,}/g, "\n\n").trim();
 
-  // 5. Truncate to keep within token budget
-  return text.slice(0, 1500);
+  // 5. Truncate to keep within token budget.
+  // Task #751: raised from 1500 → 8000 chars (~2k tokens). Long quote
+  // requests, RFP forwards, and capacity threads were getting their
+  // signal-bearing content chopped off, which is one reason so few
+  // intel suggestions were being accepted.
+  return text.slice(0, 8000);
 }
 
 function buildUserPrompt(msg: EmailMessage): string {

@@ -1071,8 +1071,25 @@ getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined>;
   getEmailSignalsForLane(laneId: string, limit?: number): Promise<import('@shared/schema').EmailSignal[]>;
   getEmailSignalsForLoad(loadId: string, limit?: number): Promise<import('@shared/schema').EmailSignal[]>;
   getUnprocessedEmailMessages(limit?: number): Promise<import('@shared/schema').EmailMessage[]>;
+  getUnprocessedEmailMessagesForOrg(orgId: string, limit?: number): Promise<import('@shared/schema').EmailMessage[]>;
   getEmailSignalsByThread(threadId: string, since?: Date): Promise<import('@shared/schema').EmailSignal[]>;
   markEmailMessageProcessed(id: string): Promise<void>;
+  // Task #751 — backlog drain + ops view support
+  getUnlinkedEmailMessages(orgId: string, limit: number, offset?: number): Promise<import('@shared/schema').EmailMessage[]>;
+  relinkEmailMessage(id: string, links: { linkedCarrierId?: string | null; linkedAccountId?: string | null }): Promise<void>;
+  getEmailPipelineHealth(orgId: string): Promise<{
+    backlog: { unprocessed: number; oldestUnprocessedAt: Date | null };
+    windows: Array<{
+      label: string;
+      sinceMs: number;
+      ingested: number;
+      linkedCarrier: number;
+      linkedAccount: number;
+      signals: number;
+      signalsByIntent: Record<string, number>;
+      suggestions: { pending: number; accepted: number; autoAccepted: number; rejected: number };
+    }>;
+  }>;
   // Email Signal Consumers (Task #191)
   insertCarrierEmailSuggestion(data: import('@shared/schema').InsertCarrierEmailSuggestion): Promise<import('@shared/schema').CarrierEmailSuggestion>;
   getCarrierEmailSuggestionByDedup(carrierId: string, threadId: string, suggestionType: string, payloadHash: string): Promise<import('@shared/schema').CarrierEmailSuggestion | undefined>;
@@ -6888,6 +6905,18 @@ export class DatabaseStorage implements IStorage {
       .limit(limit);
   }
 
+  // Task #751: org-scoped variant used by the manual /drain endpoint so a
+  // tenant admin can only burn quota processing their own org's backlog.
+  async getUnprocessedEmailMessagesForOrg(orgId: string, limit = 50): Promise<EmailMessage[]> {
+    return db.select().from(emailMessages)
+      .where(and(
+        eq(emailMessages.orgId, orgId),
+        isNull(emailMessages.processedForSignalsAt),
+      ))
+      .orderBy(asc(emailMessages.createdAt))
+      .limit(limit);
+  }
+
   async getEmailSignalsByThread(threadId: string, since?: Date): Promise<EmailSignal[]> {
     const msgs = await db.select({ id: emailMessages.id })
       .from(emailMessages)
@@ -6904,6 +6933,144 @@ export class DatabaseStorage implements IStorage {
     await db.update(emailMessages)
       .set({ processedForSignalsAt: new Date() })
       .where(eq(emailMessages.id, id));
+  }
+
+  // ── Task #751 — backlog drain + ops view support ─────────────────────────────
+
+  async getUnlinkedEmailMessages(orgId: string, limit: number, offset = 0): Promise<EmailMessage[]> {
+    return db.select().from(emailMessages)
+      .where(and(
+        eq(emailMessages.orgId, orgId),
+        isNull(emailMessages.linkedCarrierId),
+        isNull(emailMessages.linkedAccountId),
+      ))
+      .orderBy(asc(emailMessages.createdAt))
+      .limit(limit)
+      .offset(offset);
+  }
+
+  async relinkEmailMessage(
+    id: string,
+    links: { linkedCarrierId?: string | null; linkedAccountId?: string | null },
+  ): Promise<void> {
+    const set: Record<string, unknown> = {};
+    if ("linkedCarrierId" in links) set.linkedCarrierId = links.linkedCarrierId ?? null;
+    if ("linkedAccountId" in links) set.linkedAccountId = links.linkedAccountId ?? null;
+    // Reset processedForSignalsAt so the scheduler re-extracts under the new link.
+    set.processedForSignalsAt = null;
+    if (Object.keys(set).length === 0) return;
+    await db.update(emailMessages).set(set).where(eq(emailMessages.id, id));
+  }
+
+  async getEmailPipelineHealth(orgId: string): Promise<{
+    backlog: { unprocessed: number; oldestUnprocessedAt: Date | null };
+    windows: Array<{
+      label: string;
+      sinceMs: number;
+      ingested: number;
+      linkedCarrier: number;
+      linkedAccount: number;
+      signals: number;
+      signalsByIntent: Record<string, number>;
+      suggestions: { pending: number; accepted: number; autoAccepted: number; rejected: number };
+    }>;
+  }> {
+    const now = Date.now();
+    const windows = [
+      { label: "24h", sinceMs: 24 * 60 * 60 * 1000 },
+      { label: "7d", sinceMs: 7 * 24 * 60 * 60 * 1000 },
+      { label: "30d", sinceMs: 30 * 24 * 60 * 60 * 1000 },
+    ];
+
+    // Backlog: messages still missing processedForSignalsAt
+    function unwrapRows<T>(r: unknown): T[] {
+      if (Array.isArray(r)) return r as T[];
+      const wrapped = r as { rows?: T[] };
+      return wrapped?.rows ?? [];
+    }
+    const backlogRows = await db.execute<{ count: string; oldest: Date | null }>(sql`
+      SELECT COUNT(*)::text AS count, MIN(created_at) AS oldest
+      FROM email_messages
+      WHERE org_id = ${orgId} AND processed_for_signals_at IS NULL
+    `);
+    const backlogRow = unwrapRows<{ count: string; oldest: Date | null }>(backlogRows)[0]
+      ?? { count: "0", oldest: null };
+    const backlog = {
+      unprocessed: parseInt(backlogRow.count ?? "0", 10),
+      oldestUnprocessedAt: backlogRow.oldest ? new Date(backlogRow.oldest) : null,
+    };
+
+    const out: Array<{
+      label: string;
+      sinceMs: number;
+      ingested: number;
+      linkedCarrier: number;
+      linkedAccount: number;
+      signals: number;
+      signalsByIntent: Record<string, number>;
+      suggestions: { pending: number; accepted: number; autoAccepted: number; rejected: number };
+    }> = [];
+
+    for (const w of windows) {
+      const since = new Date(now - w.sinceMs);
+      const ingested = await db.execute<{
+        ingested: string; linked_carrier: string; linked_account: string;
+      }>(sql`
+        SELECT
+          COUNT(*)::text AS ingested,
+          COUNT(*) FILTER (WHERE linked_carrier_id IS NOT NULL)::text AS linked_carrier,
+          COUNT(*) FILTER (WHERE linked_account_id IS NOT NULL)::text AS linked_account
+        FROM email_messages
+        WHERE org_id = ${orgId} AND created_at >= ${since}
+      `);
+      const ing = unwrapRows<{ ingested: string; linked_carrier: string; linked_account: string }>(ingested)[0]
+        ?? { ingested: "0", linked_carrier: "0", linked_account: "0" };
+
+      // Signals grouped by intent_type — gives ops view of WHAT we're
+      // learning per window (capacity, lane preferences, pricing, etc.).
+      const sigByIntent = await db.execute<{ intent_type: string; count: string }>(sql`
+        SELECT s.intent_type, COUNT(*)::text AS count
+        FROM email_signals s
+        INNER JOIN email_messages m ON m.id = s.message_id
+        WHERE m.org_id = ${orgId} AND s.created_at >= ${since}
+        GROUP BY s.intent_type
+      `);
+      const signalsByIntent: Record<string, number> = {};
+      let sigCount = 0;
+      for (const r of unwrapRows<{ intent_type: string; count: string }>(sigByIntent)) {
+        const c = parseInt(r.count, 10);
+        signalsByIntent[r.intent_type] = c;
+        sigCount += c;
+      }
+
+      const sugRows = await db.execute<{ status: string; count: string }>(sql`
+        SELECT status, COUNT(*)::text AS count
+        FROM carrier_intel_suggestions
+        WHERE org_id = ${orgId} AND created_at >= ${since}
+        GROUP BY status
+      `);
+      const sugBuckets = { pending: 0, accepted: 0, autoAccepted: 0, rejected: 0 };
+      for (const r of unwrapRows<{ status: string; count: string }>(sugRows)) {
+        const c = parseInt(r.count, 10);
+        if (r.status === "pending") sugBuckets.pending += c;
+        else if (r.status === "accepted") sugBuckets.accepted += c;
+        else if (r.status === "auto_accepted") sugBuckets.autoAccepted += c;
+        else if (r.status === "rejected") sugBuckets.rejected += c;
+      }
+
+      out.push({
+        label: w.label,
+        sinceMs: w.sinceMs,
+        ingested: parseInt(ing.ingested ?? "0", 10),
+        linkedCarrier: parseInt(ing.linked_carrier ?? "0", 10),
+        linkedAccount: parseInt(ing.linked_account ?? "0", 10),
+        signals: sigCount,
+        signalsByIntent,
+        suggestions: sugBuckets,
+      });
+    }
+
+    return { backlog, windows: out };
   }
 
   // ── Email Signal Consumers (Task #191) ──────────────────────────────────────

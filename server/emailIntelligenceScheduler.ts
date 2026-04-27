@@ -31,11 +31,24 @@ import { fireQuoteRequestAlert } from "./quoteRequestSlaService";
 import { createHash } from "crypto";
 import type { InsertEmailSignal } from "@shared/schema";
 
-const BATCH_SIZE = parseInt(process.env.EMAIL_INTEL_BATCH_SIZE ?? "50", 10);
+// Task #751: bumped default 50 → 200 to drain the historical backlog.
+// Each message is one OpenAI call so this caps at ~200 calls / 2 minutes
+// = 6000 / hour, well under typical org rate limits.
+const BATCH_SIZE = parseInt(process.env.EMAIL_INTEL_BATCH_SIZE ?? "200", 10);
 
-async function runEmailIntelligenceBatch(): Promise<void> {
-  const messages = await storage.getUnprocessedEmailMessages(BATCH_SIZE);
-  if (messages.length === 0) return;
+export async function runEmailIntelligenceBatch(
+  overrideBatchSize?: number,
+  orgId?: string,
+): Promise<{ processed: number }> {
+  const size = overrideBatchSize ?? BATCH_SIZE;
+  // Task #751: when an operator triggers a manual drain we MUST scope the
+  // batch to their org or one tenant's admin can spend OpenAI quota
+  // processing other tenants' inboxes. The cron path passes no orgId and
+  // continues to process the global queue.
+  const messages = orgId
+    ? await storage.getUnprocessedEmailMessagesForOrg(orgId, size)
+    : await storage.getUnprocessedEmailMessages(size);
+  if (messages.length === 0) return { processed: 0 };
 
   console.log(`[emailIntelligenceScheduler] processing ${messages.length} unprocessed messages`);
 
@@ -254,6 +267,8 @@ async function runEmailIntelligenceBatch(): Promise<void> {
       }
     }
   }
+
+  return { processed: messages.length };
 }
 
 export function startEmailIntelligenceScheduler(): void {

@@ -19,6 +19,10 @@ import type { EmailConversationThread, EmailMessage } from "@shared/schema";
 import type { ConversationOwnershipStorage } from "../services/conversationOwnershipService";
 import { getErrorMessage } from "../lib/errors";
 import { qOptStr } from "../lib/req";
+import {
+  matchInboundCarrier,
+  normalizeEmailAddress,
+} from "../services/carrierContactMatchService";
 
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -28,33 +32,24 @@ function log(msg: string) {
 export interface MatchResult {
   carrierId: string | null;
   contactId: string | null;
-  confidence: "exact" | "alternate_contact" | "ambiguous" | "unmatched";
+  confidence: "exact" | "alternate_contact" | "domain_fallback" | "ambiguous" | "unmatched";
 }
 
 export async function matchInboundSender(fromEmail: string, orgId: string): Promise<MatchResult> {
-  const normalized = fromEmail.trim().toLowerCase();
-
-  const primaryMatches = await storage.getCarriersByPrimaryEmail(normalized, orgId);
-  if (primaryMatches.length === 1) {
-    return { carrierId: primaryMatches[0].id, contactId: null, confidence: "exact" };
-  }
-  if (primaryMatches.length > 1) {
-    return { carrierId: null, contactId: null, confidence: "ambiguous" };
-  }
-
-  const contactMatch = await storage.getCarrierContactByEmail(normalized, orgId);
-  if (contactMatch) {
-    return { carrierId: contactMatch.carrierId, contactId: contactMatch.id, confidence: "alternate_contact" };
-  }
-
-  return { carrierId: null, contactId: null, confidence: "unmatched" };
+  const result = await matchInboundCarrier(fromEmail, orgId, storage);
+  return {
+    carrierId: result.carrierId,
+    contactId: result.contactId,
+    confidence: result.confidence,
+  };
 }
 
 export async function matchInboundSenderToAccount(
   fromEmail: string,
   orgId: string
 ): Promise<{ companyId: string; contactId: string; contactName: string } | null> {
-  const normalized = fromEmail.trim().toLowerCase();
+  const normalized = normalizeEmailAddress(fromEmail);
+  if (!normalized) return null;
   return storage.getContactByEmailInOrg(normalized, orgId);
 }
 
@@ -519,10 +514,37 @@ async function processUserMailboxEmail(params: {
     }
   }
 
-  // If we have neither a contact match nor an existing thread, drop the
-  // message — there's nothing to link it to. (If the thread exists but has
-  // no linkedAccountId, we still save the message below with linkedAccountId
-  // = null so the thread continuity is preserved.)
+  // Task #751 — also try matching the counterparty against a known carrier
+  // (using the strengthened sender→carrier matcher with domain fallback).
+  // This is the user-mailbox equivalent of the shared-inbox carrier match
+  // and is required so that carrier intel signals flow from rep mailboxes,
+  // not just the shared-inbox path. Picks the first unambiguous match
+  // across the counterparty list.
+  let carrierMatch: { carrierId: string; confidence: string } | null = null;
+  for (const email of counterpartyEmails) {
+    const cm = await matchInboundCarrier(email, orgId, storage);
+    if (cm.carrierId && cm.confidence !== "ambiguous") {
+      carrierMatch = { carrierId: cm.carrierId, confidence: cm.confidence };
+      log(`[user-mailbox] Carrier match (${cm.confidence}) ${email} → carrier ${cm.carrierId}`);
+      break;
+    }
+  }
+
+  // Carry an existing thread's linkedCarrierId forward when we have no
+  // fresh carrier match — preserves thread continuity (mirrors the
+  // existingThreadAccountId fallback above).
+  let existingThreadCarrierId: string | null = null;
+  if (conversationId && existingThreadExists) {
+    const existingThreadEarly = await storage.getEmailConversationThreadByThreadId(orgId, conversationId);
+    existingThreadCarrierId = existingThreadEarly?.linkedCarrierId ?? null;
+  }
+  const effectiveCarrierId = carrierMatch?.carrierId ?? existingThreadCarrierId;
+
+  // If we have neither a contact match nor a carrier match nor an existing
+  // thread, drop the message — there's nothing to link it to. (If the
+  // thread exists but has no linkedAccountId, we still save the message
+  // below with linkedAccountId = null so the thread continuity is
+  // preserved.)
   //
   // EXCEPTION (Task #302): outbound rep emails must always reach the
   // play-run stamping block below so we can attribute the send to a play
@@ -530,7 +552,7 @@ async function processUserMailboxEmail(params: {
   // doesn't match a CRM contact and no thread exists yet. Without this
   // bypass, a class of rep-sent Outlook emails would never enter the
   // outcome loop.
-  if (!accountMatch && !existingThreadExists && direction !== "outbound") {
+  if (!accountMatch && !effectiveCarrierId && !existingThreadExists && direction !== "outbound") {
     return;
   }
 
@@ -550,9 +572,9 @@ async function processUserMailboxEmail(params: {
     fromEmail,
     toEmail,
     subject,
-    body: bodyFull.slice(0, 5000),
+    body: bodyFull.slice(0, 8000),
     linkedAccountId: accountMatch?.companyId ?? null,
-    linkedCarrierId: null,
+    linkedCarrierId: effectiveCarrierId,
     linkedLaneId: null,
     linkedLoadId: null,
     linkedTaskId: null,
@@ -611,7 +633,7 @@ async function processUserMailboxEmail(params: {
 
       const threadBase: EmailConversationThread = existingThread ?? {
         id: "", orgId, threadId: conversationId,
-        linkedAccountId: accountMatch?.companyId ?? null, linkedCarrierId: null,
+        linkedAccountId: accountMatch?.companyId ?? null, linkedCarrierId: effectiveCarrierId,
         ownerUserId: monitoredMailbox.userId,
         waitingState: "waiting_on_us",
         responsePriority: "normal", lastMessageId: null,
@@ -639,7 +661,7 @@ async function processUserMailboxEmail(params: {
         orgId,
         threadId: conversationId,
         linkedAccountId: accountMatch?.companyId ?? null,
-        linkedCarrierId: null,
+        linkedCarrierId: effectiveCarrierId,
         update: { ...update, ownerUserId },
       });
 

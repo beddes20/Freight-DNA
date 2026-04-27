@@ -654,6 +654,8 @@ export default function AdminMonitoredMailboxesPage() {
 
       <CoverageStatusCard onResultPanelOpen={() => undefined} />
 
+      <EmailPipelineHealthCard />
+
       {enrollAllResult && (
         <Card data-testid="card-enroll-all-results">
           <CardHeader className="pb-3">
@@ -1342,5 +1344,173 @@ export function MailboxSpotQuoteCount({ mailboxId }: { mailboxId: string }): JSX
     >
       {data ? `${data.spotQuotesFromBackfill30d} spot-quote opps (30d)` : "…"}
     </span>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Task #751 — Email pipeline ops card.
+//
+// Shows the carrier email learning pipeline's health (24h / 7d / 30d) and
+// exposes manual triggers to drain the unprocessed-message backlog and to
+// re-link historical messages to carriers/accounts under the strengthened
+// matcher.
+// ----------------------------------------------------------------------------
+type PipelineHealth = {
+  backlog: { unprocessed: number; oldestUnprocessedAt: string | null };
+  windows: Array<{
+    label: string;
+    sinceMs: number;
+    ingested: number;
+    linkedCarrier: number;
+    linkedAccount: number;
+    signals: number;
+    signalsByIntent: Record<string, number>;
+    suggestions: { pending: number; accepted: number; autoAccepted: number; rejected: number };
+  }>;
+};
+
+function pct(part: number, whole: number): string {
+  if (!whole) return "0%";
+  return `${Math.round((100 * part) / whole)}%`;
+}
+
+function EmailPipelineHealthCard(): JSX.Element {
+  const { toast } = useToast();
+  const { data, isLoading, refetch } = useQuery<PipelineHealth>({
+    queryKey: ["/api/internal/admin/email-pipeline/health"],
+    refetchOnWindowFocus: false,
+  });
+
+  const drain = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/internal/admin/email-pipeline/drain", { maxBatches: 5 });
+      return res.json() as Promise<{ processedTotal: number; batchesRun: number }>;
+    },
+    onSuccess: (r) => {
+      toast({
+        title: "Drain complete",
+        description: `Processed ${r.processedTotal} message(s) across ${r.batchesRun} batch(es).`,
+      });
+      void refetch();
+    },
+    onError: (err: Error) =>
+      toast({ title: "Drain failed", description: err.message, variant: "destructive" }),
+  });
+
+  const backfill = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/internal/admin/email-pipeline/backfill-links", {
+        batchSize: 1000,
+        runUntilEmpty: true,
+        maxBatches: 20,
+      });
+      return res.json() as Promise<{ scanned: number; linkedCarrier: number; linkedAccount: number; batchesRun: number }>;
+    },
+    onSuccess: (r) => {
+      toast({
+        title: "Backfill complete",
+        description: `Scanned ${r.scanned} across ${r.batchesRun} batch(es) — linked ${r.linkedCarrier} to carriers, ${r.linkedAccount} to accounts.`,
+      });
+      void refetch();
+    },
+    onError: (err: Error) =>
+      toast({ title: "Backfill failed", description: err.message, variant: "destructive" }),
+  });
+
+  if (isLoading || !data) return <div data-testid="loading-pipeline-health" />;
+
+  const oldest = data.backlog.oldestUnprocessedAt
+    ? new Date(data.backlog.oldestUnprocessedAt).toLocaleString()
+    : "—";
+
+  return (
+    <Card data-testid="card-email-pipeline-health">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <CardTitle className="text-base">Email learning pipeline</CardTitle>
+            <CardDescription className="text-xs">
+              Backlog: <span data-testid="text-pipeline-backlog">{data.backlog.unprocessed.toLocaleString()}</span> unprocessed ·
+              {" "}oldest <span data-testid="text-pipeline-oldest">{oldest}</span>
+            </CardDescription>
+          </div>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => drain.mutate()}
+              disabled={drain.isPending}
+              data-testid="button-pipeline-drain"
+              title="Run up to 5 extraction batches synchronously"
+            >
+              {drain.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+              Drain now
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => backfill.mutate()}
+              disabled={backfill.isPending}
+              data-testid="button-pipeline-backfill"
+              title="Re-run sender→carrier/account matcher against historical email_messages"
+            >
+              {backfill.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Wand2 className="h-3 w-3 mr-1" />}
+              Backfill links
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {data.windows.map((w) => (
+            <div
+              key={w.label}
+              className="rounded-md border p-3 text-xs"
+              data-testid={`pipeline-window-${w.label}`}
+            >
+              <div className="font-semibold text-sm mb-1">Last {w.label}</div>
+              <div className="grid grid-cols-2 gap-1">
+                <span className="text-muted-foreground">Ingested</span>
+                <span className="text-right" data-testid={`text-ingested-${w.label}`}>{w.ingested.toLocaleString()}</span>
+                <span className="text-muted-foreground">Linked carrier</span>
+                <span className="text-right" data-testid={`text-linked-carrier-${w.label}`}>
+                  {w.linkedCarrier.toLocaleString()} <span className="text-muted-foreground">({pct(w.linkedCarrier, w.ingested)})</span>
+                </span>
+                <span className="text-muted-foreground">Linked account</span>
+                <span className="text-right" data-testid={`text-linked-account-${w.label}`}>
+                  {w.linkedAccount.toLocaleString()} <span className="text-muted-foreground">({pct(w.linkedAccount, w.ingested)})</span>
+                </span>
+                <span className="text-muted-foreground">Signals</span>
+                <span className="text-right" data-testid={`text-signals-${w.label}`}>{w.signals.toLocaleString()}</span>
+                <span className="text-muted-foreground">Suggestions</span>
+                <span className="text-right" data-testid={`text-suggestions-${w.label}`}>
+                  {w.suggestions.pending}p · {w.suggestions.accepted + w.suggestions.autoAccepted}a · {w.suggestions.rejected}r
+                </span>
+              </div>
+              {Object.keys(w.signalsByIntent ?? {}).length > 0 && (
+                <div className="mt-2 pt-2 border-t border-border/60" data-testid={`signals-by-intent-${w.label}`}>
+                  <div className="text-muted-foreground mb-1">By intent</div>
+                  <div className="space-y-0.5">
+                    {Object.entries(w.signalsByIntent)
+                      .sort(([, a], [, b]) => b - a)
+                      .slice(0, 6)
+                      .map(([intent, count]) => (
+                        <div
+                          key={intent}
+                          className="grid grid-cols-2 gap-1"
+                          data-testid={`text-signal-intent-${w.label}-${intent}`}
+                        >
+                          <span className="truncate" title={intent}>{intent}</span>
+                          <span className="text-right">{count.toLocaleString()}</span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

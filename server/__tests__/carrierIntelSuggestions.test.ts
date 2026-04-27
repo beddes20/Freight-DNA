@@ -202,3 +202,94 @@ describe("Carrier Intel Suggestion Mapper (1–12)", () => {
     expect(storage.insertCarrierIntelSuggestion).not.toHaveBeenCalled();
   });
 });
+
+// ─── Task #751 — loosened auto-accept gates ──────────────────────────────────
+describe("Carrier Intel Suggestion Mapper — loosened auto-accept (Task #751)", () => {
+  function makeAutoAcceptStorage() {
+    return {
+      findDuplicateSuggestion: vi.fn().mockResolvedValue(undefined),
+      insertCarrierIntelSuggestion: vi.fn().mockResolvedValue({ id: "sugg-x" }),
+      updateSuggestionStatus: vi.fn().mockResolvedValue(undefined),
+    };
+  }
+
+  it("auto-accepts equipment_capability from new_equipment_or_region intent", async () => {
+    const storage = makeAutoAcceptStorage();
+    const signal = makeSignal({
+      intentType: "new_equipment_or_region",
+      confidence: 80,
+      extractedData: { equipment: "Reefer" },
+    });
+    await processCarrierEmailSignals(storage as any, "carrier-1", "org-1", makeMessage(), [signal]);
+    expect(storage.insertCarrierIntelSuggestion).toHaveBeenCalledOnce();
+    const inserted = storage.insertCarrierIntelSuggestion.mock.calls[0][0];
+    expect(inserted.suggestionType).toBe("equipment_capability");
+    expect(inserted.status).toBe("auto_accepted");
+  });
+
+  it("auto-accepts region_preference from new_equipment_or_region intent", async () => {
+    const storage = makeAutoAcceptStorage();
+    const signal = makeSignal({
+      intentType: "new_equipment_or_region",
+      confidence: 80,
+      extractedData: { region: "Pacific Northwest" },
+    });
+    await processCarrierEmailSignals(storage as any, "carrier-1", "org-1", makeMessage(), [signal]);
+    expect(storage.insertCarrierIntelSuggestion).toHaveBeenCalledOnce();
+    const inserted = storage.insertCarrierIntelSuggestion.mock.calls[0][0];
+    expect(inserted.suggestionType).toBe("region_preference");
+    expect(inserted.status).toBe("auto_accepted");
+  });
+
+  it("auto-accepts capacity_unavailable (in AUTO_ACCEPT_TYPES)", async () => {
+    const storage = makeAutoAcceptStorage();
+    const signal = makeSignal({
+      intentType: "capacity_unavailable",
+      confidence: 85,
+      extractedData: { region: "PNW" },
+    });
+    await processCarrierEmailSignals(storage as any, "carrier-1", "org-1", makeMessage(), [signal]);
+    expect(storage.insertCarrierIntelSuggestion).toHaveBeenCalledOnce();
+    const inserted = storage.insertCarrierIntelSuggestion.mock.calls[0][0];
+    expect(inserted.status).toBe("auto_accepted");
+  });
+
+  it("price_sensitivity stays manual at confidence 80 (below very-high gate)", async () => {
+    const storage = makeAutoAcceptStorage();
+    const signal = makeSignal({
+      intentType: "price_pushback",
+      confidence: 80,
+      extractedData: { rate: 2200, reason: "rate_too_low" },
+    });
+    await processCarrierEmailSignals(storage as any, "carrier-1", "org-1", makeMessage(), [signal]);
+    expect(storage.insertCarrierIntelSuggestion).toHaveBeenCalledOnce();
+    const inserted = storage.insertCarrierIntelSuggestion.mock.calls[0][0];
+    expect(inserted.status).toBe("pending");
+  });
+
+  it("price_sensitivity auto-accepts at confidence 95 (very-high gate)", async () => {
+    const storage = makeAutoAcceptStorage();
+    const signal = makeSignal({
+      intentType: "price_pushback",
+      confidence: 95,
+      extractedData: { rate: 2200, reason: "rate_too_low" },
+    });
+    await processCarrierEmailSignals(storage as any, "carrier-1", "org-1", makeMessage(), [signal]);
+    expect(storage.insertCarrierIntelSuggestion).toHaveBeenCalledOnce();
+    const inserted = storage.insertCarrierIntelSuggestion.mock.calls[0][0];
+    expect(inserted.status).toBe("auto_accepted");
+  });
+
+  it("lane_preference auto-accepts when only origin is present (loosened)", async () => {
+    const storage = makeAutoAcceptStorage();
+    const signal = makeSignal({
+      intentType: "lane_offer",
+      confidence: 85,
+      extractedData: { origin: "Atlanta" }, // no destination
+    });
+    await processCarrierEmailSignals(storage as any, "carrier-1", "org-1", makeMessage(), [signal]);
+    expect(storage.insertCarrierIntelSuggestion).toHaveBeenCalledOnce();
+    const inserted = storage.insertCarrierIntelSuggestion.mock.calls[0][0];
+    expect(inserted.status).toBe("auto_accepted");
+  });
+});
