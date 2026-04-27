@@ -75,12 +75,66 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────
   section("1. Disabled when env not configured");
   _resetIntegrationEventsForTests();
-  const savedTracToken = process.env.FREIGHTWAVES_TOKEN;
+
+  // Snapshot all credential env vars touched in this section so we can
+  // restore them at the end and not poison later tests.
+  const savedEnv: Record<string, string | undefined> = {
+    FREIGHTWAVES_TOKEN: process.env.FREIGHTWAVES_TOKEN,
+    SONAR_USERNAME: process.env.SONAR_USERNAME,
+    SONAR_PASSWORD: process.env.SONAR_PASSWORD,
+    ZOOMINFO_CLIENT_ID: process.env.ZOOMINFO_CLIENT_ID,
+    ZOOMINFO_CLIENT_SECRET: process.env.ZOOMINFO_CLIENT_SECRET,
+  };
+
   delete process.env.FREIGHTWAVES_TOKEN;
   const tracDisabled = await runOneProbe("trac", { liveProbe: false });
   check("TRAC disabled when FREIGHTWAVES_TOKEN missing", tracDisabled.healthState === "disabled");
   check("TRAC connected=false when disabled", tracDisabled.connected === false);
-  if (savedTracToken !== undefined) process.env.FREIGHTWAVES_TOKEN = savedTracToken;
+
+  // SONAR — disabled when neither bearer nor username/password are set.
+  delete process.env.SONAR_USERNAME;
+  delete process.env.SONAR_PASSWORD;
+  const sonarDisabled = await runOneProbe("sonar", { liveProbe: false });
+  check("SONAR disabled when no FREIGHTWAVES_TOKEN and no fallback creds", sonarDisabled.healthState === "disabled");
+
+  // SONAR — enabled via FREIGHTWAVES_TOKEN alone.
+  process.env.FREIGHTWAVES_TOKEN = "fwt-test-bearer";
+  const sonarBearer = await runOneProbe("sonar", { liveProbe: false });
+  check("SONAR enabled when FREIGHTWAVES_TOKEN present (no fallback)", sonarBearer.healthState !== "disabled");
+
+  // SONAR — enabled via SONAR_USERNAME + SONAR_PASSWORD fallback alone.
+  delete process.env.FREIGHTWAVES_TOKEN;
+  process.env.SONAR_USERNAME = "user";
+  process.env.SONAR_PASSWORD = "pass";
+  const sonarFallback = await runOneProbe("sonar", { liveProbe: false });
+  check("SONAR enabled when SONAR_USERNAME + SONAR_PASSWORD present (no bearer)", sonarFallback.healthState !== "disabled");
+
+  // SONAR — half-configured fallback (only username) is still disabled.
+  delete process.env.SONAR_PASSWORD;
+  const sonarHalf = await runOneProbe("sonar", { liveProbe: false });
+  check("SONAR disabled when only SONAR_USERNAME present", sonarHalf.healthState === "disabled");
+
+  // ZoomInfo — disabled when CLIENT_ID/SECRET missing.
+  delete process.env.ZOOMINFO_CLIENT_ID;
+  delete process.env.ZOOMINFO_CLIENT_SECRET;
+  const ziDisabled = await runOneProbe("zoominfo", { liveProbe: false });
+  check("ZoomInfo disabled when ZOOMINFO_CLIENT_ID/SECRET missing", ziDisabled.healthState === "disabled");
+
+  // ZoomInfo — half-configured (only CLIENT_ID) is still disabled.
+  process.env.ZOOMINFO_CLIENT_ID = "zi-id";
+  const ziHalf = await runOneProbe("zoominfo", { liveProbe: false });
+  check("ZoomInfo disabled when only ZOOMINFO_CLIENT_ID present", ziHalf.healthState === "disabled");
+
+  // ZoomInfo — enabled when both CLIENT_ID and CLIENT_SECRET present.
+  process.env.ZOOMINFO_CLIENT_SECRET = "zi-secret";
+  const ziOk = await runOneProbe("zoominfo", { liveProbe: false });
+  check("ZoomInfo enabled when both ZOOMINFO_CLIENT_ID and CLIENT_SECRET present", ziOk.healthState !== "disabled");
+
+  // Restore env so later sections see the original values.
+  for (const [k, v] of Object.entries(savedEnv)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
 
   // ─────────────────────────────────────────────────────────────────────
   section("2. Healthy after a recent success event");

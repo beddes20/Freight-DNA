@@ -85,20 +85,48 @@ export function _resetIntegrationEventsForTests(): void {
   lastEvents.clear();
 }
 
+/**
+ * Returns the env-var name that an admin will most likely recognize as the
+ * "primary credential" for a source. Used as the `reason` string when the
+ * integration is reported as `disabled`. The actual configured-check uses
+ * `envConfigured()` below, which mirrors the credential logic of each
+ * real client (e.g. SONAR accepts either FREIGHTWAVES_TOKEN or the
+ * SONAR_USERNAME/SONAR_PASSWORD pair; ZoomInfo uses CLIENT_ID/SECRET).
+ */
 function envKeyFor(source: IntegrationSource): string {
   switch (source) {
-    case "sonar": return "SONAR_API_KEY";
+    case "sonar": return "FREIGHTWAVES_TOKEN";
     case "graph": return "OUTLOOK_CLIENT_ID";
     case "webex": return "WEBEX_CLIENT_ID";
-    case "zoominfo": return "ZOOMINFO_USERNAME";
+    case "zoominfo": return "ZOOMINFO_CLIENT_ID";
     case "onedrive": return "OUTLOOK_CLIENT_ID";
     case "trac": return "FREIGHTWAVES_TOKEN";
     case "stripe": return "STRIPE_SECRET_KEY";
   }
 }
 
+/**
+ * Per-source credential check. Mirrors the env-var logic of each real
+ * client so the health console never reports `disabled` when the
+ * underlying integration would actually authenticate successfully.
+ *  - SONAR (`server/sonarClient.ts`): direct bearer (`FREIGHTWAVES_TOKEN`)
+ *    OR username/password fallback (`SONAR_USERNAME` + `SONAR_PASSWORD`).
+ *  - ZoomInfo (`server/zoominfo.ts`): OAuth2 client credentials
+ *    (`ZOOMINFO_CLIENT_ID` + `ZOOMINFO_CLIENT_SECRET`).
+ *  - All other sources: single primary env var from `envKeyFor()`.
+ */
 function envConfigured(source: IntegrationSource): boolean {
-  return !!process.env[envKeyFor(source)];
+  switch (source) {
+    case "sonar":
+      return (
+        !!process.env.FREIGHTWAVES_TOKEN ||
+        (!!process.env.SONAR_USERNAME && !!process.env.SONAR_PASSWORD)
+      );
+    case "zoominfo":
+      return !!process.env.ZOOMINFO_CLIENT_ID && !!process.env.ZOOMINFO_CLIENT_SECRET;
+    default:
+      return !!process.env[envKeyFor(source)];
+  }
 }
 
 /**
@@ -146,7 +174,12 @@ function freshnessHealthState(source: IntegrationSource): {
 
 async function probeSonar(_opts: ProbeOptions): Promise<IntegrationHealthSnapshot> {
   if (!envConfigured("sonar")) {
-    return { source: "sonar", connected: false, healthState: "disabled", detail: { reason: "SONAR_API_KEY missing" } };
+    return {
+      source: "sonar",
+      connected: false,
+      healthState: "disabled",
+      detail: { reason: "FREIGHTWAVES_TOKEN (or SONAR_USERNAME + SONAR_PASSWORD) missing" },
+    };
   }
   const breaker = getSonarCircuitBreakerStatus();
   const fresh = freshnessHealthState("sonar");
