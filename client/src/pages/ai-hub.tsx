@@ -1,21 +1,26 @@
 /**
  * Task #742 — AI Hub.
  *
- * Composition-only wrapper that consolidates seven previously-scattered AI
- * surfaces into a single tabbed page mounted at `/ai-hub`. Each tab renders
- * an existing page component unchanged so behavior, role gating, and test
- * IDs are preserved exactly.
+ * Composition-only wrapper that consolidates the chat-style AI surfaces into
+ * a single tabbed page mounted at `/ai-hub`. Each tab renders an existing
+ * page component unchanged so behavior, role gating, and test IDs are
+ * preserved exactly.
+ *
+ * Note: Email Intelligence and Contact Suggestions were previously tabs in
+ * the hub, but they're really domain analytics dashboards rather than
+ * "ask the AI" surfaces, so they were promoted back to standalone sidebar
+ * entries (`/email-intelligence`, `/contact-suggestions`). The hub no
+ * longer claims those URLs.
  *
  * URL is the source of truth for the active tab:
  *   - `/ai-hub?hub=<key>` is the canonical URL the sidebar links to.
  *     The hub uses the `hub` query param (NOT `tab`) so it doesn't
  *     collide with any underlying page that owns its own `?tab=` state
  *     (e.g. ValueIQ uses `?tab=insights|threads|library`).
- *   - The seven legacy URLs (`/daily-priorities`, `/valueiq`,
- *     `/email-intelligence`, `/contact-suggestions`, `/ai*`,
+ *   - The five legacy URLs (`/daily-priorities`, `/valueiq`, `/ai*`,
  *     `/admin/ai-engagement`, `/admin/copilot-analytics`) all resolve to
- *     this page with the matching tab pre-selected, so bookmarks and any
- *     in-app/email links keep working.
+ *     this page with the matching tab pre-selected, so bookmarks keep
+ *     working.
  *
  * The hub does not duplicate logic from the underlying pages and does not
  * touch their internal layouts — it just renders the right component below
@@ -27,7 +32,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
-  ClipboardList, Brain, MailCheck, UserPlus, Sparkles, Activity, BarChart3,
+  ClipboardList, Brain, Sparkles, Activity, BarChart3,
   ShieldAlert, type LucideIcon,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
@@ -35,8 +40,6 @@ import { useQuery } from "@tanstack/react-query";
 
 import DailyPrioritiesPage from "@/pages/daily-priorities";
 import ValueIQPage from "@/pages/valueiq";
-import EmailIntelligencePage from "@/pages/email-intelligence";
-import ContactSuggestionsPage from "@/pages/contact-suggestions";
 import AiCenterPage from "@/pages/ai-center";
 import AdminAiEngagementPage from "@/pages/admin-ai-engagement";
 import AdminCopilotAnalyticsPage from "@/pages/admin-copilot-analytics";
@@ -44,8 +47,6 @@ import AdminCopilotAnalyticsPage from "@/pages/admin-copilot-analytics";
 export type AiHubTabKey =
   | "priorities"
   | "valueiq"
-  | "email"
-  | "contacts"
   | "center"
   | "engagement"
   | "copilot";
@@ -81,24 +82,6 @@ export const AI_HUB_TABS: readonly TabSpec[] = [
     roles: ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"],
     blurb: "Daily AI briefing, threads, and personal library.",
     Component: ValueIQPage,
-  },
-  {
-    key: "email",
-    label: "Email Intelligence",
-    shortLabel: "Email",
-    icon: MailCheck,
-    roles: ["admin", "director", "national_account_manager", "sales_director"],
-    blurb: "AI signals extracted from your inbound email.",
-    Component: EmailIntelligencePage,
-  },
-  {
-    key: "contacts",
-    label: "Contact Suggestions",
-    shortLabel: "Contacts",
-    icon: UserPlus,
-    roles: ["admin", "director", "sales_director", "national_account_manager", "account_manager", "logistics_manager"],
-    blurb: "Suggested new contacts to add to accounts.",
-    Component: ContactSuggestionsPage,
   },
   {
     key: "center",
@@ -144,8 +127,6 @@ export const AI_HUB_ANY_TAB_ROLES: string[] = Array.from(
 export function resolveAiHubTab(pathname: string, search: string): AiHubTabKey {
   if (pathname.startsWith("/daily-priorities")) return "priorities";
   if (pathname.startsWith("/valueiq")) return "valueiq";
-  if (pathname.startsWith("/email-intelligence")) return "email";
-  if (pathname.startsWith("/contact-suggestions")) return "contacts";
   if (pathname.startsWith("/admin/ai-engagement")) return "engagement";
   if (pathname.startsWith("/admin/copilot-analytics")) return "copilot";
   if (pathname === "/ai" || pathname.startsWith("/ai/")) return "center";

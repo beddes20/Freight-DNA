@@ -19,6 +19,14 @@ import {
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
+
+// Mirrors the role list this page used to inherit from the AI Hub tab spec
+// (Task #742). Kept in sync with the sidebar role gate.
+const CONTACT_SUGGESTIONS_ROLES = [
+  "admin", "director", "sales_director", "national_account_manager",
+  "account_manager", "logistics_manager",
+];
 
 interface ContactSuggestion {
   id: string;
@@ -59,6 +67,32 @@ function ConfidenceBadge({ score }: { score: number }) {
 }
 
 export default function ContactSuggestionsPage() {
+  // Page-level role guard. The sidebar entry is hidden for unauthorized
+  // roles, but this page is now a standalone route (Task #742 split-out)
+  // so a user could still type /contact-suggestions in the URL bar — block
+  // them here so we don't render an empty shell on top of forbidden APIs.
+  // Guard lives in the outer wrapper so the inner component's hooks are only
+  // mounted for permitted users (preserves Rules of Hooks).
+  const { user } = useAuth();
+  if (user && !CONTACT_SUGGESTIONS_ROLES.includes(user.role)) {
+    return (
+      <div className="p-8" data-testid="contact-suggestions-forbidden">
+        <Card>
+          <CardContent className="p-8 text-center space-y-2">
+            <UserPlus className="h-10 w-10 text-amber-500 mx-auto" />
+            <p className="font-semibold">Contact Suggestions isn't available for your role</p>
+            <p className="text-sm text-muted-foreground">
+              Ask an admin if you should have access to AI-detected contact reviews.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+  return <ContactSuggestionsPageInner />;
+}
+
+function ContactSuggestionsPageInner() {
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const [search, setSearch] = useState("");

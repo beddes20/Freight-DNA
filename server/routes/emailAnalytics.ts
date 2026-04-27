@@ -567,6 +567,17 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
       if (!ALLOWED_ROLES.includes(user.role)) return res.status(403).json({ error: "Forbidden" });
       const orgId = user.organizationId;
 
+      // Cache the assembled response for 60s per org. The four underlying
+      // queries scan email_signals + email_messages and don't change second
+      // by second, so a short TTL turns repeated mounts (tab switches,
+      // focus refetches, multiple reps on the same org) into instant hits
+      // and prevents the page from feeling slow.
+      const cacheKey = `email-intel:overview:${orgId}`;
+      const cached = cacheGet<unknown>(cacheKey, req);
+      if (cached) {
+        return res.json(cached);
+      }
+
       const [
         signalSummaryResult,
         winLossResult,
@@ -633,35 +644,56 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
         ),
 
         // ── Urgency signals with no touchpoint logged in 24h ──────────────
+        // Replaces a per-row correlated subquery on touchpoints (N+1) with a
+        // CTE that picks the candidate urgency rows first and a LATERAL
+        // count over touchpoints scoped to the candidate's company_id +
+        // signal_at. Postgres can short-circuit the lateral after LIMIT 50,
+        // and an index on touchpoints(company_id, created_at) keeps each
+        // count cheap. Functionally equivalent; just avoids planning the
+        // touchpoint scan once per scanned candidate row.
         storage.pool.query(
-          `SELECT
-             es.id AS signal_id,
-             es.confidence,
-             es.created_at AS signal_at,
-             em.subject,
-             em.from_email,
-             em.linked_account_id,
-             c.name AS company_name,
-             EXTRACT(EPOCH FROM (NOW() - es.created_at::timestamptz)) / 3600 AS hours_elapsed,
-             (
-               SELECT COUNT(*) FROM touchpoints t
-               WHERE t.company_id = em.linked_account_id
-                 AND t.created_at::timestamptz > es.created_at::timestamptz
-             )::int AS touchpoints_after
-           FROM email_signals es
-           JOIN email_messages em ON em.id = es.message_id
-           LEFT JOIN companies c ON c.id = em.linked_account_id
-           WHERE em.org_id = $1
-             AND es.intent_type = 'urgency_signal'
-             AND es.created_at::timestamptz > NOW() - INTERVAL '7 days'
-             AND em.linked_account_id IS NOT NULL
-           ORDER BY es.created_at DESC
-           LIMIT 50`,
+          `WITH candidate_urgency AS (
+             SELECT
+               es.id            AS signal_id,
+               es.confidence,
+               es.created_at    AS signal_at,
+               em.subject,
+               em.from_email,
+               em.linked_account_id,
+               c.name           AS company_name
+             FROM email_signals es
+             JOIN email_messages em ON em.id = es.message_id
+             LEFT JOIN companies c ON c.id = em.linked_account_id
+             WHERE em.org_id = $1
+               AND es.intent_type = 'urgency_signal'
+               AND es.created_at::timestamptz > NOW() - INTERVAL '7 days'
+               AND em.linked_account_id IS NOT NULL
+             ORDER BY es.created_at DESC
+             LIMIT 50
+           )
+           SELECT
+             cu.signal_id,
+             cu.confidence,
+             cu.signal_at,
+             cu.subject,
+             cu.from_email,
+             cu.linked_account_id,
+             cu.company_name,
+             EXTRACT(EPOCH FROM (NOW() - cu.signal_at::timestamptz)) / 3600 AS hours_elapsed,
+             COALESCE(tp.touchpoints_after, 0)::int AS touchpoints_after
+           FROM candidate_urgency cu
+           LEFT JOIN LATERAL (
+             SELECT COUNT(*)::int AS touchpoints_after
+             FROM touchpoints t
+             WHERE t.company_id = cu.linked_account_id
+               AND t.created_at::timestamptz > cu.signal_at::timestamptz
+           ) tp ON true
+           ORDER BY cu.signal_at DESC`,
           [orgId]
         ),
       ]);
 
-      res.json({
+      const payload = {
         signal_summary: signalSummaryResult.rows,
         win_loss_patterns: winLossResult.rows,
         recent_signals: recentSignalsResult.rows,
@@ -675,7 +707,9 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
           hours_elapsed: Math.round(r.hours_elapsed * 10) / 10,
           responded: r.touchpoints_after > 0,
         })),
-      });
+      };
+      cacheSet(cacheKey, payload, 60 * 1000);
+      res.json(payload);
     } catch (err) {
       console.error("[email-analytics] error:", err);
       res.status(500).json({ error: "Failed to load email analytics" });
@@ -836,6 +870,16 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
       if (!ALLOWED_ROLES.includes(user.role)) return res.status(403).json({ error: "Forbidden" });
       const orgId = user.organizationId;
 
+      // Same caching rationale as /email-intelligence above — four scans
+      // over per-org email-derived tables, refreshed on a 24h window, so
+      // a 60s shared cache is safe and turns repeated mounts into instant
+      // responses without changing the user-visible contract.
+      const cacheKey = `email-intel:learned-today:${orgId}`;
+      const cached = cacheGet<unknown>(cacheKey, req);
+      if (cached) {
+        return res.json(cached);
+      }
+
       const [
         newContactSuggestions,
         conversationSparks,
@@ -927,7 +971,7 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
         ),
       ]);
 
-      res.json({
+      const payload = {
         new_contact_suggestions: newContactSuggestions.rows,
         conversation_sparks: conversationSparks.rows,
         enrichment_updates: enrichmentUpdates.rows,
@@ -938,7 +982,9 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
           enrichments_staged: enrichmentUpdates.rows.length,
           geographies_inferred: geographyInferences.rows.length,
         },
-      });
+      };
+      cacheSet(cacheKey, payload, 60 * 1000);
+      res.json(payload);
     } catch (err) {
       console.error("[email-analytics] learned-today error:", err);
       res.status(500).json({ error: "Failed to load daily digest" });

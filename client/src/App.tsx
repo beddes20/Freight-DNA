@@ -103,6 +103,8 @@ import AdminSidebarTooltipsPage from "@/pages/admin-sidebar-tooltips";
 import CustomerQuotesPage from "@/pages/customer-quotes";
 import FreightCapturePage from "@/pages/freight-capture";
 import AiHubPage from "@/pages/ai-hub";
+import EmailIntelligencePage from "@/pages/email-intelligence";
+import ContactSuggestionsPage from "@/pages/contact-suggestions";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -251,8 +253,8 @@ function Router() {
       <Route path="/my-procurement" component={MyProcurementPage} />
       <Route path="/intel">{() => { window.location.replace("/valueiq?tab=insights"); return null; }}</Route>
       <Route path="/conversations" component={ConversationsPage} />
-      <Route path="/contact-suggestions" component={AiHubPage} />
-      <Route path="/email-intelligence" component={AiHubPage} />
+      <Route path="/contact-suggestions" component={ContactSuggestionsPage} />
+      <Route path="/email-intelligence" component={EmailIntelligencePage} />
       <Route path="/proven-tactics" component={ProvenTacticsPage} />
       <Route path="/playbook" component={PlaybookPage} />
       <Route path="/coaching" component={CoachingPage} />

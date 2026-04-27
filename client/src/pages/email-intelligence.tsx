@@ -19,6 +19,11 @@ import { formatDistanceToNow } from "date-fns";
 import { ThreadDetailPanel, type ConversationThread } from "@/pages/conversations";
 import ResponseTimeTab from "@/components/email-intelligence/response-time-tab";
 import { IntegrationDegradedPill } from "@/components/integration-degraded-pill";
+import { useAuth } from "@/hooks/use-auth";
+
+// Mirrors ALLOWED_ROLES on the server (server/routes/emailAnalytics.ts) and the
+// sidebar role gate. Kept at module scope so it's easy to keep in sync.
+const EMAIL_INTELLIGENCE_ROLES = ["admin", "director", "national_account_manager", "sales_director"];
 
 interface SignalSummaryRow {
   intent_type: string;
@@ -387,6 +392,34 @@ function WinLossDrilldownDialog({
 }
 
 export default function EmailIntelligencePage() {
+  // Page-level role guard. Until Task #742 the AI Hub's outer guard caught
+  // unauthorized users; now that this page is a standalone route, we have
+  // to enforce the same restriction ourselves so a user can't bypass the
+  // hidden sidebar entry by typing /email-intelligence directly. The server
+  // still returns 403 either way — this is a UI guard so we don't render
+  // empty card chrome on top of a forbidden response. Guard lives on the
+  // outer wrapper so the inner component's hooks only mount for permitted
+  // users (preserves Rules of Hooks).
+  const { user } = useAuth();
+  if (user && !EMAIL_INTELLIGENCE_ROLES.includes(user.role)) {
+    return (
+      <div className="p-8" data-testid="email-intelligence-forbidden">
+        <Card>
+          <CardContent className="p-8 text-center space-y-2">
+            <AlertTriangle className="h-10 w-10 text-amber-500 mx-auto" />
+            <p className="font-semibold">Email Intelligence isn't available for your role</p>
+            <p className="text-sm text-muted-foreground">
+              Ask an admin if you should have access to email signal analytics.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+  return <EmailIntelligencePageInner />;
+}
+
+function EmailIntelligencePageInner() {
   const [, navigate] = useLocation();
   const [drilldown, setDrilldown] = useState<{ intentType: string; outcome: DrilldownOutcome } | null>(null);
 

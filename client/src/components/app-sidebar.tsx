@@ -78,9 +78,20 @@ const customerFacingItems: NavItem[] = [
   { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           description: "High-value opportunities ranked by potential impact.", roles: SALES_ROLES },
   { title: "RFP & Awards",    url: "/rfp-awards",      icon: Trophy,   description: "Active RFPs and awarded business tracking." },
   { title: "RFP Calendar",    url: "/rfp-calendar",    icon: Calendar, description: "Upcoming RFP deadlines and key dates." },
-  // Task #742 — Email Intelligence and Contact Suggestions moved into the
-  // unified AI Hub (sidebar row "AI" → /ai-hub) so reps don't have to hunt
-  // across Customer-Facing and Admin to find the AI surface they need.
+  {
+    title: "Email Intelligence",
+    url: "/email-intelligence",
+    icon: MailCheck,
+    description: "AI signals extracted from your inbound email — urgency, win/loss patterns, and recent activity.",
+    roles: ["admin", "director", "national_account_manager", "sales_director"],
+  },
+  {
+    title: "Contact Suggestions",
+    url: "/contact-suggestions",
+    icon: UserPlus,
+    description: "Suggested new contacts to add to accounts, learned from inbound email.",
+    roles: ["admin", "director", "sales_director", "national_account_manager", "account_manager", "logistics_manager"],
+  },
   {
     title: "Proven Tactics",
     url: "/proven-tactics",
@@ -99,19 +110,21 @@ const customerFacingItems: NavItem[] = [
   { title: "Rep Scorecard",   url: "/rep-scorecard",   icon: Medal,    description: "Compare reps and review performance metrics.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
 ];
 
-// Task #742 — every AI surface (Today's Priorities, ValueIQ, Email
-// Intelligence, Contact Suggestions, AI Center, Engagement, Copilot
-// Analytics) lives behind a single sidebar entry that opens the AI Hub
-// (/ai-hub) — a tabbed page mounting the existing page components
-// unchanged. Visibility is the union of every tab's role list (see
+// Task #742 — chat-style AI surfaces (Today's Priorities, ValueIQ, AI
+// Center, Engagement, Copilot Analytics) live behind a single sidebar
+// entry that opens the AI Hub (/ai-hub) — a tabbed page mounting the
+// existing page components unchanged. Email Intelligence and Contact
+// Suggestions used to live in the hub too, but they're really domain
+// analytics dashboards rather than AI chat surfaces, so they were
+// promoted back to standalone Customer-Facing entries above.
+// Visibility is the union of every hub tab's role list (see
 // AI_HUB_ANY_TAB_ROLES); tab-level role gating happens inside the hub
-// so a user only sees the tabs they have access to. Future AI surfaces
-// should extend the hub instead of earning their own sidebar row.
+// so a user only sees the tabs they have access to.
 const aiHubItem: NavItem = {
   title: "AI",
   url: "/ai-hub",
   icon: Sparkles,
-  description: "Today's Priorities, ValueIQ, Email Intelligence, Contact Suggestions, AI Center, Engagement, and Copilot Analytics — all in one tabbed page.",
+  description: "Today's Priorities, ValueIQ, AI Center, Engagement, and Copilot Analytics — all in one tabbed page.",
   roles: AI_HUB_ANY_TAB_ROLES,
 };
 
@@ -564,7 +577,7 @@ export function AppSidebar() {
                 <SidebarMenuItem>
                   <SidebarMenuButton
                     asChild
-                    isActive={isActive(aiHubItem.url) || isActive("/daily-priorities") || isActive("/valueiq") || isActive("/email-intelligence") || isActive("/contact-suggestions") || location.startsWith("/ai/") || location === "/ai" || isActive("/admin/ai-engagement") || isActive("/admin/copilot-analytics")}
+                    isActive={isActive(aiHubItem.url) || isActive("/daily-priorities") || isActive("/valueiq") || location.startsWith("/ai/") || location === "/ai" || isActive("/admin/ai-engagement") || isActive("/admin/copilot-analytics")}
                     tooltip={navTooltip(aiHubItem.title, resolveDescription(aiHubItem.title, aiHubItem.description, tooltipOverrides))}
                   >
                     <Link href={aiHubItem.url} data-testid="link-ai-hub" data-tour="tour-ai-hub" className="relative">
