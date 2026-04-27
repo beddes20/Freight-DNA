@@ -19,6 +19,7 @@ import { getErrorMessage } from "../lib/errors";
 import { integrationHealthSnapshots } from "@shared/schema";
 import { runAllProbes, runOneProbe, INTEGRATION_SOURCES } from "../integrations/probeRegistry";
 import { notifyOnFirstTimeDegraded } from "../integrations/integrationDegradedNotifier";
+import { getFixtureContaminationScan } from "../lib/fixtureMailboxes";
 
 function isAdmin(role: string | null | undefined) { return role === "admin"; }
 
@@ -82,6 +83,21 @@ export function registerIntegrationsHealthRoutes(app: Express) {
       res.json({ snapshots });
     } catch (err) {
       console.error("[integrations-health] error:", err);
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  // Surfaces the boot-time fixture contamination audit (counts of fixture
+  // addresses found in users.username / companies.dl_email / contacts.email).
+  // Powers the warning banner on /admin/integrations-health so admins can spot
+  // contamination without writing SQL. Returns null until the audit completes.
+  app.get("/api/admin/integrations/fixture-pollution", requireUser, async (req: Request, res: Response) => {
+    try {
+      const me = req.user!;
+      if (!isAdmin(me.role)) return res.status(403).json({ error: "Forbidden" });
+      const scan = getFixtureContaminationScan();
+      res.json({ scan });
+    } catch (err) {
       res.status(500).json({ error: getErrorMessage(err) });
     }
   });

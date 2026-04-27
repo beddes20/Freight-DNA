@@ -9,10 +9,38 @@ import { useAuth } from "@/hooks/use-auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, ShieldAlert, RefreshCw, CheckCircle2, AlertTriangle, HelpCircle, PowerOff } from "lucide-react";
+import { Loader2, ShieldAlert, RefreshCw, CheckCircle2, AlertTriangle, HelpCircle, PowerOff, Mail, Beaker } from "lucide-react";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+
+interface MailboxRow {
+  id: string;
+  email: string;
+  userId: string;
+  userName: string;
+  enabled: boolean;
+  syncStatus: string;
+  syncError: string | null;
+  subscriptionId: string | null;
+  sentItemsSubscriptionId: string | null;
+  subscriptionExpiresAt: string | null;
+  lastSentItemsNotificationAt: string | null;
+  lastOutboundCapturedAt: string | null;
+  sentItemsHealth: {
+    sentItemsHealth: "active" | "expired" | "missing" | "stale" | "unknown";
+    reason: string;
+  };
+}
+
+interface FixturePollutionScan {
+  monitoredMailboxes: number;
+  users: number;
+  companies: number;
+  contacts: number;
+  scannedAt: string;
+  samples: { table: string; column: string; email: string }[];
+}
 
 interface Snapshot {
   source: string;
@@ -209,6 +237,47 @@ export default function AdminIntegrationsHealthPage() {
     onError: () => toast({ title: "Probe failed", variant: "destructive" }),
   });
 
+  // Per-mailbox visibility — re-uses the existing admin endpoint that already
+  // returns SentItems health per row. Polls every 30s alongside the integration
+  // probes so admins see the same freshness across the page.
+  const mailboxesQuery = useQuery<{ mailboxes: MailboxRow[] }>({
+    queryKey: ["/api/internal/admin/monitored-mailboxes"],
+    queryFn: async () => {
+      const r = await fetch("/api/internal/admin/monitored-mailboxes", { credentials: "include" });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    },
+    enabled: !!canView,
+    refetchInterval: 30_000,
+  });
+
+  const fixturePollutionQuery = useQuery<{ scan: FixturePollutionScan | null }>({
+    queryKey: ["/api/admin/integrations/fixture-pollution"],
+    queryFn: async () => {
+      const r = await fetch("/api/admin/integrations/fixture-pollution", { credentials: "include" });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    },
+    enabled: !!canView,
+    refetchInterval: 5 * 60_000, // 5min — boot scan only changes on restart
+  });
+
+  const reregisterMutation = useMutation({
+    mutationFn: async (mailboxId: string) => {
+      const r = await apiRequest("POST", `/api/internal/admin/monitored-mailboxes/${mailboxId}/sync`);
+      return r.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Subscription re-registered" });
+      qc.invalidateQueries({ queryKey: ["/api/internal/admin/monitored-mailboxes"] });
+    },
+    onError: (err) => toast({
+      title: "Re-register failed",
+      description: err instanceof Error ? err.message : String(err),
+      variant: "destructive",
+    }),
+  });
+
   if (!user) {
     return <div className="p-8 flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
   }
@@ -240,6 +309,8 @@ export default function AdminIntegrationsHealthPage() {
       {isError && (
         <ErrorBanner message="Couldn't load integration health" onRetry={() => refetch()} />
       )}
+
+      <FixturePollutionBanner scan={fixturePollutionQuery.data?.scan ?? null} />
 
       {isLoading && !data ? (
         <Card><CardContent className="p-8 text-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground inline-block" /></CardContent></Card>
@@ -294,6 +365,168 @@ export default function AdminIntegrationsHealthPage() {
           ))}
         </div>
       )}
+
+      <MonitoredMailboxesSection
+        mailboxes={mailboxesQuery.data?.mailboxes ?? []}
+        isLoading={mailboxesQuery.isLoading}
+        isError={mailboxesQuery.isError}
+        onRetry={() => mailboxesQuery.refetch()}
+        onReregister={(id) => reregisterMutation.mutate(id)}
+        reregisteringId={reregisterMutation.isPending ? (reregisterMutation.variables as string | undefined) : undefined}
+      />
     </div>
+  );
+}
+
+function FixturePollutionBanner({ scan }: { scan: FixturePollutionScan | null }) {
+  if (!scan) return null;
+  const total = scan.users + scan.companies + scan.contacts;
+  if (total === 0) return null;
+  const breakdownParts: string[] = [];
+  if (scan.users > 0) breakdownParts.push(`${scan.users} user${scan.users === 1 ? "" : "s"}`);
+  if (scan.companies > 0) breakdownParts.push(`${scan.companies} compan${scan.companies === 1 ? "y" : "ies"}`);
+  if (scan.contacts > 0) breakdownParts.push(`${scan.contacts} contact${scan.contacts === 1 ? "" : "s"}`);
+  return (
+    <Card className="border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800" data-testid="banner-fixture-pollution">
+      <CardContent className="p-4 flex items-start gap-3">
+        <Beaker className="h-5 w-5 text-amber-700 dark:text-amber-400 mt-0.5 flex-shrink-0" />
+        <div className="space-y-1 text-sm">
+          <div className="font-medium text-amber-900 dark:text-amber-200">
+            Fixture-style addresses detected in production tables
+          </div>
+          <div className="text-amber-800 dark:text-amber-300">
+            Found <span className="tabular-nums font-medium">{breakdownParts.join(", ")}</span> using
+            non-routable domains (example.com / .test / .invalid / .localhost / test.local).
+            New fixture rows are blocked, but these existing rows should be reviewed and removed if
+            they aren't intentional. Last scanned {fmtAgo(scan.scannedAt)}.
+          </div>
+          {scan.samples.length > 0 && (
+            <details className="text-xs text-amber-700 dark:text-amber-400 mt-2">
+              <summary className="cursor-pointer">Show samples ({scan.samples.length})</summary>
+              <ul className="mt-1 ml-4 list-disc space-y-0.5">
+                {scan.samples.map((s, i) => (
+                  <li key={i} data-testid={`text-fixture-sample-${i}`}>
+                    <code>{s.table}.{s.column}</code> = {s.email}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function MonitoredMailboxesSection({
+  mailboxes,
+  isLoading,
+  isError,
+  onRetry,
+  onReregister,
+  reregisteringId,
+}: {
+  mailboxes: MailboxRow[];
+  isLoading: boolean;
+  isError: boolean;
+  onRetry: () => void;
+  onReregister: (id: string) => void;
+  reregisteringId: string | undefined;
+}) {
+  return (
+    <Card data-testid="card-monitored-mailboxes">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Mail className="h-4 w-4 text-muted-foreground" />
+          Monitored mailboxes
+          {mailboxes.length > 0 && (
+            <Badge variant="outline" className="text-[10px]">{mailboxes.length}</Badge>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="p-0">
+        {isError ? (
+          <div className="p-4">
+            <ErrorBanner message="Couldn't load monitored mailboxes" onRetry={onRetry} />
+          </div>
+        ) : isLoading && mailboxes.length === 0 ? (
+          <div className="p-6 text-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground inline-block" /></div>
+        ) : mailboxes.length === 0 ? (
+          <div className="p-6 text-center text-sm text-muted-foreground">No monitored mailboxes registered.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-muted/40 text-muted-foreground">
+                <tr>
+                  <th className="text-left p-2 font-medium">Mailbox</th>
+                  <th className="text-left p-2 font-medium">User</th>
+                  <th className="text-left p-2 font-medium">Subscription</th>
+                  <th className="text-left p-2 font-medium">SentItems</th>
+                  <th className="text-left p-2 font-medium">Expires</th>
+                  <th className="text-left p-2 font-medium">Last outbound</th>
+                  <th className="p-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {mailboxes.map((m) => {
+                  const sentHealth = m.sentItemsHealth?.sentItemsHealth ?? "unknown";
+                  return (
+                    <tr key={m.id} className="border-t" data-testid={`row-mailbox-${m.id}`}>
+                      <td className="p-2 font-mono">{m.email}</td>
+                      <td className="p-2">{m.userName}</td>
+                      <td className="p-2">
+                        <Badge
+                          variant={m.syncStatus === "active" ? "default" : "outline"}
+                          className="text-[10px]"
+                        >
+                          {m.syncStatus}
+                        </Badge>
+                      </td>
+                      <td className="p-2">
+                        <SentItemsHealthBadge state={sentHealth} reason={m.sentItemsHealth?.reason} />
+                      </td>
+                      <td className="p-2 tabular-nums">{fmtAgo(m.subscriptionExpiresAt)}</td>
+                      <td className="p-2 tabular-nums">{fmtAgo(m.lastOutboundCapturedAt)}</td>
+                      <td className="p-2 text-right">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => onReregister(m.id)}
+                          disabled={reregisteringId === m.id}
+                          data-testid={`button-reregister-${m.id}`}
+                        >
+                          {reregisteringId === m.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                          ) : (
+                            <RefreshCw className="h-3 w-3 mr-1" />
+                          )}
+                          Re-register
+                        </Button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function SentItemsHealthBadge({ state, reason }: { state: string; reason?: string }) {
+  const map: Record<string, { label: string; className: string }> = {
+    active:  { label: "Active",  className: "bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-800" },
+    expired: { label: "Expired", className: "bg-red-100 text-red-800 border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800" },
+    missing: { label: "Missing", className: "bg-red-100 text-red-800 border-red-300 dark:bg-red-950 dark:text-red-300 dark:border-red-800" },
+    stale:   { label: "Stale",   className: "bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800" },
+    unknown: { label: "Unknown", className: "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-900 dark:text-slate-300 dark:border-slate-700" },
+  };
+  const cfg = map[state] ?? map.unknown;
+  return (
+    <Badge variant="outline" className={`text-[10px] ${cfg.className}`} title={reason}>
+      {cfg.label}
+    </Badge>
   );
 }

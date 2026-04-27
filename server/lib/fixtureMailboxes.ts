@@ -54,3 +54,68 @@ export function isFixtureMailboxAddress(email: string | null | undefined): boole
   const lower = email.toLowerCase().trim();
   return FIXTURE_MAILBOX_DOMAINS.some(suffix => lower.endsWith(suffix));
 }
+
+/**
+ * Typed error thrown by storage-level guards (createUser, createCompany,
+ * createContact, …) when a fixture address is about to be persisted.
+ *
+ * Routes can catch this specifically to surface a 400 with a helpful
+ * message instead of a generic 500.
+ */
+export class FixtureMailboxError extends Error {
+  readonly code = "FIXTURE_MAILBOX" as const;
+  constructor(public readonly email: string, public readonly column: string) {
+    super(
+      `Refusing to persist fixture/non-routable address "${email}" into ${column}. ` +
+      `These addresses (e.g. @example.com, .test, .invalid) cannot receive real ` +
+      `email and would silently break downstream Outlook / Resend traffic.`,
+    );
+    this.name = "FixtureMailboxError";
+  }
+}
+
+/**
+ * Storage-level boundary guard. Call right before any INSERT that would
+ * persist a real-person email into a column that downstream code may use
+ * to send mail (users.username, companies.dl_email, contacts.email, etc).
+ *
+ * Throws `FixtureMailboxError` on a fixture match so the caller can decide
+ * whether to surface a 400 or just log and continue. Pass the column name
+ * for diagnostic clarity in the error message.
+ */
+export function assertNotFixtureEmail(
+  email: string | null | undefined,
+  column: string,
+): void {
+  if (isFixtureMailboxAddress(email)) {
+    throw new FixtureMailboxError(email!, column);
+  }
+}
+
+/**
+ * Module-level cache of the most recent boot-scan results across email-
+ * bearing tables. Populated by runFixtureContaminationScan() in
+ * runMigrations.ts and read by the /api/admin/integrations/fixture-pollution
+ * endpoint so admins can see at a glance whether any tables hold fixture
+ * addresses without having to write SQL.
+ *
+ * `null` means the scan hasn't completed yet (e.g. very early after boot).
+ */
+export interface FixtureContaminationCounts {
+  monitoredMailboxes: number;
+  users: number;
+  companies: number;
+  contacts: number;
+  scannedAt: string;
+  samples: { table: string; column: string; email: string }[];
+}
+
+let _lastScan: FixtureContaminationCounts | null = null;
+
+export function setFixtureContaminationScan(counts: FixtureContaminationCounts): void {
+  _lastScan = counts;
+}
+
+export function getFixtureContaminationScan(): FixtureContaminationCounts | null {
+  return _lastScan;
+}

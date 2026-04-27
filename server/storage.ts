@@ -2,6 +2,7 @@ import { eq, inArray, ilike, or, and, asc, desc, isNull, isNotNull, gte, lte, lt
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { cacheGet, cacheSet, cacheInvalidatePrefix } from "./cache";
+import { assertNotFixtureEmail, isFixtureMailboxAddress } from "./lib/fixtureMailboxes";
 import {
   users,
   companies,
@@ -1524,6 +1525,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
+    // Guard: users.username is the rep's login email and is auto-enrolled into
+    // monitored_mailboxes by the bulk "enroll all" admin flow. A fixture
+    // username (e.g. wq.test.*@example.com) would silently re-pollute the
+    // mailbox subscription health rollup. Reject at the boundary so the
+    // contamination cannot recur from this code path.
+    assertNotFixtureEmail(insertUser.username, "users.username");
     const [user] = await db.insert(users).values({ ...insertUser, createdAt: insertUser.createdAt || new Date().toISOString() }).returning();
     return user;
   }
@@ -1596,6 +1603,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createCompany(company: InsertCompany): Promise<Company> {
+    // Guard: companies.dl_email is read by outbound email schedulers (carrier
+    // outreach, weekly review, intel digests). A fixture address there means
+    // an org-wide message will silently land in /dev/null. Reject inserts.
+    assertNotFixtureEmail(company.dlEmail, "companies.dl_email");
     const [created] = await db.insert(companies).values(company).returning();
     cacheInvalidatePrefix("companies:");
     return created;
@@ -1603,6 +1614,18 @@ export class DatabaseStorage implements IStorage {
 
   async bulkCreateCompanies(companiesList: InsertCompany[]): Promise<Company[]> {
     if (companiesList.length === 0) return [];
+    // Bulk variant — quarantine fixture rows by FILTERING them out rather
+    // than throwing. A 5,000-row CSV import containing one accidental
+    // @example.com address must not abort the entire batch (would turn a
+    // data-quality issue into an outage). We log the count and the
+    // single-row createCompany guard still throws for explicit unit
+    // creates where the caller expects immediate feedback.
+    const quarantined = companiesList.filter(c => isFixtureMailboxAddress(c.dlEmail));
+    if (quarantined.length > 0) {
+      console.warn(`[bulkCreateCompanies] dropped ${quarantined.length} rows with fixture dlEmail (e.g. ${quarantined[0].dlEmail})`);
+      companiesList = companiesList.filter(c => !isFixtureMailboxAddress(c.dlEmail));
+      if (companiesList.length === 0) return [];
+    }
     const firstOrgId = companiesList[0].organizationId;
     const existing = await db
       .select({ id: companies.id, name: companies.name })
@@ -1798,12 +1821,26 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createContact(contact: InsertContact): Promise<Contact> {
+    // Guard: contacts.email is the destination for AI-drafted emails, carrier
+    // outreach, intel digests, and the customer touchpoint workflow. A
+    // fixture address would silently absorb real outbound traffic.
+    assertNotFixtureEmail(contact.email, "contacts.email");
     const [created] = await db.insert(contacts).values(contact).returning();
     return created;
   }
 
   async bulkCreateContacts(contactList: InsertContact[]): Promise<Contact[]> {
     if (contactList.length === 0) return [];
+    // Bulk variant — quarantine fixture rows by FILTERING them out rather
+    // than throwing. CSV imports must not abort because of a single
+    // accidental @example.com entry. The single-row createContact guard
+    // still throws for unit creates where caller wants immediate feedback.
+    const quarantined = contactList.filter(c => isFixtureMailboxAddress(c.email));
+    if (quarantined.length > 0) {
+      console.warn(`[bulkCreateContacts] dropped ${quarantined.length} rows with fixture email (e.g. ${quarantined[0].email})`);
+      contactList = contactList.filter(c => !isFixtureMailboxAddress(c.email));
+      if (contactList.length === 0) return [];
+    }
     const companyIds = [...new Set(contactList.map(c => c.companyId))];
     const existing = await db
       .select({ id: contacts.id, companyId: contacts.companyId, email: contacts.email, name: contacts.name })

@@ -44,6 +44,7 @@ import {
   getCaptureAuditHealthForUsers,
   type CaptureAuditHealthSnapshot,
 } from "../services/conversationReplyCaptureService";
+import { notifyOnInboxUnhealthy } from "../services/conversationsInboxAlerter";
 import {
   recordThreadEvent,
   listThreadEvents,
@@ -1537,6 +1538,35 @@ export function registerConversationsRoutes(app: Express): void {
         } satisfies { ok: boolean } & CaptureAuditHealthSnapshot & {
           affectedThreads: Array<typeof enrichedAffected[number]>;
         });
+
+        // Fire-and-forget alert hook. The previous "Webhook unhealthy"
+        // recurrence hid for five iterations because nothing alerted admins
+        // — only the on-page pill changed color. notifyOnInboxUnhealthy
+        // throttles to once per org per 24h and no-ops when status !==
+        // "unhealthy", so this is safe to call on every poll. Detached
+        // intentionally (`void`) — alerting must not block the pill response.
+        //
+        // Gated on user.role === "admin" so non-admin pill polls (the same
+        // endpoint powers the per-rep inbox badge) cannot drive alerter
+        // traffic. Admins are the only audience for the resulting in-app
+        // notification + email; restricting the trigger keeps work off the
+        // critical path for regular reps and removes any opportunity for a
+        // curious rep to spam the throttle.
+        if (snapshot.status === "unhealthy" && user.role === "admin") {
+          const firstUnhealthy = snapshot.mailboxes.find(
+            m => m.sentItemsHealth === "expired" || m.sentItemsHealth === "missing",
+          );
+          void notifyOnInboxUnhealthy({
+            organizationId: user.organizationId,
+            status: snapshot.status,
+            webhookFailureCount: snapshot.webhookFailureCount,
+            pendingRecoveryThreadCount: snapshot.pendingRecoveryThreadCount,
+            totalMailboxes: snapshot.scope.mailboxes,
+            detail: firstUnhealthy?.reason ?? null,
+          }).catch(err => {
+            console.warn("[conversations] inbox-unhealthy alert dispatch failed:", getErrorMessage(err));
+          });
+        }
       } catch (err) {
         console.error("[conversations] GET /capture-audit-health error:", err);
         res.status(500).json({ error: "Failed to load capture audit health" });

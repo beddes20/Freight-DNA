@@ -1,5 +1,5 @@
 import { Pool } from "pg";
-import { FIXTURE_MAILBOX_LIKE_PATTERNS } from "./lib/fixtureMailboxes";
+import { FIXTURE_MAILBOX_LIKE_PATTERNS, setFixtureContaminationScan } from "./lib/fixtureMailboxes";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -4822,5 +4822,84 @@ export async function runMigrations() {
     console.error("[migrations] fixture monitored_mailboxes purge error:", err);
   } finally {
     clientFixturePurge.release();
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Cross-table fixture contamination AUDIT (read-only).
+  //
+  // monitored_mailboxes is purged above because every row there must have a
+  // working Graph subscription. The other tables — users, companies,
+  // contacts — may legitimately contain test rows in dev environments and
+  // we must NOT silently delete them. Instead, we count any fixture
+  // addresses present and stash the result in module-level state so the
+  // admin /admin/integrations-health page can surface the warning. The
+  // boundary guards in storage.ts prevent any NEW fixture rows from being
+  // inserted after this audit runs.
+  // ────────────────────────────────────────────────────────────────────────
+  const clientAudit = await pool.connect();
+  try {
+    const samples: { table: string; column: string; email: string }[] = [];
+
+    const usersResult = await clientAudit.query(
+      `SELECT username FROM users WHERE LOWER(username) LIKE ANY($1::text[]) LIMIT 5`,
+      [FIXTURE_MAILBOX_LIKE_PATTERNS as string[]],
+    );
+    const usersCount = (await clientAudit.query(
+      `SELECT COUNT(*)::int AS n FROM users WHERE LOWER(username) LIKE ANY($1::text[])`,
+      [FIXTURE_MAILBOX_LIKE_PATTERNS as string[]],
+    )).rows[0]?.n ?? 0;
+    for (const r of usersResult.rows) samples.push({ table: "users", column: "username", email: r.username });
+
+    const companiesResult = await clientAudit.query(
+      `SELECT dl_email FROM companies WHERE dl_email IS NOT NULL AND LOWER(dl_email) LIKE ANY($1::text[]) LIMIT 5`,
+      [FIXTURE_MAILBOX_LIKE_PATTERNS as string[]],
+    );
+    const companiesCount = (await clientAudit.query(
+      `SELECT COUNT(*)::int AS n FROM companies WHERE dl_email IS NOT NULL AND LOWER(dl_email) LIKE ANY($1::text[])`,
+      [FIXTURE_MAILBOX_LIKE_PATTERNS as string[]],
+    )).rows[0]?.n ?? 0;
+    for (const r of companiesResult.rows) samples.push({ table: "companies", column: "dl_email", email: r.dl_email });
+
+    const contactsResult = await clientAudit.query(
+      `SELECT email FROM contacts WHERE email IS NOT NULL AND LOWER(email) LIKE ANY($1::text[]) LIMIT 5`,
+      [FIXTURE_MAILBOX_LIKE_PATTERNS as string[]],
+    );
+    const contactsCount = (await clientAudit.query(
+      `SELECT COUNT(*)::int AS n FROM contacts WHERE email IS NOT NULL AND LOWER(email) LIKE ANY($1::text[])`,
+      [FIXTURE_MAILBOX_LIKE_PATTERNS as string[]],
+    )).rows[0]?.n ?? 0;
+    for (const r of contactsResult.rows) samples.push({ table: "contacts", column: "email", email: r.email });
+
+    setFixtureContaminationScan({
+      monitoredMailboxes: 0, // purged above; always 0 after migration ran
+      users: usersCount,
+      companies: companiesCount,
+      contacts: contactsCount,
+      scannedAt: new Date().toISOString(),
+      samples,
+    });
+
+    const totalCrossTable = usersCount + companiesCount + contactsCount;
+    if (totalCrossTable > 0) {
+      console.warn(
+        `[migrations] fixture contamination AUDIT — found ${totalCrossTable} fixture address(es) across email-bearing tables: ` +
+        `users.username=${usersCount}, companies.dl_email=${companiesCount}, contacts.email=${contactsCount}. ` +
+        `Boundary guards prevent new pollution; review /admin/integrations-health to clean these up if undesired.`,
+      );
+    } else {
+      console.log("[migrations] fixture contamination audit clean — no fixture addresses in users/companies/contacts");
+    }
+  } catch (err) {
+    console.error("[migrations] fixture contamination audit error:", err);
+    setFixtureContaminationScan({
+      monitoredMailboxes: 0,
+      users: 0,
+      companies: 0,
+      contacts: 0,
+      scannedAt: new Date().toISOString(),
+      samples: [],
+    });
+  } finally {
+    clientAudit.release();
   }
 }
