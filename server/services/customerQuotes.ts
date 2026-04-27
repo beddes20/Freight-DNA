@@ -12,6 +12,8 @@ import {
   type InsertFreightOpportunity,
 } from "@shared/schema";
 import { UNKNOWN_CUSTOMER_NAME, classifyPartyType } from "./customerNameResolver";
+import { isCustomerFacingQuoteRep } from "@shared/quoteOpportunitiesRoles";
+import { users } from "@shared/schema";
 import { learnFromReassign } from "./quoteSenderMappings";
 import type { QuotePartyType } from "@shared/schema";
 import { getStaleQuoteFollowUps } from "./staleQuoteFollowup";
@@ -710,19 +712,55 @@ function enrich(
 }
 
 async function loadContext(orgId: string) {
-  const [customers, reps, reasons, laneGroups, carriers] = await Promise.all([
+  // Task #714 — left-join `users` so we can hide reps whose linked user is
+  // a non-customer-facing role (logistics_manager, logistics_coordinator,
+  // generic "sales", etc.) from the Quote Opportunities pickers and the
+  // funnel rep performance breakdown. Reps with NULL `user_id` (legacy /
+  // email-signature only) are kept since they pre-date the user system
+  // and removing them would erase historical attribution.
+  const [customers, repsJoined, reasons, laneGroups, carriers] = await Promise.all([
     db.select().from(quoteCustomers).where(eq(quoteCustomers.organizationId, orgId)).orderBy(asc(quoteCustomers.name)),
-    db.select().from(quoteReps).where(eq(quoteReps.organizationId, orgId)).orderBy(asc(quoteReps.name)),
+    db
+      .select({
+        id: quoteReps.id,
+        organizationId: quoteReps.organizationId,
+        userId: quoteReps.userId,
+        name: quoteReps.name,
+        email: quoteReps.email,
+        linkedUserRole: users.role,
+      })
+      .from(quoteReps)
+      .leftJoin(users, eq(users.id, quoteReps.userId))
+      .where(eq(quoteReps.organizationId, orgId))
+      .orderBy(asc(quoteReps.name)),
     db.select().from(quoteOutcomeReasons).where(eq(quoteOutcomeReasons.organizationId, orgId)),
     db.select().from(quoteLaneGroups).where(eq(quoteLaneGroups.organizationId, orgId)),
     db.select().from(quoteCarriers).where(eq(quoteCarriers.organizationId, orgId)),
   ]);
+  // `allReps` powers `repMap` so individual quote rows can still resolve a
+  // rep's display name even when that rep is hidden from the dropdowns.
+  // `reps` is the public-facing list returned to the client (snapshot.reps)
+  // and is filtered to customer-facing reps only.
+  const allReps: QuoteRep[] = repsJoined.map(({ linkedUserRole: _r, ...rest }) => rest);
+  const customerFacingReps: QuoteRep[] = repsJoined
+    .filter(r => isCustomerFacingQuoteRep(r.linkedUserRole))
+    .map(({ linkedUserRole: _r, ...rest }) => rest);
+  const customerFacingRepIds = new Set<string>(customerFacingReps.map(r => r.id));
   return {
-    customers, reps, reasons, laneGroups, carriers,
+    customers,
+    // Public rep list (snapshot.reps consumes this directly).
+    reps: customerFacingReps,
+    reasons, laneGroups, carriers,
     customerMap: new Map(customers.map(c => [c.id, c])),
-    repMap: new Map(reps.map(r => [r.id, r])),
+    // repMap retains every rep so name lookups in list rows / drawers /
+    // funnel-bucket labels still resolve for legacy / hidden rows.
+    repMap: new Map(allReps.map(r => [r.id, r])),
     reasonMap: new Map(reasons.map(r => [r.id, r])),
     carrierMap: new Map(carriers.map(c => [c.id, c])),
+    // Set used by the funnel performers aggregation to drop quotes
+    // attributed to a non-customer-facing rep from the best/worst rep
+    // ranking. The underlying quote rows are unaffected.
+    customerFacingRepIds,
   };
 }
 
@@ -3774,7 +3812,14 @@ export async function getFunnel(
     cust.quotedSum += num(r.quotedAmount);
     customerAgg.set(r.customerId, cust);
 
-    if (r.repId) {
+    // Task #714 — skip rep buckets for any quote attributed to a rep whose
+    // linked user has a non-customer-facing role (logistics_manager,
+    // logistics_coordinator, generic "sales", etc.). The quote itself is
+    // still counted in lane / customer / stage totals — it just doesn't
+    // surface in the rep best/worst ranking. Reps without a linked user
+    // (legacy / email-signature only) remain in `customerFacingRepIds`
+    // and continue to aggregate normally.
+    if (r.repId && ctx.customerFacingRepIds.has(r.repId)) {
       const rep = repAgg.get(r.repId) ?? {
         id: r.repId,
         label: ctx.repMap.get(r.repId)?.name ?? "—",

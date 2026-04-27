@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CustomerQuotesPortalContext, useCqOverlayPortal } from "@/lib/customer-quotes-portal";
 import { formatCustomerName } from "@shared/laneFormatters";
+import { isQuoteOpportunitiesRole } from "@shared/quoteOpportunitiesRoles";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -354,29 +355,27 @@ function useCustomerQuotesTheme(): { theme: "light" | "dark"; toggle: () => void
 }
 
 // ---------- Page ----------
-// Task #615 — Quote Opportunities is restricted to roles that own the
-// customer relationship. Reps outside this set (drivers, ops, dispatch,
+// Task #615 / #714 — Quote Opportunities is restricted to roles that own
+// the customer relationship. Reps outside this set (drivers, ops, dispatch,
 // generic "sales", carrier-side roles, etc.) see an "Access required"
 // empty state and the sidebar entry is hidden for them too.
-const QUOTE_OPPORTUNITIES_ROLES = new Set<string>([
-  "admin",
-  "director",
-  "national_account_manager",
-  "account_manager",
-]);
-
+//
+// The role set lives in `shared/quoteOpportunitiesRoles.ts` so that the
+// page-access gate, the sidebar visibility check, and the server-side rep
+// filter (which hides reps whose linked user is non-customer-facing from
+// the dropdowns / performance breakdown) cannot drift apart.
 export default function CustomerQuotesPage(): JSX.Element {
-  // Task #615 — gate the entire dashboard at the page boundary so the
-  // hook order inside the heavy inner page never changes between renders.
-  // Sidebar entry is hidden for ungated roles via the same role list, but
-  // direct URL navigation still lands here, so this short-circuit is the
-  // last line of defence on the client.
+  // Gate the entire dashboard at the page boundary so the hook order
+  // inside the heavy inner page never changes between renders. Sidebar
+  // entry is hidden for ungated roles via the same role list, but direct
+  // URL navigation still lands here, so this short-circuit is the last
+  // line of defence on the client.
   const { user: currentUser, isLoading: authLoading } = useAuth();
   const hasAccess =
     !!currentUser
     && typeof currentUser === "object"
     && "role" in currentUser
-    && QUOTE_OPPORTUNITIES_ROLES.has((currentUser as { role: string }).role);
+    && isQuoteOpportunitiesRole((currentUser as { role: string }).role);
   if (authLoading) {
     return (
       <div className="flex items-center justify-center h-full" data-testid="customer-quotes-auth-loading">

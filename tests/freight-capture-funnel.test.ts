@@ -18,7 +18,7 @@ import {
   quoteOpportunities, quoteEvents,
 } from "../shared/schema";
 import { eq, inArray } from "drizzle-orm";
-import { getFunnel, resolveFunnelRepScope } from "../server/services/customerQuotes";
+import { getFunnel, getSnapshot, resolveFunnelRepScope } from "../server/services/customerQuotes";
 
 let passed = 0;
 let failed = 0;
@@ -419,6 +419,147 @@ async function main(): Promise<void> {
       worstLabels.includes("Cust 4"),
       `worst labels: ${worstLabels.join(", ")}`,
     );
+  }
+
+  // ── 9. Customer-facing rep filter (Task #714) ────────────────────────────
+  // Reps whose linked user has a non-customer-facing role (logistics_manager,
+  // logistics_coordinator, generic "sales", etc.) must be hidden from the
+  // public rep list returned by `getSnapshot` AND must NOT surface in the
+  // funnel performers.reps best/worst ranking. Reps with a NULL `user_id`
+  // (legacy / email-signature only) keep appearing.
+  console.log("\n── 9. Customer-facing rep filter (Task #714) ──");
+  {
+    const ts = Date.now();
+    const [org9] = await db
+      .insert(organizations)
+      .values({ name: `Rep Filter ${ts}`, slug: `rep-filter-${ts}` })
+      .returning();
+    orgIdsToCleanup.push(org9.id);
+
+    // Seed users covering the full role taxonomy that the rep filter
+    // touches: 3 customer-facing (admin / NAM / AM) and 3 carrier-facing
+    // (logistics_manager / logistics_coordinator / generic "sales").
+    const roleUsers = await db
+      .insert(users)
+      .values([
+        { organizationId: org9.id, name: "AM User",       username: `am-${ts}@x.com`,    role: "account_manager",         password: "x", managerId: null },
+        { organizationId: org9.id, name: "NAM User",      username: `nam-${ts}@x.com`,   role: "national_account_manager", password: "x", managerId: null },
+        { organizationId: org9.id, name: "Director User", username: `dir-${ts}@x.com`,   role: "director",                 password: "x", managerId: null },
+        { organizationId: org9.id, name: "LM User",       username: `lm-${ts}@x.com`,    role: "logistics_manager",        password: "x", managerId: null },
+        { organizationId: org9.id, name: "LC User",       username: `lc-${ts}@x.com`,    role: "logistics_coordinator",    password: "x", managerId: null },
+        { organizationId: org9.id, name: "Sales User",    username: `sales-${ts}@x.com`, role: "sales",                    password: "x", managerId: null },
+      ])
+      .returning();
+    const [amUser, namUser, dirUser, lmUser, lcUser, salesUser] = roleUsers;
+
+    // 3 customer-facing reps + 3 carrier-facing reps + 1 legacy rep with
+    // no linked user (must still appear in the public rep list).
+    const repsRows = await db
+      .insert(quoteReps)
+      .values([
+        { organizationId: org9.id, name: "Rep AM",     userId: amUser.id },
+        { organizationId: org9.id, name: "Rep NAM",    userId: namUser.id },
+        { organizationId: org9.id, name: "Rep Dir",    userId: dirUser.id },
+        { organizationId: org9.id, name: "Rep LM",     userId: lmUser.id },
+        { organizationId: org9.id, name: "Rep LC",     userId: lcUser.id },
+        { organizationId: org9.id, name: "Rep Sales",  userId: salesUser.id },
+        { organizationId: org9.id, name: "Rep Legacy", userId: null },
+      ])
+      .returning();
+    const [repAM, repNAM, repDir, repLM, repLC, repSales, repLegacy] = repsRows;
+
+    const [cust9] = await db
+      .insert(quoteCustomers)
+      .values({ organizationId: org9.id, name: "Acme 9", partyType: "customer" })
+      .returning();
+
+    // One won + one lost per rep so every rep is "decided" and would
+    // otherwise show up in the best/worst rep ranking.
+    const oppRows: Array<typeof quoteOpportunities.$inferInsert> = [];
+    for (const rep of repsRows) {
+      const now = new Date();
+      oppRows.push({
+        organizationId: org9.id, customerId: cust9.id, repId: rep.id, requestDate: now,
+        equipment: "Van", originCity: "Dallas", originState: "TX",
+        destCity: "Atlanta", destState: "GA", quotedAmount: "1500",
+        outcomeStatus: "won", carrierPaid: "1200",
+      });
+      oppRows.push({
+        organizationId: org9.id, customerId: cust9.id, repId: rep.id, requestDate: now,
+        equipment: "Van", originCity: "Dallas", originState: "TX",
+        destCity: "Memphis", destState: "TN", quotedAmount: "1400",
+        outcomeStatus: "lost_price",
+      });
+    }
+    await db.insert(quoteOpportunities).values(oppRows);
+
+    // (a) Snapshot's public rep list excludes carrier-facing reps but
+    //     keeps the customer-facing reps and the legacy unlinked rep.
+    const snap = await getSnapshot(org9.id, {});
+    const snapRepNames = snap.reps.map(r => r.name).sort();
+    assert(
+      "9a: snapshot.reps includes Rep AM / Rep NAM / Rep Dir",
+      ["Rep AM", "Rep NAM", "Rep Dir"].every(n => snapRepNames.includes(n)),
+      `got ${snapRepNames.join(", ")}`,
+    );
+    assert(
+      "9a: snapshot.reps excludes Rep LM (logistics_manager)",
+      !snapRepNames.includes("Rep LM"),
+      `got ${snapRepNames.join(", ")}`,
+    );
+    assert(
+      "9a: snapshot.reps excludes Rep LC (logistics_coordinator)",
+      !snapRepNames.includes("Rep LC"),
+    );
+    assert(
+      "9a: snapshot.reps excludes Rep Sales (generic sales)",
+      !snapRepNames.includes("Rep Sales"),
+    );
+    assert(
+      "9c: snapshot.reps still includes Rep Legacy (null user_id)",
+      snapRepNames.includes("Rep Legacy"),
+      `got ${snapRepNames.join(", ")}`,
+    );
+
+    // (b) Funnel performers.reps ranking ignores carrier-facing reps but
+    //     includes customer-facing reps and the legacy unlinked rep.
+    const funnel = await getFunnel(org9.id, {}, null);
+    const perfLabels = [...funnel.performers.reps.best, ...funnel.performers.reps.worst]
+      .map(r => r.label);
+    assert(
+      "9b: performers.reps excludes Rep LM",
+      !perfLabels.includes("Rep LM"),
+      `got ${perfLabels.join(", ")}`,
+    );
+    assert(
+      "9b: performers.reps excludes Rep LC",
+      !perfLabels.includes("Rep LC"),
+    );
+    assert(
+      "9b: performers.reps excludes Rep Sales",
+      !perfLabels.includes("Rep Sales"),
+    );
+    assert(
+      "9b: performers.reps includes a customer-facing rep (Rep AM)",
+      perfLabels.includes("Rep AM"),
+      `got ${perfLabels.join(", ")}`,
+    );
+    assert(
+      "9c: performers.reps includes Rep Legacy (null user_id)",
+      perfLabels.includes("Rep Legacy"),
+      `got ${perfLabels.join(", ")}`,
+    );
+    // The carrier-facing reps' QUOTES are still counted in stage totals —
+    // we only hide the rep buckets, not the underlying quote rows.
+    // 7 reps × (1 won + 1 lost) = 14 received, 7 won, 7 lost.
+    assert(
+      "9d: stage totals still include carrier-facing reps' quotes",
+      funnel.summary.totalReceived === 14 && funnel.summary.totalWon === 7,
+      `received=${funnel.summary.totalReceived} won=${funnel.summary.totalWon}`,
+    );
+
+    // Touch references so unused-binding lints don't fire on the destructure.
+    void repAM; void repNAM; void repDir; void repLM; void repLC; void repSales; void repLegacy;
   }
 
   await cleanup();

@@ -31,11 +31,16 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { SIDEBAR_TOOLTIP_DEFAULT_MAP } from "@/lib/sidebar-tooltip-catalog";
 import type { SidebarTooltip } from "@shared/schema";
+import { QUOTE_OPPORTUNITIES_ROLES } from "@shared/quoteOpportunitiesRoles";
 import vtLogoWhite from "@assets/value-truck-logo-white.png";
 
 const SALES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
 const PROSPECTS_ROLES = ["admin", "sales", "sales_director"];
 const DAILY_PRIORITIES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
+// Task #714 — sidebar visibility shares the page-gate role list (see
+// `shared/quoteOpportunitiesRoles.ts`). Materialised as a mutable array
+// because `NavItem.roles` is typed as `string[]`.
+const QUOTE_OPPORTUNITIES_SIDEBAR_ROLES: string[] = Array.from(QUOTE_OPPORTUNITIES_ROLES);
 
 type NavItem = {
   title: string;
@@ -67,7 +72,7 @@ const navItems: NavItem[] = [
 const customerFacingItems: NavItem[] = [
   { title: "Launchpad",         url: "/prospects",        icon: Crosshair,     description: "Find and qualify new prospects to pursue.", roles: PROSPECTS_ROLES },
   { title: "Customers",         url: "/customers",        icon: Network,       description: "Browse customer accounts and account history.", roles: SALES_ROLES },
-  { title: "Customer Quotes",   url: "/customer-quotes",  icon: FileBarChart2, description: "Quote requests, outcomes, and lane performance — drillable analytics across customers and reps.", roles: ["admin", "director", "national_account_manager", "account_manager"] },
+  { title: "Customer Quotes",   url: "/customer-quotes",  icon: FileBarChart2, description: "Quote requests, outcomes, and lane performance — drillable analytics across customers and reps.", roles: QUOTE_OPPORTUNITIES_SIDEBAR_ROLES },
   { title: "Freight Capture",   url: "/freight-capture",  icon: Filter,        description: "Quote-to-book funnel: stages from request received through win, with loss reasons and best/worst performers.", roles: ["admin", "director", "sales_director", "national_account_manager", "account_manager", "sales"] },
   { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           description: "High-value opportunities ranked by potential impact.", roles: SALES_ROLES },
   { title: "RFP & Awards",    url: "/rfp-awards",      icon: Trophy,   description: "Active RFPs and awarded business tracking." },
