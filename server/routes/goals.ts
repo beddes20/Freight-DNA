@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import { pStr } from "../lib/req";
 import { storage } from "../storage";
 import { requireAuth, getCurrentUser } from "../auth";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow } from "../colResolver";
@@ -368,7 +369,7 @@ export function registerGoalRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getGoal((req.params.id as string));
+      const existing = await storage.getGoal(pStr(req.params.id));
       if (!existing) return res.status(404).json({ error: "Goal not found" });
       let canEdit = user.role === "admin" || existing.namId === user.id || existing.amId === user.id;
       if (!canEdit && (user.role === "director" || user.role === "sales_director")) {
@@ -382,7 +383,7 @@ export function registerGoalRoutes(app: Express): void {
         }
       }
       if (!canEdit) return res.status(403).json({ error: "Access denied" });
-      const updated = await storage.updateGoal((req.params.id as string), req.body);
+      const updated = await storage.updateGoal(pStr(req.params.id), req.body);
       // Notify the other party about goal updates
       const isProgressUpdate = req.body.currentValue !== undefined && Object.keys(req.body).length === 1;
       if (isProgressUpdate && existing.namId !== user.id) {
@@ -413,7 +414,7 @@ export function registerGoalRoutes(app: Express): void {
         const newVal = parseFloat(req.body.currentValue || "0");
         const tgt = parseFloat(existing.target || "0");
         if (tgt > 0 && newVal >= tgt) {
-          await storage.updateGoal((req.params.id as string), { status: "completed" }).catch(() => {});
+          await storage.updateGoal(pStr(req.params.id), { status: "completed" }).catch(() => {});
           const goalTitle = existing.title || `${existing.metric.replace(/_/g, " ")} goal`;
           if (existing.namId !== user.id) {
             storage.createNotification({
@@ -450,10 +451,10 @@ export function registerGoalRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getGoal((req.params.id as string));
+      const existing = await storage.getGoal(pStr(req.params.id));
       if (!existing) return res.status(404).json({ error: "Goal not found" });
       if (user.role !== "admin" && existing.namId !== user.id) return res.status(403).json({ error: "Access denied" });
-      await storage.deleteGoal((req.params.id as string));
+      await storage.deleteGoal(pStr(req.params.id));
       cacheInvalidatePrefix(`leaderboard:`);
       res.json({ ok: true });
     } catch (error) {
@@ -465,7 +466,7 @@ export function registerGoalRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const comments = await storage.getGoalComments((req.params.id as string));
+      const comments = await storage.getGoalComments(pStr(req.params.id));
       res.json(comments);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch comments" });
@@ -476,14 +477,14 @@ export function registerGoalRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const goal = await storage.getGoal((req.params.id as string));
+      const goal = await storage.getGoal(pStr(req.params.id));
       if (!goal) return res.status(404).json({ error: "Goal not found" });
       const canComment = user.role === "admin" || goal.namId === user.id || goal.amId === user.id;
       if (!canComment) return res.status(403).json({ error: "Access denied" });
       const body = (req.body.body || req.body.text || "").trim();
       if (!body) return res.status(400).json({ error: "Comment body is required" });
       const comment = await storage.createGoalComment({
-        goalId: (req.params.id as string),
+        goalId: pStr(req.params.id),
         authorId: user.id,
         body,
         createdAt: new Date().toISOString(),
@@ -513,10 +514,10 @@ export function registerGoalRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const comment = await storage.getGoalComment((req.params.id as string));
+      const comment = await storage.getGoalComment(pStr(req.params.id));
       if (!comment) return res.status(404).json({ error: "Comment not found" });
       if (user.role !== "admin" && comment.authorId !== user.id) return res.status(403).json({ error: "Access denied" });
-      await storage.deleteGoalComment((req.params.id as string));
+      await storage.deleteGoalComment(pStr(req.params.id));
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete comment" });
@@ -527,7 +528,7 @@ export function registerGoalRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const goal = await storage.getGoal((req.params.id as string));
+      const goal = await storage.getGoal(pStr(req.params.id));
       if (!goal) return res.status(404).json({ error: "Goal not found" });
       let autoValue: number | null = null;
       const allUsers = await storage.getUsers(req.session.organizationId!);
@@ -624,7 +625,7 @@ export function registerGoalRoutes(app: Express): void {
   // Margin trend: last 6 months of actual margin for the rep tied to a goal
   app.get("/api/goals/:id/margin-trend", requireAuth, async (req, res) => {
     try {
-      const goal = await storage.getGoal((req.params.id as string));
+      const goal = await storage.getGoal(pStr(req.params.id));
       if (!goal) return res.status(404).json({ error: "Goal not found" });
       const allUsers = await storage.getUsers(req.session.organizationId!);
       const amUser = allUsers.find(u => u.id === goal.amId);

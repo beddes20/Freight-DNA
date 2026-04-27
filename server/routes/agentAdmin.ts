@@ -1,6 +1,6 @@
 import { getErrorMessage } from "../lib/errors";
 import type { Express, Request, Response } from "express";
-import { pStr, qStr, qOptStr } from "../lib/req";
+import { pStr, qInt, qOptStr, qStr } from "../lib/req";
 import { eq, and, desc, sql, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../storage";
@@ -155,7 +155,7 @@ export function registerAgentAdminRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const ok = await deleteFact(user.id, String(req.params.id), user.organizationId);
+      const ok = await deleteFact(user.id, pStr(req.params.id), user.organizationId);
       if (!ok) return res.status(404).json({ error: "Fact not found" });
       res.json({ ok: true });
     } catch {
@@ -168,7 +168,7 @@ export function registerAgentAdminRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 50)));
+      const limit = Math.min(200, Math.max(1, qInt(req.query.limit, 50)));
       const rows = await db.select({
         id: agentMemories.id,
         kind: agentMemories.kind,
@@ -191,7 +191,7 @@ export function registerAgentAdminRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const ok = await deleteMemory(user.id, String(req.params.id), user.organizationId);
+      const ok = await deleteMemory(user.id, pStr(req.params.id), user.organizationId);
       if (!ok) return res.status(404).json({ error: "Memory not found" });
       res.json({ ok: true });
     } catch {
@@ -205,9 +205,9 @@ export function registerAgentAdminRoutes(app: Express) {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-      const scope = String(req.query.scope || "me") as "me" | "team" | "org";
-      const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 100)));
-      const before = req.query.before ? new Date(String(req.query.before)) : null;
+      const scope = (qStr(req.query.scope) || "me") as "me" | "team" | "org";
+      const limit = Math.min(200, Math.max(1, qInt(req.query.limit, 100)));
+      const before = qStr(req.query.before) ? new Date(qStr(req.query.before)) : null;
 
       // Resolve target user IDs by scope.
       let userIds: string[] = [user.id];
@@ -294,7 +294,7 @@ export function registerAgentAdminRoutes(app: Express) {
     if (!me) return res.status(401).json({ error: "Unauthorized" });
     if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
 
-    const targetId = String(req.params.userId);
+    const targetId = pStr(req.params.userId);
     const [target] = await db.select().from(users).where(eq(users.id, targetId));
     if (!target || target.organizationId !== me.organizationId) {
       return res.status(404).json({ error: "User not found" });
@@ -333,7 +333,7 @@ export function registerAgentAdminRoutes(app: Express) {
       if (!me) return res.status(401).json({ error: "Unauthorized" });
       if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
 
-      const targetId = String(req.params.userId);
+      const targetId = pStr(req.params.userId);
       const [target] = await db.select().from(users).where(eq(users.id, targetId));
       if (!target || target.organizationId !== me.organizationId) {
         return res.status(404).json({ error: "User not found" });
@@ -420,7 +420,7 @@ export function registerAgentAdminRoutes(app: Express) {
       if (!me) return res.status(401).json({ error: "Unauthorized" });
       if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
 
-      const targetId = String(req.params.userId);
+      const targetId = pStr(req.params.userId);
       const [target] = await db.select().from(users).where(eq(users.id, targetId));
       if (!target || target.organizationId !== me.organizationId) {
         return res.status(404).json({ error: "User not found" });
@@ -665,7 +665,7 @@ export function registerAgentAdminRoutes(app: Express) {
       const me = await getCurrentUser(req);
       if (!me) return res.status(401).json({ error: "Unauthorized" });
       if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
-      const channel = String(req.query.channel || "base") as ChannelSlot;
+      const channel = (qStr(req.query.channel) || "base") as ChannelSlot;
       if (!isChannelSlot(channel)) return res.status(400).json({ error: "Unknown channel slot" });
       const agentId = await ensureDefaultAgent(me.organizationId);
 
@@ -795,7 +795,7 @@ export function registerAgentAdminRoutes(app: Express) {
       const me = await getCurrentUser(req);
       if (!me) return res.status(401).json({ error: "Unauthorized" });
       if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
-      const id = String(req.params.id);
+      const id = pStr(req.params.id);
       const agentId = await ensureDefaultAgent(me.organizationId);
       const [existing] = await db.select().from(agentPlays).where(eq(agentPlays.id, id));
       if (!existing || existing.agentId !== agentId) {
@@ -818,7 +818,7 @@ export function registerAgentAdminRoutes(app: Express) {
       const me = await getCurrentUser(req);
       if (!me) return res.status(401).json({ error: "Unauthorized" });
       if (!isAdmin(me.role)) return res.status(403).json({ error: "Admin only" });
-      const id = String(req.params.id);
+      const id = pStr(req.params.id);
       const agentId = await ensureDefaultAgent(me.organizationId);
       const [existing] = await db.select().from(agentPlays).where(eq(agentPlays.id, id));
       if (!existing || existing.agentId !== agentId) {

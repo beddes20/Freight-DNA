@@ -14,6 +14,7 @@
  */
 
 import type { Express, Request, Response, NextFunction } from "express";
+import { pStr } from "../lib/req";
 import { storage } from "../storage";
 import { getErrorMessage } from "../lib/errors";
 import { MarketSignalEngine } from "../marketSignalEngine";
@@ -82,12 +83,12 @@ export function registerMarketSignalRoutes(app: Express): void {
   // Suppressed signals do not participate in lifecycle transitions.
   app.post("/api/internal/market-signals/:id/suppress", async (req, res) => {
     try {
-      const signal = await engine.getMarketSignalById(req.params.id);
+      const signal = await engine.getMarketSignalById(pStr(req.params.id));
       if (!signal) {
         return res.status(404).json({ error: "Signal not found" });
       }
-      await engine.suppressMarketSignal(req.params.id);
-      res.json({ ok: true, id: req.params.id, status: "suppressed" });
+      await engine.suppressMarketSignal(pStr(req.params.id));
+      res.json({ ok: true, id: pStr(req.params.id), status: "suppressed" });
     } catch (err) {
       console.error("[market-signals] suppress error:", err);
       res.status(500).json({ error: "Failed to suppress market signal" });
@@ -125,7 +126,7 @@ export function registerMarketSignalRoutes(app: Express): void {
   // Signal detail with full evidence payload.
   app.get("/api/internal/market-signals/:id", async (req, res) => {
     try {
-      const signal = await engine.getMarketSignalById(req.params.id);
+      const signal = await engine.getMarketSignalById(pStr(req.params.id));
       if (!signal) {
         return res.status(404).json({ error: "Signal not found" });
       }

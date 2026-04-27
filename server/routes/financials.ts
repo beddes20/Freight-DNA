@@ -2,7 +2,7 @@ import type { Express } from "express";
 import multer from "multer";
 import XLSX from "xlsx";
 import { storage } from "../storage";
-import { requireAuth, getCurrentUser, getVisibleCompanyIds } from "../auth";
+import { getCurrentUser, getVisibleCompanyIds, requireAuth, requireUser } from "../auth";
 import { runRecurringLaneEngineForOrg } from "../recurringLaneCapacityEngine";
 import { runImportFromWorkbook as runAvailableFreightImportFromWorkbook } from "../availableFreightImporter";
 import {
@@ -117,10 +117,9 @@ async function linkSalespersonsFromRows(rows: any[], organizationId: string) {
 export function registerFinancialRoutes(app: Express): void {
   // ── Financial Data ─────────────────────────────────────────────────────────
 
-  app.get("/api/historical-data", requireAuth, async (req, res) => {
+  app.get("/api/historical-data", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
       if (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager" && user.role !== "sales" && user.role !== "sales_director") {
         return res.status(403).json({ error: "Forbidden" });
       }
@@ -180,10 +179,9 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/opportunities", requireAuth, async (req, res) => {
+  app.get("/api/opportunities", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
 
       const latestOppUpload = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
       if (!latestOppUpload) return res.json([]);
@@ -360,10 +358,9 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/opportunities/dismissals", requireAuth, async (req, res) => {
+  app.get("/api/opportunities/dismissals", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
       if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role)) {
         return res.status(403).json({ error: "Forbidden" });
       }
@@ -380,10 +377,9 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/opportunities/dismiss/:companyId", requireAuth, async (req, res) => {
+  app.post("/api/opportunities/dismiss/:companyId", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
       if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role)) {
         return res.status(403).json({ error: "Forbidden" });
       }
@@ -399,10 +395,9 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.delete("/api/opportunities/dismiss/:companyId", requireAuth, async (req, res) => {
+  app.delete("/api/opportunities/dismiss/:companyId", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
       if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role)) {
         return res.status(403).json({ error: "Forbidden" });
       }
@@ -416,10 +411,9 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/opportunities/archived", requireAuth, async (req, res) => {
+  app.get("/api/opportunities/archived", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
 
       const orgId = req.session.organizationId!;
 
@@ -455,10 +449,9 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/opportunities/field-created", requireAuth, async (req, res) => {
+  app.get("/api/opportunities/field-created", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
 
       const orgId = req.session.organizationId!;
 
@@ -504,7 +497,7 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/financials", requireAuth, async (req, res) => {
+  app.get("/api/financials", requireUser, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager" && user.role !== "sales" && user.role !== "sales_director")) {
@@ -537,7 +530,7 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/financials/uploads", requireAuth, async (req, res) => {
+  app.get("/api/financials/uploads", requireUser, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") {
@@ -550,7 +543,7 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/financials/uploads/:id/download", requireAuth, async (req, res) => {
+  app.get("/api/financials/uploads/:id/download", requireUser, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
@@ -590,7 +583,7 @@ export function registerFinancialRoutes(app: Express): void {
    * "Salesperson" column (col AB).  Only users with role "sales" or "sales_director"
    * are candidates.  Matching uses financialRepId first, then normalised name.
    */
-  app.post("/api/financials/upload", requireAuth, upload.single("file"), async (req, res) => {
+  app.post("/api/financials/upload", requireUser, upload.single("file"), async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") {
@@ -682,7 +675,7 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.delete("/api/financials/uploads/:id", requireAuth, async (req, res) => {
+  app.delete("/api/financials/uploads/:id", requireUser, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") {
@@ -695,7 +688,7 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/financials/sheets", requireAuth, async (req, res) => {
+  app.get("/api/financials/sheets", requireUser, async (req, res) => {
     try {
       const latest = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
       if (!latest) return res.json({ bestDealDaysSpot: [], bestDealDaysAll: [], trendAnalysis: [], averagesData: [], dailyAcquisition: [] });
@@ -711,7 +704,7 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/financials/customer-names", requireAuth, async (req, res) => {
+  app.get("/api/financials/customer-names", requireUser, async (req, res) => {
     try {
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const names = new Set<string>();
@@ -730,7 +723,7 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/financials/account-summary", requireAuth, async (req, res) => {
+  app.get("/api/financials/account-summary", requireUser, async (req, res) => {
     try {
       const asCacheKey = `account-summary:${req.session.organizationId}:${qStr(req.query.period) || "current"}`;
       const asCached = cacheGet(asCacheKey);
@@ -838,7 +831,7 @@ export function registerFinancialRoutes(app: Express): void {
   });
 
   // ── Dispatcher summary (for Logistics Managers) ────────────────────────────
-  app.get("/api/financials/dispatcher-summary", requireAuth, async (req, res) => {
+  app.get("/api/financials/dispatcher-summary", requireUser, async (req, res) => {
     try {
       const dsCacheKey = `dispatcher-summary:${req.session.organizationId}:${qStr(req.query.period) || "current"}`;
       const dsCached = cacheGet(dsCacheKey);
@@ -897,7 +890,7 @@ export function registerFinancialRoutes(app: Express): void {
   });
 
   // ── Repeat Carrier metric (for Logistics Managers) ─────────────────────────
-  app.get("/api/financials/repeat-carriers", requireAuth, async (req, res) => {
+  app.get("/api/financials/repeat-carriers", requireUser, async (req, res) => {
     try {
       const latest = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
       if (!latest) return res.json([]);
@@ -970,7 +963,7 @@ export function registerFinancialRoutes(app: Express): void {
   });
 
   // ── Carrier Lane Search — build a call list of carriers by corridor ─────────
-  app.get("/api/carriers/lane-search", requireAuth, async (req, res) => {
+  app.get("/api/carriers/lane-search", requireUser, async (req, res) => {
     try {
       const orgId = req.session.organizationId!;
       const originQuery = (qStr(req.query.origin) || "").trim();
@@ -1167,7 +1160,7 @@ export function registerFinancialRoutes(app: Express): void {
   });
 
   // ── Salesperson summary (for Sales roles) ──────────────────────────────────
-  app.get("/api/financials/salesperson-summary", requireAuth, async (req, res) => {
+  app.get("/api/financials/salesperson-summary", requireUser, async (req, res) => {
     try {
       const latest = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
       if (!latest) return res.json([]);
@@ -1221,7 +1214,7 @@ export function registerFinancialRoutes(app: Express): void {
   });
 
   // ── Last Upload Info ─────────────────────────────────────────────────────────
-  app.get("/api/financials/last-upload-info", requireAuth, async (req, res) => {
+  app.get("/api/financials/last-upload-info", requireUser, async (req, res) => {
     try {
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (!uploads.length) return res.json({ uploadedAt: null, fileName: null });
@@ -1233,7 +1226,7 @@ export function registerFinancialRoutes(app: Express): void {
   });
 
   // ── Attribution Gaps ──────────────────────────────────────────────────────────
-  app.get("/api/financials/attribution-gaps", requireAuth, async (req, res) => {
+  app.get("/api/financials/attribution-gaps", requireUser, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
@@ -1309,7 +1302,7 @@ export function registerFinancialRoutes(app: Express): void {
   });
 
   // ── Salesperson Accounts ──────────────────────────────────────────────────────
-  app.get("/api/financials/salesperson-accounts", requireAuth, async (req, res) => {
+  app.get("/api/financials/salesperson-accounts", requireUser, async (req, res) => {
     try {
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       if (!uploads.length) return res.json([]);
@@ -1386,17 +1379,16 @@ export function registerFinancialRoutes(app: Express): void {
 
   // ── OneDrive Sync & Settings ────────────────────────────────────────────────
 
-  app.get("/api/settings/azure-enabled", requireAuth, async (req, res) => {
+  app.get("/api/settings/azure-enabled", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
       res.json({ enabled: azureCredentialsConfigured() });
     } catch (error) {
       res.status(500).json({ error: "Failed to check Azure status" });
     }
   });
 
-  app.get("/api/settings/onedrive-url", requireAuth, async (req, res) => {
+  app.get("/api/settings/onedrive-url", requireUser, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || (user.role !== "admin" && user.role !== "national_account_manager" && user.role !== "sales")) {
@@ -1409,7 +1401,7 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.patch("/api/settings/onedrive-url", requireAuth, async (req, res) => {
+  app.patch("/api/settings/onedrive-url", requireUser, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") {
@@ -1425,7 +1417,7 @@ export function registerFinancialRoutes(app: Express): void {
   });
 
   // Admin-only endpoint to import financial rows in chunks (for DB cloning)
-  app.post("/api/admin/import-financial-rows", requireAuth, async (req, res) => {
+  app.post("/api/admin/import-financial-rows", requireUser, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
@@ -1438,7 +1430,7 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/financials/sync-onedrive", requireAuth, async (req, res) => {
+  app.post("/api/financials/sync-onedrive", requireUser, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || (user.role !== "admin" && user.role !== "national_account_manager" && user.role !== "sales")) {
@@ -1468,7 +1460,7 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/sync-alert", requireAuth, async (req, res) => {
+  app.get("/api/sync-alert", requireUser, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") {
@@ -1485,7 +1477,7 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/sync-alert/dismiss", requireAuth, async (req, res) => {
+  app.post("/api/sync-alert/dismiss", requireUser, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") {
@@ -1501,7 +1493,7 @@ export function registerFinancialRoutes(app: Express): void {
 
   // ── Historical Data & Opportunities ─────────────────────────────────────────
 
-  app.get("/api/historical-data-summary", requireAuth, async (req, res) => {
+  app.get("/api/historical-data-summary", requireUser, async (req, res) => {
     try {
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const rawHdsSrc = uploads.flatMap(u => (u.rows as any[]) || []);
@@ -1540,7 +1532,7 @@ export function registerFinancialRoutes(app: Express): void {
   });
 
   // ── Lane Corridors ─────────────────────────────────────────────────────────────────────────────
-  app.get("/api/historical-lane-corridors", requireAuth, async (req, res) => {
+  app.get("/api/historical-lane-corridors", requireUser, async (req, res) => {
     try {
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const corridorMap: Record<string, { origin: string; destination: string; originCity: string; originState: string; destCity: string; destState: string; loads: number }> = {};
@@ -1568,7 +1560,7 @@ export function registerFinancialRoutes(app: Express): void {
   });
 
   // ── Heatmap Data ─────────────────────────────────────────────────────────────
-  app.get("/api/historical-heatmap", requireAuth, async (req, res) => {
+  app.get("/api/historical-heatmap", requireUser, async (req, res) => {
     try {
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       console.log(`[heatmap] ${uploads.length} upload(s) found`);

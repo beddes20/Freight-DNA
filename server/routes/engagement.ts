@@ -1,5 +1,5 @@
 import type { Express } from "express";
-import { pStr, qStr, qOptStr } from "../lib/req";
+import { pStr, qOptStr, qStr } from "../lib/req";
 import { storage } from "../storage";
 import { getCurrentUser, canAccessCompany, getVisibleCompanyIds, requireAuth } from "../auth";
 import { type Callout, internalPosts as internalPostsTable, type InsertCrmOpportunity } from "@shared/schema";
@@ -336,7 +336,7 @@ export function registerEngagementRoutes(app: Express) {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const logs = await storage.getOpportunityLogs(req.session.organizationId!);
-      const log = logs.find(l => l.id === req.params.id);
+      const log = logs.find(l => l.id === pStr(req.params.id));
       if (!log) return res.status(404).json({ error: "Not found" });
       if (log.repId !== user.id && user.role !== "admin" && user.role !== "director" && user.role !== "sales_director") {
         return res.status(403).json({ error: "Not authorized" });
@@ -354,7 +354,7 @@ export function registerEngagementRoutes(app: Express) {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const logs = await storage.getOpportunityLogs(req.session.organizationId!);
-      const log = logs.find(l => l.id === req.params.id);
+      const log = logs.find(l => l.id === pStr(req.params.id));
       if (!log) return res.status(404).json({ error: "Not found" });
       if (log.repId !== user.id && user.role !== "admin") return res.status(403).json({ error: "Not authorized" });
       await storage.deleteOpportunityLog(pStr(req.params.id));

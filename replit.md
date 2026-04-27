@@ -50,6 +50,14 @@ Pages and cards use three shared primitives so loading, empty, and error states 
 
 Surfaces standardized in Task #694: `/daily-priorities`, `/customer-quotes` (snapshot/list error + empty filtered table), `/lane-inbox`, `/lanes/work-queue`, plus `CallActivityTrendline`, `CallPaceCard`, `CallQualityPanel`, `CallQualityPortlet`, and `CallQualityDrillIn` on `/calls`. Future pages should import from `@/components/ui/empty-state` and `@/components/ui/error-banner` rather than hand-rolling empty divs or destructive banners. Section 10 of `tests/code-quality-guardrails.test.ts` enforces presence of these components and their wiring on the standardized surfaces.
 
+#### Reusable handler helpers (Task #695)
+Express routes use a small, enforced set of helpers so request parsing, auth, and error handling stay uniform across the ~50 route modules:
+-   **`requireUser`** (`server/auth.ts`) — middleware that runs `requireAuth` then resolves and attaches the current `User` to `req.user`. Routes use `app.get(path, requireUser, async (req, res) => …)` and read `req.user!` directly instead of repeating `getCurrentUser` + null-check blocks (~110 boilerplate blocks were collapsed). The Express `Request` type is augmented in `server/auth.ts` so `req.user` is fully typed across the codebase.
+-   **`pStr`, `qStr`, `qOptStr`, `qStrArr`, `qInt`, `qBool`, `extractListFilters`** (`server/lib/req.ts`) — typed accessors for `req.params` and `req.query`. They normalize the unknown / `string | string[]` shape Express returns, throw `400` on missing required values, and (for `qInt` / `qBool`) coerce + validate. `extractListFilters({ search, status, … })` is the canonical one-liner for list endpoints. Raw `req.params.X` / `req.query.X` reads are banned in route files.
+-   **`getErrorMessage`** (`server/lib/errors.ts`) — already required in catch blocks; legacy patterns like `(err as Error).message` and `err instanceof Error ? err.message : ''` are now also banned in route files.
+
+Sections 11 (directory-wide route hygiene — scans every file under `server/routes/**` for raw param/query reads and legacy error patterns) and 12 (helper presence — verifies `extractListFilters`, `qInt`, `qBool`, the `requireUser` middleware, and the `Request.user` augmentation all exist) of `tests/code-quality-guardrails.test.ts` enforce these conventions on every commit.
+
 ## External Dependencies
 -   **PostgreSQL**: Primary database.
 -   **xlsx (SheetJS)**: Excel and CSV parsing.

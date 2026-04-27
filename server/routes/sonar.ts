@@ -10,6 +10,7 @@
  */
 
 import type { Express, Request, Response } from "express";
+import { qOptStr } from "../lib/req";
 import { requireAuth, getCurrentUser } from "../auth";
 import { getErrorMessage } from "../lib/errors";
 import { storage } from "../storage";
@@ -95,7 +96,7 @@ export function registerSonarRoutes(app: Express): void {
   // Returns national summary + optional role-specific intelligence block.
   app.get("/api/sonar/market-pulse", requireAuth, async (req: Request, res: Response) => {
     try {
-      const role = (req.query.role as string | undefined)?.trim();
+      const role = qOptStr(req.query.role)?.trim();
       const national = await getNationalMarketSummary();
       const cbStatus = getSonarCircuitBreakerStatus();
       const nationalWithStatus = {
@@ -283,7 +284,7 @@ export function registerSonarRoutes(app: Express): void {
   // ── GET /api/sonar/market-otris?markets=Atlanta,Dallas,... ──────────────────
   app.get("/api/sonar/market-otris", requireAuth, async (req: Request, res: Response) => {
     try {
-      const raw = req.query.markets as string | undefined;
+      const raw = qOptStr(req.query.markets);
       if (!raw) return res.json({ otris: [] });
       const markets = raw.split(",").map(m => m.trim()).filter(Boolean).slice(0, 30);
       const otris = await getMarketOtris(markets);
@@ -330,7 +331,7 @@ export function registerSonarRoutes(app: Express): void {
   //   Within each pair, origin and destination are PIPE-separated.
   app.get("/api/sonar/lane-signals", requireAuth, async (req: Request, res: Response) => {
     try {
-      const lanesParam = (req.query.lanes as string | undefined)?.trim();
+      const lanesParam = qOptStr(req.query.lanes)?.trim();
       if (lanesParam) {
         const pairs = lanesParam.split(";")
           .map(s => s.split("|"))
@@ -355,8 +356,8 @@ export function registerSonarRoutes(app: Express): void {
       }
 
       // Single lane mode
-      const origin = (req.query.origin as string | undefined)?.trim();
-      const destination = (req.query.destination as string | undefined)?.trim();
+      const origin = qOptStr(req.query.origin)?.trim();
+      const destination = qOptStr(req.query.destination)?.trim();
       if (!origin || !destination) {
         return res.status(400).json({ error: "Provide origin+destination or lanes= query param" });
       }
@@ -387,8 +388,8 @@ export function registerSonarRoutes(app: Express): void {
   // ATL→DAL probe (timed under the hard lane-call budget).
   app.get("/api/sonar/health", requireAuth, async (req: Request, res: Response) => {
     try {
-      const origin = (req.query.origin as string | undefined)?.trim() || "Atlanta";
-      const destination = (req.query.destination as string | undefined)?.trim() || "Dallas";
+      const origin = qOptStr(req.query.origin)?.trim() || "Atlanta";
+      const destination = qOptStr(req.query.destination)?.trim() || "Dallas";
       const report = await probeSonarHealth({ laneOrigin: origin, laneDestination: destination });
       const now = Date.now();
       const lastSuccessMs = report.daily.lastSuccessAt ? Date.parse(report.daily.lastSuccessAt) : 0;

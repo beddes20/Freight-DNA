@@ -10,6 +10,7 @@
  */
 
 import type { Express, Request, Response } from "express";
+import { pStr, qStr } from "../lib/req";
 import { storage } from "../storage";
 import { requireAuth, getCurrentUser } from "../auth";
 import { cacheGet, cacheSet, cacheInvalidatePrefix } from "../cache";
@@ -59,19 +60,19 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
   function parseRtFilters(req: Request, orgId: string) {
     const now = new Date();
     const defaultStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    const startStr = typeof req.query.start === "string" ? req.query.start : null;
-    const endStr = typeof req.query.end === "string" ? req.query.end : null;
+    const startStr = typeof qStr(req.query.start) === "string" ? qStr(req.query.start) : null;
+    const endStr = typeof qStr(req.query.end) === "string" ? qStr(req.query.end) : null;
     const start = startStr ? new Date(startStr) : defaultStart;
     const end = endStr ? new Date(endStr) : new Date(now.getTime() + 60_000);
-    const repIdsRaw = typeof req.query.repIds === "string" ? req.query.repIds : "";
+    const repIdsRaw = typeof qStr(req.query.repIds) === "string" ? qStr(req.query.repIds) : "";
     const repIds = repIdsRaw
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
-    const accountId = typeof req.query.accountId === "string" && req.query.accountId.trim()
-      ? req.query.accountId.trim()
+    const accountId = typeof qStr(req.query.accountId) === "string" && qStr(req.query.accountId).trim()
+      ? qStr(req.query.accountId).trim()
       : undefined;
-    const businessHours = String(req.query.businessHours ?? "true").toLowerCase() !== "false";
+    const businessHours = (qStr(req.query.businessHours) || "true").toLowerCase() !== "false";
     return {
       orgId,
       start,
@@ -186,7 +187,7 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
       const orgId = user.organizationId;
 
       const uiFilters = parseRtFilters(req, orgId);
-      const granularityRaw = typeof req.query.granularity === "string" ? req.query.granularity : "day";
+      const granularityRaw = typeof qStr(req.query.granularity) === "string" ? qStr(req.query.granularity) : "day";
       const granularity: Granularity = (["day", "week", "month"] as const).includes(granularityRaw as Granularity)
         ? (granularityRaw as Granularity)
         : "day";
@@ -267,8 +268,8 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
 
       const filters = parseRtFilters(req, orgId);
       const pairs = await getCachedPairs(filters);
-      const limit = Math.min(50, Math.max(5, Number(req.query.limit) || 25));
-      const unattributedOnly = String(req.query.unattributedOnly ?? "false").toLowerCase() === "true";
+      const limit = Math.min(50, Math.max(5, Number(qStr(req.query.limit)) || 25));
+      const unattributedOnly = (qStr(req.query.unattributedOnly) || "false").toLowerCase() === "true";
       const rows = buildSlowestThreads(pairs, filters.businessHours, new Date(), limit, { unattributedOnly });
 
       res.json({ businessHours: filters.businessHours, rows });
@@ -531,7 +532,7 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
         }
       }
 
-      const threadIdParam = String(req.params.threadId);
+      const threadIdParam = pStr(req.params.threadId);
       const updated = await db.update(emailConversationThreads)
         .set({ ownerUserId: parsed.data.ownerUserId, updatedAt: new Date() })
         .where(and(
@@ -692,8 +693,8 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
       if (!ALLOWED_ROLES.includes(user.role)) return res.status(403).json({ error: "Forbidden" });
       const orgId = user.organizationId;
 
-      const intentTypeRaw = typeof req.query.intent_type === "string" ? req.query.intent_type.trim() : "";
-      const outcomeRaw = typeof req.query.outcome === "string" ? req.query.outcome.trim().toLowerCase() : "all";
+      const intentTypeRaw = typeof qStr(req.query.intent_type) === "string" ? qStr(req.query.intent_type).trim() : "";
+      const outcomeRaw = typeof qStr(req.query.outcome) === "string" ? qStr(req.query.outcome).trim().toLowerCase() : "all";
       if (!intentTypeRaw) return res.status(400).json({ error: "intent_type is required" });
       const outcome = ["won", "lost", "neutral", "all"].includes(outcomeRaw) ? outcomeRaw : "all";
 

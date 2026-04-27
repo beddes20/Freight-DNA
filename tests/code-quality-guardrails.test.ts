@@ -459,6 +459,139 @@ assert(
   "call-quality-scorecard.tsx is missing standardized empty/error states"
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 11: Directory-wide route hygiene (Task #695)
+// Walk every file in server/routes/ and assert:
+//   • No raw `req.params.X` reads (must be wrapped in pStr)
+//   • No raw `req.query.X` reads (must be wrapped in qStr / qOptStr / qStrArr
+//     / qInt / qBool / extractListFilters)
+//   • No legacy error-message patterns in catch blocks
+//     (`(err as Error)?.message`, `err instanceof Error ? err.message : …`)
+// This catches regressions in route files we haven't hand-listed in earlier
+// sections and is intentionally O(routes) so newly-added route files are
+// covered automatically.
+// ─────────────────────────────────────────────────────────────────────────────
+const ROUTES_DIR = path.join(ROOT, "server", "routes");
+const ALL_ROUTE_FILES = fs
+  .readdirSync(ROUTES_DIR)
+  .filter((f) => f.endsWith(".ts"))
+  .sort();
+
+// Files that legitimately reference the helpers (their own definitions etc).
+// Currently empty — every route file should funnel through the helpers.
+const RAW_REQ_ALLOWLIST = new Set<string>([]);
+
+// Destructuring-pattern allowlist — these files still use
+// `const { x, y } = req.query` / `const { id } = req.params` and have not yet
+// been migrated to the typed accessors. New route files MUST NOT add
+// destructured access; this list should only shrink.
+const DESTRUCTURING_ALLOWLIST = new Set<string>([
+  "carrierHub.ts",
+  "coaching.ts",
+  "companyCollaborators.ts",
+  "conversations.ts",
+  "emailDrafting.ts",
+  "engagement.ts",
+  "freightOpportunityCockpit.ts",
+  "marketSignals.ts",
+  "myProcurement.ts",
+  "playbook.ts",
+  "proactiveOpportunities.ts",
+  "provenTactics.ts",
+]);
+
+const RAW_PARAM_RE = /(?<!pStr\()(?<!qStrArr\()req\.params\.\w+/g;
+const RAW_QUERY_RE =
+  /(?<!qStr\()(?<!qOptStr\()(?<!qStrArr\()(?<!qInt\()(?<!qBool\()(?<!extractListFilters\()req\.query\.\w+/g;
+const LEGACY_ERR_RE_1 = /\(\s*err(?:or)?\s+as\s+Error\s*\)\s*\??\.message/g;
+const LEGACY_ERR_RE_2 =
+  /err(?:or)?\s+instanceof\s+Error\s*\?\s*err(?:or)?\.message/g;
+// Destructured req.params/req.query — escapes the per-property regexes above
+// (`const { x } = req.query` parses past `RAW_QUERY_RE` because there is no
+// `.X` after `req.query`). This was identified as a Section 11 gap during
+// Task #695 architect review.
+const DESTRUCTURE_REQ_RE = /\}\s*=\s*req\.(?:params|query)\b/g;
+// Bracket notation: `req.params["x"]` / `req.query['y']` also escapes the
+// `.X` regex. Forbid it directly.
+const BRACKET_REQ_RE = /\breq\.(?:params|query)\s*\[/g;
+
+for (const f of ALL_ROUTE_FILES) {
+  if (RAW_REQ_ALLOWLIST.has(f)) continue;
+  const src = readFile(path.join("server", "routes", f));
+
+  const rawParams = src.match(RAW_PARAM_RE) ?? [];
+  assert(
+    `routes/${f} — no raw req.params.X (must use pStr)`,
+    rawParams.length === 0,
+    `Found ${rawParams.length} raw req.params reads in server/routes/${f}: e.g. ${rawParams.slice(0, 3).join(", ")}`
+  );
+
+  const rawQueries = src.match(RAW_QUERY_RE) ?? [];
+  assert(
+    `routes/${f} — no raw req.query.X (must use qStr / qOptStr / qStrArr / qInt / qBool / extractListFilters)`,
+    rawQueries.length === 0,
+    `Found ${rawQueries.length} raw req.query reads in server/routes/${f}: e.g. ${rawQueries.slice(0, 3).join(", ")}`
+  );
+
+  const legacyErr = (src.match(LEGACY_ERR_RE_1) ?? []).concat(src.match(LEGACY_ERR_RE_2) ?? []);
+  assert(
+    `routes/${f} — no legacy error patterns (must use getErrorMessage)`,
+    legacyErr.length === 0,
+    `Found ${legacyErr.length} legacy error-message reads in server/routes/${f}`
+  );
+
+  // Destructuring + bracket-notation hygiene. Skip files explicitly grandfathered
+  // in DESTRUCTURING_ALLOWLIST — those are tracked as a follow-up.
+  if (!DESTRUCTURING_ALLOWLIST.has(f)) {
+    const destructured = src.match(DESTRUCTURE_REQ_RE) ?? [];
+    assert(
+      `routes/${f} — no destructured req.params / req.query (must use pStr / qStr helpers)`,
+      destructured.length === 0,
+      `Found ${destructured.length} destructured req.* reads in server/routes/${f}: e.g. ${destructured.slice(0, 3).join(", ")}`
+    );
+
+    const bracketed = src.match(BRACKET_REQ_RE) ?? [];
+    assert(
+      `routes/${f} — no bracket-notation req.params[…] / req.query[…] (must use pStr / qStr helpers)`,
+      bracketed.length === 0,
+      `Found ${bracketed.length} bracket req.* reads in server/routes/${f}: e.g. ${bracketed.slice(0, 3).join(", ")}`
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 12: Reusable handler helpers exist (Task #695)
+// ─────────────────────────────────────────────────────────────────────────────
+const reqHelpersSrc = readFile("server/lib/req.ts");
+assert(
+  "server/lib/req.ts — exports extractListFilters",
+  reqHelpersSrc.includes("export function extractListFilters"),
+  "extractListFilters helper missing from server/lib/req.ts"
+);
+assert(
+  "server/lib/req.ts — exports qInt",
+  reqHelpersSrc.includes("export function qInt"),
+  "qInt helper missing from server/lib/req.ts"
+);
+assert(
+  "server/lib/req.ts — exports qBool",
+  reqHelpersSrc.includes("export function qBool"),
+  "qBool helper missing from server/lib/req.ts"
+);
+
+const authSrc = readFile("server/auth.ts");
+assert(
+  "server/auth.ts — exports requireUser middleware",
+  authSrc.includes("export async function requireUser"),
+  "requireUser middleware missing from server/auth.ts"
+);
+assert(
+  "server/auth.ts — augments Request with user property",
+  authSrc.includes('declare module "express-serve-static-core"') &&
+    authSrc.includes("user?: User"),
+  "Express Request not augmented with user?: User"
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

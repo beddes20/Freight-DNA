@@ -9,7 +9,7 @@
  */
 
 import type { Express } from "express";
-import { pStr, qStr, qOptStr } from "../lib/req";
+import { pStr, qOptStr, qStr } from "../lib/req";
 import { requireAuth, getCurrentUser } from "../auth";
 import { storage } from "../storage";
 import { z } from "zod";
@@ -44,7 +44,7 @@ export function registerGeographicResponsibilitiesRoutes(app: Express): void {
           contactId: qOptStr(req.query.contactId),
           lanePatternId: qOptStr(req.query.lanePatternId),
           status: qOptStr(req.query.status),
-          minConfidence: req.query.minConfidence ? Number(req.query.minConfidence) : undefined,
+          minConfidence: qStr(req.query.minConfidence) ? Number(qStr(req.query.minConfidence)) : undefined,
           responsibilityType: qOptStr(req.query.responsibilityType),
         };
 
@@ -88,7 +88,7 @@ export function registerGeographicResponsibilitiesRoutes(app: Express): void {
         const filters = {
           accountId: qOptStr(req.query.accountId),
           status: qOptStr(req.query.status),
-          minConfidence: req.query.minConfidence ? Number(req.query.minConfidence) : undefined,
+          minConfidence: qStr(req.query.minConfidence) ? Number(qStr(req.query.minConfidence)) : undefined,
           responsibilityType: qOptStr(req.query.responsibilityType),
         };
 

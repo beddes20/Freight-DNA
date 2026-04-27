@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { pStr, qStr, qOptStr } from "../lib/req";
-import { requireAuth, getCurrentUser } from "../auth";
+import { getCurrentUser, requireAuth, requireUser } from "../auth";
 import { storage } from "../storage";
 import {
   webexCredentialsConfigured,
@@ -793,10 +793,9 @@ export function registerWebexRoutes(app: Express) {
 
   loadStoredRefreshToken();
 
-  app.get("/api/webex/authorize", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/webex/authorize", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
       const mode = (qStr(req.query.mode)) === "personal" ? "personal" : "org";
       if (mode === "org" && user.role !== "admin") {
         return res.status(403).json({ error: "Only admins can authorize the org-level Webex connection" });
@@ -818,7 +817,7 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
-  app.get("/api/webex/debug-config", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/webex/debug-config", requireUser, async (req: Request, res: Response) => {
     const user = await getCurrentUser(req);
     if (!user || user.role !== "admin") {
       return res.status(403).json({ error: "Admin only" });
@@ -948,7 +947,7 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
-  app.get("/api/webex/status", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/webex/status", requireUser, async (req: Request, res: Response) => {
     const info = getWebexRedirectUriInfo(req);
     const authState = getWebexAuthState();
     res.json({
@@ -964,13 +963,13 @@ export function registerWebexRoutes(app: Express) {
     });
   });
 
-  app.get("/api/webex/deep-link/:phone", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/webex/deep-link/:phone", requireUser, async (req: Request, res: Response) => {
     const phone = pStr(req.params.phone);
     if (!phone) return res.status(400).json({ error: "Phone number required" });
     res.json({ deepLink: buildWebexCallDeepLink(phone) });
   });
 
-  app.get("/api/webex/presence/:phone", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/webex/presence/:phone", requireUser, async (req: Request, res: Response) => {
     try {
       if (!webexCredentialsConfigured()) {
         return res.json({ status: "unknown", configured: false });
@@ -1000,10 +999,9 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
-  app.get("/api/webex/my-connection", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/webex/my-connection", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
       const record = await storage.getWebexUserToken(user.id);
       const { WEBEX_SCOPES_VERSION } = await import("../webexService");
       const grantedScopes = (record?.scopes ?? "").split(/\s+/).filter(Boolean);
@@ -1031,10 +1029,9 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
-  app.delete("/api/webex/my-connection", requireAuth, async (req: Request, res: Response) => {
+  app.delete("/api/webex/my-connection", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
       const deleted = await disconnectUserWebex(user.id);
       log(`User ${user.id} disconnected their personal Webex account (deleted=${deleted})`);
       res.json({ deleted });
@@ -1047,10 +1044,9 @@ export function registerWebexRoutes(app: Express) {
   // Task #466: Admin Webex Health panel — surfaces per-user scope coverage,
   // last-success per data source, backfill progress %, and recent enrichment
   // failures in one view so admins can spot-check the integration.
-  app.get("/api/webex/health", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/webex/health", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
       if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
       if (!user.organizationId) return res.status(400).json({ error: "User has no organization" });
 
@@ -1176,10 +1172,9 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
-  app.post("/api/webex/sync-my-calls", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/webex/sync-my-calls", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
       if (!webexCredentialsConfigured()) {
         return res.status(400).json({ error: "Webex credentials not configured" });
       }
@@ -1203,10 +1198,9 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
-  app.post("/api/webex/sync-calls", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/webex/sync-calls", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
 
       if (!webexCredentialsConfigured()) {
         return res.status(400).json({ error: "Webex credentials not configured" });
@@ -1280,10 +1274,9 @@ export function registerWebexRoutes(app: Express) {
   // ── 90-day history backfill (Task #316) ──────────────────────────────────
   // Chunked call-history pull extending well past the 48h CDR visibility cap
   // so trendlines can be seeded the first time the analytics scope is enabled.
-  app.post("/api/webex/backfill-history", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/webex/backfill-history", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
       if (user.role !== "admin" && user.role !== "director") {
         return res.status(403).json({ error: "Admin or director only" });
       }
@@ -1319,7 +1312,7 @@ export function registerWebexRoutes(app: Express) {
 
   // ── Webex user mappings (Task #258) ───────────────────────────────────────
 
-  app.get("/api/webex/user-mappings", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/webex/user-mappings", requireUser, async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
@@ -1335,7 +1328,7 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
-  app.post("/api/webex/user-mappings/seed", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/webex/user-mappings/seed", requireUser, async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
@@ -1347,7 +1340,7 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
-  app.post("/api/webex/backfill-attribution", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/webex/backfill-attribution", requireUser, async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
@@ -1378,7 +1371,7 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
-  app.post("/api/webex/user-mappings", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/webex/user-mappings", requireUser, async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
@@ -1394,7 +1387,7 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
-  app.patch("/api/webex/user-mappings/:id", requireAuth, async (req: Request, res: Response) => {
+  app.patch("/api/webex/user-mappings/:id", requireUser, async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
@@ -1417,7 +1410,7 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
-  app.delete("/api/webex/user-mappings/:id", requireAuth, async (req: Request, res: Response) => {
+  app.delete("/api/webex/user-mappings/:id", requireUser, async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
@@ -1434,7 +1427,7 @@ export function registerWebexRoutes(app: Express) {
   // Admin-only read-only view. Aggregates per-rep device mix over the window
   // and surfaces unused provisioned devices. Attribution is via the existing
   // webex_user_mappings table (CDR personId/email -> internal userId).
-  app.get("/api/webex/device-usage", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/webex/device-usage", requireUser, async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
@@ -1654,10 +1647,9 @@ export function registerWebexRoutes(app: Express) {
   // Returns missed inbound calls for the current user's org within the
   // requested window, hydrated with contact/company/attributed-rep details
   // so the portlet can render callback actions without follow-up requests.
-  app.get("/api/webex/missed-inbound", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/webex/missed-inbound", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
 
       const hours = Math.min(Math.max(parseInt((qStr(req.query.hours)) || "48", 10) || 48, 1), 24 * 14);
       const sinceIso = new Date(Date.now() - hours * 3600 * 1000).toISOString();
@@ -1718,10 +1710,9 @@ export function registerWebexRoutes(app: Express) {
   // attributed rep (or the calling user when no rep is attributed / caller is
   // unknown) and returns a navigation target so the UI can open the contact
   // record or a quick-add screen for unknown numbers.
-  app.post("/api/webex/missed-inbound/:id/callback", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/webex/missed-inbound/:id/callback", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
 
       const missed = await storage.getMissedInboundCall(pStr(req.params.id));
       if (!missed || missed.orgId !== user.organizationId) {
@@ -1819,10 +1810,9 @@ export function registerWebexRoutes(app: Express) {
   // Aggregates Webex-synced call touchpoints into KPIs, a dow×hour heatmap,
   // and a ranked rep table with 30-day baseline deltas. Read-only; built on
   // top of the existing call touchpoint records (notes contain `[Webex CDR:`).
-  app.get("/api/webex/usage-report", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/webex/usage-report", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
       if (!["admin", "sales_director", "director", "national_account_manager"].includes(user.role)) {
         return res.status(403).json({ error: "Access restricted to leadership roles" });
       }
@@ -2036,10 +2026,9 @@ export function registerWebexRoutes(app: Express) {
    *   range     — "today" | "7d" | "30d" | "90d" (matches usage-report)
    *   managerId — optional team scope; if set, the rep must belong to it
    */
-  app.get("/api/webex/usage-report/rep-calls", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/webex/usage-report/rep-calls", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
       if (!["admin", "sales_director", "director", "national_account_manager"].includes(user.role)) {
         return res.status(403).json({ error: "Access restricted to leadership roles" });
       }
@@ -2153,7 +2142,7 @@ export function registerWebexRoutes(app: Express) {
     }
   });
 
-  app.post("/api/webex/presence-batch", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/webex/presence-batch", requireUser, async (req: Request, res: Response) => {
     try {
       if (!webexCredentialsConfigured()) {
         return res.json({ presenceMap: {}, configured: false });
@@ -2215,10 +2204,9 @@ export function registerWebexRoutes(app: Express) {
    * dead-air %, avg MOS, avg jitter, avg loss, after-hours %, grade mix) and
    * flags the reps who need coaching attention.
    */
-  app.get("/api/webex/call-quality/scorecard", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/webex/call-quality/scorecard", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
 
       const daysRaw = parseInt(qStr(req.query.days) || "30", 10);
       const days = Math.min(90, Math.max(1, Number.isFinite(daysRaw) ? daysRaw : 30));
@@ -2382,10 +2370,9 @@ export function registerWebexRoutes(app: Express) {
    * window. Used by the Exec Analytics "Call Quality" panel to jump from a
    * row to the underlying calls.
    */
-  app.get("/api/webex/call-quality/calls", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/webex/call-quality/calls", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const daysRaw = parseInt(qStr(req.query.days) || "30", 10);
       const days = Math.min(90, Math.max(1, Number.isFinite(daysRaw) ? daysRaw : 30));
       const userIdFilter = qOptStr(req.query.userId) ?? null;
@@ -2429,10 +2416,9 @@ export function registerWebexRoutes(app: Express) {
    * with up to ~13 months (395 days) of history. Idempotent — safe to
    * re-run; existing rows are upserted.
    */
-  app.post("/api/webex/call-quality/backfill", requireAuth, async (req: Request, res: Response) => {
+  app.post("/api/webex/call-quality/backfill", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       if (user.role !== "admin" && user.role !== "owner") {
         return res.status(403).json({ error: "Admin access required" });
       }

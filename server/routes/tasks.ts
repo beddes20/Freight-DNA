@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import { pStr } from "../lib/req";
 import { storage } from "../storage";
 import { getCurrentUser, canAccessCompany, requireAuth } from "../auth";
 
@@ -46,10 +47,10 @@ export function registerTaskRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(user, (req.params.companyId as string)))) {
+      if (!(await canAccessCompany(user, pStr(req.params.companyId)))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const companyTasks = await storage.getTasksByCompany((req.params.companyId as string));
+      const companyTasks = await storage.getTasksByCompany(pStr(req.params.companyId));
       const counts = await storage.getTaskCommentCounts(companyTasks.map(t => t.id));
       res.json(companyTasks.map(t => ({ ...t, commentCount: counts[t.id] ?? 0 })));
     } catch (error) {
@@ -145,7 +146,7 @@ export function registerTaskRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getTask((req.params.id as string));
+      const existing = await storage.getTask(pStr(req.params.id));
       if (!existing) return res.status(404).json({ error: "Task not found" });
 
       const allUsers = await storage.getUsers(req.session.organizationId!);
@@ -225,7 +226,7 @@ export function registerTaskRoutes(app: Express) {
         }
         data.assignedTo = req.body.assignedTo;
       }
-      const task = await storage.updateTask((req.params.id as string), data);
+      const task = await storage.updateTask(pStr(req.params.id), data);
       if (data.assignedTo && data.assignedTo !== existing.assignedTo && data.assignedTo !== user.id) {
         storage.createNotification({
           userId: data.assignedTo,
@@ -272,12 +273,12 @@ export function registerTaskRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getTask((req.params.id as string));
+      const existing = await storage.getTask(pStr(req.params.id));
       if (!existing) return res.status(404).json({ error: "Task not found" });
       if (existing.assignedBy !== user.id && user.role !== "admin") {
         return res.status(403).json({ error: "Only the creator or admin can delete tasks" });
       }
-      await storage.deleteTask((req.params.id as string));
+      await storage.deleteTask(pStr(req.params.id));
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete task" });
@@ -290,7 +291,7 @@ export function registerTaskRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const comments = await storage.getTaskComments((req.params.id as string));
+      const comments = await storage.getTaskComments(pStr(req.params.id));
       res.json(comments);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch comments" });
@@ -303,16 +304,16 @@ export function registerTaskRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { content, parentId } = req.body;
       if (!content?.trim()) return res.status(400).json({ error: "Content is required" });
-      const task = await storage.getTask((req.params.id as string));
+      const task = await storage.getTask(pStr(req.params.id));
       if (!task) return res.status(404).json({ error: "Task not found" });
       const comment = await storage.createTaskComment({
-        taskId: (req.params.id as string),
+        taskId: pStr(req.params.id),
         authorId: user.id,
         content: content.trim(),
         createdAt: new Date().toISOString(),
         parentId: parentId || null,
       });
-      const existingComments = await storage.getTaskComments((req.params.id as string));
+      const existingComments = await storage.getTaskComments(pStr(req.params.id));
       const threadParticipants = existingComments.map(c => c.authorId);
       const notifyIds = [...new Set([task.assignedTo, task.assignedBy, ...threadParticipants])].filter(
         (id): id is string => !!id && id !== user.id
@@ -338,7 +339,7 @@ export function registerTaskRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const task = await storage.getTask((req.params.id as string));
+      const task = await storage.getTask(pStr(req.params.id));
       if (!task) return res.status(404).json({ error: "Task not found" });
       if (task.assignedBy !== user.id) return res.status(403).json({ error: "Only the task creator can send a reminder" });
       if (task.status === "completed") return res.status(400).json({ error: "Task is already completed" });
@@ -366,13 +367,13 @@ export function registerTaskRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const comments = await storage.getTaskComments((req.params.taskId as string));
-      const comment = comments.find(c => c.id === (req.params.commentId as string));
+      const comments = await storage.getTaskComments(pStr(req.params.taskId));
+      const comment = comments.find(c => c.id === pStr(req.params.commentId));
       if (!comment) return res.status(404).json({ error: "Comment not found" });
       if (comment.authorId !== user.id && user.role !== "admin") {
         return res.status(403).json({ error: "Not authorized" });
       }
-      await storage.deleteTaskComment((req.params.commentId as string));
+      await storage.deleteTaskComment(pStr(req.params.commentId));
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete comment" });

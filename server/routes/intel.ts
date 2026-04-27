@@ -10,7 +10,7 @@ import { getErrorMessage } from "../lib/errors";
  */
 
 import type { Express, Request, Response } from "express";
-import { pStr } from "../lib/req";
+import { pStr, qStr } from "../lib/req";
 import { db, storage } from "../storage";
 import { eq, and, gte } from "drizzle-orm";
 import { intelTrackedLanes, intelLaneRates, recurringLanes } from "../../shared/schema";
@@ -1604,8 +1604,8 @@ export function registerIntelRoutes(app: Express): void {
   type ResolvedFilterUserId = string | undefined | typeof FORBIDDEN;
 
   async function resolveFilterUserIdForIntel(user: any, req: any): Promise<ResolvedFilterUserId> {
-    const requested = typeof req.query.userId === "string" && req.query.userId.trim()
-      ? req.query.userId.trim()
+    const requested = typeof qStr(req.query.userId) === "string" && qStr(req.query.userId).trim()
+      ? qStr(req.query.userId).trim()
       : undefined;
     // Admin and Sales Director keep their existing org-wide visibility — no
     // userId means "everyone", any userId is allowed (per task scope notes).
@@ -1703,7 +1703,7 @@ export function registerIntelRoutes(app: Express): void {
       if (!allowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized" });
 
       const orgId = req.session.organizationId!;
-      const forceRefresh = req.query.refresh === "true";
+      const forceRefresh = qStr(req.query.refresh) === "true";
       if (forceRefresh) {
         const cacheKey = `${orgId}:${user.id}`;
         aiBriefCache.delete(cacheKey);
@@ -1806,8 +1806,8 @@ export function registerIntelRoutes(app: Express): void {
 
       const orgId = req.session.organizationId!;
       // Non-admins are always scoped to their own lanes; admins can filter by userId param
-      const filterUserId = user.role === "admin" && typeof req.query.userId === "string" && req.query.userId.trim()
-        ? req.query.userId.trim()
+      const filterUserId = user.role === "admin" && typeof qStr(req.query.userId) === "string" && qStr(req.query.userId).trim()
+        ? qStr(req.query.userId).trim()
         : user.id;
 
       // ── Task #272 perf ───────────────────────────────────────────────────

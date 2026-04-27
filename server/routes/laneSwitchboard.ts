@@ -12,6 +12,7 @@ import type { Express } from "express";
 import { z } from "zod";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { requireAuth, getCurrentUser } from "../auth";
+import { getErrorMessage } from "../lib/errors";
 import { storage, db } from "../storage";
 import {
   recurringLanes,
@@ -198,7 +199,7 @@ export function registerLaneSwitchboardRoutes(app: Express) {
       res.json(response);
     } catch (err) {
       console.error("[lane-switchboard] error:", err);
-      res.status(500).json({ error: (err as Error)?.message ?? "Switchboard failed" });
+      res.status(500).json({ error: getErrorMessage(err) ?? "Switchboard failed" });
     }
   });
 }

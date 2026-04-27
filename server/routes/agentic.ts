@@ -2,7 +2,7 @@
  * /api/agentic — workflow agent fleet, HITL inbox, pods, adapters, runs.
  */
 import type { Express, Request, Response } from "express";
-import { pStr, qStr, qOptStr } from "../lib/req";
+import { pStr, qOptStr, qStr } from "../lib/req";
 import { db } from "../storage";
 import { eq, and, desc } from "drizzle-orm";
 import { requireAuth, getCurrentUser } from "../auth";
@@ -173,7 +173,7 @@ export function registerAgenticRoutes(app: Express) {
   app.patch("/api/agentic/adapters/:key", requireAuth, async (req, res) => {
     const ctx = await ctxFor(req, res); if (!ctx) return;
     if (ctx.role && !["admin"].includes(ctx.role)) return res.status(403).json({ error: "forbidden" });
-    const key = req.params.key as AdapterKey;
+    const key = pStr(req.params.key) as AdapterKey;
     if (!ALL_ADAPTERS.includes(key)) return res.status(400).json({ error: "unknown_adapter" });
     const row = await upsertAdapterStatus({
       organizationId: ctx.organizationId, adapterKey: key,

@@ -33,7 +33,7 @@ import { pStr, qStr, qOptStr } from "../lib/req";
 import multer from "multer";
 import XLSX from "xlsx";
 import { storage, db, CARRIER_DAILY_BUDGET_CONFIG } from "../storage";
-import { requireAuth, getCurrentUser } from "../auth";
+import { getCurrentUser, requireAuth, requireUser } from "../auth";
 import { publish as publishLiveSync } from "../services/liveSync";
 import { rankCarriersForLane, isHighFrequencyLane, buildHighFrequencyIndex, isHighFrequencyLaneFromIndex, HIGH_FREQUENCY_CONFIG } from "../carrierRankingService";
 import { runRecurringLaneEngineForOrg, LANE_CONFIG } from "../recurringLaneCapacityEngine";
@@ -145,16 +145,14 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
   // ── Feature Flag ───────────────────────────────────────────────────────────
 
-  app.get("/api/feature-flags/:key", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/feature-flags/:key", requireUser, async (req, res) => {
+    const user = req.user!;
     const enabled = await storage.getFeatureFlag(user.organizationId, pStr(req.params.key));
     res.json({ key: pStr(req.params.key), enabled });
   });
 
-  app.patch("/api/feature-flags/:key", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.patch("/api/feature-flags/:key", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!ADMIN_ROLES.includes(user.role)) return res.status(403).json({ error: "Admin/Director only" });
     const { enabled } = req.body;
     if (typeof enabled !== "boolean") return res.status(400).json({ error: "enabled must be boolean" });
@@ -171,9 +169,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
   // admins need to seed the carrier catalog *before* enabling the feature flag,
   // so gating it behind lane_carrier_outreach_v1 would create a pre-launch catch-22.
 
-  app.get("/api/carriers", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/carriers", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!ADMIN_ROLES.includes(user.role)) {
       return res.status(403).json({ error: "Director/Admin only" });
     }
@@ -181,9 +178,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     res.json(list);
   });
 
-  app.post("/api/carriers", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.post("/api/carriers", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!ADMIN_ROLES.includes(user.role)) {
       return res.status(403).json({ error: "Director/Admin only" });
     }
@@ -196,9 +192,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
   // ── Phase 2: External Carrier Import + Sourcing Performance ──────────────
 
   /** GET /api/carriers/sourcing-performance — per-channel analytics */
-  app.get("/api/carriers/sourcing-performance", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/carriers/sourcing-performance", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     try {
       const channels = await storage.getCarrierSourcingPerformance(user.organizationId);
@@ -210,9 +205,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
   });
 
   /** POST /api/carriers/import — import carriers without lane context */
-  app.post("/api/carriers/import", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.post("/api/carriers/import", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     const schema = z.object({
       carriers: z.array(z.object({
@@ -241,17 +235,15 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
   });
 
   /** GET /api/carriers/import-batches — list all org import batches */
-  app.get("/api/carriers/import-batches", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/carriers/import-batches", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     const batches = await storage.getCarrierImportBatches(user.organizationId);
     res.json(batches);
   });
 
-  app.patch("/api/carriers/:id", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.patch("/api/carriers/:id", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!ADMIN_ROLES.includes(user.role)) {
       return res.status(403).json({ error: "Director/Admin only" });
     }
@@ -277,9 +269,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     res.json(carrier);
   });
 
-  app.delete("/api/carriers/:id", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.delete("/api/carriers/:id", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!["admin", "director"].includes(user.role)) {
       return res.status(403).json({ error: "Admin/Director only" });
     }
@@ -294,9 +285,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
   });
 
   // ── Bulk delete carriers ───────────────────────────────────────────────────
-  app.delete("/api/carriers", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.delete("/api/carriers", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!ADMIN_ROLES.includes(user.role)) return res.status(403).json({ error: "Admin/Director only" });
     const ids = req.body?.ids;
     if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids array required" });
@@ -309,8 +299,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
   app.post("/api/admin/carriers/seed-from-excel", upload.single("file"), async (req, res, next) => {
     try {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+    const user = req.user!;
     if (!ADMIN_ROLES.includes(user.role)) return res.status(403).json({ error: "Admin/Director only" });
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
@@ -694,7 +683,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
   // ── Lane Outreach Config (client-readable, no flag gate) ──────────────────
 
-  app.get("/api/lane-outreach-config", requireAuth, async (_req, res) => {
+  app.get("/api/lane-outreach-config", requireUser, async (_req, res) => {
     res.json({
       completionCarriersContacted: LANE_CONFIG.completionCarriersContacted,
     });
@@ -702,9 +691,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
   // ── Recurring Lanes ────────────────────────────────────────────────────────
 
-  app.get("/api/recurring-lanes", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/recurring-lanes", requireUser, async (req, res) => {
+    const user = req.user!;
     const flagOn = await isFeatureEnabled(user.organizationId);
     if (!flagOn) return res.json([]);
 
@@ -716,9 +704,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
   // ── Lane Work Queue (all authenticated users) — must be before /:id ────────
 
-  app.get("/api/recurring-lanes/work-queue", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/recurring-lanes/work-queue", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     try {
       // Pagination: keyset by (laneScore DESC, laneId). Default page size 50.
@@ -915,9 +902,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
   // ── Unactioned Hot Reply Count (for sidebar badge) ──────────────────────────
 
-  app.get("/api/recurring-lanes/unactioned-reply-count", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/recurring-lanes/unactioned-reply-count", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     try {
       const { visibleUserIds, canSeeUnassigned } = await storage.resolveVisibleUserIds(
@@ -933,9 +919,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
   });
 
   /** Read-only: returns the metadata from the last engine run for admin debug panel. */
-  app.get("/api/recurring-lanes/engine-status", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/recurring-lanes/engine-status", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Admin/Director only" });
     try {
@@ -949,9 +934,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
   // ── Manual Lane Creation ───────────────────────────────────────────────────
 
-  app.post("/api/lanes/manual", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.post("/api/lanes/manual", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
     const schema = z.object({
@@ -1050,9 +1034,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/recurring-lanes/:id", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/recurring-lanes/:id", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     const lane = await getLaneForOrg(pStr(req.params.id), user, res);
     if (!lane) return;
@@ -1066,9 +1049,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
    * Returns reply summary (totalReplied, hotCount, topStatus, topCarrierName, needsAction),
    * bench counts, and any matched award task info. NOT included in the LWQ list payload.
    */
-  app.get("/api/recurring-lanes/:id/detail", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/recurring-lanes/:id/detail", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     const lane = await getLaneForOrg(pStr(req.params.id), user, res);
     if (!lane) return;
@@ -1130,9 +1112,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     }
   });
 
-  app.patch("/api/recurring-lanes/:id", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.patch("/api/recurring-lanes/:id", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
     const lane = await storage.getRecurringLane(pStr(req.params.id));
@@ -1231,9 +1212,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
   // ── Lane Delete ────────────────────────────────────────────────────────────
 
-  app.delete("/api/recurring-lanes/:id", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.delete("/api/recurring-lanes/:id", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
     const lane = await storage.getRecurringLane(pStr(req.params.id));
@@ -1257,9 +1237,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
   // ── Lane Assignment ────────────────────────────────────────────────────────
 
-  app.post("/api/recurring-lanes/:laneId/assign", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.post("/api/recurring-lanes/:laneId/assign", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
     const lane = await storage.getRecurringLane(pStr(req.params.laneId));
@@ -1395,9 +1374,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
   });
 
   // Run the recurring lane engine + scoring on demand (admin/director)
-  app.post("/api/recurring-lanes/run-engine", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.post("/api/recurring-lanes/run-engine", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Admin/Director only" });
 
@@ -1434,9 +1412,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     return Date.now() - lastDate.getTime() <= ACTIVE_RECENCY_MS;
   };
 
-  app.get("/api/lanes/:laneId/carrier-suggestions", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/lanes/:laneId/carrier-suggestions", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
     const lane = await getLaneForOrg(pStr(req.params.laneId), user!, res);
@@ -1741,9 +1718,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
   // ── Draft Outreach Emails ──────────────────────────────────────────────────
 
-  app.post("/api/lanes/:laneId/draft-outreach-emails", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.post("/api/lanes/:laneId/draft-outreach-emails", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
     const lane = await getLaneWithAccessCheck(pStr(req.params.laneId), user!, res);
@@ -1850,9 +1826,8 @@ House style — follow every rule:
 
   // ── Carrier Interest / Bench ───────────────────────────────────────────────
 
-  app.get("/api/lanes/:laneId/carrier-bench", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/lanes/:laneId/carrier-bench", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     const lane = await getLaneForOrg(pStr(req.params.laneId), user!, res);
     if (!lane) return;
@@ -1956,9 +1931,8 @@ House style — follow every rule:
     }
   }
 
-  app.post("/api/lanes/:laneId/carrier-interest", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.post("/api/lanes/:laneId/carrier-interest", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     const lane = await getLaneWithAccessCheck(pStr(req.params.laneId), user!, res);
     if (!lane) return;
@@ -2026,9 +2000,8 @@ House style — follow every rule:
 
   // ── Reply Classification ───────────────────────────────────────────────────
 
-  app.post("/api/lanes/:laneId/classify-reply", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.post("/api/lanes/:laneId/classify-reply", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     const lane = await getLaneWithAccessCheck(pStr(req.params.laneId), user!, res);
     if (!lane) return;
@@ -2155,9 +2128,8 @@ Respond with ONLY the status label (one of the 5 above), nothing else.
 
   // ── Follow-up Suggestions ─────────────────────────────────────────────────
 
-  app.get("/api/lanes/:laneId/followup-suggestions", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/lanes/:laneId/followup-suggestions", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     const lane = await getLaneForOrg(pStr(req.params.laneId), user!, res);
     if (!lane) return;
@@ -2269,9 +2241,8 @@ Rules for suggestions:
   // Sends emails via the configured provider (Resend → SMTP fallback),
   // creates an outreach log with send-tracking fields, and upserts bench entries.
 
-  app.post("/api/lanes/:laneId/send-outreach-emails", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.post("/api/lanes/:laneId/send-outreach-emails", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
     const lane = await getLaneWithAccessCheck(pStr(req.params.laneId), user!, res);
@@ -2632,9 +2603,8 @@ Rules for suggestions:
 
   // ── Outreach Log & Card Completion ────────────────────────────────────────
 
-  app.post("/api/lanes/:laneId/outreach-log", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.post("/api/lanes/:laneId/outreach-log", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     const lane = await getLaneWithAccessCheck(pStr(req.params.laneId), user!, res);
     if (!lane) return;
@@ -2755,9 +2725,8 @@ Rules for suggestions:
     res.json({ log, carriersContactedCount: newCount, resolved });
   });
 
-  app.get("/api/lanes/:laneId/outreach-log", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/lanes/:laneId/outreach-log", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     const lane = await getLaneForOrg(pStr(req.params.laneId), user!, res);
     if (!lane) return;
@@ -2768,12 +2737,11 @@ Rules for suggestions:
   // ── Phase 2: Lane-specific carrier import ─────────────────────────────────
 
   /** POST /api/lanes/:laneId/import-carriers — import external carriers for a lane */
-  app.post("/api/lanes/:laneId/import-carriers", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.post("/api/lanes/:laneId/import-carriers", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
-    const { laneId } = req.params;
+    const laneId = pStr(req.params.laneId);
     const lane = await storage.getRecurringLane(laneId);
     if (!lane || lane.orgId !== user.organizationId) {
       return res.status(404).json({ error: "Lane not found" });
@@ -2809,9 +2777,8 @@ Rules for suggestions:
   });
 
   /** GET /api/lanes/:laneId/import-batches — list import batches for a lane */
-  app.get("/api/lanes/:laneId/import-batches", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/lanes/:laneId/import-batches", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
     const batches = await storage.getCarrierImportBatches(user.organizationId, pStr(req.params.laneId));
     res.json(batches);
@@ -2820,9 +2787,8 @@ Rules for suggestions:
   // ── Lane Coverage Profile ──────────────────────────────────────────────────
 
   /** GET /api/lanes/:laneId/coverage-profile — compute on demand and cache */
-  app.get("/api/lanes/:laneId/coverage-profile", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/lanes/:laneId/coverage-profile", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
     const lane = await getLaneForOrg(pStr(req.params.laneId), user, res);
@@ -2838,9 +2804,8 @@ Rules for suggestions:
   });
 
   /** POST /api/lanes/:laneId/coverage-profile/confirm — user confirms stable status */
-  app.post("/api/lanes/:laneId/coverage-profile/confirm", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.post("/api/lanes/:laneId/coverage-profile/confirm", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
     const lane = await getLaneWithAccessCheck(pStr(req.params.laneId), user, res);
@@ -2865,9 +2830,8 @@ Rules for suggestions:
   });
 
   /** POST /api/lanes/:laneId/coverage-profile/override — set manual override status */
-  app.post("/api/lanes/:laneId/coverage-profile/override", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.post("/api/lanes/:laneId/coverage-profile/override", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
     const lane = await getLaneWithAccessCheck(pStr(req.params.laneId), user, res);
@@ -2901,9 +2865,8 @@ Rules for suggestions:
   });
 
   /** POST /api/lanes/:laneId/coverage-profile/broaden — enable open procurement mode */
-  app.post("/api/lanes/:laneId/coverage-profile/broaden", async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.post("/api/lanes/:laneId/coverage-profile/broaden", requireUser, async (req, res) => {
+    const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
 
     const lane = await getLaneWithAccessCheck(pStr(req.params.laneId), user, res);
@@ -2964,9 +2927,8 @@ Rules for suggestions:
   // ── Procurement Task Outreach Logs ────────────────────────────────────────
   // Returns carrier_outreach_logs records written by the procurement send flow
   // for a given task, so the procurement workspace can display reply status.
-  app.get("/api/procurement/:taskId/outreach-logs", requireAuth, async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/procurement/:taskId/outreach-logs", requireUser, async (req, res) => {
+    const user = req.user!;
     const task = await storage.getTask(pStr(req.params.taskId));
     if (!task) return res.status(404).json({ error: "Task not found" });
     // Org-scope: the task must belong to the user's org (via task.orgId or linked user)
@@ -2995,9 +2957,8 @@ Rules for suggestions:
   //   - Any authenticated user can view their own audit (repId omitted or = self).
   //   - Managers (admin / director / national_account_manager / logistics_manager)
   //     can view any rep in their org.
-  app.get("/api/lwq/send-reply-audit", requireAuth, async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/lwq/send-reply-audit", requireUser, async (req, res) => {
+    const user = req.user!;
 
     const MANAGER_ROLES = new Set(["admin", "director", "national_account_manager", "logistics_manager"]);
     const isManager = MANAGER_ROLES.has(user.role);
@@ -3234,9 +3195,8 @@ Rules for suggestions:
   // ── Admin: Graph Reply Tracking Health Check ─────────────────────────────
   // Returns the current Mail.Read permission status and subscription state.
   // Accessible to any authenticated admin user. Does not expose secrets.
-  app.get("/api/admin/graph-reply-status", requireAuth, async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/admin/graph-reply-status", requireUser, async (req, res) => {
+    const user = req.user!;
     if (user.role !== "admin" && user.role !== "owner") {
       return res.status(403).json({ error: "Forbidden" });
     }

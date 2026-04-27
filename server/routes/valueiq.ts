@@ -25,7 +25,7 @@ import { getErrorMessage } from "../lib/errors";
  * existing client SSE consumer can be reused.
  */
 import type { Express, Request, Response } from "express";
-import { pStr, qStr, qOptStr } from "../lib/req";
+import { pStr, qOptStr, qStr } from "../lib/req";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import multer from "multer";
@@ -210,8 +210,8 @@ export function registerValueIQRoutes(app: Express) {
   app.get("/api/valueiq/threads", requireAuth, async (req: Request, res: Response) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
-    const archived = req.query.archived === "true";
-    const projectId = typeof req.query.projectId === "string" ? req.query.projectId : null;
+    const archived = qStr(req.query.archived) === "true";
+    const projectId = typeof qStr(req.query.projectId) === "string" ? qStr(req.query.projectId) : null;
     const conds = [eq(threadsTable.userId, user.id)];
     if (archived) {
       // archived rows only when ?archived=true
@@ -612,7 +612,7 @@ export function registerValueIQRoutes(app: Express) {
         await db.execute(sql`SELECT 1`);
         return { ok: true, ms: Date.now() - start, configured: true } as const;
       } catch (err) {
-        return { ok: false, ms: Date.now() - start, configured: true, error: (err as Error).message } as const;
+        return { ok: false, ms: Date.now() - start, configured: true, error: getErrorMessage(err) } as const;
       }
     })();
     const pgvectorProbe = (async () => {
@@ -626,7 +626,7 @@ export function registerValueIQRoutes(app: Express) {
         const ok = ext.rows.length > 0 && idx.rows.length > 0;
         return { ok, ms: Date.now() - start, configured: ext.rows.length > 0, indexed: idx.rows.length > 0 };
       } catch (err) {
-        return { ok: false, ms: Date.now() - start, configured: false, error: (err as Error).message };
+        return { ok: false, ms: Date.now() - start, configured: false, error: getErrorMessage(err) };
       }
     })();
     // ── Embedder probe (one tiny embedding round-trip) ──
@@ -640,7 +640,7 @@ export function registerValueIQRoutes(app: Express) {
         const ok = Array.isArray(v) && v.length > 0;
         return { ok, ms: Date.now() - start, configured: true, lastSuccessAt: ok ? new Date().toISOString() : undefined };
       } catch (err) {
-        return { ok: false, ms: Date.now() - start, configured: true, error: (err as Error).message };
+        return { ok: false, ms: Date.now() - start, configured: true, error: getErrorMessage(err) };
       }
     })();
     // ── EIA probe (shares cache with the freight tool) ──
@@ -650,14 +650,14 @@ export function registerValueIQRoutes(app: Express) {
         const { getEiaDieselPrice } = await import("../sonarClient");
         const v = await getEiaDieselPrice();
         return { ok: !!v, ms: Date.now() - start, configured: true, lastSuccessAt: lastSuccess.eia };
-      } catch (err) { return { ok: false, ms: Date.now() - start, configured: true, error: (err as Error).message, lastSuccessAt: lastSuccess.eia }; }
+      } catch (err) { return { ok: false, ms: Date.now() - start, configured: true, error: getErrorMessage(err), lastSuccessAt: lastSuccess.eia }; }
     })();
     const sonarProbe = (async () => {
       try {
         const { getSonarCircuitBreakerStatus } = await import("../sonarClient");
         const cb = getSonarCircuitBreakerStatus();
         return { ok: !cb.isOpen, configured: true, circuitBreaker: cb };
-      } catch (err) { return { ok: false, configured: false, error: (err as Error).message }; }
+      } catch (err) { return { ok: false, configured: false, error: getErrorMessage(err) }; }
     })();
     const openaiConfigured = !!process.env.OPENAI_API_KEY;
     const anthropicConfigured = !!process.env.ANTHROPIC_API_KEY;

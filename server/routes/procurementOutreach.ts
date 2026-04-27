@@ -12,6 +12,7 @@
  */
 
 import type { Express } from "express";
+import { qStr } from "../lib/req";
 import { storage } from "../storage";
 import { getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "../auth";
 import { rankCarriersForLane } from "../carrierRankingService";
@@ -107,11 +108,11 @@ export function registerProcurementOutreachRoutes(app: Express): void {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Unauthorized" });
 
-    const origin = String(req.query.origin ?? "").trim();
-    const destination = String(req.query.destination ?? "").trim();
-    const volume = parseFloat(String(req.query.volume ?? "0")) || 0;
-    const equipmentType = String(req.query.equipmentType ?? "").trim() || null;
-    const customerName = String(req.query.customerName ?? "").trim() || null;
+    const origin = (qStr(req.query.origin) || "").trim();
+    const destination = (qStr(req.query.destination) || "").trim();
+    const volume = parseFloat((qStr(req.query.volume) || "0")) || 0;
+    const equipmentType = (qStr(req.query.equipmentType) || "").trim() || null;
+    const customerName = (qStr(req.query.customerName) || "").trim() || null;
 
     if (!origin || !destination) {
       return res.status(400).json({ error: "origin and destination are required" });

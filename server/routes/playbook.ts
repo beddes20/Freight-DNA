@@ -1,4 +1,5 @@
 import { getErrorMessage } from "../lib/errors";
+import { pStr, qStr } from "../lib/req";
 /**
  * Playbook Module Routes (Task #300)
  *
@@ -521,7 +522,7 @@ export function registerPlaybookRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const [play] = await db.select().from(plays)
-        .where(and(eq(plays.id, String(req.params.id)), eq(plays.orgId, user.organizationId)));
+        .where(and(eq(plays.id, pStr(req.params.id)), eq(plays.orgId, user.organizationId)));
       if (!play) return res.status(404).json({ error: "Play not found" });
       if (!isAuthor(user.role) && play.status !== "published") {
         return res.status(404).json({ error: "Play not found" });
@@ -581,7 +582,7 @@ export function registerPlaybookRoutes(app: Express): void {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       if (!isAuthor(user.role)) return res.status(403).json({ error: "Manager/Admin only" });
       const [existing] = await db.select().from(plays)
-        .where(and(eq(plays.id, String(req.params.id)), eq(plays.orgId, user.organizationId)));
+        .where(and(eq(plays.id, pStr(req.params.id)), eq(plays.orgId, user.organizationId)));
       if (!existing) return res.status(404).json({ error: "Play not found" });
 
       const parsed = playInputSchema.partial().parse(req.body);
@@ -640,7 +641,7 @@ export function registerPlaybookRoutes(app: Express): void {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       if (!isAuthor(user.role)) return res.status(403).json({ error: "Manager/Admin only" });
       const [existing] = await db.select().from(plays)
-        .where(and(eq(plays.id, String(req.params.id)), eq(plays.orgId, user.organizationId)));
+        .where(and(eq(plays.id, pStr(req.params.id)), eq(plays.orgId, user.organizationId)));
       if (!existing) return res.status(404).json({ error: "Play not found" });
       const [updated] = await db.update(plays)
         .set({ status: "published", updatedAt: new Date() })
@@ -664,7 +665,7 @@ export function registerPlaybookRoutes(app: Express): void {
       if (!isAuthor(user.role)) return res.status(403).json({ error: "Manager/Admin only" });
       const [updated] = await db.update(plays)
         .set({ status: "archived", updatedAt: new Date() })
-        .where(and(eq(plays.id, String(req.params.id)), eq(plays.orgId, user.organizationId)))
+        .where(and(eq(plays.id, pStr(req.params.id)), eq(plays.orgId, user.organizationId)))
         .returning();
       if (!updated) return res.status(404).json({ error: "Play not found" });
       res.json({ play: updated });
@@ -692,7 +693,7 @@ export function registerPlaybookRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const [play] = await db.select().from(plays)
-        .where(and(eq(plays.id, String(req.params.id)), eq(plays.orgId, user.organizationId)));
+        .where(and(eq(plays.id, pStr(req.params.id)), eq(plays.orgId, user.organizationId)));
       if (!play || play.status !== "published") return res.status(404).json({ error: "Play not found" });
 
       const parsed = runSchema.parse(req.body);
@@ -831,7 +832,7 @@ export function registerPlaybookRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const [run] = await db.select().from(playRuns)
-        .where(and(eq(playRuns.id, String(req.params.runId)), eq(playRuns.orgId, user.organizationId)));
+        .where(and(eq(playRuns.id, pStr(req.params.runId)), eq(playRuns.orgId, user.organizationId)));
       if (!run) return res.status(404).json({ error: "Run not found" });
       if (run.repUserId && run.repUserId !== user.id && !isAuthor(user.role)) {
         return res.status(403).json({ error: "Only the assigned rep or a manager can mark this run sent" });
@@ -881,7 +882,7 @@ export function registerPlaybookRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const [run] = await db.select().from(playRuns)
-        .where(and(eq(playRuns.id, String(req.params.runId)), eq(playRuns.orgId, user.organizationId)));
+        .where(and(eq(playRuns.id, pStr(req.params.runId)), eq(playRuns.orgId, user.organizationId)));
       if (!run) return res.status(404).json({ error: "Run not found" });
       const isOwner = run.repUserId === user.id;
       if (!isOwner && !isAuthor(user.role)) {
@@ -941,7 +942,7 @@ export function registerPlaybookRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       const [run] = await db.select().from(playRuns)
-        .where(and(eq(playRuns.id, String(req.params.runId)), eq(playRuns.orgId, user.organizationId)));
+        .where(and(eq(playRuns.id, pStr(req.params.runId)), eq(playRuns.orgId, user.organizationId)));
       if (!run) return res.status(404).json({ error: "Run not found" });
 
       // Authz: only the rep who owns the run, or a manager/admin, can record an outcome.
@@ -1001,10 +1002,10 @@ export function registerPlaybookRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const requestedScope = String(req.query.scope ?? "me");
+      const requestedScope = (qStr(req.query.scope) || "me");
       // Only managers/admins can request 'org' scope; everyone else is forced to 'me'.
       const scope = requestedScope === "org" && isAuthor(user.role) ? "org" : "me";
-      const status = req.query.status ? String(req.query.status) : null;
+      const status = qStr(req.query.status) ? qStr(req.query.status) : null;
 
       const conds = [eq(playRuns.orgId, user.organizationId)];
       if (scope === "me") conds.push(eq(playRuns.repUserId, user.id));
@@ -1147,7 +1148,7 @@ export function registerPlaybookRoutes(app: Express): void {
       });
 
       // CSV export option.
-      if (String(req.query.format ?? "json") === "csv") {
+      if ((qStr(req.query.format) || "json") === "csv") {
         const header = "play,audience,channel,status,completed_runs,success,fail,no_response,win_rate_pct,median_hours";
         const csv = [header].concat(
           analytics.map((a) => [

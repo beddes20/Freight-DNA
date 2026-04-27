@@ -17,6 +17,7 @@
  */
 
 import type { Express, Request, Response } from "express";
+import { pStr, qStr } from "../lib/req";
 import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import { getCurrentUser } from "../auth";
 import { storage, db } from "../storage";
@@ -224,13 +225,13 @@ export function registerNbaReadyToActRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const card = await storage.getNbaCard(String(req.params.id));
+      const card = await storage.getNbaCard(pStr(req.params.id));
       if (!card) return res.status(404).json({ error: "Card not found" });
       if (card.orgId !== user.organizationId) return res.status(403).json({ error: "Not your org" });
 
-      const overrideContactId = typeof req.query.contactId === "string" && req.query.contactId ? req.query.contactId : undefined;
-      const tone = typeof req.query.tone === "string" && TONE_INSTRUCTIONS[req.query.tone] !== undefined ? req.query.tone : "default";
-      const regenerate = req.query.regenerate === "1" || req.query.regenerate === "true";
+      const overrideContactId = typeof qStr(req.query.contactId) === "string" && qStr(req.query.contactId) ? qStr(req.query.contactId) : undefined;
+      const tone = typeof qStr(req.query.tone) === "string" && TONE_INSTRUCTIONS[qStr(req.query.tone)] !== undefined ? qStr(req.query.tone) : "default";
+      const regenerate = qStr(req.query.regenerate) === "1" || qStr(req.query.regenerate) === "true";
 
       const cacheKey = makeCacheKey(card.id, overrideContactId, tone);
       const now = Date.now();

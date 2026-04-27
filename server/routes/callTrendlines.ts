@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { pStr, qStr, qOptStr } from "../lib/req";
-import { requireAuth, getCurrentUser } from "../auth";
+import { getCurrentUser, requireAuth, requireUser } from "../auth";
 import { storage } from "../storage";
 import { getErrorMessage } from "../lib/errors";
 import {
@@ -27,10 +27,9 @@ function clampDays(raw: unknown): number {
 }
 
 export function registerCallTrendlineRoutes(app: Express) {
-  app.get("/api/calls/trendline/company/:companyId", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/calls/trendline/company/:companyId", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
 
       const companyId = pStr(req.params.companyId);
       const company = await storage.getCompany(companyId);
@@ -51,10 +50,9 @@ export function registerCallTrendlineRoutes(app: Express) {
   // Task #691 — org-wide trendline used by the Call Performance Hub.
   // Mirrors the per-company trendline shape so the same React component can
   // render either scope. Optional `repId` narrows to a single rep org-wide.
-  app.get("/api/calls/trendline/org", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/calls/trendline/org", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
       // Org-wide rep telephony rollup is a manager-only surface; non-managers
       // (account_manager, sales, logistics_*) have no business reason to see
       // peers' call counts and historically only access company-scoped data.
@@ -71,10 +69,9 @@ export function registerCallTrendlineRoutes(app: Express) {
     }
   });
 
-  app.get("/api/calls/pace", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/calls/pace", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
       const days = clampDays(qOptStr(req.query.days));
       const rows = await buildOrgCallPace(user.organizationId, days);
       res.json({ days, rows });
@@ -84,10 +81,9 @@ export function registerCallTrendlineRoutes(app: Express) {
     }
   });
 
-  app.get("/api/calls/lane-rollup", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/calls/lane-rollup", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const user = req.user!;
       const lane = (qStr(req.query.lane) || "").trim();
       if (!lane) return res.status(400).json({ error: "lane query param required" });
       const days = clampDays(qOptStr(req.query.days));

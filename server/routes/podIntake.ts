@@ -26,7 +26,7 @@ import { z } from "zod";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { storage, db } from "../storage";
 import { loadFact, freightOpportunities } from "@shared/schema";
-import { requireAuth, getCurrentUser } from "../auth";
+import { getCurrentUser, requireAuth, requireUser } from "../auth";
 import {
   matchOrderIdToLoad,
   resolveRecipients,
@@ -77,12 +77,11 @@ export function registerPodIntakeRoutes(app: Express): void {
   // ── List buckets ────────────────────────────────────────────────────────
   app.get(
     "/api/admin/pod-intake",
-    requireAuth,
+    requireUser,
     requireAdmin,
     async (req: Request, res: Response) => {
       try {
-        const user = await getCurrentUser(req);
-        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const user = req.user!;
 
         const bucketParam = bucketSchema.safeParse(qStr(req.query.bucket) || "forwarded");
         if (!bucketParam.success) {
@@ -139,12 +138,11 @@ export function registerPodIntakeRoutes(app: Express): void {
   // ── Single row detail ───────────────────────────────────────────────────
   app.get(
     "/api/admin/pod-intake/settings",
-    requireAuth,
+    requireUser,
     requireAdmin,
     async (req: Request, res: Response) => {
       try {
-        const user = await getCurrentUser(req);
-        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const user = req.user!;
         const settings = await storage.getPodIntakeSettings(user.organizationId);
         res.json({
           settings:
@@ -166,12 +164,11 @@ export function registerPodIntakeRoutes(app: Express): void {
 
   app.patch(
     "/api/admin/pod-intake/settings",
-    requireAuth,
+    requireUser,
     requireAdmin,
     async (req: Request, res: Response) => {
       try {
-        const user = await getCurrentUser(req);
-        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const user = req.user!;
         const parsed = settingsPatchSchema.safeParse(req.body);
         if (!parsed.success) {
           return res
@@ -215,12 +212,11 @@ export function registerPodIntakeRoutes(app: Express): void {
 
   app.get(
     "/api/admin/pod-intake/:id",
-    requireAuth,
+    requireUser,
     requireAdmin,
     async (req: Request, res: Response) => {
       try {
-        const user = await getCurrentUser(req);
-        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const user = req.user!;
         const row = await storage.getPodIntakeEmail(user.organizationId, pStr(req.params.id));
         if (!row) return res.status(404).json({ error: "Not found" });
         res.json({ row: { ...row, bucket: bucketForRow(row) } });
@@ -238,12 +234,11 @@ export function registerPodIntakeRoutes(app: Express): void {
   // explicitly via the next endpoint).
   app.post(
     "/api/admin/pod-intake/:id/link",
-    requireAuth,
+    requireUser,
     requireAdmin,
     async (req: Request, res: Response) => {
       try {
-        const user = await getCurrentUser(req);
-        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const user = req.user!;
 
         const parsed = linkSchema.safeParse(req.body);
         if (!parsed.success) {
@@ -281,12 +276,11 @@ export function registerPodIntakeRoutes(app: Express): void {
   // original bytes.
   app.post(
     "/api/admin/pod-intake/:id/reforward",
-    requireAuth,
+    requireUser,
     requireAdmin,
     async (req: Request, res: Response) => {
       try {
-        const user = await getCurrentUser(req);
-        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const user = req.user!;
 
         const row = await storage.getPodIntakeEmail(user.organizationId, pStr(req.params.id));
         if (!row) return res.status(404).json({ error: "Not found" });
@@ -501,10 +495,9 @@ export function registerPodIntakeRoutes(app: Express): void {
   // List the PODs the current user owns (as dispatcher OR account owner).
   // Each row is augmented with `unreadNotificationIds` so the client can
   // post a single mark-as-seen call per row.
-  app.get("/api/my-pods", requireAuth, async (req: Request, res: Response) => {
+  app.get("/api/my-pods", requireUser, async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
 
       const limit = Math.min(Number(qStr(req.query.limit) || "200") || 200, 500);
       const rows = await storage.listPodIntakeEmailsForUser(user.id, user.organizationId, { limit });
@@ -553,11 +546,10 @@ export function registerPodIntakeRoutes(app: Express): void {
   // Cheap "do I have unread PODs?" probe for the sidebar badge.
   app.get(
     "/api/my-pods/unread-count",
-    requireAuth,
+    requireUser,
     async (req: Request, res: Response) => {
       try {
-        const user = await getCurrentUser(req);
-        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const user = req.user!;
         const allNotifs = await storage.getNotifications(user.id);
         const unread = allNotifs.filter(
           (n) => n.type === "pod_received" && !n.read,
@@ -574,11 +566,10 @@ export function registerPodIntakeRoutes(app: Express): void {
   // current user. Idempotent + scoped to the caller via storage.markNotificationsReadByIds.
   app.post(
     "/api/my-pods/:id/seen",
-    requireAuth,
+    requireUser,
     async (req: Request, res: Response) => {
       try {
-        const user = await getCurrentUser(req);
-        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const user = req.user!;
         const podId = pStr(req.params.id);
 
         // Confirm the user owns this POD before clearing notifications —
@@ -620,11 +611,10 @@ export function registerPodIntakeRoutes(app: Express): void {
   // the dispatcher / account owner of the row.
   app.get(
     "/api/loads/by-order-id/:orderId/pods",
-    requireAuth,
+    requireUser,
     async (req: Request, res: Response) => {
       try {
-        const user = await getCurrentUser(req);
-        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const user = req.user!;
         const orderId = pStr(req.params.orderId).trim();
         if (!orderId) return res.json({ count: 0, rows: [] });
         const rows = await storage.listPodIntakeEmailsByOrderId(user.organizationId, orderId);
@@ -668,8 +658,7 @@ export function registerPodIntakeRoutes(app: Express): void {
     requireAuth,
     async (req: Request, res: Response) => {
       try {
-        const user = await getCurrentUser(req);
-        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const user = req.user!;
 
         const row = await storage.getPodIntakeEmail(user.organizationId, pStr(req.params.id));
         if (!row) return res.status(404).json({ error: "Not found" });

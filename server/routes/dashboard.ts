@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import { qStr } from "../lib/req";
 import { storage } from "../storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds } from "../auth";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getCustomerFromRow } from "../colResolver";
@@ -148,7 +149,7 @@ export function registerDashboardRoutes(app: Express): void {
       // Build scoped alias filter for Director (non-admin) / NAM / AM
       // Admins can also filter by a specific director via ?directorId=<userId>
       let scopedAliases: Set<string> | null = null;
-      const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
+      const directorIdParam = isDirectorRole && user.role === "admin" && typeof qStr(req.query.directorId) === "string" ? qStr(req.query.directorId) : null;
       if (directorIdParam) {
         const teamCompanies = getDirectorTeamCompanies(directorIdParam, allUsers, allCompanies);
         scopedAliases = buildAliasSet(teamCompanies);
@@ -359,7 +360,7 @@ export function registerDashboardRoutes(app: Express): void {
       const allUsers = await storage.getUsers(user.organizationId);
       let amIds: string[];
       if (user.role === "admin") {
-        const directorIdParam = typeof req.query.directorId === "string" ? req.query.directorId : null;
+        const directorIdParam = typeof qStr(req.query.directorId) === "string" ? qStr(req.query.directorId) : null;
         if (directorIdParam) {
           // Scope to AMs whose manager (NAM) reports to the selected director
           const directReportIds = new Set(allUsers.filter(u => u.managerId === directorIdParam).map(u => u.id));
@@ -459,7 +460,7 @@ export function registerDashboardRoutes(app: Express): void {
       // For Director (non-admin)/NAM: scope to their team's companies
       // Admins can filter by a specific director via ?directorId=<userId>
       const isDirectorOnlyRole = isDirectorRole && user.role !== "admin";
-      const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
+      const directorIdParam = isDirectorRole && user.role === "admin" && typeof qStr(req.query.directorId) === "string" ? qStr(req.query.directorId) : null;
       let scopedCompanyIds: Set<string>;
       if (isNamRole) {
         const teamCompanies = getNamTeamCompanies(user.id, allUsers, orgCompanies);
@@ -498,8 +499,8 @@ export function registerDashboardRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const type = String(req.query.type || "");
-      const personal = req.query.personal === "true";
+      const type = (qStr(req.query.type) || "");
+      const personal = qStr(req.query.personal) === "true";
       const orgId = req.session.organizationId!;
       const today = new Date().toISOString().slice(0, 10);
       const now = new Date();
@@ -519,7 +520,7 @@ export function registerDashboardRoutes(app: Express): void {
         const isDirectorRole = (DIRECTOR_ROLES as readonly string[]).includes(user.role);
         const isNamRole = (NAM_ROLES as readonly string[]).includes(user.role);
         const isDirectorOnlyRole = isDirectorRole && user.role !== "admin";
-        const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
+        const directorIdParam = isDirectorRole && user.role === "admin" && typeof qStr(req.query.directorId) === "string" ? qStr(req.query.directorId) : null;
         if (isNamRole) {
           const teamCompanies = getNamTeamCompanies(user.id, allUsers, orgCompanies);
           scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
@@ -608,7 +609,7 @@ export function registerDashboardRoutes(app: Express): void {
 
       // Admins can filter by a specific director via ?directorId=<userId>
       const isDirectorOnlyRole = isDirectorRole && user.role !== "admin";
-      const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
+      const directorIdParam = isDirectorRole && user.role === "admin" && typeof qStr(req.query.directorId) === "string" ? qStr(req.query.directorId) : null;
       let scopedCompanyIds: Set<string>;
       if (isNamRole) {
         const allUsers = await storage.getUsers(orgId);
@@ -652,7 +653,7 @@ export function registerDashboardRoutes(app: Express): void {
         return res.status(403).json({ error: "Access denied" });
       }
 
-      const mmDirId = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : "all";
+      const mmDirId = isDirectorRole && user.role === "admin" && typeof qStr(req.query.directorId) === "string" ? qStr(req.query.directorId) : "all";
       const mmCacheKey = `margin-metrics:${req.session.organizationId}:${user.id}:${mmDirId}`;
       const mmCached = cacheGet(mmCacheKey);
       if (mmCached) return res.json(mmCached);
@@ -712,7 +713,7 @@ export function registerDashboardRoutes(app: Express): void {
       // For Director (non-admin) role: only show users within their vertical (direct reports + their direct reports)
       // Admins can filter by a specific director via ?directorId=<userId>
       const isDirectorOnlyRole = isDirectorRole && user.role !== "admin";
-      const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
+      const directorIdParam = isDirectorRole && user.role === "admin" && typeof qStr(req.query.directorId) === "string" ? qStr(req.query.directorId) : null;
       let scopedUserIds: Set<string> | null = null;
       if (isNamRole) {
         scopedUserIds = new Set(allUsers.filter(u => u.managerId === user.id).map(u => u.id));
@@ -1012,7 +1013,7 @@ export function registerDashboardRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const days = parseInt(req.query.days as string) || 30;
+      const days = parseInt(qStr(req.query.days), 10) || 30;
       const cacheKey = `cold-contacts:${user.id}:${days}`;
       const cached = cacheGet(cacheKey);
       if (cached) return res.json(cached);
@@ -1036,7 +1037,7 @@ export function registerDashboardRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const days = parseInt(req.query.days as string) || 30;
+      const days = parseInt(qStr(req.query.days), 10) || 30;
       const cacheKey = `meaningful-overdue:${user.id}:${days}`;
       const cached = cacheGet(cacheKey);
       if (cached) return res.json(cached);

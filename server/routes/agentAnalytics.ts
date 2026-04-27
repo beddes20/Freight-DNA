@@ -1,4 +1,5 @@
 import { getErrorMessage } from "../lib/errors";
+import { pStr, qInt } from "../lib/req";
 /**
  * Task #360 — DNA Copilot Analytics, Feedback & Audit endpoints.
  *
@@ -161,7 +162,7 @@ export function registerAgentAnalyticsRoutes(app: Express) {
       if (!me) return res.status(401).json({ error: "Unauthorized" });
       if (!isAnalyticsViewer(me.role)) return res.status(403).json({ error: "Forbidden" });
 
-      const days = Math.min(90, Math.max(1, Number(req.query.days ?? 30)));
+      const days = Math.min(90, Math.max(1, qInt(req.query.days, 30)));
       const overview = await agentAnalyticsStorage.getOverview(me.organizationId, days);
       res.json(overview);
     } catch (err) {
@@ -177,8 +178,8 @@ export function registerAgentAnalyticsRoutes(app: Express) {
       if (!me) return res.status(401).json({ error: "Unauthorized" });
       if (!isAnalyticsViewer(me.role)) return res.status(403).json({ error: "Forbidden" });
 
-      const days = Math.min(90, Math.max(1, Number(req.query.days ?? 14)));
-      const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 100)));
+      const days = Math.min(90, Math.max(1, qInt(req.query.days, 14)));
+      const limit = Math.min(200, Math.max(1, qInt(req.query.limit, 100)));
       const rows = await agentAnalyticsStorage.getNeedsAttention(me.organizationId, days, limit);
       res.json(rows);
     } catch (err) {
@@ -194,8 +195,8 @@ export function registerAgentAnalyticsRoutes(app: Express) {
       if (!me) return res.status(401).json({ error: "Unauthorized" });
       if (!isAnalyticsViewer(me.role)) return res.status(403).json({ error: "Forbidden" });
 
-      const days = Math.min(90, Math.max(1, Number(req.query.days ?? 30)));
-      const limit = Math.min(500, Math.max(1, Number(req.query.limit ?? 200)));
+      const days = Math.min(90, Math.max(1, qInt(req.query.days, 30)));
+      const limit = Math.min(500, Math.max(1, qInt(req.query.limit, 200)));
       const rows = await agentAnalyticsStorage.getRecentActions(me.organizationId, days, limit);
       res.json(rows);
     } catch (err) {
@@ -210,7 +211,7 @@ export function registerAgentAnalyticsRoutes(app: Express) {
     try {
       const me = await getCurrentUser(req);
       if (!me) return res.status(401).json({ error: "Unauthorized" });
-      const targetId = String(req.params.userId);
+      const targetId = pStr(req.params.userId);
 
       // Org-scope at the storage layer — getUserInOrg returns undefined for
       // any user not in the caller's org, eliminating the IDOR path entirely.
@@ -229,7 +230,7 @@ export function registerAgentAnalyticsRoutes(app: Express) {
         return res.status(403).json({ error: "Forbidden" });
       }
 
-      const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 25)));
+      const limit = Math.min(100, Math.max(1, qInt(req.query.limit, 25)));
       const rows = await agentAnalyticsStorage.getActionsByUser(me.organizationId, targetId, limit);
       res.json(rows);
     } catch (err) {
@@ -243,13 +244,13 @@ export function registerAgentAnalyticsRoutes(app: Express) {
     try {
       const me = await getCurrentUser(req);
       if (!me) return res.status(401).json({ error: "Unauthorized" });
-      const companyId = String(req.params.companyId);
+      const companyId = pStr(req.params.companyId);
 
       const { storage } = await import("../storage");
       const company = await storage.getCompanyInOrg(companyId, me.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
-      const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 25)));
+      const limit = Math.min(100, Math.max(1, qInt(req.query.limit, 25)));
       const rows = await agentAnalyticsStorage.getActionsByCompany(me.organizationId, companyId, limit);
       res.json(rows);
     } catch (err) {
@@ -265,7 +266,7 @@ export function registerAgentAnalyticsRoutes(app: Express) {
       if (!me) return res.status(401).json({ error: "Unauthorized" });
       if (!isAnalyticsViewer(me.role)) return res.status(403).json({ error: "Forbidden" });
 
-      const turn = await agentAnalyticsStorage.getTurnDetail(me.organizationId, String(req.params.id));
+      const turn = await agentAnalyticsStorage.getTurnDetail(me.organizationId, pStr(req.params.id));
       if (!turn) return res.status(404).json({ error: "Turn not found" });
       res.json(turn);
     } catch (err) {

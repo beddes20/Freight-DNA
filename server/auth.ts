@@ -24,6 +24,16 @@ declare module "express-session" {
   }
 }
 
+// Express request augmentation: requireUser attaches the resolved User
+// to req.user so handlers can stop repeating the
+//   const user = await getCurrentUser(req); if (!user) return res.status(401)…
+// boilerplate.
+declare module "express-serve-static-core" {
+  interface Request {
+    user?: User;
+  }
+}
+
 // In-memory impersonation tracker: adminClerkUserId -> targetDbUserId
 const impersonationMap = new Map<string, string>();
 
@@ -249,6 +259,33 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   if (!IS_PROD && req.session?.userId) return next();
 
   return res.status(401).json({ error: "Authentication required" });
+}
+
+/**
+ * Stronger variant of `requireAuth` that also resolves the DB user and
+ * attaches it to `req.user` (typed via the `Request` augmentation above),
+ * so handlers can write `req.user!.id` instead of repeating the
+ * `getCurrentUser(req)` + null-check + 401 boilerplate.
+ *
+ * Use this on routes that always need a User. For routes that just need
+ * "is authenticated", `requireAuth` is still fine.
+ */
+export async function requireUser(req: Request, res: Response, next: NextFunction) {
+  // Run requireAuth first so that the resolved User is cached on the request
+  // (under the file-local RESOLVED_USER symbol) and 401s are returned for
+  // unauthenticated callers without us having to duplicate the logic.
+  let nextCalled = false;
+  await requireAuth(req, res, () => {
+    nextCalled = true;
+  });
+  if (!nextCalled) return; // requireAuth already sent a 401
+
+  // requireAuth caches the user on req[RESOLVED_USER] when it can. Read it
+  // back via getCurrentUser, which falls through to a direct lookup if needed.
+  const user = await getCurrentUser(req);
+  if (!user) return res.status(401).json({ error: "Authentication required" });
+  req.user = user;
+  return next();
 }
 
 export async function getCurrentUser(req: Request): Promise<User | null> {

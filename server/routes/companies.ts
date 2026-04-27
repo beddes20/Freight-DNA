@@ -26,7 +26,7 @@ export function registerCompanyRoutes(app: Express): void {
       if (visibleIds !== null) {
         allCompanies = allCompanies.filter(c => visibleIds.includes(c.id));
       }
-      const includeArchived = req.query.includeArchived === "true";
+      const includeArchived = qStr(req.query.includeArchived) === "true";
       if (!includeArchived) {
         allCompanies = allCompanies.filter(c => !c.archivedAt);
       }

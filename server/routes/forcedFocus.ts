@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import { pStr } from "../lib/req";
 import { storage } from "../storage";
 import { getCurrentUser, requireAuth } from "../auth";
 
@@ -113,7 +114,7 @@ export function registerForcedFocusRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getForcedFocus(req.params.id as string);
+      const existing = await storage.getForcedFocus(pStr(req.params.id));
       if (!existing) return res.status(404).json({ error: "Forced focus not found" });
       const isAdmin = user.role === "admin";
       if (!isAdmin && existing.orgId !== user.organizationId) {

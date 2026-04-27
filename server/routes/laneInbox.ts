@@ -16,6 +16,7 @@
 // surface (e.g. a customer's auto-flip storm) can't crowd out the others.
 
 import type { Express } from "express";
+import { qStr } from "../lib/req";
 import { requireAuth, getCurrentUser } from "../auth";
 import { db } from "../storage";
 import {
@@ -73,8 +74,8 @@ export function registerLaneInboxRoutes(app: Express): void {
       const orgId = user.organizationId;
       if (!orgId) return res.status(403).json({ error: "No organization" });
 
-      const scope = String(req.query.scope ?? "all"); // "all" | "mine"
-      const surfaceFilter = String(req.query.surface ?? "");
+      const scope = (qStr(req.query.scope) || "all"); // "all" | "mine"
+      const surfaceFilter = (qStr(req.query.surface) || "");
       const validSurfaces: Surface[] = [
         "available_freight",
         "lane_work_queue",

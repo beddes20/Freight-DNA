@@ -1,6 +1,6 @@
 import type { Express, Request } from "express";
 import { z } from "zod";
-import { requireAuth, getCurrentUser } from "../auth";
+import { getCurrentUser, requireAuth, requireUser } from "../auth";
 import {
   getSnapshot, getQuoteDetail,
   listQuotes, listSavedViews, createSavedView, deleteSavedView, exportCsv,
@@ -117,10 +117,9 @@ function parseFilters(req: Request): QuoteFilters {
 }
 
 export function registerCustomerQuoteRoutes(app: Express): void {
-  app.get("/api/customer-quotes/snapshot", requireAuth, async (req, res) => {
+  app.get("/api/customer-quotes/snapshot", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       // Task #597 — `ensureQuoteSeed` removed from request paths so demo
       // rows can never re-seed an org via the dashboard. Demo seeding is
       // now strictly opt-in via the dev-only seed script.
@@ -143,10 +142,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   // manager-style roles (consistent with managerRoles elsewhere in the
   // codebase) and see the full org-wide funnel. Page-level access is still
   // gated by QUOTE_OPPORTUNITIES_ROLES on the client.
-  app.get("/api/customer-quotes/funnel", requireAuth, async (req, res) => {
+  app.get("/api/customer-quotes/funnel", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const allowed = new Set([
         "admin", "director", "sales_director",
         "national_account_manager", "sales", "account_manager",
@@ -165,10 +163,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/customer-quotes/list", requireAuth, async (req, res) => {
+  app.get("/api/customer-quotes/list", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       // Task #597 — see snapshot route. No demo seeding from request paths.
       void ensureEmailBackfill(user.organizationId);
       const parsed = listQuerySchema.safeParse(req.query);
@@ -219,10 +216,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     return (u.name && u.name.trim()) || u.username || u.id;
   }
 
-  app.post("/api/customer-quotes/quote", requireAuth, async (req, res) => {
+  app.post("/api/customer-quotes/quote", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const data = createQuoteSchema.parse(req.body);
       const opp = await createQuote(user.organizationId, actorName(user), data, user.id);
       const detail = await getQuoteDetail(user.organizationId, opp.id);
@@ -234,10 +230,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     }
   });
 
-  app.patch("/api/customer-quotes/quote/:id", requireAuth, async (req, res) => {
+  app.patch("/api/customer-quotes/quote/:id", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const data = updateQuoteSchema.parse(req.body);
       const opp = await updateQuote(user.organizationId, actorName(user), pStr(req.params.id), data, user.id);
       const detail = await getQuoteDetail(user.organizationId, opp.id);
@@ -263,10 +258,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
 
   // Task #584 — inline "Create new customer" used by the dashboard's
   // Unknown-bucket reassign popover. Idempotent on case-insensitive name.
-  app.post("/api/customer-quotes/customers", requireAuth, async (req, res) => {
+  app.post("/api/customer-quotes/customers", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const data = z.object({
         name: z.string().trim().min(1, "Name is required").max(120),
         segment: z.string().trim().max(80).optional().nullable(),
@@ -284,10 +278,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   // Always sets `partyTypeManual=true` so background classifiers leave the
   // row alone going forward. Used by the drawer's "Mark customer / Mark
   // carrier" buttons. Returns the updated row.
-  app.patch("/api/customer-quotes/customers/:id", requireAuth, async (req, res) => {
+  app.patch("/api/customer-quotes/customers/:id", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const data = z.object({
         partyType: z.enum(QUOTE_PARTY_TYPES),
       }).parse(req.body);
@@ -304,10 +297,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/customer-quotes/quote/:id", requireAuth, async (req, res) => {
+  app.get("/api/customer-quotes/quote/:id", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const detail = await getQuoteDetail(user.organizationId, pStr(req.params.id));
       if (!detail) return res.status(404).json({ error: "Not found" });
       res.json(detail);
@@ -318,10 +310,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/customer-quotes/pricing-intelligence", requireAuth, async (req, res) => {
+  app.get("/api/customer-quotes/pricing-intelligence", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const schema = z.object({
         customerId: z.string().min(1),
         originCity: z.string().min(1),
@@ -346,10 +337,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
 
   // 3-tier pricing recommendation for a specific quote (Aggressive /
   // Balanced / Premium with per-tier estimated win-prob and floor flag).
-  app.get("/api/customer-quotes/quote/:id/recommendation", requireAuth, async (req, res) => {
+  app.get("/api/customer-quotes/quote/:id/recommendation", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const rec = await getPricingRecommendation(user.organizationId, pStr(req.params.id));
       res.json(rec);
     } catch (err) {
@@ -360,10 +350,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   });
 
   // Per-equipment $/mile margin floors (read).
-  app.get("/api/customer-quotes/pricing-floors", requireAuth, async (req, res) => {
+  app.get("/api/customer-quotes/pricing-floors", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const floors = await getMarginFloors(user.organizationId);
       res.json({ floors });
     } catch (err) {
@@ -374,10 +363,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   });
 
   // Per-equipment $/mile margin floors (admin update). Replaces the full map.
-  app.patch("/api/customer-quotes/pricing-floors", requireAuth, async (req, res) => {
+  app.patch("/api/customer-quotes/pricing-floors", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       if (!["admin", "director", "sales_director"].includes(user.role)) {
         return res.status(403).json({ error: "Admin access required" });
       }
@@ -396,10 +384,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   // Customer Quotes #3 — admin list of learned sender→customer mappings.
   // Visible only to admin/director/sales_director — these mappings are an
   // org-level config artifact, not a per-rep view.
-  app.get("/api/customer-quotes/sender-mappings", requireAuth, async (req, res) => {
+  app.get("/api/customer-quotes/sender-mappings", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       if (!["admin", "director", "sales_director"].includes(user.role)) {
         return res.status(403).json({ error: "Admin access required" });
       }
@@ -415,10 +402,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   // Customer Quotes #3 — admin delete of a learned mapping. Org-scoped at
   // the service layer; we still re-check the role here so we never let a
   // rep delete an org-wide config row.
-  app.delete("/api/customer-quotes/sender-mappings/:id", requireAuth, async (req, res) => {
+  app.delete("/api/customer-quotes/sender-mappings/:id", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       if (!["admin", "director", "sales_director"].includes(user.role)) {
         return res.status(403).json({ error: "Admin access required" });
       }
@@ -439,10 +425,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   // in app_settings. Stored under the `auto_won_quote_af_handoff:${orgId}`
   // key so it follows the rest of the project's org-scoped settings
   // convention (no separate org_settings table).
-  app.get("/api/customer-quotes/settings/auto-af-handoff", requireAuth, async (req, res) => {
+  app.get("/api/customer-quotes/settings/auto-af-handoff", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       if (!["admin", "director", "sales_director"].includes(user.role)) {
         return res.status(403).json({ error: "Admin access required" });
       }
@@ -455,10 +440,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     }
   });
 
-  app.put("/api/customer-quotes/settings/auto-af-handoff", requireAuth, async (req, res) => {
+  app.put("/api/customer-quotes/settings/auto-af-handoff", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       if (!["admin", "director", "sales_director"].includes(user.role)) {
         return res.status(403).json({ error: "Admin access required" });
       }
@@ -477,10 +461,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   // Task #615 retired the needs-review bucket along with the rest of the
   // unknown-customer surface area. Each list capped at `limit` (default 5,
   // max 25).
-  app.get("/api/customer-quotes/action-queue", requireAuth, async (req, res) => {
+  app.get("/api/customer-quotes/action-queue", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const schema = z.object({
         limit: z.preprocess(
           v => v === undefined ? 5 : Number(v),
@@ -501,10 +484,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   // Customer Quotes #2 — bulk reassign Needs-Review quotes to a real
   // customer. Defensive: a quote is skipped if its current customer is
   // NOT in the shared "Unknown — needs review" bucket.
-  app.post("/api/customer-quotes/quotes/bulk-reassign-customer", requireAuth, async (req, res) => {
+  app.post("/api/customer-quotes/quotes/bulk-reassign-customer", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const schema = z.object({
         quoteIds: z.array(z.string().min(1)).min(1).max(500),
         targetCustomerId: z.string().min(1),
@@ -528,10 +510,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
 
   // Customer Quotes #2 — bulk-flip outcome status. Used by the
   // "Mark ignored" / "Mark pending" bulk action.
-  app.post("/api/customer-quotes/quotes/bulk-status", requireAuth, async (req, res) => {
+  app.post("/api/customer-quotes/quotes/bulk-status", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const schema = z.object({
         quoteIds: z.array(z.string().min(1)).min(1).max(500),
         status: z.enum(["ignored", "pending"]),
@@ -561,10 +542,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   });
 
   // Task #505 — Spot Quote Search
-  app.get("/api/customer-quotes/spot-search", requireAuth, async (req, res) => {
+  app.get("/api/customer-quotes/spot-search", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const schema = z.object({
         pickupCity: z.string().min(1).max(80),
         pickupState: z.string().min(1).max(8),
@@ -601,12 +581,11 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   });
   app.post(
     "/api/customer-quotes/spot-intake",
-    requireAuth,
+    requireUser,
     intakeUpload.single("file"),
     async (req, res) => {
       try {
-        const user = await getCurrentUser(req);
-        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const user = req.user!;
 
         const file = (req as Request & { file?: Express.Multer.File }).file;
         if (file) {
@@ -661,10 +640,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     },
   );
 
-  app.get("/api/customer-quotes/lane-autocomplete", requireAuth, async (req, res) => {
+  app.get("/api/customer-quotes/lane-autocomplete", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const schema = z.object({
         q: z.string().min(1).max(80),
         kind: z.enum(["origin", "dest"]),
@@ -681,17 +659,15 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/customer-quotes/saved-views", requireAuth, async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.get("/api/customer-quotes/saved-views", requireUser, async (req, res) => {
+    const user = req.user!;
     const views = await listSavedViews(user.organizationId);
     res.json(views);
   });
 
-  app.post("/api/customer-quotes/saved-views", requireAuth, async (req, res) => {
+  app.post("/api/customer-quotes/saved-views", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const schema = z.object({
         name: z.string().min(1).max(80),
         filters: filtersSchema.default({}),
@@ -705,9 +681,8 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     }
   });
 
-  app.delete("/api/customer-quotes/saved-views/:id", requireAuth, async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Unauthorized" });
+  app.delete("/api/customer-quotes/saved-views/:id", requireUser, async (req, res) => {
+    const user = req.user!;
     await deleteSavedView(user.organizationId, user.id, pStr(req.params.id));
     res.json({ ok: true });
   });
@@ -716,10 +691,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   // The create path delegates to the same `createQuote` service used elsewhere
   // (no duplicate insert logic). Margin guardrail is enforced server-side when
   // an estimatedCost is provided so the frontend can't bypass it.
-  app.post("/api/customer-quotes/spot/create", requireAuth, async (req, res) => {
+  app.post("/api/customer-quotes/spot/create", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const parsed = spotQuoteCreateSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: "Invalid input", details: parsed.error.flatten() });
@@ -767,10 +741,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/customer-quotes/spot/email-draft", requireAuth, async (req, res) => {
+  app.post("/api/customer-quotes/spot/email-draft", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const schema = z.object({
         quoteId: z.string().min(1),
         recommendedRate: z.number().finite().positive().optional(),
@@ -853,10 +826,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/customer-quotes/sync-tms", requireAuth, async (req, res) => {
+  app.post("/api/customer-quotes/sync-tms", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       // Restrict to admin/director — write path that mutates outcomes.
       if (user.role !== "admin" && user.role !== "director") {
         return res.status(403).json({ error: "Forbidden" });
@@ -874,10 +846,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   // Task #690 — viewer-scoped: account_manager sees only their own quotes,
   // managers/directors/admins see the full org list. Scope mirrors
   // resolveFunnelRepScope so behavior is consistent with the funnel view.
-  app.get("/api/customer-quotes/stale-followups", requireAuth, async (req, res) => {
+  app.get("/api/customer-quotes/stale-followups", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const forceStr = qStr(req.query.force);
       const force = forceStr === "1" || forceStr === "true";
       if (force) clearStaleFollowUpCache(user.organizationId);
@@ -895,10 +866,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   // filtered post-cache per viewer), so a sidebar poll is free (cached hit)
   // or triggers a single shared recompute. Returns just the integer to keep
   // the payload tiny across many open tabs.
-  app.get("/api/customer-quotes/stale-followups/count", requireAuth, async (req, res) => {
+  app.get("/api/customer-quotes/stale-followups/count", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const scope = await resolveFunnelRepScope(user.organizationId, { id: user.id, role: user.role });
       const count = await getStaleQuoteFollowUpCount(user.organizationId, { scope });
       res.json({ count });
@@ -909,10 +879,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/customer-quotes/recompute-stale", requireAuth, async (req, res) => {
+  app.post("/api/customer-quotes/recompute-stale", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       clearStaleFollowUpCache(user.organizationId);
       const items = await getStaleQuoteFollowUps(user.organizationId, { force: true });
       res.json({ ok: true, count: items.length });
@@ -922,10 +891,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     }
   });
 
-  app.get("/api/customer-quotes/export.csv", requireAuth, async (req, res) => {
+  app.get("/api/customer-quotes/export.csv", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const filters = parseFilters(req);
       const csv = await exportCsv(user.organizationId, filters);
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -940,10 +908,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   // Task #526 — observability for the lazy auto-backfill (and any admin-
   // triggered run). Returns the most recent backfill state for the caller's
   // org so ops can verify the Customer Quotes table is fully real-data-backed.
-  app.get("/api/customer-quotes/email-backfill-status", requireAuth, async (req, res) => {
+  app.get("/api/customer-quotes/email-backfill-status", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       const status = getEmailBackfillStatus(user.organizationId);
       res.json({ ok: true, organizationId: user.organizationId, status });
     } catch (err) {
@@ -955,10 +922,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
 
   // Task #526 — admin-only endpoint to backfill quote_opportunities from
   // historical inbound email_messages. Idempotent; safe to invoke repeatedly.
-  app.post("/api/customer-quotes/backfill-from-emails", requireAuth, async (req, res) => {
+  app.post("/api/customer-quotes/backfill-from-emails", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       if (!["admin", "director", "sales_director"].includes(user.role)) {
         return res.status(403).json({ error: "Admin access required" });
       }
@@ -980,10 +946,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   // leaked into a live org (e.g., when QUOTE_DEMO_SEED_ENABLED was briefly on).
   // Idempotent. Defaults to the caller's org; pass { allOrgs: true } to sweep
   // every org (admin only).
-  app.post("/api/customer-quotes/purge-demo-seed", requireAuth, async (req, res) => {
+  app.post("/api/customer-quotes/purge-demo-seed", requireUser, async (req, res) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const user = req.user!;
       if (!["admin", "director", "sales_director"].includes(user.role)) {
         return res.status(403).json({ error: "Admin access required" });
       }

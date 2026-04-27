@@ -16,7 +16,7 @@
 import type { Express } from "express";
 import { z } from "zod";
 import { eq, and, desc, inArray, sql, or } from "drizzle-orm";
-import { requireAuth, getCurrentUser } from "../auth";
+import { getCurrentUser, requireUser } from "../auth";
 import { db } from "../storage";
 import {
   carrierScorecardFact,
@@ -50,7 +50,7 @@ async function requireAdmin(req: any, res: any): Promise<{ orgId: string; userId
 
 export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
   // ── GET /api/carrier-intelligence/scorecard ──────────────────────────────
-  app.get("/api/carrier-intelligence/scorecard", requireAuth, async (req, res) => {
+  app.get("/api/carrier-intelligence/scorecard", requireUser, async (req, res) => {
     try {
       const orgId = orgOf(req); if (!orgId) return res.status(401).json({ error: "Unauthorized" });
       const equipment = (qOptStr(req.query.equipment)) || "ALL";
@@ -67,7 +67,7 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
 
   // ── GET /api/carrier-intelligence/carriers/:carrierId ────────────────────
   // Accepts a carrier UUID from the rolodex OR a raw carrier_name (urlencoded).
-  app.get("/api/carrier-intelligence/carriers/:carrierId", requireAuth, async (req, res) => {
+  app.get("/api/carrier-intelligence/carriers/:carrierId", requireUser, async (req, res) => {
     try {
       const orgId = orgOf(req); if (!orgId) return res.status(401).json({ error: "Unauthorized" });
       const ident = decodeURIComponent(pStr(req.params.carrierId));
@@ -233,7 +233,7 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
     equipmentType: z.string().optional(), // alias accepted for backward compat
     customer: z.string().optional(),
   });
-  app.get("/api/carrier-intelligence/lane-pricing", requireAuth, async (req, res) => {
+  app.get("/api/carrier-intelligence/lane-pricing", requireUser, async (req, res) => {
     try {
       const orgId = orgOf(req); if (!orgId) return res.status(401).json({ error: "Unauthorized" });
       const parsed = lanePricingSchema.safeParse(req.query);
@@ -256,7 +256,7 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
   });
 
   // ── GET /api/carrier-intelligence/available-loads ────────────────────────
-  app.get("/api/carrier-intelligence/available-loads", requireAuth, async (req, res) => {
+  app.get("/api/carrier-intelligence/available-loads", requireUser, async (req, res) => {
     try {
       const orgId = orgOf(req); if (!orgId) return res.status(401).json({ error: "Unauthorized" });
 
@@ -322,7 +322,7 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
   // ── GET /api/carrier-intelligence/available-loads/:orderId/recommendations
   // The path uses orderId (the TMS-facing identifier) per the spec; we
   // resolve to load_fact.id internally.
-  app.get("/api/carrier-intelligence/available-loads/:orderId/recommendations", requireAuth, async (req, res) => {
+  app.get("/api/carrier-intelligence/available-loads/:orderId/recommendations", requireUser, async (req, res) => {
     try {
       const orgId = orgOf(req); if (!orgId) return res.status(401).json({ error: "Unauthorized" });
       const limit = Math.min(15, Math.max(1, Number(qStr(req.query.limit)) || 5));
@@ -364,7 +364,7 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
   });
 
   // ── Admin: settings + recompute ──────────────────────────────────────────
-  app.get("/api/admin/carrier-intelligence/scoring", requireAuth, async (req, res) => {
+  app.get("/api/admin/carrier-intelligence/scoring", requireUser, async (req, res) => {
     const ctx = await requireAdmin(req, res); if (!ctx) return;
     try {
       const [blend, thresholds] = await Promise.all([
@@ -423,7 +423,7 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
       confidenceChips: confidenceChipsSchema.optional(),
     }).optional(),
   });
-  app.put("/api/admin/carrier-intelligence/scoring", requireAuth, async (req, res) => {
+  app.put("/api/admin/carrier-intelligence/scoring", requireUser, async (req, res) => {
     const ctx = await requireAdmin(req, res); if (!ctx) return;
     try {
       const parsed = updateSchema.safeParse(req.body ?? {});
@@ -441,7 +441,7 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
     }
   });
 
-  app.post("/api/admin/carrier-intelligence/recompute", requireAuth, async (req, res) => {
+  app.post("/api/admin/carrier-intelligence/recompute", requireUser, async (req, res) => {
     const ctx = await requireAdmin(req, res); if (!ctx) return;
     try {
       const skipRecs = req.body?.skipRecommendations === true;

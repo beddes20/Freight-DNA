@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import { pStr, qStr } from "../lib/req";
 import { and, desc, eq, gte } from "drizzle-orm";
 import { storage, db } from "../storage";
 import { canSeeRepUser, getCurrentUser, requireAuth } from "../auth";
@@ -62,7 +63,7 @@ export function registerCoachingRoutes(app: Express) {
       const { text, tag } = req.body;
       if (!text?.trim()) return res.status(400).json({ error: "Text required" });
       const topic = await storage.createTopic({
-        sessionId: (req.params.id as string),
+        sessionId: pStr(req.params.id),
         addedById: user.id,
         text: text.trim(),
         tag: tag || "fyi",
@@ -81,7 +82,7 @@ export function registerCoachingRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { status } = req.body;
       if (!status) return res.status(400).json({ error: "Status required" });
-      const updated = await storage.updateTopicStatus((req.params.id as string), status);
+      const updated = await storage.updateTopicStatus(pStr(req.params.id), status);
       if (!updated) return res.status(404).json({ error: "Topic not found" });
       res.json(updated);
     } catch (error) {
@@ -93,7 +94,7 @@ export function registerCoachingRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const deleted = await storage.deleteTopic((req.params.id as string));
+      const deleted = await storage.deleteTopic(pStr(req.params.id));
       if (!deleted) return res.status(404).json({ error: "Topic not found" });
       res.status(204).send();
     } catch (error) {
@@ -106,8 +107,8 @@ export function registerCoachingRoutes(app: Express) {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { carryForwardTopicIds, moraleScore, sessionSummary, sendSummaryEmail } = req.body || {};
-      const oldSession = await storage.getSession((req.params.id as string));
-      const newSession = await storage.closeSession((req.params.id as string), {
+      const oldSession = await storage.getSession(pStr(req.params.id));
+      const newSession = await storage.closeSession(pStr(req.params.id), {
         carryForwardTopicIds: Array.isArray(carryForwardTopicIds) ? carryForwardTopicIds : undefined,
         moraleScore: typeof moraleScore === "number" ? moraleScore : undefined,
         sessionSummary: typeof sessionSummary === "string" && sessionSummary.trim() ? sessionSummary.trim() : undefined,
@@ -115,7 +116,7 @@ export function registerCoachingRoutes(app: Express) {
       if (sendSummaryEmail && oldSession) {
         try {
           const { build1on1SummaryEmail, sendEmail } = await import("../emailService");
-          const topics = await storage.getTopicsBySession((req.params.id as string));
+          const topics = await storage.getTopicsBySession(pStr(req.params.id));
           const allUsers = await storage.getUsers(user.organizationId);
           const nam = allUsers.find(u => u.id === oldSession.namId);
           const am = allUsers.find(u => u.id === oldSession.amId);
@@ -161,12 +162,12 @@ export function registerCoachingRoutes(app: Express) {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { meetingDate } = req.body;
-      const session = await storage.getSession((req.params.id as string));
+      const session = await storage.getSession(pStr(req.params.id));
       if (!session) return res.status(404).json({ error: "Session not found" });
       if (!(await canAccessCoachingPair(user, session.namId, session.amId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const updated = await storage.updateSessionMeetingDate((req.params.id as string), meetingDate || null);
+      const updated = await storage.updateSessionMeetingDate(pStr(req.params.id), meetingDate || null);
       if (!updated) return res.status(404).json({ error: "Session not found" });
       res.json(updated);
     } catch (error) {
@@ -198,12 +199,12 @@ export function registerCoachingRoutes(app: Express) {
         }
         normalizedLink = trimmed;
       }
-      const session = await storage.getSession((req.params.id as string));
+      const session = await storage.getSession(pStr(req.params.id));
       if (!session) return res.status(404).json({ error: "Session not found" });
       if (!(await canAccessCoachingPair(user, session.namId, session.amId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const updated = await storage.updateSessionMeetingLink((req.params.id as string), normalizedLink);
+      const updated = await storage.updateSessionMeetingLink(pStr(req.params.id), normalizedLink);
       if (!updated) return res.status(404).json({ error: "Session not found" });
       res.json(updated);
     } catch (error) {
@@ -217,13 +218,13 @@ export function registerCoachingRoutes(app: Express) {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { notes } = req.body;
       if (typeof notes !== "string") return res.status(400).json({ error: "Notes must be a string" });
-      const session = await storage.getSession((req.params.id as string));
+      const session = await storage.getSession(pStr(req.params.id));
       if (!session) return res.status(404).json({ error: "Session not found" });
       if (session.status !== "active") return res.status(400).json({ error: "Cannot update notes on an archived session" });
       if (!(await canAccessCoachingPair(user, session.namId, session.amId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const updated = await storage.updateSessionNotes((req.params.id as string), notes);
+      const updated = await storage.updateSessionNotes(pStr(req.params.id), notes);
       if (!updated) return res.status(404).json({ error: "Session not found" });
       res.json(updated);
     } catch (error) {
@@ -396,7 +397,7 @@ export function registerCoachingRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const amId = req.query.amId as string;
+      const amId = qStr(req.query.amId);
       if (!amId) return res.status(400).json({ error: "amId required" });
 
       const allUsers = await storage.getUsers(user.organizationId);
@@ -595,8 +596,8 @@ export function registerCoachingRoutes(app: Express) {
       if (!MANAGER_ROLES.has(user.role)) {
         return res.status(403).json({ error: "Manager or admin role required" });
       }
-      const weekStart = typeof req.query.weekStart === "string"
-        ? req.query.weekStart
+      const weekStart = typeof qStr(req.query.weekStart) === "string"
+        ? qStr(req.query.weekStart)
         : mondayOf(new Date());
       const cards = await buildCoachingCards(user.id, user.organizationId, weekStart);
       res.json({ weekStart, weekEnd: addDays(weekStart, 6), cards });
@@ -613,7 +614,7 @@ export function registerCoachingRoutes(app: Express) {
       if (!MANAGER_ROLES.has(user.role)) {
         return res.status(403).json({ error: "Manager or admin role required" });
       }
-      const repId = req.params.repId as string;
+      const repId = pStr(req.params.repId);
       // Task #525: admin / sales_director keep blanket access. Every other
       // manager (including Director and NAM) must have the rep inside
       // their own reporting tree.
@@ -622,8 +623,8 @@ export function registerCoachingRoutes(app: Express) {
           return res.status(403).json({ error: "Rep is not in your team" });
         }
       }
-      const weekStart = typeof req.query.weekStart === "string"
-        ? req.query.weekStart
+      const weekStart = typeof qStr(req.query.weekStart) === "string"
+        ? qStr(req.query.weekStart)
         : mondayOf(new Date());
       const card = await buildCoachingCardForRep(repId, user.organizationId, weekStart);
       if (!card) return res.status(404).json({ error: "Rep not found" });
@@ -714,7 +715,7 @@ export function registerCoachingRoutes(app: Express) {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const noteId = req.params.id as string;
+      const noteId = pStr(req.params.id);
       const [existing] = await db.select().from(coachingNotes).where(
         and(eq(coachingNotes.id, noteId), eq(coachingNotes.orgId, user.organizationId))
       );

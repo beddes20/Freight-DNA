@@ -13,6 +13,7 @@
  */
 
 import type { Express, Request, Response, NextFunction } from "express";
+import { pStr, qOptStr, qStr } from "../lib/req";
 import { storage } from "../storage";
 
 const SERVICE_TOKEN = process.env.INTERNAL_SERVICE_TOKEN;
@@ -43,8 +44,8 @@ export function registerEmailIntelligenceRoutes(app: Express): void {
   // ── GET /api/internal/accounts/:accountId/email-signals ───────────────────
   app.get("/api/internal/accounts/:accountId/email-signals", async (req: Request, res: Response) => {
     try {
-      const accountId = req.params.accountId as string;
-      const limit = parseInt((req.query.limit as string) ?? "100", 10);
+      const accountId = pStr(req.params.accountId);
+      const limit = parseInt(qStr(req.query.limit) ?? "100", 10);
       const signals = await storage.getEmailSignalsForAccount(accountId, limit);
       res.json({ accountId, count: signals.length, signals });
     } catch (err) {
@@ -56,8 +57,8 @@ export function registerEmailIntelligenceRoutes(app: Express): void {
   // ── GET /api/internal/carriers/:carrierId/email-signals ───────────────────
   app.get("/api/internal/carriers/:carrierId/email-signals", async (req: Request, res: Response) => {
     try {
-      const carrierId = req.params.carrierId as string;
-      const limit = parseInt((req.query.limit as string) ?? "100", 10);
+      const carrierId = pStr(req.params.carrierId);
+      const limit = parseInt(qStr(req.query.limit) ?? "100", 10);
       const signals = await storage.getEmailSignalsForCarrier(carrierId, limit);
       res.json({ carrierId, count: signals.length, signals });
     } catch (err) {
@@ -69,8 +70,8 @@ export function registerEmailIntelligenceRoutes(app: Express): void {
   // ── GET /api/internal/carriers/:carrierId/email-suggestions ──────────────
   app.get("/api/internal/carriers/:carrierId/email-suggestions", async (req: Request, res: Response) => {
     try {
-      const carrierId = req.params.carrierId as string;
-      const status = req.query.status as string | undefined;
+      const carrierId = pStr(req.params.carrierId);
+      const status = qOptStr(req.query.status);
       const suggestions = await storage.getCarrierEmailSuggestions(carrierId, status);
       res.json({ carrierId, count: suggestions.length, suggestions });
     } catch (err) {
@@ -82,7 +83,7 @@ export function registerEmailIntelligenceRoutes(app: Express): void {
   // ── GET /api/internal/email-intelligence/thread/:threadId ─────────────────
   app.get("/api/internal/email-intelligence/thread/:threadId", async (req: Request, res: Response) => {
     try {
-      const threadId = req.params.threadId as string;
+      const threadId = pStr(req.params.threadId);
       const signals = await storage.getEmailSignalsByThread(threadId);
       res.json({ threadId, count: signals.length, signals });
     } catch (err) {
@@ -95,7 +96,7 @@ export function registerEmailIntelligenceRoutes(app: Express): void {
   // Queryable win/loss evidence — supports ?outcomeType=won|lost
   app.get("/api/internal/email-intelligence/win-loss", async (req: Request, res: Response) => {
     try {
-      const outcomeType = (req.query.outcomeType as string) ?? "won";
+      const outcomeType = qStr(req.query.outcomeType) ?? "won";
       if (outcomeType !== "won" && outcomeType !== "lost") {
         return res.status(400).json({ error: "outcomeType must be 'won' or 'lost'" });
       }
@@ -112,8 +113,8 @@ export function registerEmailIntelligenceRoutes(app: Express): void {
   // or via email_messages.linkedLoadId (proxy for opportunityId).
   app.get("/api/internal/opportunities/:id/email-signals", async (req: Request, res: Response) => {
     try {
-      const opportunityId = req.params.id as string;
-      const limit = parseInt((req.query.limit as string) ?? "100", 10);
+      const opportunityId = pStr(req.params.id);
+      const limit = parseInt(qStr(req.query.limit) ?? "100", 10);
       const signals = await storage.getEmailSignalsForOpportunity(opportunityId, limit);
       res.json({
         opportunityId,
