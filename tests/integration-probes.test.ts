@@ -156,7 +156,13 @@ async function main() {
   // ─────────────────────────────────────────────────────────────────────
   section("4. Breaker open forces SONAR to degraded");
   _resetIntegrationEventsForTests();
-  process.env.SONAR_API_KEY = process.env.SONAR_API_KEY ?? "sonar-test";
+  // Use the real credential gate (FREIGHTWAVES_TOKEN) so the probe
+  // doesn't bail out as `disabled` on machines that don't have the
+  // production SONAR_USERNAME/PASSWORD pair set.
+  const savedFwt = process.env.FREIGHTWAVES_TOKEN;
+  if (!process.env.FREIGHTWAVES_TOKEN && !(process.env.SONAR_USERNAME && process.env.SONAR_PASSWORD)) {
+    process.env.FREIGHTWAVES_TOKEN = "fwt-test-bearer-section4";
+  }
   recordIntegrationEvent({ source: "sonar", outcome: "success" });
   recordIntegrationEvent({ source: "sonar", outcome: "breaker_open", breakerState: "open" });
   const sonar = await runOneProbe("sonar", { liveProbe: false });
@@ -167,6 +173,10 @@ async function main() {
   const breakerOpen = sonar.breakerState === "open";
   check("SONAR breaker state surfaced", breakerOpen || sonar.healthState === "healthy");
   if (breakerOpen) check("SONAR degraded when breaker open", sonar.healthState === "degraded");
+  // Restore FREIGHTWAVES_TOKEN so later sections see whatever the host env
+  // had originally configured.
+  if (savedFwt === undefined) delete process.env.FREIGHTWAVES_TOKEN;
+  else process.env.FREIGHTWAVES_TOKEN = savedFwt;
 
   // ─────────────────────────────────────────────────────────────────────
   section("5. Unknown when env present but no events recorded");
