@@ -106,6 +106,13 @@ const customerFacingItems: NavItem[] = [
     description: "Step-by-step guides for common sales situations.",
     roles: ["admin", "director", "national_account_manager", "sales_director", "logistics_manager", "account_manager", "sales"],
   },
+  {
+    title: "Freight Attribution Triage",
+    url: "/freight-triage",
+    icon: GitMerge,
+    description: "Margin-sorted gaps from your relationship-freight book — unworked accounts, unattributed lanes, and unassigned contacts in one ranked worklist.",
+    roles: SALES_ROLES,
+  },
   { title: "Coaching",        url: "/coaching",        icon: Sparkles, description: "Coaching notes and rep development plans.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
   { title: "Rep Scorecard",   url: "/rep-scorecard",   icon: Medal,    description: "Compare reps and review performance metrics.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
 ];

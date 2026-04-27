@@ -7467,6 +7467,361 @@ Respond with valid JSON only:
     }
   });
 
+  // ── Freight Attribution Triage Worklist (Task #783) ─────────────────────────
+  // Ranked, margin-sorted list of every attribution gap across the rep's book:
+  //   • unworked_account     — company has freight but no contact has a base
+  //   • unattributed_lane    — worked company, loads not claimed by any contact
+  //   • unassigned_contact   — contact has lanes/attribs but no relationship base
+  // Reuses the helpers from the relationship-freight summary endpoints so the
+  // bucket math stays identical: a row that disappears from this worklist also
+  // disappears from the corresponding callout on the dashboard portlet.
+  app.get("/api/freight-attribution-triage", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const userIsAdmin = isAdmin(user);
+      const isDirector = ["director", "national_account_manager"].includes(user.role ?? "");
+
+      let visibleCompanyIds: string[] = [];
+      if (userIsAdmin) {
+        const all = await storage.getCompanies(user.organizationId);
+        visibleCompanyIds = all.map(c => c.id);
+      } else if (isDirector) {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        const repIds = [user.id, ...teamIds];
+        const all = await storage.getCompanies(user.organizationId);
+        visibleCompanyIds = all.filter(c => repIds.includes(c.assignedTo ?? "")).map(c => c.id);
+      } else {
+        const all = await storage.getCompanies(user.organizationId);
+        visibleCompanyIds = all.filter(c => c.assignedTo === user.id).map(c => c.id);
+      }
+
+      if (visibleCompanyIds.length === 0) {
+        return res.json({ rows: [], totalMargin: 0, totalLoads: 0, counts: { unworked_account: 0, unattributed_lane: 0, unassigned_contact: 0 } });
+      }
+
+      const [allCompanies, allContacts, allAttributions, upload] = await Promise.all([
+        storage.getCompaniesByIds(visibleCompanyIds, user.organizationId),
+        storage.getContactsByCompanyIds(visibleCompanyIds),
+        storage.getLaneAttributionsByCompanyIds(visibleCompanyIds),
+        storage.getLatestFinancialUploadForOrg(user.organizationId),
+      ]);
+
+      const companyById: Record<string, typeof allCompanies[number]> = {};
+      const companyNameMap: Record<string, string[]> = {};
+      for (const c of allCompanies) {
+        companyById[c.id] = c;
+        companyNameMap[c.id] = [c.name, ...(c.financialAlias ? c.financialAlias.split(",").map((a: string) => a.trim()) : [])].filter(Boolean);
+      }
+
+      const rawRows: any[] = (upload?.rows ?? []) as any[];
+      const cols = rawRows.length ? resolveColumns(rawRows) : ({} as any);
+      const marginK = cols.marginDollar ?? "Margin $";
+
+      const workedCompanyIds = new Set<string>(
+        allContacts.filter(c => c.relationshipBase && c.relationshipBase.trim()).map(c => c.companyId)
+      );
+
+      const TRIAGE_BASE_RANK: Record<string, number> = { hr: 4, "3rd": 3, "2nd": 2, "1st": 1, unknown: 0 };
+      const sortedAllContacts = [...allContacts].sort((a, b) => {
+        const ra = TRIAGE_BASE_RANK[normRelationshipBase(a.relationshipBase)] ?? 0;
+        const rb = TRIAGE_BASE_RANK[normRelationshipBase(b.relationshipBase)] ?? 0;
+        if (rb !== ra) return rb - ra;
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      });
+
+      const contactsByCompany: Record<string, typeof allContacts> = {};
+      for (const c of allContacts) {
+        if (!contactsByCompany[c.companyId]) contactsByCompany[c.companyId] = [];
+        contactsByCompany[c.companyId].push(c);
+      }
+
+      type TriageRow =
+        | {
+            id: string;
+            type: "unworked_account";
+            companyId: string;
+            companyName: string;
+            margin: number;
+            loads: number;
+            contacts: Array<{ id: string; name: string; title: string | null; relationshipBase: string | null }>;
+          }
+        | {
+            id: string;
+            type: "unattributed_lane";
+            companyId: string;
+            companyName: string;
+            margin: number;
+            loads: number;
+            originCity: string | null;
+            originState: string | null;
+            destinationCity: string | null;
+            destinationState: string | null;
+            originLabel: string;
+            destinationLabel: string;
+            reason: "no_coverage" | "no_matching_lane" | "broad_matcher_suppressed";
+            workedContacts: Array<{ id: string; name: string; title: string | null; relationshipBase: string }>;
+          }
+        | {
+            id: string;
+            type: "unassigned_contact";
+            companyId: string;
+            companyName: string;
+            margin: number;
+            loads: number;
+            contactId: string;
+            contactName: string;
+            contactTitle: string | null;
+          };
+
+      const rows: TriageRow[] = [];
+
+      // ── Unworked accounts ────────────────────────────────────────────────────
+      if (rawRows.length > 0) {
+        for (const companyId of visibleCompanyIds) {
+          if (workedCompanyIds.has(companyId)) continue;
+          const co = companyById[companyId];
+          if (!co) continue;
+          const names = companyNameMap[companyId] ?? [];
+          if (names.length === 0) continue;
+          const total = computeCompanyFreightTotal(rawRows, cols, names);
+          if (total.loads === 0) continue;
+          const cs = (contactsByCompany[companyId] ?? []).map(c => ({
+            id: c.id,
+            name: c.name,
+            title: c.title ?? null,
+            relationshipBase: c.relationshipBase ?? null,
+          }));
+          rows.push({
+            id: `unworked:${companyId}`,
+            type: "unworked_account",
+            companyId,
+            companyName: co.name,
+            margin: total.margin,
+            loads: total.loads,
+            contacts: cs,
+          });
+        }
+      }
+
+      // ── Unattributed lanes (worked companies) ────────────────────────────────
+      // Same priority-claim logic as the dashboard endpoint: highest base claims
+      // first, leftover indices are unattributed.
+      if (rawRows.length > 0) {
+        const companySeenIndices: Record<string, Set<number>> = {};
+        const companyHasAnyLaneData: Record<string, boolean> = {};
+        // States covered by a contact's broad state-only matchers that were suppressed
+        // by that same contact's more-specific lane matchers (Phase 2 rule). When loads
+        // remain unattributed AND fall in one of these states, we surface the
+        // "broad_matcher_suppressed" reason.
+        const companySuppressedBroadStates: Record<string, Set<string>> = {};
+        const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+        for (const contact of sortedAllContacts) {
+          if (!workedCompanyIds.has(contact.companyId)) continue;
+          const contactAttribs = allAttributions.filter(a => a.contactId === contact.id);
+          const hasAttribs = contactAttribs.length > 0;
+          const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
+          if (!hasAttribs && !hasLaneStrings) continue;
+          companyHasAnyLaneData[contact.companyId] = true;
+          const names = companyNameMap[contact.companyId] ?? [];
+          if (names.length === 0) continue;
+          if (!companySeenIndices[contact.companyId]) companySeenIndices[contact.companyId] = new Set<number>();
+          const seen = companySeenIndices[contact.companyId];
+          if (hasAttribs) {
+            const m = computeFreightMetrics(rawRows, cols, names, contactAttribs, seen);
+            m.matchedIndices.forEach(i => seen.add(i));
+          } else {
+            const m = computeFreightFromContactLaneStrings(rawRows, cols, names, contact.lanes || [], contact.regions || [], seen);
+            m.matchedIndices.forEach(i => seen.add(i));
+            // Detect broad-state matchers that were suppressed by more-specific
+            // matchers on the same contact (mirrors Phase 2 logic in
+            // computeFreightFromContactLaneStrings).
+            const terms = [...(contact.lanes || []), ...(contact.regions || [])];
+            const broadStates: string[] = [];
+            let hasNonBroad = false;
+            for (const term of terms) {
+              const t = (term || "").trim();
+              if (!t) continue;
+              const dirMatch = t.match(/^(.+?)(?:→|->|\s+to\s+)(.+)$/i);
+              if (dirMatch) { hasNonBroad = true; continue; }
+              if (t.length <= 3 && /^[a-zA-Z]+$/.test(t)) { broadStates.push(norm(t)); continue; }
+              hasNonBroad = true;
+            }
+            if (hasNonBroad && broadStates.length > 0) {
+              if (!companySuppressedBroadStates[contact.companyId]) companySuppressedBroadStates[contact.companyId] = new Set<string>();
+              for (const st of broadStates) companySuppressedBroadStates[contact.companyId].add(st);
+            }
+          }
+        }
+
+        const shipperCityK = cols.shipperCity ?? cols.origin;
+        const shipperStateK = cols.shipperState ?? cols.originState;
+        const consigneeCityK = cols.consigneeCity ?? cols.destination;
+        const consigneeStateK = cols.consigneeState ?? cols.destinationState;
+
+        for (const companyId of visibleCompanyIds) {
+          if (!workedCompanyIds.has(companyId)) continue;
+          const co = companyById[companyId];
+          if (!co) continue;
+          const names = companyNameMap[companyId] ?? [];
+          if (names.length === 0) continue;
+          const total = computeCompanyFreightTotal(rawRows, cols, names);
+          const seen = companySeenIndices[companyId] ?? new Set<number>();
+          // Group unclaimed indices by normalized O/D
+          type LaneGroup = {
+            originCityNorm: string;
+            originStateNorm: string;
+            destCityNorm: string;
+            destStateNorm: string;
+            originCityRaw: string;
+            originStateRaw: string;
+            destCityRaw: string;
+            destStateRaw: string;
+            loads: number;
+            margin: number;
+          };
+          const groups: Record<string, LaneGroup> = {};
+          for (const idx of total.allIndices) {
+            if (seen.has(idx)) continue;
+            const row = rawRows[idx];
+            const oCityRaw = String((shipperCityK ? row[shipperCityK] : "") || "").split(",")[0].trim();
+            const oStateRaw = String((shipperStateK ? row[shipperStateK] : "") || "").trim();
+            const dCityRaw = String((consigneeCityK ? row[consigneeCityK] : "") || "").split(",")[0].trim();
+            const dStateRaw = String((consigneeStateK ? row[consigneeStateK] : "") || "").trim();
+            const oCityNorm = normCity(oCityRaw);
+            const oStateNorm = norm(oStateRaw);
+            const dCityNorm = normCity(dCityRaw);
+            const dStateNorm = norm(dStateRaw);
+            const key = `${oCityNorm}|${oStateNorm}|${dCityNorm}|${dStateNorm}`;
+            if (!groups[key]) {
+              groups[key] = {
+                originCityNorm: oCityNorm,
+                originStateNorm: oStateNorm,
+                destCityNorm: dCityNorm,
+                destStateNorm: dStateNorm,
+                originCityRaw: oCityRaw,
+                originStateRaw: oStateRaw,
+                destCityRaw: dCityRaw,
+                destStateRaw: dStateRaw,
+                loads: 0,
+                margin: 0,
+              };
+            }
+            const g = groups[key];
+            g.loads++;
+            g.margin += parseFloat(String(row[marginK] || 0).replace(/[$,]/g, "")) || 0;
+          }
+
+          if (Object.keys(groups).length === 0) continue;
+
+          const workedContacts = (contactsByCompany[companyId] ?? [])
+            .filter(c => normRelationshipBase(c.relationshipBase) !== "unknown")
+            .map(c => ({
+              id: c.id,
+              name: c.name,
+              title: c.title ?? null,
+              relationshipBase: normRelationshipBase(c.relationshipBase),
+            }));
+
+          const baseReason: "no_coverage" | "no_matching_lane" = companyHasAnyLaneData[companyId]
+            ? "no_matching_lane"
+            : "no_coverage";
+          const suppressedStates = companySuppressedBroadStates[companyId] ?? new Set<string>();
+
+          for (const [key, g] of Object.entries(groups)) {
+            const fmtPart = (city: string, st: string) => {
+              const c = city.trim();
+              const s = st.trim().toUpperCase();
+              if (c && s) return `${c}, ${s}`;
+              if (c) return c;
+              if (s) return s;
+              return "Unknown";
+            };
+            // Per-group reason refinement: if a contact had a broad state-only
+            // matcher in this O/D's origin/dest state but the matcher was
+            // suppressed by a more-specific lane on the same contact, surface
+            // that as the cause.
+            let reason: "no_coverage" | "no_matching_lane" | "broad_matcher_suppressed" = baseReason;
+            if (
+              suppressedStates.size > 0 &&
+              (suppressedStates.has(g.originStateNorm) || suppressedStates.has(g.destStateNorm))
+            ) {
+              reason = "broad_matcher_suppressed";
+            }
+            rows.push({
+              id: `unattributed:${companyId}:${key}`,
+              type: "unattributed_lane",
+              companyId,
+              companyName: co.name,
+              margin: g.margin,
+              loads: g.loads,
+              originCity: g.originCityRaw || null,
+              originState: g.originStateRaw || null,
+              destinationCity: g.destCityRaw || null,
+              destinationState: g.destStateRaw || null,
+              originLabel: fmtPart(g.originCityRaw, g.originStateRaw),
+              destinationLabel: fmtPart(g.destCityRaw, g.destStateRaw),
+              reason,
+              workedContacts,
+            });
+          }
+        }
+      }
+
+      // ── Unassigned contacts (worked account, has lane data, no base) ────────
+      for (const contact of allContacts) {
+        if (!workedCompanyIds.has(contact.companyId)) continue;
+        const base = normRelationshipBase(contact.relationshipBase);
+        if (base !== "unknown") continue;
+        const hasAttribs = allAttributions.some(a => a.contactId === contact.id);
+        const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
+        if (!hasAttribs && !hasLaneStrings) continue;
+        const co = companyById[contact.companyId];
+        if (!co) continue;
+        // Compute the contact's own freight footprint (without dedup) for sorting context
+        const names = companyNameMap[contact.companyId] ?? [];
+        let loads = 0, margin = 0;
+        if (rawRows.length > 0 && names.length > 0) {
+          if (hasAttribs) {
+            const contactAttribs = allAttributions.filter(a => a.contactId === contact.id);
+            const m = computeFreightMetrics(rawRows, cols, names, contactAttribs);
+            loads = m.loads; margin = m.margin;
+          } else {
+            const m = computeFreightFromContactLaneStrings(rawRows, cols, names, contact.lanes || [], contact.regions || []);
+            loads = m.loads; margin = m.margin;
+          }
+        }
+        rows.push({
+          id: `unassigned:${contact.id}`,
+          type: "unassigned_contact",
+          companyId: contact.companyId,
+          companyName: co.name,
+          margin,
+          loads,
+          contactId: contact.id,
+          contactName: contact.name,
+          contactTitle: contact.title ?? null,
+        });
+      }
+
+      rows.sort((a, b) => b.margin - a.margin);
+
+      const counts = {
+        unworked_account: rows.filter(r => r.type === "unworked_account").length,
+        unattributed_lane: rows.filter(r => r.type === "unattributed_lane").length,
+        unassigned_contact: rows.filter(r => r.type === "unassigned_contact").length,
+      };
+      const totalMargin = rows.reduce((s, r) => s + r.margin, 0);
+      const totalLoads = rows.reduce((s, r) => s + r.loads, 0);
+
+      res.json({ rows, totalMargin, totalLoads, counts });
+    } catch (e: any) {
+      console.error("[freight-attribution-triage]", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ── Relationship Base Distribution — counts companies & contacts per level ──
   app.get("/api/relationship-base-distribution", requireAuth, async (req, res) => {
     try {

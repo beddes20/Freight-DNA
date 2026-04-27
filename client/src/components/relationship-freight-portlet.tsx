@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -109,19 +110,27 @@ export function RelationshipFreightDashboardPortlet({ externalData }: { external
               <SummaryTable rows={data.summary} unworkedAccounts={data.unworkedAccounts} unworkedLoads={data.unworkedLoads} unworkedMargin={data.unworkedMargin} />
               <ProgressionCallout summary={data.summary} />
               {(data.unattributedLoads ?? 0) > 0 && (
-                <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-muted border border-dashed border-muted-foreground/50 text-xs text-foreground mt-2" data-testid="callout-dashboard-unattributed">
+                <Link
+                  href="/freight-triage"
+                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-muted border border-dashed border-muted-foreground/50 text-xs text-foreground mt-2 hover:bg-muted/80 transition-colors"
+                  data-testid="callout-dashboard-unattributed"
+                >
                   <div className="flex items-center gap-2">
                     <Package className="w-3.5 h-3.5 flex-shrink-0 text-muted-foreground" />
                     <span><strong>Unattributed Lanes:</strong> {(data.unattributedLoads ?? 0).toLocaleString()} load{(data.unattributedLoads ?? 0) !== 1 ? "s" : ""} on worked accounts not yet claimed by any contact lane</span>
                   </div>
-                  <span className="text-[10px] font-medium text-amber-700 dark:text-amber-300 whitespace-nowrap">Add a Lane Attribution</span>
-                </div>
+                  <span className="text-[10px] font-medium text-amber-700 dark:text-amber-300 whitespace-nowrap">Open triage worklist →</span>
+                </Link>
               )}
               {(data.unassignedContacts ?? 0) > 0 && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 text-xs text-amber-700 dark:text-amber-400 mt-1" data-testid="callout-dashboard-unassigned">
+                <Link
+                  href="/freight-triage"
+                  className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 text-xs text-amber-700 dark:text-amber-400 mt-1 hover:bg-amber-100 dark:hover:bg-amber-950/50 transition-colors"
+                  data-testid="callout-dashboard-unassigned"
+                >
                   <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
                   <span><strong>Unassigned Contacts:</strong> {data.unassignedContacts} contact{(data.unassignedContacts ?? 0) !== 1 ? "s" : ""} have lanes but no relationship base set — freight is tracked under "Unassigned"</span>
-                </div>
+                </Link>
               )}
             </div>
           )}
