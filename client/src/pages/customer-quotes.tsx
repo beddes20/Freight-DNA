@@ -40,7 +40,6 @@ import { PricingRecommendationCard } from "@/components/PricingRecommendationCar
 import { MarginFloorsSettings } from "@/components/MarginFloorsSettings";
 import { SenderMappingsDialog } from "@/components/SenderMappingsDialog";
 import { SpotQuoteSearch } from "@/components/SpotQuoteSearch";
-import { EmailCoverageBanner } from "@/components/EmailCoverageBanner";
 import { ActionQueueCard } from "@/components/customer-quotes/ActionQueueCard";
 import { computeQuoteSla, formatSlaBadge } from "@shared/quoteSla";
 
@@ -764,9 +763,6 @@ function CustomerQuotesPageInner(): JSX.Element {
           </div>
         </div>
       </div>
-
-      {/* Task #517 — coverage banner: dormant unless something needs attention */}
-      <EmailCoverageBanner />
 
       {/* Sticky filter bar */}
       <div className="sticky top-0 z-20 px-6 py-3 border-b border-border bg-background/95 backdrop-blur shrink-0" data-testid="filter-bar">

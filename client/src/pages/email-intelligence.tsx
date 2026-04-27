@@ -18,7 +18,6 @@ import {
 import { formatDistanceToNow } from "date-fns";
 import { ThreadDetailPanel, type ConversationThread } from "@/pages/conversations";
 import ResponseTimeTab from "@/components/email-intelligence/response-time-tab";
-import { EmailCoverageBanner } from "@/components/EmailCoverageBanner";
 import { IntegrationDegradedPill } from "@/components/integration-degraded-pill";
 
 interface SignalSummaryRow {
@@ -509,9 +508,6 @@ export default function EmailIntelligencePage() {
           </div>
         )}
       </div>
-
-      {/* Task #517 — coverage banner: dormant unless something needs attention */}
-      <EmailCoverageBanner />
 
       <div className="p-4 md:p-6 space-y-4 md:space-y-6">
         <Tabs defaultValue="urgency" className="w-full">
