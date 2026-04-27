@@ -616,18 +616,24 @@ function SuggestedPool({
   onTogglePool,
   onSelectPoolIds,
   onClearPoolIds,
+  promoted = false,
 }: {
   oppId: string;
   selectedPoolIds: Set<string>;
   onTogglePool: (carrierId: string) => void;
   onSelectPoolIds: (carrierIds: string[]) => void;
   onClearPoolIds: (carrierIds: string[]) => void;
+  // Task #768 — when the ranked shortlist is empty, this list is the primary
+  // surface (not a "beyond the shortlist" supplement). Render the explainer
+  // header + tooltip and lead with the carrier list rather than a collapsed
+  // section.
+  promoted?: boolean;
 }) {
   const [open, setOpen] = useState(true);
   const [filter, setFilter] = useState<"all" | PoolEntry["tag"]>("all");
   const [search, setSearch] = useState("");
 
-  const { data, isLoading, isError, refetch } = useQuery<{ pool: PoolEntry[]; total: number }>({
+  const { data, isLoading, isError, refetch } = useQuery<{ pool: PoolEntry[]; total: number; floor?: number }>({
     queryKey: ["/api/freight-opportunities", oppId, "carrier-pool"],
     queryFn: async () => {
       const res = await fetch(`/api/freight-opportunities/${oppId}/carrier-pool`, { credentials: "include" });
@@ -657,7 +663,37 @@ function SuggestedPool({
   const allFilteredSelected = filteredCarrierIds.length > 0 && filteredCarrierIds.every(id => selectedPoolIds.has(id));
 
   return (
-    <div className="border border-border rounded-lg bg-card overflow-hidden" data-testid="section-pool">
+    <div
+      className={`border rounded-lg bg-card overflow-hidden ${promoted ? "border-amber-500/50" : "border-border"}`}
+      data-testid={promoted ? "section-pool-promoted" : "section-pool"}
+    >
+      {promoted && (
+        // Task #768 — Explainer banner shown only when the ranked shortlist
+        // is empty. Reuses the lucide Info icon + native title attribute as
+        // a lightweight tooltip for "Why these carriers" — no new design
+        // system work, no new component needed.
+        <div className="px-4 py-2.5 bg-amber-500/10 border-b border-amber-500/30 flex items-start gap-2" data-testid="banner-pool-promoted">
+          <Sparkles className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+          <div className="text-xs flex-1">
+            <p className="font-medium text-amber-800 dark:text-amber-300">
+              No proven matches yet — here are carriers from your system that could run this lane.
+            </p>
+            <p
+              className="text-amber-700/90 dark:text-amber-300/90 mt-0.5 inline-flex items-center gap-1"
+              data-testid="text-pool-why-explainer"
+            >
+              <span>Why these carriers?</span>
+              <span
+                className="inline-flex items-center"
+                title="Picked from your active catalog using state pair, equipment fit, HQ proximity, and active status. Pool widens until at least 30 carriers are surfaced."
+                data-testid="tooltip-pool-why"
+              >
+                <Info className="h-3 w-3 text-amber-700 dark:text-amber-300" />
+              </span>
+            </p>
+          </div>
+        </div>
+      )}
       <button
         onClick={() => setOpen(v => !v)}
         aria-expanded={open}
@@ -665,10 +701,10 @@ function SuggestedPool({
       >
         <div className="flex items-center gap-2 min-w-0">
           {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
-          <span className="text-sm font-semibold">Suggested carrier pool</span>
+          <span className="text-sm font-semibold">{promoted ? "Carriers from your system" : "Suggested carrier pool"}</span>
           <span className="text-muted-foreground/60">·</span>
           <span className="text-xs text-muted-foreground">
-            {isLoading ? "loading…" : `${pool.length} carriers beyond the ranked shortlist`}
+            {isLoading ? "loading…" : promoted ? `${pool.length} carriers` : `${pool.length} carriers beyond the ranked shortlist`}
           </span>
           <span className="text-xs text-muted-foreground/70 hidden md:inline">· bulk-select to send wide</span>
         </div>
@@ -1484,25 +1520,43 @@ export default function AvailableFreightDetailPage() {
             </div>
           </div>
 
-          {totalCount === 0 ? (
+          {/*
+            Task #768 — Carrier surface state machine:
+            - rankingInFlight: ranker is still working → show spinner card.
+            - !rankingInFlight && totalCount === 0: ranker has run and matched
+              nothing → promote the suggested pool to the primary surface
+              with an explainer header, plus a small "Try ranking again"
+              affordance below. Reps NEVER see a "permanent loading" state.
+            - totalCount > 0: render bucket sections, then the suggested pool
+              below as a supplemental "wider net" — original behavior.
+          */}
+          {(data as any)?.rankingInFlight ? (
             <Card>
               <CardContent className="py-12 text-center text-sm text-muted-foreground space-y-3" data-testid="state-empty-carriers">
-                {(data as any)?.rankingInFlight ? (
-                  <>
-                    <RefreshCw className="h-5 w-5 mx-auto animate-spin" />
-                    <p className="font-medium">Ranking carriers…</p>
-                  </>
-                ) : (
-                  <>
-                    <p className="font-medium">No carriers were ranked for this opportunity.</p>
-                    <Button size="sm" variant="outline" onClick={() => rerankMutation.mutate()} disabled={rerankMutation.isPending} data-testid="button-rerank-carriers">
-                      <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${rerankMutation.isPending ? "animate-spin" : ""}`} />
-                      Try ranking again
-                    </Button>
-                  </>
-                )}
+                <RefreshCw className="h-5 w-5 mx-auto animate-spin" />
+                <p className="font-medium">Ranking carriers…</p>
               </CardContent>
             </Card>
+          ) : totalCount === 0 ? (
+            <>
+              <SuggestedPool
+                oppId={id}
+                selectedPoolIds={selectedPool}
+                onTogglePool={togglePool}
+                onSelectPoolIds={selectPoolIds}
+                onClearPoolIds={clearPoolIds}
+                promoted
+              />
+              <Card>
+                <CardContent className="py-4 flex items-center justify-between gap-3 text-xs text-muted-foreground" data-testid="state-empty-carriers">
+                  <p>No proven matches yet — the carriers above came from your active catalog.</p>
+                  <Button size="sm" variant="outline" onClick={() => rerankMutation.mutate()} disabled={rerankMutation.isPending} data-testid="button-rerank-carriers">
+                    <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${rerankMutation.isPending ? "animate-spin" : ""}`} />
+                    Try ranking again
+                  </Button>
+                </CardContent>
+              </Card>
+            </>
           ) : (
             <>
               {BUCKET_ORDER.map((bucket, idx) => {

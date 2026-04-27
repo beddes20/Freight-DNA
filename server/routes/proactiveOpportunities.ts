@@ -75,6 +75,19 @@ function runOrJoinRank(opp: import("@shared/schema").FreightOpportunity) {
     } catch (err) {
       const message = getErrorMessage(err);
       console.error(`[freight-opps] inline rank ${opp.id} failed after ${Date.now() - started}ms:`, message);
+      // Task #768 — record the failed attempt as a `lazy_shortlist_rank`
+      // audit row so the detail endpoint stops re-kicking the rank on every
+      // 3s poll. Without this, the spinner could spin forever when the
+      // ranker throws (timeout, db error) rather than completing with zero
+      // matches. Audit failure is itself best-effort.
+      try {
+        await storage.appendFreightOpportunityAudit({
+          opportunityId: opp.id,
+          eventType: "generated",
+          actorUserId: null,
+          payload: { kind: "lazy_shortlist_rank", result: "error", error: message },
+        });
+      } catch { /* audit is advisory */ }
       return { ranked: false, carriers: [] as any[], error: message };
     } finally {
       inflightRanks.delete(opp.id);
@@ -184,23 +197,32 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       const org = orgId(req);
       const opp = await storage.getFreightOpportunity(org, pStr(req.params.id));
       if (!opp) return res.status(404).json({ error: "Opportunity not found" });
-      const carriers = await storage.listFreightOpportunityCarriers(opp.id);
-      // Backfill: rows imported via the Available Freight workbook never went
-      // through generateOpportunitiesForCompany, so they may have no carrier
-      // shortlist persisted. Kick off the rank in the background and return
-      // immediately with `rankingInFlight: true` — the client polls every 3s
-      // (refetchInterval in available-freight-detail.tsx) and picks up the
-      // shortlist as soon as the rank lands. Awaiting inline previously
-      // blocked the response for up to 25s and made the page appear frozen
-      // after a click. `runOrJoinRank` already dedupes concurrent kickoffs
-      // per opportunity, so polling does not stack up rank work.
+      // Fetch carriers + audit together so we can decide rankingInFlight off
+      // the audit history (Task #768). Previously the endpoint reported
+      // rankingInFlight=true whenever the persisted shortlist was empty,
+      // which meant a true zero-match rank kept polling the spinner forever
+      // because no rows were ever persisted. Now: if a `lazy_shortlist_rank`
+      // audit row already exists (success OR zero-match OR error), the rank
+      // attempt is considered complete and the UI immediately shows the
+      // empty/fallback state. `runOrJoinRank` itself dedupes concurrent
+      // kickoffs, so combined with the audit gate we cap retries to one
+      // attempt per opportunity per page-load cycle.
+      const [carriers, audit] = await Promise.all([
+        storage.listFreightOpportunityCarriers(opp.id),
+        storage.listFreightOpportunityAudit(opp.id),
+      ]);
+      const rankAttempted = audit.some(a => {
+        const payload = a.payload as { kind?: string } | null;
+        return payload?.kind === "lazy_shortlist_rank";
+      });
       let rankingInFlight = false;
-      if (carriers.length === 0) {
+      if (carriers.length === 0 && !rankAttempted) {
         rankingInFlight = true;
-        // Fire-and-forget; errors are logged inside runOrJoinRank.
+        // Fire-and-forget; errors are logged inside runOrJoinRank, and the
+        // failure path writes a `lazy_shortlist_rank` audit row so the
+        // spinner cannot loop indefinitely on a thrown rank.
         void runOrJoinRank(opp);
       }
-      const audit = await storage.listFreightOpportunityAudit(opp.id);
       // Phase 4: hydrate per-carrier response history so the UI can show
       // outcomes (last + count) without N follow-up calls.
       const responsesByRow = await Promise.all(
@@ -216,7 +238,7 @@ export function registerProactiveOpportunityRoutes(app: Express) {
         carriers: carriersWithResponses,
         audit,
         rankingInFlight,
-        rankAttempted: rankingInFlight,
+        rankAttempted,
         rankError: null,
       });
     } catch (err) {
@@ -413,8 +435,20 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       }
 
       scored.sort((a, b) => b.fitScore - a.fitScore);
-      const top = scored.slice(0, 28);
-      res.json({ pool: top, total: scored.length });
+      // Task #768 — Floor of 30 carriers. The previous cap of 28 meant reps
+      // hit a "loading…" / near-empty state on small orgs or strict-status
+      // pages. Sorting already implements the progressive-widening order
+      // (state-pair > in-region > HQ-proximity > catalog filler) via the
+      // additive score signals above, so slicing the first 50 carriers
+      // preserves the priority ordering. The page never returns fewer than
+      // 30 entries unless the org's eligible catalog is itself smaller —
+      // every active, non-do-not-use catalog carrier remains eligible for
+      // the floor.
+      const POOL_FLOOR = 30;
+      const POOL_CAP = 50;
+      const sliceLen = Math.max(POOL_FLOOR, Math.min(POOL_CAP, scored.length));
+      const top = scored.slice(0, sliceLen);
+      res.json({ pool: top, total: scored.length, floor: POOL_FLOOR });
     } catch (err) {
       console.error("[freight-opps] carrier-pool error:", err);
       res.status(500).json({ error: "Failed to load carrier pool" });
