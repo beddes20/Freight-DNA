@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { recordAiEvent } from "@/lib/aiTelemetry";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +23,17 @@ export default function AIIntelligencePage() {
   const [activeTab, setActiveTab] = useState("overview");
   const [selectedCompany, setSelectedCompany] = useState<string>("");
   const [expandedCards, setExpandedCards] = useState<Set<string>>(new Set());
+
+  // Task #700 — surface impression on mount; click event each time the user
+  // navigates between intelligence tabs so per-feature usage shows up in the
+  // admin AI Engagement leaderboard.
+  useEffect(() => {
+    recordAiEvent({ surface: "ai_intelligence_hub", eventType: "impression", feature: activeTab });
+  }, []);
+  const handleTabChange = (next: string) => {
+    setActiveTab(next);
+    recordAiEvent({ surface: "ai_intelligence_hub", eventType: "click", feature: next });
+  };
 
   const { data: dashboard, isLoading: dashLoading } = useQuery<any>({
     queryKey: ["/api/ai-intelligence/dashboard"],
@@ -287,7 +299,7 @@ export default function AIIntelligencePage() {
             );
           })()}
 
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <Tabs value={activeTab} onValueChange={handleTabChange}>
             <TabsList className="flex md:grid md:grid-cols-5 lg:grid-cols-10 w-full overflow-x-auto no-scrollbar" data-testid="tabs-intelligence">
               <TabsTrigger value="overview" className="flex-shrink-0" data-testid="tab-overview">Overview</TabsTrigger>
               <TabsTrigger value="meeting-prep" className="flex-shrink-0" data-testid="tab-meeting-prep">Meeting Prep</TabsTrigger>

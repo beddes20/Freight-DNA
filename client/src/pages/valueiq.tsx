@@ -13,6 +13,7 @@ import { Sparkles, MessageSquare, BookMarked, Plus, Send, Trash2, Pin, Archive, 
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import AIIntelligencePage from "@/pages/ai-intelligence";
+import { recordAiEvent } from "@/lib/aiTelemetry";
 
 // Lightweight inline renderer that linkifies markdown-style [text](href) and
 // bare URLs. Keeps line breaks via whitespace-pre-wrap on the parent and adds
@@ -63,6 +64,15 @@ function useTabFromUrl(): [string, (t: string) => void] {
 
 export default function ValueIQPage() {
   const [tab, setTab] = useTabFromUrl();
+  // Task #700 — surface impression on mount + click event when the user
+  // switches tabs so admin AI Engagement console can see per-feature usage.
+  useEffect(() => {
+    recordAiEvent({ surface: "valueiq", eventType: "impression", feature: tab });
+  }, []); // intentionally only on mount
+  const handleTabChange = (next: string) => {
+    setTab(next);
+    recordAiEvent({ surface: "valueiq", eventType: "click", feature: next });
+  };
   return (
     <div className="container mx-auto p-4 md:p-6 max-w-[1400px]">
       <div className="mb-4 flex items-center gap-3">
@@ -72,7 +82,7 @@ export default function ValueIQPage() {
           <p className="text-sm text-muted-foreground">Your AI workspace — insights, threads, and personal library, grounded in your CRM data.</p>
         </div>
       </div>
-      <Tabs value={tab} onValueChange={setTab}>
+      <Tabs value={tab} onValueChange={handleTabChange}>
         <TabsList className="mb-4">
           <TabsTrigger value="insights" data-testid="tab-insights"><Sparkles className="h-4 w-4 mr-2" />Insights</TabsTrigger>
           <TabsTrigger value="threads" data-testid="tab-threads"><MessageSquare className="h-4 w-4 mr-2" />Threads</TabsTrigger>

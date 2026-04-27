@@ -15,8 +15,9 @@
  *   /ai/adapters        → Adapter status / dry-run vs live
  *   /ai/admin           → Legacy AiAgentPortal (personas, plays, permissions, activity)
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useRoute } from "wouter";
+import { recordAiEvent } from "@/lib/aiTelemetry";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -407,6 +408,18 @@ export default function AiCenterPage() {
   const [matchAgentDetail, agentDetailParams] = useRoute("/ai/agents/:slug");
 
   const activeTab = useMemo<TabKey>(() => tabFromPath(location), [location]);
+
+  // Task #700 — surface impression on mount; click event whenever the user
+  // moves between AI Center tabs (agents / approvals / pods / adapters / admin).
+  useEffect(() => {
+    recordAiEvent({ surface: "ai_center", eventType: "impression", feature: activeTab });
+  }, []);
+  useEffect(() => {
+    recordAiEvent({ surface: "ai_center", eventType: "click", feature: activeTab });
+    // intentionally re-runs on tab change but not on first render — first render
+    // is already covered by the impression event above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   const isAdmin = user?.role === "admin";
   const canSeeAi = ["admin", "manager", "director", "national_account_manager", "sales_director"].includes(user?.role ?? "");

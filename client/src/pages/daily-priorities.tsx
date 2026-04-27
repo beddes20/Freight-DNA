@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { NbaCard } from "@/components/NbaCard";
 import type { NbaCardData } from "@/components/NbaCard";
+import { recordAiEvent } from "@/lib/aiTelemetry";
 
 // Ordered list of action button selectors to try when the user hits Enter
 // on a selected card. The first match found inside the card is "clicked".
@@ -612,6 +613,12 @@ export default function DailyPrioritiesPage() {
       setSelectedCardId(null);
     }
   }, [selectedCardId, selectedCard]);
+
+  // Task #700 — record an impression of the Daily Priorities surface so the
+  // admin AI Engagement console sees usage of this top-level AI page.
+  useEffect(() => {
+    recordAiEvent({ surface: "daily_priorities", eventType: "impression" });
+  }, []);
 
   // Latest navigation state in a ref so the keyboard handler doesn't have to
   // be re-bound every time the selection changes (fewer re-renders, fewer

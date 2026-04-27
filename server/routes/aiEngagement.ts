@@ -15,10 +15,11 @@ import { and, eq, gte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../storage";
 import { requireUser } from "../auth";
-import { qInt } from "../lib/req";
+import { qInt, qOptStr } from "../lib/req";
 import { getErrorMessage } from "../lib/errors";
 import {
   aiEngagementEvents,
+  users as usersTable,
   AI_ENGAGEMENT_SURFACES,
   AI_ENGAGEMENT_EVENT_TYPES,
 } from "@shared/schema";
@@ -72,6 +73,18 @@ export function registerAiEngagementRoutes(app: Express) {
 
       const days = Math.min(90, Math.max(1, qInt(req.query.days, 30)));
       const since = new Date(Date.now() - days * 86400_000);
+      const surfaceFilter = qOptStr(req.query.surface);
+
+      const baseFilter = surfaceFilter
+        ? and(
+            eq(aiEngagementEvents.organizationId, me.organizationId),
+            gte(aiEngagementEvents.createdAt, since),
+            eq(aiEngagementEvents.surface, surfaceFilter),
+          )
+        : and(
+            eq(aiEngagementEvents.organizationId, me.organizationId),
+            gte(aiEngagementEvents.createdAt, since),
+          );
 
       const rows = await db
         .select({
@@ -81,10 +94,7 @@ export function registerAiEngagementRoutes(app: Express) {
           users: sql<number>`COUNT(DISTINCT ${aiEngagementEvents.userId})::int`,
         })
         .from(aiEngagementEvents)
-        .where(and(
-          eq(aiEngagementEvents.organizationId, me.organizationId),
-          gte(aiEngagementEvents.createdAt, since),
-        ))
+        .where(baseFilter)
         .groupBy(aiEngagementEvents.surface, aiEngagementEvents.eventType);
 
       type Bucket = {
@@ -142,7 +152,87 @@ export function registerAiEngagementRoutes(app: Express) {
         return { ...b, ctr, acceptRate, dismissRate };
       }).sort((a, b) => b.impressions - a.impressions);
 
-      res.json({ days, surfaces });
+      // ── Top users (org-scoped, joined to users for display name) ────────────
+      const topUserRows = await db
+        .select({
+          userId: aiEngagementEvents.userId,
+          name: usersTable.name,
+          username: usersTable.username,
+          impressions: sql<number>`SUM(CASE WHEN ${aiEngagementEvents.eventType} = 'impression' THEN 1 ELSE 0 END)::int`,
+          accepts: sql<number>`SUM(CASE WHEN ${aiEngagementEvents.eventType} IN ('accept','apply') THEN 1 ELSE 0 END)::int`,
+          total: sql<number>`COUNT(*)::int`,
+        })
+        .from(aiEngagementEvents)
+        .leftJoin(usersTable, eq(usersTable.id, aiEngagementEvents.userId))
+        .where(baseFilter)
+        .groupBy(aiEngagementEvents.userId, usersTable.name, usersTable.username)
+        .orderBy(sql`COUNT(*) DESC`)
+        .limit(10);
+      const topUsers = topUserRows.map((u) => ({
+        userId: u.userId,
+        name: u.name || u.username || "(unknown)",
+        impressions: u.impressions,
+        accepts: u.accepts,
+        total: u.total,
+        acceptRate: u.impressions > 0 ? u.accepts / u.impressions : 0,
+      }));
+
+      // ── Per-feature leaderboard (most + least engaged features) ─────────────
+      const featureRows = await db
+        .select({
+          surface: aiEngagementEvents.surface,
+          feature: aiEngagementEvents.feature,
+          impressions: sql<number>`SUM(CASE WHEN ${aiEngagementEvents.eventType} = 'impression' THEN 1 ELSE 0 END)::int`,
+          accepts: sql<number>`SUM(CASE WHEN ${aiEngagementEvents.eventType} IN ('accept','apply') THEN 1 ELSE 0 END)::int`,
+          dismisses: sql<number>`SUM(CASE WHEN ${aiEngagementEvents.eventType} = 'dismiss' THEN 1 ELSE 0 END)::int`,
+        })
+        .from(aiEngagementEvents)
+        .where(baseFilter)
+        .groupBy(aiEngagementEvents.surface, aiEngagementEvents.feature);
+      const featureBuckets = featureRows
+        .filter((f) => f.feature !== null && f.impressions > 0)
+        .map((f) => ({
+          surface: f.surface,
+          feature: f.feature as string,
+          impressions: f.impressions,
+          accepts: f.accepts,
+          dismisses: f.dismisses,
+          acceptRate: f.impressions > 0 ? f.accepts / f.impressions : 0,
+          dismissRate: f.impressions > 0 ? f.dismisses / f.impressions : 0,
+        }));
+      const featureLeaderboard = {
+        most: [...featureBuckets].sort((a, b) => b.acceptRate - a.acceptRate).slice(0, 10),
+        least: [...featureBuckets].sort((a, b) => a.acceptRate - b.acceptRate).slice(0, 10),
+      };
+
+      // ── Time series (impressions per day for sparkline) ─────────────────────
+      const seriesRows = await db
+        .select({
+          day: sql<string>`to_char(${aiEngagementEvents.createdAt}, 'YYYY-MM-DD')`,
+          impressions: sql<number>`SUM(CASE WHEN ${aiEngagementEvents.eventType} = 'impression' THEN 1 ELSE 0 END)::int`,
+          accepts: sql<number>`SUM(CASE WHEN ${aiEngagementEvents.eventType} IN ('accept','apply') THEN 1 ELSE 0 END)::int`,
+          total: sql<number>`COUNT(*)::int`,
+        })
+        .from(aiEngagementEvents)
+        .where(baseFilter)
+        .groupBy(sql`to_char(${aiEngagementEvents.createdAt}, 'YYYY-MM-DD')`)
+        .orderBy(sql`to_char(${aiEngagementEvents.createdAt}, 'YYYY-MM-DD')`);
+      const timeSeries = seriesRows.map((s) => ({
+        day: s.day,
+        impressions: s.impressions,
+        accepts: s.accepts,
+        total: s.total,
+      }));
+
+      res.json({
+        days,
+        surface: surfaceFilter ?? null,
+        availableSurfaces: AI_ENGAGEMENT_SURFACES,
+        surfaces,
+        topUsers,
+        featureLeaderboard,
+        timeSeries,
+      });
     } catch (err) {
       console.error("[ai-engagement] overview error:", err);
       res.status(500).json({ error: getErrorMessage(err) });
