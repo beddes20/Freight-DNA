@@ -215,31 +215,51 @@ function ThreadsPane() {
     if (!first) return;
     queryClient.prefetchQuery({
       queryKey: ["/api/valueiq/threads", first.id, "messages"],
-      queryFn: () =>
-        fetch(`/api/valueiq/threads/${first.id}/messages`, { credentials: "include" }).then((r) => r.json()),
+      // Use a strict fetcher (matches the default getQueryFn behavior): throw
+      // on non-OK so a 401/500 doesn't poison the cache with `{error}` and
+      // crash `messagesQ.data?.map` on the next render.
+      queryFn: async () => {
+        const r = await fetch(`/api/valueiq/threads/${first.id}/messages`, { credentials: "include" });
+        if (!r.ok) throw new Error(`${r.status}: ${r.statusText}`);
+        return r.json();
+      },
     });
   }, [threadsQ.data]);
 
-  // Build a human-readable degradation summary from the health snapshot.
-  const degradedProviders: string[] = [];
+  // Split degradation into "core" (db/embedder/sonar/openai — chat is meaningfully
+  // impaired) vs "advisory" (eia/fmcsa/websearch/anthropic — only fuel/market-side
+  // answers may be thin; the chat itself works fine for everything else).
+  // Mirrors the server-side `degraded` flag in /api/valueiq/health.
+  const ADVISORY_PROVIDERS = new Set(["eia", "fmcsa", "websearch", "anthropic"]);
+  const downCore: string[] = [];
+  const downAdvisory: string[] = [];
   if (healthQ.data?.providers) {
     for (const [name, info] of Object.entries(healthQ.data.providers)) {
-      if (!info.ok && info.configured !== false) degradedProviders.push(name);
+      if (info.ok || info.configured === false) continue;
+      if (ADVISORY_PROVIDERS.has(name)) downAdvisory.push(name);
+      else downCore.push(name);
     }
   }
-  const showHealthBanner = !!healthQ.data?.degraded || degradedProviders.length > 0;
+  const coreDegraded = !!healthQ.data?.degraded || downCore.length > 0;
+  const advisoryOnly = !coreDegraded && downAdvisory.length > 0;
+  const showHealthBanner = coreDegraded || advisoryOnly;
+  const bannerText = coreDegraded
+    ? (downCore.length
+        ? `${downCore.join(", ")} ${downCore.length === 1 ? "is" : "are"} degraded — answers may be thin or unavailable.`
+        : "Some core providers are degraded right now — answers may be thin.")
+    : `${downAdvisory.join(", ")} ${downAdvisory.length === 1 ? "is" : "are"} unavailable — only related answers may be limited. The chat works normally for everything else.`;
+  const bannerClass = coreDegraded
+    ? "border-amber-300 bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-700"
+    : "border-muted-foreground/30 bg-muted/40 text-muted-foreground";
 
   return (
     <div className="grid grid-cols-12 gap-4 h-[calc(100vh-200px)] min-h-[600px]">
       {showHealthBanner && (
         <div
-          className="col-span-12 -mb-2 px-3 py-2 text-xs rounded-md border border-amber-300 bg-amber-50 text-amber-900 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-700"
+          className={`col-span-12 -mb-2 px-3 py-2 text-xs rounded-md border ${bannerClass}`}
           data-testid="banner-valueiq-health"
         >
-          <span className="font-medium">Heads up:</span>{" "}
-          {degradedProviders.length > 0
-            ? `${degradedProviders.join(", ")} ${degradedProviders.length === 1 ? "is" : "are"} degraded — answers from those sources may be missing.`
-            : "Some providers are degraded right now — answers may be thin."}
+          <span className="font-medium">Heads up:</span> {bannerText}
         </div>
       )}
       <div className="col-span-3 border rounded-md flex flex-col min-h-0">
@@ -329,17 +349,34 @@ function ThreadView({ thread, agents, onPin, onArchive }: { thread: ThreadRow; a
   const [pendingAttNames, setPendingAttNames] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  // Tracks the current in-flight send so we can cancel on unmount or thread
+  // switch — prevents the send button from staying disabled forever if the
+  // user navigates away mid-stream.
+  const sendAbortRef = useRef<AbortController | null>(null);
 
-  useEffect(() => { setStreaming(""); setDraft(""); setPendingAttIds([]); setPendingAttNames([]); }, [thread.id]);
+  useEffect(() => {
+    setStreaming(""); setDraft(""); setPendingAttIds([]); setPendingAttNames([]);
+    // Cancel any in-flight stream when switching threads.
+    sendAbortRef.current?.abort();
+    sendAbortRef.current = null;
+    setIsSending(false);
+  }, [thread.id]);
+
+  // Abort the in-flight stream when the component unmounts.
+  useEffect(() => {
+    return () => { sendAbortRef.current?.abort(); };
+  }, []);
   useEffect(() => {
     if (!agentId && agents.length > 0) {
       setAgentId(thread.defaultAgentId ?? agents.find(a => a.isDefault)?.id ?? agents[0].id);
     }
   }, [agents, thread, agentId]);
 
+  // Use the default queryFn (which handles 401 by throwing instead of
+  // returning {error: ...}) so a brief auth blip can't crash this view via
+  // `messagesQ.data?.map` on a non-array.
   const messagesQ = useQuery<MessageRow[]>({
     queryKey: ["/api/valueiq/threads", thread.id, "messages"],
-    queryFn: () => fetch(`/api/valueiq/threads/${thread.id}/messages`, { credentials: "include" }).then(r => r.json()),
   });
 
   useEffect(() => {
@@ -357,13 +394,38 @@ function ThreadView({ thread, agents, onPin, onArchive }: { thread: ThreadRow; a
     setDraft("");
     setPendingAttIds([]);
     setPendingAttNames([]);
+
+    // Hard safety net so the send button is never permanently stuck disabled
+    // even if the network or server hangs. Server has its own 90s ceiling.
+    const ac = new AbortController();
+    sendAbortRef.current?.abort();
+    sendAbortRef.current = ac;
+    const safetyTimeout = setTimeout(() => ac.abort(), 95_000);
+
+    let restoreDraftOnFailure = true;
     try {
       const res = await fetch(`/api/valueiq/threads/${thread.id}/messages`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content, agentId, attachmentIds }),
+        signal: ac.signal,
       });
-      if (!res.ok || !res.body) throw new Error("send failed");
+      // Treat session expiry as a real, actionable signal rather than a vague
+      // "send failed" toast — bounce to login so the user can re-auth.
+      if (res.status === 401) {
+        toast({ title: "Session expired", description: "Please sign in again to continue.", variant: "destructive" });
+        if (!window.location.pathname.startsWith("/login")) {
+          window.location.href = "/login";
+        }
+        return;
+      }
+      if (!res.ok || !res.body) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(txt || `Send failed (${res.status})`);
+      }
+      // We made it past the request boundary — the message is committed
+      // server-side. Don't restore draft (it was sent).
+      restoreDraftOnFailure = false;
       const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
       while (true) {
         const { value, done } = await reader.read();
@@ -379,11 +441,29 @@ function ThreadView({ thread, agents, onPin, onArchive }: { thread: ThreadRow; a
           } catch {}
         }
       }
-    } catch (err: any) {
-      toast({ title: "Send failed", description: err.message ?? "Try again", variant: "destructive" });
+    } catch (err: unknown) {
+      const isAbort = err instanceof DOMException && err.name === "AbortError";
+      if (!isAbort) {
+        const msg = err instanceof Error ? err.message : "Try again";
+        toast({ title: "Send failed", description: msg, variant: "destructive" });
+      }
+      // Restore the user's typed message so they don't have to retype it
+      // after a network error or timeout. (If we got past the POST boundary
+      // the message was already committed server-side, so keep it cleared.)
+      if (restoreDraftOnFailure) {
+        setDraft((prev) => prev || content);
+        setPendingAttIds(attachmentIds);
+      }
     } finally {
-      setIsSending(false);
-      setStreaming("");
+      clearTimeout(safetyTimeout);
+      // Only finalize state if THIS send is still the active one. Prevents a
+      // late-arriving finally from a thread switch / abort from clobbering a
+      // newer in-flight send (would re-enable button mid-stream).
+      if (sendAbortRef.current === ac) {
+        sendAbortRef.current = null;
+        setIsSending(false);
+        setStreaming("");
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/valueiq/threads", thread.id, "messages"] });
       queryClient.invalidateQueries({ queryKey: ["/api/valueiq/threads"] });
     }

@@ -401,26 +401,59 @@ export function registerValueIQRoutes(app: Express) {
 
     let assembled = "";
     let finalAgentName: string | null = null;
+    // Hard ceiling on a single turn so the SSE stream always closes and the
+    // client's send button never gets stuck disabled. Picked above the OpenAI
+    // typical p99 (~30s) but well under any sensible user patience floor.
+    const TURN_TIMEOUT_MS = 90_000;
+    let turnTimedOut = false;
+    let timeoutHandle: NodeJS.Timeout | null = null;
+    const turnPromise = runAgentTurn({
+      ctx,
+      history: historyForLLM,
+      userMessage: userContent,
+      agentId,
+      projectId: thread.projectId ?? null,
+      emit: (event) => {
+        if (turnTimedOut) return; // stop writing once we've already closed
+        if ("content" in event && typeof event.content === "string") assembled += event.content;
+        try { res.write(`data: ${JSON.stringify(event)}\n\n`); } catch {}
+      },
+    });
+    // If we win the race with the timeout, the turnPromise keeps running and
+    // its rejection (if any) would otherwise become an unhandledRejection that
+    // can destabilize the process. Attach a terminal handler so late failures
+    // are just logged.
+    turnPromise.catch((err) => {
+      if (turnTimedOut) console.warn("[valueiq] late turn rejection after timeout:", err);
+    });
+    const timeoutPromise = new Promise<"timeout">((resolve) => {
+      timeoutHandle = setTimeout(() => { turnTimedOut = true; resolve("timeout"); }, TURN_TIMEOUT_MS);
+    });
+    const FALLBACK_ERROR_MSG = "Sorry — I couldn't get a response right now. The AI service may be busy. Please try again in a moment.";
     try {
-      const result = await runAgentTurn({
-        ctx,
-        history: historyForLLM,
-        userMessage: userContent,
-        agentId,
-        projectId: thread.projectId ?? null,
-        emit: (event) => {
-          if ("content" in event && typeof event.content === "string") assembled += event.content;
-          res.write(`data: ${JSON.stringify(event)}\n\n`);
-        },
-      });
-      // Look up agent name once for storage.
-      const [agentRow] = await db.select({ name: agentsTable.name }).from(agentsTable).where(eq(agentsTable.id, result.agentId)).limit(1);
-      finalAgentName = agentRow?.name ?? null;
-      await db.insert(threadMessages).values({
-        threadId: thread.id, role: "assistant", agentId: result.agentId,
-        agentName: finalAgentName, content: assembled || "(no response)",
-        metadata: result.hadError ? { hadError: true } : null,
-      });
+      const raced = await Promise.race([turnPromise, timeoutPromise]);
+      if (raced === "timeout") {
+        const timeoutMsg = "Sorry — that took too long. Please try again with a shorter or more specific question.";
+        try { res.write(`data: ${JSON.stringify({ error: timeoutMsg })}\n\n`); } catch {}
+        await db.insert(threadMessages).values({
+          threadId: thread.id, role: "assistant", agentId,
+          agentName: null, content: assembled ? `${assembled}\n\n_(reply was cut off — request timed out)_` : timeoutMsg,
+          metadata: { hadError: true, reason: "timeout" } as any,
+        });
+      } else {
+        const result = raced;
+        // Look up agent name once for storage.
+        const [agentRow] = await db.select({ name: agentsTable.name }).from(agentsTable).where(eq(agentsTable.id, result.agentId)).limit(1);
+        finalAgentName = agentRow?.name ?? null;
+        const finalContent = assembled.trim()
+          ? assembled
+          : (result.hadError ? FALLBACK_ERROR_MSG : "I didn't have anything to add for that one — try rephrasing or asking about a specific account, lane, or carrier.");
+        await db.insert(threadMessages).values({
+          threadId: thread.id, role: "assistant", agentId: result.agentId,
+          agentName: finalAgentName, content: finalContent,
+          metadata: result.hadError ? { hadError: true } : null,
+        });
+      }
       // bump thread last_message_at + auto-title first turn
       const newTitle = thread.title === "New thread" && body.content.length > 0
         ? body.content.slice(0, 60)
@@ -430,10 +463,22 @@ export function registerValueIQRoutes(app: Express) {
       }).where(eq(threadsTable.id, thread.id));
     } catch (err) {
       console.error("[valueiq] runAgentTurn error:", err);
-      res.write(`data: ${JSON.stringify({ error: "Agent failed. Please try again." })}\n\n`);
+      try { res.write(`data: ${JSON.stringify({ error: FALLBACK_ERROR_MSG })}\n\n`); } catch {}
+      // Persist a chat-visible error so the user has a record of what happened
+      // instead of staring at a thread with their question and no reply.
+      try {
+        await db.insert(threadMessages).values({
+          threadId: thread.id, role: "assistant", agentId,
+          agentName: null, content: assembled.trim() ? `${assembled}\n\n_(reply was cut off due to an error)_` : FALLBACK_ERROR_MSG,
+          metadata: { hadError: true, reason: "exception" } as any,
+        });
+      } catch (persistErr) {
+        console.error("[valueiq] failed to persist error message:", persistErr);
+      }
     } finally {
-      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-      res.end();
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      try { res.write(`data: ${JSON.stringify({ done: true })}\n\n`); } catch {}
+      try { res.end(); } catch {}
     }
   });
 
