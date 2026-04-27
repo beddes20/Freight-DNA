@@ -23,6 +23,7 @@ import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { useCqOverlayPortal } from "@/lib/customer-quotes-portal";
+import { IntegrationDegradedPill } from "@/components/integration-degraded-pill";
 import {
   Search, MapPin, Truck, Calendar, AlertTriangle, TrendingUp, TrendingDown, Minus, Award, Users,
   Clock, Activity, X, ChevronRight, ChevronDown, Copy, RefreshCw, SlidersHorizontal,
@@ -1973,6 +1974,7 @@ function PricingGuidanceBand({ guidance, market, marketStatus, freshnessLabel }:
             {isTrac && (
               <span className="ml-1 text-[9px] px-1 py-0.5 rounded-[3px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/40 font-semibold" data-testid="badge-spot-band-trac">TRAC</span>
             )}
+            <IntegrationDegradedPill source="sonar" label="SONAR" />
           </span>
           <span className="text-3xl font-bold text-amber-700 dark:text-amber-400 tabular-nums leading-tight mt-0.5" data-testid="text-spot-guidance-range">
             {guidance.suggestedLow !== null && guidance.suggestedHigh !== null

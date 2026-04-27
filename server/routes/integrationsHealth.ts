@@ -18,6 +18,7 @@ import { pStr } from "../lib/req";
 import { getErrorMessage } from "../lib/errors";
 import { integrationHealthSnapshots } from "@shared/schema";
 import { runAllProbes, runOneProbe, INTEGRATION_SOURCES } from "../integrations/probeRegistry";
+import { notifyOnFirstTimeDegraded } from "../integrations/integrationDegradedNotifier";
 
 function isAdmin(role: string | null | undefined) { return role === "admin"; }
 
@@ -50,6 +51,10 @@ export function registerIntegrationsHealthRoutes(app: Express) {
       if (!isAdmin(me.role)) return res.status(403).json({ error: "Forbidden" });
       const snapshots = await runAllProbes();
       // Persist each snapshot for trend analysis + first-time-degraded notif.
+      // The notifier MUST only run when persistence succeeded — otherwise it
+      // would compare the new degraded snapshot against stale DB history and
+      // emit false alerts.
+      let persisted = false;
       try {
         await db.insert(integrationHealthSnapshots).values(snapshots.map((s) => ({
           source: s.source,
@@ -61,8 +66,18 @@ export function registerIntegrationsHealthRoutes(app: Express) {
           breakerState: s.breakerState ?? null,
           detail: (s.detail ?? null) as object | null,
         })));
+        persisted = true;
       } catch (err) {
         console.warn("[integrations-health] snapshot persist failed:", getErrorMessage(err));
+      }
+      if (persisted) {
+        // Fire one notification per source on first healthy → degraded transition.
+        // Scoped to admins in the requesting user's organization (no cross-tenant
+        // leakage) and throttled per-source per-24h with an advisory lock so
+        // concurrent admin refreshes can't double-notify.
+        void notifyOnFirstTimeDegraded(snapshots, { organizationId: me.organizationId }).catch((err) => {
+          console.warn("[integrations-health] degraded notifier failed:", getErrorMessage(err));
+        });
       }
       res.json({ snapshots });
     } catch (err) {

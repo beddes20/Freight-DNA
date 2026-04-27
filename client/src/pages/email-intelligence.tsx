@@ -19,6 +19,7 @@ import { formatDistanceToNow } from "date-fns";
 import { ThreadDetailPanel, type ConversationThread } from "@/pages/conversations";
 import ResponseTimeTab from "@/components/email-intelligence/response-time-tab";
 import { EmailCoverageBanner } from "@/components/EmailCoverageBanner";
+import { IntegrationDegradedPill } from "@/components/integration-degraded-pill";
 
 interface SignalSummaryRow {
   intent_type: string;
@@ -445,7 +446,10 @@ export default function EmailIntelligencePage() {
               <BrainCircuit className="w-5 h-5 text-amber-400" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-white">Email Intelligence</h1>
+              <h1 className="text-xl font-bold text-white flex items-center gap-2">
+                Email Intelligence
+                <IntegrationDegradedPill source="graph" label="Outlook" />
+              </h1>
               <p className="text-sm text-zinc-400">Win/loss patterns, urgency signals, and email-derived insights</p>
             </div>
           </div>

@@ -3,10 +3,17 @@
  *
  * Each external integration registers a probe function returning the
  * `IntegrationHealthSnapshot` shape. Probes default to "cheap" mode that
- * reads in-process state (last call timestamps, breaker state) without
- * issuing a live external call. The admin "test now" button passes
- * `{ liveProbe: true }` to force a real check.
+ * reads in-process state (last call timestamps, breaker state, env-var
+ * presence, OAuth state) without issuing a live external call. The admin
+ * "test now" button passes `{ liveProbe: true }` to force a real check
+ * for integrations that support one (currently ZoomInfo).
  */
+
+import { getSonarCircuitBreakerStatus } from "../sonarClient";
+import { azureCredentialsConfigured } from "../graphService";
+import { getMailReadConsentStatus } from "../graphSubscriptionService";
+import { getWebexAuthState, webexNeedsReauth } from "../webexService";
+import { testZoomInfoConnection } from "../zoominfo";
 
 export const INTEGRATION_SOURCES = [
   "sonar",
@@ -35,21 +42,11 @@ export interface IntegrationHealthSnapshot {
 export interface ProbeOptions { liveProbe?: boolean }
 export type ProbeFn = (opts: ProbeOptions) => Promise<IntegrationHealthSnapshot>;
 
-const probes: Record<IntegrationSource, ProbeFn> = {
-  sonar: defaultProbe.bind(null, "sonar"),
-  graph: defaultProbe.bind(null, "graph"),
-  webex: defaultProbe.bind(null, "webex"),
-  zoominfo: defaultProbe.bind(null, "zoominfo"),
-  onedrive: defaultProbe.bind(null, "onedrive"),
-  trac: defaultProbe.bind(null, "trac"),
-  stripe: defaultProbe.bind(null, "stripe"),
-};
-
 /**
  * Tiny in-process event bus the resilience helper writes to (Task #706).
  * Each integration calls `recordIntegrationEvent({ source, outcome,
- * latencyMs, error })` after every external call so the probes can read
- * last-success / last-error / breaker hints without a DB round-trip.
+ * errorMessage, breakerState })` after every external call so the probes
+ * can read last-success / last-error / breaker hints without a DB round-trip.
  */
 const lastEvents = new Map<IntegrationSource, {
   lastSuccessAt: Date | null;
@@ -83,34 +80,9 @@ export function recordIntegrationEvent(input: {
   lastEvents.set(input.source, cur);
 }
 
-async function defaultProbe(source: IntegrationSource, _opts: ProbeOptions): Promise<IntegrationHealthSnapshot> {
-  const ev = lastEvents.get(source);
-  if (!ev) {
-    return {
-      source,
-      connected: !!process.env[envKeyFor(source)],
-      healthState: process.env[envKeyFor(source)] ? "unknown" : "disabled",
-      detail: { reason: "no events yet" },
-    };
-  }
-  const recentlySucceeded = ev.lastSuccessAt && (Date.now() - ev.lastSuccessAt.getTime()) < 30 * 60_000;
-  const recentlyErrored = ev.lastErrorAt && (Date.now() - ev.lastErrorAt.getTime()) < 5 * 60_000;
-  const breakerOpen = ev.breakerState === "open";
-  const healthState: HealthState = breakerOpen
-    ? "degraded"
-    : recentlyErrored && !recentlySucceeded
-      ? "degraded"
-      : recentlySucceeded ? "healthy" : "unknown";
-  return {
-    source,
-    connected: true,
-    healthState,
-    lastSuccessAt: ev.lastSuccessAt,
-    lastErrorAt: ev.lastErrorAt,
-    lastErrorMessage: ev.lastErrorMessage,
-    breakerState: ev.breakerState,
-    detail: { totalSuccess: ev.totalSuccess, totalError: ev.totalError },
-  };
+/** Reset the in-process event bus. Test-only — never used by production code. */
+export function _resetIntegrationEventsForTests(): void {
+  lastEvents.clear();
 }
 
 function envKeyFor(source: IntegrationSource): string {
@@ -120,10 +92,237 @@ function envKeyFor(source: IntegrationSource): string {
     case "webex": return "WEBEX_CLIENT_ID";
     case "zoominfo": return "ZOOMINFO_USERNAME";
     case "onedrive": return "OUTLOOK_CLIENT_ID";
-    case "trac": return "TRAC_BEARER_TOKEN";
+    case "trac": return "FREIGHTWAVES_TOKEN";
     case "stripe": return "STRIPE_SECRET_KEY";
   }
 }
+
+function envConfigured(source: IntegrationSource): boolean {
+  return !!process.env[envKeyFor(source)];
+}
+
+/**
+ * Apply the rolling-event freshness rules to a snapshot. Returns
+ * `degraded` when the breaker is open or when the most recent error is
+ * within 5 minutes and there's no success in the last 30 minutes.
+ */
+function freshnessHealthState(source: IntegrationSource): {
+  healthState: HealthState;
+  lastSuccessAt: Date | null;
+  lastErrorAt: Date | null;
+  lastErrorMessage: string | null;
+  breakerState: "closed" | "open" | "half_open" | null;
+  totals: { totalSuccess: number; totalError: number };
+} {
+  const ev = lastEvents.get(source);
+  if (!ev) {
+    return {
+      healthState: envConfigured(source) ? "unknown" : "disabled",
+      lastSuccessAt: null, lastErrorAt: null, lastErrorMessage: null,
+      breakerState: null, totals: { totalSuccess: 0, totalError: 0 },
+    };
+  }
+  const recentlySucceeded = !!ev.lastSuccessAt && (Date.now() - ev.lastSuccessAt.getTime()) < 30 * 60_000;
+  const recentlyErrored = !!ev.lastErrorAt && (Date.now() - ev.lastErrorAt.getTime()) < 5 * 60_000;
+  const breakerOpen = ev.breakerState === "open";
+  const healthState: HealthState = breakerOpen
+    ? "degraded"
+    : recentlyErrored && !recentlySucceeded
+      ? "degraded"
+      : recentlySucceeded ? "healthy" : "unknown";
+  return {
+    healthState,
+    lastSuccessAt: ev.lastSuccessAt,
+    lastErrorAt: ev.lastErrorAt,
+    lastErrorMessage: ev.lastErrorMessage,
+    breakerState: ev.breakerState,
+    totals: { totalSuccess: ev.totalSuccess, totalError: ev.totalError },
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Per-integration probe implementations
+// ──────────────────────────────────────────────────────────────────────────
+
+async function probeSonar(_opts: ProbeOptions): Promise<IntegrationHealthSnapshot> {
+  if (!envConfigured("sonar")) {
+    return { source: "sonar", connected: false, healthState: "disabled", detail: { reason: "SONAR_API_KEY missing" } };
+  }
+  const breaker = getSonarCircuitBreakerStatus();
+  const fresh = freshnessHealthState("sonar");
+  // Breaker authoritative: if it's open, always degraded regardless of events.
+  const healthState: HealthState = breaker.isOpen
+    ? "degraded"
+    : fresh.healthState;
+  return {
+    source: "sonar",
+    connected: true,
+    healthState,
+    lastSuccessAt: fresh.lastSuccessAt,
+    lastErrorAt: fresh.lastErrorAt,
+    lastErrorMessage: breaker.isOpen
+      ? `Circuit breaker tripped at ${breaker.trippedAt}; resumes ${breaker.resumesAt}`
+      : fresh.lastErrorMessage,
+    breakerState: breaker.isOpen ? "open" : (fresh.breakerState ?? "closed"),
+    detail: { ...fresh.totals, breaker },
+  };
+}
+
+async function probeGraph(_opts: ProbeOptions): Promise<IntegrationHealthSnapshot> {
+  if (!azureCredentialsConfigured()) {
+    return { source: "graph", connected: false, healthState: "disabled", detail: { reason: "Azure (Graph) credentials not configured" } };
+  }
+  const consent = getMailReadConsentStatus();
+  const fresh = freshnessHealthState("graph");
+  // Mail.Read consent missing or stale → degraded (the common in-prod failure).
+  const consentDegraded = consent.status !== "granted";
+  const healthState: HealthState = consentDegraded ? "degraded" : fresh.healthState;
+  return {
+    source: "graph",
+    connected: true,
+    healthState,
+    lastSuccessAt: fresh.lastSuccessAt,
+    lastErrorAt: fresh.lastErrorAt,
+    lastErrorMessage: consentDegraded
+      ? (consent.lastError ?? `Mail.Read consent: ${consent.status}`)
+      : fresh.lastErrorMessage,
+    breakerState: fresh.breakerState,
+    detail: { ...fresh.totals, mailReadConsent: consent },
+  };
+}
+
+async function probeOneDrive(_opts: ProbeOptions): Promise<IntegrationHealthSnapshot> {
+  // OneDrive flows through the same Azure app + Graph token. We keep a
+  // separate source so the admin can see the file-sync state independently
+  // from inbound mail consent.
+  if (!azureCredentialsConfigured()) {
+    return { source: "onedrive", connected: false, healthState: "disabled", detail: { reason: "Azure (OneDrive) credentials not configured" } };
+  }
+  const fresh = freshnessHealthState("onedrive");
+  return {
+    source: "onedrive",
+    connected: true,
+    healthState: fresh.healthState,
+    lastSuccessAt: fresh.lastSuccessAt,
+    lastErrorAt: fresh.lastErrorAt,
+    lastErrorMessage: fresh.lastErrorMessage,
+    breakerState: fresh.breakerState,
+    detail: { ...fresh.totals },
+  };
+}
+
+async function probeWebex(_opts: ProbeOptions): Promise<IntegrationHealthSnapshot> {
+  const auth = getWebexAuthState();
+  if (!auth.configured) {
+    return { source: "webex", connected: false, healthState: "disabled", detail: { reason: "Webex client credentials not configured" } };
+  }
+  const needsReauth = webexNeedsReauth();
+  const fresh = freshnessHealthState("webex");
+  const healthState: HealthState = needsReauth ? "degraded" : fresh.healthState;
+  return {
+    source: "webex",
+    connected: !needsReauth && auth.hasRefreshToken,
+    healthState,
+    lastSuccessAt: fresh.lastSuccessAt,
+    lastErrorAt: fresh.lastErrorAt,
+    lastErrorMessage: needsReauth
+      ? (auth.lastRefreshError ?? "Webex org token revoked or expired — admin needs to reconnect")
+      : fresh.lastErrorMessage,
+    breakerState: fresh.breakerState,
+    detail: {
+      ...fresh.totals,
+      hasRefreshToken: auth.hasRefreshToken,
+      accessTokenExpiresAt: auth.accessTokenExpiresAt,
+      lastRefreshAt: auth.lastRefreshAt,
+    },
+  };
+}
+
+async function probeZoomInfo(opts: ProbeOptions): Promise<IntegrationHealthSnapshot> {
+  if (!process.env.ZOOMINFO_USERNAME || !process.env.ZOOMINFO_PASSWORD) {
+    return { source: "zoominfo", connected: false, healthState: "disabled", detail: { reason: "ZoomInfo credentials missing" } };
+  }
+  const fresh = freshnessHealthState("zoominfo");
+  if (opts.liveProbe) {
+    try {
+      const ok = await testZoomInfoConnection();
+      if (ok) recordIntegrationEvent({ source: "zoominfo", outcome: "success" });
+      return {
+        source: "zoominfo",
+        connected: ok,
+        healthState: ok ? "healthy" : "degraded",
+        lastSuccessAt: ok ? new Date() : fresh.lastSuccessAt,
+        lastErrorAt: ok ? fresh.lastErrorAt : new Date(),
+        lastErrorMessage: ok ? null : "ZoomInfo authentication failed",
+        breakerState: fresh.breakerState,
+        detail: { ...fresh.totals, liveProbe: true },
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      recordIntegrationEvent({ source: "zoominfo", outcome: "error", errorMessage: msg });
+      return {
+        source: "zoominfo", connected: false, healthState: "degraded",
+        lastSuccessAt: fresh.lastSuccessAt, lastErrorAt: new Date(),
+        lastErrorMessage: msg, breakerState: fresh.breakerState,
+        detail: { ...fresh.totals, liveProbe: true },
+      };
+    }
+  }
+  return {
+    source: "zoominfo",
+    connected: true,
+    healthState: fresh.healthState,
+    lastSuccessAt: fresh.lastSuccessAt,
+    lastErrorAt: fresh.lastErrorAt,
+    lastErrorMessage: fresh.lastErrorMessage,
+    breakerState: fresh.breakerState,
+    detail: { ...fresh.totals },
+  };
+}
+
+async function probeTrac(_opts: ProbeOptions): Promise<IntegrationHealthSnapshot> {
+  if (!envConfigured("trac")) {
+    return { source: "trac", connected: false, healthState: "disabled", detail: { reason: "FREIGHTWAVES_TOKEN missing" } };
+  }
+  const fresh = freshnessHealthState("trac");
+  return {
+    source: "trac",
+    connected: true,
+    healthState: fresh.healthState,
+    lastSuccessAt: fresh.lastSuccessAt,
+    lastErrorAt: fresh.lastErrorAt,
+    lastErrorMessage: fresh.lastErrorMessage,
+    breakerState: fresh.breakerState,
+    detail: { ...fresh.totals },
+  };
+}
+
+async function probeStripe(_opts: ProbeOptions): Promise<IntegrationHealthSnapshot> {
+  if (!envConfigured("stripe")) {
+    return { source: "stripe", connected: false, healthState: "disabled", detail: { reason: "STRIPE_SECRET_KEY missing" } };
+  }
+  const fresh = freshnessHealthState("stripe");
+  return {
+    source: "stripe",
+    connected: true,
+    healthState: fresh.healthState,
+    lastSuccessAt: fresh.lastSuccessAt,
+    lastErrorAt: fresh.lastErrorAt,
+    lastErrorMessage: fresh.lastErrorMessage,
+    breakerState: fresh.breakerState,
+    detail: { ...fresh.totals },
+  };
+}
+
+const probes: Record<IntegrationSource, ProbeFn> = {
+  sonar: probeSonar,
+  graph: probeGraph,
+  webex: probeWebex,
+  zoominfo: probeZoomInfo,
+  onedrive: probeOneDrive,
+  trac: probeTrac,
+  stripe: probeStripe,
+};
 
 export function registerProbe(source: IntegrationSource, fn: ProbeFn): void {
   probes[source] = fn;

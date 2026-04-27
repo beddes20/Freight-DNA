@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { CallActivityTrendline } from "@/components/call-activity-trendline";
 import { CallPaceCard } from "@/components/call-pace-card";
 import { CallQualityPanel } from "@/components/call-quality-scorecard";
+import { IntegrationDegradedPill } from "@/components/integration-degraded-pill";
 
 // Mirrors the sidebar visibility for "Call Performance" and the server-side
 // allowlist on `/api/calls/trendline/org`. Non-managers who arrive via direct
@@ -46,7 +47,10 @@ export default function CallsPage() {
             <div className="flex items-center gap-2">
               <PhoneCall className="h-5 w-5 text-blue-600 dark:text-blue-400" />
               <div>
-                <CardTitle data-testid="text-calls-title">Call Performance</CardTitle>
+                <CardTitle data-testid="text-calls-title" className="flex items-center gap-2">
+                  Call Performance
+                  <IntegrationDegradedPill source="webex" label="Webex" />
+                </CardTitle>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   Webex telephony rollup across the entire org — pace, weekly trendline, and quality.
                 </p>
