@@ -1,3 +1,5 @@
+import { resilientFetch } from "./lib/httpRetry";
+
 const ZOOMINFO_API_BASE = "https://api.zoominfo.com";
 
 const TRANSPORTATION_JOB_TITLES = [
@@ -77,11 +79,11 @@ async function getAuthToken(): Promise<string> {
     client_id: clientId,
     client_secret: clientSecret,
   });
-  const res = await fetch(`${ZOOMINFO_API_BASE}/oauth/token`, {
+  const res = await resilientFetch("zoominfo", () => fetch(`${ZOOMINFO_API_BASE}/oauth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: form.toString(),
-  });
+  }));
 
   if (!res.ok) {
     const text = await res.text();
@@ -132,14 +134,14 @@ export async function searchZoomInfoContacts(
     sortOrder: "desc",
   };
 
-  const res = await fetch(`${ZOOMINFO_API_BASE}/search/contact`, {
+  const res = await resilientFetch("zoominfo", () => fetch(`${ZOOMINFO_API_BASE}/search/contact`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(body),
-  });
+  }));
 
   if (!res.ok) {
     const text = await res.text();

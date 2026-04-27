@@ -2,9 +2,12 @@
  * Task #706 — Shared resilience helper for outbound HTTP calls.
  *
  * Wraps `fetch` with:
- *   - configurable timeout (default 15s)
- *   - exponential-backoff retry on 5xx / network errors / 429 (default 2 retries)
- *   - per-source circuit breaker (5 failures in 60s → OPEN for 60s)
+ *   - configurable timeout (per-source default, overridable)
+ *   - exponential-backoff retry with jitter on 5xx / network errors / 429
+ *   - per-source circuit breaker (threshold failures in a window → OPEN
+ *     for a per-source cooldown). Some sources (SONAR) trip immediately
+ *     on a specific status code (HTTP 451 — record-cap limit).
+ *   - automatic Retry-After header honoring on 429 / 503
  *   - emits `recordIntegrationEvent` so the Integrations Health Console
  *     and the per-widget <IntegrationDegradedPill /> see the result
  *
@@ -24,6 +27,59 @@ export interface ResilientFetchOptions {
   timeoutMs?: number;
   retries?: number;
   retryOn?: (statusOrError: number | Error) => boolean;
+  /**
+   * Status codes that immediately trip the circuit breaker on first
+   * occurrence (e.g. SONAR 451 record-cap). The response is still returned
+   * so the caller can short-circuit with cached/fallback data.
+   */
+  tripImmediatelyOn?: number[];
+  /**
+   * Honor `Retry-After` on 429/503 responses (default `true`). Set false
+   * for legacy callers that already handle the header upstream.
+   */
+  respectRetryAfter?: boolean;
+}
+
+export interface SourcePolicy {
+  timeoutMs: number;
+  retries: number;
+  retryOn?: (s: number | Error) => boolean;
+  breakerCooldownMs: number;
+  breakerThreshold: number;
+  breakerWindowMs: number;
+  tripImmediatelyOn?: number[];
+  respectRetryAfter: boolean;
+}
+
+// Per-source defaults. SONAR is conservative because of the 451 record-cap;
+// Webex respects Retry-After strictly; Graph is more aggressive (transient
+// 503s are common during mailbox throttling).
+const DEFAULT_POLICY: SourcePolicy = {
+  timeoutMs: 15_000,
+  retries: 2,
+  breakerCooldownMs: 60_000,
+  breakerThreshold: 5,
+  breakerWindowMs: 60_000,
+  respectRetryAfter: true,
+};
+const POLICIES: Record<IntegrationSource, SourcePolicy> = {
+  sonar: {
+    ...DEFAULT_POLICY,
+    timeoutMs: 12_000,
+    retries: 1,
+    breakerCooldownMs: 30 * 60_000,
+    tripImmediatelyOn: [451],
+  },
+  graph: { ...DEFAULT_POLICY, timeoutMs: 15_000, retries: 3 },
+  webex: { ...DEFAULT_POLICY, timeoutMs: 15_000, retries: 4 },
+  zoominfo: { ...DEFAULT_POLICY, timeoutMs: 10_000, retries: 2 },
+  onedrive: { ...DEFAULT_POLICY, timeoutMs: 30_000, retries: 3 },
+  trac: { ...DEFAULT_POLICY, timeoutMs: 10_000, retries: 2 },
+  stripe: { ...DEFAULT_POLICY, timeoutMs: 10_000, retries: 2 },
+};
+
+export function getPolicy(source: IntegrationSource): SourcePolicy {
+  return POLICIES[source];
 }
 
 interface BreakerState {
@@ -32,9 +88,6 @@ interface BreakerState {
   openedAt: number | null;
 }
 const breakers = new Map<IntegrationSource, BreakerState>();
-const BREAKER_WINDOW_MS = 60_000;
-const BREAKER_THRESHOLD = 5;
-const BREAKER_COOLDOWN_MS = 60_000;
 
 function getBreaker(source: IntegrationSource): BreakerState {
   let b = breakers.get(source);
@@ -45,9 +98,10 @@ function getBreaker(source: IntegrationSource): BreakerState {
   return b;
 }
 
-function breakerStateFor(b: BreakerState): "closed" | "open" | "half_open" {
+function breakerStateFor(source: IntegrationSource, b: BreakerState): "closed" | "open" | "half_open" {
   if (b.openedAt == null) return "closed";
-  if (Date.now() - b.openedAt > BREAKER_COOLDOWN_MS) return "half_open";
+  const cooldown = POLICIES[source].breakerCooldownMs;
+  if (Date.now() - b.openedAt > cooldown) return "half_open";
   return "open";
 }
 
@@ -61,20 +115,75 @@ function recordSuccess(source: IntegrationSource) {
 
 function recordFailure(source: IntegrationSource, err: string) {
   const b = getBreaker(source);
-  if (Date.now() - b.windowStart > BREAKER_WINDOW_MS) {
+  const policy = POLICIES[source];
+  if (Date.now() - b.windowStart > policy.breakerWindowMs) {
     b.consecutiveFailures = 0;
     b.windowStart = Date.now();
   }
   b.consecutiveFailures += 1;
-  if (b.consecutiveFailures >= BREAKER_THRESHOLD && b.openedAt == null) {
+  if (b.consecutiveFailures >= policy.breakerThreshold && b.openedAt == null) {
     b.openedAt = Date.now();
   }
   recordIntegrationEvent({
     source,
     outcome: "error",
     errorMessage: err,
-    breakerState: breakerStateFor(b),
+    breakerState: breakerStateFor(source, b),
   });
+}
+
+/**
+ * Manually trip the circuit breaker for a source. Used by integrations
+ * that detect a "stop everything" signal outside the normal failure
+ * counting (e.g. SONAR 451 record-cap response).
+ */
+export function tripBreaker(source: IntegrationSource, reason: string): void {
+  const b = getBreaker(source);
+  b.openedAt = Date.now();
+  recordIntegrationEvent({
+    source,
+    outcome: "error",
+    errorMessage: reason,
+    breakerState: "open",
+  });
+}
+
+/** Manually close a breaker. Test-only — never used by production code. */
+export function _resetBreakerForTests(source?: IntegrationSource): void {
+  if (source) {
+    breakers.delete(source);
+  } else {
+    breakers.clear();
+  }
+}
+
+/**
+ * Returns the current breaker status in the legacy
+ * `getSonarCircuitBreakerStatus()` shape so callers can render it without
+ * caring which source they're inspecting.
+ */
+export function getBreakerStatus(source: IntegrationSource): {
+  isOpen: boolean;
+  trippedAt: string | null;
+  resumesAt: string | null;
+} {
+  const b = breakers.get(source);
+  if (!b || b.openedAt == null) {
+    return { isOpen: false, trippedAt: null, resumesAt: null };
+  }
+  const cooldown = POLICIES[source].breakerCooldownMs;
+  const isOpen = Date.now() - b.openedAt < cooldown;
+  if (!isOpen) {
+    // Cooldown elapsed — treat as closed and surface that to the caller
+    // so the next caller can attempt the request (half-open semantics).
+    b.openedAt = null;
+    return { isOpen: false, trippedAt: null, resumesAt: null };
+  }
+  return {
+    isOpen: true,
+    trippedAt: new Date(b.openedAt).toISOString(),
+    resumesAt: new Date(b.openedAt + cooldown).toISOString(),
+  };
 }
 
 class CircuitOpenError extends Error {
@@ -83,19 +192,38 @@ class CircuitOpenError extends Error {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+function parseRetryAfter(header: string | null): number | null {
+  if (!header) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(60_000, seconds * 1000);
+  // HTTP-date form
+  const dateMs = Date.parse(header);
+  if (Number.isFinite(dateMs)) {
+    const wait = dateMs - Date.now();
+    return wait > 0 ? Math.min(60_000, wait) : 0;
+  }
+  return null;
+}
+
 export async function resilientFetch(
   source: IntegrationSource,
   fetchFactory: () => Promise<Response>,
   opts: ResilientFetchOptions = {},
 ): Promise<Response> {
-  const timeoutMs = opts.timeoutMs ?? 15_000;
-  const retries = opts.retries ?? 2;
+  const policy = POLICIES[source];
+  const timeoutMs = opts.timeoutMs ?? policy.timeoutMs;
+  const retries = opts.retries ?? policy.retries;
   const retryOn = opts.retryOn ?? defaultRetryOn;
+  const tripImmediatelyOn = opts.tripImmediatelyOn ?? policy.tripImmediatelyOn ?? [];
+  const respectRetryAfter = opts.respectRetryAfter ?? policy.respectRetryAfter;
 
-  const breakerCurrent = breakerStateFor(getBreaker(source));
-  if (breakerCurrent === "open") {
+  // Half-open semantics: getBreakerStatus() resets `openedAt` to null when
+  // the cooldown has elapsed, so we always read the current state via it.
+  const status = getBreakerStatus(source);
+  if (status.isOpen) {
     recordIntegrationEvent({
-      source, outcome: "breaker_open",
+      source,
+      outcome: "breaker_open",
       errorMessage: "circuit open — short-circuited",
       breakerState: "open",
     });
@@ -106,6 +234,13 @@ export async function resilientFetch(
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await withTimeout(fetchFactory(), timeoutMs);
+
+      // Immediate-trip statuses (e.g. SONAR 451 record-cap).
+      if (tripImmediatelyOn.includes(res.status)) {
+        tripBreaker(source, `HTTP ${res.status} — immediate breaker trip`);
+        return res;
+      }
+
       if (res.ok) {
         recordSuccess(source);
         return res;
@@ -119,6 +254,15 @@ export async function resilientFetch(
         recordFailure(source, lastError.message);
         return res;
       }
+
+      // Honor Retry-After on 429/503 if the policy says so.
+      if (respectRetryAfter && (res.status === 429 || res.status === 503)) {
+        const retryAfterMs = parseRetryAfter(res.headers.get("retry-after"));
+        if (retryAfterMs != null) {
+          await sleep(retryAfterMs);
+          continue;
+        }
+      }
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
       if (attempt === retries || !retryOn(lastError)) {
@@ -126,9 +270,10 @@ export async function resilientFetch(
         throw lastError;
       }
     }
-    // exponential backoff: 200ms, 600ms, 1.4s
-    const delay = 200 * Math.pow(3, attempt);
-    await sleep(delay);
+    // exponential backoff with ±20% jitter: 200ms, 600ms, 1.4s, ...
+    const base = 200 * Math.pow(3, attempt);
+    const jitter = base * (0.2 * (Math.random() * 2 - 1));
+    await sleep(Math.max(50, Math.round(base + jitter)));
   }
   throw lastError ?? new Error("resilientFetch: exhausted retries");
 }

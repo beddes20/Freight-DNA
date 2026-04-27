@@ -3,6 +3,7 @@ import XLSX from "xlsx";
 import { storage } from "./storage";
 import { isFirstBusinessDay } from "./monthlyGoalScheduler";
 import { getGraphAccessToken, azureCredentialsConfigured } from "./graphService";
+import { resilientFetch } from "./lib/httpRetry";
 
 function logMessage(message: string): void {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -170,10 +171,10 @@ export async function performOneDriveSync(uploadedBy: string): Promise<{ id: str
     );
   }
 
-  const response = await fetch(contentUrl, {
+  const response = await resilientFetch("onedrive", () => fetch(contentUrl, {
     headers: { Authorization: `Bearer ${token}` },
     redirect: "follow",
-  });
+  }));
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");

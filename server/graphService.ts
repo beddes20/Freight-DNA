@@ -11,6 +11,8 @@
  *   OUTLOOK_CLIENT_SECRET  — Azure app registration client secret
  */
 
+import { resilientFetch } from "./lib/httpRetry";
+
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
   console.log(`${t} [graph] ${msg}`);
@@ -49,11 +51,11 @@ export async function getGraphAccessToken(): Promise<string> {
     scope: "https://graph.microsoft.com/.default",
   });
 
-  const res = await fetch(url, {
+  const res = await resilientFetch("graph", () => fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
-  });
+  }));
 
   if (!res.ok) {
     const text = await res.text();

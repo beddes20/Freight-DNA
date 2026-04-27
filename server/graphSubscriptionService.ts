@@ -14,6 +14,7 @@
 import { azureCredentialsConfigured, getGraphAccessToken } from "./graphService";
 import { storage, db } from "./storage";
 import { sql } from "drizzle-orm";
+import { resilientFetch } from "./lib/httpRetry";
 
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -283,9 +284,9 @@ async function checkMailReadPermission(mailbox: string): Promise<boolean> {
   try {
     const token = await getGraphAccessToken();
     const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/mailFolders/inbox?$select=id`;
-    const res = await fetch(url, {
+    const res = await resilientFetch("graph", () => fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
-    });
+    }));
     if (res.status === 200) return true;
     if (res.status === 403) {
       const body = await res.text();
@@ -302,9 +303,9 @@ async function checkMailReadPermission(mailbox: string): Promise<boolean> {
 
 async function findExistingSubscription(token: string, webhookUrl: string): Promise<{ id: string; expirationDateTime: string } | null> {
   try {
-    const res = await fetch("https://graph.microsoft.com/v1.0/subscriptions", {
+    const res = await resilientFetch("graph", () => fetch("https://graph.microsoft.com/v1.0/subscriptions", {
       headers: { Authorization: `Bearer ${token}` },
-    });
+    }));
     if (!res.ok) return null;
     const data = await res.json() as { value: Array<{ id: string; notificationUrl: string; expirationDateTime: string }> };
     return data.value?.find(s => s.notificationUrl === webhookUrl) ?? null;
@@ -350,14 +351,14 @@ async function registerSubscription(config: ReplyEmailConfig): Promise<string | 
       clientState,
     };
 
-    const res = await fetch("https://graph.microsoft.com/v1.0/subscriptions", {
+    const res = await resilientFetch("graph", () => fetch("https://graph.microsoft.com/v1.0/subscriptions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
-    });
+    }));
 
     if (res.status === 201) {
       const data = await res.json() as { id: string; expirationDateTime: string };
@@ -380,14 +381,14 @@ async function renewSubscription(subscriptionId: string): Promise<boolean> {
     const SUB_TTL_MS = 4200 * 60 * 1000;
     const expiresAt = new Date(Date.now() + SUB_TTL_MS).toISOString();
 
-    const res = await fetch(`https://graph.microsoft.com/v1.0/subscriptions/${subscriptionId}`, {
+    const res = await resilientFetch("graph", () => fetch(`https://graph.microsoft.com/v1.0/subscriptions/${subscriptionId}`, {
       method: "PATCH",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ expirationDateTime: expiresAt }),
-    });
+    }));
 
     if (res.status === 200) {
       log(`Subscription ${subscriptionId} renewed until ${expiresAt}`);
@@ -531,14 +532,14 @@ export async function registerMailboxSubscription(mailboxEmail: string, mailboxI
         clientState,
       };
 
-      const res = await fetch("https://graph.microsoft.com/v1.0/subscriptions", {
+      const res = await resilientFetch("graph", () => fetch("https://graph.microsoft.com/v1.0/subscriptions", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
-      });
+      }));
 
       if (res.status === 201) {
         const data = await res.json() as { id: string; expirationDateTime: string };
@@ -612,10 +613,10 @@ export async function removeMailboxSubscription(subscriptionId: string, mailboxI
   try {
     const token = await getGraphAccessToken();
     for (const sid of subIds) {
-      const res = await fetch(`https://graph.microsoft.com/v1.0/subscriptions/${sid}`, {
+      const res = await resilientFetch("graph", () => fetch(`https://graph.microsoft.com/v1.0/subscriptions/${sid}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
-      });
+      }));
       if (res.ok || res.status === 404) {
         log(`[user-mailbox] Subscription ${sid} removed`);
       } else {

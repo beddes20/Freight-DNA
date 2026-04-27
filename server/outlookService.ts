@@ -18,6 +18,7 @@
 
 import { getGraphAccessToken, azureCredentialsConfigured } from "./graphService";
 import { isEmailLiveModeOn } from "./emailGate";
+import { resilientFetch } from "./lib/httpRetry";
 
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -129,14 +130,14 @@ export async function sendOutlookEmail(opts: OutlookSendOptions): Promise<Outloo
     // ── Two-step: create draft → read IDs → send ──────────────────────────
     try {
       const createUrl = `https://graph.microsoft.com/v1.0/users/${encodedFrom}/messages`;
-      const createRes = await fetch(createUrl, {
+      const createRes = await resilientFetch("graph", () => fetch(createUrl, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(message),
-      });
+      }));
 
       if (createRes.ok) {
         const draft = await createRes.json() as { id?: string; conversationId?: string; internetMessageId?: string };
@@ -150,12 +151,12 @@ export async function sendOutlookEmail(opts: OutlookSendOptions): Promise<Outloo
 
         // Send the draft
         const sendUrl = `https://graph.microsoft.com/v1.0/users/${encodedFrom}/messages/${encodeURIComponent(draftId)}/send`;
-        const sendRes = await fetch(sendUrl, {
+        const sendRes = await resilientFetch("graph", () => fetch(sendUrl, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${token}`,
           },
-        });
+        }));
 
         if (sendRes.status === 202) {
           log(`Email sent (two-step) from ${opts.fromEmail} to ${opts.toEmail}: "${opts.subject}" [msgId=${draftId}]`);
@@ -176,14 +177,14 @@ export async function sendOutlookEmail(opts: OutlookSendOptions): Promise<Outloo
 
     // ── Fallback: one-step sendMail (HTTP 202, no IDs returned) ──────────
     const url = `https://graph.microsoft.com/v1.0/users/${encodedFrom}/sendMail`;
-    const res = await fetch(url, {
+    const res = await resilientFetch("graph", () => fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ message, saveToSentItems: opts.saveToSentItems !== false }),
-    });
+    }));
 
     if (res.status === 202) {
       log(`Email sent (one-step) from ${opts.fromEmail} to ${opts.toEmail}: "${opts.subject}"`);

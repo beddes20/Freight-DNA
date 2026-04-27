@@ -20,6 +20,7 @@
 import { storage } from "../storage";
 import { azureCredentialsConfigured, getGraphAccessToken } from "../graphService";
 import { syncMailboxDelta } from "./mailboxDeltaSyncService";
+import { resilientFetch } from "../lib/httpRetry";
 import type { MailboxHistoricalBackfill, MonitoredMailbox } from "@shared/schema";
 
 function log(msg: string) {
@@ -58,25 +59,14 @@ function getBackfillDays(): number {
 }
 
 /**
- * Inject-friendly fetch with 429 / 503 retry-after backoff so production
- * Graph throttling doesn't kill a backfill mid-run.
+ * Backfill fetch — delegates to the shared resilience helper (Task #706),
+ * which honors `Retry-After` on 429/503 per the "graph" policy and trips
+ * the breaker on sustained failures.
  */
 async function fetchWithBackoff(url: string, token: string): Promise<Response> {
-  let attempt = 0;
-  // Loop with bounded retries.
-  while (true) {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (res.status !== 429 && res.status !== 503) return res;
-    if (attempt >= RATE_LIMIT_MAX_RETRIES) return res;
-    const retryAfterHeader = res.headers.get("retry-after");
-    const retryAfterSec = retryAfterHeader ? parseInt(retryAfterHeader, 10) : NaN;
-    const waitMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0
-      ? retryAfterSec * 1000
-      : Math.min(60_000, 1000 * Math.pow(2, attempt));
-    log(`Rate-limited (${res.status}); waiting ${Math.round(waitMs / 1000)}s before retry ${attempt + 1}`);
-    await new Promise(r => setTimeout(r, waitMs));
-    attempt++;
-  }
+  return resilientFetch("graph", () => fetch(url, { headers: { Authorization: `Bearer ${token}` } }), {
+    retries: RATE_LIMIT_MAX_RETRIES,
+  });
 }
 
 /**

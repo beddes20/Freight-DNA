@@ -621,6 +621,103 @@ assert(
   "recordIntegrationEvent missing — Integrations Health (Task #701) consumes this from resilientFetch via the integration probe registry."
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 13: Shared resilience helper coverage (Task #706)
+// Every external-integration HTTP call site in the listed files must funnel
+// through `resilientFetch(...)` so the per-source policy (timeout, retry,
+// breaker, Retry-After honoring) and the Integrations Health probe events
+// (Task #701) apply uniformly. New raw `fetch(` calls in these files are
+// forbidden unless explicitly opted out with a `// guardrail-allow-fetch:`
+// marker on the same or previous line (used for public, non-policy endpoints
+// like the EIA petroleum API in sonarClient.ts).
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n── 13. Shared resilience helper coverage (Task #706) ────────────────\n");
+
+const RESILIENT_FETCH_FILES: string[] = [
+  "server/sonarClient.ts",
+  "server/tracService.ts",
+  "server/graphService.ts",
+  "server/graphSubscriptionService.ts",
+  "server/services/mailboxHistoricalBackfillService.ts",
+  "server/services/mailboxDeltaSyncService.ts",
+  "server/webexService.ts",
+  "server/zoominfo.ts",
+  "server/outlookService.ts",
+  "server/availableFreightImporter.ts",
+  "server/loadFactPowerBIImporter.ts",
+  "server/monthlyDataRefreshScheduler.ts",
+];
+
+// Match `fetch(` but NOT `resilientFetch(` (negative lookbehind) and NOT
+// the inner factory `() => fetch(...)` body inside a resilientFetch call
+// (we can't easily do that with regex, so we instead look at each line and
+// require either the `resilientFetch(` token on the same line, or the
+// allow-fetch marker on this or the previous line).
+const RAW_FETCH_RE = /(?<!resilient)\bfetch\s*\(/i;
+
+for (const rel of RESILIENT_FETCH_FILES) {
+  const fullPath = path.join(ROOT, rel);
+  if (!fs.existsSync(fullPath)) {
+    assert(`${rel} — file exists`, false, "file not found");
+    continue;
+  }
+  const lines = readFile(rel).split("\n");
+  const offenders: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!RAW_FETCH_RE.test(line)) continue;
+    // Skip pure-comment lines (the regex matches the word "fetch" inside
+    // section banners like "── OneDrive fetch (mirrors …) ──").
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
+    // Allow if `resilientFetch(` appears on the same line (factory pattern).
+    if (/resilientFetch\s*\(/.test(line)) continue;
+    // Allow if explicit opt-out marker is on this line OR within 5 lines
+    // above (multi-line justification comments are common — see EIA call
+    // in sonarClient.ts).
+    let allowed = line.includes("guardrail-allow-fetch:");
+    for (let look = 1; !allowed && look <= 5 && i - look >= 0; look++) {
+      if (lines[i - look].includes("guardrail-allow-fetch:")) allowed = true;
+    }
+    if (allowed) continue;
+    offenders.push(`L${i + 1}: ${line.trim().slice(0, 120)}`);
+  }
+  assert(
+    `${rel} — every external HTTP call routes through resilientFetch (or is marked guardrail-allow-fetch)`,
+    offenders.length === 0,
+    offenders.length
+      ? `Found ${offenders.length} raw fetch() call(s):\n      ${offenders.slice(0, 5).join("\n      ")}`
+      : undefined
+  );
+}
+
+// Sanity-check the policy registry covers every IntegrationSource we route
+// through resilientFetch. New sources added to probeRegistry should also get
+// a tuned policy in httpRetry.ts; otherwise they silently inherit DEFAULT.
+const httpRetryFullSrc = readFile("server/lib/httpRetry.ts");
+for (const source of ["sonar", "graph", "webex", "zoominfo", "onedrive", "trac", "stripe"]) {
+  assert(
+    `httpRetry.ts — POLICIES has tuned entry for "${source}"`,
+    new RegExp(`\\b${source}\\s*:\\s*\\{`).test(httpRetryFullSrc),
+    `No tuned policy for "${source}" in POLICIES — add timeoutMs/retries/breaker settings.`
+  );
+}
+
+assert(
+  "httpRetry.ts — exports getBreakerStatus / tripBreaker / _resetBreakerForTests",
+  /export\s+function\s+getBreakerStatus/.test(httpRetryFullSrc) &&
+    /export\s+function\s+tripBreaker/.test(httpRetryFullSrc) &&
+    /export\s+function\s+_resetBreakerForTests/.test(httpRetryFullSrc),
+  "httpRetry.ts is missing one of the breaker introspection helpers required by sonarClient.getSonarCircuitBreakerStatus and the unit tests."
+);
+
+assert(
+  "sonarClient.ts — getSonarCircuitBreakerStatus delegates to shared helper",
+  readFile("server/sonarClient.ts").includes('getBreakerStatus("sonar")') ||
+    readFile("server/sonarClient.ts").includes("_getBreakerStatus(\"sonar\")"),
+  "getSonarCircuitBreakerStatus no longer reads from the shared httpRetry breaker — the bespoke breaker should have been removed in Task #706."
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

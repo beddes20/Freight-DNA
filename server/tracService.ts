@@ -15,6 +15,7 @@
  */
 
 import { storage } from "./storage";
+import { resilientFetch } from "./lib/httpRetry";
 
 const TRAC_BASE = "https://api.freightwaves.com";
 const TOKEN = () => process.env.FREIGHTWAVES_TOKEN ?? "";
@@ -167,26 +168,21 @@ async function tracPost(path: string, body: object): Promise<unknown> {
   const token = TOKEN();
   if (!token) throw new Error("FREIGHTWAVES_TOKEN not configured");
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
-  try {
-    const res = await fetch(`${TRAC_BASE}${path}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`TRAC ${path} → HTTP ${res.status}: ${text.slice(0, 200)}`);
-    }
-    return res.json();
-  } finally {
-    clearTimeout(timeout);
+  // Task #706 — shared resilience helper handles timeout, retry, and breaker
+  // per the "trac" policy in server/lib/httpRetry.ts.
+  const res = await resilientFetch("trac", () => fetch(`${TRAC_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  }), { timeoutMs: 15_000 });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`TRAC ${path} → HTTP ${res.status}: ${text.slice(0, 200)}`);
   }
+  return res.json();
 }
 
 function buildLaneBody(

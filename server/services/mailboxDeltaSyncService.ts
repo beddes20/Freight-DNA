@@ -16,6 +16,7 @@
 
 import { storage } from "../storage";
 import { azureCredentialsConfigured, getGraphAccessToken } from "../graphService";
+import { resilientFetch } from "../lib/httpRetry";
 import type { MailboxSyncFailure, MonitoredMailbox } from "@shared/schema";
 
 function log(msg: string) {
@@ -134,9 +135,9 @@ async function fetchDeltaMessages(
 
   while (url && pageCount < MAX_PAGES) {
     pageCount++;
-    const res = await fetch(url, {
+    const res = await resilientFetch("graph", () => fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
-    });
+    }));
 
     if (!res.ok) {
       const errText = await res.text();
@@ -180,7 +181,7 @@ async function fetchSingleMessage(
     : "id,conversationId,from,toRecipients,ccRecipients,subject,bodyPreview,body,receivedDateTime,internetMessageId";
 
   const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailboxEmail)}/messages/${encodeURIComponent(providerMessageId)}?$select=${selectFields}`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await resilientFetch("graph", () => fetch(url, { headers: { Authorization: `Bearer ${token}` } }));
   if (res.status === 404) return null;
   if (!res.ok) {
     const errText = await res.text();

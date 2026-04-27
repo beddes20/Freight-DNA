@@ -144,36 +144,17 @@ let lastSonarCallAt = 0;
 let _sonarQueueTail: Promise<void> = Promise.resolve();
 
 // ── Circuit Breaker (451 rate-limit protection) ───────────────────────────────
+// Now delegates to the shared per-source breaker in server/lib/httpRetry.ts
+// (Task #706). The 30-minute cooldown and immediate-trip-on-451 behavior is
+// declared in the SONAR policy block of httpRetry.ts; this file just reads
+// it back and exposes the legacy `getSonarCircuitBreakerStatus()` shape so
+// existing callers (probes, /admin routes, valueiq) keep compiling.
 
-const CIRCUIT_BREAKER_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
-let circuitBreakerTrippedAt: number | null = null;
+import { getBreakerStatus as _getBreakerStatus, resilientFetch } from "./lib/httpRetry";
 let circuitBreakerLoggedOnce = false;
 
-function isCircuitBreakerOpen(): boolean {
-  if (circuitBreakerTrippedAt === null) return false;
-  if (Date.now() - circuitBreakerTrippedAt > CIRCUIT_BREAKER_COOLDOWN_MS) {
-    log("Circuit breaker reset — resuming SONAR API calls");
-    circuitBreakerTrippedAt = null;
-    circuitBreakerLoggedOnce = false;
-    return false;
-  }
-  return true;
-}
-
-function tripCircuitBreaker() {
-  circuitBreakerTrippedAt = Date.now();
-  const cooldownMinutes = Math.round(CIRCUIT_BREAKER_COOLDOWN_MS / 60000);
-  log(`⚡ Circuit breaker TRIPPED — SONAR returned HTTP 451 (record limit exceeded). All SONAR calls will return cached/fallback data for ${cooldownMinutes} minutes.`);
-}
-
 export function getSonarCircuitBreakerStatus(): { isOpen: boolean; trippedAt: string | null; resumesAt: string | null } {
-  if (circuitBreakerTrippedAt === null) return { isOpen: false, trippedAt: null, resumesAt: null };
-  const resumesAt = new Date(circuitBreakerTrippedAt + CIRCUIT_BREAKER_COOLDOWN_MS);
-  return {
-    isOpen: Date.now() - circuitBreakerTrippedAt < CIRCUIT_BREAKER_COOLDOWN_MS,
-    trippedAt: new Date(circuitBreakerTrippedAt).toISOString(),
-    resumesAt: resumesAt.toISOString(),
-  };
+  return _getBreakerStatus("sonar");
 }
 
 // ── Request Coalescing ────────────────────────────────────────────────────────
@@ -399,12 +380,11 @@ async function getSonarToken(): Promise<string | null> {
   }
 
   try {
-    const resp = await fetch(`${SONAR_BASE}/credential/authenticate`, {
+    const resp = await resilientFetch("sonar", () => fetch(`${SONAR_BASE}/credential/authenticate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
-      signal: AbortSignal.timeout(10_000),
-    });
+    }), { timeoutMs: 10_000 });
     if (!resp.ok) {
       log(`Auth failed: ${resp.status} ${resp.statusText}`);
       return null;
@@ -421,8 +401,9 @@ async function getSonarToken(): Promise<string | null> {
     cachedToken = { token, expiresAt };
     log("Auth token refreshed");
     return token;
-  } catch (err: any) {
-    log(`Auth error: ${err.message}`);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`Auth error: ${msg}`);
     return null;
   }
 }
@@ -432,14 +413,16 @@ async function getSonarToken(): Promise<string | null> {
 async function sonarGet(path: string): Promise<any | null> {
   await warmMemoryCacheFromDb();
 
-  if (isCircuitBreakerOpen()) {
+  const breakerStatus = getSonarCircuitBreakerStatus();
+  if (breakerStatus.isOpen) {
     if (!circuitBreakerLoggedOnce) {
       circuitBreakerLoggedOnce = true;
-      const status = getSonarCircuitBreakerStatus();
-      log(`Circuit breaker OPEN — returning cached/fallback data for all SONAR calls until ${status.resumesAt}`);
+      log(`Circuit breaker OPEN — returning cached/fallback data for all SONAR calls until ${breakerStatus.resumesAt}`);
     }
     return null;
   }
+  // Reset the once-per-cooldown log gate when the breaker is closed again.
+  if (!breakerStatus.isOpen && circuitBreakerLoggedOnce) circuitBreakerLoggedOnce = false;
 
   return coalescedSonarGet(path);
 }
@@ -461,15 +444,15 @@ async function rawSonarGet(path: string): Promise<any | null> {
   if (!token) return null;
   await rateLimitedWait();
   try {
-    const resp = await fetch(`${SONAR_BASE}${path}`, {
+    // The shared resilience helper (Task #706) handles timeout, breaker,
+    // 5xx retry, and the 451 immediate-trip per the "sonar" policy. The
+    // 451 response is still returned so we can short-circuit to cached
+    // data; the breaker open state stops subsequent calls.
+    const resp = await resilientFetch("sonar", () => fetch(`${SONAR_BASE}${path}`, {
       headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(12_000),
-    });
+    }));
 
-    if (resp.status === 451) {
-      tripCircuitBreaker();
-      return null;
-    }
+    if (resp.status === 451) return null;
 
     if (resp.status === 401) {
       // If we were using the direct bearer token (FREIGHTWAVES_TOKEN), mark
@@ -482,21 +465,18 @@ async function rawSonarGet(path: string): Promise<any | null> {
       }
       const newToken = await getSonarToken();
       if (!newToken || newToken === token) return null;
-      const resp2 = await fetch(`${SONAR_BASE}${path}`, {
+      const resp2 = await resilientFetch("sonar", () => fetch(`${SONAR_BASE}${path}`, {
         headers: { Authorization: `Bearer ${newToken}` },
-        signal: AbortSignal.timeout(12_000),
-      });
-      if (resp2.status === 451) {
-        tripCircuitBreaker();
-        return null;
-      }
+      }));
+      if (resp2.status === 451) return null;
       if (!resp2.ok) { log(`GET ${path} → ${resp2.status}`); return null; }
       return await resp2.json();
     }
     if (!resp.ok) { log(`GET ${path} → ${resp.status}`); return null; }
     return await resp.json();
-  } catch (err: any) {
-    log(`GET ${path} error: ${err.message}`);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log(`GET ${path} error: ${msg}`);
     return null;
   }
 }
@@ -673,6 +653,9 @@ async function fetchEiaDieselPrice(): Promise<EiaDieselResult | null> {
       "&length=2" +
       "&out=json";
 
+    // guardrail-allow-fetch: EIA is a public petroleum-data endpoint, not
+    // part of the SONAR integration; failures here must not trip the
+    // SONAR breaker. Timeout is enforced inline.
     const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
     if (!resp.ok) {
       log(`EIA diesel fetch failed: ${resp.status}`);

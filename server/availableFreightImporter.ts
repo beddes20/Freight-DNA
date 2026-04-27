@@ -21,6 +21,7 @@ import crypto from "crypto";
 import { sql } from "drizzle-orm";
 import { storage, db } from "./storage";
 import { getGraphAccessToken, azureCredentialsConfigured } from "./graphService";
+import { resilientFetch } from "./lib/httpRetry";
 import { upsertLoadFact } from "./carrierIntelligenceService";
 import { freightOpportunityToInsert } from "./loadFactBackfill";
 import { ensureShortlistRanked } from "./proactiveOpportunityService";
@@ -541,10 +542,10 @@ async function fetchWorkbookFromOneDrive(filePath: string): Promise<{ workbook: 
     );
   }
 
-  const response = await fetch(contentUrl, {
+  const response = await resilientFetch("onedrive", () => fetch(contentUrl, {
     headers: { Authorization: `Bearer ${token}` },
     redirect: "follow",
-  });
+  }));
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
     throw new Error(`Graph API error fetching available freight file (HTTP ${response.status}): ${errorText.slice(0, 200)}`);

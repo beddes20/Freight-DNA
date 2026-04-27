@@ -10,6 +10,8 @@
  *   WEBEX_ORG_ID        — Webex organization ID
  */
 
+import { resilientFetch } from "./lib/httpRetry";
+
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
   console.log(`${t} [webex] ${msg}`);
@@ -64,73 +66,37 @@ export async function webexFetch<T = any>(
     finalHeaders.Authorization = `Bearer ${token}`;
   }
 
-  let attempt = 0;
-  let lastError = "";
-  let lastStatus = 0;
-  let lastResponse: Response | null = null;
-  while (attempt <= maxRetries) {
-    let res: Response;
-    try {
-      res = await fetch(url, { ...rest, headers: finalHeaders });
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
-      lastStatus = 0;
-      const wait = Math.min(10_000, 250 * 2 ** attempt);
-      attempt++;
-      if (attempt > maxRetries) break;
-      await new Promise(r => setTimeout(r, wait));
-      continue;
-    }
-    lastResponse = res;
-    lastStatus = res.status;
-
-    if (res.ok) {
-      let data: T | null = null;
-      try {
-        const ct = res.headers.get("content-type") ?? "";
-        if (ct.includes("json")) data = (await res.json()) as T;
-      } catch {
-        data = null;
-      }
-      return { ok: true, status: res.status, data, error: null, retried: attempt, response: res };
-    }
-
-    // 401 is terminal — caller should refresh token / mark reauth.
-    if (res.status === 401 || res.status === 403) {
-      const text = await safeReadText(res);
-      onFailure?.({ url, status: res.status, body: text });
-      return { ok: false, status: res.status, data: null, error: text || `HTTP ${res.status}`, retried: attempt, response: res };
-    }
-
-    // 429: honor Retry-After (seconds, optionally HTTP date).
-    if (res.status === 429) {
-      const retryAfter = res.headers.get("retry-after");
-      const waitMs = parseRetryAfter(retryAfter) ?? Math.min(30_000, 1_000 * 2 ** attempt);
-      lastError = `429 rate limited (retry-after ${retryAfter ?? "unknown"})`;
-      attempt++;
-      if (attempt > maxRetries) break;
-      await new Promise(r => setTimeout(r, waitMs));
-      continue;
-    }
-
-    // 5xx: exponential backoff.
-    if (res.status >= 500) {
-      lastError = `HTTP ${res.status}`;
-      const wait = Math.min(10_000, 250 * 2 ** attempt);
-      attempt++;
-      if (attempt > maxRetries) break;
-      await new Promise(r => setTimeout(r, wait));
-      continue;
-    }
-
-    // 4xx other than 401/403/429: terminal client error.
-    const text = await safeReadText(res);
-    onFailure?.({ url, status: res.status, body: text });
-    return { ok: false, status: res.status, data: null, error: text || `HTTP ${res.status}`, retried: attempt, response: res };
+  // Task #706 — delegate retry/backoff/Retry-After/breaker to the shared
+  // resilience helper. The legacy hand-rolled loop (Task #466) is removed.
+  // Behavior preserved: 429 honors Retry-After, 5xx is retried with backoff,
+  // 4xx (other than 429) is terminal, and network errors retry. The
+  // `retried` counter loses fidelity (resilientFetch doesn't surface it)
+  // but it was used only for debug logging.
+  let res: Response;
+  try {
+    res = await resilientFetch("webex", () => fetch(url, { ...rest, headers: finalHeaders }), {
+      retries: maxRetries,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    onFailure?.({ url, status: 0, body: msg });
+    return { ok: false, status: 0, data: null, error: msg, retried: maxRetries, response: null };
   }
 
-  onFailure?.({ url, status: lastStatus, body: lastError || "fetch failed" });
-  return { ok: false, status: lastStatus, data: null, error: lastError || "fetch failed", retried: attempt, response: lastResponse };
+  if (res.ok) {
+    let data: T | null = null;
+    try {
+      const ct = res.headers.get("content-type") ?? "";
+      if (ct.includes("json")) data = (await res.json()) as T;
+    } catch {
+      data = null;
+    }
+    return { ok: true, status: res.status, data, error: null, retried: 0, response: res };
+  }
+
+  const text = await safeReadText(res);
+  onFailure?.({ url, status: res.status, body: text });
+  return { ok: false, status: res.status, data: null, error: text || `HTTP ${res.status}`, retried: 0, response: res };
 }
 
 async function safeReadText(res: Response): Promise<string> {
@@ -318,7 +284,7 @@ export interface WebexTokenResponse {
 export async function exchangeWebexCodeStateless(code: string, redirectUri: string): Promise<WebexTokenResponse> {
   const clientId = process.env.WEBEX_CLIENT_ID!.trim();
   const clientSecret = process.env.WEBEX_CLIENT_SECRET!.trim();
-  const res = await fetch("https://webexapis.com/v1/access_token", {
+  const res = await resilientFetch("webex", () => fetch("https://webexapis.com/v1/access_token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -328,7 +294,7 @@ export async function exchangeWebexCodeStateless(code: string, redirectUri: stri
       code,
       redirect_uri: redirectUri,
     }).toString(),
-  });
+  }));
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Failed to exchange Webex auth code: ${res.status} ${text}`);
@@ -354,7 +320,7 @@ export async function refreshWebexAccessTokenWith(refreshToken: string): Promise
   }
   const clientId = process.env.WEBEX_CLIENT_ID!.trim();
   const clientSecret = process.env.WEBEX_CLIENT_SECRET!.trim();
-  const res = await fetch("https://webexapis.com/v1/access_token", {
+  const res = await resilientFetch("webex", () => fetch("https://webexapis.com/v1/access_token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -363,7 +329,7 @@ export async function refreshWebexAccessTokenWith(refreshToken: string): Promise
       client_secret: clientSecret,
       refresh_token: refreshToken,
     }).toString(),
-  });
+  }));
   if (!res.ok) {
     const text = await res.text();
     if (isInvalidGrantError(res.status, text)) {
@@ -380,9 +346,9 @@ export async function refreshWebexAccessTokenWith(refreshToken: string): Promise
  * rep connects their account.
  */
 export async function fetchWebexMe(accessToken: string): Promise<WebexPerson | null> {
-  const res = await fetch("https://webexapis.com/v1/people/me", {
+  const res = await resilientFetch("webex", () => fetch("https://webexapis.com/v1/people/me", {
     headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  }));
   if (!res.ok) {
     log(`fetchWebexMe error ${res.status}`);
     return null;
@@ -402,7 +368,7 @@ export async function exchangeWebexCode(code: string, redirectUri: string): Prom
   const clientId = process.env.WEBEX_CLIENT_ID!.trim();
   const clientSecret = process.env.WEBEX_CLIENT_SECRET!.trim();
 
-  const res = await fetch("https://webexapis.com/v1/access_token", {
+  const res = await resilientFetch("webex", () => fetch("https://webexapis.com/v1/access_token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -412,7 +378,7 @@ export async function exchangeWebexCode(code: string, redirectUri: string): Prom
       code,
       redirect_uri: redirectUri,
     }).toString(),
-  });
+  }));
 
   if (!res.ok) {
     const text = await res.text();
@@ -486,17 +452,20 @@ export async function refreshWebexAccessToken(): Promise<string> {
 
   const clientId = process.env.WEBEX_CLIENT_ID!.trim();
   const clientSecret = process.env.WEBEX_CLIENT_SECRET!.trim();
+  // Capture into a const so the resilientFetch closure sees a non-null value
+  // (TypeScript can't narrow module-level lets across closure boundaries).
+  const refreshTokenForRequest = _refreshToken;
 
-  const res = await fetch("https://webexapis.com/v1/access_token", {
+  const res = await resilientFetch("webex", () => fetch("https://webexapis.com/v1/access_token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       grant_type: "refresh_token",
       client_id: clientId,
       client_secret: clientSecret,
-      refresh_token: _refreshToken,
+      refresh_token: refreshTokenForRequest,
     }).toString(),
-  });
+  }));
 
   if (!res.ok) {
     const text = await res.text();
@@ -850,9 +819,9 @@ export async function fetchWebexPeople(
   }
 
   const url = `https://webexapis.com/v1/people?${params.toString()}`;
-  const res = await fetch(url, {
+  const res = await resilientFetch("webex", () => fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
-  });
+  }));
 
   if (!res.ok) return [];
 
@@ -880,7 +849,7 @@ export async function listWebexPeople(maxResults = 1000): Promise<WebexPerson[]>
   let url: string = `https://webexapis.com/v1/people?${params.toString()}`;
 
   while (url && all.length < maxResults) {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await resilientFetch("webex", () => fetch(url, { headers: { Authorization: `Bearer ${token}` } }));
     if (!res.ok) {
       const text = await res.text();
       log(`listWebexPeople error ${res.status}: ${text}`);
@@ -913,9 +882,9 @@ export async function fetchPersonStatus(personId: string): Promise<string> {
   const token = await getWebexAccessToken();
 
   const url = `https://webexapis.com/v1/people/${encodeURIComponent(personId)}`;
-  const res = await fetch(url, {
+  const res = await resilientFetch("webex", () => fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
-  });
+  }));
 
   if (!res.ok) return "unknown";
 
@@ -927,9 +896,9 @@ export async function fetchCallRecording(recordingId: string): Promise<Buffer | 
   const token = await getWebexAccessToken();
 
   const metaUrl = `https://webexapis.com/v1/recordings/${encodeURIComponent(recordingId)}`;
-  const metaRes = await fetch(metaUrl, {
+  const metaRes = await resilientFetch("webex", () => fetch(metaUrl, {
     headers: { Authorization: `Bearer ${token}` },
-  });
+  }));
 
   if (!metaRes.ok) {
     log(`Recording metadata fetch error ${metaRes.status}`);
@@ -943,7 +912,7 @@ export async function fetchCallRecording(recordingId: string): Promise<Buffer | 
     return null;
   }
 
-  const audioRes = await fetch(downloadUrl);
+  const audioRes = await resilientFetch("webex", () => fetch(downloadUrl));
   if (!audioRes.ok) {
     log(`Recording download error ${audioRes.status}`);
     return null;
