@@ -533,7 +533,9 @@ function MarketPulseStrip({ pulse, isStale, timestamp }: { pulse: MarketPulse; i
         ? (ntiPerMove > 100
             ? `$${Math.round(ntiPerMove).toLocaleString()}`
             : `$${fmt(pulse.ntiPerMile ?? 2.28, 2)}/mi`)
-        : "—",
+        : (pulse.ntiPerMile !== null
+            ? `$${fmt(pulse.ntiPerMile, 2)}/mi`
+            : "—"),
       delta: ntiDelta !== null
         ? `${ntiDelta > 0 ? "↑" : "↓"} ${Math.abs(ntiDelta).toFixed(0)} WoW`
         : "WoW —",
