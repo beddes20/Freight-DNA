@@ -272,8 +272,15 @@ async function probeWebex(_opts: ProbeOptions): Promise<IntegrationHealthSnapsho
 }
 
 async function probeZoomInfo(opts: ProbeOptions): Promise<IntegrationHealthSnapshot> {
-  if (!process.env.ZOOMINFO_USERNAME || !process.env.ZOOMINFO_PASSWORD) {
-    return { source: "zoominfo", connected: false, healthState: "disabled", detail: { reason: "ZoomInfo credentials missing" } };
+  // Use the shared envConfigured() so this stays in lockstep with
+  // server/zoominfo.ts (OAuth2 client credentials: CLIENT_ID + CLIENT_SECRET).
+  if (!envConfigured("zoominfo")) {
+    return {
+      source: "zoominfo",
+      connected: false,
+      healthState: "disabled",
+      detail: { reason: "ZOOMINFO_CLIENT_ID + ZOOMINFO_CLIENT_SECRET missing" },
+    };
   }
   const fresh = freshnessHealthState("zoominfo");
   if (opts.liveProbe) {
