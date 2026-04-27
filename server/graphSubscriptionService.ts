@@ -175,36 +175,69 @@ export async function refreshMailReadConsentStatus(): Promise<MailReadConsentSta
     await persistConsent(null);
     return getMailReadConsentStatus();
   }
-  // Probe target: the configured shared reply mailbox if present, else any
-  // enabled monitored mailbox in the system. Either path proves whether
-  // the Mail.Read application permission is granted in the tenant.
-  let probeMailbox = process.env.OUTLOOK_REPLY_EMAIL?.trim() ?? null;
-  if (!probeMailbox) {
-    try {
-      const enabled = await storage.getEnabledMonitoredMailboxes();
-      probeMailbox = enabled[0]?.email ?? null;
-    } catch {
-      probeMailbox = null;
+  // Probe targets: try the configured shared reply mailbox first, then any
+  // enabled monitored mailbox. Tenant admins frequently set
+  // OUTLOOK_REPLY_EMAIL to a generic alias that doesn't exist as a real
+  // user mailbox in M365 — that returns 404 ErrorInvalidUser, NOT 403.
+  // We must distinguish "probe target doesn't exist" from "permission
+  // denied" or admins see a misleading "Mail.Read not granted" banner
+  // even when IT has correctly granted the permission.
+  const candidates: string[] = [];
+  const replyEmail = process.env.OUTLOOK_REPLY_EMAIL?.trim();
+  if (replyEmail) candidates.push(replyEmail);
+  try {
+    const enabled = await storage.getEnabledMonitoredMailboxes();
+    for (const m of enabled) {
+      if (m.email && !candidates.includes(m.email)) candidates.push(m.email);
+      if (candidates.length >= 5) break; // bound the probe cost
     }
+  } catch {
+    // ignore — fall through with whatever we have
   }
-  if (!probeMailbox) {
+  if (candidates.length === 0) {
     _mailReadConsent = "pending";
     _mailReadLastError = "No mailbox to probe — enroll a mailbox first";
     _mailReadLastCheckedAt = new Date();
     await persistConsent(null);
     return getMailReadConsentStatus();
   }
-  try {
-    const ok = await checkMailReadPermission(probeMailbox);
-    _mailReadConsent = ok ? "granted" : "denied";
-    _mailReadLastError = ok ? null : "Mail.Read application permission not granted in tenant";
-    if (ok) _mailReadGranted = true;
-  } catch (err) {
-    _mailReadConsent = "unknown";
-    _mailReadLastError = err instanceof Error ? err.message : String(err);
+
+  let lastResult: { status: number | null; mailbox: string } = { status: null, mailbox: candidates[0] };
+  let granted = false;
+  let permissionDenied = false;
+  for (const mailbox of candidates) {
+    try {
+      const result = await probeMailReadPermission(mailbox);
+      lastResult = { status: result.status, mailbox };
+      if (result.status === 200) { granted = true; break; }
+      if (result.status === 403) { permissionDenied = true; break; }
+      // 404 / 400 / others → try the next candidate
+    } catch (err) {
+      lastResult = { status: null, mailbox };
+      _mailReadLastError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  if (granted) {
+    _mailReadConsent = "granted";
+    _mailReadLastError = null;
+    _mailReadGranted = true;
+  } else if (permissionDenied) {
+    _mailReadConsent = "denied";
+    _mailReadLastError = "Mail.Read application permission not granted in tenant";
+  } else {
+    // Every candidate returned a non-200, non-403 status (typically 404
+    // ErrorInvalidUser when OUTLOOK_REPLY_EMAIL points at a non-existent
+    // mailbox and no real mailboxes are enrolled yet). Don't claim
+    // permission is denied — say what's actually true so admins know
+    // to enroll a real mailbox or fix OUTLOOK_REPLY_EMAIL.
+    _mailReadConsent = "pending";
+    _mailReadLastError = lastResult.status === 404
+      ? `Probe mailbox "${lastResult.mailbox}" was not found in your Microsoft 365 tenant. Enroll a real user mailbox or set OUTLOOK_REPLY_EMAIL to a mailbox that exists.`
+      : `Could not verify Mail.Read permission against any candidate mailbox (last status: ${lastResult.status ?? "error"}).`;
   }
   _mailReadLastCheckedAt = new Date();
-  await persistConsent(probeMailbox);
+  await persistConsent(lastResult.mailbox);
   return getMailReadConsentStatus();
 }
 
@@ -280,25 +313,37 @@ export function getReplyEmailConfig(): ReplyEmailConfig | null {
   };
 }
 
-async function checkMailReadPermission(mailbox: string): Promise<boolean> {
+/**
+ * Low-level Mail.Read probe. Returns the raw HTTP status so callers can
+ * distinguish "permission denied" (403) from "mailbox does not exist in
+ * tenant" (404 ErrorInvalidUser). Returns `null` on network/transport
+ * errors. The boolean wrapper `checkMailReadPermission` is preserved
+ * for callers that only need a yes/no.
+ */
+async function probeMailReadPermission(mailbox: string): Promise<{ status: number | null; bodyPreview: string }> {
   try {
     const token = await getGraphAccessToken();
     const url = `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/mailFolders/inbox?$select=id`;
     const res = await resilientFetch("graph", () => fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     }));
-    if (res.status === 200) return true;
-    if (res.status === 403) {
-      const body = await res.text();
-      log(`Mail.Read permission not granted (403): ${body.slice(0, 200)}`);
-      return false;
+    let bodyPreview = "";
+    if (res.status !== 200) {
+      try { bodyPreview = (await res.text()).slice(0, 200); } catch { /* ignore */ }
     }
-    log(`Unexpected status ${res.status} checking Mail.Read permission`);
-    return false;
+    if (res.status === 403) log(`Mail.Read permission denied for ${mailbox} (403): ${bodyPreview}`);
+    else if (res.status === 404) log(`Probe mailbox ${mailbox} not found in tenant (404 ErrorInvalidUser)`);
+    else if (res.status !== 200) log(`Unexpected status ${res.status} probing ${mailbox}: ${bodyPreview}`);
+    return { status: res.status, bodyPreview };
   } catch (err) {
-    log(`Error checking Mail.Read permission: ${err instanceof Error ? err.message : String(err)}`);
-    return false;
+    log(`Error probing Mail.Read for ${mailbox}: ${err instanceof Error ? err.message : String(err)}`);
+    return { status: null, bodyPreview: err instanceof Error ? err.message : String(err) };
   }
+}
+
+async function checkMailReadPermission(mailbox: string): Promise<boolean> {
+  const result = await probeMailReadPermission(mailbox);
+  return result.status === 200;
 }
 
 async function findExistingSubscription(token: string, webhookUrl: string): Promise<{ id: string; expirationDateTime: string } | null> {
@@ -409,11 +454,30 @@ let _activationTimer: ReturnType<typeof setInterval> | null = null;
 async function tryActivate(config: { mailbox: string; webhookUrl: string }): Promise<boolean> {
   if (_subscriptionId) return true;
 
-  const hasPermission = await checkMailReadPermission(config.mailbox);
+  // Mirror refreshMailReadConsentStatus: distinguish 404 (probe mailbox
+  // doesn't exist in tenant) from 403 (permission denied). Without this,
+  // a misconfigured OUTLOOK_REPLY_EMAIL on a tenant where IT has correctly
+  // granted Mail.Read would have its consent state reverted to "denied"
+  // here on every activation cycle, overwriting the correct status that
+  // refreshMailReadConsentStatus computes from real enrolled mailboxes.
+  const probe = await probeMailReadPermission(config.mailbox);
   _mailReadLastCheckedAt = new Date();
-  if (!hasPermission) {
-    _mailReadConsent = "denied";
-    _mailReadLastError = "Mail.Read application permission not granted in tenant";
+  if (probe.status !== 200) {
+    if (probe.status === 403) {
+      _mailReadConsent = "denied";
+      _mailReadLastError = "Mail.Read application permission not granted in tenant";
+    } else if (probe.status === 404) {
+      // The configured shared reply mailbox doesn't exist — leave any
+      // existing "granted" state intact, just record a pending note so
+      // admins can see the misconfiguration.
+      if (_mailReadConsent !== "granted") {
+        _mailReadConsent = "pending";
+        _mailReadLastError = `Reply mailbox "${config.mailbox}" was not found in your Microsoft 365 tenant. Set OUTLOOK_REPLY_EMAIL to a real mailbox or remove it.`;
+      }
+    } else if (_mailReadConsent !== "granted") {
+      _mailReadConsent = "unknown";
+      _mailReadLastError = `Could not verify Mail.Read against ${config.mailbox} (status ${probe.status ?? "error"}).`;
+    }
     void persistConsent(config.mailbox);
     return false;
   }
