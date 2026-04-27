@@ -25,6 +25,8 @@ import { initWeeklyAccountReviewScheduler } from "./weeklyAccountReviewScheduler
 import { initCoachingDigestScheduler } from "./coachingDigestScheduler";
 import { initMissedInboundRecapScheduler } from "./missedInboundRecapScheduler";
 import { initLmCheckinScheduler } from "./lmCheckinScheduler";
+import { initCarrierIntelExpirationScheduler } from "./carrierIntelExpirationScheduler";
+import { initCarrierIntelNudgeScheduler } from "./carrierIntelNudgeScheduler";
 import { initNbaPhase1Scheduler } from "./nbaPhase1Scheduler";
 import { initSonarDailyRefreshScheduler } from "./sonarDailyRefreshScheduler";
 import { initMarketSignalScheduler } from "./marketSignalScheduler";
@@ -449,6 +451,12 @@ process.on("uncaughtException", (err) => {
       initCoachingDigestScheduler();
       initMissedInboundRecapScheduler();
       initLmCheckinScheduler();
+      // Task #769 — drive Carrier Hub "Needs Review" to zero with a nightly
+      // stale-cleanup pass + a weekday morning rep nudge for outstanding
+      // pending suggestions. Both jobs are org-aware and read their settings
+      // from app_settings so admins can tune behavior live.
+      initCarrierIntelExpirationScheduler();
+      initCarrierIntelNudgeScheduler();
 
       setTimeout(() => {
         initNbaPhase1Scheduler();

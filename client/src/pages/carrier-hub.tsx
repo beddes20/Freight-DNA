@@ -622,11 +622,15 @@ function SuggestionCard({
   onAccept,
   onReject,
   isPending,
+  selected,
+  onSelectChange,
 }: {
   suggestion: CarrierIntelSuggestion;
   onAccept: (id: string, comment?: string) => void;
   onReject: (id: string, comment?: string) => void;
   isPending: boolean;
+  selected?: boolean;
+  onSelectChange?: (id: string, next: boolean) => void;
 }) {
   const [note, setNote] = useState("");
   const p = suggestion.payload;
@@ -650,6 +654,16 @@ function SuggestionCard({
   return (
     <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 space-y-2" data-testid={`suggestion-card-${suggestion.id}`}>
       <div className="flex items-start justify-between gap-2">
+        {onSelectChange && (
+          <div className="pt-0.5">
+            <Checkbox
+              checked={!!selected}
+              onCheckedChange={v => onSelectChange(suggestion.id, !!v)}
+              data-testid={`checkbox-suggestion-${suggestion.id}`}
+              aria-label="Select suggestion"
+            />
+          </div>
+        )}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-medium text-foreground">
@@ -827,6 +841,11 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
   const [profileForm, setProfileForm] = useState<Partial<CarrierDetail["carrier"]>>({});
   const [activeTab, setActiveTab] = useState("overview");
   const [showRejectedSuggestions, setShowRejectedSuggestions] = useState(false);
+  // Per-carrier-drawer multi-select state for the "Needs Review" UX (Task #769).
+  // Reset whenever the carrier changes so opening a different carrier never
+  // carries over a stale selection.
+  const [selectedSuggestionIds, setSelectedSuggestionIds] = useState<Set<string>>(new Set());
+  useEffect(() => { setSelectedSuggestionIds(new Set()); }, [carrierId]);
 
   const { data, isLoading } = useQuery<CarrierDetail>({
     queryKey: ["/api/carrier-hub", carrierId],
@@ -947,6 +966,41 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
       toast({ title: "Suggestion rejected" });
     },
     onError: () => toast({ title: "Failed to reject suggestion", variant: "destructive" }),
+  });
+
+  // ── Bulk suggestion ops (Task #769) ──────────────────────────────────────
+  // The single-row mutations above invalidate just the open carrier; bulk
+  // ops also invalidate the sidebar pending-intel badge and the carrier-list
+  // pending_intel_count column so "Needs Review" reflects the new zero
+  // immediately, without waiting for a manual refetch.
+  function invalidatePendingViews() {
+    qc.invalidateQueries({ queryKey: ["/api/carrier-hub", carrierId, "intelligence"] });
+    qc.invalidateQueries({ queryKey: ["/api/carrier-hub/pending-intel-count"] });
+    qc.invalidateQueries({ queryKey: ["/api/carrier-hub"] });
+  }
+
+  const bulkSuggestions = useMutation({
+    mutationFn: ({ ids, action, comment }: { ids: string[]; action: "accept" | "reject"; comment?: string }) =>
+      apiRequest("POST", `/api/carrier-hub/suggestions/bulk`, { ids, action, comment }),
+    onSuccess: (resp: any, vars) => {
+      invalidatePendingViews();
+      setSelectedSuggestionIds(new Set());
+      const updated = resp?.updated ?? vars.ids.length;
+      toast({ title: vars.action === "accept" ? `Accepted ${updated} suggestion${updated === 1 ? "" : "s"}` : `Rejected ${updated} suggestion${updated === 1 ? "" : "s"}` });
+    },
+    onError: () => toast({ title: "Bulk action failed", variant: "destructive" }),
+  });
+
+  const acceptAllForCarrier = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", `/api/carrier-hub/${carrierId}/suggestions/accept-all`, {}),
+    onSuccess: (resp: any) => {
+      invalidatePendingViews();
+      setSelectedSuggestionIds(new Set());
+      const updated = resp?.updated ?? 0;
+      toast({ title: `Accepted all ${updated} suggestion${updated === 1 ? "" : "s"} from this carrier` });
+    },
+    onError: () => toast({ title: "Failed to accept all suggestions", variant: "destructive" }),
   });
 
   const updateCarrier = useMutation({
@@ -1662,6 +1716,67 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
                     <p className="text-xs text-muted-foreground italic" data-testid="intel-no-pending">No pending suggestions. Suggestions appear automatically when email signals are processed for this carrier.</p>
                   )}
 
+                  {/* Bulk action toolbar (Task #769) — only render when there's
+                      something to act on. The "select all" checkbox shows the
+                      indeterminate-style middle state via the Radix Checkbox's
+                      `data-state` when partial; we keep state strictly boolean
+                      here and let the user click again to clear. */}
+                  {intelData.suggestions.pending.length > 0 && (() => {
+                    const allIds = intelData.suggestions.pending.map(s => s.id);
+                    const selectedCount = allIds.filter(id => selectedSuggestionIds.has(id)).length;
+                    const allSelected = selectedCount === allIds.length;
+                    const bulkBusy = bulkSuggestions.isPending || acceptAllForCarrier.isPending;
+                    return (
+                      <div className="flex flex-wrap items-center gap-2 mb-2 p-2 rounded-md border border-border bg-muted/20" data-testid="bulk-suggestion-toolbar">
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            checked={allSelected}
+                            onCheckedChange={v => {
+                              setSelectedSuggestionIds(v ? new Set(allIds) : new Set());
+                            }}
+                            data-testid="checkbox-select-all-suggestions"
+                            aria-label="Select all pending suggestions"
+                          />
+                          <span className="text-xs text-muted-foreground" data-testid="text-bulk-selected-count">
+                            {selectedCount === 0 ? "Select all" : `${selectedCount} selected`}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 ml-auto">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={selectedCount === 0 || bulkBusy}
+                            onClick={() => bulkSuggestions.mutate({ ids: Array.from(selectedSuggestionIds), action: "accept" })}
+                            data-testid="button-bulk-accept-suggestions"
+                          >
+                            <ThumbsUp className="w-3.5 h-3.5 mr-1" />
+                            Accept selected
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={selectedCount === 0 || bulkBusy}
+                            onClick={() => bulkSuggestions.mutate({ ids: Array.from(selectedSuggestionIds), action: "reject" })}
+                            data-testid="button-bulk-reject-suggestions"
+                          >
+                            <ThumbsDown className="w-3.5 h-3.5 mr-1" />
+                            Reject selected
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="default"
+                            disabled={bulkBusy}
+                            onClick={() => acceptAllForCarrier.mutate()}
+                            data-testid="button-accept-all-from-carrier"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                            Accept all from this carrier
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   <div className="space-y-3">
                     {intelData.suggestions.pending.map(s => (
                       <SuggestionCard
@@ -1669,7 +1784,15 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
                         suggestion={s}
                         onAccept={(id, comment) => acceptSuggestion.mutate({ id, comment })}
                         onReject={(id, comment) => rejectSuggestion.mutate({ id, comment })}
-                        isPending={acceptSuggestion.isPending || rejectSuggestion.isPending}
+                        isPending={acceptSuggestion.isPending || rejectSuggestion.isPending || bulkSuggestions.isPending || acceptAllForCarrier.isPending}
+                        selected={selectedSuggestionIds.has(s.id)}
+                        onSelectChange={(id, next) => {
+                          setSelectedSuggestionIds(prev => {
+                            const copy = new Set(prev);
+                            if (next) copy.add(id); else copy.delete(id);
+                            return copy;
+                          });
+                        }}
                       />
                     ))}
                   </div>

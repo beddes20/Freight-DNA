@@ -1104,7 +1104,7 @@ getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined>;
   insertCarrierIntelSuggestion(data: import('@shared/schema').InsertCarrierIntelSuggestion): Promise<import('@shared/schema').CarrierIntelSuggestion>;
   getSuggestionsForCarrier(carrierId: string, status?: string): Promise<import('@shared/schema').CarrierIntelSuggestion[]>;
   getSuggestionById(id: string): Promise<import('@shared/schema').CarrierIntelSuggestion | undefined>;
-  updateSuggestionStatus(id: string, status: 'accepted' | 'rejected' | 'auto_accepted', opts: { userId?: string; comment?: string }): Promise<import('@shared/schema').CarrierIntelSuggestion | undefined>;
+  updateSuggestionStatus(id: string, status: 'accepted' | 'rejected' | 'auto_accepted' | 'auto_dismissed', opts: { userId?: string; comment?: string; resolutionReason?: string }): Promise<import('@shared/schema').CarrierIntelSuggestion | undefined>;
   findDuplicateSuggestion(carrierId: string, suggestionType: string, emailSignalId: string): Promise<import('@shared/schema').CarrierIntelSuggestion | undefined>;
   getCarrierIntelSuggestionByDedup(carrierId: string, suggestionType: string, emailSignalId: string): Promise<import('@shared/schema').CarrierIntelSuggestion | undefined>;
   getCarrierIntelSuggestions(carrierId: string, status?: string): Promise<import('@shared/schema').CarrierIntelSuggestion[]>;
@@ -7244,19 +7244,20 @@ export class DatabaseStorage implements IStorage {
 
   async updateSuggestionStatus(
     id: string,
-    status: 'accepted' | 'rejected' | 'auto_accepted',
-    opts: { userId?: string; comment?: string }
+    status: 'accepted' | 'rejected' | 'auto_accepted' | 'auto_dismissed',
+    opts: { userId?: string; comment?: string; resolutionReason?: string }
   ): Promise<CarrierIntelSuggestion | undefined> {
     const now = new Date();
     const updates: Partial<CarrierIntelSuggestion> = {
       status,
       updatedAt: now,
-      comment: opts.comment ?? undefined,
     };
+    if (opts.comment !== undefined) updates.comment = opts.comment;
+    if (opts.resolutionReason !== undefined) updates.resolutionReason = opts.resolutionReason;
     if (status === 'accepted' || status === 'auto_accepted') {
       updates.acceptedAt = now;
       if (opts.userId) updates.acceptedByUserId = opts.userId;
-    } else if (status === 'rejected') {
+    } else if (status === 'rejected' || status === 'auto_dismissed') {
       updates.rejectedAt = now;
       if (opts.userId) updates.rejectedByUserId = opts.userId;
     }

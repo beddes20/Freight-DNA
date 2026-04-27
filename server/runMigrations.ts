@@ -1957,7 +1957,17 @@ export async function runMigrations() {
       CREATE INDEX IF NOT EXISTS idx_carrier_intel_suggestions_status
         ON carrier_intel_suggestions(status)
     `);
-    console.log("[migrations] carrier_intel_suggestions table ensured (Task #193/#194)");
+    // Task #769: resolution_reason column distinguishes auto-resolution audit
+    // reasons (e.g. "auto_resolved_stale") from human accept/reject actions.
+    await clientCarrierIntel.query(`
+      ALTER TABLE carrier_intel_suggestions ADD COLUMN IF NOT EXISTS resolution_reason TEXT
+    `);
+    // Composite index for the nightly stale-cleanup scan.
+    await clientCarrierIntel.query(`
+      CREATE INDEX IF NOT EXISTS idx_carrier_intel_suggestions_pending_age
+        ON carrier_intel_suggestions(org_id, created_at) WHERE status = 'pending'
+    `);
+    console.log("[migrations] carrier_intel_suggestions table ensured (Task #193/#194/#769)");
   } catch (err) {
     console.error("[migrations] carrier_intel_suggestions migration error:", err);
   } finally {

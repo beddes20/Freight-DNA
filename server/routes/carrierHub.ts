@@ -896,4 +896,107 @@ export function registerCarrierHubRoutes(app: Express) {
       res.status(500).json({ error: "Failed to reject suggestion" });
     }
   });
+
+  // ── BULK SUGGESTIONS: ACCEPT / REJECT (Task #769) ─────────────────────────
+  // POST /api/carrier-hub/suggestions/bulk
+  // Body: { ids: string[], action: "accept" | "reject", comment?: string }
+  // Org-scoped: each suggestion is verified to belong to a carrier in the
+  // caller's org before status is touched. Out-of-scope ids are silently
+  // skipped so a stale UI selection can't escalate into a 500.
+  app.post("/api/carrier-hub/suggestions/bulk", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const userId = (req as any).session?.userId as string | undefined;
+      const body = req.body ?? {};
+      const ids: unknown = body.ids;
+      const action: unknown = body.action;
+      const comment: unknown = body.comment;
+
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: "ids must be a non-empty array" });
+      }
+      if (action !== "accept" && action !== "reject") {
+        return res.status(400).json({ error: "action must be 'accept' or 'reject'" });
+      }
+      if (ids.length > 500) {
+        return res.status(400).json({ error: "bulk action limited to 500 suggestions" });
+      }
+      const stringIds = ids.filter((x): x is string => typeof x === "string" && x.length > 0);
+      if (stringIds.length === 0) return res.json({ updated: 0, skipped: 0, ids: [] });
+
+      // Pull the suggestions and join to carrier/org for the scope check.
+      const scoped = await storage.pool.query<{ id: string }>(
+        `SELECT cis.id
+           FROM carrier_intel_suggestions cis
+           JOIN carriers c ON c.id = cis.carrier_id
+          WHERE cis.id = ANY($1::varchar[])
+            AND c.org_id = $2`,
+        [stringIds, org],
+      );
+      const allowedIds = scoped.rows.map(r => r.id);
+      const skipped = stringIds.length - allowedIds.length;
+
+      const targetStatus: 'accepted' | 'rejected' = action === "accept" ? "accepted" : "rejected";
+      let updated = 0;
+      const updatedIds: string[] = [];
+      for (const id of allowedIds) {
+        try {
+          const row = await storage.updateSuggestionStatus(id, targetStatus, {
+            userId,
+            comment: typeof comment === "string" && comment ? comment : undefined,
+          });
+          if (row) {
+            updated++;
+            updatedIds.push(row.id);
+          }
+        } catch (err) {
+          console.error(`[carrier-hub] bulk ${action} failed for ${id}:`, err);
+        }
+      }
+      res.json({ updated, skipped, ids: updatedIds });
+    } catch (err) {
+      console.error("[carrier-hub] bulk suggestion error:", err);
+      res.status(500).json({ error: "Failed to bulk update suggestions" });
+    }
+  });
+
+  // POST /api/carrier-hub/:id/suggestions/accept-all
+  // Accept every pending suggestion for one carrier in a single click.
+  // Body: { comment?: string }
+  app.post("/api/carrier-hub/:id/suggestions/accept-all", requireAuth, async (req, res) => {
+    try {
+      const org = orgId(req);
+      const carrierId = pStr(req.params.id);
+      const userId = (req as any).session?.userId as string | undefined;
+      const comment: unknown = (req.body ?? {}).comment;
+
+      const [carrier] = await db
+        .select({ id: carriers.id })
+        .from(carriers)
+        .where(and(eq(carriers.id, carrierId), eq(carriers.orgId, org)));
+      if (!carrier) return res.status(404).json({ error: "Carrier not found" });
+
+      const pending = await storage.getSuggestionsForCarrier(carrierId, "pending");
+      let updated = 0;
+      const updatedIds: string[] = [];
+      for (const s of pending) {
+        try {
+          const row = await storage.updateSuggestionStatus(s.id, "accepted", {
+            userId,
+            comment: typeof comment === "string" && comment ? comment : undefined,
+          });
+          if (row) {
+            updated++;
+            updatedIds.push(row.id);
+          }
+        } catch (err) {
+          console.error(`[carrier-hub] accept-all failed for ${s.id}:`, err);
+        }
+      }
+      res.json({ updated, ids: updatedIds });
+    } catch (err) {
+      console.error("[carrier-hub] accept-all suggestions error:", err);
+      res.status(500).json({ error: "Failed to accept all suggestions" });
+    }
+  });
 }

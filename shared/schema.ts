@@ -2048,7 +2048,7 @@ export type EmailConversationReadState = typeof emailConversationReadStates.$inf
 
 // ─── Carrier Intel Suggestions (Task #193) ───────────────────────────────────
 
-export const carrierIntelSuggestionStatuses = ["pending", "accepted", "rejected", "auto_accepted"] as const;
+export const carrierIntelSuggestionStatuses = ["pending", "accepted", "rejected", "auto_accepted", "auto_dismissed"] as const;
 export type CarrierIntelSuggestionStatus = typeof carrierIntelSuggestionStatuses[number];
 
 export const carrierIntelSuggestionTypes = [
@@ -2082,6 +2082,9 @@ export const carrierIntelSuggestions = pgTable("carrier_intel_suggestions", {
   confidenceScore: integer("confidence_score").notNull().default(50),
   status: text("status").notNull().default("pending"),
   comment: text("comment"),
+  // Task #769: distinguishes auto-resolution audit reasons (e.g.
+  // "auto_resolved_stale") from human accept/reject decisions.
+  resolutionReason: text("resolution_reason"),
   acceptedByUserId: varchar("accepted_by_user_id"),
   rejectedByUserId: varchar("rejected_by_user_id"),
   acceptedAt: timestamp("accepted_at"),

@@ -1128,3 +1128,50 @@ export async function fetchVoicemailAudio(
     return null;
   }
 }
+
+// ─── Direct messaging (Task #769) ─────────────────────────────────────────
+// Best-effort Webex DM helper for rep nudges/digests. Uses a bot token
+// configured via WEBEX_BOT_TOKEN if present; gracefully no-ops otherwise so
+// the calling scheduler doesn't crash when Webex is not wired.
+
+export function webexBotConfigured(): boolean {
+  return !!process.env.WEBEX_BOT_TOKEN;
+}
+
+export interface WebexDirectMessageResult {
+  ok: boolean;
+  status: number;
+  error?: string;
+}
+
+export async function sendWebexDirectMessage(opts: {
+  toEmail: string;
+  text: string;
+  markdown?: string;
+}): Promise<WebexDirectMessageResult> {
+  const token = process.env.WEBEX_BOT_TOKEN;
+  if (!token) return { ok: false, status: 0, error: "WEBEX_BOT_TOKEN not configured" };
+  if (!opts.toEmail || !opts.toEmail.includes("@")) {
+    return { ok: false, status: 0, error: "invalid recipient email" };
+  }
+  try {
+    const body = {
+      toPersonEmail: opts.toEmail,
+      text: opts.text,
+      ...(opts.markdown ? { markdown: opts.markdown } : {}),
+    };
+    const result = await webexFetch<{ id: string }>("https://webexapis.com/v1/messages", {
+      method: "POST",
+      token,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      maxRetries: 1,
+    });
+    if (!result.ok) {
+      return { ok: false, status: result.status, error: result.error ?? `HTTP ${result.status}` };
+    }
+    return { ok: true, status: result.status };
+  } catch (err) {
+    return { ok: false, status: 0, error: err instanceof Error ? err.message : String(err) };
+  }
+}

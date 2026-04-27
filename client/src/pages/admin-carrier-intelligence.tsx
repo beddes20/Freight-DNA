@@ -601,6 +601,8 @@ export default function AdminCarrierIntelligencePage() {
         </CardContent>
       </Card>
 
+      <NeedsReviewSettingsCard />
+
       <AlertDialog open={!!forceCutoverConfirm} onOpenChange={(o) => !o && setForceCutoverConfirm(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -628,6 +630,166 @@ export default function AdminCarrierIntelligencePage() {
         Foundation task #368 — downstream scoring/pricing will read from <code>load_fact</code> via the carrierIntelligence service once cutover is active.
       </div>
     </div>
+  );
+}
+
+/**
+ * Needs-Review controls (Task #769).
+ *
+ * Org-scoped settings that govern the nightly stale-cleanup pass and the
+ * weekday morning rep nudge. The card also exposes a "Run cleanup now"
+ * button that triggers the same routine the cron job runs at 02:15 UTC,
+ * so an admin can drive the queue to zero on demand without waiting.
+ *
+ * Lives at the bottom of the existing admin page rather than getting its
+ * own route — keeps the entire carrier-intelligence config story in one
+ * place per the task spec.
+ */
+interface NeedsReviewSettings {
+  softThreshold: number;
+  stalenessDays: number;
+  dailyNudgeEnabled: boolean;
+}
+
+function NeedsReviewSettingsCard() {
+  const { toast } = useToast();
+  const [draft, setDraft] = useState<NeedsReviewSettings | null>(null);
+
+  const settingsQuery = useQuery<{ settings: NeedsReviewSettings }>({
+    queryKey: ["/api/admin/carrier-intelligence/needs-review-settings"],
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: async (payload: NeedsReviewSettings) => {
+      const res = await apiRequest("PUT", "/api/admin/carrier-intelligence/needs-review-settings", payload);
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Needs Review settings saved" });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/carrier-intelligence/needs-review-settings"] });
+      setDraft(null);
+    },
+    onError: (err: Error) => toast({ title: "Save failed", description: err.message, variant: "destructive" }),
+  });
+
+  const cleanupMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/carrier-intelligence/run-cleanup-now", {});
+      return res.json();
+    },
+    onSuccess: (data: { result?: { autoAccepted: number; autoDismissed: number; scanned: number } }) => {
+      const r = data.result;
+      toast({
+        title: "Cleanup complete",
+        description: r
+          ? `Scanned ${r.scanned} • auto-accepted ${r.autoAccepted} • auto-dismissed ${r.autoDismissed}`
+          : "Done",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/carrier-hub"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/carrier-hub/pending-intel-count"] });
+    },
+    onError: (err: Error) => toast({ title: "Cleanup failed", description: err.message, variant: "destructive" }),
+  });
+
+  const current = draft ?? settingsQuery.data?.settings ?? null;
+  const dirty = !!draft && !!settingsQuery.data && (
+    draft.softThreshold !== settingsQuery.data.settings.softThreshold ||
+    draft.stalenessDays !== settingsQuery.data.settings.stalenessDays ||
+    draft.dailyNudgeEnabled !== settingsQuery.data.settings.dailyNudgeEnabled
+  );
+
+  function patch(p: Partial<NeedsReviewSettings>) {
+    const base = draft ?? settingsQuery.data?.settings;
+    if (!base) return;
+    setDraft({ ...base, ...p });
+  }
+
+  return (
+    <Card data-testid="card-needs-review-settings">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><Clock className="h-5 w-5" /> Needs Review automation</CardTitle>
+        <CardDescription>
+          Auto-resolves stale pending carrier intelligence suggestions and nudges reps each weekday morning.
+          High-confidence safe-category suggestions are auto-accepted past the staleness window; everything else is auto-dismissed
+          with reason <code>auto_resolved_stale</code>.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {settingsQuery.isLoading || !current ? (
+          <div className="text-muted-foreground text-sm"><Loader2 className="h-4 w-4 inline mr-2 animate-spin" />Loading…</div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="needs-review-soft-threshold">Soft confidence threshold</Label>
+                <Input
+                  id="needs-review-soft-threshold"
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={current.softThreshold}
+                  onChange={(e) => patch({ softThreshold: Math.max(0, Math.min(100, Number(e.target.value) || 0)) })}
+                  data-testid="input-soft-threshold"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Stale safe-category suggestions at or above this score are auto-accepted (default 60).
+                </p>
+              </div>
+              <div>
+                <Label htmlFor="needs-review-staleness-days">Staleness window (days)</Label>
+                <Input
+                  id="needs-review-staleness-days"
+                  type="number"
+                  min={1}
+                  max={90}
+                  value={current.stalenessDays}
+                  onChange={(e) => patch({ stalenessDays: Math.max(1, Math.min(90, Number(e.target.value) || 1)) })}
+                  data-testid="input-staleness-days"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Pending suggestions older than this become eligible for auto-resolution (default 14).
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between border rounded-md p-3">
+              <div>
+                <Label htmlFor="needs-review-daily-nudge" className="font-medium">Daily rep nudge</Label>
+                <p className="text-xs text-muted-foreground">
+                  Weekday morning notification + email (and Webex DM when configured) summarizing each rep's pending intel.
+                </p>
+              </div>
+              <Switch
+                id="needs-review-daily-nudge"
+                checked={current.dailyNudgeEnabled}
+                onCheckedChange={(v) => patch({ dailyNudgeEnabled: v })}
+                data-testid="switch-daily-nudge"
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                onClick={() => draft && saveMutation.mutate(draft)}
+                disabled={!dirty || saveMutation.isPending}
+                data-testid="button-save-needs-review-settings"
+              >
+                {saveMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                Save settings
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => cleanupMutation.mutate()}
+                disabled={cleanupMutation.isPending}
+                data-testid="button-run-cleanup-now"
+              >
+                {cleanupMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+                Run cleanup now
+              </Button>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

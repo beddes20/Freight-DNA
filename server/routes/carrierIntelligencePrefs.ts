@@ -18,6 +18,11 @@
 import type { Express, Request, Response } from "express";
 import { requireAuth, getCurrentUser } from "../auth";
 import { storage } from "../storage";
+import {
+  getNeedsReviewSettings,
+  setNeedsReviewSettings,
+  runCarrierIntelStaleCleanupForOrg,
+} from "../services/carrierIntelSuggestionExpiration";
 
 const USER_KEY = (orgId: string, userId: string) => `carrier_intel:user_prefs:${orgId}:${userId}`;
 const ORG_DEFAULTS_KEY = (orgId: string) => `carrier_intel:org_defaults:${orgId}`;
@@ -109,6 +114,48 @@ export function registerCarrierIntelligencePrefsRoutes(app: Express) {
     const next = mergePrefs(DEFAULT_PREFS, req.body ?? {});
     await storage.setSetting(ORG_DEFAULTS_KEY(u.organizationId), JSON.stringify(next));
     return res.json({ ok: true, defaults: next });
+  });
+
+  // ── Needs-Review settings (Task #769) ─────────────────────────────────────
+  // Org-level controls for the "Needs Review" auto-resolution + nudge job:
+  //   softThreshold      — confidence cutoff that a stale safe-category
+  //                        suggestion must clear to be auto-accepted (else
+  //                        it's auto_dismissed). Default 60.
+  //   stalenessDays      — age in days before a pending suggestion becomes
+  //                        eligible for auto-resolution. Default 14.
+  //   dailyNudgeEnabled  — whether the weekday morning rep nudge runs at
+  //                        all for this org. Default true.
+  app.get("/api/admin/carrier-intelligence/needs-review-settings", requireAuth, async (req: Request, res: Response) => {
+    const u = await getCurrentUser(req);
+    if (!u?.organizationId) return res.status(401).json({ error: "Unauthorized" });
+    if (!ADMIN_ROLES.has(u.role ?? "")) return res.status(403).json({ error: "Forbidden" });
+    const settings = await getNeedsReviewSettings(u.organizationId);
+    return res.json({ settings });
+  });
+
+  app.put("/api/admin/carrier-intelligence/needs-review-settings", requireAuth, async (req: Request, res: Response) => {
+    const u = await getCurrentUser(req);
+    if (!u?.organizationId) return res.status(401).json({ error: "Unauthorized" });
+    if (!ADMIN_ROLES.has(u.role ?? "")) return res.status(403).json({ error: "Forbidden" });
+    const settings = await setNeedsReviewSettings(u.organizationId, req.body ?? {});
+    return res.json({ ok: true, settings });
+  });
+
+  // POST /api/admin/carrier-intelligence/run-cleanup-now
+  // Manual trigger for the nightly stale-cleanup job, scoped to the
+  // calling admin's org. Returns the same result shape the scheduler logs
+  // so the admin UI can show "Auto-accepted X · Auto-dismissed Y".
+  app.post("/api/admin/carrier-intelligence/run-cleanup-now", requireAuth, async (req: Request, res: Response) => {
+    const u = await getCurrentUser(req);
+    if (!u?.organizationId) return res.status(401).json({ error: "Unauthorized" });
+    if (!ADMIN_ROLES.has(u.role ?? "")) return res.status(403).json({ error: "Forbidden" });
+    try {
+      const result = await runCarrierIntelStaleCleanupForOrg(u.organizationId);
+      return res.json({ ok: true, result });
+    } catch (err) {
+      console.error("[carrier-intel-cleanup] manual trigger error:", err);
+      return res.status(500).json({ ok: false, error: "Cleanup failed" });
+    }
   });
 }
 
