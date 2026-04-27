@@ -115,6 +115,13 @@ const customerFacingItems: NavItem[] = [
   },
   { title: "Coaching",        url: "/coaching",        icon: Sparkles, description: "Coaching notes and rep development plans.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
   { title: "Rep Scorecard",   url: "/rep-scorecard",   icon: Medal,    description: "Compare reps and review performance metrics.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
+  {
+    title: "Conversations",
+    url: "/conversations",
+    icon: MessageSquare,
+    description: "Inbound carrier and customer messages.",
+    roles: ["admin", "director", "national_account_manager", "sales_director", "account_manager", "sales"],
+  },
 ];
 
 // Task #742 — chat-style AI surfaces (Today's Priorities, ValueIQ, AI
@@ -560,9 +567,11 @@ export function AppSidebar() {
                   badge={
                     item.title === "Customer Quotes" && staleFollowupCount > 0
                       ? staleFollowupCount
-                      : undefined
+                      : item.title === "Conversations"
+                        ? conversationsWaitingCount
+                        : undefined
                   }
-                  badgeColor="amber"
+                  badgeColor={item.title === "Conversations" ? "red" : "amber"}
                 />
               ))}
             </CollapsibleGroup>
