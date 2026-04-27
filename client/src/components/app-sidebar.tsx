@@ -539,13 +539,11 @@ export function AppSidebar() {
                   isActive={isActive(item.url)}
                   overrides={tooltipOverrides}
                   badge={
-                    item.title === "Today's Priorities" && dailyWorkspaceCount > 0
-                      ? dailyWorkspaceCount
-                      : item.title === "Customer Quotes" && staleFollowupCount > 0
-                        ? staleFollowupCount
-                        : undefined
+                    item.title === "Customer Quotes" && staleFollowupCount > 0
+                      ? staleFollowupCount
+                      : undefined
                   }
-                  badgeColor={item.title === "Customer Quotes" ? "amber" : "green"}
+                  badgeColor="amber"
                 />
               ))}
             </CollapsibleGroup>
