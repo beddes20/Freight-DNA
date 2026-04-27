@@ -62,7 +62,11 @@ export function LogTouchFab() {
       onClick={handleClick}
       title="Log Touch (Shift+T)"
       aria-label="Log a touch"
-      className="fixed bottom-[7.5rem] md:bottom-[5.5rem] right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-full shadow-lg bg-primary text-primary-foreground hover:bg-primary/90 active:scale-95 transition-all duration-150 text-sm font-medium"
+      // Task #773 — drop the bright primary fill that read as a separate
+      // brand color on the dark dashboard. Match the muted `card` surface
+      // used by other dashboard panels so the FAB feels like part of the
+      // dashboard chrome instead of a foreign sticker.
+      className="fixed bottom-[7.5rem] md:bottom-[5.5rem] right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-full shadow-lg bg-card text-card-foreground border border-border hover:bg-accent hover:text-accent-foreground active:scale-95 transition-all duration-150 text-sm font-medium"
       style={{ boxShadow: "0 4px 20px rgba(0,0,0,0.25)" }}
     >
       <PhoneCall className="h-4 w-4 shrink-0" />

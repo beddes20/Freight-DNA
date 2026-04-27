@@ -11,6 +11,7 @@ import { z } from "zod";
 import { eq, and, desc, ilike, sql, inArray, gte, lte, isNull } from "drizzle-orm";
 import { db } from "../storage";
 import { storage } from "../storage";
+import { getVisibleCompanyIds } from "../auth";
 import {
   companies, contacts, tasks, touchpoints, users, freightOpportunities, type User,
   loadFact, carrierRecommendation, carrierScorecardFact,
@@ -1225,6 +1226,16 @@ export const TOOLS: AgentTool[] = [
       let cards: Array<typeof nbaCards.$inferSelect> = teamScope
         ? await storage.getVisibleNbaCardsForOrg(ctx.organizationId, lim * 4)
         : await storage.getVisibleNbaCards(ctx.rep.id, lim * 4);
+      // Task #773 — when answering for a single rep (not the whole org),
+      // intersect with their visible-company set so a Webex missed-call card
+      // attributed to their extension can't surface a foreign account here.
+      if (!teamScope) {
+        const visibleIds = await getVisibleCompanyIds(ctx.rep);
+        if (visibleIds !== null) {
+          const visibleSet = new Set(visibleIds);
+          cards = cards.filter(c => !c.companyId || visibleSet.has(c.companyId));
+        }
+      }
       if (args.rule_type) cards = cards.filter(c => c.ruleType === String(args.rule_type));
       if (args.company_name) {
         const q = String(args.company_name).toLowerCase();

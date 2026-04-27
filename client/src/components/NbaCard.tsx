@@ -305,7 +305,10 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
             </span>
           )}
           {isLaneCapacityCard && card.urgencyScore > 0 && (
-            <span className="flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/25">
+            // Task #773 — replace the amber wash with a neutral surface so
+            // the lane chip blends into the dark card body. Outcome badges
+            // above still carry the color signal.
+            <span className="flex items-center gap-0.5 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-white/8 text-white/75 border border-white/10">
               <Truck className="w-2.5 h-2.5" />
               Lane {card.urgencyScore}
             </span>
@@ -325,7 +328,10 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
         {card.companyName && !hideCompanyLink && (
           <a
             href={card.companyId ? `/companies/${card.companyId}` : undefined}
-            className="text-xs font-semibold text-white hover:text-amber-400 transition-colors truncate flex items-center gap-1"
+            // Task #773 — drop the bright amber hover so the card body
+            // reads as a sibling of the dark dashboard portlets. Keep
+            // outcome badges as the carriers of color signal.
+            className="text-xs font-semibold text-white hover:text-white/85 transition-colors truncate flex items-center gap-1"
             data-testid={`nba-card-company-link-${card.id}`}
             onClick={() => recordAiEvent({
               surface: "nba_card",
@@ -345,7 +351,9 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
             <div className="flex flex-wrap items-center gap-1">
               {card.atStakeAmount != null && Number(card.atStakeAmount) > 0 && (
                 <span
-                  className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 font-semibold"
+                  // Task #773 — emerald reads as "money" without the
+                  // glowing amber wash that made every card look alarming.
+                  className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/12 border border-emerald-500/25 text-emerald-300 font-semibold"
                   title={card.atStakeBasis ?? undefined}
                   data-testid={`nba-card-at-stake-${card.id}`}
                 >
@@ -373,7 +381,9 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
             </div>
             {card.atStakeAmount != null && Number(card.atStakeAmount) > 0 && card.atStakeBasis && (
               <p
-                className="text-[10px] leading-tight text-amber-300/70"
+                // Task #773 — basis hint reads as muted secondary text
+                // instead of glowing amber.
+                className="text-[10px] leading-tight text-white/45"
                 data-testid={`nba-card-at-stake-basis-${card.id}`}
               >
                 Basis: {card.atStakeBasis}
@@ -471,9 +481,11 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
       {/* Bottom: suggested action + action buttons */}
       <div className="flex flex-col gap-1.5 mt-2">
         {/* Action suggestion — clamped to 1 line */}
-        <div className="flex items-center gap-1.5 bg-amber-500/8 rounded px-2 py-1 border border-amber-500/15">
-          <ArrowRight className="w-3 h-3 text-amber-400 shrink-0" />
-          <p className="text-[11px] text-amber-100/90 line-clamp-1">{card.suggestedAction}</p>
+        {/* Task #773 — neutral surface; outcome badges already indicate
+            urgency, so the action strip doesn't need an amber wash. */}
+        <div className="flex items-center gap-1.5 bg-white/5 rounded px-2 py-1 border border-white/10">
+          <ArrowRight className="w-3 h-3 text-white/55 shrink-0" />
+          <p className="text-[11px] text-white/80 line-clamp-1">{card.suggestedAction}</p>
         </div>
 
         {/* Action row */}
@@ -526,7 +538,7 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
               size="sm"
               onClick={() => setShowReadyToAct(v => !v)}
               disabled={resolveMutation.isPending}
-              className="h-6 text-[10px] px-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/30"
+              className="h-6 text-[10px] px-2 bg-white/10 hover:bg-white/15 text-white/85 border border-white/15"
               data-testid={`nba-card-ready-to-act-${card.id}`}
             >
               <Sparkles className="w-3 h-3 mr-0.5" />
@@ -551,7 +563,7 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
               size="sm"
               onClick={() => setShowCarrierOutreach(true)}
               disabled={resolveMutation.isPending}
-              className="h-6 text-[10px] px-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30"
+              className="h-6 text-[10px] px-2 bg-white/10 hover:bg-white/15 text-white/85 border border-white/15"
               data-testid={`nba-card-generate-carrier-outreach-${card.id}`}
             >
               <Truck className="w-3 h-3 mr-0.5" />
@@ -564,7 +576,7 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
             >
               <Button
                 size="sm"
-                className="h-6 text-[10px] px-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30"
+                className="h-6 text-[10px] px-2 bg-white/10 hover:bg-white/15 text-white/85 border border-white/15"
               >
                 <ArrowRight className="w-3 h-3 mr-0.5" />
                 View Quote

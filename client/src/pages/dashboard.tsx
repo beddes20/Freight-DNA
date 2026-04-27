@@ -2691,24 +2691,30 @@ function TryTodayQueueBanner(): JSX.Element | null {
   // when they're on the classic dashboard with the old preference.
   if (data.defaultToTodayQueue === true) return null;
 
+  // Task #773 — render as a quiet, dark-themed callout that sits flush with
+  // the rest of the dashboard portlets instead of a bright amber alert.
   return (
     <div
-      className="flex items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/40 px-4 py-2.5"
+      className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card text-card-foreground px-4 py-2.5"
       data-testid="banner-try-today-queue"
     >
       <div className="flex items-center gap-2 text-sm">
-        <span className="font-medium text-amber-900 dark:text-amber-100">Try the new Today queue</span>
-        <span className="text-xs text-amber-800/80 dark:text-amber-200/80">
+        <span className="font-medium text-foreground">Try the new Today queue</span>
+        <span className="text-xs text-muted-foreground">
           One prioritized list — replies, hot LWQ lanes, urgent freight, SLA quotes.
         </span>
       </div>
       <div className="flex items-center gap-2 shrink-0">
-        <Link href="/today" className="text-xs underline text-amber-900 dark:text-amber-100" data-testid="link-preview-today">
+        <Link
+          href="/today"
+          className="text-xs underline text-muted-foreground hover:text-foreground"
+          data-testid="link-preview-today"
+        >
           Preview
         </Link>
         <Button
           size="sm"
-          variant="default"
+          variant="outline"
           onClick={() => setPref.mutate(true)}
           disabled={setPref.isPending}
           data-testid="button-make-today-home"

@@ -8931,7 +8931,26 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
         // Default cap is 5 (focused triage) but reps can request up to 50 when
         // they are sorting/filtering by at-stake $ (Task #372 — triage by impact).
         const limit = Math.min(Number(req.query.limit ?? 5), 50);
-        cards = await storage.getVisibleNbaCards(currentUser.id, limit);
+        // Task #773 — Priorities feed must respect getVisibleCompanyIds. The
+        // raw `nbaCards.userId === rep.id` query alone leaks cards whose
+        // attribution rep doesn't own the matched account (e.g. Webex
+        // missed-call cards minted on the rep's extension for an account
+        // outside their book). Fetch a larger window so we still return up
+        // to `limit` cards after the visible-company intersection.
+        const rawCards = await storage.getVisibleNbaCards(currentUser.id, limit * 4);
+        const visibleIds = await getVisibleCompanyIds(currentUser);
+        if (visibleIds === null) {
+          // null = unrestricted (admin); we already handled the portfolio
+          // path above, but keep this branch defensive.
+          cards = rawCards.slice(0, limit);
+        } else {
+          const visibleSet = new Set(visibleIds);
+          // Org-level cards (no companyId) always pass through; cards tied
+          // to a specific company must be inside the rep's visible set.
+          cards = rawCards
+            .filter(c => !c.companyId || visibleSet.has(c.companyId))
+            .slice(0, limit);
+        }
       }
       // Exclude cards tied to archived companies
       const orgCompanies = await storage.getCompanies(currentUser.organizationId);

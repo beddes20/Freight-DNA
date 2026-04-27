@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { pStr, qStr, qOptStr } from "../lib/req";
-import { getCurrentUser, requireAuth, requireUser } from "../auth";
+import { getCurrentUser, requireAuth, requireUser, getVisibleCompanyIds } from "../auth";
 import { storage } from "../storage";
 import {
   webexCredentialsConfigured,
@@ -267,6 +267,77 @@ async function syncCallsForOrg(
     log(`No users in org ${orgId}, skipping sync`);
     return { touchpoints: [], nbaCards: [] };
   }
+  const usersById = new Map(orgUsers.map(u => [u.id, u] as const));
+
+  // Task #773 — re-routing helpers for missed-call NBA card attribution.
+  // When a Webex missed-call card would be created on a rep whose visible
+  // companies don't include the matched account, hand the card off to the
+  // actual account owner (or fall back to an admin so the org-wide
+  // portfolio still surfaces it). The visibility lookup is per-user and
+  // mildly expensive (joins every company in the org), so we memoize per
+  // sync run.
+  const visibleCompanyCache = new Map<string, Set<string> | null>();
+  async function getCachedVisibleSet(userId: string): Promise<Set<string> | null> {
+    if (visibleCompanyCache.has(userId)) return visibleCompanyCache.get(userId)!;
+    const u = usersById.get(userId);
+    if (!u) {
+      visibleCompanyCache.set(userId, new Set());
+      return new Set();
+    }
+    const ids = await getVisibleCompanyIds(u);
+    const set = ids === null ? null : new Set(ids);
+    visibleCompanyCache.set(userId, set);
+    return set;
+  }
+  // Find any user in the org with portfolio-style visibility into the
+  // given company. Preference order:
+  //   1. an admin (org-wide visibility, always)
+  //   2. a director / sales_director / NAM whose team scope already
+  //      includes the account (verified via getCachedVisibleSet)
+  // This guarantees re-routed cards land on someone who can actually
+  // see them — not silently dropped — even in orgs that have no admin
+  // but do have a director or NAM running the portfolio view.
+  const PORTFOLIO_ROLES = new Set([
+    "director",
+    "sales_director",
+    "national_account_manager",
+  ]);
+  async function findPortfolioFallbackOwner(companyId: string): Promise<string | null> {
+    const admin = orgUsers.find(u => u.role === "admin");
+    if (admin) return admin.id;
+    const candidates = orgUsers
+      .filter(u => PORTFOLIO_ROLES.has(u.role))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    for (const u of candidates) {
+      const v = await getCachedVisibleSet(u.id);
+      if (v === null || v.has(companyId)) return u.id;
+    }
+    return null;
+  }
+  async function pickOwnerForMissedCallCard(
+    candidateUserId: string,
+    companyId: string | null,
+  ): Promise<string> {
+    // No company linkage → keep the attributed rep; nothing to route.
+    if (!companyId) return candidateUserId;
+    const visible = await getCachedVisibleSet(candidateUserId);
+    if (visible === null || visible.has(companyId)) return candidateUserId;
+    // Attributed rep can't see this account. Prefer the company's owner
+    // (assignedTo / salesPersonId), then any portfolio viewer in the
+    // org so the card still surfaces in some leadership queue.
+    try {
+      const company = await storage.getCompany(companyId);
+      if (company) {
+        const ownerId = company.assignedTo ?? company.salesPersonId ?? null;
+        if (ownerId && usersById.has(ownerId)) return ownerId;
+      }
+    } catch {
+      // fall through to portfolio-viewer fallback
+    }
+    const fallback = await findPortfolioFallbackOwner(companyId);
+    if (fallback) return fallback;
+    return candidateUserId;
+  }
 
   const createdTouchpoints: any[] = [];
   const createdNbaCards: any[] = [];
@@ -404,9 +475,19 @@ async function syncCallsForOrg(
         );
         const urgency = minutesAgo < 60 ? 90 : minutesAgo < 360 ? 60 : 30;
 
+        // Task #773 — re-route the card if the attributed rep can't see the
+        // matched account (e.g. an inbound call rang on Jared's extension
+        // but the company belongs to another rep's book). The /api/nba/cards
+        // route now intersects with getVisibleCompanyIds, so without this
+        // step the card would be silently dropped from every dashboard.
+        const cardOwnerId = await pickOwnerForMissedCallCard(
+          attributedUserId,
+          matchedContact.companyId || null,
+        );
+
         const nbaCard = await storage.createNbaCard({
           orgId,
-          userId: attributedUserId,
+          userId: cardOwnerId,
           companyId: matchedContact.companyId || null,
           contactId: matchedContact.id,
           companyName: company?.name || null,
@@ -1752,9 +1833,62 @@ export function registerWebexRoutes(app: Express) {
           return user!.id;
         }
       }
-      const assignTo = missed.contactId
+      // Task #773 — when re-creating a card via the callback portlet, the
+      // attributed rep may not own the matched account (e.g. the call rang
+      // on Jared's extension but the company belongs to another rep). Defer
+      // to the company owner so the new card lands on the correct rep's
+      // dashboard instead of leaking back into the wrong queue. Mirrors
+      // the CDR sync helper in this same file (see pickOwnerForMissedCallCard).
+      async function pickAccountOwnerOrSelf(candidateId: string): Promise<string> {
+        // Capture into a local so TS's narrowing from the early-return guard
+        // above survives into this inner function's closure.
+        const m = missed!;
+        if (!m.companyId) return candidateId;
+        const candidate = await storage.getUser(candidateId);
+        if (!candidate) return candidateId;
+        const visible = await getVisibleCompanyIds(candidate);
+        if (visible === null || visible.includes(m.companyId)) return candidateId;
+        try {
+          const company = await storage.getCompany(m.companyId);
+          if (company) {
+            const ownerId = company.assignedTo ?? company.salesPersonId ?? null;
+            if (ownerId) return ownerId;
+          }
+        } catch {
+          // fall through
+        }
+        // Portfolio-viewer fallback: prefer admin (org-wide), else any
+        // director / sales_director / NAM whose team scope already covers
+        // the company. Guarantees the card surfaces in some leadership
+        // queue even in orgs that have no admin user, instead of being
+        // silently suppressed by the visibility guard on /api/nba/cards.
+        try {
+          const orgUsers = await storage.getUsers(user!.organizationId);
+          const admin = orgUsers.find(u => u.role === "admin");
+          if (admin) return admin.id;
+          const portfolioRoles = new Set([
+            "director",
+            "sales_director",
+            "national_account_manager",
+          ]);
+          const candidates = orgUsers
+            .filter(u => portfolioRoles.has(u.role))
+            .sort((a, b) => a.id.localeCompare(b.id));
+          for (const u of candidates) {
+            const v = await getVisibleCompanyIds(u);
+            if (v === null || v.includes(m.companyId)) return u.id;
+          }
+        } catch {
+          // ignore
+        }
+        return candidateId;
+      }
+      const tentativeAssignTo = missed.contactId
         ? (missed.attributedUserId ?? user.id)
         : (missed.attributedUserId ?? await pickCoordinator());
+      const assignTo = missed.contactId
+        ? await pickAccountOwnerOrSelf(tentativeAssignTo)
+        : tentativeAssignTo;
       const play = getPlayForRuleType("webex_missed_call");
       const contact = missed.contactId ? await storage.getContact(missed.contactId) : null;
       const company = missed.companyId ? await storage.getCompany(missed.companyId) : null;
