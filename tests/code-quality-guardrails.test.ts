@@ -734,17 +734,17 @@ const perfHintsSrc = readFile("server/lib/perfHints.ts");
 
 // 14a. ENDPOINT_BUDGETS lists all 12 routes called out in the task plan.
 const REQUIRED_BUDGET_KEYS = [
-  "/api/daily-priorities",
+  "/api/today-queue",
   "/api/nba/cards",
   "/api/lane-inbox",
   "/api/available-freight",
-  "/api/lanes/work-queue",
+  "/api/recurring-lanes/work-queue",
   "/api/carrier-hub",
   "/api/customer-quotes",
-  "/api/conversations",
+  "/api/internal/conversations",
   "/api/dashboard/summary",
   "/api/calls/trendline",
-  "/api/ai-center/summary",
+  "/api/ai-center/fleet",
   "/api/valueiq/today",
 ];
 for (const key of REQUIRED_BUDGET_KEYS) {

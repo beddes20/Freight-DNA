@@ -187,11 +187,22 @@ async function main() {
   console.log("\n── 5. findBudgetBreaches honors 20-request minimum ──");
   // Use a real budgeted route so findBudgetBreaches considers it.
   const budgetedRoute = "GET /api/dashboard/summary"; // budget = 800
+  // Use the dev bypass user's real org so notifications can fan out to a
+  // real admin row. Tests reuse this org for both 5/6 to keep the data set
+  // small and predictable.
+  const devUserId = process.env.DEV_AUTH_BYPASS_USER_ID || "";
+  if (!devUserId) throw new Error("DEV_AUTH_BYPASS_USER_ID must be set for the perf tests");
+  const devUserRows = await db
+    .select({ organizationId: sql<string>`organization_id` })
+    .from(sql`users`)
+    .where(sql`id = ${devUserId}`);
+  const breachOrgId = devUserRows[0]?.organizationId;
+  if (!breachOrgId) throw new Error("dev bypass user has no organization_id");
   await db.delete(endpointPerfSamples).where(eq(endpointPerfSamples.routeKey, budgetedRoute));
   // Only 5 samples — should NOT be reported (below the 20-req minimum).
   await db.insert(endpointPerfSamples).values(
     Array.from({ length: 5 }, () => ({
-      organizationId: null,
+      organizationId: breachOrgId,
       routeKey: budgetedRoute,
       durationMs: 5_000, // way over budget
       statusCode: 200,
@@ -199,12 +210,15 @@ async function main() {
     })),
   );
   const breachesSparse = await findBudgetBreaches(24);
-  assert("sparse data NOT reported as a breach", !breachesSparse.some((b) => b.routeKey === budgetedRoute));
+  assert(
+    "sparse data NOT reported as a breach",
+    !breachesSparse.some((b) => b.routeKey === budgetedRoute && b.organizationId === breachOrgId),
+  );
 
-  // Now add 20 more, all over budget
+  // Now add 25 more, all over budget — total 30 in this org.
   await db.insert(endpointPerfSamples).values(
     Array.from({ length: 25 }, () => ({
-      organizationId: null,
+      organizationId: breachOrgId,
       routeKey: budgetedRoute,
       durationMs: 5_000,
       statusCode: 200,
@@ -212,28 +226,66 @@ async function main() {
     })),
   );
   const breachesFull = await findBudgetBreaches(24);
-  const breach = breachesFull.find((b) => b.routeKey === budgetedRoute);
+  const breach = breachesFull.find(
+    (b) => b.routeKey === budgetedRoute && b.organizationId === breachOrgId,
+  );
   assert("dense breach IS reported", !!breach);
   if (breach) {
     assertEq("breach budget is 800", breach.budget, 800);
     assert("breach p95 is over budget", breach.p95 > 800);
+    assertEq("breach is org-scoped to the requesting org", breach.organizationId, breachOrgId);
   }
 
+  // ── 5b. Cross-org isolation: a breach in org X must not appear under org Y
+  console.log("\n── 5b. findBudgetBreaches groups by organization ──");
+  const otherOrgId = "perf-test-foreign-org";
+  await db.insert(endpointPerfSamples).values(
+    Array.from({ length: 30 }, () => ({
+      organizationId: otherOrgId,
+      routeKey: budgetedRoute,
+      durationMs: 50, // well under budget for this foreign org
+      statusCode: 200,
+      cacheHint: null,
+    })),
+  );
+  const breachesByOrg = await findBudgetBreaches(24);
+  const foreign = breachesByOrg.find(
+    (b) => b.routeKey === budgetedRoute && b.organizationId === otherOrgId,
+  );
+  assert(
+    "foreign org with healthy latency is NOT a breach",
+    foreign === undefined,
+  );
+  const original = breachesByOrg.find(
+    (b) => b.routeKey === budgetedRoute && b.organizationId === breachOrgId,
+  );
+  assert(
+    "original org's breach still appears (not suppressed by other org's healthy data)",
+    !!original,
+  );
+
   // ── 6. runPerfBudgetBreachCheck — throttle blocks duplicate within 24h ─
-  console.log("\n── 6. breach check throttles per-route per 24h ──");
+  console.log("\n── 6. breach check throttles per (org, route) within 24h ──");
+  const throttleRelatedId = `${breachOrgId}:${budgetedRoute}`;
   // Clear any prior breach notifications so the throttle has a clean slate.
   await db
     .delete(notifications)
     .where(
       and(
         eq(notifications.type, "perf_budget_breach"),
-        eq(notifications.relatedId, budgetedRoute),
+        eq(notifications.relatedId, throttleRelatedId),
       ),
     );
   const r1 = await runPerfBudgetBreachCheck();
-  assert("first run: notified at least one route", r1.notified.length >= 1);
+  assert(
+    "first run: notified at least one (org,route) pair",
+    r1.notified.some((n) => n.organizationId === breachOrgId && n.routeKey === budgetedRoute),
+  );
   const r2 = await runPerfBudgetBreachCheck();
-  assert("second run within 24h: notifies zero routes (throttled)", r2.notified.length === 0);
+  assert(
+    "second run within 24h: that pair is throttled",
+    !r2.notified.some((n) => n.organizationId === breachOrgId && n.routeKey === budgetedRoute),
+  );
 
   // Cleanup the test route's samples + notifications.
   await db.delete(endpointPerfSamples).where(eq(endpointPerfSamples.routeKey, aggRoute));
@@ -243,7 +295,7 @@ async function main() {
     .where(
       and(
         eq(notifications.type, "perf_budget_breach"),
-        eq(notifications.relatedId, budgetedRoute),
+        eq(notifications.relatedId, throttleRelatedId),
       ),
     );
 

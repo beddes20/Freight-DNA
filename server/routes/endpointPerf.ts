@@ -130,10 +130,15 @@ export function registerEndpointPerfRoutes(app: Express) {
         const pass = budget == null ? null : (r.p95 ?? 0) <= budget;
         const tagged = (Number(r.warmHits) || 0) + (Number(r.coldHits) || 0);
         const warmPct = tagged > 0 ? Math.round((Number(r.warmHits) / tagged) * 100) : null;
+        const requests = Number(r.count) || 0;
+        const errors = Number(r.errors) || 0;
+        // errorRate = 5xx percentage over the window (0..100, one decimal).
+        const errorRate = requests > 0 ? Math.round((errors / requests) * 1000) / 10 : 0;
         return {
           routeKey: r.routeKey,
-          requests: Number(r.count) || 0,
-          errors: Number(r.errors) || 0,
+          requests,
+          errors,
+          errorRate,
           warmHits: Number(r.warmHits) || 0,
           coldHits: Number(r.coldHits) || 0,
           warmPct,
@@ -148,7 +153,7 @@ export function registerEndpointPerfRoutes(app: Express) {
       for (const [routeKey, budget] of Object.entries(ENDPOINT_BUDGETS)) {
         if (!seen.has(routeKey)) {
           out.push({
-            routeKey, requests: 0, errors: 0, warmHits: 0, coldHits: 0, warmPct: null,
+            routeKey, requests: 0, errors: 0, errorRate: 0, warmHits: 0, coldHits: 0, warmPct: null,
             p50: 0, p95: 0, p99: 0, budget, pass: null,
           });
         }

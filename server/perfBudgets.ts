@@ -10,17 +10,17 @@
  */
 
 export const ENDPOINT_BUDGETS: Record<string, number> = {
-  "GET /api/daily-priorities": 600,
+  "GET /api/today-queue": 600,
   "GET /api/nba/cards": 500,
   "GET /api/lane-inbox": 600,
   "GET /api/available-freight": 800,
-  "GET /api/lanes/work-queue": 700,
+  "GET /api/recurring-lanes/work-queue": 700,
   "GET /api/carrier-hub": 700,
   "GET /api/customer-quotes": 600,
-  "GET /api/conversations": 700,
+  "GET /api/internal/conversations": 700,
   "GET /api/dashboard/summary": 800,
   "GET /api/calls/trendline": 600,
-  "GET /api/ai-center/summary": 700,
+  "GET /api/ai-center/fleet": 700,
   "GET /api/valueiq/today": 700,
 };
 

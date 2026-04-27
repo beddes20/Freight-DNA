@@ -1,18 +1,20 @@
 /**
  * Task #705 — Daily perf-budget breach notifier.
  *
- * Once per day, compares yesterday's p95 latency for each tracked endpoint
- * against the budget in `perfBudgets.ts`. If a route blew its p95 budget,
- * one notification is created for every admin user — but only if no
- * breach notification for the same route has been written in the last 24h.
- * That throttle keeps the notifications feed clean when an endpoint is
- * persistently slow.
+ * Once per day, compares yesterday's p95 latency for each tracked endpoint —
+ * per organization — against the budget in `perfBudgets.ts`. If a route
+ * blew its p95 budget for an org, one notification is created for every
+ * admin user *in that org* — but only if no breach notification for the
+ * same `(orgId, routeKey)` pair has been written in the last 24h. That
+ * throttle keeps the notifications feed clean when an endpoint is
+ * persistently slow, and the per-org grouping prevents one tenant's perf
+ * problems from spamming admins in unrelated orgs.
  *
  * The notification deep-links into `/admin/endpoint-perf` so the recipient
  * can drill into per-day p95 sparklines immediately.
  */
 import cron from "node-cron";
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, eq, gte, isNotNull, sql } from "drizzle-orm";
 import { db } from "./storage";
 import { endpointPerfSamples, notifications, users } from "@shared/schema";
 import { ENDPOINT_BUDGETS } from "./perfBudgets";
@@ -21,54 +23,76 @@ import { getErrorMessage } from "./lib/errors";
 const NOTIFICATION_TYPE = "perf_budget_breach";
 
 interface BreachRow {
+  organizationId: string;
   routeKey: string;
   budget: number;
   p95: number;
   requests: number;
 }
 
+function throttleKey(organizationId: string, routeKey: string): string {
+  return `${organizationId}:${routeKey}`;
+}
+
 /**
- * Compute which tracked routes blew their p95 budget over the look-back
+ * Compute which (org, route) pairs blew their p95 budget over the look-back
  * window. Pure function over a DB read so it's easy to call from tests.
+ *
+ * Rows with a null organizationId (e.g. unauthenticated 401s) are ignored
+ * — they aren't actionable for any tenant's admin.
  */
 export async function findBudgetBreaches(lookbackHours = 24): Promise<BreachRow[]> {
   const since = new Date(Date.now() - lookbackHours * 3_600_000);
   const rows = await db
     .select({
+      organizationId: endpointPerfSamples.organizationId,
       routeKey: endpointPerfSamples.routeKey,
       count: sql<number>`COUNT(*)::int`,
       p95: sql<number>`PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY ${endpointPerfSamples.durationMs})::int`,
     })
     .from(endpointPerfSamples)
-    .where(gte(endpointPerfSamples.createdAt, since))
-    .groupBy(endpointPerfSamples.routeKey);
+    .where(
+      and(
+        gte(endpointPerfSamples.createdAt, since),
+        isNotNull(endpointPerfSamples.organizationId),
+      ),
+    )
+    .groupBy(endpointPerfSamples.organizationId, endpointPerfSamples.routeKey);
 
   const breaches: BreachRow[] = [];
   for (const r of rows) {
     const budget = ENDPOINT_BUDGETS[r.routeKey];
     if (budget == null) continue;
+    if (!r.organizationId) continue;
     const p95 = Number(r.p95) || 0;
     const requests = Number(r.count) || 0;
     // Require a small minimum sample size to avoid flapping on near-empty
     // days (e.g. weekends). 20 requests is enough for p95 to be stable.
     if (requests < 20) continue;
     if (p95 > budget) {
-      breaches.push({ routeKey: r.routeKey, budget, p95, requests });
+      breaches.push({
+        organizationId: r.organizationId,
+        routeKey: r.routeKey,
+        budget,
+        p95,
+        requests,
+      });
     }
   }
   return breaches;
 }
 
 /**
- * Returns the route keys that have NOT been notified about in the last
- * `throttleHours` hours. Used to keep the feed quiet when an endpoint is
- * persistently slow.
+ * Returns the (org, route) pairs that have NOT been notified about in the
+ * last `throttleHours` hours. Throttling on the composite key keeps one
+ * tenant's persistently-slow endpoint from suppressing alerts for another
+ * tenant on the same route.
  */
 async function filterRecentlyNotified(
-  routeKeys: string[],
+  pairs: Array<{ organizationId: string; routeKey: string }>,
   throttleHours = 24,
-): Promise<string[]> {
-  if (routeKeys.length === 0) return [];
+): Promise<Set<string>> {
+  if (pairs.length === 0) return new Set();
   const since = new Date(Date.now() - throttleHours * 3_600_000);
   const rows = await db
     .select({ relatedId: notifications.relatedId })
@@ -83,7 +107,12 @@ async function filterRecentlyNotified(
   for (const r of rows) {
     if (r.relatedId) recent.add(r.relatedId);
   }
-  return routeKeys.filter((k) => !recent.has(k));
+  const eligible = new Set<string>();
+  for (const p of pairs) {
+    const key = throttleKey(p.organizationId, p.routeKey);
+    if (!recent.has(key)) eligible.add(key);
+  }
+  return eligible;
 }
 
 /**
@@ -93,7 +122,7 @@ async function filterRecentlyNotified(
  */
 export async function runPerfBudgetBreachCheck(): Promise<{
   breaches: BreachRow[];
-  notified: string[];
+  notified: Array<{ organizationId: string; routeKey: string }>;
   adminCount: number;
 }> {
   const breaches = await findBudgetBreaches(24);
@@ -101,43 +130,57 @@ export async function runPerfBudgetBreachCheck(): Promise<{
     return { breaches: [], notified: [], adminCount: 0 };
   }
 
-  const notifiable = await filterRecentlyNotified(
-    breaches.map((b) => b.routeKey),
+  const eligibleKeys = await filterRecentlyNotified(
+    breaches.map((b) => ({ organizationId: b.organizationId, routeKey: b.routeKey })),
     24,
   );
-  if (notifiable.length === 0) {
+  if (eligibleKeys.size === 0) {
     return { breaches, notified: [], adminCount: 0 };
   }
 
-  const admins = await db
-    .select({ id: users.id })
+  // Fetch all admins once, then partition by org so each tenant only sees
+  // its own breach notifications.
+  const adminRows = await db
+    .select({ id: users.id, organizationId: users.organizationId })
     .from(users)
     .where(eq(users.role, "admin"));
-  if (admins.length === 0) {
+  if (adminRows.length === 0) {
     return { breaches, notified: [], adminCount: 0 };
   }
+  const adminsByOrg = new Map<string, string[]>();
+  for (const a of adminRows) {
+    if (!a.organizationId) continue;
+    const arr = adminsByOrg.get(a.organizationId) ?? [];
+    arr.push(a.id);
+    adminsByOrg.set(a.organizationId, arr);
+  }
 
-  const breachesByKey = new Map(breaches.map((b) => [b.routeKey, b]));
+  const notified: Array<{ organizationId: string; routeKey: string }> = [];
   const inserts: Array<typeof notifications.$inferInsert> = [];
-  for (const routeKey of notifiable) {
-    const b = breachesByKey.get(routeKey);
-    if (!b) continue;
-    for (const a of admins) {
+  let adminFanout = 0;
+  for (const b of breaches) {
+    const key = throttleKey(b.organizationId, b.routeKey);
+    if (!eligibleKeys.has(key)) continue;
+    const orgAdmins = adminsByOrg.get(b.organizationId) ?? [];
+    if (orgAdmins.length === 0) continue;
+    notified.push({ organizationId: b.organizationId, routeKey: b.routeKey });
+    for (const adminId of orgAdmins) {
       inserts.push({
-        userId: a.id,
+        userId: adminId,
         type: NOTIFICATION_TYPE,
-        title: `Performance budget breached: ${routeKey}`,
+        title: `Performance budget breached: ${b.routeKey}`,
         body: `p95 was ${b.p95}ms over the last 24h (budget: ${b.budget}ms, ${b.requests} requests). Investigate caches and slow joins.`,
         link: "/admin/endpoint-perf",
-        relatedId: routeKey,
+        relatedId: key,
       });
+      adminFanout += 1;
     }
   }
 
   if (inserts.length > 0) {
     await db.insert(notifications).values(inserts);
   }
-  return { breaches, notified: notifiable, adminCount: admins.length };
+  return { breaches, notified, adminCount: adminFanout };
 }
 
 let scheduled: ReturnType<typeof cron.schedule> | null = null;
@@ -159,7 +202,7 @@ export function initPerfBudgetBreachScheduler(): void {
             return;
           }
           console.log(
-            `[perf-breach] ${r.breaches.length} breach(es); notified ${r.notified.length} route(s) × ${r.adminCount} admin(s)`,
+            `[perf-breach] ${r.breaches.length} breach(es); notified ${r.notified.length} (org,route) pair(s) × ${r.adminCount} admin notification(s)`,
           );
         })
         .catch((err) => {

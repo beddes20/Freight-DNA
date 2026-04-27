@@ -18,6 +18,7 @@ interface RouteRow {
   routeKey: string;
   requests: number;
   errors: number;
+  errorRate: number;
   warmHits: number;
   coldHits: number;
   warmPct: number | null;
@@ -147,7 +148,7 @@ export default function AdminEndpointPerfPage() {
                   <tr className="border-b">
                     <th className="text-left py-2 pr-3">Route</th>
                     <th className="text-right py-2 px-3">Requests</th>
-                    <th className="text-right py-2 px-3">Errors</th>
+                    <th className="text-right py-2 px-3">Error %</th>
                     <th className="text-right py-2 px-3">Warm</th>
                     <th className="text-right py-2 px-3">p50 (ms)</th>
                     <th className="text-right py-2 px-3">p95 (ms)</th>
@@ -162,7 +163,13 @@ export default function AdminEndpointPerfPage() {
                     <tr key={r.routeKey} className={`border-b hover-elevate ${r.pass === false ? "bg-red-500/5" : ""}`} data-testid={`row-route-${r.routeKey.replace(/[^\w]/g, "_")}`}>
                       <td className="py-2 pr-3 font-mono text-xs">{r.routeKey}</td>
                       <td className="text-right py-2 px-3 tabular-nums">{r.requests.toLocaleString()}</td>
-                      <td className="text-right py-2 px-3 tabular-nums">{r.errors > 0 ? <span className="text-red-600 dark:text-red-400">{r.errors}</span> : 0}</td>
+                      <td className="text-right py-2 px-3 tabular-nums" data-testid={`text-error-rate-${r.routeKey.replace(/[^\w]/g, "_")}`}>
+                        {r.errors > 0 ? (
+                          <span className="text-red-600 dark:text-red-400" title={`${r.errors} of ${r.requests} requests`}>{r.errorRate}%</span>
+                        ) : (
+                          <span className="text-muted-foreground">0%</span>
+                        )}
+                      </td>
                       <td className="text-right py-2 px-3 tabular-nums text-muted-foreground" data-testid={`text-warm-${r.routeKey.replace(/[^\w]/g, "_")}`}>
                         {r.warmPct == null ? "—" : `${r.warmPct}%`}
                       </td>
