@@ -4643,4 +4643,62 @@ export async function runMigrations() {
   } finally {
     clientTodaySnoozes.release();
   }
+
+  // Task #700 — AI Engagement Instrumentation table.
+  // Task #701 — Integration health snapshots table.
+  // Task #705 — Endpoint perf samples table.
+  const clientObservability = await pool.connect();
+  try {
+    await clientObservability.query(`
+      CREATE TABLE IF NOT EXISTS ai_engagement_events (
+        id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        user_id         varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        surface         text NOT NULL,
+        feature         text,
+        event_type      text NOT NULL,
+        target_id       text,
+        meta            jsonb,
+        created_at      timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientObservability.query(`CREATE INDEX IF NOT EXISTS ai_eng_org_surface_created_idx ON ai_engagement_events (organization_id, surface, created_at)`);
+    await clientObservability.query(`CREATE INDEX IF NOT EXISTS ai_eng_org_created_idx ON ai_engagement_events (organization_id, created_at)`);
+    await clientObservability.query(`CREATE INDEX IF NOT EXISTS ai_eng_user_created_idx ON ai_engagement_events (user_id, created_at)`);
+
+    await clientObservability.query(`
+      CREATE TABLE IF NOT EXISTS endpoint_perf_samples (
+        id              varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar,
+        route_key       text NOT NULL,
+        duration_ms     integer NOT NULL,
+        status_code     integer NOT NULL,
+        cache_hint      text,
+        created_at      timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientObservability.query(`CREATE INDEX IF NOT EXISTS perf_samples_route_created_idx ON endpoint_perf_samples (route_key, created_at)`);
+    await clientObservability.query(`CREATE INDEX IF NOT EXISTS perf_samples_created_idx ON endpoint_perf_samples (created_at)`);
+
+    await clientObservability.query(`
+      CREATE TABLE IF NOT EXISTS integration_health_snapshots (
+        id                 varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        source             text NOT NULL,
+        connected          boolean NOT NULL,
+        health_state       text NOT NULL,
+        last_success_at    timestamp,
+        last_error_at      timestamp,
+        last_error_message text,
+        breaker_state      text,
+        detail             jsonb,
+        created_at         timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await clientObservability.query(`CREATE INDEX IF NOT EXISTS integration_health_source_created_idx ON integration_health_snapshots (source, created_at)`);
+    console.log("[migrations] observability tables ensured (Tasks #700/#701/#705)");
+  } catch (err) {
+    console.error("[migrations] observability migration error:", err);
+  } finally {
+    clientObservability.release();
+  }
 }

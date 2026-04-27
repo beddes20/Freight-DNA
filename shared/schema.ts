@@ -5618,3 +5618,124 @@ export const graphTenantConsent = pgTable("graph_tenant_consent", {
   mailbox: text("mailbox"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// Task #700: AI Engagement Instrumentation
+// ──────────────────────────────────────────────────────────────────────────
+//
+// Lightweight per-event log so every AI-rendering surface in the app can
+// emit `impression` / `click` / `accept` / `dismiss` / `apply` / `copy` /
+// `thumbs_down` events. The admin engagement page reads aggregates from
+// this table to decide which AI surfaces to keep, merge, or retire.
+//
+// Surface names live in code only (not enforced as enum) so adding a new
+// AI surface doesn't require a migration; the admin page renders an
+// "Unknown surfaces" bucket if anything shows up that isn't in the
+// registry.
+export const AI_ENGAGEMENT_SURFACES = [
+  "nba_card",
+  "daily_priorities",
+  "valueiq",
+  "ai_center",
+  "ai_intelligence_hub",
+  "proactive_nudge",
+  "talking_points",
+  "health_narrative",
+  "touchpoint_summary",
+  "meeting_brief",
+  "weekly_account_review",
+  "ai_email_draft",
+  "ready_to_act",
+  "carrier_recommendation",
+  "spot_quote_intel",
+] as const;
+export type AiEngagementSurface = typeof AI_ENGAGEMENT_SURFACES[number];
+
+export const AI_ENGAGEMENT_EVENT_TYPES = [
+  "impression",
+  "click",
+  "accept",
+  "apply",
+  "copy",
+  "dismiss",
+  "thumbs_up",
+  "thumbs_down",
+] as const;
+export type AiEngagementEventType = typeof AI_ENGAGEMENT_EVENT_TYPES[number];
+
+export const aiEngagementEvents = pgTable(
+  "ai_engagement_events",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    surface: text("surface").notNull(),
+    feature: text("feature"),
+    eventType: text("event_type").notNull(),
+    targetId: text("target_id"),
+    meta: jsonb("meta"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("ai_eng_org_surface_created_idx").on(t.organizationId, t.surface, t.createdAt),
+    index("ai_eng_org_created_idx").on(t.organizationId, t.createdAt),
+    index("ai_eng_user_created_idx").on(t.userId, t.createdAt),
+  ],
+);
+export const insertAiEngagementEventSchema = createInsertSchema(aiEngagementEvents).omit({ id: true, createdAt: true });
+export type InsertAiEngagementEvent = z.infer<typeof insertAiEngagementEventSchema>;
+export type AiEngagementEvent = typeof aiEngagementEvents.$inferSelect;
+
+// ──────────────────────────────────────────────────────────────────────────
+// Task #705: Endpoint performance samples
+// ──────────────────────────────────────────────────────────────────────────
+//
+// Per-request timing for the small set of expensive endpoints we want to
+// guard with explicit p95 budgets. The middleware tags each row with the
+// route key, status, and a cold/warm cache hint so cache regressions are
+// visible in the admin perf page.
+export const endpointPerfSamples = pgTable(
+  "endpoint_perf_samples",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id"),
+    routeKey: text("route_key").notNull(),
+    durationMs: integer("duration_ms").notNull(),
+    statusCode: integer("status_code").notNull(),
+    cacheHint: text("cache_hint"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("perf_samples_route_created_idx").on(t.routeKey, t.createdAt),
+    index("perf_samples_created_idx").on(t.createdAt),
+  ],
+);
+export type EndpointPerfSample = typeof endpointPerfSamples.$inferSelect;
+
+// ──────────────────────────────────────────────────────────────────────────
+// Task #701/#706: External integration health probes & retry events
+// ──────────────────────────────────────────────────────────────────────────
+//
+// `integrationHealthSnapshots` is a tiny rolling table that the probe
+// registry writes to whenever any external integration is checked. The
+// admin Integrations Health Console reads the latest row per source.
+// The "first-time-degraded" notification compares the latest two rows.
+export const integrationHealthSnapshots = pgTable(
+  "integration_health_snapshots",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    source: text("source").notNull(),
+    connected: boolean("connected").notNull(),
+    healthState: text("health_state").notNull(),
+    lastSuccessAt: timestamp("last_success_at"),
+    lastErrorAt: timestamp("last_error_at"),
+    lastErrorMessage: text("last_error_message"),
+    breakerState: text("breaker_state"),
+    detail: jsonb("detail"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("integration_health_source_created_idx").on(t.source, t.createdAt),
+  ],
+);
+export type IntegrationHealthSnapshot = typeof integrationHealthSnapshots.$inferSelect;

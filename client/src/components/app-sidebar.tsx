@@ -114,6 +114,8 @@ const aiItems: NavItem[] = [
   { title: "Today's Priorities", url: "/daily-priorities", icon: ClipboardList, description: "All active NBA signals bucketed by action type — Defend, Quote Now, Follow Up, Grow, Procure Carrier.", roles: DAILY_PRIORITIES_ROLES },
   { title: "ValueIQ",            url: "/valueiq",          icon: Brain,         description: "Daily AI briefing on your top accounts.", roles: VALUEIQ_ROLES },
   { title: "AI Center",          url: "/ai",               icon: Sparkles,      description: "Configure AI agents, approvals, and adapters.", roles: AI_CENTER_ROLES },
+  // Task #700 — engagement instrumentation admin page (admin-only)
+  { title: "AI Engagement",      url: "/admin/ai-engagement", icon: Activity,    description: "Per-surface impressions, CTR, accept rate, and zero-engagement candidates.", roles: ["admin", "director", "sales_director"] },
 ];
 
 const carrierFacingItems: NavItem[] = [
@@ -677,6 +679,26 @@ export function AppSidebar() {
                       <Link href="/admin/webex-health" data-testid="link-admin-webex-health">
                         <Activity className="h-4 w-4" />
                         <span>Webex Health</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {user?.role === "admin" && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/integrations-health"} tooltip={navTooltip("Integrations Health", "Live status of every external integration (SONAR, Graph, Webex, ZoomInfo, OneDrive, TRAC, Stripe).")}>
+                      <Link href="/admin/integrations-health" data-testid="link-admin-integrations-health">
+                        <Activity className="h-4 w-4" />
+                        <span>Integrations Health</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {user?.role === "admin" && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/endpoint-perf"} tooltip={navTooltip("Endpoint Perf", "Per-route p50/p95/p99 latency vs. budget.")}>
+                      <Link href="/admin/endpoint-perf" data-testid="link-admin-endpoint-perf">
+                        <Activity className="h-4 w-4" />
+                        <span>Endpoint Perf</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>

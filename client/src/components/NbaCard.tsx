@@ -9,6 +9,8 @@ import { NbaLogTouchDialog } from "./NbaLogTouchDialog";
 import { CarrierOutreachPanel } from "./CarrierOutreachPanel";
 import { DraftEmailModal } from "./DraftEmailModal";
 import { NbaReadyToActPanel } from "./NbaReadyToActPanel";
+import { recordAiEvent } from "@/lib/aiTelemetry";
+import { WhyThisSuggestion } from "@/components/why-this-suggestion";
 import {
   AlertTriangle,
   Zap,
@@ -153,7 +155,15 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
     if (viewedSent.current) return;
     viewedSent.current = true;
     apiRequest("POST", `/api/nba/cards/${card.id}/view`).catch(() => {});
-  }, [card.id]);
+    // Task #700 — count this card render as one impression so the AI
+    // engagement page can compute CTR / accept-rate per surface.
+    recordAiEvent({
+      surface: "nba_card",
+      eventType: "impression",
+      feature: card.ruleType,
+      targetId: card.id,
+    });
+  }, [card.id, card.ruleType]);
   const isPortfolioRole = ["admin", "director"].includes(currentUser?.role ?? "");
 
   const { data: teamMembersRaw = [] } = useQuery<TeamMember[]>({
@@ -192,6 +202,7 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
 
   function handleAction() {
     resolveMutation.mutate({ action: "actioned" });
+    recordAiEvent({ surface: "nba_card", eventType: "accept", feature: card.ruleType, targetId: card.id });
     toast({ title: "Marked as actioned", description: `Card for ${card.companyName} closed.` });
   }
 
@@ -199,12 +210,20 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
     const d = new Date();
     d.setDate(d.getDate() + 3);
     resolveMutation.mutate({ action: "snoozed", snoozeUntil: d.toISOString().split("T")[0] });
+    recordAiEvent({ surface: "nba_card", eventType: "click", feature: `${card.ruleType}:snooze`, targetId: card.id });
     toast({ title: "Snoozed 3 days", description: "Card will return in 3 days." });
   }
 
   function handleDismiss() {
     if (!dismissValue) return;
     resolveMutation.mutate({ action: "dismissed", dismissReason: dismissValue });
+    recordAiEvent({
+      surface: "nba_card",
+      eventType: "dismiss",
+      feature: card.ruleType,
+      targetId: card.id,
+      meta: { reason: dismissValue },
+    });
     toast({ title: "Card dismissed" });
     setShowDismiss(false);
   }
@@ -359,6 +378,14 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
 
         {/* Why this now — clamped to 2 lines */}
         <p className="text-xs text-white/70 leading-snug line-clamp-2">{card.whyThisNow}</p>
+        <WhyThisSuggestion
+          surface="nba_card"
+          feature={card.ruleType}
+          targetId={card.id}
+          reason={card.whyThisNow}
+          signals={card.signalSummary}
+          testIdSuffix={card.id}
+        />
 
         {/* Signal bullets — max 3, single line each */}
         {bullets.length > 0 && (

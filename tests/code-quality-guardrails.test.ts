@@ -592,6 +592,35 @@ assert(
   "Express Request not augmented with user?: User"
 );
 
+// ── Section 13: Shared resilience helper exists (Task #706) ──────────────────
+//
+// External-API services should converge on a single `resilientFetch` helper
+// instead of each rolling its own timeout / retry / circuit-breaker code.
+// This section enforces that the helper file exists, exports the expected
+// surface, and is paired with the integration probe registry that powers
+// Task #701's Integrations Health Console.
+const httpRetryPath = "server/lib/httpRetry.ts";
+const probeRegistryPath = "server/integrations/probeRegistry.ts";
+const httpRetrySrc = readFile(httpRetryPath);
+const probeRegistrySrc = readFile(probeRegistryPath);
+assert(
+  `${httpRetryPath} — exports resilientFetch`,
+  httpRetrySrc.includes("export async function resilientFetch") ||
+    httpRetrySrc.includes("export function resilientFetch"),
+  "resilientFetch helper missing — Task #706 needs the shared HTTP wrapper to converge service code on one retry/circuit primitive."
+);
+assert(
+  `${httpRetryPath} — implements timeout + backoff`,
+  /timeout/i.test(httpRetrySrc) && /retry|backoff/i.test(httpRetrySrc),
+  "resilientFetch must combine a per-attempt timeout with retry/backoff so callers get bounded latency + transient-error recovery."
+);
+assert(
+  `${probeRegistryPath} — exports recordIntegrationEvent`,
+  probeRegistrySrc.includes("export function recordIntegrationEvent") ||
+    probeRegistrySrc.includes("export async function recordIntegrationEvent"),
+  "recordIntegrationEvent missing — Integrations Health (Task #701) consumes this from resilientFetch via the integration probe registry."
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

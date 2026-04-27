@@ -46,6 +46,9 @@ import AdminUsers from "@/pages/admin-users";
 import AdminCopilotAnalyticsPage from "@/pages/admin-copilot-analytics";
 import AdminCarriers from "@/pages/admin-carriers";
 import AdminWebexHealth from "@/pages/admin-webex-health";
+import AdminAiEngagementPage from "@/pages/admin-ai-engagement";
+import AdminIntegrationsHealthPage from "@/pages/admin-integrations-health";
+import AdminEndpointPerfPage from "@/pages/admin-endpoint-perf";
 import RepCustomers from "@/pages/rep-customers";
 import Financials from "@/pages/financials";
 import HistoricalData from "@/pages/historical-data";
@@ -197,6 +200,9 @@ function Router() {
       <Route path="/admin/copilot-analytics" component={AdminCopilotAnalyticsPage} />
       <Route path="/admin/carriers" component={AdminCarriers} />
       <Route path="/admin/webex-health" component={AdminWebexHealth} />
+      <Route path="/admin/ai-engagement" component={AdminAiEngagementPage} />
+      <Route path="/admin/integrations-health" component={AdminIntegrationsHealthPage} />
+      <Route path="/admin/endpoint-perf" component={AdminEndpointPerfPage} />
       <Route path="/admin/monitored-mailboxes" component={AdminMonitoredMailboxesPage} />
       <Route path="/admin/pod-intake" component={AdminPodIntakePage} />
       <Route path="/my-pods" component={MyPodsPage} />

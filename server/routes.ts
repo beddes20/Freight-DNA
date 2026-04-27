@@ -530,6 +530,13 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  // ── Endpoint-perf timing middleware (Task #705) ─────────────────────────────
+  // Registered FIRST so it captures latency for every API route below — moving
+  // this lower would silently exclude all routes registered before it from the
+  // perf budget dashboard.
+  const { perfTimingMiddleware } = await import("./routes/endpointPerf");
+  app.use(perfTimingMiddleware);
+
   // ── NBA in-process cache ────────────────────────────────────────────────────
   // Declared here (top of registerRoutes) so all touchpoint POST routes can
   // delete stale keys immediately after a new touchpoint is saved, rather than
@@ -2578,6 +2585,18 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerAgentAdminRoutes(app);
   const { registerAgentAnalyticsRoutes } = await import("./routes/agentAnalytics");
   registerAgentAnalyticsRoutes(app);
+  // Task #700: AI engagement instrumentation — batched event ingest + admin overview.
+  const { registerAiEngagementRoutes } = await import("./routes/aiEngagement");
+  registerAiEngagementRoutes(app);
+  // Task #701: Integrations Health Console — admin probe snapshot.
+  const { registerIntegrationsHealthRoutes } = await import("./routes/integrationsHealth");
+  registerIntegrationsHealthRoutes(app);
+  // Task #705: Endpoint performance budgets — admin overview.
+  // perfTimingMiddleware was registered at the very top of registerRoutes
+  // (Task #705) so it captures every route below; we only need to register
+  // the admin-facing perf routes here.
+  const { registerEndpointPerfRoutes } = await import("./routes/endpointPerf");
+  registerEndpointPerfRoutes(app);
   const { registerValueIQRoutes } = await import("./routes/valueiq");
   registerValueIQRoutes(app);
   const { registerAccountReviewRoutes } = await import("./routes/accountReviews");
