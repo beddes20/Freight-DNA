@@ -24,7 +24,7 @@ import { recommendCarriersForLoad } from "../carrierRecommendationEngine";
 import { listAvailableFreightImports } from "../availableFreightImporter";
 import {
   getNationalMarketSummary, getMarketOtris, getLaneVotrisBatch,
-  getLaneMarketRate, buildVotriQualifier,
+  getLaneMarketRate, buildVotriQualifier, withSonarCaller,
 } from "../sonarClient";
 import { tracLaneDirectionSignal } from "../tracAlertEngine";
 import {
@@ -135,19 +135,21 @@ export const TOOLS: AgentTool[] = [
     description: "Live national market data from FreightWaves Sonar: national OTRI, NTI spot $/move, contract VCRPM1, spread.",
     parameters: { type: "object", properties: {} },
     async execute() {
-      try {
-        const pulse = await getNationalMarketSummary();
-        const has = pulse.otri !== null;
-        const sig = !has ? "⚪ No Data" : pulse.otri! > 20 ? "🔴 Hot" : pulse.otri! > 8 ? "🟡 Warm" : "🟢 Cool";
-        const lines = [`FreightWaves Sonar — National Pulse${pulse.isStale ? " ⚠ Stale" : ""}`];
-        if (has) lines.push(`National OTRI: ${pulse.otri!.toFixed(2)}% (${(pulse.otriWoWDelta ?? 0) >= 0 ? "+" : ""}${(pulse.otriWoWDelta ?? 0).toFixed(1)}pp WoW) — ${sig}`);
-        else lines.push(`National OTRI: unavailable`);
-        lines.push(pulse.ntiPerMove !== null ? `NTI Spot: $${pulse.ntiPerMove.toFixed(2)}/move` : "NTI Spot: unavailable");
-        lines.push(pulse.ntiPerMile !== null ? `Contract (VCRPM1): $${pulse.ntiPerMile.toFixed(2)}/mile` : "Contract: unavailable");
-        return { kind: "data", text: lines.join("\n") };
-      } catch {
-        return { kind: "data", text: "Sonar national data temporarily unavailable." };
-      }
+      return withSonarCaller("ai:query_national_rates", async () => {
+        try {
+          const pulse = await getNationalMarketSummary();
+          const has = pulse.otri !== null;
+          const sig = !has ? "⚪ No Data" : pulse.otri! > 20 ? "🔴 Hot" : pulse.otri! > 8 ? "🟡 Warm" : "🟢 Cool";
+          const lines = [`FreightWaves Sonar — National Pulse${pulse.isStale ? " ⚠ Stale" : ""}`];
+          if (has) lines.push(`National OTRI: ${pulse.otri!.toFixed(2)}% (${(pulse.otriWoWDelta ?? 0) >= 0 ? "+" : ""}${(pulse.otriWoWDelta ?? 0).toFixed(1)}pp WoW) — ${sig}`);
+          else lines.push(`National OTRI: unavailable`);
+          lines.push(pulse.ntiPerMove !== null ? `NTI Spot: $${pulse.ntiPerMove.toFixed(2)}/move` : "NTI Spot: unavailable");
+          lines.push(pulse.ntiPerMile !== null ? `Contract (VCRPM1): $${pulse.ntiPerMile.toFixed(2)}/mile` : "Contract: unavailable");
+          return { kind: "data" as const, text: lines.join("\n") };
+        } catch {
+          return { kind: "data" as const, text: "Sonar national data temporarily unavailable." };
+        }
+      });
     },
   },
   {
@@ -162,18 +164,26 @@ export const TOOLS: AgentTool[] = [
     async execute(_ctx, args) {
       const market = String(args.market || "").trim();
       if (!market) return { kind: "data", text: "No market specified." };
-      try {
-        const otris = await getMarketOtris([market]);
-        const m = otris[0];
-        if (!m) return { kind: "data", text: `No Sonar data for "${market}".` };
-        const sig = m.signal === "hot" ? "🔴 Hot" : m.signal === "warm" ? "🟡 Warm" : m.signal === "cool" ? "🟢 Cool" : "⚪";
-        const lines = [`Sonar market — ${m.market}:`];
-        if (m.otri !== null) lines.push(`OTRI: ${m.otri.toFixed(1)}% ${sig}`);
-        if (m.votri !== null && m.votri !== undefined) lines.push(`VOTRI: ${m.votri.toFixed(1)}%`);
-        return { kind: "data", text: lines.join("\n") };
-      } catch {
-        return { kind: "data", text: "Sonar market data temporarily unavailable." };
-      }
+      return withSonarCaller("ai:query_market_otri", async () => {
+        try {
+          const otris = await getMarketOtris([market]);
+          const m = otris[0];
+          if (!m) return { kind: "data" as const, text: `No Sonar data for "${market}".` };
+          // Honest empty state (Task #740): if both OTRI and VOTRI are null we
+          // explicitly tell the agent that no live data is available rather
+          // than emitting just a header line.
+          if (m.otri === null && (m.votri === null || m.votri === undefined)) {
+            return { kind: "data" as const, text: `Sonar market — ${m.market}: no live OTRI/VOTRI data available right now.` };
+          }
+          const sig = m.signal === "hot" ? "🔴 Hot" : m.signal === "warm" ? "🟡 Warm" : m.signal === "cool" ? "🟢 Cool" : "⚪";
+          const lines = [`Sonar market — ${m.market}:`];
+          if (m.otri !== null) lines.push(`OTRI: ${m.otri.toFixed(1)}% ${sig}`);
+          if (m.votri !== null && m.votri !== undefined) lines.push(`VOTRI: ${m.votri.toFixed(1)}%`);
+          return { kind: "data" as const, text: lines.join("\n") };
+        } catch {
+          return { kind: "data" as const, text: "Sonar market data temporarily unavailable." };
+        }
+      });
     },
   },
   {
@@ -188,23 +198,25 @@ export const TOOLS: AgentTool[] = [
     async execute(_ctx, args) {
       const origin = String(args.origin || "");
       const destination = String(args.destination || "");
-      try {
-        const [votriMap, tracDir, lmr] = await Promise.all([
-          getLaneVotrisBatch([{ origin, destination }]),
-          tracLaneDirectionSignal(origin, destination).catch(() => null),
-          getLaneMarketRate(origin, destination).catch(() => ({ marketRatePerMile: null as number | null })),
-        ]);
-        const votri = votriMap.get(buildVotriQualifier(origin, destination));
-        const dirLabel = tracDir === "hot" ? "Tightening" : tracDir === "warm" ? "Mild tightening" : tracDir === "stable" ? "Stable" : tracDir === "cool" ? "Softening" : null;
-        const lines = [`${origin} → ${destination}`];
-        if (dirLabel) lines.push(`TRAC Direction: ${dirLabel}`);
-        if (lmr.marketRatePerMile !== null) lines.push(`TRAC Spot: $${lmr.marketRatePerMile.toFixed(2)}/mile`);
-        if (votri?.votri !== null && votri?.votri !== undefined) lines.push(`VOTRI: ${votri.votri.toFixed(1)}%`);
-        if (lines.length === 1) lines.push("Market data unavailable for this lane.");
-        return { kind: "data", text: lines.join("\n") };
-      } catch {
-        return { kind: "data", text: "Lane signal data temporarily unavailable." };
-      }
+      return withSonarCaller("ai:query_lane_signal", async () => {
+        try {
+          const [votriMap, tracDir, lmr] = await Promise.all([
+            getLaneVotrisBatch([{ origin, destination }]),
+            tracLaneDirectionSignal(origin, destination).catch(() => null),
+            getLaneMarketRate(origin, destination).catch(() => ({ marketRatePerMile: null as number | null })),
+          ]);
+          const votri = votriMap.get(buildVotriQualifier(origin, destination));
+          const dirLabel = tracDir === "hot" ? "Tightening" : tracDir === "warm" ? "Mild tightening" : tracDir === "stable" ? "Stable" : tracDir === "cool" ? "Softening" : null;
+          const lines = [`${origin} → ${destination}`];
+          if (dirLabel) lines.push(`TRAC Direction: ${dirLabel}`);
+          if (lmr.marketRatePerMile !== null) lines.push(`TRAC Spot: $${lmr.marketRatePerMile.toFixed(2)}/mile`);
+          if (votri?.votri !== null && votri?.votri !== undefined) lines.push(`VOTRI: ${votri.votri.toFixed(1)}%`);
+          if (lines.length === 1) lines.push("Market data unavailable for this lane.");
+          return { kind: "data" as const, text: lines.join("\n") };
+        } catch {
+          return { kind: "data" as const, text: "Lane signal data temporarily unavailable." };
+        }
+      });
     },
   },
   {

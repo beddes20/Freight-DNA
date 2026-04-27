@@ -12,7 +12,7 @@
  *     ratePerMile=null and DO NOT cache the failure (so the next call retries).
  */
 
-import { getLaneMarketRate } from "./sonarClient";
+import { getLaneMarketRate, withSonarCaller } from "./sonarClient";
 
 export interface SonarLanePricing {
   origin: string;
@@ -92,7 +92,12 @@ export async function getSonarLanePricing(
   let fresh: SonarLanePricing;
   let success = false;
   try {
-    const result = (await getLaneMarketRate(origin, destination)) as RawSonarResult | null | undefined;
+    // Tag any new live SONAR call as `pricing:blend` so the Integrations
+    // Health Console can distinguish quote-workbench / cockpit / ranking
+    // requests from raw UI VOTRI lookups in the call-budget ledger.
+    const result = (await withSonarCaller("pricing:blend", () =>
+      getLaneMarketRate(origin, destination),
+    )) as RawSonarResult | null | undefined;
     fresh = buildSuccess(origin, destination, equipmentType, result ?? {});
     success = fresh.ratePerMile !== null;
   } catch {

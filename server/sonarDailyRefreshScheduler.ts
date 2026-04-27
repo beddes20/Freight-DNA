@@ -13,8 +13,13 @@
  */
 
 import cron from "node-cron";
-import { runDailySonarRefresh, getSonarDailyPullStatus } from "./sonarClient";
-import { notifyAdminsOfSystemEvent } from "./sonarAlertNotifier";
+import {
+  runDailySonarRefresh,
+  getSonarDailyPullStatus,
+  getSonarCircuitBreakerStatus,
+  withSonarCaller,
+} from "./sonarClient";
+import { notifyAdminsOfSystemEvent, checkBreakerLongOpen } from "./sonarAlertNotifier";
 
 function log(msg: string) {
   const t = new Date().toISOString();
@@ -33,7 +38,7 @@ async function notifyAdminsOfFailure(summary: string): Promise<void> {
 export async function runSonarDailyRefreshNow(): Promise<void> {
   log("Starting daily Sonar refresh…");
   try {
-    const status = await runDailySonarRefresh();
+    const status = await withSonarCaller("scheduler:daily-refresh", () => runDailySonarRefresh());
     const summary = `national=${status.nationalOk ? "OK" : "FAIL"} markets=${status.marketsOk}/${status.marketsAttempted}`;
     if (!status.nationalOk && status.marketsOk === 0) {
       log(`⚠ Daily refresh returned NO DATA — ${summary}${status.lastError ? ` (${status.lastError})` : ""}`);
@@ -68,4 +73,17 @@ export function initSonarDailyRefreshScheduler(): void {
       log(`Boot refresh check error (non-fatal): ${err?.message ?? err}`);
     }
   }, 30_000);
+
+  // Long-open breaker monitor (Task #740): every 5 minutes, check whether the
+  // SONAR circuit breaker has been open for ≥60 minutes during business
+  // hours and notify admins once per breaker-open episode.
+  const BREAKER_POLL_MS = 5 * 60 * 1000;
+  setInterval(() => {
+    try {
+      void checkBreakerLongOpen(getSonarCircuitBreakerStatus());
+    } catch (err: any) {
+      log(`Breaker long-open check error (non-fatal): ${err?.message ?? err}`);
+    }
+  }, BREAKER_POLL_MS).unref();
+  log("Sonar long-open breaker monitor registered (5-min poll)");
 }

@@ -23,6 +23,7 @@ import {
   getLaneMarketRate,
   probeSonarHealth,
   runDailySonarRefresh,
+  withSonarCaller,
   type LaneVotri,
 } from "../sonarClient";
 import { getLaneTimeoutStats } from "../sonarAlertNotifier";
@@ -95,7 +96,7 @@ export function registerSonarRoutes(app: Express): void {
   // ── GET /api/sonar/market-pulse?role=... ─────────────────────────────────────
   // Returns national summary + optional role-specific intelligence block.
   app.get("/api/sonar/market-pulse", requireAuth, async (req: Request, res: Response) => {
-    try {
+    try { await withSonarCaller("ui:market-pulse", async () => {
       const role = qOptStr(req.query.role)?.trim();
       const national = await getNationalMarketSummary();
       const cbStatus = getSonarCircuitBreakerStatus();
@@ -275,7 +276,7 @@ export function registerSonarRoutes(app: Express): void {
       }
 
       res.json(nationalWithStatus);
-    } catch (err) {
+    }); } catch (err) {
       console.error("[sonar] market-pulse error:", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch market pulse" });
     }
@@ -283,13 +284,13 @@ export function registerSonarRoutes(app: Express): void {
 
   // ── GET /api/sonar/market-otris?markets=Atlanta,Dallas,... ──────────────────
   app.get("/api/sonar/market-otris", requireAuth, async (req: Request, res: Response) => {
-    try {
+    try { await withSonarCaller("ui:market-otris", async () => {
       const raw = qOptStr(req.query.markets);
-      if (!raw) return res.json({ otris: [] });
+      if (!raw) { res.json({ otris: [] }); return; }
       const markets = raw.split(",").map(m => m.trim()).filter(Boolean).slice(0, 30);
       const otris = await getMarketOtris(markets);
       res.json({ otris });
-    } catch (err) {
+    }); } catch (err) {
       console.error("[sonar] market-otris error:", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch market OTRIs" });
     }
@@ -299,10 +300,11 @@ export function registerSonarRoutes(app: Express): void {
   // Body: { lanes: [{ origin: string, destination: string }] }
   // Returns: { signals: { qualifier: string, ... }[] }
   app.post("/api/sonar/lane-signals/batch", requireAuth, async (req: Request, res: Response) => {
-    try {
+    try { await withSonarCaller("ui:lane-signals", async () => {
       const { lanes } = req.body as { lanes?: Array<{ origin: string; destination: string }> };
       if (!Array.isArray(lanes) || lanes.length === 0) {
-        return res.json({ signals: [] });
+        res.json({ signals: [] });
+        return;
       }
       const validLanes = lanes.filter(l => l.origin && l.destination);
       const CHUNK_SIZE = 50;
@@ -317,7 +319,7 @@ export function registerSonarRoutes(app: Express): void {
         if (tracDir) sig.signal = tracDir;
       }
       res.json({ signals: allSignals });
-    } catch (err) {
+    }); } catch (err) {
       console.error("[sonar] lane-signals/batch error:", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch lane signals" });
     }
@@ -333,49 +335,54 @@ export function registerSonarRoutes(app: Express): void {
     try {
       const lanesParam = qOptStr(req.query.lanes)?.trim();
       if (lanesParam) {
-        const pairs = lanesParam.split(";")
-          .map(s => s.split("|"))
-          .filter(parts => parts.length === 2 && parts[0] && parts[1])
-          .map(([origin, destination]) => ({ origin: origin.trim(), destination: destination.trim() }));
+        await withSonarCaller("ui:lane-signals", async () => {
+          const pairs = lanesParam.split(";")
+            .map(s => s.split("|"))
+            .filter(parts => parts.length === 2 && parts[0] && parts[1])
+            .map(([origin, destination]) => ({ origin: origin.trim(), destination: destination.trim() }));
 
-        if (pairs.length === 0) return res.json({ signals: [] });
+          if (pairs.length === 0) { res.json({ signals: [] }); return; }
 
-        // Process in chunks of 50 to avoid overwhelming the Sonar API while serving all lanes.
-        const CHUNK_SIZE = 50;
-        const allSignals: LaneVotri[] = [];
-        for (let i = 0; i < pairs.length; i += CHUNK_SIZE) {
-          const chunk = pairs.slice(i, i + CHUNK_SIZE);
-          const votriMap = await getLaneVotrisBatch(chunk);
-          allSignals.push(...Array.from(votriMap.values()));
-        }
-        for (const sig of allSignals) {
-          const tracDir = await tracLaneDirectionSignal(sig.origin, sig.destination).catch(() => null);
-          if (tracDir) sig.signal = tracDir;
-        }
-        return res.json({ signals: allSignals });
+          // Process in chunks of 50 to avoid overwhelming the Sonar API while serving all lanes.
+          const CHUNK_SIZE = 50;
+          const allSignals: LaneVotri[] = [];
+          for (let i = 0; i < pairs.length; i += CHUNK_SIZE) {
+            const chunk = pairs.slice(i, i + CHUNK_SIZE);
+            const votriMap = await getLaneVotrisBatch(chunk);
+            allSignals.push(...Array.from(votriMap.values()));
+          }
+          for (const sig of allSignals) {
+            const tracDir = await tracLaneDirectionSignal(sig.origin, sig.destination).catch(() => null);
+            if (tracDir) sig.signal = tracDir;
+          }
+          res.json({ signals: allSignals });
+        });
+        return;
       }
 
-      // Single lane mode
+      // Single lane mode — counts toward the lane-detail live budget.
       const origin = qOptStr(req.query.origin)?.trim();
       const destination = qOptStr(req.query.destination)?.trim();
       if (!origin || !destination) {
         return res.status(400).json({ error: "Provide origin+destination or lanes= query param" });
       }
-      const votriMap = await getLaneVotrisBatch([{ origin, destination }]);
-      const qualifier = buildVotriQualifier(origin, destination);
-      const signal = votriMap.get(qualifier) ?? null;
-      let tracSpotRpm: number | null = null;
-      if (signal) {
-        const tracDir = await tracLaneDirectionSignal(origin, destination).catch(() => null);
-        if (tracDir) {
-          signal.signal = tracDir;
+      await withSonarCaller("ui:lane-detail", async () => {
+        const votriMap = await getLaneVotrisBatch([{ origin, destination }]);
+        const qualifier = buildVotriQualifier(origin, destination);
+        const signal = votriMap.get(qualifier) ?? null;
+        let tracSpotRpm: number | null = null;
+        if (signal) {
+          const tracDir = await tracLaneDirectionSignal(origin, destination).catch(() => null);
+          if (tracDir) {
+            signal.signal = tracDir;
+          }
+          try {
+            const lmr = await getLaneMarketRate(origin, destination);
+            tracSpotRpm = lmr.marketRatePerMile;
+          } catch {}
         }
-        try {
-          const lmr = await getLaneMarketRate(origin, destination);
-          tracSpotRpm = lmr.marketRatePerMile;
-        } catch {}
-      }
-      res.json({ signal, tracSpotRpm });
+        res.json({ signal, tracSpotRpm });
+      });
     } catch (err) {
       console.error("[sonar] lane-signals error:", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch lane signal" });
@@ -390,7 +397,9 @@ export function registerSonarRoutes(app: Express): void {
     try {
       const origin = qOptStr(req.query.origin)?.trim() || "Atlanta";
       const destination = qOptStr(req.query.destination)?.trim() || "Dallas";
-      const report = await probeSonarHealth({ laneOrigin: origin, laneDestination: destination });
+      const report = await withSonarCaller("admin:health", () =>
+        probeSonarHealth({ laneOrigin: origin, laneDestination: destination }),
+      );
       const now = Date.now();
       const lastSuccessMs = report.daily.lastSuccessAt ? Date.parse(report.daily.lastSuccessAt) : 0;
       const dailyAgeHours = lastSuccessMs ? (now - lastSuccessMs) / 3_600_000 : null;
@@ -414,7 +423,7 @@ export function registerSonarRoutes(app: Express): void {
       if (!user || user.role !== "admin") {
         return res.status(403).json({ error: "admin only" });
       }
-      const status = await runDailySonarRefresh();
+      const status = await withSonarCaller("admin:probe", () => runDailySonarRefresh());
       res.json({ ok: true, status });
     } catch (err) {
       console.error("[sonar] manual refresh error:", getErrorMessage(err));

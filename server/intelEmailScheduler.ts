@@ -14,6 +14,8 @@ import {
   getNationalMarketSummary,
   getMarketOtris,
   getLaneMarketRatesBatch,
+  withSonarCaller,
+  getSonarCallCounters,
   buildVotriQualifier,
 } from "./sonarClient";
 import { generateLaneCoachingCard } from "./aiHelpers";
@@ -166,6 +168,7 @@ function buildDailyInsightsEmail(opts: {
   ratePositioningHtml?: string;
   coachingActionsHtml?: string;
   lastSuccessfulPull?: string | null;
+  sonarCallSummaryHtml?: string;
 }): string {
   const otriDir = (opts.otriDelta ?? 0) >= 0 ? "▲" : "▼";
   const otriColor = (opts.otriDelta ?? 0) > 0 ? "#dc2626" : "#16a34a";
@@ -211,6 +214,7 @@ function buildDailyInsightsEmail(opts: {
     ${opts.buyRateHtml}
     ${opts.coachingActionsHtml ?? ""}
     ${opts.ratePositioningHtml ?? ""}
+    ${opts.sonarCallSummaryHtml ?? ""}
 
     <div style="background:#f9fafb;padding:20px 24px;border-top:1px solid #e5e7eb;">
       <p style="color:#6b7280;font-size:11px;margin:0;text-align:center;">
@@ -220,6 +224,74 @@ function buildDailyInsightsEmail(opts: {
   `;
 
   return baseEmailTemplate("Daily Intelligence", body);
+}
+
+export function buildSonarCallSummaryHtml(): string {
+  const budget = getSonarCallCounters();
+  const snap = budget.yesterday ?? budget.today;
+  if (!snap || Object.keys(snap.byCaller).length === 0) return "";
+
+  const totals = snap.totals;
+  const ratioLabel = snap.cacheHitRatio !== null
+    ? `${(snap.cacheHitRatio * 100).toFixed(1)}% cache hit`
+    : "no traffic";
+  const rows = Object.entries(snap.byCaller)
+    .sort((a, b) => (b[1].live + b[1].coalesced) - (a[1].live + a[1].coalesced))
+    .map(([tag, c]) => {
+      const unexpected = snap.unexpectedLiveCallers.includes(tag);
+      const tagCell = unexpected
+        ? `<span style="color:#dc2626;font-weight:700;">${tag} ⚠</span>`
+        : tag;
+      return `
+        <tr style="border-top:1px solid #e5e7eb;">
+          <td style="padding:6px 10px;font-size:11px;color:#111;">${tagCell}</td>
+          <td style="padding:6px 10px;font-size:11px;text-align:right;color:#111;">${c.live}</td>
+          <td style="padding:6px 10px;font-size:11px;text-align:right;color:#6b7280;">${c.coalesced}</td>
+          <td style="padding:6px 10px;font-size:11px;text-align:right;color:#6b7280;">${c.cacheHits}</td>
+          <td style="padding:6px 10px;font-size:11px;text-align:right;color:${c.breakerSkipped > 0 ? "#dc2626" : "#6b7280"};">${c.breakerSkipped}</td>
+          <td style="padding:6px 10px;font-size:11px;text-align:right;color:${c.budgetSkipped > 0 ? "#b45309" : "#6b7280"};">${c.budgetSkipped}</td>
+          <td style="padding:6px 10px;font-size:11px;text-align:right;color:${c.errors > 0 ? "#dc2626" : "#6b7280"};">${c.errors}</td>
+        </tr>`;
+    })
+    .join("");
+
+  const unexpectedNote = snap.unexpectedLiveCallers.length > 0
+    ? `<div style="padding:8px 12px;background:#fef2f2;color:#991b1b;font-size:11px;border-radius:6px;margin-bottom:10px;">⚠ Unexpected live callers (outside the SONAR call budget): ${snap.unexpectedLiveCallers.join(", ")}</div>`
+    : "";
+
+  return `
+    <div style="padding:16px 24px;background:#fff;border-top:1px solid #e5e7eb;">
+      <h3 style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#6b7280;margin:0 0 10px;">
+        📊 SONAR ${budget.yesterday ? "yesterday" : "today (so far)"} — ${snap.date} · ${ratioLabel}
+      </h3>
+      ${unexpectedNote}
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:#fff;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
+        <thead>
+          <tr style="background:#f3f4f6;">
+            <th style="text-align:left;padding:6px 10px;font-size:10px;color:#6b7280;font-weight:600;">Caller</th>
+            <th style="text-align:right;padding:6px 10px;font-size:10px;color:#6b7280;font-weight:600;">Live</th>
+            <th style="text-align:right;padding:6px 10px;font-size:10px;color:#6b7280;font-weight:600;">Coalesced</th>
+            <th style="text-align:right;padding:6px 10px;font-size:10px;color:#6b7280;font-weight:600;">Cache</th>
+            <th style="text-align:right;padding:6px 10px;font-size:10px;color:#6b7280;font-weight:600;">Breaker</th>
+            <th style="text-align:right;padding:6px 10px;font-size:10px;color:#6b7280;font-weight:600;">Budget</th>
+            <th style="text-align:right;padding:6px 10px;font-size:10px;color:#6b7280;font-weight:600;">Errors</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+        <tfoot>
+          <tr style="background:#f9fafb;border-top:2px solid #e5e7eb;">
+            <td style="padding:6px 10px;font-size:11px;font-weight:700;color:#111;">Total</td>
+            <td style="padding:6px 10px;font-size:11px;text-align:right;font-weight:700;color:#111;">${totals.live}</td>
+            <td style="padding:6px 10px;font-size:11px;text-align:right;font-weight:700;color:#111;">${totals.coalesced}</td>
+            <td style="padding:6px 10px;font-size:11px;text-align:right;font-weight:700;color:#111;">${totals.cacheHits}</td>
+            <td style="padding:6px 10px;font-size:11px;text-align:right;font-weight:700;color:${totals.breakerSkipped > 0 ? "#dc2626" : "#111"};">${totals.breakerSkipped}</td>
+            <td style="padding:6px 10px;font-size:11px;text-align:right;font-weight:700;color:${totals.budgetSkipped > 0 ? "#b45309" : "#111"};">${totals.budgetSkipped}</td>
+            <td style="padding:6px 10px;font-size:11px;text-align:right;font-weight:700;color:${totals.errors > 0 ? "#dc2626" : "#111"};">${totals.errors}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  `;
 }
 
 function buildScorecardEmail(opts: {
@@ -286,6 +358,10 @@ async function sendDailyIntelEmails(): Promise<void> {
     return;
   }
 
+  return withSonarCaller("email:daily-intel", () => sendDailyIntelEmailsInner());
+}
+
+async function sendDailyIntelEmailsInner(): Promise<void> {
   try {
     const allOrgs = await storage.getOrganizations();
 
@@ -578,6 +654,8 @@ async function sendDailyIntelEmails(): Promise<void> {
       const today = new Date();
       const dateStr = today.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 
+      const sonarCallSummaryHtml = buildSonarCallSummaryHtml();
+
       for (const admin of adminUsers) {
         const html = buildDailyInsightsEmail({
           recipientName: admin.name.split(" ")[0],
@@ -591,6 +669,7 @@ async function sendDailyIntelEmails(): Promise<void> {
           coachingActionsHtml,
           ratePositioningHtml,
           lastSuccessfulPull: national.lastSuccessfulPull ?? null,
+          sonarCallSummaryHtml,
         });
 
         const sent = await sendEmail({
@@ -615,6 +694,10 @@ async function sendBiweeklyScorecardEmails(): Promise<void> {
     return;
   }
 
+  return withSonarCaller("email:biweekly-scorecard", () => sendBiweeklyScorecardEmailsInner());
+}
+
+async function sendBiweeklyScorecardEmailsInner(): Promise<void> {
   const now = Date.now();
   const lastTs = getLastBiweeklyEmailTs();
   const daysSince = (now - lastTs) / (1000 * 60 * 60 * 24);
@@ -792,6 +875,10 @@ async function sendBiweeklyScorecardEmails(): Promise<void> {
 // ── Manual / on-demand send for a specific org ────────────────────────────────
 
 export async function sendIntelNowForOrg(orgId: string): Promise<void> {
+  return withSonarCaller("email:intel-now", () => sendIntelNowForOrgInner(orgId));
+}
+
+async function sendIntelNowForOrgInner(orgId: string): Promise<void> {
   logIntel(`Manual send triggered for org ${orgId}`);
 
   const allUsers = await storage.getUsers(orgId);

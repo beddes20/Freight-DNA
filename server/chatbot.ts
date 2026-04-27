@@ -2,7 +2,7 @@ import type { Express, Request, Response } from "express";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { sendEmail, buildFeedbackEmail } from "./emailService";
-import { getNationalMarketSummary, getMarketOtris, getLaneVotrisBatch, getLaneMarketRate, buildVotriQualifier } from "./sonarClient";
+import { getNationalMarketSummary, getMarketOtris, getLaneVotrisBatch, getLaneMarketRate, buildVotriQualifier, withSonarCaller } from "./sonarClient";
 import { tracLaneDirectionSignal } from "./tracAlertEngine";
 import { computeIntelPayload } from "./routes/intel";
 import { drizzle } from "drizzle-orm/node-postgres";
@@ -1245,12 +1245,12 @@ ${ANALYST_RULES}`,
       // Fetch Sonar market context in parallel
       let marketContext = "";
       try {
-        const [pulse, laneVotris] = await Promise.all([
+        const [pulse, laneVotris] = await withSonarCaller("chatbot:context", () => Promise.all([
           getNationalMarketSummary(),
           resolvedLanePairs.length > 0
             ? getLaneVotrisBatch(resolvedLanePairs)
             : Promise.resolve(new Map()),
-        ]);
+        ]));
         if (pulse.otri !== null) {
           const marketSignal = pulse.otri > 20 ? "tight (carriers rejecting frequently)"
             : pulse.otri > 8 ? "moderate"

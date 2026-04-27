@@ -25,6 +25,122 @@ interface Snapshot {
   detail: Record<string, unknown> | null;
 }
 
+interface CallerCounter {
+  live: number;
+  coalesced: number;
+  cacheHits: number;
+  breakerSkipped: number;
+  budgetSkipped: number;
+  errors: number;
+}
+
+interface CallBudgetSnapshot {
+  date: string;
+  totals: CallerCounter;
+  cacheHitRatio: number | null;
+  byCaller: Record<string, CallerCounter>;
+  unexpectedLiveCallers: string[];
+  allowedLiveCallers: string[];
+}
+
+interface SonarCallBudget {
+  today: CallBudgetSnapshot;
+  yesterday: CallBudgetSnapshot | null;
+}
+
+function SonarCallBudgetBlock({ budget }: { budget: SonarCallBudget }) {
+  const today = budget.today;
+  const callerEntries = Object.entries(today.byCaller).sort(
+    (a, b) => (b[1].live + b[1].coalesced) - (a[1].live + a[1].coalesced),
+  );
+  const ratioLabel = today.cacheHitRatio !== null
+    ? `${(today.cacheHitRatio * 100).toFixed(1)}% cache`
+    : "—";
+  return (
+    <div className="pt-2 border-t border-border space-y-2" data-testid="block-sonar-call-budget">
+      <div className="flex items-center justify-between">
+        <span className="text-muted-foreground font-medium">Call budget · {today.date}</span>
+        <span className="tabular-nums" data-testid="text-sonar-calls-total">
+          {today.totals.live} live / {today.totals.coalesced} coal / {today.totals.cacheHits} cache · <span data-testid="text-sonar-cache-hit-ratio">{ratioLabel}</span>
+        </span>
+      </div>
+      {today.totals.breakerSkipped > 0 && (
+        <div className="flex items-center justify-between text-red-600 dark:text-red-400">
+          <span>Breaker-skipped</span>
+          <span className="tabular-nums">{today.totals.breakerSkipped}</span>
+        </div>
+      )}
+      {today.totals.budgetSkipped > 0 && (
+        <div className="flex items-center justify-between text-amber-700 dark:text-amber-400" data-testid="row-sonar-budget-skipped">
+          <span>Budget-skipped (non-allowed callers)</span>
+          <span className="tabular-nums">{today.totals.budgetSkipped}</span>
+        </div>
+      )}
+      {today.unexpectedLiveCallers.length > 0 && (
+        <div
+          className="text-[11px] rounded-sm bg-red-50 dark:bg-red-950/30 text-red-700 dark:text-red-300 px-2 py-1"
+          data-testid="text-sonar-unexpected-callers"
+        >
+          ⚠ Unexpected live callers: {today.unexpectedLiveCallers.join(", ")}
+        </div>
+      )}
+      {callerEntries.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground italic">No SONAR calls so far today.</p>
+      ) : (
+        <table className="w-full text-[11px]">
+          <thead>
+            <tr className="text-muted-foreground">
+              <th className="text-left font-normal">Caller</th>
+              <th className="text-right font-normal">Live</th>
+              <th className="text-right font-normal">Coal</th>
+              <th className="text-right font-normal">Cache</th>
+              <th className="text-right font-normal">Brk</th>
+              <th className="text-right font-normal">Bdg</th>
+              <th className="text-right font-normal">Err</th>
+            </tr>
+          </thead>
+          <tbody>
+            {callerEntries.map(([tag, c]) => {
+              const isUnexpected = today.unexpectedLiveCallers.includes(tag);
+              return (
+                <tr key={tag} data-testid={`row-sonar-caller-${tag}`}>
+                  <td
+                    className={`py-0.5 truncate max-w-[140px] ${isUnexpected ? "text-red-600 dark:text-red-400 font-semibold" : ""}`}
+                    title={tag}
+                  >
+                    {tag}{isUnexpected ? " ⚠" : ""}
+                  </td>
+                  <td className="text-right tabular-nums">{c.live}</td>
+                  <td className="text-right tabular-nums text-muted-foreground">{c.coalesced}</td>
+                  <td className="text-right tabular-nums text-muted-foreground">{c.cacheHits}</td>
+                  <td className={`text-right tabular-nums ${c.breakerSkipped > 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>{c.breakerSkipped}</td>
+                  <td className={`text-right tabular-nums ${c.budgetSkipped > 0 ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}`}>{c.budgetSkipped}</td>
+                  <td className={`text-right tabular-nums ${c.errors > 0 ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}`}>{c.errors}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {budget.yesterday && (
+        <div className="text-[11px] text-muted-foreground pt-1">
+          Yesterday ({budget.yesterday.date}): {budget.yesterday.totals.live} live ·{" "}
+          {budget.yesterday.totals.coalesced} coalesced ·{" "}
+          {budget.yesterday.totals.cacheHits} cache
+          {budget.yesterday.cacheHitRatio !== null && (
+            <span> · {(budget.yesterday.cacheHitRatio * 100).toFixed(1)}% hit</span>
+          )}
+          {budget.yesterday.unexpectedLiveCallers.length > 0 && (
+            <span className="text-red-600 dark:text-red-400">
+              {" "}· ⚠ {budget.yesterday.unexpectedLiveCallers.length} unexpected
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const SOURCE_LABEL: Record<string, string> = {
   sonar: "FreightWaves SONAR",
   graph: "Microsoft Graph (Outlook)",
@@ -156,6 +272,9 @@ export default function AdminIntegrationsHealthPage() {
                   <p className="text-red-600 dark:text-red-400 break-words" data-testid={`text-error-${s.source}`}>
                     {s.lastErrorMessage}
                   </p>
+                )}
+                {s.source === "sonar" && s.detail && (s.detail as { callBudget?: SonarCallBudget }).callBudget && (
+                  <SonarCallBudgetBlock budget={(s.detail as { callBudget: SonarCallBudget }).callBudget} />
                 )}
                 <div className="pt-2">
                   <Button

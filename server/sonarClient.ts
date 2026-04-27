@@ -28,6 +28,147 @@
  */
 
 import { storage } from "./storage";
+import { AsyncLocalStorage } from "async_hooks";
+
+// Per-caller SONAR call counters (Task #740).
+
+interface CallerCounter {
+  live: number;
+  coalesced: number;
+  cacheHits: number;
+  breakerSkipped: number;
+  budgetSkipped: number;
+  errors: number;
+}
+
+interface CallCountersSnapshot {
+  date: string;
+  byCaller: Record<string, CallerCounter>;
+}
+
+// Surfaces approved to make cache-miss live SONAR calls.
+const ALLOWED_LIVE_CALLERS = new Set<string>([
+  "scheduler:daily-refresh",
+  "scheduler:nba-phase1",
+  "ui:quote-workbench",
+  "ui:lane-detail",
+  "pricing:blend",
+  "admin:probe",
+  "admin:health",
+]);
+
+function freshCounters(): CallCountersSnapshot {
+  return { date: new Date().toISOString().slice(0, 10), byCaller: {} };
+}
+
+let callCountersToday: CallCountersSnapshot = freshCounters();
+let callCountersYesterday: CallCountersSnapshot | null = null;
+
+function rolloverCallCountersIfNeeded(): void {
+  const today = new Date().toISOString().slice(0, 10);
+  if (callCountersToday.date !== today) {
+    callCountersYesterday = callCountersToday;
+    callCountersToday = freshCounters();
+  }
+}
+
+const callerContext = new AsyncLocalStorage<{ tag: string }>();
+
+export function withSonarCaller<T>(tag: string, fn: () => Promise<T>): Promise<T> {
+  return callerContext.run({ tag }, fn);
+}
+
+function currentCallerTag(): string {
+  return callerContext.getStore()?.tag ?? "unknown";
+}
+
+function bumpCounter(kind: keyof CallerCounter): void {
+  rolloverCallCountersIfNeeded();
+  const tag = currentCallerTag();
+  const cur = callCountersToday.byCaller[tag] ?? {
+    live: 0, coalesced: 0, cacheHits: 0, breakerSkipped: 0, budgetSkipped: 0, errors: 0,
+  };
+  cur[kind] += 1;
+  callCountersToday.byCaller[tag] = cur;
+}
+
+function totalsFor(snapshot: CallCountersSnapshot): CallerCounter {
+  const t: CallerCounter = { live: 0, coalesced: 0, cacheHits: 0, breakerSkipped: 0, budgetSkipped: 0, errors: 0 };
+  for (const c of Object.values(snapshot.byCaller)) {
+    t.live += c.live;
+    t.coalesced += c.coalesced;
+    t.cacheHits += c.cacheHits;
+    t.breakerSkipped += c.breakerSkipped;
+    t.budgetSkipped += c.budgetSkipped;
+    t.errors += c.errors;
+  }
+  return t;
+}
+
+function cacheHitRatioFor(t: CallerCounter): number | null {
+  const denom = t.cacheHits + t.live + t.breakerSkipped + t.budgetSkipped;
+  return denom === 0 ? null : Math.round((t.cacheHits / denom) * 1000) / 1000;
+}
+
+function unexpectedLiveCallers(snapshot: CallCountersSnapshot): string[] {
+  return Object.entries(snapshot.byCaller)
+    .filter(([tag, c]) => c.live > 0 && !ALLOWED_LIVE_CALLERS.has(tag))
+    .map(([tag]) => tag)
+    .sort();
+}
+
+export interface SonarCallBudgetSnapshot {
+  date: string;
+  totals: CallerCounter;
+  cacheHitRatio: number | null;
+  byCaller: Record<string, CallerCounter>;
+  unexpectedLiveCallers: string[];
+  allowedLiveCallers: string[];
+}
+
+export interface SonarCallBudget {
+  today: SonarCallBudgetSnapshot;
+  yesterday: SonarCallBudgetSnapshot | null;
+}
+
+function buildBudgetSnapshot(snap: CallCountersSnapshot): SonarCallBudgetSnapshot {
+  const totals = totalsFor(snap);
+  return {
+    date: snap.date,
+    totals,
+    cacheHitRatio: cacheHitRatioFor(totals),
+    byCaller: { ...snap.byCaller },
+    unexpectedLiveCallers: unexpectedLiveCallers(snap),
+    allowedLiveCallers: Array.from(ALLOWED_LIVE_CALLERS).sort(),
+  };
+}
+
+export function getSonarCallCounters(): SonarCallBudget {
+  rolloverCallCountersIfNeeded();
+  return {
+    today: buildBudgetSnapshot(callCountersToday),
+    yesterday: callCountersYesterday ? buildBudgetSnapshot(callCountersYesterday) : null,
+  };
+}
+
+export function _resetSonarCallCountersForTests(): void {
+  callCountersToday = freshCounters();
+  callCountersYesterday = null;
+}
+
+export function _resetSonarCachesForTests(): void {
+  nationalCache = null;
+  otriCache.clear();
+  votriCache.clear();
+  lastKnownNational = null;
+  inflightRequests.clear();
+  eiaDieselCache = null;
+  _dbCacheWarmupPromise = null;
+  cachedToken = null;
+  directTokenInvalid = false;
+  fallbackAuthAnnounced = false;
+  circuitBreakerLoggedOnce = false;
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -139,7 +280,9 @@ const TRAC_MARKET_RATE_TTL = 6 * 60 * 60 * 1000;
 // completes.
 const LIVE_LANE_TIMEOUT_MS = 25_000;
 
-const SONAR_RATE_LIMIT_INTERVAL_MS = 12_000;
+const SONAR_RATE_LIMIT_INTERVAL_MS = process.env.SONAR_RATE_LIMIT_INTERVAL_MS
+  ? Number(process.env.SONAR_RATE_LIMIT_INTERVAL_MS)
+  : 12_000;
 let lastSonarCallAt = 0;
 let _sonarQueueTail: Promise<void> = Promise.resolve();
 
@@ -163,11 +306,18 @@ const inflightRequests = new Map<string, Promise<any>>();
 
 async function coalescedSonarGet(path: string): Promise<any | null> {
   if (inflightRequests.has(path)) {
+    bumpCounter("coalesced");
     return inflightRequests.get(path)!;
   }
-  const promise = rawSonarGet(path).finally(() => {
-    inflightRequests.delete(path);
-  });
+  bumpCounter("live");
+  const promise = rawSonarGet(path)
+    .then((v) => {
+      if (v === null) bumpCounter("errors");
+      return v;
+    })
+    .finally(() => {
+      inflightRequests.delete(path);
+    });
   inflightRequests.set(path, promise);
   return promise;
 }
@@ -415,14 +565,23 @@ async function sonarGet(path: string): Promise<any | null> {
 
   const breakerStatus = getSonarCircuitBreakerStatus();
   if (breakerStatus.isOpen) {
+    bumpCounter("breakerSkipped");
     if (!circuitBreakerLoggedOnce) {
       circuitBreakerLoggedOnce = true;
       log(`Circuit breaker OPEN — returning cached/fallback data for all SONAR calls until ${breakerStatus.resumesAt}`);
     }
     return null;
   }
-  // Reset the once-per-cooldown log gate when the breaker is closed again.
-  if (!breakerStatus.isOpen && circuitBreakerLoggedOnce) circuitBreakerLoggedOnce = false;
+  if (circuitBreakerLoggedOnce) circuitBreakerLoggedOnce = false;
+
+  // Hard call-budget enforcement: only the explicit ALLOWED_LIVE_CALLERS may
+  // make cache-miss live calls. Coalesced (in-flight piggyback) is fine; the
+  // gate sits in coalescedSonarGet to allow unattributed in-flight reuse.
+  const tag = currentCallerTag();
+  if (!ALLOWED_LIVE_CALLERS.has(tag) && !inflightRequests.has(path)) {
+    bumpCounter("budgetSkipped");
+    return null;
+  }
 
   return coalescedSonarGet(path);
 }
@@ -708,6 +867,7 @@ export async function getNationalMarketSummary(): Promise<NationalMarketSummary>
   await warmMemoryCacheFromDb();
 
   if (nationalCache && isFresh(nationalCache)) {
+    bumpCounter("cacheHits");
     return nationalCache.value;
   }
 
@@ -821,6 +981,7 @@ export async function getMarketOtris(markets: string[]): Promise<MarketOtri[]> {
     const key = market.toLowerCase();
     const entry = otriCache.get(key);
     if (entry && isFresh(entry)) {
+      bumpCounter("cacheHits");
       cached.push(entry.value);
     } else {
       uncached.push(market);
@@ -944,7 +1105,10 @@ export async function getLaneVotri(origin: string, destination: string): Promise
 
   const qualifier = buildVotriQualifier(origin, destination);
   const cached = votriCache.get(qualifier);
-  if (cached && isFresh(cached)) return cached.value;
+  if (cached && isFresh(cached)) {
+    bumpCounter("cacheHits");
+    return cached.value;
+  }
 
   return withDeadline(
     fetchLaneVotriLive(origin, destination, qualifier, cached?.value ?? null),
@@ -1100,7 +1264,10 @@ export async function getLaneMarketRate(origin: string, destination: string): Pr
   const qualifier = buildVotriQualifier(origin, destination);
   const cacheKey = `lmr:${qualifier}`;
   const cached = laneMarketRateCache.get(cacheKey);
-  if (cached && isFresh(cached)) return cached.value;
+  if (cached && isFresh(cached)) {
+    bumpCounter("cacheHits");
+    return cached.value;
+  }
 
   return withDeadline(
     fetchLaneMarketRateLive(origin, destination, qualifier, cacheKey),
@@ -1301,6 +1468,7 @@ export interface SonarHealthReport {
   authMode: "bearer_token" | "username_password" | "none";
   circuitBreaker: ReturnType<typeof getSonarCircuitBreakerStatus>;
   daily: SonarDailyPullStatus;
+  callBudget: SonarCallBudget;
   national: {
     ok: boolean;
     isStale: boolean;
@@ -1341,6 +1509,7 @@ export async function probeSonarHealth(opts?: { laneOrigin?: string; laneDestina
     authMode,
     circuitBreaker: getSonarCircuitBreakerStatus(),
     daily: getSonarDailyPullStatus(),
+    callBudget: getSonarCallCounters(),
     national: {
       ok: nat.otri !== null || nat.ntiPerMove !== null || nat.ntiPerMile !== null,
       isStale: nat.isStale,

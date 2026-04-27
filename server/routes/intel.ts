@@ -28,6 +28,7 @@ import {
   getLaneVotrisBatch,
   getLaneMarketRatesBatch,
   buildVotriQualifier,
+  withSonarCaller,
   type NationalMarketSummary,
   type MarketOtri,
   type MarketExtended,
@@ -1241,7 +1242,7 @@ async function getOrComputeSonarBundle(orgId: string, filterUserId?: string): Pr
   const existing = sonarBundleInFlight.get(key);
   if (existing) return existing;
 
-  const promise = (async (): Promise<SonarBundle> => {
+  const promise = withSonarCaller("ui:intel-bundle", async (): Promise<SonarBundle> => {
     const tStart = Date.now();
     const { allLanes } = await getAllLanesForOrg(orgId);
     const lanes = filterUserId
@@ -1283,7 +1284,7 @@ async function getOrComputeSonarBundle(orgId: string, filterUserId?: string): Pr
     sonarBundleValueCache.set(key, { value: bundle, fetchedAt: Date.now() });
     logIntel(`SONAR bundle built (VOTRI=${votriByQualifier.size} OTRI=${marketOtris.length}) in ${Date.now() - tStart}ms`);
     return bundle;
-  })();
+  });
 
   sonarBundleInFlight.set(key, promise);
   try {
@@ -1757,11 +1758,11 @@ export function registerIntelRoutes(app: Express): void {
 
       // Fetch VOTRI and per-market OTRI in parallel for all relevant lane corridors
       const originMarkets = Array.from(new Set(allBriefLanes.map(l => l.origin.toLowerCase().trim())));
-      const [national, votriMap, marketOtriData] = await Promise.all([
+      const [national, votriMap, marketOtriData] = await withSonarCaller("ui:intel-brief", () => Promise.all([
         getNationalMarketSummary(),
         getLaneVotrisBatch(allBriefLanes),
         getMarketOtrisExtended(originMarkets.slice(0, 5)).catch(() => [] as MarketExtended[]),
-      ]);
+      ]));
 
       const topLanes = allBriefLanes.map(l => {
         const qualifier = buildVotriQualifier(l.origin, l.destination);
@@ -1825,11 +1826,13 @@ export function registerIntelRoutes(app: Express): void {
       const userLanes = allLanes.filter(l => l.ownerUserId === filterUserId);
 
       // Merge awarded RFP lanes as supplementary entries (non-blocking)
-      const [rfpLaneItems, national] = await Promise.all([
+      const [rfpLaneItems, national] = await withSonarCaller("ui:intel-my-lanes", () => Promise.all([
         getAwardedRfpLanesForUser(orgId, filterUserId),
         getNationalMarketSummary(),
-      ]);
-      const myLanes = await computeMyLanes(userLanes, national, orgId);
+      ]));
+      const myLanes = await withSonarCaller("ui:intel-my-lanes", () =>
+        computeMyLanes(userLanes, national, orgId),
+      );
 
       // Compute VOTRI for RFP lanes not already covered by financial lanes
       const existingKeys = new Set(myLanes.map(r => `${r.origin}|${r.destination}|${r.companyName}`));
@@ -1837,7 +1840,9 @@ export function registerIntelRoutes(app: Express): void {
 
       let rfpRows: MyLanesRow[] = [];
       if (rfpOnly.length > 0) {
-        const rfpVotriMap = await getLaneVotrisBatch(rfpOnly.map(r => ({ origin: r.origin, destination: r.destination })));
+        const rfpVotriMap = await withSonarCaller("ui:intel-my-lanes", () =>
+          getLaneVotrisBatch(rfpOnly.map(r => ({ origin: r.origin, destination: r.destination }))),
+        );
         const rfpCities = Array.from(new Set([...rfpOnly.map(r => r.origin), ...rfpOnly.map(r => r.destination)]));
         let rfpWeatherMap = new Map<string, WeatherFlag>();
         try { rfpWeatherMap = await getWeatherFlagsForCities(rfpCities); } catch { /* non-blocking */ }

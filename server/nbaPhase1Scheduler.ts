@@ -26,7 +26,7 @@ import { users as usersTable } from "@shared/schema";
 import { and, eq } from "drizzle-orm";
 import { detectAndProcessPatternShifts } from "./services/quotePatternShift";
 import { generateConversationOwnershipNbas } from "./nextBestActionEngine";
-import { getAvgVotriWoW, getLaneVotrisBatch, getLaneVotrisBatchFresh, buildVotriQualifier } from "./sonarClient";
+import { getAvgVotriWoW, getLaneVotrisBatch, getLaneVotrisBatchFresh, buildVotriQualifier, withSonarCaller } from "./sonarClient";
 import { tracLaneDirectionSignal } from "./tracAlertEngine";
 import { resolveColumns, getRepFromRow } from "./colResolver";
 import { isExcludedRow } from "./financialHelpers";
@@ -349,7 +349,7 @@ async function runNbaPhase1ForAllOrgs(): Promise<void> {
               }
 
               const votriWoWAvg = tracSignalScore === null
-                ? await getAvgVotriWoW(validLanes).catch(() => null)
+                ? await withSonarCaller("scheduler:nba-phase1", () => getAvgVotriWoW(validLanes)).catch(() => null)
                 : tracSignalScore;
               if (votriWoWAvg === null) continue;
 
@@ -518,7 +518,7 @@ async function runIntradayVotriAlerts(): Promise<void> {
         const VOTRIW_THRESHOLD = 3; // percentage points
         for (const [userId, lanes] of userLaneMap) {
           if (lanes.length === 0) continue;
-          const votriMap = await getLaneVotrisBatchFresh(lanes);
+          const votriMap = await withSonarCaller("scheduler:nba-phase1", () => getLaneVotrisBatchFresh(lanes));
 
           for (const lane of lanes) {
             const qualifier = buildVotriQualifier(lane.origin, lane.destination);

@@ -9,7 +9,7 @@
  * for integrations that support one (currently ZoomInfo).
  */
 
-import { getSonarCircuitBreakerStatus } from "../sonarClient";
+import { getSonarCircuitBreakerStatus, getSonarCallCounters } from "../sonarClient";
 import { azureCredentialsConfigured } from "../graphService";
 import { getMailReadConsentStatus } from "../graphSubscriptionService";
 import { getWebexAuthState, webexNeedsReauth } from "../webexService";
@@ -183,6 +183,7 @@ async function probeSonar(_opts: ProbeOptions): Promise<IntegrationHealthSnapsho
   }
   const breaker = getSonarCircuitBreakerStatus();
   const fresh = freshnessHealthState("sonar");
+  const callBudget = getSonarCallCounters();
   // Breaker authoritative: if it's open, always degraded regardless of events.
   const healthState: HealthState = breaker.isOpen
     ? "degraded"
@@ -197,7 +198,7 @@ async function probeSonar(_opts: ProbeOptions): Promise<IntegrationHealthSnapsho
       ? `Circuit breaker tripped at ${breaker.trippedAt}; resumes ${breaker.resumesAt}`
       : fresh.lastErrorMessage,
     breakerState: breaker.isOpen ? "open" : (fresh.breakerState ?? "closed"),
-    detail: { ...fresh.totals, breaker },
+    detail: { ...fresh.totals, breaker, callBudget },
   };
 }
 
