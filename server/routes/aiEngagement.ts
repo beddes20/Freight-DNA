@@ -45,17 +45,31 @@ export function registerAiEngagementRoutes(app: Express) {
     try {
       const me = req.user!;
       const parsed = batchSchema.parse(req.body ?? {});
+      // Validate surface against the canonical registry. Unknown surfaces
+      // are routed to an explicit `unknown_surface` bucket (with the
+      // submitted name in `meta.requestedSurface`) so accidental typos
+      // don't silently pollute the analytics table with drifted surface
+      // names — they show up as a single, easy-to-spot bucket instead.
+      const KNOWN_SURFACES = new Set<string>(AI_ENGAGEMENT_SURFACES as readonly string[]);
       const rows = parsed.events
         .filter((e) => AI_ENGAGEMENT_EVENT_TYPES.includes(e.eventType as typeof AI_ENGAGEMENT_EVENT_TYPES[number]))
-        .map((e) => ({
-          organizationId: me.organizationId,
-          userId: me.id,
-          surface: e.surface,
-          feature: e.feature ?? null,
-          eventType: e.eventType,
-          targetId: e.targetId ?? null,
-          meta: (e.meta ?? null) as object | null,
-        }));
+        .map((e) => {
+          const known = KNOWN_SURFACES.has(e.surface);
+          const surface = known ? e.surface : "unknown_surface";
+          const meta = (e.meta ?? null) as Record<string, unknown> | null;
+          const finalMeta = known
+            ? meta
+            : { ...(meta ?? {}), requestedSurface: e.surface };
+          return {
+            organizationId: me.organizationId,
+            userId: me.id,
+            surface,
+            feature: e.feature ?? null,
+            eventType: e.eventType,
+            targetId: e.targetId ?? null,
+            meta: finalMeta as object | null,
+          };
+        });
       if (rows.length === 0) return res.json({ inserted: 0 });
       await db.insert(aiEngagementEvents).values(rows);
       res.json({ inserted: rows.length });
