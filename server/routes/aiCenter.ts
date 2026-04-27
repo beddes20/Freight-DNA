@@ -13,6 +13,7 @@ import { requireAuth, getCurrentUser } from "../auth";
 import { agents, workflowAgents, type Agent, type WorkflowAgent } from "@shared/schema";
 import { ensureWorkflowAgentsForOrg } from "../agentic/registry";
 import { fleetStats } from "../agentic/outcomes";
+import { WORKFLOW_AGENT_IMPLEMENTATION_STATUS, type AgentSlug } from "../agentic/agents";
 
 async function ctxFor(req: Request, res: Response) {
   const u = await getCurrentUser(req);
@@ -36,14 +37,28 @@ export function registerAiCenterRoutes(app: Express) {
 
     // Make sure the workflow agents exist for this org so the fleet list isn't
     // empty on first visit. The callable agents are seeded elsewhere.
-    const workflow = await ensureWorkflowAgentsForOrg(ctx.organizationId);
+    const workflowRows = await ensureWorkflowAgentsForOrg(ctx.organizationId);
     const callable: Agent[] = await db.select().from(agents).where(eq(agents.organizationId, ctx.organizationId));
     const stats = await fleetStats(ctx.organizationId, 30);
+
+    // Attach engineering implementation status (live_logic vs stub) so the
+    // Fleet UI can render an honest per-agent badge. See
+    // server/agentic/agents/index.ts for the rationale and source-of-truth map.
+    const workflow = workflowRows.map((w: WorkflowAgent) => ({
+      ...w,
+      implementationStatus:
+        WORKFLOW_AGENT_IMPLEMENTATION_STATUS[w.slug as AgentSlug] ?? "stub",
+    }));
+
+    // Headline number for the page-level "X of N agents in preview" banner —
+    // counts agents whose runner is still a placeholder.
+    const stubCount = workflow.filter(w => w.implementationStatus === "stub").length;
 
     const summary = {
       callableCount: callable.length,
       workflowCount: workflow.length,
-      enabledWorkflowCount: workflow.filter((w: WorkflowAgent) => w.enabled).length,
+      enabledWorkflowCount: workflow.filter(w => w.enabled).length,
+      stubWorkflowCount: stubCount,
       autonomyMix: workflow.reduce<Record<string, number>>((acc, w) => {
         acc[w.autonomy] = (acc[w.autonomy] ?? 0) + 1;
         return acc;

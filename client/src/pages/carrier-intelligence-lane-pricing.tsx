@@ -14,6 +14,7 @@ import {
   colorForConfidence, fmtRpm, fmtNum, downloadCsv,
 } from "@/lib/carrier-intelligence";
 import { useToast } from "@/hooks/use-toast";
+import { UnconfiguredPipelineEmptyState } from "@/components/empty-states/UnconfiguredPipelineEmptyState";
 
 interface BlendedRate {
   targetBuyRpm: number | null;
@@ -213,6 +214,10 @@ export default function CarrierIntelligenceLanePricingPage() {
           )}
         </CardContent>
       </Card>
+
+      {!result && (
+        <UnconfiguredPipelineEmptyState surface="lane-pricing" onlyWhenUnconfigured />
+      )}
 
       {result && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

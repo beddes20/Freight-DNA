@@ -18,6 +18,7 @@ import {
   type CarrierIntelThresholds,
 } from "@/lib/carrier-intelligence";
 import { useToast } from "@/hooks/use-toast";
+import { UnconfiguredPipelineEmptyState } from "@/components/empty-states/UnconfiguredPipelineEmptyState";
 
 interface ScorecardRow {
   id: string;
@@ -342,7 +343,15 @@ export default function CarrierIntelligenceScorecardPage() {
                 </TableHeader>
                 <TableBody>
                   {filtered.length === 0 ? (
-                    <TableRow><TableCell colSpan={10} className="text-center text-muted-foreground py-8" data-testid="text-no-rows">No carriers match these filters.</TableCell></TableRow>
+                    <TableRow>
+                      <TableCell colSpan={10} className="py-8" data-testid="text-no-rows">
+                        {scorecards.length === 0 ? (
+                          <UnconfiguredPipelineEmptyState surface="scorecard" />
+                        ) : (
+                          <div className="text-center text-muted-foreground">No carriers match these filters.</div>
+                        )}
+                      </TableCell>
+                    </TableRow>
                   ) : filtered.map((r) => {
                     const ms = moveStatus ?? ["realized", "active"];
                     const realizedDim = !ms.includes("realized") ? "text-muted-foreground/60" : "";

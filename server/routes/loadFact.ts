@@ -89,6 +89,57 @@ export function registerLoadFactRoutes(app: Express): void {
     }
   });
 
+  // ── Pipeline health (admin honesty diagnostic) ───────────────────────────
+  // Surfaces *why* the carrier-intelligence pages might be empty without
+  // requiring an admin to dig through scheduler logs. The shape mirrors what
+  // the /admin/integrations-health UI consumes for other integrations so the
+  // Load Fact tile renders next to them with consistent colour semantics.
+  app.get("/api/admin/load-fact/pipeline-health", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      if (user.role !== "admin") return res.status(403).json({ error: "Admin access required" });
+      const orgId = user.organizationId;
+      const [url, scheduleCfg, lastImportRaw, counts] = await Promise.all([
+        storage.getSetting(loadFactPowerBiUrlKey(orgId)),
+        getLoadFactScheduleConfig(orgId),
+        storage.getSetting(loadFactLastImportKey(orgId)),
+        getLoadFactCounts(orgId),
+      ]);
+      const urlConfigured = !!(url && url.trim().length > 0);
+      // Azure creds are required for the OneDrive/Graph workbook fetch — even
+      // a configured URL won't import without them.
+      const credentialsPresent = !!(
+        process.env.OUTLOOK_TENANT_ID &&
+        process.env.OUTLOOK_CLIENT_ID &&
+        process.env.OUTLOOK_CLIENT_SECRET
+      );
+      const scheduleEnabled =
+        scheduleCfg.cadence !== "off" &&
+        (scheduleCfg.morningEnabled || scheduleCfg.afternoonEnabled);
+      let lastImportAt: string | null = null;
+      let lastImportRowCount = 0;
+      if (lastImportRaw) {
+        try {
+          const parsed = JSON.parse(lastImportRaw) as { completedAt?: string; totalRows?: number };
+          lastImportAt = parsed.completedAt ?? null;
+          lastImportRowCount = parsed.totalRows ?? 0;
+        } catch { /* malformed setting — treat as no prior import */ }
+      }
+      return res.json({
+        urlConfigured,
+        credentialsPresent,
+        scheduleEnabled,
+        lastImportAt,
+        lastImportRowCount,
+        currentRowCount: counts.total,
+      });
+    } catch (err) {
+      console.error("[load-fact/pipeline-health]", err);
+      return res.status(500).json({ error: "Failed to read pipeline health" });
+    }
+  });
+
   // ── Schedule config ──────────────────────────────────────────────────────
 
   app.get("/api/admin/load-fact/schedule", requireAuth, async (req, res) => {

@@ -178,6 +178,30 @@ export default function AiHubPage() {
     }
   }, [user, activeTab, visibleTabs, fallbackTab, setLocation]);
 
+  // Honesty redirect: on an admin's *first ever* visit to the AI Hub,
+  // bounce them to the AI Center → Adapters tab so they immediately see
+  // which integrations are wired up before they look at the agent fleet.
+  // Mirrors the legacy /ai redirect inside ai-center.tsx, but fires from
+  // the canonical sidebar entry (/ai-hub with no ?hub=) too. Stored in
+  // localStorage as a one-shot — subsequent visits keep the resolved tab.
+  const isAdminUser = user?.role === "admin";
+  useEffect(() => {
+    if (!isAdminUser) return;
+    if (typeof window === "undefined") return;
+    if (window.localStorage.getItem("aiCenterFirstVisitAck") === "true") return;
+    // Only fire on entry points that don't carry an explicit hub selection:
+    // the bare /ai-hub (no ?hub=) and the legacy /ai root. If the user
+    // navigated to a specific tab (e.g. /ai-hub?hub=valueiq, /daily-priorities,
+    // /ai/agents) respect their intent.
+    const params = new URLSearchParams(search ?? "");
+    const isBareHub = location === "/ai-hub" && !params.get("hub");
+    const isBareLegacy = location === "/ai";
+    if (!isBareHub && !isBareLegacy) return;
+    window.localStorage.setItem("aiCenterFirstVisitAck", "true");
+    setLocation("/ai/adapters");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdminUser, location, search]);
+
   const dailyCount = useDailyWorkspaceCount(
     !!user && AI_HUB_TABS[0].roles.includes(user.role),
   );

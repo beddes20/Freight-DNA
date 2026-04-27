@@ -11,6 +11,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { AiDegradedBanner, type AiStatusBag } from "@/components/ai-degraded-banner";
 import {
   Select,
   SelectContent,
@@ -1598,6 +1599,19 @@ export default function IntelPage() {
   const executiveLoading = executiveQ.isLoading;
   const ratePosLoading   = ratePosQ.isLoading;
 
+  // ── AI degraded-state status bags ────────────────────────────────────────
+  // Each section endpoint may attach a `_aiStatus` bag describing which AI
+  // helpers were degraded for the request (missing API key, failed call,
+  // empty response). We surface those as inline banners so users know *why*
+  // an AI summary card is missing instead of seeing it silently disappear.
+  // See server/lib/aiHelperStatus.ts and client/src/components/ai-degraded-banner.tsx
+  // for the full rationale.
+  const alertsAiStatus    = (alertsQ.data    as { _aiStatus?: AiStatusBag } | undefined)?._aiStatus;
+  const marketAiStatus    = (marketQ.data    as { _aiStatus?: AiStatusBag } | undefined)?._aiStatus;
+  const scorecardAiStatus = (scorecardQ.data as { _aiStatus?: AiStatusBag } | undefined)?._aiStatus;
+  const executiveAiStatus = (executiveQ.data as { _aiStatus?: AiStatusBag } | undefined)?._aiStatus;
+  const ratePosAiStatus   = (ratePosQ.data   as { _aiStatus?: AiStatusBag } | undefined)?._aiStatus;
+
   const data: (IntelPayload & { ratePositioning?: RatePositioningSummary }) | undefined = shellQ.data && {
     viewUserId: shellQ.data.viewUserId,
     viewUserName: shellQ.data.viewUserName,
@@ -1890,6 +1904,30 @@ export default function IntelPage() {
           <Radio className="h-5 w-5 text-blue-500" /> Daily Insights
         </h2>
 
+        {/* AI degraded banners — only render when a helper is unconfigured/failed/empty. */}
+        <div className="mb-4 space-y-2">
+          <AiDegradedBanner
+            entry={alertsAiStatus?.alert_narrative}
+            surface="AI alert summaries"
+            testIdSuffix="alert-narrative"
+          />
+          <AiDegradedBanner
+            entry={alertsAiStatus?.spot_opportunity}
+            surface="AI spot-opportunity narratives"
+            testIdSuffix="spot-opportunity"
+          />
+          <AiDegradedBanner
+            entry={alertsAiStatus?.buy_rate_rationale}
+            surface="AI buy-rate rationale"
+            testIdSuffix="buy-rate-rationale"
+          />
+          <AiDegradedBanner
+            entry={marketAiStatus?.market_context}
+            surface="AI market context"
+            testIdSuffix="market-context"
+          />
+        </div>
+
         {marketLoading || !marketQ.data ? (
           <div className="border rounded-xl p-4 mb-4 space-y-2 animate-pulse" data-testid="skeleton-market-pulse">
             <div className="h-4 w-40 bg-muted rounded" />
@@ -2148,6 +2186,15 @@ export default function IntelPage() {
           </div>
         </div>
 
+        {/* AI degraded banner — lane narratives unavailable. */}
+        <div className="mb-3">
+          <AiDegradedBanner
+            entry={scorecardAiStatus?.lane_narrative}
+            surface="AI lane narratives"
+            testIdSuffix="lane-narrative"
+          />
+        </div>
+
         {scorecardLoading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4" data-testid="skeleton-scorecard">
             {[0,1,2,3].map(i => (
@@ -2201,7 +2248,17 @@ export default function IntelPage() {
           <div className="h-3 w-10/12 bg-muted/60 rounded" />
         </div>
       ) : (
-        <ExecutiveReportSection report={executiveReport} />
+        <>
+          {/* AI degraded banner — executive brief unavailable. */}
+          <div className="mb-3">
+            <AiDegradedBanner
+              entry={executiveAiStatus?.executive_brief}
+              surface="AI executive brief"
+              testIdSuffix="executive-brief"
+            />
+          </div>
+          <ExecutiveReportSection report={executiveReport} />
+        </>
       ))}
     </div>
   );

@@ -18,6 +18,7 @@ import {
 } from "@/lib/carrier-intelligence";
 import { formatLaneLocation } from "@shared/laneFormatters";
 import { useToast } from "@/hooks/use-toast";
+import { UnconfiguredPipelineEmptyState } from "@/components/empty-states/UnconfiguredPipelineEmptyState";
 
 interface RecRow {
   id: string; rank: number; carrierName: string; totalScore: number;
@@ -333,7 +334,15 @@ export default function CarrierIntelligenceAvailableLoadsPage() {
                 </TableHeader>
                 <TableBody>
                   {filtered.length === 0 ? (
-                    <TableRow><TableCell colSpan={10} className="text-center text-muted-foreground py-8" data-testid="text-no-rows">No open loads match these filters.</TableCell></TableRow>
+                    <TableRow>
+                      <TableCell colSpan={10} className="py-8" data-testid="text-no-rows">
+                        {(data?.loads?.length ?? 0) === 0 ? (
+                          <UnconfiguredPipelineEmptyState surface="available-loads" />
+                        ) : (
+                          <div className="text-center text-muted-foreground">No open loads match these filters.</div>
+                        )}
+                      </TableCell>
+                    </TableRow>
                   ) : filtered.map((l) => {
                     const top = l.topRecommendations[0];
                     // Title-Case city + uppercase state — matches CSV export

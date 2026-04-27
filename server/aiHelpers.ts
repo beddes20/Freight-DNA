@@ -15,6 +15,7 @@
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { getDbCached, setDbCached } from "./dbCache";
+import { recordAiStatus } from "./lib/aiHelperStatus";
 
 // ── Clients ───────────────────────────────────────────────────────────────────
 
@@ -146,10 +147,13 @@ export async function getAlertNarrative(
   originOtri: number,
   votri: number | null,
 ): Promise<string | null> {
-  if (!process.env.OPENAI_API_KEY) return null;
+  if (!process.env.OPENAI_API_KEY) {
+    recordAiStatus("alert_narrative", "unconfigured", "OPENAI_API_KEY not set");
+    return null;
+  }
   const key = `alert:${lane}:${signal}:${severity}:${Math.round(originOtri)}:${votri !== null ? Math.round(votri) : "n"}`;
   const cached = await getCachedLayered(key, TTL_30);
-  if (cached) return cached;
+  if (cached) { recordAiStatus("alert_narrative", "ok"); return cached; }
 
   try {
     const prompt = `You are a freight market intelligence analyst. Write a 1–2 sentence plain-English explanation for a freight lane alert that a logistics professional can act on immediately.
@@ -162,11 +166,14 @@ Origin market OTRI: ${originOtri.toFixed(1)}%${votri !== null ? `\nLane VOTRI (v
 
 Keep the tone direct and professional. No bullet points, no headers. 1–2 sentences only.`;
     const result = await callAI(prompt, 120);
+    if (!result) { recordAiStatus("alert_narrative", "empty"); return null; }
     setCachedLayered(key, result, TTL_30, DB_TTL_30);
     log(`Alert narrative generated for ${lane}`);
+    recordAiStatus("alert_narrative", "ok");
     return result;
   } catch (err: unknown) {
     log(`Alert narrative error: ${err instanceof Error ? err.message : String(err)}`);
+    recordAiStatus("alert_narrative", "failed", err instanceof Error ? err.message : String(err));
     return null;
   }
 }
@@ -181,10 +188,13 @@ export async function getSpotOpportunityNarrative(
   expectedCost: number,
   marginGap: number,
 ): Promise<string | null> {
-  if (!process.env.OPENAI_API_KEY) return null;
+  if (!process.env.OPENAI_API_KEY) {
+    recordAiStatus("spot_opportunity", "unconfigured", "OPENAI_API_KEY not set");
+    return null;
+  }
   const key = `spot:${lane}:${Math.round(marginGap * 10)}`;
   const cached = await getCachedLayered(key, TTL_30);
-  if (cached) return cached;
+  if (cached) { recordAiStatus("spot_opportunity", "ok"); return cached; }
 
   try {
     const prompt = `You are a freight market intelligence analyst. Write a 1–2 sentence plain-English description of a spot rate opportunity for a freight broker.
@@ -196,11 +206,14 @@ Estimated margin gap: ${marginGap.toFixed(1)}%
 
 Explain why this is an opportunity and what the broker should do. 1–2 sentences only, direct and actionable.`;
     const result = await callAI(prompt, 120);
+    if (!result) { recordAiStatus("spot_opportunity", "empty"); return null; }
     setCachedLayered(key, result, TTL_30, DB_TTL_30);
     log(`Spot narrative generated for ${lane}`);
+    recordAiStatus("spot_opportunity", "ok");
     return result;
   } catch (err: unknown) {
     log(`Spot narrative error: ${err instanceof Error ? err.message : String(err)}`);
+    recordAiStatus("spot_opportunity", "failed", err instanceof Error ? err.message : String(err));
     return null;
   }
 }
@@ -216,11 +229,14 @@ export async function getBuyRateRationale(
   originOtri: number,
   votri: number | null,
 ): Promise<string | null> {
-  if (!process.env.OPENAI_API_KEY) return null;
+  if (!process.env.OPENAI_API_KEY) {
+    recordAiStatus("buy_rate_rationale", "unconfigured", "OPENAI_API_KEY not set");
+    return null;
+  }
   const key = `buyr:${lane}:${Math.round(buyRateLow * 100)}:${Math.round(buyRateHigh * 100)}:${Math.round(originOtri)}`;
-  if (buyRateLow <= 0 && buyRateHigh <= 0) return null;
+  if (buyRateLow <= 0 && buyRateHigh <= 0) return null; // No-op input — not a degraded signal.
   const cached = await getCachedLayered(key, TTL_30);
-  if (cached) return cached;
+  if (cached) { recordAiStatus("buy_rate_rationale", "ok"); return cached; }
 
   try {
     const prompt = `You are a freight market intelligence analyst. Write a 1–2 sentence buy rate rationale for a freight broker.
@@ -231,11 +247,14 @@ Origin market OTRI: ${originOtri.toFixed(1)}%${votri !== null ? `\nLane VOTRI (v
 
 Explain why this rate range makes sense given current market conditions. 1–2 sentences, direct and professional.`;
     const result = await callAI(prompt, 120);
+    if (!result) { recordAiStatus("buy_rate_rationale", "empty"); return null; }
     setCachedLayered(key, result, TTL_30, DB_TTL_30);
     log(`Buy rate rationale generated for ${lane}`);
+    recordAiStatus("buy_rate_rationale", "ok");
     return result;
   } catch (err: unknown) {
     log(`Buy rate rationale error: ${err instanceof Error ? err.message : String(err)}`);
+    recordAiStatus("buy_rate_rationale", "failed", err instanceof Error ? err.message : String(err));
     return null;
   }
 }
@@ -270,10 +289,13 @@ export async function getLaneNarrative(
   votri: number | null,
   destOtri: number,
 ): Promise<string | null> {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
+  if (!process.env.ANTHROPIC_API_KEY) {
+    recordAiStatus("lane_narrative", "unconfigured", "ANTHROPIC_API_KEY not set");
+    return null;
+  }
   const key = `lane-narr:${lane}:${Math.round(avg6WkMarginPct * 10)}:${marginTrend}:${weeklyMarginPcts.map(p => Math.round(p)).join(",")}`;
   const cached = await getCachedLayered(key, TTL_60);
-  if (cached) return cached;
+  if (cached) { recordAiStatus("lane_narrative", "ok"); return cached; }
 
   try {
     const anthropic = getAnthropic();
@@ -295,12 +317,14 @@ Focus on: what the trend means, what's driving it, and one strategic recommendat
       messages: [{ role: "user", content: prompt }],
     });
     const result = extractClaudeText(resp);
-    if (!result) return null;
+    if (!result) { recordAiStatus("lane_narrative", "empty"); return null; }
     setCachedLayered(key, result, TTL_60, DB_TTL_60);
     log(`Lane narrative generated for ${lane}`);
+    recordAiStatus("lane_narrative", "ok");
     return result;
   } catch (err: unknown) {
     log(`Lane narrative error: ${err instanceof Error ? err.message : String(err)}`);
+    recordAiStatus("lane_narrative", "failed", err instanceof Error ? err.message : String(err));
     return null;
   }
 }
@@ -317,10 +341,13 @@ export async function getExecutiveBrief(
   topMarket: string,
   bestWeek: string,
 ): Promise<string | null> {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
+  if (!process.env.ANTHROPIC_API_KEY) {
+    recordAiStatus("executive_brief", "unconfigured", "ANTHROPIC_API_KEY not set");
+    return null;
+  }
   const key = `exec-brief:${totalLoads}:${Math.round(totalRevenue / 1000)}:${Math.round(overallMarginPct * 10)}:${healthDistribution.SCALE}:${healthDistribution.HOLD}`;
   const cached = await getCachedLayered(key, TTL_60);
-  if (cached) return cached;
+  if (cached) { recordAiStatus("executive_brief", "ok"); return cached; }
 
   try {
     const anthropic = getAnthropic();
@@ -343,12 +370,14 @@ Write as if briefing a VP. Highlight the most important insight and one strategi
       messages: [{ role: "user", content: prompt }],
     });
     const result = extractClaudeText(resp);
-    if (!result) return null;
+    if (!result) { recordAiStatus("executive_brief", "empty"); return null; }
     setCachedLayered(key, result, TTL_60, DB_TTL_60);
     log(`Executive brief generated`);
+    recordAiStatus("executive_brief", "ok");
     return result;
   } catch (err: unknown) {
     log(`Executive brief error: ${err instanceof Error ? err.message : String(err)}`);
+    recordAiStatus("executive_brief", "failed", err instanceof Error ? err.message : String(err));
     return null;
   }
 }
@@ -378,14 +407,21 @@ interface PerplexityResponse {
 export async function getPerplexityMarketContext(
   markets: string[],
 ): Promise<MarketContextItem[] | null> {
-  if (!process.env.PERPLEXITY_API_KEY) return null;
-  if (markets.length === 0) return null;
+  if (!process.env.PERPLEXITY_API_KEY) {
+    recordAiStatus("market_context", "unconfigured", "PERPLEXITY_API_KEY not set");
+    return null;
+  }
+  if (markets.length === 0) return null; // No-op input — not a degraded signal.
 
   const top3 = markets.slice(0, 3);
   const key = `perplexity:${top3.join(",")}`;
   const cached = await getCachedLayered(key, TTL_60);
   if (cached) {
-    try { return JSON.parse(cached) as MarketContextItem[]; } catch { /* fall through */ }
+    try {
+      const parsed = JSON.parse(cached) as MarketContextItem[];
+      recordAiStatus("market_context", "ok");
+      return parsed;
+    } catch { /* fall through to refetch */ }
   }
 
   try {
@@ -424,25 +460,35 @@ Today's date: ${new Date().toLocaleDateString("en-US", { weekday: "long", year: 
 
     if (!resp.ok) {
       log(`Perplexity error: ${resp.status} ${resp.statusText}`);
+      recordAiStatus("market_context", "failed", `Perplexity ${resp.status} ${resp.statusText}`);
       return null;
     }
 
     const data = await resp.json() as PerplexityResponse;
     const text = (data.choices?.[0]?.message?.content ?? "").trim();
-    if (!text) return null;
+    if (!text) { recordAiStatus("market_context", "empty"); return null; }
 
     // Extract JSON array from the response (strip any accidental markdown fences)
     const jsonMatch = text.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) { log("Perplexity: no JSON array found in response"); return null; }
+    if (!jsonMatch) {
+      log("Perplexity: no JSON array found in response");
+      recordAiStatus("market_context", "failed", "Perplexity returned non-JSON response");
+      return null;
+    }
     const items = JSON.parse(jsonMatch[0]) as MarketContextItem[];
-    if (!Array.isArray(items) || items.length === 0) return null;
+    if (!Array.isArray(items) || items.length === 0) {
+      recordAiStatus("market_context", "empty");
+      return null;
+    }
 
     const serialized = JSON.stringify(items);
     setCachedLayered(key, serialized, TTL_60, DB_TTL_4H);
     log(`Perplexity market context fetched for: ${top3.join(", ")}`);
+    recordAiStatus("market_context", "ok");
     return items;
   } catch (err: unknown) {
     log(`Perplexity error: ${err instanceof Error ? err.message : String(err)}`);
+    recordAiStatus("market_context", "failed", err instanceof Error ? err.message : String(err));
     return null;
   }
 }
@@ -493,11 +539,15 @@ export async function generateLaneCoachingCard(
   votri: number | null,
   marginTrend: "tightening" | "easing" | "stable",
 ): Promise<string | null> {
-  if (!process.env.OPENAI_API_KEY || marketRatePerMile === null) return null;
+  if (!process.env.OPENAI_API_KEY) {
+    recordAiStatus("coaching_card", "unconfigured", "OPENAI_API_KEY not set");
+    return null;
+  }
+  if (marketRatePerMile === null) return null; // No-op input — not a degraded signal.
 
   const key = `coaching:${lane}:${Math.round(paidRatePerMile * 100)}:${Math.round(marketRatePerMile * 100)}:${forecastDirection}:${classification}`;
   const cached = await getCachedLayered(key, TTL_60);
-  if (cached) return cached;
+  if (cached) { recordAiStatus("coaching_card", "ok"); return cached; }
 
   try {
     const aboveBelow = deltaPerMile >= 0 ? "above" : "below";
@@ -529,11 +579,14 @@ Target benchmark rate: $${targetRate.toFixed(2)}/mile
 Write a coaching card that tells the rep EXACTLY what action to take (renegotiate, lock in current rates, hold, or capitalize on favorable positioning). Be specific: include the dollar amount and the reason. 2–3 sentences only, direct and action-oriented. No bullet points, no headers.`;
 
     const result = await callAI(prompt, 180);
+    if (!result) { recordAiStatus("coaching_card", "empty"); return null; }
     setCachedLayered(key, result, TTL_60, DB_TTL_60);
     log(`Coaching card generated for ${lane}`);
+    recordAiStatus("coaching_card", "ok");
     return result;
   } catch (err: unknown) {
     log(`Coaching card error: ${err instanceof Error ? err.message : String(err)}`);
+    recordAiStatus("coaching_card", "failed", err instanceof Error ? err.message : String(err));
     return null;
   }
 }

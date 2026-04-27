@@ -45,6 +45,7 @@ import {
   getPerplexityMarketContext,
   type MarketContextItem,
 } from "../aiHelpers";
+import { withAiStatusContext } from "../lib/aiHelperStatus";
 import { getWeatherFlagsForCities, type WeatherFlag } from "../weatherService";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -1676,9 +1677,24 @@ export function registerIntelRoutes(app: Express): void {
       }
       const filterUserId = resolved as string | undefined;
       const tStart = Date.now();
-      const data = await compute(orgId, filterUserId);
+      // Wrap compute in an AI-status context so any helper that records a
+      // degraded signal (missing key, failed call, empty response) bubbles
+      // up to the response payload as `_aiStatus`. The frontend renders a
+      // per-section banner from this so users know *why* an AI card is
+      // missing instead of seeing it silently disappear. See
+      // server/lib/aiHelperStatus.ts for the rationale.
+      const { result: data, aiStatus } = await withAiStatusContext(
+        () => compute(orgId, filterUserId),
+      );
       logIntel(`section ${label} (${filterUserId ? "rep " + filterUserId : "org"}) in ${Date.now() - tStart}ms`);
-      res.json(data);
+      // Only attach _aiStatus when there's something to report — keeps the
+      // payload clean for the common all-ok case and lets the client treat
+      // a missing key as "no degraded signals to show".
+      if (data && typeof data === "object" && Object.keys(aiStatus).length > 0) {
+        res.json({ ...(data as object), _aiStatus: aiStatus });
+      } else {
+        res.json(data);
+      }
     } catch (err) {
       console.error(`[intel/${label}] Error:`, err);
       res.status(500).json({ error: `Failed to load ${label}` });

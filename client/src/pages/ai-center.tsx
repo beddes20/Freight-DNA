@@ -65,23 +65,78 @@ function tabFromPath(path: string): TabKey {
 }
 
 // ─── Fleet tab ───────────────────────────────────────────────────────────
+type ImplementationStatus = "live_logic" | "stub";
+type WorkflowAgentWithStatus = WorkflowAgent & { implementationStatus: ImplementationStatus };
+
 function FleetTab() {
   const { data, isLoading } = useQuery<{
     callable: Agent[];
-    workflow: WorkflowAgent[];
+    workflow: WorkflowAgentWithStatus[];
     stats: { byAgent: Record<string, Record<string, number>> };
-    summary: { callableCount: number; workflowCount: number; enabledWorkflowCount: number; autonomyMix: Record<string, number> };
+    summary: {
+      callableCount: number;
+      workflowCount: number;
+      enabledWorkflowCount: number;
+      stubWorkflowCount?: number;
+      autonomyMix: Record<string, number>;
+    };
   }>({
     queryKey: ["/api/ai-center/fleet"],
   });
+
+  // Honesty banner — dismissed state persisted so users only see it once
+  // until a new round of agents flips back to stub. Stored in localStorage
+  // because this is a UI-only preference, not a server-tracked acknowledgement.
+  const [previewAck, setPreviewAck] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("aiCenterPreviewAck") === "true";
+  });
+  const dismissPreviewBanner = () => {
+    setPreviewAck(true);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("aiCenterPreviewAck", "true");
+    }
+  };
 
   if (isLoading) return <div className="text-sm text-muted-foreground" data-testid="text-fleet-loading">Loading agent fleet…</div>;
 
   const callable = data?.callable ?? [];
   const workflow = data?.workflow ?? [];
+  const stubCount = data?.summary.stubWorkflowCount ?? workflow.filter(w => w.implementationStatus === "stub").length;
+  const totalCount = workflow.length;
 
   return (
     <div className="space-y-8" data-testid="tab-fleet">
+      {/* ── Honesty banner ────────────────────────────────────────────────
+          Surfaces the gap between "agent shown in UI" and "agent actually
+          executes against real systems". Dismissible because once a manager
+          has read this, repeating it on every visit becomes noise. */}
+      {!previewAck && stubCount > 0 && (
+        <div
+          className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100 flex items-start gap-3"
+          data-testid="banner-fleet-preview"
+        >
+          <ShieldAlert className="h-4 w-4 mt-0.5 flex-shrink-0" />
+          <div className="flex-1">
+            <p className="font-medium">
+              {stubCount} of {totalCount} agents in preview.
+            </p>
+            <p className="text-xs mt-0.5 text-amber-800/90 dark:text-amber-100/80">
+              Approved actions are recorded but do not execute against real systems yet.
+              See the Adapters tab for connection status.
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={dismissPreviewBanner}
+            data-testid="button-fleet-preview-dismiss"
+          >
+            Got it
+          </Button>
+        </div>
+      )}
+
       {/* Summary strip */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Card data-testid="stat-callable-count">
@@ -132,6 +187,7 @@ function FleetTab() {
           {workflow.map((a) => {
             const s = data?.stats?.byAgent?.[a.id] ?? {};
             const pending = (s as any).pending ?? 0;
+            const isStub = a.implementationStatus === "stub";
             return (
               <Card key={a.id} data-testid={`card-workflow-${a.slug}`} className="hover-elevate">
                 <CardHeader className="pb-3">
@@ -148,11 +204,32 @@ function FleetTab() {
                       <Badge className={AUTONOMY_COLOR[a.autonomy] ?? ""} data-testid={`badge-autonomy-${a.slug}`}>
                         {a.autonomy}
                       </Badge>
+                      {/* Honesty badge: green = real domain logic; amber = canned mock data.
+                          Distinct from autonomy (which only describes execution policy). */}
+                      <Badge
+                        className={
+                          isStub
+                            ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200"
+                            : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+                        }
+                        data-testid={`badge-implementation-${a.slug}`}
+                      >
+                        {isStub ? "Preview / mock data" : "Live logic"}
+                      </Badge>
                     </div>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <p className="text-sm text-muted-foreground line-clamp-3">{a.description}</p>
+                  {isStub && (
+                    <p
+                      className="text-[11px] text-amber-700 dark:text-amber-300 leading-snug"
+                      data-testid={`text-stub-microcopy-${a.slug}`}
+                    >
+                      Outputs are deterministic mock data until adapters are wired.
+                      Approvals are recorded but no external calls fire.
+                    </p>
+                  )}
                   <div className="flex items-center gap-3 text-xs">
                     <span className={a.enabled ? "text-emerald-600" : "text-muted-foreground"}>
                       {a.enabled ? "Enabled" : "Disabled"}
@@ -408,6 +485,26 @@ export default function AiCenterPage() {
   const [matchAgentDetail, agentDetailParams] = useRoute("/ai/agents/:slug");
 
   const activeTab = useMemo<TabKey>(() => tabFromPath(location), [location]);
+
+  // Honesty redirect: on an admin's *first ever* visit to /ai (the bare
+  // root that resolves to Fleet by default), bounce them to the Adapters
+  // tab so they immediately see which integrations are wired up before
+  // they look at the agent fleet. The flag is one-shot — subsequent
+  // visits to /ai keep the existing Fleet default. Stored in localStorage
+  // because this is a UI hint, not a server-side preference.
+  const isAdminUser = user?.role === "admin";
+  useEffect(() => {
+    if (!isAdminUser) return;
+    if (location !== "/ai" && location !== "/ai/agents") return;
+    if (typeof window === "undefined") return;
+    if (window.localStorage.getItem("aiCenterFirstVisitAck") === "true") return;
+    window.localStorage.setItem("aiCenterFirstVisitAck", "true");
+    setLocation("/ai/adapters");
+    // Eslint-disable: this effect should fire exactly once per page mount
+    // for the first-visit case; we deliberately exclude `setLocation` from
+    // deps because changing the location mid-effect would re-trigger it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdminUser, location]);
 
   // Task #700 — surface impression on mount; click event whenever the user
   // changes tabs *after* mount (we use a first-render ref so the impression

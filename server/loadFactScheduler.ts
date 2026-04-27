@@ -28,7 +28,18 @@ async function runSlot(slot: "morning" | "afternoon"): Promise<void> {
   for (const org of orgs) {
     try {
       const url = await storage.getSetting(loadFactPowerBiUrlKey(org.id));
-      if (!url) continue;
+      if (!url) {
+        // Honesty pass: previously this branch was a silent `continue`, which
+        // made an unconfigured pipeline look identical to a healthy one in
+        // production logs. Surface a single WARN per org per tick so admins
+        // can see "we tried to import but you haven't configured the source".
+        console.warn(
+          `[load-fact-scheduler] org=${org.id} slot=${slot} skipped: ` +
+          `load_fact_powerbi_url not configured. Set it under ` +
+          `Admin → Integrations Health → Load Fact pipeline to enable imports.`,
+        );
+        continue;
+      }
       const cfg = await getLoadFactScheduleConfig(org.id);
       if (!isSlotActive(cfg, slot)) {
         console.log(`[load-fact-scheduler] org=${org.id} slot=${slot} skipped (cfg=${JSON.stringify(cfg)})`);

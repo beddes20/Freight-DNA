@@ -237,6 +237,35 @@ export const AGENT_RUNNERS: Record<AgentSlug, (i: RunInput) => Promise<RunResult
   billing: runBilling,
 };
 
+/**
+ * Implementation honesty signal — distinguishes agents whose runner uses
+ * real domain logic against live freight tables (`live_logic`) from those
+ * still returning canned/deterministic data while the underlying adapters
+ * and rules are wired up (`stub`).
+ *
+ * This is *not* the same as the adapter `mode` (dry_run vs live) — even a
+ * `live_logic` agent will not fire external calls until its adapters flip
+ * out of dry-run. This map tells the user "the brain is real" vs "the
+ * brain is a placeholder", which is what most users actually care about
+ * when they see an Agentic Brokerage Fleet on the Fleet tab.
+ *
+ * Source of truth: code review of each `run*` function in this file.
+ *   - pricing       → reads quote signals, computes stretch sell from real numbers.
+ *   - risk          → consumes a vetting payload, scores against thresholds.
+ *   - order_schedule → emits a generic "Validation suggestion" with no real input parsing.
+ *   - coverage      → emits a static "Outreach plan" with no carrier ranking.
+ *   - execution     → emits a stock check-call message.
+ *   - billing       → emits a stock invoice payload.
+ */
+export const WORKFLOW_AGENT_IMPLEMENTATION_STATUS: Record<AgentSlug, "live_logic" | "stub"> = {
+  pricing: "live_logic",
+  risk: "live_logic",
+  order_schedule: "stub",
+  coverage: "stub",
+  execution: "stub",
+  billing: "stub",
+};
+
 export async function runAgentBySlug(slug: AgentSlug, input: RunInput): Promise<RunResult> {
   const runner = AGENT_RUNNERS[slug];
   if (!runner) throw new Error(`Unknown agent: ${slug}`);

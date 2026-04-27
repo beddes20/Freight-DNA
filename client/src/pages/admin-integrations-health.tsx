@@ -9,7 +9,8 @@ import { useAuth } from "@/hooks/use-auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, ShieldAlert, RefreshCw, CheckCircle2, AlertTriangle, HelpCircle, PowerOff, Mail, Beaker } from "lucide-react";
+import { Loader2, ShieldAlert, RefreshCw, CheckCircle2, AlertTriangle, HelpCircle, PowerOff, Mail, Beaker, DatabaseZap } from "lucide-react";
+import { Link } from "wouter";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
@@ -312,6 +313,8 @@ export default function AdminIntegrationsHealthPage() {
 
       <FixturePollutionBanner scan={fixturePollutionQuery.data?.scan ?? null} />
 
+      <LoadFactPipelineTile />
+
       {isLoading && !data ? (
         <Card><CardContent className="p-8 text-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground inline-block" /></CardContent></Card>
       ) : (
@@ -528,5 +531,112 @@ function SentItemsHealthBadge({ state, reason }: { state: string; reason?: strin
     <Badge variant="outline" className={`text-[10px] ${cfg.className}`} title={reason}>
       {cfg.label}
     </Badge>
+  );
+}
+
+interface PipelineHealth {
+  urlConfigured: boolean;
+  credentialsPresent: boolean;
+  scheduleEnabled: boolean;
+  lastImportAt: string | null;
+  lastImportRowCount: number;
+  currentRowCount: number;
+}
+
+/**
+ * Load Fact pipeline tile — surfaces *why* the carrier-intelligence pages
+ * may be empty. The honesty cases (in priority order):
+ *   1. URL not configured   → yellow banner with link to Load Fact admin.
+ *   2. Azure creds missing  → yellow banner naming the missing env vars.
+ *   3. Schedule paused/off  → yellow banner.
+ *   4. Configured + healthy → green tile with last-import metadata.
+ * Without this tile an admin had no way to tell whether a quiet day was
+ * "real" or "the pipeline silently never ran".
+ */
+function LoadFactPipelineTile() {
+  const { data, isLoading, isError, refetch } = useQuery<PipelineHealth>({
+    queryKey: ["/api/admin/load-fact/pipeline-health"],
+    queryFn: async () => {
+      const r = await fetch("/api/admin/load-fact/pipeline-health", { credentials: "include" });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    },
+    refetchInterval: 60_000,
+  });
+
+  if (isLoading) {
+    return (
+      <Card data-testid="card-load-fact-pipeline">
+        <CardContent className="p-6 text-center">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground inline-block" />
+        </CardContent>
+      </Card>
+    );
+  }
+  if (isError || !data) {
+    return (
+      <Card data-testid="card-load-fact-pipeline" className="border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800">
+        <CardContent className="p-4 text-sm">
+          <span className="text-amber-700 dark:text-amber-300">Couldn't read Load Fact pipeline status.</span>
+          <Button size="sm" variant="outline" className="ml-3" onClick={() => refetch()} data-testid="button-retry-pipeline-health">Retry</Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const lastImportLabel = data.lastImportAt ? fmtAgo(data.lastImportAt) : "never";
+  const cause: { tone: "yellow" | "green"; title: string; body: string; cta?: { label: string; href: string } } =
+    !data.urlConfigured
+      ? {
+          tone: "yellow",
+          title: "Load Fact pipeline — not configured",
+          body: "No source URL has been set, so scheduled imports skip every tick. Carrier scorecards, available loads, and lane pricing will stay empty until the URL is provided.",
+          cta: { label: "Configure source URL", href: "/admin/load-fact" },
+        }
+      : !data.credentialsPresent
+      ? {
+          tone: "yellow",
+          title: "Load Fact pipeline — Azure credentials missing",
+          body: "OUTLOOK_TENANT_ID, OUTLOOK_CLIENT_ID, and OUTLOOK_CLIENT_SECRET must all be set so the importer can fetch the workbook from OneDrive/Graph.",
+        }
+      : !data.scheduleEnabled
+      ? {
+          tone: "yellow",
+          title: "Load Fact pipeline — schedule paused",
+          body: `Source URL is set but the cron schedule is off. Last import: ${lastImportLabel} (${data.lastImportRowCount.toLocaleString()} rows).`,
+          cta: { label: "Open Load Fact admin", href: "/admin/load-fact" },
+        }
+      : {
+          tone: "green",
+          title: "Load Fact pipeline — healthy",
+          body: `Last import: ${lastImportLabel} (${data.lastImportRowCount.toLocaleString()} rows). Currently ${data.currentRowCount.toLocaleString()} rows in load_fact.`,
+        };
+
+  const tone = cause.tone === "yellow"
+    ? "border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800"
+    : "border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800";
+  const Icon = cause.tone === "yellow" ? AlertTriangle : CheckCircle2;
+  const iconTone = cause.tone === "yellow" ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400";
+
+  return (
+    <Card className={tone} data-testid="card-load-fact-pipeline">
+      <CardContent className="p-4 flex items-start gap-3">
+        <DatabaseZap className={`h-5 w-5 mt-0.5 ${iconTone}`} />
+        <div className="flex-1 space-y-1">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-sm" data-testid="text-pipeline-status-title">{cause.title}</span>
+            <Icon className={`h-3.5 w-3.5 ${iconTone}`} />
+          </div>
+          <p className="text-xs text-muted-foreground" data-testid="text-pipeline-status-body">{cause.body}</p>
+          {cause.cta && (
+            <div className="pt-1">
+              <Button asChild size="sm" variant="outline" data-testid="button-pipeline-cta">
+                <Link href={cause.cta.href}>{cause.cta.label}</Link>
+              </Button>
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
