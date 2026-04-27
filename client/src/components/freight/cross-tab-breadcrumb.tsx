@@ -37,7 +37,10 @@ const SURFACE_LABELS: Record<LaneSurfaceSlug, { label: string; path: string }> =
 };
 
 function isLaneSurface(slug: string): slug is LaneSurfaceSlug {
-  return slug in SURFACE_LABELS;
+  // Object.prototype.hasOwnProperty.call avoids matching inherited keys
+  // ("toString", "constructor", etc.) that a plain `slug in SURFACE_LABELS`
+  // check would falsely accept and render a broken breadcrumb for.
+  return Object.prototype.hasOwnProperty.call(SURFACE_LABELS, slug);
 }
 
 /**
