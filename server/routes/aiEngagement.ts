@@ -190,7 +190,7 @@ export function registerAiEngagementRoutes(app: Express) {
         .where(baseFilter)
         .groupBy(aiEngagementEvents.surface, aiEngagementEvents.feature);
       const featureBuckets = featureRows
-        .filter((f) => f.feature !== null && f.impressions > 0)
+        .filter((f) => f.feature !== null)
         .map((f) => ({
           surface: f.surface,
           feature: f.feature as string,
@@ -200,9 +200,17 @@ export function registerAiEngagementRoutes(app: Express) {
           acceptRate: f.impressions > 0 ? f.accepts / f.impressions : 0,
           dismissRate: f.impressions > 0 ? f.dismisses / f.impressions : 0,
         }));
+      // `most` = features with at least one impression, ranked by accept rate.
+      // `least` = the same set ranked the other way (low accept rate).
+      // `zeroImpression` = features tracked (any event type) but never shown
+      // to a user — these are the strongest "kill or merge" candidates and
+      // are the explicit deliverable from the AI Engagement task.
+      const withImpressions = featureBuckets.filter((f) => f.impressions > 0);
+      const zeroImpression = featureBuckets.filter((f) => f.impressions === 0);
       const featureLeaderboard = {
-        most: [...featureBuckets].sort((a, b) => b.acceptRate - a.acceptRate).slice(0, 10),
-        least: [...featureBuckets].sort((a, b) => a.acceptRate - b.acceptRate).slice(0, 10),
+        most: [...withImpressions].sort((a, b) => b.acceptRate - a.acceptRate).slice(0, 10),
+        least: [...withImpressions].sort((a, b) => a.acceptRate - b.acceptRate).slice(0, 10),
+        zeroImpression: zeroImpression.slice(0, 20),
       };
 
       // ── Time series (impressions per day for sparkline) ─────────────────────

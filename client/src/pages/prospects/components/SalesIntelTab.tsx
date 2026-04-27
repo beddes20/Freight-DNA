@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { recordAiEvent } from "@/lib/aiTelemetry";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Sparkles, RefreshCw, Loader2 } from "lucide-react";
@@ -22,6 +23,13 @@ export function SalesIntelTab({ prospect }: { prospect: EnrichedProspect }) {
         queryClient.invalidateQueries({ queryKey: ["/api/prospects"] });
         if (!force) toast({ title: "Sales Intel Brief generated!" });
         else toast({ title: "Brief regenerated" });
+        // Task #700 — record an impression for the talking-points surface.
+        recordAiEvent({
+          surface: "talking_points",
+          eventType: "impression",
+          feature: force ? "regenerate" : "generate",
+          targetId: String(prospect.id),
+        });
       }
     } catch {
       toast({ title: "Failed to generate brief", variant: "destructive" });

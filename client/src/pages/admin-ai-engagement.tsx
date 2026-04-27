@@ -59,7 +59,7 @@ interface OverviewResponse {
   availableSurfaces: string[];
   surfaces: SurfaceRow[];
   topUsers: TopUser[];
-  featureLeaderboard: { most: FeatureBucket[]; least: FeatureBucket[] };
+  featureLeaderboard: { most: FeatureBucket[]; least: FeatureBucket[]; zeroImpression: FeatureBucket[] };
   timeSeries: SeriesPoint[];
 }
 
@@ -290,6 +290,34 @@ export default function AdminAiEngagementPage() {
               testId="leaderboard-least"
             />
           </div>
+
+          {(data?.featureLeaderboard?.zeroImpression ?? []).length > 0 && (
+            <Card data-testid="card-zero-impression-features">
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  Zero-impression features
+                  <Badge variant="outline">{data?.featureLeaderboard?.zeroImpression?.length ?? 0}</Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Features that received some interaction but were never shown as an impression in the
+                  last {data?.days ?? days} days. Strong candidates for retirement or rewiring.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {(data?.featureLeaderboard?.zeroImpression ?? []).map((f) => (
+                    <Badge
+                      key={`${f.surface}::${f.feature}`}
+                      variant="secondary"
+                      data-testid={`badge-zero-feature-${f.surface}-${f.feature}`}
+                    >
+                      {f.feature} <span className="opacity-60 ml-1">({SURFACE_LABEL[f.surface] ?? f.surface})</span>
+                    </Badge>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {dark.length > 0 && (
             <Card>

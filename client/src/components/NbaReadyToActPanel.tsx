@@ -6,6 +6,7 @@ import {
   Sparkles, RefreshCcw, Mail, MessageSquare, PhoneCall, DollarSign, ListChecks, UserCircle, Loader2,
 } from "lucide-react";
 import { NbaLogTouchDialog } from "./NbaLogTouchDialog";
+import { recordAiEvent } from "@/lib/aiTelemetry";
 
 interface ReadyToActContact {
   id: string;
@@ -88,6 +89,19 @@ export function NbaReadyToActPanel({ cardId, companyId, companyName, cardContact
     if (data?.draft) setEditedDraft(data.draft);
   }, [data?.draft]);
 
+  // Task #700 — record an impression each time a fresh ready-to-act payload
+  // is built so the AI Engagement console knows the surface fired.
+  useEffect(() => {
+    if (data?.shape && data.shape !== "lane_capacity") {
+      recordAiEvent({
+        surface: "ready_to_act",
+        eventType: "impression",
+        feature: data.shape,
+        targetId: cardId,
+      });
+    }
+  }, [data?.shape, cardId]);
+
   const { data: contacts = [] } = useQuery<{ id: string; name: string; title?: string | null }[]>({
     queryKey: ["/api/companies", companyId, "contacts"],
     enabled: !!companyId,
@@ -123,11 +137,23 @@ export function NbaReadyToActPanel({ cardId, companyId, companyName, cardContact
 
   function handleRegenerate() {
     setRefreshKey(k => k + 1);
+    recordAiEvent({
+      surface: "ready_to_act",
+      eventType: "click",
+      feature: `${data?.shape ?? "unknown"}:regenerate`,
+      targetId: cardId,
+    });
   }
 
   async function handleCopy() {
     try {
       await navigator.clipboard.writeText(editedDraft);
+      recordAiEvent({
+        surface: "ready_to_act",
+        eventType: "copy",
+        feature: data?.shape ?? null,
+        targetId: cardId,
+      });
     } catch { /* no-op */ }
   }
 
