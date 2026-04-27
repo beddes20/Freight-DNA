@@ -22,7 +22,7 @@ import OpenAI from "openai";
 import { db } from "../storage";
 import {
   quoteOpportunities, quoteEvents, quoteCustomers, quoteReps,
-  quoteOutcomeReasons, emailMessages,
+  quoteOutcomeReasons, emailMessages, users,
   type EmailMessage, type QuoteOutcomeStatus,
 } from "@shared/schema";
 import {
@@ -33,6 +33,7 @@ import {
   type ResolvedCustomer,
 } from "./customerNameResolver";
 import { lookupMapping, bumpHit } from "./quoteSenderMappings";
+import { isCustomerFacingQuoteRep } from "@shared/quoteOpportunitiesRoles";
 
 export interface ParsedQuoteFields {
   originCity: string;
@@ -524,6 +525,23 @@ async function findOrCreateRep(orgId: string, email: string): Promise<string | n
     .where(and(eq(quoteReps.organizationId, orgId), eq(quoteReps.email, email)))
     .limit(1);
   if (existing.length > 0) return existing[0].id;
+
+  // Task #721 — Gate the rep-create path on the sender's user role. If the
+  // email resolves to a user in the org whose role is non-customer-facing
+  // (logistics_manager, logistics_coordinator, generic "sales", etc.), skip
+  // the insert so carrier-facing inboxes don't keep growing the
+  // `quote_reps` table with rows that the Quote Opportunities surface
+  // already hides via the shared `isCustomerFacingQuoteRep` filter.
+  //
+  // When the email doesn't match any user we KEEP the existing behavior
+  // (create the rep) so legitimate AM/NAM signatures from people who
+  // aren't logged in as users yet still seed the rep universe.
+  const [linkedUser] = await db.select({ role: users.role }).from(users).where(and(
+    eq(users.organizationId, orgId),
+    eq(users.username, email),
+  )).limit(1);
+  if (linkedUser && !isCustomerFacingQuoteRep(linkedUser.role)) return null;
+
   const name = email.split("@")[0].replace(/[._-]+/g, " ").replace(/\b\w/g, c => c.toUpperCase());
   const [row] = await db.insert(quoteReps).values({ organizationId: orgId, name, email }).returning();
   return row.id;

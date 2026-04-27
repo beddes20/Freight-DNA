@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { parseQuoteEmail, decideLostReason, ingestQuoteFromEmail } from "../services/quoteEmailIngestion";
 import {
   resolveCustomerName,
@@ -13,7 +13,8 @@ import {
 } from "../services/customerNameResolver";
 import { db } from "../storage";
 import {
-  emailMessages, quoteOpportunities, quoteCustomers, quoteEvents, organizations,
+  emailMessages, quoteOpportunities, quoteCustomers, quoteEvents, quoteReps,
+  organizations, users,
 } from "@shared/schema";
 
 describe("parseQuoteEmail", () => {
@@ -447,4 +448,112 @@ describe("resolveCustomerName (Task #578)", () => {
       expect(isLegacyFreeMailCustomerName(null)).toBe(false);
     });
   });
+});
+
+/**
+ * Task #721 — Stop creating new rep records from carrier-facing email
+ * senders. The ingestion pipeline must skip the `quote_reps` insert when
+ * the recipient (rep) email resolves to an org user whose role is
+ * non-customer-facing (logistics_manager, logistics_coordinator, sales,
+ * etc.) so carrier-only inboxes don't keep growing the table with rows
+ * that the Quote Opportunities pickers already hide.
+ */
+describe("ingestQuoteFromEmail rep-create gate (Task #721)", () => {
+  it("skips quote_reps insert for a logistics_manager rep but creates one for an account_manager", async () => {
+    const orgRow = await db.select({ id: organizations.id }).from(organizations).limit(1);
+    if (orgRow.length === 0) return; // No org in DB — skip silently in clean envs.
+    const orgId = orgRow[0].id;
+    const tag = `t721-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const lmEmail = `lm-${tag}@example.com`;
+    const amEmail = `am-${tag}@example.com`;
+
+    const userIds: string[] = [];
+    const messageIds: string[] = [];
+    const ingestedIds: string[] = [];
+    try {
+      // Seed two users in the org: one carrier-facing (logistics_manager)
+      // and one customer-facing (account_manager).
+      const [lmUser] = await db.insert(users).values({
+        organizationId: orgId,
+        username: lmEmail,
+        name: `LM ${tag}`,
+        role: "logistics_manager",
+      }).returning();
+      const [amUser] = await db.insert(users).values({
+        organizationId: orgId,
+        username: amEmail,
+        name: `AM ${tag}`,
+        role: "account_manager",
+      }).returning();
+      userIds.push(lmUser.id, amUser.id);
+
+      // Build two inbound emails routed to each user's mailbox.
+      for (const toEmail of [lmEmail, amEmail]) {
+        const [row] = await db.insert(emailMessages).values({
+          orgId,
+          providerMessageId: `${tag}-${toEmail}`,
+          direction: "inbound",
+          fromEmail: `customer-${tag}@acme.com`,
+          toEmail,
+          subject: `${tag} Spot quote needed`,
+          body: "Need a rate from Chicago, IL to Atlanta, GA next Tuesday. Thanks.",
+        }).returning();
+        messageIds.push(row.id);
+      }
+
+      for (const id of messageIds) {
+        const [msg] = await db.select().from(emailMessages).where(eq(emailMessages.id, id)).limit(1);
+        const result = await ingestQuoteFromEmail(msg, { useAiFallback: false });
+        expect(result.status).toBe("ingested");
+        expect(result.quoteId).toBeTruthy();
+        ingestedIds.push(result.quoteId!);
+      }
+
+      // The logistics_manager mailbox must NOT have produced a rep row;
+      // the account_manager mailbox must have.
+      const lmReps = await db.select({ id: quoteReps.id }).from(quoteReps).where(and(
+        eq(quoteReps.organizationId, orgId),
+        eq(quoteReps.email, lmEmail),
+      ));
+      expect(lmReps.length).toBe(0);
+
+      const amReps = await db.select({ id: quoteReps.id }).from(quoteReps).where(and(
+        eq(quoteReps.organizationId, orgId),
+        eq(quoteReps.email, amEmail),
+      ));
+      expect(amReps.length).toBe(1);
+
+      // And the resulting opportunities must reflect the gate: the
+      // logistics_manager opp has no rep attached, the account_manager
+      // opp does.
+      const opps = await db.select({
+        id: quoteOpportunities.id,
+        repId: quoteOpportunities.repId,
+        sourceReference: quoteOpportunities.sourceReference,
+      }).from(quoteOpportunities).where(inArray(quoteOpportunities.id, ingestedIds));
+
+      const byRef = new Map(opps.map((o) => [o.sourceReference, o]));
+      expect(byRef.get(`${tag}-${lmEmail}`)?.repId).toBeNull();
+      expect(byRef.get(`${tag}-${amEmail}`)?.repId).toBe(amReps[0].id);
+    } finally {
+      if (ingestedIds.length > 0) {
+        await db.delete(quoteEvents).where(inArray(quoteEvents.quoteId, ingestedIds));
+        await db.delete(quoteOpportunities).where(inArray(quoteOpportunities.id, ingestedIds));
+      }
+      if (messageIds.length > 0) {
+        await db.delete(emailMessages).where(inArray(emailMessages.id, messageIds));
+      }
+      // Drop the rep we created for the AM (FK on opportunities is
+      // already gone by this point) and any LM rep that may have leaked
+      // in if the gate regressed, so the test is fully self-cleaning.
+      await db.delete(quoteReps).where(and(
+        eq(quoteReps.organizationId, orgId),
+        inArray(quoteReps.email, [lmEmail, amEmail]),
+      ));
+      if (userIds.length > 0) {
+        await db.delete(users).where(inArray(users.id, userIds));
+      }
+    }
+  }, 30_000);
 });
