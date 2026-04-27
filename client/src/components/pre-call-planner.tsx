@@ -48,6 +48,7 @@ import { GrowthScoreBadge } from "@/components/account-growth-portlet";
 import { invalidateAfterTouchpoint } from "@/lib/invalidations";
 import { buildAiToasts } from "@/lib/aiTouchUtils";
 import { useToast } from "@/hooks/use-toast";
+import { recordAiEvent } from "@/lib/aiTelemetry";
 import { useWebexStatus, useWebexPresenceBatch, getPresenceStyle } from "@/hooks/use-webex";
 import { WebexDisabledHint } from "@/components/webex-disabled-hint";
 import { Video } from "lucide-react";
@@ -299,6 +300,33 @@ export function PreCallPlanner({
     staleTime: 15 * 60 * 1000,
   });
 
+  // Task #700 — telemetry impressions for derived narrative surfaces.
+  // These fire once per fresh data arrival inside the planner so the AI
+  // Engagement console can see touchpoint_summary and health_narrative
+  // are actually being shown to reps.
+  useEffect(() => {
+    if (open && tpSummaryData?.summary) {
+      recordAiEvent({
+        surface: "touchpoint_summary",
+        eventType: "impression",
+        feature: "pre_call_planner",
+        targetId: String(company.id),
+        meta: { noteCount: tpSummaryData.noteCount ?? 0 },
+      });
+    }
+  }, [open, tpSummaryData?.summary, company.id]);
+
+  useEffect(() => {
+    if (open && healthNarrativeData?.narrative) {
+      recordAiEvent({
+        surface: "health_narrative",
+        eventType: "impression",
+        feature: "pre_call_planner",
+        targetId: String(company.id),
+      });
+    }
+  }, [open, healthNarrativeData?.narrative, company.id]);
+
   const { data: lanePatterns } = useQuery<{ topCorridors: Array<{ lane: string; origin?: string; destination?: string; originState?: string; destinationState?: string; totalVolume: number }> }>({
     queryKey: ["/api/companies", company.id, "lane-patterns"],
     queryFn: () => fetch(`/api/companies/${company.id}/lane-patterns`, { credentials: "include" }).then(r => r.ok ? r.json() : null),
@@ -430,6 +458,16 @@ export function PreCallPlanner({
       });
       const data = await res.json();
       setTalkingPoints(data.points || []);
+      // Task #700 — telemetry impression for talking-points surface.
+      if (Array.isArray(data.points) && data.points.length > 0) {
+        recordAiEvent({
+          surface: "talking_points",
+          eventType: "impression",
+          feature: "pre_call_planner",
+          targetId: String(company.id),
+          meta: { pointCount: data.points.length },
+        });
+      }
     } catch {
       setTalkingPoints(["Unable to generate talking points. Try again."]);
     } finally {

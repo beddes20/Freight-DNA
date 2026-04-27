@@ -100,9 +100,28 @@ export default function AIIntelligencePage() {
     enabled: !!selectedCompany,
   });
 
+  // Task #700 — meeting_brief impression each time briefs are loaded for an account.
+  useEffect(() => {
+    if (selectedCompany && (briefsData as any)?.briefs?.length) {
+      recordAiEvent({
+        surface: "meeting_brief",
+        eventType: "impression",
+        feature: "list",
+        targetId: selectedCompany,
+        meta: { count: (briefsData as any).briefs.length },
+      });
+    }
+  }, [selectedCompany, (briefsData as any)?.briefs?.length]);
+
   const genBriefMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/ai-intelligence/meeting-prep/${selectedCompany}`),
     onSuccess: () => {
+      recordAiEvent({
+        surface: "meeting_brief",
+        eventType: "click",
+        feature: "generate",
+        targetId: selectedCompany,
+      });
       queryClient.invalidateQueries({ queryKey: ["/api/ai-intelligence/meeting-prep", selectedCompany] });
       toast({ title: "Meeting brief generated" });
     },

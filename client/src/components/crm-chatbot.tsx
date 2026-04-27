@@ -16,6 +16,7 @@ import { type AnswerMeta } from "./dna-copilot/answer-card";
 import { MessageList } from "./dna-copilot/message-list";
 import { EmptyState } from "./dna-copilot/empty-state";
 import { MODE_STORAGE_KEY, type ChatMessage, type Conversation, type CopilotMode, type NudgesResponse, type ReportType } from "./dna-copilot/types";
+import { recordAiEvent } from "@/lib/aiTelemetry";
 
 
 export function CrmChatbot() {
@@ -82,6 +83,24 @@ export function CrmChatbot() {
     enabled: open && !!user,
     staleTime: 5 * 60 * 1000,
   });
+
+  // Task #700 — proactive_nudge impression each time the chatbot loads a
+  // fresh batch of nudges/alerts for the current user.
+  useEffect(() => {
+    if (!open || !nudges) return;
+    const nudgeCount = (nudges.suggestions?.length ?? 0) + (nudges.alerts?.length ?? 0);
+    if (nudgeCount > 0) {
+      recordAiEvent({
+        surface: "proactive_nudge",
+        eventType: "impression",
+        feature: "chatbot",
+        meta: {
+          suggestions: nudges.suggestions?.length ?? 0,
+          alerts: nudges.alerts?.length ?? 0,
+        },
+      });
+    }
+  }, [open, nudges]);
 
   const pagePrompts = useMemo(
     () => getSuggestedPrompts(user?.role, pageContext?.entityType ?? null),

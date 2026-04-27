@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Sparkles, ThumbsUp, ThumbsDown, MessageSquarePlus, User as UserIcon, Bot } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { recordAiEvent } from "@/lib/aiTelemetry";
 
 interface AccountReviewSourceSnapshots {
   contactCount: number;
@@ -88,11 +89,30 @@ export function AccountReviewsTab({ companyId, companyName }: Props) {
     queryKey: ["/api/account-reviews/company", companyId],
   });
 
+  // Task #700 — weekly_account_review impression each time the list renders for an account.
+  useEffect(() => {
+    if (reviews && reviews.length > 0) {
+      recordAiEvent({
+        surface: "weekly_account_review",
+        eventType: "impression",
+        feature: "list",
+        targetId: companyId,
+        meta: { count: reviews.length },
+      });
+    }
+  }, [reviews?.length, companyId]);
+
   const generateMut = useMutation({
     mutationFn: async () => apiRequest("POST", "/api/account-reviews/generate", { companyId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/account-reviews/company", companyId] });
       toast({ title: "Account review generated", description: `Latest review for ${companyName} is ready.` });
+      recordAiEvent({
+        surface: "weekly_account_review",
+        eventType: "click",
+        feature: "generate",
+        targetId: companyId,
+      });
     },
     onError: (e: unknown) => toast({ title: "Could not generate", description: e instanceof Error ? e.message : String(e), variant: "destructive" }),
   });
@@ -100,9 +120,15 @@ export function AccountReviewsTab({ companyId, companyName }: Props) {
   const rateMut = useMutation({
     mutationFn: async ({ id, rating }: { id: string; rating: "up" | "down" }) =>
       apiRequest("POST", `/api/account-reviews/${id}/rate`, { rating }),
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: ["/api/account-reviews/company", companyId] });
       toast({ title: "Thanks for the feedback" });
+      recordAiEvent({
+        surface: "weekly_account_review",
+        eventType: vars.rating === "up" ? "thumbs_up" : "thumbs_down",
+        feature: "rate",
+        targetId: vars.id,
+      });
     },
   });
 
