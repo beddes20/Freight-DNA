@@ -9,6 +9,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Calendar, ChevronDown } from "lucide-react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Sheet,
@@ -166,14 +173,72 @@ export default function ConversationsPage() {
   const [filterRep, setFilterRep] = useState<string>("all");
 
   const [archiveSearch, setArchiveSearch] = useState("");
-  const [archiveDateFrom, setArchiveDateFrom] = useState("");
-  const [archiveDateTo, setArchiveDateTo] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(archiveSearch), 400);
     return () => clearTimeout(t);
   }, [archiveSearch]);
+
+  // ── Date range filter — shared across every bucket (Task #787) ────────────
+  // Reps want to narrow any inbox bucket (Mine, Unowned, etc.) to a window of
+  // recent activity, not just the Archived bucket. We keep a single source of
+  // truth here and feed dateFrom/dateTo into every request + the React Query
+  // key so changing the range refetches and resets pagination.
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  // Inline validation: the UI guards against From > To by treating an
+  // invalid range as "no date filter" so we never send a broken request.
+  const isDateRangeInvalid = !!dateFrom && !!dateTo && dateFrom > dateTo;
+  const effectiveDateFrom = isDateRangeInvalid ? "" : dateFrom;
+  const effectiveDateTo = isDateRangeInvalid ? "" : dateTo;
+
+  function fmtLocalDate(d: Date): string {
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function applyDatePreset(preset: "today" | "last7" | "last30" | "thisMonth") {
+    const today = new Date();
+    const todayStr = fmtLocalDate(today);
+    if (preset === "today") {
+      setDateFrom(todayStr);
+      setDateTo(todayStr);
+    } else if (preset === "last7") {
+      const from = new Date(today);
+      from.setDate(today.getDate() - 6);
+      setDateFrom(fmtLocalDate(from));
+      setDateTo(todayStr);
+    } else if (preset === "last30") {
+      const from = new Date(today);
+      from.setDate(today.getDate() - 29);
+      setDateFrom(fmtLocalDate(from));
+      setDateTo(todayStr);
+    } else if (preset === "thisMonth") {
+      const from = new Date(today.getFullYear(), today.getMonth(), 1);
+      setDateFrom(fmtLocalDate(from));
+      setDateTo(todayStr);
+    }
+  }
+
+  function clearDateRange() {
+    setDateFrom("");
+    setDateTo("");
+  }
+
+  // Whenever the *effective* date range changes, dump the accumulated thread
+  // list and the pagination cursor so "Load more" can't blend pages from a
+  // previous range with the new one. The query key change below also forces
+  // a refetch — this just keeps the visible list consistent in the gap.
+  useEffect(() => {
+    setAllThreads([]);
+    setNextCursor(null);
+    // We intentionally don't include setAllThreads/setNextCursor in deps —
+    // they're stable state setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveDateFrom, effectiveDateTo]);
 
   // ── Density (per-user via localStorage) ───────────────────────────────────
   const [density, setDensity] = useState<ConversationDensity>(loadDensity);
@@ -284,8 +349,6 @@ export default function ConversationsPage() {
     } else if (bucket === "archived") {
       p.set("archived", "true");
       if (debouncedSearch) p.set("search", debouncedSearch);
-      if (archiveDateFrom) p.set("dateFrom", archiveDateFrom);
-      if (archiveDateTo) p.set("dateTo", archiveDateTo);
     } else if (bucket === "snoozed") {
       // Show only currently-snoozed threads. Sorted by snooze wake time
       // ascending on the server.
@@ -305,6 +368,11 @@ export default function ConversationsPage() {
     // so we only emit the param when the rep has narrowed it — keeps URLs
     // and request lines clean.
     if (audience !== "all") p.set("audience", audience);
+    // Date range filter — applied on every bucket (Task #787). Uses the
+    // *effective* values so an invalid (From > To) range is treated as
+    // "no date filter" and never reaches the server.
+    if (effectiveDateFrom) p.set("dateFrom", effectiveDateFrom);
+    if (effectiveDateTo) p.set("dateTo", effectiveDateTo);
     if (cursorParam) p.set("cursor", cursorParam);
     return p.toString();
   }
@@ -319,8 +387,8 @@ export default function ConversationsPage() {
       filterOverdue,
       filterRep,
       debouncedSearch,
-      archiveDateFrom,
-      archiveDateTo,
+      effectiveDateFrom,
+      effectiveDateTo,
     ],
     queryFn: async () => {
       const res = await fetch(`/api/internal/conversations?${buildParams()}`);
@@ -568,7 +636,7 @@ export default function ConversationsPage() {
   // them in the bulk action queue.
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [bucket, filterState, filterPriority, filterOverdue, filterRep, debouncedSearch, archiveDateFrom, archiveDateTo]);
+  }, [bucket, filterState, filterPriority, filterOverdue, filterRep, debouncedSearch, effectiveDateFrom, effectiveDateTo]);
 
   function applySavedView(view: SavedView) {
     const f = view.filters ?? {};
@@ -858,50 +926,131 @@ export default function ConversationsPage() {
             )}
 
             {bucket === "archived" && (
-              <>
-                <div className="relative flex-1 min-w-[180px]">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-                  <Input
-                    placeholder="Search account, carrier, or subject…"
-                    value={archiveSearch}
-                    onChange={(e) => setArchiveSearch(e.target.value)}
-                    className="pl-8 h-8 text-xs"
-                    data-testid="input-archive-search"
-                  />
-                </div>
+              <div className="relative flex-1 min-w-[180px]">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
                 <Input
-                  type="date"
-                  value={archiveDateFrom}
-                  onChange={(e) => setArchiveDateFrom(e.target.value)}
-                  className="w-36 h-8 text-xs"
-                  data-testid="input-archive-date-from"
+                  placeholder="Search account, carrier, or subject…"
+                  value={archiveSearch}
+                  onChange={(e) => setArchiveSearch(e.target.value)}
+                  className="pl-8 h-8 text-xs"
+                  data-testid="input-archive-search"
                 />
-                <Input
-                  type="date"
-                  value={archiveDateTo}
-                  onChange={(e) => setArchiveDateTo(e.target.value)}
-                  className="w-36 h-8 text-xs"
-                  data-testid="input-archive-date-to"
-                />
-                {(archiveSearch || archiveDateFrom || archiveDateTo) && (
+                {archiveSearch && (
                   <Button
                     variant="ghost"
-                    size="sm"
-                    className="h-8 text-xs"
+                    size="icon"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6"
                     onClick={() => {
                       setArchiveSearch("");
                       setDebouncedSearch("");
-                      setArchiveDateFrom("");
-                      setArchiveDateTo("");
                     }}
-                    data-testid="button-clear-archive-filters"
+                    data-testid="button-clear-archive-search"
+                    aria-label="Clear search"
                   >
-                    <X className="w-3 h-3 mr-1" />
-                    Clear
+                    <X className="w-3 h-3" />
                   </Button>
                 )}
-              </>
+              </div>
             )}
+
+            {/* Date range filter — visible in every bucket (Task #787).
+                Replaces the archive-only date inputs so there is exactly one
+                date range UI no matter which bucket is active. */}
+            <div className="flex flex-wrap items-center gap-1.5" data-testid="date-range-filter">
+              <Label htmlFor="input-date-from" className="text-xs text-muted-foreground hidden sm:inline">
+                From
+              </Label>
+              <Input
+                id="input-date-from"
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                max={dateTo || undefined}
+                className={cn(
+                  "w-[9.5rem] h-8 text-xs",
+                  isDateRangeInvalid && "border-destructive focus-visible:ring-destructive",
+                )}
+                data-testid="input-date-from"
+                aria-invalid={isDateRangeInvalid}
+              />
+              <Label htmlFor="input-date-to" className="text-xs text-muted-foreground hidden sm:inline">
+                To
+              </Label>
+              <Input
+                id="input-date-to"
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                min={dateFrom || undefined}
+                className={cn(
+                  "w-[9.5rem] h-8 text-xs",
+                  isDateRangeInvalid && "border-destructive focus-visible:ring-destructive",
+                )}
+                data-testid="input-date-to"
+                aria-invalid={isDateRangeInvalid}
+              />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs gap-1.5"
+                    data-testid="button-date-preset"
+                  >
+                    <Calendar className="w-3 h-3" />
+                    Quick range
+                    <ChevronDown className="w-3 h-3 opacity-60" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem
+                    onSelect={() => applyDatePreset("today")}
+                    data-testid="option-date-preset-today"
+                  >
+                    Today
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => applyDatePreset("last7")}
+                    data-testid="option-date-preset-last7"
+                  >
+                    Last 7 days
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => applyDatePreset("last30")}
+                    data-testid="option-date-preset-last30"
+                  >
+                    Last 30 days
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => applyDatePreset("thisMonth")}
+                    data-testid="option-date-preset-this-month"
+                  >
+                    This month
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              {(dateFrom || dateTo) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={clearDateRange}
+                  data-testid="button-clear-date-range"
+                >
+                  <X className="w-3 h-3 mr-1" />
+                  Clear dates
+                </Button>
+              )}
+              {isDateRangeInvalid && (
+                <span
+                  className="text-xs text-destructive"
+                  role="alert"
+                  data-testid="text-date-range-error"
+                >
+                  "From" date must be on or before "To" date.
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Bulk action bar — sticky above the list when ≥1 thread is checked. */}
