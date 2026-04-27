@@ -34,15 +34,15 @@ import {
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface MarketPulse {
-  otri: number;
-  otriWoWDelta: number;
-  ntiPerMove: number;   // NTI.USA $/move (spot, national)
-  ntiPerMile: number;   // VCRPM1.USA $/mile (contract)
-  ntiWoWDelta: number;
-  flatbedOtri: number;
-  flatbedSignal: "hot" | "cool" | "neutral";
-  dieselPerGal: number;
-  dieselMoMDelta: number;
+  otri: number | null;
+  otriWoWDelta: number | null;
+  ntiPerMove: number | null;   // NTI.USA $/move (spot, national)
+  ntiPerMile: number | null;   // VCRPM1.USA $/mile (contract)
+  ntiWoWDelta: number | null;
+  flatbedOtri: number | null;
+  flatbedSignal: "hot" | "cool" | "neutral" | null;
+  dieselPerGal: number | null;
+  dieselMoMDelta: number | null;
   timestamp: string;
   isStale: boolean;
 }
@@ -512,38 +512,52 @@ function TracRateCardsPanel({
 // ── Market Pulse Strip ────────────────────────────────────────────────────────
 
 function MarketPulseStrip({ pulse, isStale, timestamp }: { pulse: MarketPulse; isStale: boolean; timestamp: string }) {
+  const fmt = (n: number | null | undefined, digits = 2): string =>
+    typeof n === "number" && Number.isFinite(n) ? n.toFixed(digits) : "—";
+  const otriDelta = pulse.otriWoWDelta;
+  const ntiDelta = pulse.ntiWoWDelta;
+  const dieselDelta = pulse.dieselMoMDelta;
+  const ntiPerMove = pulse.ntiPerMove;
   const metrics = [
     {
       label: "Nat'l OTRI",
-      value: `${pulse.otri.toFixed(2)}%`,
-      delta: `${pulse.otriWoWDelta > 0 ? "▲" : "▼"} ${Math.abs(pulse.otriWoWDelta).toFixed(1)}% WoW`,
-      deltaColor: pulse.otriWoWDelta > 0 ? "text-red-400" : "text-green-400",
+      value: pulse.otri !== null ? `${fmt(pulse.otri, 2)}%` : "—",
+      delta: otriDelta !== null
+        ? `${otriDelta > 0 ? "▲" : "▼"} ${Math.abs(otriDelta).toFixed(1)}% WoW`
+        : "WoW —",
+      deltaColor: (otriDelta ?? 0) > 0 ? "text-red-400" : "text-green-400",
     },
     {
       label: "NTI Spot/move",
-      value: pulse.ntiPerMove > 100
-        ? `$${Math.round(pulse.ntiPerMove).toLocaleString()}`
-        : `$${(pulse.ntiPerMile ?? 2.28).toFixed(2)}/mi`,
-      delta: `${pulse.ntiWoWDelta > 0 ? "↑" : "↓"} ${Math.abs(pulse.ntiWoWDelta).toFixed(0)} WoW`,
-      deltaColor: pulse.ntiWoWDelta > 0 ? "text-amber-400" : "text-green-400",
+      value: ntiPerMove !== null
+        ? (ntiPerMove > 100
+            ? `$${Math.round(ntiPerMove).toLocaleString()}`
+            : `$${fmt(pulse.ntiPerMile ?? 2.28, 2)}/mi`)
+        : "—",
+      delta: ntiDelta !== null
+        ? `${ntiDelta > 0 ? "↑" : "↓"} ${Math.abs(ntiDelta).toFixed(0)} WoW`
+        : "WoW —",
+      deltaColor: (ntiDelta ?? 0) > 0 ? "text-amber-400" : "text-green-400",
     },
     {
       label: "Contract $/mi",
-      value: `$${(pulse.ntiPerMile ?? 2.28).toFixed(2)}`,
+      value: `$${fmt(pulse.ntiPerMile ?? 2.28, 2)}`,
       delta: "VCRPM1",
       deltaColor: "text-white/40",
     },
     {
       label: "Flatbed OTRI",
-      value: `${pulse.flatbedOtri.toFixed(1)}%`,
+      value: pulse.flatbedOtri !== null ? `${fmt(pulse.flatbedOtri, 1)}%` : "—",
       delta: pulse.flatbedSignal === "hot" ? "⚠ Very hot" : pulse.flatbedSignal === "cool" ? "✓ Cool" : "Neutral",
       deltaColor: pulse.flatbedSignal === "hot" ? "text-red-400" : pulse.flatbedSignal === "cool" ? "text-green-400" : "text-amber-400",
     },
     {
       label: "Diesel/gal (EIA)",
-      value: `$${pulse.dieselPerGal.toFixed(2)}`,
-      delta: `${pulse.dieselMoMDelta > 0 ? "▲" : "▼"} $${Math.abs(pulse.dieselMoMDelta).toFixed(3)} WoW`,
-      deltaColor: pulse.dieselMoMDelta > 0 ? "text-red-400" : "text-green-400",
+      value: pulse.dieselPerGal !== null ? `$${fmt(pulse.dieselPerGal, 2)}` : "—",
+      delta: dieselDelta !== null
+        ? `${dieselDelta > 0 ? "▲" : "▼"} $${Math.abs(dieselDelta).toFixed(3)} WoW`
+        : "WoW —",
+      deltaColor: (dieselDelta ?? 0) > 0 ? "text-red-400" : "text-green-400",
     },
   ];
 

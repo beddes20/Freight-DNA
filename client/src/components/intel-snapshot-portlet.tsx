@@ -14,14 +14,19 @@ interface LaneAlert {
 }
 
 interface MarketPulse {
-  otri: number;
-  ntiPerMile: number;
-  flatbedOtri: number;
-  flatbedSignal: string;
-  dieselPerGal: number;
+  otri: number | null;
+  ntiPerMile: number | null;
+  flatbedOtri: number | null;
+  flatbedSignal: string | null;
+  dieselPerGal: number | null;
   timestamp: string;
   isStale: boolean;
 }
+
+const fmtPct = (n: number | null | undefined, digits = 1): string =>
+  typeof n === "number" && Number.isFinite(n) ? `${n.toFixed(digits)}%` : "—";
+const fmtUsd = (n: number | null | undefined, digits = 2): string =>
+  typeof n === "number" && Number.isFinite(n) ? `$${n.toFixed(digits)}` : "—";
 
 interface IntelSnapshot {
   dailyInsights: {
@@ -102,10 +107,10 @@ export function IntelSnapshotPortlet() {
         {/* Market Pulse Strip */}
         <div className="rounded-lg overflow-hidden" style={{ background: "#0a1628" }}>
           <div className="flex divide-x divide-white/10">
-            <PulseMetric label="OTRI" value={`${marketPulse.otri.toFixed(1)}%`} />
-            <PulseMetric label="NTI/mi" value={`$${marketPulse.ntiPerMile.toFixed(2)}`} />
-            <PulseMetric label="Flatbed" value={`${marketPulse.flatbedOtri.toFixed(1)}%`} />
-            <PulseMetric label="Diesel" value={`$${marketPulse.dieselPerGal.toFixed(2)}`} />
+            <PulseMetric label="OTRI" value={fmtPct(marketPulse.otri, 1)} />
+            <PulseMetric label="NTI/mi" value={fmtUsd(marketPulse.ntiPerMile, 2)} />
+            <PulseMetric label="Flatbed" value={fmtPct(marketPulse.flatbedOtri, 1)} />
+            <PulseMetric label="Diesel" value={fmtUsd(marketPulse.dieselPerGal, 2)} />
           </div>
         </div>
 
