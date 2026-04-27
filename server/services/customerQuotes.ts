@@ -1508,6 +1508,22 @@ export type QuoteSourceMessage = {
   receivedAt: string | null;
 };
 
+// Auto-flip context for a single email_won/email_lost/tms_won/tms_lost event,
+// keyed by quote_event.id. Lets the drawer's timeline answer "what triggered
+// this Won/Lost auto-flip" — matched phrase + email body excerpt + a link
+// back to the Conversations thread.
+export type QuoteOutcomeFlipContext = {
+  source: "email" | "tms";
+  matchedPhrase: string | null;
+  bodyExcerpt: string | null;
+  emailSubject: string | null;
+  fromEmail: string | null;
+  threadId: string | null;
+  messageId: string | null;
+  reasonCode: string | null;
+  matchTier: string | null;
+};
+
 export type QuoteDetail = {
   opp: QuoteOpportunity;
   events: typeof quoteEvents.$inferSelect[];
@@ -1524,6 +1540,11 @@ export type QuoteDetail = {
   // row (looked up by sourceReference) so the drawer can deep-link to the
   // Conversations tab on the right thread.
   sourceMessage: QuoteSourceMessage | null;
+  // Auto-flip context keyed by quote_event.id. Empty when the quote has no
+  // email_won/email_lost/tms_won/tms_lost events. The drawer's timeline
+  // uses this to surface "AI flipped this to Won because the customer
+  // wrote 'go ahead and book it'".
+  outcomeFlipContext: Record<string, QuoteOutcomeFlipContext>;
 };
 
 export async function getQuoteDetail(orgId: string, quoteId: string): Promise<QuoteDetail | null> {
@@ -1553,6 +1574,7 @@ export async function getQuoteDetail(orgId: string, quoteId: string): Promise<Qu
   ]);
   const lwqLane = await getLwqLaneForQuote(orgId, quoteId);
   const sourceMessage = await loadSourceMessage(orgId, opp);
+  const outcomeFlipContext = await loadOutcomeFlipContext(orgId, events);
   return {
     opp, events, customer, rep, carrier, reason,
     relatedSameLane: sameLane.filter(r => r.id !== quoteId),
@@ -1560,7 +1582,89 @@ export async function getQuoteDetail(orgId: string, quoteId: string): Promise<Qu
     relatedSameLaneGroup: sameLaneGroup.filter(r => r.id !== quoteId && r.originCity !== opp.originCity),
     lwqLaneId: lwqLane?.laneId ?? null,
     sourceMessage,
+    outcomeFlipContext,
   };
+}
+
+/**
+ * Build per-event flip context for the drawer's timeline. For each
+ * email_won / email_lost event we look up the triggering email_messages
+ * row by payload.messageId and attach a 240-char body excerpt + the matched
+ * phrase so reps can see exactly which words tripped the auto-flip. For
+ * tms_won / tms_lost we surface the match tier from payload (no email
+ * lookup needed). Returns an empty record when the quote has no flip
+ * events — keeps the drawer rendering trivial.
+ */
+const FLIP_EVENT_TYPES = new Set(["email_won", "email_lost", "tms_won", "tms_lost"]);
+const BODY_EXCERPT_MAX = 240;
+
+async function loadOutcomeFlipContext(
+  orgId: string,
+  events: typeof quoteEvents.$inferSelect[],
+): Promise<Record<string, QuoteOutcomeFlipContext>> {
+  const flipEvents = events.filter(e => FLIP_EVENT_TYPES.has(e.eventType));
+  if (flipEvents.length === 0) return {};
+
+  // Collect referenced email message ids across all email_won/email_lost
+  // events in one batch (avoids N round-trips for quotes with multi-flip
+  // history, e.g. AI flipped to Won then a rep marked Lost manually).
+  const messageIds = new Set<string>();
+  for (const e of flipEvents) {
+    const payload = (e.payload ?? {}) as Record<string, unknown>;
+    const mid = typeof payload.messageId === "string" ? payload.messageId : null;
+    if (mid) messageIds.add(mid);
+  }
+
+  let messagesById = new Map<string, typeof emailMessages.$inferSelect>();
+  if (messageIds.size > 0) {
+    const rows = await db.select().from(emailMessages).where(and(
+      eq(emailMessages.orgId, orgId),
+      inArray(emailMessages.id, Array.from(messageIds)),
+    ));
+    messagesById = new Map(rows.map(r => [r.id, r]));
+  }
+
+  const out: Record<string, QuoteOutcomeFlipContext> = {};
+  for (const e of flipEvents) {
+    const payload = (e.payload ?? {}) as Record<string, unknown>;
+    const isEmail = e.eventType === "email_won" || e.eventType === "email_lost";
+    const isTms = e.eventType === "tms_won" || e.eventType === "tms_lost";
+    const messageId = typeof payload.messageId === "string" ? payload.messageId : null;
+    const msg = messageId ? messagesById.get(messageId) ?? null : null;
+
+    // Matched phrase preference: explicit `matchedPhrase` (lost path), then
+    // `winLanguage` / `lossLanguage` (LLM-extracted hint), else null.
+    const matchedPhrase = pickStringField(payload, ["matchedPhrase", "winLanguage", "win_language", "wonLanguage", "won_language", "lossLanguage", "loss_language"]);
+    const reasonCode = pickStringField(payload, ["reasonCode", "reason_code"]);
+    const matchTier = pickStringField(payload, ["matchTier", "match_tier"]);
+
+    out[e.id] = {
+      source: isEmail ? "email" : "tms",
+      matchedPhrase,
+      bodyExcerpt: msg?.body ? truncateBody(msg.body) : null,
+      emailSubject: msg?.subject ?? null,
+      fromEmail: msg?.fromEmail ?? null,
+      threadId: (msg?.threadId ?? (typeof payload.threadId === "string" ? payload.threadId : null)) ?? null,
+      messageId,
+      reasonCode,
+      matchTier: isTms ? matchTier : null,
+    };
+  }
+  return out;
+}
+
+function pickStringField(obj: Record<string, unknown>, keys: string[]): string | null {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+function truncateBody(s: string): string {
+  const cleaned = s.replace(/\s+/g, " ").trim();
+  if (cleaned.length <= BODY_EXCERPT_MAX) return cleaned;
+  return cleaned.slice(0, BODY_EXCERPT_MAX - 1) + "…";
 }
 
 /**

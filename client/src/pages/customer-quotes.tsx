@@ -203,6 +203,18 @@ type QuoteSourceMessage = {
   receivedAt: string | null;
 };
 
+type QuoteOutcomeFlipContext = {
+  source: "email" | "tms";
+  matchedPhrase: string | null;
+  bodyExcerpt: string | null;
+  emailSubject: string | null;
+  fromEmail: string | null;
+  threadId: string | null;
+  messageId: string | null;
+  reasonCode: string | null;
+  matchTier: string | null;
+};
+
 type QuoteDetail = {
   opp: Quote;
   events: QuoteEvent[];
@@ -218,6 +230,17 @@ type QuoteDetail = {
   // Task #526 — populated when source = "email", lets us deep-link the
   // drawer's Source card to the Conversations tab on the right thread.
   sourceMessage: QuoteSourceMessage | null;
+  // Per-event auto-flip context (keyed by quote_event.id). Populated for
+  // email_won / email_lost / tms_won / tms_lost events so the timeline can
+  // surface "AI flipped this to Won because the customer wrote …".
+  outcomeFlipContext: Record<string, QuoteOutcomeFlipContext>;
+};
+
+const FLIP_EVENT_LABELS: Record<string, { label: string; tone: "won" | "lost" }> = {
+  email_won: { label: "Auto-flipped to Won (email)", tone: "won" },
+  email_lost: { label: "Auto-flipped to Lost (email)", tone: "lost" },
+  tms_won: { label: "Auto-flipped to Won (TMS-confirmed)", tone: "won" },
+  tms_lost: { label: "Auto-flipped to Lost (TMS-confirmed)", tone: "lost" },
 };
 
 // ---------- Constants ----------
@@ -2182,13 +2205,71 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
               <ol className="space-y-2">
                 {data.events.map(e => {
                   const amt = e.payload && typeof e.payload === "object" && "quotedAmount" in e.payload ? String((e.payload as Record<string, unknown>).quotedAmount) : null;
+                  const flip = data.outcomeFlipContext?.[e.id];
+                  const flipLabel = FLIP_EVENT_LABELS[e.eventType];
+                  const isFlip = !!flipLabel;
+                  const dotClass = isFlip
+                    ? (flipLabel.tone === "won" ? "bg-emerald-500" : "bg-red-500")
+                    : "bg-amber-400";
                   return (
-                    <li key={e.id} className="flex items-start gap-2 text-xs">
-                      <div className="w-1.5 h-1.5 rounded-full bg-amber-400 mt-1.5 shrink-0" />
+                    <li key={e.id} className="flex items-start gap-2 text-xs" data-testid={`event-${e.eventType}-${e.id}`}>
+                      <div className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${dotClass}`} />
                       <div className="flex-1">
-                        <div className="text-foreground capitalize">{e.eventType.replace(/_/g, " ")} <span className="text-muted-foreground font-normal">· {e.actor ?? "system"}</span></div>
+                        <div className="text-foreground">
+                          {isFlip ? (
+                            <span className={flipLabel.tone === "won" ? "text-emerald-700 dark:text-emerald-300 font-medium" : "text-red-700 dark:text-red-300 font-medium"}>
+                              {flipLabel.label}
+                            </span>
+                          ) : (
+                            <span className="capitalize">{e.eventType.replace(/_/g, " ")}</span>
+                          )}
+                          <span className="text-muted-foreground font-normal"> · {e.actor ?? "system"}</span>
+                        </div>
                         <div className="text-muted-foreground text-[10px]">{new Date(e.occurredAt).toLocaleString()}</div>
                         {amt && <div className="text-muted-foreground text-[10px]">Amount: {fmtMoney(amt)}</div>}
+                        {flip && (
+                          <div className="mt-1 rounded border border-border/60 bg-muted/40 p-2 space-y-1" data-testid={`flip-context-${e.id}`}>
+                            {flip.matchedPhrase && (
+                              <div className="text-[11px] text-foreground">
+                                <span className="text-muted-foreground">Matched phrase: </span>
+                                <span className="italic">&ldquo;{flip.matchedPhrase}&rdquo;</span>
+                              </div>
+                            )}
+                            {flip.reasonCode && (
+                              <div className="text-[10px] text-muted-foreground">
+                                Reason: {STATUS_LABELS[flip.reasonCode] ?? flip.reasonCode.replace(/_/g, " ")}
+                              </div>
+                            )}
+                            {flip.matchTier && (
+                              <div className="text-[10px] text-muted-foreground">
+                                TMS match tier: {flip.matchTier}
+                              </div>
+                            )}
+                            {flip.source === "email" && flip.bodyExcerpt && (
+                              <div className="text-[11px] text-foreground/80">
+                                <div className="text-[10px] text-muted-foreground mb-0.5">
+                                  From {flip.fromEmail ?? "customer"}{flip.emailSubject ? ` · ${flip.emailSubject}` : ""}
+                                </div>
+                                <div className="line-clamp-3 whitespace-pre-wrap">{flip.bodyExcerpt}</div>
+                              </div>
+                            )}
+                            {flip.source === "email" && (flip.threadId || flip.messageId) && (
+                              <a
+                                href={
+                                  flip.threadId
+                                    ? `/conversations?threadId=${encodeURIComponent(flip.threadId)}`
+                                    : `/conversations?messageId=${encodeURIComponent(flip.messageId!)}`
+                                }
+                                className="inline-flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300 hover:underline"
+                                data-testid={`link-flip-email-${e.id}`}
+                                title="Open the email that triggered this auto-flip"
+                              >
+                                View triggering email
+                                <ChevronRight className="h-3 w-3" />
+                              </a>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </li>
                   );

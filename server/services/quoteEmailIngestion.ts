@@ -770,6 +770,60 @@ export function decideLostReason(language: string | null | undefined): LostReaso
   return LOST_INCUMBENT;
 }
 
+// ─── Phrase-level Lost detector (mirrors WON_LANGUAGE_PATTERNS) ──────────────
+//
+// The upstream LLM intent classifier doesn't always emit a structured
+// closed_lost_indicator signal — newer phrasings, short replies, or noisy
+// threads can slip past it. This regex sweep gives the inbound pipeline a
+// belt-and-suspenders Lost path, parallel to `isWonLanguage`. Patterns are
+// intentionally conservative: each must clearly signal "we are not booking
+// you for this load" rather than negotiation, a question, or a polite
+// non-commit. Recall comes from the AI signal; precision comes from here.
+const LOST_LANGUAGE_PATTERNS: RegExp[] = [
+  // "going with someone else" / "going a different direction"
+  /\b(?:we(?:'?re|\s+are)?\s+|going\s+to\s+)?go(?:ing)?\s+(?:with|to\s+use)\s+(?:another|a\s+different|someone\s+else|a\s+different\s+carrier)\b/i,
+  /\bgoing\s+in\s+a\s+different\s+direction\b/i,
+  // Pass / decline language
+  /\b(?:we(?:'?ll|\s+will|\s+are\s+going\s+to)?\s+|gonna\s+|going\s+to\s+)?pass\s+(?:on\s+(?:this|the\s+(?:load|quote|lane|freight))|this\s+(?:one|time|round))\b/i,
+  /\b(?:we(?:'?re|\s+are)\s+)?(?:not\s+going\s+to\s+|won'?t\s+|will\s+not\s+)(?:use|book|tender|go\s+with)\s+you\b/i,
+  /\b(?:we(?:'?ll|\s+will)?\s+have\s+to\s+)?decline(?:\s+this)?\b/i,
+  // Already covered (by someone else — distinct from "covered with you" which
+  // is a Won signal handled by isWonLanguage). Each pattern requires explicit
+  // external-party context (by/with another, someone else, a different
+  // carrier, or elsewhere) so we don't false-positive on the inverse
+  // ("booked with you" / "covered with us") which means the OPPOSITE.
+  /\b(?:load\s+is\s+|we\s+(?:got\s+(?:this|it)\s+|have\s+(?:this|it)\s+))?(?:already\s+)?covered\s+(?:by\s+(?:another|someone)|with\s+(?:another|someone))\b/i,
+  /\b(?:we(?:'?ve|\s+have)?\s+)?(?:already\s+)?(?:got|booked|tendered|covered)\s+(?:this|it)\s+(?:with|to)\s+(?:another|someone\s+else|a\s+different\s+carrier|elsewhere)\b/i,
+  /\b(?:load|shipment)\s+is\s+(?:already\s+)?(?:booked|tendered|covered)\s+(?:by|with)\s+(?:another|someone\s+else|a\s+different\s+carrier|elsewhere)\b/i,
+  // Price-driven loss
+  /\b(?:rate|price|quote)\s+(?:is\s+)?(?:too\s+high|out\s+of\s+(?:range|budget))\b/i,
+  /\b(?:found|got)\s+(?:a\s+)?(?:cheaper|lower|better)\s+(?:rate|price|quote|carrier)\b/i,
+  /\b(?:we'?re|we\s+are)\s+(?:going\s+with|using)\s+(?:a\s+cheaper|the\s+lower)\b/i,
+  // Cancelled / no longer needed
+  /\b(?:load|shipment|order)\s+(?:(?:is|was|got|has\s+been)\s+)?(?:cancel(?:l?ed)?|pulled|on\s+hold)\b/i,
+  /\b(?:no\s+longer|don'?t)\s+need\s+(?:this|the\s+(?:load|truck|coverage))\b/i,
+  /\bcustomer\s+(?:cancel(?:l?ed)?|pulled)\b/i,
+  // Award-elsewhere ("awarded to another carrier", "tendered elsewhere",
+  // "covered elsewhere"). Includes the standalone "elsewhere" target so we
+  // catch shorter phrasings without requiring an explicit
+  // carrier/broker/provider noun.
+  /\b(?:awarded|tendered|given|booked|covered)\s+(?:(?:to\s+)?(?:another|a\s+different)\s+(?:carrier|broker|provider)|elsewhere)\b/i,
+];
+
+/**
+ * Pure detector — true when the email body/subject matches our Lost-language
+ * patterns. Exposed for unit testing. Does NOT inspect direction or thread —
+ * those are checked by `applyClosedLostToOpenQuote`.
+ *
+ * Mirrors `isWonLanguage` precision standard: each pattern must clearly
+ * signal "we are not booking this with you", not negotiation or politeness.
+ */
+export function isLostLanguage(text: string | null | undefined): boolean {
+  const s = (text ?? "").trim();
+  if (!s) return false;
+  return LOST_LANGUAGE_PATTERNS.some(re => re.test(s));
+}
+
 async function findOrCreateLostReason(orgId: string, reason: LostReason): Promise<string> {
   const existing = await db.select().from(quoteOutcomeReasons).where(and(
     eq(quoteOutcomeReasons.organizationId, orgId),
@@ -791,7 +845,8 @@ export interface CloseLostResult {
     | "skipped_outbound"
     | "skipped_no_thread"
     | "skipped_no_open_quote"
-    | "skipped_already_closed";
+    | "skipped_already_closed"
+    | "skipped_no_lost_language";
   quoteId?: string;
   reasonCode?: LostReason["code"];
 }
@@ -810,6 +865,35 @@ export async function applyClosedLostToOpenQuote(
 ): Promise<CloseLostResult> {
   if (message.direction !== "inbound") return { status: "skipped_outbound" };
   if (!message.threadId) return { status: "skipped_no_thread" };
+
+  // High-precision guard: only fire when EITHER the upstream LLM signal is
+  // present, OR our regex sweep matches the body/subject. Without one of
+  // those we bail — protects against accidental loss-marking from a noisy
+  // signal upstream that didn't actually contain loss language.
+  const lossLanguageHint = pickStr(opts?.extractedData ?? {}, ["lossLanguage", "loss_language"]);
+  const intentSubtype = opts?.intentSubtype ?? null;
+  const intentLooksLost = intentSubtype === "closed_lost_indicator" || intentSubtype === "lost";
+  const bodyMatches = isLostLanguage(message.body) || isLostLanguage(message.subject) || isLostLanguage(lossLanguageHint);
+  if (!intentLooksLost && !lossLanguageHint && !bodyMatches) {
+    return { status: "skipped_no_lost_language" };
+  }
+
+  // Won-precedence guard: ambiguous wording like "load is booked with you"
+  // would historically have matched older broad Lost patterns. Even though
+  // the patterns are now tightened, an upstream `closed_lost_indicator`
+  // signal can still fire on a message that ALSO contains clear Won
+  // language. In that case we yield to the Won handler — the
+  // emailIntelligenceService runs Won first, so by the time we get here
+  // the quote is already closed_won and our pending-only update would
+  // skip anyway, but this explicit bail is defensive against direct
+  // callers and produces a clean, audit-friendly status.
+  const wonAlsoMatches =
+    isWonLanguage(message.body) ||
+    isWonLanguage(message.subject) ||
+    isWonLanguage(lossLanguageHint);
+  if (wonAlsoMatches) {
+    return { status: "skipped_no_lost_language" };
+  }
 
   // All sourceReference values that quote_opportunities could have been
   // created with for messages on this thread (providerMessageId fallback to
@@ -845,8 +929,14 @@ export async function applyClosedLostToOpenQuote(
   const open = pending[0];
   if (!open) return { status: "skipped_already_closed", quoteId: candidates[0].id };
 
-  const lossLanguage = pickStr(opts?.extractedData ?? {}, ["lossLanguage", "loss_language"]);
-  const reason = decideLostReason(lossLanguage);
+  // Reason mapping: prefer the structured AI hint; fall back to the message
+  // body/subject so a phrase-only match can still classify (e.g. "found a
+  // cheaper carrier" → lost_price). decideLostReason defaults to
+  // lost_incumbent when nothing is recognizable.
+  const reasonLanguage = lossLanguageHint
+    ?? (isLostLanguage(message.body) ? message.body : null)
+    ?? (isLostLanguage(message.subject) ? message.subject : null);
+  const reason = decideLostReason(reasonLanguage);
   const reasonId = await findOrCreateLostReason(message.orgId, reason);
 
   await db.update(quoteOpportunities).set({
@@ -865,13 +955,42 @@ export async function applyClosedLostToOpenQuote(
       messageId: message.id,
       providerMessageId: message.providerMessageId,
       threadId: message.threadId,
-      lossLanguage: lossLanguage ?? null,
-      intentSubtype: opts?.intentSubtype ?? null,
+      lossLanguage: lossLanguageHint ?? null,
+      matchedPhrase: bodyMatches && !lossLanguageHint
+        ? extractFirstLostMatch(message.body) ?? extractFirstLostMatch(message.subject)
+        : null,
+      intentSubtype,
       reasonCode: reason.code,
     },
   });
 
   return { status: "closed_lost", quoteId: open.id, reasonCode: reason.code };
+}
+
+/**
+ * Returns the first phrase fragment that triggered a Lost regex match, used
+ * for surfacing "what tripped the auto-flip" in the quote drawer's outcome
+ * history. Returns null when no pattern matches.
+ */
+export function extractFirstLostMatch(text: string | null | undefined): string | null {
+  const s = (text ?? "").trim();
+  if (!s) return null;
+  for (const re of LOST_LANGUAGE_PATTERNS) {
+    const m = re.exec(s);
+    if (m) return m[0];
+  }
+  return null;
+}
+
+/** Mirror of extractFirstLostMatch for the Won-language patterns. */
+export function extractFirstWonMatch(text: string | null | undefined): string | null {
+  const s = (text ?? "").trim();
+  if (!s) return null;
+  for (const re of WON_LANGUAGE_PATTERNS) {
+    const m = re.exec(s);
+    if (m) return m[0];
+  }
+  return null;
 }
 
 // ─── Task #723: closed_won_indicator → flip pending quote to won ─────────────

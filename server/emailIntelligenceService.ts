@@ -16,7 +16,7 @@ import type {
 } from "@shared/schema";
 import { applyMessageToThread } from "./services/conversationWaitingStateService";
 import { determineInitialOwner } from "./services/conversationOwnershipService";
-import { ingestQuoteFromEmail, applyClosedLostToOpenQuote, applyClosedWonToOpenQuote, isWonLanguage } from "./services/quoteEmailIngestion";
+import { ingestQuoteFromEmail, applyClosedLostToOpenQuote, applyClosedWonToOpenQuote, isWonLanguage, isLostLanguage } from "./services/quoteEmailIngestion";
 
 // ─── Intent taxonomy ─────────────────────────────────────────────────────────
 
@@ -362,28 +362,17 @@ export async function processEmailMessage(messageId: string): Promise<{
       }
     }
 
-    // Task #482: when the customer reply on a quote thread reads as a
-    // closed_lost_indicator (e.g. "load is covered"), flip the matching
-    // pending quote_opportunity to a lost_* outcome with the right reason
-    // and record an `email_lost` quote_event. Best-effort.
-    const lostSignal = result.signals.find(s => s.intentType === "closed_lost_indicator");
-    if (lostSignal) {
-      try {
-        await applyClosedLostToOpenQuote(msg, {
-          extractedData: lostSignal.extractedData ?? null,
-          intentSubtype: lostSignal.intentSubtype ?? null,
-        });
-      } catch (err) {
-        console.error(`[emailIntelligence] closed-lost handling failed for ${msg.id}:`, err);
-      }
-    }
-
-    // Task #723: parallel Won-language path. The classifier doesn't always
-    // emit a structured won-indicator signal (it's a newer category), so we
-    // ALSO sniff every inbound customer reply for Won language directly. The
-    // applyClosedWonToOpenQuote function is idempotent and high-precision —
-    // it bails when no Won language is found in either the signal hint or
-    // the message body, so a wide trigger here is safe.
+    // Task #723: Won-language path runs FIRST. Both Won and Lost detectors
+    // bail when the quote is no longer pending, so whichever runs first
+    // "wins" on ambiguous-but-positive replies. Won has stronger
+    // commercial impact (booking the load) and its phrases are more
+    // unambiguous ("book it", "tender to you"), so we let it claim the
+    // pending row before Lost gets a chance. The classifier doesn't
+    // always emit a structured won-indicator signal (it's a newer
+    // category), so we ALSO sniff every inbound customer reply for Won
+    // language directly. applyClosedWonToOpenQuote is idempotent and
+    // high-precision — it bails when no Won language is found in either
+    // the signal hint or the message body, so a wide trigger here is safe.
     const wonSignal = result.signals.find(
       s => s.intentType === "closed_won_indicator" || s.intentSubtype === "closed_won_indicator",
     );
@@ -396,6 +385,28 @@ export async function processEmailMessage(messageId: string): Promise<{
         });
       } catch (err) {
         console.error(`[emailIntelligence] closed-won handling failed for ${msg.id}:`, err);
+      }
+    }
+
+    // Task #482 + phrase-level Lost detector: when the customer reply on a
+    // quote thread carries Lost language ("going with someone else", "found
+    // a cheaper carrier", "load is covered by another"), flip the matching
+    // pending quote_opportunity to a lost_* outcome with the right reason
+    // and record an `email_lost` quote_event. Fire on either the LLM
+    // `closed_lost_indicator` signal OR a body/subject phrase match.
+    // applyClosedLostToOpenQuote is idempotent, requires one of the two,
+    // AND defers to Won precedence internally (skips when isWonLanguage
+    // also matches the same text), so a wide trigger here is safe.
+    const lostSignal = result.signals.find(s => s.intentType === "closed_lost_indicator");
+    const shouldTryLost = !!lostSignal || isLostLanguage(msg.body) || isLostLanguage(msg.subject);
+    if (shouldTryLost) {
+      try {
+        await applyClosedLostToOpenQuote(msg, {
+          extractedData: lostSignal?.extractedData ?? null,
+          intentSubtype: lostSignal?.intentSubtype ?? null,
+        });
+      } catch (err) {
+        console.error(`[emailIntelligence] closed-lost handling failed for ${msg.id}:`, err);
       }
     }
   }
