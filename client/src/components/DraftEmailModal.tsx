@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { recordAiEvent } from "@/lib/aiTelemetry";
 import {
   Dialog,
   DialogContent,
@@ -121,6 +122,13 @@ export function DraftEmailModal({
     onSuccess: (data) => {
       setDraft(data.draft);
       setDraftResponse(data);
+      // Task #700 — record an impression event for the generated AI draft.
+      recordAiEvent({
+        surface: "ai_email_draft",
+        eventType: "impression",
+        feature: data.playType ?? playType ?? null,
+        targetId: threadId ?? accountId ?? null,
+      });
     },
     onError: () => {
       toast({ title: "Failed to generate draft", variant: "destructive" });
@@ -155,6 +163,13 @@ export function DraftEmailModal({
 
   function handleFeedback(rating: "good" | "bad" | "needs_work") {
     setFeedbackRating(rating);
+    // Task #700 — surface thumbs-up / thumbs-down feedback as engagement events.
+    recordAiEvent({
+      surface: "ai_email_draft",
+      eventType: rating === "good" ? "thumbs_up" : "thumbs_down",
+      feature: draftResponse?.playType ?? playType ?? null,
+      targetId: threadId ?? accountId ?? null,
+    });
     if (rating === "good") {
       setShowFeedbackNotes(false);
       feedbackMutation.mutate({ rating, notes: feedbackNotes || undefined });
@@ -182,6 +197,13 @@ export function DraftEmailModal({
       await navigator.clipboard.writeText(draft);
       setCopied(true);
       toast({ title: "Draft copied to clipboard" });
+      // Task #700 — copy is the strongest "I used this draft" signal.
+      recordAiEvent({
+        surface: "ai_email_draft",
+        eventType: "copy",
+        feature: draftResponse?.playType ?? playType ?? null,
+        targetId: threadId ?? accountId ?? null,
+      });
       setTimeout(() => setCopied(false), 2000);
     } catch {
       toast({ title: "Unable to copy — please select and copy manually", variant: "destructive" });

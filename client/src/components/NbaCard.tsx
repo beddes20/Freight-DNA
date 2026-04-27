@@ -327,6 +327,12 @@ export function NbaCard({ card, hideCompanyLink = false, onDismissed, onActioned
             href={card.companyId ? `/companies/${card.companyId}` : undefined}
             className="text-xs font-semibold text-white hover:text-amber-400 transition-colors truncate flex items-center gap-1"
             data-testid={`nba-card-company-link-${card.id}`}
+            onClick={() => recordAiEvent({
+              surface: "nba_card",
+              eventType: "click",
+              feature: `${card.ruleType}:company-link`,
+              targetId: card.id,
+            })}
           >
             {card.companyName}
             {card.companyId && <Link2 className="w-2.5 h-2.5 opacity-40" />}
