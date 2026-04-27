@@ -49,6 +49,14 @@ export const ELIGIBLE_ROLES: ReadonlyArray<string> = [
   "logistics_manager",
 ];
 
+// Fixture mailbox detection — see server/lib/fixtureMailboxes.ts for the
+// full rationale. Re-exported so existing imports (and tests) keep working.
+export {
+  FIXTURE_MAILBOX_DOMAINS,
+  isFixtureMailboxAddress,
+} from "../lib/fixtureMailboxes";
+import { isFixtureMailboxAddress } from "../lib/fixtureMailboxes";
+
 async function persistSubscriptionFailure(
   mailbox: { id: string; orgId: string },
   err: unknown,
@@ -137,6 +145,12 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
         return res.status(400).json({ error: "User not found in your organization" });
       }
 
+      if (isFixtureMailboxAddress(parsed.data.email)) {
+        return res.status(400).json({
+          error: "Test/fixture mailbox addresses (e.g. @example.com) cannot be enrolled — they cannot be subscribed to in your Microsoft 365 tenant and would permanently appear unhealthy.",
+        });
+      }
+
       const existing = await storage.getMonitoredMailboxByEmail(user.organizationId, parsed.data.email);
       if (existing) {
         return res.status(409).json({ error: "This email is already being monitored" });
@@ -223,6 +237,15 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
         if (existingUserIds.has(u.id) || existingEmails.has(email)) {
           skipped++;
           results.push({ userId: u.id, userName: u.name, email, outcome: "already_enrolled" });
+          continue;
+        }
+        // Skip test/fixture mailbox addresses — they can never be subscribed
+        // in a real Microsoft 365 tenant and would permanently flip the
+        // Conversations Inbox health badge to "unhealthy". This is the
+        // long-standing root cause of the recurring "Webhook unhealthy" pill.
+        if (isFixtureMailboxAddress(email)) {
+          skippedNoMailbox++;
+          results.push({ userId: u.id, userName: u.name, email, outcome: "skipped_no_mailbox" });
           continue;
         }
         try {

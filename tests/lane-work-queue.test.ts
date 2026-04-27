@@ -258,6 +258,25 @@ async function createLaneWithCustomer(
 // ── Cleanup ────────────────────────────────────────────────────────────────────
 
 async function cleanup(): Promise<void> {
+  // Belt-and-suspenders: even though this test never inserts into
+  // monitored_mailboxes directly, an admin who clicks "Enroll all eligible
+  // users" while these wq.test.* users exist will create monitored_mailbox
+  // rows for them — and those rows can never receive Microsoft Graph
+  // notifications (the addresses don't exist in any tenant), permanently
+  // tripping the Conversations Inbox "Webhook unhealthy" badge. Drop any
+  // monitored mailboxes pointed at our test users BEFORE we delete the users.
+  const userIds = cleanupIds.filter(c => c.table === "users").map(c => c.id);
+  if (userIds.length > 0) {
+    await q(
+      `DELETE FROM monitored_mailboxes WHERE user_id = ANY($1::text[])`,
+      [userIds],
+    ).catch(() => {});
+  }
+  // Catch-all in case a legacy row predates the user-id link.
+  await q(
+    `DELETE FROM monitored_mailboxes WHERE LOWER(email) LIKE 'wq.test.%@example.com'`,
+  ).catch(() => {});
+
   const order = [
     "tasks",
     "lane_carrier_interest",

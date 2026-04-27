@@ -1,4 +1,5 @@
 import { Pool } from "pg";
+import { FIXTURE_MAILBOX_LIKE_PATTERNS } from "./lib/fixtureMailboxes";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -4783,5 +4784,43 @@ export async function runMigrations() {
     console.error("[migrations] Task #741 webex webhook migration error:", err);
   } finally {
     clientWebexWebhooks.release();
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Cleanup: purge fixture mailbox addresses from monitored_mailboxes.
+  //
+  // Background: the lane-work-queue test suite seeds users with
+  // `wq.test.*@example.com` addresses. If anyone ever invokes the admin
+  // "Enroll all eligible users" flow while those test users exist, those
+  // addresses get inserted into monitored_mailboxes. Microsoft Graph cannot
+  // subscribe to non-existent addresses, so each one is permanently stuck
+  // with `sentItemsHealth = "missing"`, and the Conversations Inbox shows
+  // "Webhook unhealthy" forever even though every real mailbox is fine.
+  //
+  // This migration removes any mailboxes whose address ends in a known
+  // fixture/non-routable domain (kept in sync with FIXTURE_MAILBOX_DOMAINS in
+  // server/routes/monitoredMailboxes.ts). The route handlers reject these
+  // addresses going forward, so this cleanup only needs to run once per
+  // environment but is safe to leave in place permanently.
+  // ────────────────────────────────────────────────────────────────────────
+  const clientFixturePurge = await pool.connect();
+  try {
+    const result = await clientFixturePurge.query(
+      `DELETE FROM monitored_mailboxes
+       WHERE LOWER(email) LIKE ANY($1::text[])
+       RETURNING id, email`,
+      [FIXTURE_MAILBOX_LIKE_PATTERNS as string[]],
+    );
+    if (result.rowCount && result.rowCount > 0) {
+      console.log(
+        `[migrations] purged ${result.rowCount} fixture monitored_mailboxes (e.g. ${result.rows.slice(0, 3).map(r => r.email).join(", ")}) — these can never receive Graph notifications and were tripping the "Webhook unhealthy" badge`,
+      );
+    } else {
+      console.log("[migrations] no fixture monitored_mailboxes to purge");
+    }
+  } catch (err) {
+    console.error("[migrations] fixture monitored_mailboxes purge error:", err);
+  } finally {
+    clientFixturePurge.release();
   }
 }

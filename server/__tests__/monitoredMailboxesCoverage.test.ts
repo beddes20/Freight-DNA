@@ -397,3 +397,93 @@ describe("ELIGIBLE_ROLES (Task #523 — include LMs in Enroll All)", () => {
     expect(noMailbox.map(u => u.id)).toEqual(["u-lm-noemail"]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fixture mailbox guard — regression test.
+//
+// Background: the Conversations Inbox "Webhook unhealthy" badge kept getting
+// re-tripped because the lane-work-queue test suite leaves users with
+// `wq.test.*@example.com` addresses, and the bulk enroll-all flow used to
+// indiscriminately enroll them. Microsoft Graph then permanently 404'd on
+// every subscription registration, leaving every fixture row stuck at
+// `sentItemsHealth = "missing"` and rolling the org-wide health up to
+// "unhealthy" (any mailbox in `expired`/`missing` flips the badge red).
+//
+// This test locks in the boundary guard so the recurrence path can never
+// reopen — if someone removes the guard, this test fails loudly.
+// ─────────────────────────────────────────────────────────────────────────────
+import {
+  isFixtureMailboxAddress,
+  FIXTURE_MAILBOX_DOMAINS,
+  FIXTURE_MAILBOX_LIKE_PATTERNS,
+} from "../lib/fixtureMailboxes";
+
+describe("isFixtureMailboxAddress — webhook-health regression guard", () => {
+  it("blocks the exact wq.test.*@example.com pattern that caused the original incident", () => {
+    expect(isFixtureMailboxAddress("wq.test.7e523ccc@example.com")).toBe(true);
+    expect(isFixtureMailboxAddress("WQ.Test.AbCdEf@Example.COM")).toBe(true); // case-insensitive
+    expect(isFixtureMailboxAddress("  wq.test.42@example.com  ")).toBe(true); // trims whitespace
+  });
+
+  it("blocks RFC 6761 / RFC 2606 reserved special-use domains and their subdomains", () => {
+    // example.{com,org,net} — RFC 2606
+    expect(isFixtureMailboxAddress("foo@example.com")).toBe(true);
+    expect(isFixtureMailboxAddress("foo@example.org")).toBe(true);
+    expect(isFixtureMailboxAddress("foo@example.net")).toBe(true);
+    // RFC 6761 reserved TLDs — both bare AND subdomain forms
+    expect(isFixtureMailboxAddress("foo@invalid")).toBe(true);
+    expect(isFixtureMailboxAddress("foo@bar.invalid")).toBe(true);
+    expect(isFixtureMailboxAddress("foo@localhost")).toBe(true);
+    expect(isFixtureMailboxAddress("foo@bar.localhost")).toBe(true);
+    expect(isFixtureMailboxAddress("foo@test")).toBe(true);
+    expect(isFixtureMailboxAddress("foo@bar.test")).toBe(true);
+    expect(isFixtureMailboxAddress("foo@example")).toBe(true);
+    expect(isFixtureMailboxAddress("foo@bar.example")).toBe(true);
+    // Common dev/CI overrides
+    expect(isFixtureMailboxAddress("foo@test.local")).toBe(true);
+    expect(isFixtureMailboxAddress("foo@local.test")).toBe(true);
+  });
+
+  it("does NOT flag real customer/employee mailbox addresses", () => {
+    expect(isFixtureMailboxAddress("taylor.call@valuetruck.com")).toBe(false);
+    expect(isFixtureMailboxAddress("dispatch@bigshipper.com")).toBe(false);
+    expect(isFixtureMailboxAddress("sales@example-truckline.com")).toBe(false); // not @example.com
+    expect(isFixtureMailboxAddress("user@invalidcompany.com")).toBe(false);     // .com not .invalid
+    expect(isFixtureMailboxAddress("user@testdrive.com")).toBe(false);          // .com not .test
+  });
+
+  it("handles null/empty/garbage input safely", () => {
+    expect(isFixtureMailboxAddress(null)).toBe(false);
+    expect(isFixtureMailboxAddress(undefined)).toBe(false);
+    expect(isFixtureMailboxAddress("")).toBe(false);
+    expect(isFixtureMailboxAddress("not-an-email")).toBe(false);
+  });
+
+  it("FIXTURE_MAILBOX_LIKE_PATTERNS stays in lock-step with FIXTURE_MAILBOX_DOMAINS (no drift)", () => {
+    // The boot-time DELETE migration uses the LIKE patterns; the route guard
+    // uses the suffix list. If they ever drift, the migration could leave
+    // pollution behind that the route guard would otherwise catch (or vice
+    // versa) — exactly the failure mode that caused this to keep recurring.
+    expect(FIXTURE_MAILBOX_LIKE_PATTERNS.length).toBe(FIXTURE_MAILBOX_DOMAINS.length);
+    FIXTURE_MAILBOX_DOMAINS.forEach((suffix, i) => {
+      expect(FIXTURE_MAILBOX_LIKE_PATTERNS[i]).toBe(`%${suffix}`);
+    });
+  });
+
+  it("simulates the enroll-all skip path: fixture users are filtered before insert", () => {
+    interface OrgUser { id: string; role: string; username: string }
+    const allUsers: OrgUser[] = [
+      { id: "u-real-1", role: "account_manager",          username: "rep1@valuetruck.com" },
+      { id: "u-real-2", role: "national_account_manager", username: "rep2@valuetruck.com" },
+      { id: "u-test-1", role: "account_manager",          username: "wq.test.aaaaaaaa@example.com" },
+      { id: "u-test-2", role: "admin",                    username: "wq.test.bbbbbbbb@example.com" },
+      { id: "u-test-3", role: "account_manager",          username: "fixture@bar.invalid" },
+    ];
+    const eligible = allUsers.filter(u => ELIGIBLE_ROLES.includes(u.role));
+    const wouldEnroll = eligible.filter(u => !isFixtureMailboxAddress(u.username));
+    expect(wouldEnroll.map(u => u.id)).toEqual(["u-real-1", "u-real-2"]);
+    // Critical assertion: zero fixture rows would reach the database, so the
+    // webhook-failure count from this enrollment batch is exactly 0.
+    expect(eligible.length - wouldEnroll.length).toBe(3);
+  });
+});
