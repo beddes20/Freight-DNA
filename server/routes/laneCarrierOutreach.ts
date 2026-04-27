@@ -1367,6 +1367,11 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         ownerName: newOwnerForCache?.name ?? null,
       }).catch(() => {});
 
+      // Cross-tab UX — owner change moves the lane between LWQ buckets and
+      // also affects Carrier Hub / Lane Inbox surfaces. Notify other tabs so
+      // they refetch without waiting for window focus. (Task #703 SSE wiring.)
+      publishLiveSync(user.organizationId, "recurring_lane", pStr(req.params.laneId));
+
       res.json(updated);
     } catch (err) {
       res.status(500).json({ error: getErrorMessage(err) });

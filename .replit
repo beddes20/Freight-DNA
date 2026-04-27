@@ -74,6 +74,10 @@ args = "storage-integration"
 task = "workflow.run"
 args = "test:freight-capture-funnel"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "test:lane-system-e2e"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -137,6 +141,17 @@ args = "npx tsx tests/freight-capture-funnel.test.ts"
 
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow]]
+name = "test:lane-system-e2e"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx playwright test --config=playwright.config.cjs tests/lane-system-e2e.spec.cjs --workers=4"
+
+[workflows.workflow.metadata]
+isValidation = true
 
 [postMerge]
 path = "scripts/post-merge.sh"
