@@ -24,9 +24,15 @@ const visionResponse = vi.hoisted(() => ({
   current: "{}",
 }));
 const openaiCalls = vi.hoisted(() => ({ count: 0 }));
+const openaiCtorArgs = vi.hoisted(() => ({
+  last: null as { apiKey?: string; baseURL?: string } | null,
+}));
 
 vi.mock("openai", () => {
   class MockOpenAI {
+    constructor(opts: { apiKey?: string; baseURL?: string }) {
+      openaiCtorArgs.last = opts;
+    }
     chat = {
       completions: {
         create: vi.fn(async () => {
@@ -419,5 +425,69 @@ describe("parseQuoteIntakeFromImage — vision-mocked screenshot", () => {
     expect(out.pickupCity).toBe("Chicago");
     expect(out.deliveryCity).toBeNull();
     expect(out.notes.join(" ")).toMatch(/couldn't pin down a full lane/i);
+  });
+});
+
+// ─── OpenAI client env-var precedence (Task #804) ───────────────────────────
+//
+// In Replit the managed OpenAI integration exposes credentials under
+// `AI_INTEGRATIONS_OPENAI_API_KEY` / `AI_INTEGRATIONS_OPENAI_BASE_URL`. The
+// intake service used to read only `OPENAI_API_KEY`, which made the dropzone
+// surface "Image parsing is unavailable — OpenAI key is not configured" even
+// when the integration was wired up. The lazy client builder must now prefer
+// the managed variables and fall back to `OPENAI_API_KEY`.
+
+describe("getOpenAi() env-var precedence (Task #804)", () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+    openaiCtorArgs.last = null;
+    vi.resetModules();
+  });
+
+  it("prefers AI_INTEGRATIONS_OPENAI_API_KEY over OPENAI_API_KEY and passes the managed baseURL through", async () => {
+    vi.resetModules();
+    openaiCtorArgs.last = null;
+    process.env.AI_INTEGRATIONS_OPENAI_API_KEY = "managed-key";
+    process.env.AI_INTEGRATIONS_OPENAI_BASE_URL = "https://managed.example.com/v1";
+    process.env.OPENAI_API_KEY = "fallback-key";
+
+    const mod = await import("../services/spotQuoteIntake");
+    visionResponse.current = JSON.stringify({ isQuote: false, rawText: "" });
+    await mod.parseQuoteIntakeFromImage(Buffer.from("x"), "image/png");
+
+    expect(openaiCtorArgs.last?.apiKey).toBe("managed-key");
+    expect(openaiCtorArgs.last?.baseURL).toBe("https://managed.example.com/v1");
+  });
+
+  it("falls back to OPENAI_API_KEY when the managed variable is not set", async () => {
+    vi.resetModules();
+    openaiCtorArgs.last = null;
+    delete process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+    delete process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+    process.env.OPENAI_API_KEY = "legacy-key";
+
+    const mod = await import("../services/spotQuoteIntake");
+    visionResponse.current = JSON.stringify({ isQuote: false, rawText: "" });
+    await mod.parseQuoteIntakeFromImage(Buffer.from("x"), "image/png");
+
+    expect(openaiCtorArgs.last?.apiKey).toBe("legacy-key");
+    expect(openaiCtorArgs.last?.baseURL).toBeUndefined();
+  });
+
+  it("returns the 'OpenAI key is not configured' note when neither variable is set", async () => {
+    vi.resetModules();
+    openaiCtorArgs.last = null;
+    delete process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+    delete process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+    delete process.env.OPENAI_API_KEY;
+
+    const mod = await import("../services/spotQuoteIntake");
+    const out = await mod.parseQuoteIntakeFromImage(Buffer.from("x"), "image/png");
+
+    expect(openaiCtorArgs.last).toBeNull();
+    expect(out.confidence).toBe(0);
+    expect(out.notes.join(" ")).toMatch(/OpenAI key is not configured/i);
   });
 });

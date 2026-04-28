@@ -69,8 +69,9 @@ const VALID_EQUIPMENT = new Set(["Dry Van", "Reefer", "Flatbed", "Power Only", "
 let _openaiClient: OpenAI | null | undefined;
 function getOpenAi(): OpenAI | null {
   if (_openaiClient !== undefined) return _openaiClient;
-  const apiKey = process.env.OPENAI_API_KEY;
-  _openaiClient = apiKey ? new OpenAI({ apiKey }) : null;
+  const apiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY;
+  const baseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+  _openaiClient = apiKey ? new OpenAI({ apiKey, baseURL }) : null;
   return _openaiClient;
 }
 
