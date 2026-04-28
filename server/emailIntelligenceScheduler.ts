@@ -366,6 +366,38 @@ export async function runEmailIntelligenceBatch(
   return { processed: messages.length };
 }
 
+// Reentrancy guard so the admin "Run AI batch now" button can't pile up
+// overlapping batches if pressed repeatedly while a manual drain is mid-run.
+// The cron path remains untouched (node-cron itself doesn't mutex; the
+// freshness-first slice keeps concurrent ticks productive).
+let _manualBatchInFlight = false;
+
+/**
+ * Admin-triggerable manual run of the email intelligence batch. Used by the
+ * "Run AI batch now" button on the Capture Audit Status pill so an admin
+ * can unstick a stalled cron without waiting for the next tick or a
+ * workflow restart. Fire-and-forget — returns immediately so the HTTP
+ * response isn't held open for a multi-minute drain.
+ */
+export function triggerImmediateEmailIntelligenceBatch(opts?: {
+  orgId?: string;
+}): { started: boolean; reason?: string } {
+  if (_manualBatchInFlight) {
+    return { started: false, reason: "batch_in_progress" };
+  }
+  _manualBatchInFlight = true;
+  void withHeartbeat(JOB_NAMES.emailIntelligenceBatch, EMAIL_INTEL_INTERVAL_MS, () =>
+    runEmailIntelligenceBatch(undefined, opts?.orgId),
+  )
+    .catch(err =>
+      console.error("[emailIntelligenceScheduler] manual batch error:", err),
+    )
+    .finally(() => {
+      _manualBatchInFlight = false;
+    });
+  return { started: true };
+}
+
 export function startEmailIntelligenceScheduler(): void {
   console.log(`[emailIntelligenceScheduler] starting — every 2 min (cron: */2 * * * *), batch=${BATCH_SIZE}`);
 

@@ -1686,6 +1686,40 @@ export function registerConversationsRoutes(app: Express): void {
     },
   );
 
+  // ── POST /api/internal/admin/conversations/run-ai-batch-now ────────────────
+  // Admin-triggered manual run of the email_intelligence_batch cron. The cron
+  // runs every 2 minutes; this gives an admin (or the "Run AI batch now"
+  // button on the Capture Audit pill) an immediate pass without waiting for
+  // the next tick or a workflow restart. This is the recovery escape hatch
+  // for a stuck batch — paired with the new stuck-running staleness check in
+  // getStaleCronHeartbeats so the pill goes red within ≤6 min of a stall
+  // (was previously invisible, allowing 3h silent outages).
+  app.post(
+    "/api/internal/admin/conversations/run-ai-batch-now",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        if (!["admin", "director", "sales_director"].includes(user.role)) {
+          return res.status(403).json({ error: "Admin access required" });
+        }
+        const { triggerImmediateEmailIntelligenceBatch } = await import(
+          "../emailIntelligenceScheduler"
+        );
+        // Scope to the caller's org so a director in org A can't drain
+        // org B's queue (mirrors the renew-mailbox-subscriptions scope).
+        const result = triggerImmediateEmailIntelligenceBatch({
+          orgId: user.organizationId,
+        });
+        res.json({ ok: true, ...result });
+      } catch (err) {
+        console.error("[conversations] POST /admin/run-ai-batch-now error:", err);
+        res.status(500).json({ error: "AI batch trigger failed" });
+      }
+    },
+  );
+
   // ── POST /api/internal/admin/conversations/renew-mailbox-subscriptions ────
   // Admin-only manual trigger for the Graph mailbox subscription renewer.
   // The periodic cron runs every 6h, but when the Webhook health pill goes

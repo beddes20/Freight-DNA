@@ -120,3 +120,36 @@ export const CRITICAL_EMAIL_PIPELINE_JOBS: ReadonlySet<JobName> = new Set([
   JOB_NAMES.emailIntelligenceBatch,
   JOB_NAMES.replyCaptureSelfHealSweep,
 ]);
+
+/**
+ * Threshold past which a heartbeat row whose `lastStatus="running"` should
+ * be treated as a corpse (the prior tick was SIGKILL'd, hung on an external
+ * call, or otherwise died without writing the finish row). Used by both
+ * `getStaleCronHeartbeats` (to flag the pill) and `recordCronHeartbeatStart`
+ * (to log a reclaim breadcrumb when the next tick overwrites the corpse).
+ *
+ * The two-tier policy (April 28 hot patch):
+ *   - Critical jobs (CRITICAL_EMAIL_PIPELINE_JOBS): max(intervalMs * 3, 6 min).
+ *     For the 2-min `email_intelligence_batch` this floors at 6 min so a
+ *     stuck batch escalates the pill to red within ≤6 minutes — matching
+ *     sales' freshness SLA. For the 5-min `mailbox_delta_sync_poll` and
+ *     `reply_capture_self_heal_sweep` this gives 15 min before flagging,
+ *     loose enough to ride out a single slow tick.
+ *   - Non-critical jobs (everything else, including 6-hour renewers and
+ *     hourly retries): max(intervalMs * 5, 10 min). Looser because their
+ *     silence does not immediately starve the inbox; the audit pill rolls
+ *     them up as amber ("recovering") rather than red.
+ *
+ * Centralized here so a future change can't drift between the staleness
+ * detector and the reclaim logger — they must agree on the boundary.
+ */
+export function getStuckRunningThresholdMs(
+  jobName: string,
+  expectedIntervalMs: number,
+): number {
+  const isCritical = (CRITICAL_EMAIL_PIPELINE_JOBS as ReadonlySet<string>).has(jobName);
+  if (isCritical) {
+    return Math.max(expectedIntervalMs * 3, 6 * 60 * 1000);
+  }
+  return Math.max(expectedIntervalMs * 5, 10 * 60 * 1000);
+}

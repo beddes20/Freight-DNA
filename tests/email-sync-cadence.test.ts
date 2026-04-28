@@ -231,21 +231,110 @@ async function main(): Promise<void> {
   const stale = await storage.getStaleCronHeartbeats(1.5);
   assert("stale job is reported", stale.some(s => s.jobName === staleJob));
 
-  // A "running" row is NOT stale even if nextExpectedAt is past — a tick
-  // that's actually executing is the opposite of dead.
-  const runningJob = `__test_running_${Date.now()}`;
+  // A *recently* started "running" row is NOT stale — a tick that's actually
+  // executing is the opposite of dead.
+  const recentRunningJob = `__test_running_recent_${Date.now()}`;
   await db.insert(cronHeartbeats).values({
-    jobName: runningJob,
+    jobName: recentRunningJob,
     expectedIntervalMs: 60_000,
-    lastStartedAt: new Date(Date.now() - 60 * 60_000),
+    lastStartedAt: new Date(Date.now() - 30_000), // started 30s ago, well under threshold
+    lastFinishedAt: null,
+    lastStatus: "running",
+    nextExpectedAt: new Date(Date.now() + 30_000),
+    consecutiveFailures: 0,
+    updatedAt: new Date(),
+  });
+  const stale2 = await storage.getStaleCronHeartbeats(1.5);
+  assert(
+    "recently-started running job is NOT reported as stale",
+    !stale2.some(s => s.jobName === recentRunningJob),
+  );
+
+  // A *long*-running non-critical corpse row IS stale — April 28 hot patch.
+  // Non-critical threshold is max(intervalMs * 5, 10 min). With a 60s
+  // interval the threshold is 10 min, so a row that's been "running" for
+  // an hour must surface as stale.
+  const stuckRunningJob = `__test_running_stuck_${Date.now()}`;
+  await db.insert(cronHeartbeats).values({
+    jobName: stuckRunningJob,
+    expectedIntervalMs: 60_000,
+    lastStartedAt: new Date(Date.now() - 60 * 60_000), // 60min stuck >> 10min threshold
     lastFinishedAt: null,
     lastStatus: "running",
     nextExpectedAt: new Date(Date.now() - 59 * 60_000),
     consecutiveFailures: 0,
     updatedAt: new Date(),
   });
-  const stale2 = await storage.getStaleCronHeartbeats(1.5);
-  assert("running job is NOT reported as stale", !stale2.some(s => s.jobName === runningJob));
+  const stale2b = await storage.getStaleCronHeartbeats(1.5);
+  assert(
+    "stuck-running non-critical corpse IS reported as stale (April 28 hot patch)",
+    stale2b.some(s => s.jobName === stuckRunningJob),
+    "Without this, a SIGKILL'd / hung tick stays invisible — that's how email_intelligence_batch went silent for 3h",
+  );
+
+  // ─── 6b. Critical-job stuck-running threshold is tighter ───────────
+  // Critical jobs (email_intelligence_batch, mailbox_delta_sync_poll,
+  // reply_capture_self_heal_sweep) use max(interval*3, 6min) so the
+  // 2-min email_intelligence_batch escalates to red within ≤6 min,
+  // matching sales' freshness SLA. We assert the exact policy by using
+  // the real critical job names with synthetic timing.
+
+  // (i) email_intelligence_batch (interval=2min) running for 7 min must
+  // be flagged — threshold = max(2min*3, 6min) = 6 min.
+  const criticalStuckJob = JOB_NAMES.emailIntelligenceBatch;
+  const criticalIntervalMs = 2 * 60 * 1000;
+  // Wipe any real production row for this name first so the test is
+  // deterministic, then restore at cleanup time.
+  const priorCriticalRow = (
+    await db
+      .select()
+      .from(cronHeartbeats)
+      .where(eq(cronHeartbeats.jobName, criticalStuckJob))
+      .limit(1)
+  )[0];
+  await db.delete(cronHeartbeats).where(eq(cronHeartbeats.jobName, criticalStuckJob));
+  await db.insert(cronHeartbeats).values({
+    jobName: criticalStuckJob,
+    expectedIntervalMs: criticalIntervalMs,
+    lastStartedAt: new Date(Date.now() - 7 * 60_000), // 7m old, threshold 6m
+    lastFinishedAt: null,
+    lastStatus: "running",
+    nextExpectedAt: new Date(Date.now() - 5 * 60_000),
+    consecutiveFailures: 0,
+    updatedAt: new Date(),
+  });
+  const staleCritical = await storage.getStaleCronHeartbeats(1.5);
+  assert(
+    "critical email_intelligence_batch stuck >6min IS reported as stale",
+    staleCritical.some(s => s.jobName === criticalStuckJob),
+    "If this fails, the audit pill won't escalate within sales' ≤6min freshness SLA — the original April 28 outage scenario.",
+  );
+
+  // (ii) Same critical job, only 4 min old, must NOT be flagged
+  // (legitimately mid-run).
+  await db.delete(cronHeartbeats).where(eq(cronHeartbeats.jobName, criticalStuckJob));
+  await db.insert(cronHeartbeats).values({
+    jobName: criticalStuckJob,
+    expectedIntervalMs: criticalIntervalMs,
+    lastStartedAt: new Date(Date.now() - 4 * 60_000), // 4m old, threshold 6m
+    lastFinishedAt: null,
+    lastStatus: "running",
+    nextExpectedAt: new Date(Date.now() - 2 * 60_000),
+    consecutiveFailures: 0,
+    updatedAt: new Date(),
+  });
+  const staleCritical2 = await storage.getStaleCronHeartbeats(1.5);
+  assert(
+    "critical email_intelligence_batch mid-run at 4m is NOT reported as stale",
+    !staleCritical2.some(s => s.jobName === criticalStuckJob),
+    "False-flagging a legitimately slow tick would create alert fatigue and undermine the pill.",
+  );
+
+  // Restore prior row so we don't perturb the live system.
+  await db.delete(cronHeartbeats).where(eq(cronHeartbeats.jobName, criticalStuckJob));
+  if (priorCriticalRow) {
+    await db.insert(cronHeartbeats).values(priorCriticalRow);
+  }
 
   // Recently-ticked job (nextExpectedAt in future) is NOT stale.
   const freshJob = `__test_fresh_${Date.now()}`;
@@ -288,7 +377,8 @@ async function main(): Promise<void> {
   await db.delete(cronHeartbeats).where(eq(cronHeartbeats.jobName, testJobOk));
   await db.delete(cronHeartbeats).where(eq(cronHeartbeats.jobName, testJobErr));
   await db.delete(cronHeartbeats).where(eq(cronHeartbeats.jobName, staleJob));
-  await db.delete(cronHeartbeats).where(eq(cronHeartbeats.jobName, runningJob));
+  await db.delete(cronHeartbeats).where(eq(cronHeartbeats.jobName, recentRunningJob));
+  await db.delete(cronHeartbeats).where(eq(cronHeartbeats.jobName, stuckRunningJob));
   await db.delete(cronHeartbeats).where(eq(cronHeartbeats.jobName, freshJob));
 
   console.log("──────────────────────────────────────────────────────────────");

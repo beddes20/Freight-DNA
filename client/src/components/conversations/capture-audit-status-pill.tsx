@@ -18,6 +18,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
+  Brain,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -301,6 +302,59 @@ export function CaptureAuditStatusPill({
     onError: (err: unknown) => {
       toast({
         title: "Sync failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Admin-only "Run AI batch now" — kicks off an immediate
+  // email_intelligence_batch tick. The cron runs every 2 minutes; this is
+  // the recovery hatch when that batch has stalled (e.g. OpenAI hang, a
+  // SIGKILL'd workflow tick, or an infinite loop). Paired with the new
+  // stuck-running staleness check in getStaleCronHeartbeats so the pill
+  // goes red within ≤6 min of a stall — previously a stuck "running"
+  // heartbeat was invisible to staleness detection and the system silently
+  // sat with un-classified email for 3 hours on April 28.
+  const runAiBatch = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest(
+        "POST",
+        "/api/internal/admin/conversations/run-ai-batch-now",
+        {},
+      );
+      return res.json() as Promise<{
+        ok: boolean;
+        started: boolean;
+        reason?: string;
+      }>;
+    },
+    onSuccess: (result) => {
+      if (result.started) {
+        toast({
+          title: "AI batch started",
+          description:
+            "Classifying the latest inbound email — new conversation rows + signals will appear within a minute or two.",
+        });
+      } else if (result.reason === "batch_in_progress") {
+        toast({
+          title: "AI batch already running",
+          description: "A drain is in progress — no need to start another.",
+        });
+      } else {
+        toast({
+          title: "AI batch not started",
+          description: result.reason ?? "Unknown reason",
+          variant: "destructive",
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations/capture-audit-health"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
+      refetch();
+    },
+    onError: (err: unknown) => {
+      toast({
+        title: "AI batch trigger failed",
         description: err instanceof Error ? err.message : "Unknown error",
         variant: "destructive",
       });
@@ -754,6 +808,22 @@ export function CaptureAuditStatusPill({
                   ? <Loader2 className="w-3 h-3 animate-spin" />
                   : <Download className="w-3 h-3" />}
                 Sync mail now
+              </Button>
+            )}
+            {canRenew && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1 h-7"
+                disabled={runAiBatch.isPending}
+                onClick={() => runAiBatch.mutate()}
+                data-testid="button-run-ai-batch-now"
+                title="Force the AI classification batch to run right now (cron does this every 2 minutes; press this if the inbox looks frozen)"
+              >
+                {runAiBatch.isPending
+                  ? <Loader2 className="w-3 h-3 animate-spin" />
+                  : <Brain className="w-3 h-3" />}
+                Run AI batch now
               </Button>
             )}
             {canRenew && (

@@ -277,6 +277,7 @@ import {
   type CompanyCollaborator,
   type InsertCompanyCollaborator,
 } from "@shared/schema";
+import { getStuckRunningThresholdMs } from "./lib/cronHeartbeat";
 
 const { Pool } = pg;
 
@@ -8590,6 +8591,29 @@ export class DatabaseStorage implements IStorage {
   async recordCronHeartbeatStart(jobName: string, expectedIntervalMs: number): Promise<void> {
     const now = new Date();
     const nextExpectedAt = new Date(now.getTime() + expectedIntervalMs);
+
+    // Reclaim a stuck-"running" heartbeat from a prior tick that never
+    // finished (process SIGKILL'd mid-tick, OpenAI hang, infinite loop).
+    // Without this, a corpse can sit in `lastStatus="running"` indefinitely
+    // and was previously invisible to staleness detection — that's how the
+    // email_intelligence_batch went silent for 3 hours on April 28.
+    const prior = await db
+      .select()
+      .from(cronHeartbeats)
+      .where(eq(cronHeartbeats.jobName, jobName))
+      .limit(1);
+    const priorRow = prior[0];
+    if (priorRow?.lastStatus === "running" && priorRow.lastStartedAt) {
+      const stuckThresholdMs = getStuckRunningThresholdMs(jobName, expectedIntervalMs);
+      const ageMs = now.getTime() - priorRow.lastStartedAt.getTime();
+      if (ageMs > stuckThresholdMs) {
+        console.error(
+          `[cron-heartbeat] reclaiming stuck '${jobName}' tick ` +
+          `(was running for ${Math.round(ageMs / 60000)}m, threshold ${Math.round(stuckThresholdMs / 60000)}m)`,
+        );
+      }
+    }
+
     await db
       .insert(cronHeartbeats)
       .values({
@@ -8644,15 +8668,27 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(cronHeartbeats).orderBy(cronHeartbeats.jobName);
   }
 
-  // A job is "stale" when nextExpectedAt + grace has passed AND it isn't
-  // currently mid-tick (status === "running"). graceFactor defaults to 1.5
-  // so a job that's expected every 5min won't be flagged until it's been
-  // 7.5 minutes since the last start. Tunable per call site.
+  // A job is "stale" when:
+  //   (a) nextExpectedAt + grace has passed AND it isn't mid-tick, OR
+  //   (b) it claims to still be "running" but its lastStartedAt is older
+  //       than max(expectedIntervalMs * 5, 10 min) — i.e. the prior tick
+  //       died without recording a finish (process SIGKILL, OpenAI hang,
+  //       infinite loop). Without (b), a corpse heartbeat is invisible
+  //       to the pill — that's how email_intelligence_batch went silent
+  //       for 3 hours on April 28.
+  // graceFactor defaults to 1.5 so a job expected every 5 min isn't
+  // flagged until 7.5 min after the last start. Tunable per call site.
   async getStaleCronHeartbeats(graceFactor: number = 1.5): Promise<CronHeartbeat[]> {
     const rows = await db.select().from(cronHeartbeats);
     const now = Date.now();
     return rows.filter(r => {
-      if (r.lastStatus === "running") return false;
+      // (b) Stuck-running detection.
+      if (r.lastStatus === "running") {
+        if (!r.lastStartedAt) return false;
+        const stuckThresholdMs = getStuckRunningThresholdMs(r.jobName, r.expectedIntervalMs);
+        return now - r.lastStartedAt.getTime() > stuckThresholdMs;
+      }
+      // (a) Standard "next tick is overdue" detection.
       if (!r.nextExpectedAt) return false;
       const grace = r.expectedIntervalMs * (graceFactor - 1);
       return now - r.nextExpectedAt.getTime() > grace;
