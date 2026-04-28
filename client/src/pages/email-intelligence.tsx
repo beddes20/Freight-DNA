@@ -427,6 +427,25 @@ function EmailIntelligencePageInner() {
     setDrilldown({ intentType, outcome });
   };
 
+  // Task #799: keep the dashboard fresh on a 5-minute cadence so reps don't
+  // have to mash the Refresh button to see newly-ingested signals. The
+  // ingestion cron runs every 2 minutes; this client-side interval matches
+  // the 60s server cache + typical ingest latency closely enough that a
+  // signal captured on the server appears in the Recent Feed within ~5 min
+  // of its arrival.
+  //
+  // React Query defaults that we intentionally rely on (no overrides needed):
+  //   - refetchInterval pauses while the tab is hidden (we do NOT set
+  //     refetchIntervalInBackground=true), so a backgrounded tab stops
+  //     hammering the API.
+  //   - refetchOnWindowFocus=true + staleTime=5min means returning to a
+  //     tab that's been away for ≥5 min triggers an immediate refetch.
+  //   - refetchOnReconnect=true picks data back up after a network blip.
+  //   - calling refetch() from the manual Refresh button resets the
+  //     interval timer, so the next auto-refresh is 5 min after the manual
+  //     pull rather than firing on top of it.
+  const AUTO_REFRESH_MS = 5 * 60 * 1000;
+
   const { data, isLoading, error, refetch } = useQuery<EmailIntelligenceData>({
     queryKey: ["/api/analytics/email-intelligence"],
     queryFn: async () => {
@@ -434,18 +453,29 @@ function EmailIntelligencePageInner() {
       if (!r.ok) throw new Error("Failed to load analytics");
       return r.json();
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: AUTO_REFRESH_MS,
+    refetchInterval: AUTO_REFRESH_MS,
   });
 
-  const { data: learnedData, isLoading: learnedLoading } = useQuery<LearnedTodayData>({
+  const { data: learnedData, isLoading: learnedLoading, refetch: refetchLearned } = useQuery<LearnedTodayData>({
     queryKey: ["/api/analytics/email-learned-today"],
     queryFn: async () => {
       const r = await fetch("/api/analytics/email-learned-today");
       if (!r.ok) throw new Error("Failed to load daily digest");
       return r.json();
     },
-    staleTime: 5 * 60 * 1000,
+    staleTime: AUTO_REFRESH_MS,
+    refetchInterval: AUTO_REFRESH_MS,
   });
+
+  // Manual Refresh pulls BOTH datasets so the "Today" digest tile stays in
+  // step with the rest of the dashboard. Previously it only refetched the
+  // main analytics query, which left the Learned Today card potentially
+  // stale until its own 5-min interval ticked.
+  const refreshAll = () => {
+    refetch();
+    refetchLearned();
+  };
 
   const urgencyUnresponded = data?.urgency_signals.filter(u => !u.responded) ?? [];
   const urgencyResponded = data?.urgency_signals.filter(u => u.responded) ?? [];
@@ -488,7 +518,7 @@ function EmailIntelligencePageInner() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => refetch()}
+            onClick={refreshAll}
             className="text-zinc-300 border-zinc-600 hover:bg-zinc-700"
             data-testid="refresh-analytics"
           >
