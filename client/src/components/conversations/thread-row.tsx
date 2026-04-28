@@ -3,7 +3,27 @@ import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Clock, User, Users, ChevronRight, Sparkles, Archive, DollarSign, BellOff } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Clock,
+  User,
+  Users,
+  ChevronRight,
+  Sparkles,
+  Archive,
+  DollarSign,
+  BellOff,
+  Check,
+  Inbox,
+  MoreHorizontal,
+  UserPlus,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DraftEmailModal } from "@/components/DraftEmailModal";
 import { WaitingStateBadge, PriorityDot } from "./badges";
@@ -38,6 +58,10 @@ export function ThreadRow({
   onToggleChecked?: (id: string, checked: boolean) => void;
 }) {
   const [showDraftEmail, setShowDraftEmail] = useState(false);
+  // Snooze popover lives behind the overflow menu so the action is reachable
+  // by keyboard/touch users; keep its open state local so the menu can pop
+  // it open without nesting popovers in the trigger.
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
   const isOverdue = !!thread.overdueAt && thread.waitingState === "waiting_on_us";
   const isUnread = !!thread.unread;
   const isCompact = density === "compact";
@@ -58,10 +82,20 @@ export function ThreadRow({
   const lastMsg = msgData?.messages?.[msgData.messages.length - 1];
   const previewBody = stripHtmlToText(lastMsg?.body ?? "").slice(0, 120);
 
+  const canResolve = thread.waitingState !== "resolved" && thread.waitingState !== "archived";
+  const canReopen = thread.waitingState === "resolved";
+  const canArchive = thread.waitingState === "resolved" && !!onArchive;
+  const canUnsnooze = thread.waitingState === "snoozed" && !!onUnsnooze;
+  const canSnooze = !!onSnooze && thread.waitingState !== "archived" && thread.waitingState !== "snoozed";
+  const canAssignToMe = !thread.ownerName;
+
   return (
     <div
       className={cn(
-        "relative flex items-start gap-3 border-b last:border-0 hover:bg-muted/40 transition-colors cursor-pointer",
+        // `group` enables the per-row hover affordance: action buttons
+        // appear on hover while the row's primary content (sender,
+        // subject, badges, timestamp) stays fully visible at rest.
+        "group relative flex items-start gap-3 border-b last:border-0 hover:bg-muted/40 transition-colors cursor-pointer",
         isCompact ? "px-3 py-2" : "px-4 py-3",
         isOverdue && "bg-red-50/50 dark:bg-red-950/20",
         isSelected && "bg-muted/60 dark:bg-muted/40 border-l-2 border-l-primary -ml-px"
@@ -160,91 +194,172 @@ export function ThreadRow({
         )}
       </div>
 
-      <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-        {!thread.ownerName && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 text-xs"
-            onClick={() => onAssignToMe(thread.id)}
-            data-testid={`button-assign-me-${thread.id}`}
-          >
-            Assign to me
-          </Button>
-        )}
-        {thread.waitingState !== "resolved" && thread.waitingState !== "archived" && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 text-xs"
-            onClick={() => onChangeState(thread.id, "resolved")}
-            data-testid={`button-resolve-${thread.id}`}
-          >
-            Resolve
-          </Button>
-        )}
-        {thread.waitingState === "resolved" && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 text-xs"
-            onClick={() => onChangeState(thread.id, "waiting_on_us")}
-            data-testid={`button-reopen-${thread.id}`}
-          >
-            Reopen
-          </Button>
-        )}
-        {thread.waitingState === "resolved" && onArchive && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 text-xs gap-1"
-            onClick={() => onArchive(thread.id)}
-            data-testid={`button-archive-${thread.id}`}
-          >
-            <Archive className="w-3 h-3" />
-            Archive
-          </Button>
-        )}
-        {thread.waitingState === "snoozed" && onUnsnooze && (
+      {/* Per-row actions — Resolve / Snooze / Draft are hidden by default
+          and revealed on hover so the row reads as content first, controls
+          second. The overflow menu next to them is always visible so
+          keyboard and touch users still have a stable, reachable target
+          for every action. */}
+      <div
+        className="flex items-center gap-1 shrink-0"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          className="hidden md:flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity"
+          data-testid={`row-actions-${thread.id}`}
+        >
+          {canResolve && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs"
+              onClick={() => onChangeState(thread.id, "resolved")}
+              data-testid={`button-resolve-${thread.id}`}
+            >
+              Resolve
+            </Button>
+          )}
+          {canSnooze && (
+            <SnoozePopover
+              onSnooze={(until) => onSnooze!(thread.id, until)}
+              testId={`button-snooze-${thread.id}`}
+              trigger={
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs gap-1"
+                  data-testid={`button-snooze-${thread.id}`}
+                >
+                  <Clock className="w-3 h-3" />
+                  Snooze
+                </Button>
+              }
+            />
+          )}
           <Button
             size="sm"
             variant="ghost"
-            className="h-7 text-xs gap-1"
-            onClick={() => onUnsnooze(thread.id)}
-            data-testid={`button-unsnooze-${thread.id}`}
+            className="h-7 text-xs gap-1 text-indigo-600 dark:text-indigo-400"
+            onClick={() => setShowDraftEmail(true)}
+            data-testid={`button-draft-email-thread-${thread.id}`}
           >
-            <BellOff className="w-3 h-3" />
-            Wake now
+            <Sparkles className="w-3 h-3" />
+            Draft
           </Button>
-        )}
-        {onSnooze && thread.waitingState !== "archived" && thread.waitingState !== "snoozed" && (
-          <SnoozePopover
-            onSnooze={(until) => onSnooze(thread.id, until)}
-            testId={`button-snooze-${thread.id}`}
-            trigger={
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7 text-xs gap-1"
-                data-testid={`button-snooze-${thread.id}`}
+        </div>
+
+        {/* Overflow menu — keyboard/touch entry to every action plus the
+            ones that don't fit in the inline row (assign-to-me, reopen,
+            archive, wake-now). Always visible so it's reachable without
+            hover. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 w-7 p-0"
+              data-testid={`button-row-overflow-${thread.id}`}
+              aria-label="More actions"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <MoreHorizontal className="w-4 h-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="end"
+            onClick={(e) => e.stopPropagation()}
+            data-testid={`menu-row-overflow-${thread.id}`}
+          >
+            {/* Each menu item carries the legacy `button-X-${id}` testid
+                so existing tests that drove the old inline buttons keep
+                working — the action is the same, just reached through the
+                overflow menu now. */}
+            <DropdownMenuItem
+              onClick={() => setShowDraftEmail(true)}
+              data-testid={`menu-draft-${thread.id}`}
+            >
+              <Sparkles className="w-3.5 h-3.5 mr-2" />
+              Draft reply
+            </DropdownMenuItem>
+            {canAssignToMe && (
+              <DropdownMenuItem
+                onClick={() => onAssignToMe(thread.id)}
+                data-testid={`button-assign-me-${thread.id}`}
               >
-                <Clock className="w-3 h-3" />
-                Snooze
-              </Button>
+                <UserPlus className="w-3.5 h-3.5 mr-2" />
+                Assign to me
+              </DropdownMenuItem>
+            )}
+            {canResolve && (
+              <DropdownMenuItem
+                onClick={() => onChangeState(thread.id, "resolved")}
+                data-testid={`menu-resolve-${thread.id}`}
+              >
+                <Check className="w-3.5 h-3.5 mr-2" />
+                Mark resolved
+              </DropdownMenuItem>
+            )}
+            {canReopen && (
+              <DropdownMenuItem
+                onClick={() => onChangeState(thread.id, "waiting_on_us")}
+                data-testid={`button-reopen-${thread.id}`}
+              >
+                <Inbox className="w-3.5 h-3.5 mr-2" />
+                Reopen
+              </DropdownMenuItem>
+            )}
+            {canSnooze && (
+              <DropdownMenuItem
+                onClick={() => setSnoozeOpen(true)}
+                data-testid={`menu-snooze-${thread.id}`}
+              >
+                <Clock className="w-3.5 h-3.5 mr-2" />
+                Snooze…
+              </DropdownMenuItem>
+            )}
+            {canUnsnooze && (
+              <DropdownMenuItem
+                onClick={() => onUnsnooze!(thread.id)}
+                data-testid={`button-unsnooze-${thread.id}`}
+              >
+                <BellOff className="w-3.5 h-3.5 mr-2" />
+                Wake now
+              </DropdownMenuItem>
+            )}
+            {canArchive && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => onArchive!(thread.id)}
+                  data-testid={`button-archive-${thread.id}`}
+                >
+                  <Archive className="w-3.5 h-3.5 mr-2" />
+                  Archive
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        {/* Hidden snooze popover — anchored off-screen so the
+            DropdownMenu's "Snooze…" item can open it without
+            nesting popovers in the trigger. The popover renders its
+            content in a portal so the off-screen trigger doesn't
+            affect layout. */}
+        {canSnooze && (
+          <SnoozePopover
+            onSnooze={(until) => { setSnoozeOpen(false); return onSnooze!(thread.id, until); }}
+            open={snoozeOpen}
+            onOpenChange={setSnoozeOpen}
+            trigger={
+              <span
+                className="absolute opacity-0 pointer-events-none"
+                aria-hidden
+                tabIndex={-1}
+              />
             }
           />
         )}
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-7 text-xs gap-1 text-indigo-600 dark:text-indigo-400"
-          onClick={() => setShowDraftEmail(true)}
-          data-testid={`button-draft-email-thread-${thread.id}`}
-        >
-          <Sparkles className="w-3 h-3" />
-          Draft
-        </Button>
+
         <ChevronRight className="w-4 h-4 text-muted-foreground" />
       </div>
 

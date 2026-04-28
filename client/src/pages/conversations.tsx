@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -8,14 +8,6 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Calendar, ChevronDown } from "lucide-react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Sheet,
@@ -25,21 +17,25 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import {
-  AlertTriangle,
   Search,
   X,
   Menu,
   Rows3,
   Rows2,
   MessageSquare,
+  RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BucketSidebar } from "@/components/conversations/bucket-sidebar";
 import { ThreadList } from "@/components/conversations/thread-list";
 import { ThreadDetailPane, EmptyDetailPane } from "@/components/conversations/thread-detail-pane";
-import { RepFilterCombobox } from "@/components/conversations/rep-filter-combobox";
 import { CaptureAuditStatusPill } from "@/components/conversations/capture-audit-status-pill";
 import { BulkActionBar } from "@/components/conversations/bulk-action-bar";
+import {
+  DatePopover,
+  FiltersPopover,
+  ActiveFilterChips,
+} from "@/components/conversations/filter-controls";
 import {
   Dialog,
   DialogContent,
@@ -49,7 +45,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Bookmark } from "lucide-react";
 import type {
   ConversationBucket,
   ConversationDensity,
@@ -150,7 +145,7 @@ export default function ConversationsPage() {
   }
 
   function setBucket(b: ConversationBucket) {
-    setAllThreads([]);
+    setExtraPages([]);
     setNextCursor(null);
     // Switching buckets exits any active saved view — saved views always have
     // a single specific bucket, so the moment the user picks a different one
@@ -228,14 +223,14 @@ export default function ConversationsPage() {
     setDateTo("");
   }
 
-  // Whenever the *effective* date range changes, dump the accumulated thread
-  // list and the pagination cursor so "Load more" can't blend pages from a
+  // Whenever the *effective* date range changes, drop any "Load more" pages
+  // and the pagination cursor so "Load more" can't blend pages from a
   // previous range with the new one. The query key change below also forces
-  // a refetch — this just keeps the visible list consistent in the gap.
+  // a refetch and React Query will replace the first page on its own.
   useEffect(() => {
-    setAllThreads([]);
+    setExtraPages([]);
     setNextCursor(null);
-    // We intentionally don't include setAllThreads/setNextCursor in deps —
+    // We intentionally don't include setExtraPages/setNextCursor in deps —
     // they're stable state setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveDateFrom, effectiveDateTo]);
@@ -284,7 +279,7 @@ export default function ConversationsPage() {
   function changeAudience(next: ConversationAudience) {
     if (next === audience) return;
     setAudience(next);
-    setAllThreads([]);
+    setExtraPages([]);
     setNextCursor(null);
     setSelectedIds(new Set());
   }
@@ -312,8 +307,12 @@ export default function ConversationsPage() {
     });
   }
 
-  // ── Pagination state — accumulated as the user clicks "Load more" ─────────
-  const [allThreads, setAllThreads] = useState<ConversationThread[]>([]);
+  // ── Pagination state — only the *extra* pages beyond the React Query
+  // first page. The first page is always read live from `data?.threads`
+  // so back-navigation from an open thread can never land on an empty
+  // list (the cached query result is still there, even if a transient
+  // refetch races with the navigation). "Load more" appends pages here.
+  const [extraPages, setExtraPages] = useState<ConversationThread[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
 
   // Mobile drawer for the bucket sidebar (lg+ shows it as a real pane).
@@ -377,7 +376,7 @@ export default function ConversationsPage() {
     return p.toString();
   }
 
-  const { data, isLoading, isError, refetch } = useQuery<ThreadsResponse>({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery<ThreadsResponse>({
     queryKey: [
       "/api/internal/conversations",
       bucket,
@@ -403,12 +402,96 @@ export default function ConversationsPage() {
     refetchOnWindowFocus: true,
   });
 
+  // Reset "Load more" pagination ONLY when the user changes the filter
+  // signature (bucket / audience / filters / date / search). A background
+  // refetch of the same query keeps the same key, so the user's already
+  // loaded extra pages stay intact — critical for the back-from-thread
+  // scenario where a 30s refetch could otherwise wipe out pages 2..N
+  // while the rep is reading a thread.
   useEffect(() => {
-    if (data) {
-      setAllThreads(data.threads);
+    setExtraPages([]);
+    setNextCursor(null);
+  }, [
+    bucket,
+    audience,
+    filterState,
+    filterPriority,
+    filterOverdue,
+    filterRep,
+    debouncedSearch,
+    effectiveDateFrom,
+    effectiveDateTo,
+  ]);
+
+  // Track the cursor returned by the active first-page query so "Load more"
+  // can pick up where the server left off. Only update when the cursor
+  // actually changes to avoid clobbering a paginated cursor with the
+  // same value during background refetches.
+  useEffect(() => {
+    if (data && extraPages.length === 0) {
       setNextCursor(data.nextCursor);
     }
-  }, [data]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.nextCursor]);
+
+  // ── Refresh control ─────────────────────────────────────────────────────
+  // Manual refresh of the visible thread list + every bucket count badge.
+  // Used by the inbox header Refresh button and the "R" keyboard shortcut.
+  // We refetch the active list query (so failures actually bubble up here
+  // and we can toast on them) and then invalidate sibling queries (bucket
+  // counts, single-thread deep links) so they refresh in the background.
+  // `isManualRefreshing` is tracked separately from the query's general
+  // `isFetching` flag so the button's spinner/disabled state lights up
+  // *only* for user-initiated refreshes — not for the silent 30s
+  // refetchInterval or the focus-restored refetch, which would otherwise
+  // make the button look perpetually busy.
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+  const refreshInbox = useCallback(async () => {
+    setIsManualRefreshing(true);
+    try {
+      const result = await refetch();
+      if (result.isError) {
+        toast({
+          title: "Failed to refresh",
+          description: "Couldn't reload the inbox. Please try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+      // Best-effort: kick the bucket-count and per-thread queries too.
+      // These are read-mostly so a fire-and-forget invalidate is fine —
+      // their own queryFns will surface their own errors if any matter.
+      void queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
+    } catch {
+      toast({
+        title: "Failed to refresh",
+        description: "Couldn't reload the inbox. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsManualRefreshing(false);
+    }
+  }, [refetch, toast]);
+
+  // "R" keyboard shortcut. Active any time the conversations page is mounted
+  // and focus is *not* in a text input / textarea / contenteditable — we
+  // don't want to swallow the rep's typing in a draft reply, the archive
+  // search box, or the "save view" name field.
+  useEffect(() => {
+    function handler(e: KeyboardEvent) {
+      if (e.key !== "r" && e.key !== "R") return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (!t) return;
+      const tag = t.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (t.isContentEditable) return;
+      e.preventDefault();
+      void refreshInbox();
+    }
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [refreshInbox]);
 
   const loadMoreMutation = useMutation({
     mutationFn: async () => {
@@ -419,7 +502,7 @@ export default function ConversationsPage() {
     },
     onSuccess: (result) => {
       if (result) {
-        setAllThreads(prev => [...prev, ...result.threads]);
+        setExtraPages(prev => [...prev, ...result.threads]);
         setNextCursor(result.nextCursor);
       }
     },
@@ -673,7 +756,7 @@ export default function ConversationsPage() {
     setFilterPriority((f.filterPriority as string) ?? "all");
     setFilterOverdue(!!f.filterOverdue);
     setFilterRep((f.filterRep as string) ?? "all");
-    setAllThreads([]);
+    setExtraPages([]);
     setNextCursor(null);
     updateUrl({ bucket: view.bucket === "mine" ? null : view.bucket, threadId: null });
   }
@@ -689,6 +772,29 @@ export default function ConversationsPage() {
   }
 
   // ── Thread sorting (mirrors the server's intent per bucket) ───────────────
+  // Build the visible list from the React Query cache (first page) plus any
+  // accumulated "Load more" pages. Reading the first page from the cache —
+  // not from local state — is what makes back-navigation safe: even if a
+  // refetch lands while the detail pane is open, the list always has rows
+  // when the rep returns to it.
+  const baseThreads = data?.threads ?? [];
+  // Dedupe by row id when concatenating extra pages: a background refetch of
+  // page 1 can occasionally pull in a thread that's also present in
+  // extraPages (e.g. a new top-of-list thread pushes an old one into the
+  // tail), which would otherwise produce duplicate React keys and a
+  // double-rendered row.
+  const allThreads = useMemo(() => {
+    if (extraPages.length === 0) return baseThreads;
+    const seen = new Set<string>();
+    const out: ConversationThread[] = [];
+    for (const t of [...baseThreads, ...extraPages]) {
+      if (seen.has(t.id)) continue;
+      seen.add(t.id);
+      out.push(t);
+    }
+    return out;
+  }, [baseThreads, extraPages],
+  );
   const sorted = useMemo(() => {
     const arr = [...allThreads];
     arr.sort((a, b) => {
@@ -811,6 +917,18 @@ export default function ConversationsPage() {
             variant="outline"
             size="sm"
             className="h-8 gap-1.5 text-xs"
+            onClick={() => void refreshInbox()}
+            disabled={isManualRefreshing}
+            data-testid="button-refresh-inbox"
+            title="Refresh conversations (R)"
+          >
+            <RefreshCw className={cn("w-3.5 h-3.5", isManualRefreshing && "animate-spin")} />
+            <span className="hidden sm:inline">Refresh</span>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 text-xs"
             onClick={() => setDensity(density === "comfortable" ? "compact" : "comfortable")}
             data-testid="button-density-toggle"
             title={`Switch to ${density === "comfortable" ? "compact" : "comfortable"} density`}
@@ -852,13 +970,12 @@ export default function ConversationsPage() {
           )}
           data-testid="middle-pane"
         >
-          {/* Filters bar */}
+          {/* Compact filter bar — Audience toggle stays inline (it changes
+              the meaning of every other control); everything else lives
+              behind a Date popover and a single Filters popover so the bar
+              is one line tall on a typical screen. Active filters surface
+              as dismissible chips below this bar. */}
           <div className="px-3 py-2 border-b shrink-0 flex flex-wrap items-center gap-2 bg-muted/10">
-            {/* Audience toggle — flips the inbox between customer-facing and
-                carrier-facing threads (or both). Persisted per user so a
-                rep's preferred audience sticks across reloads. Placed first
-                in the filter bar because it changes the meaning of every
-                other filter and bucket count to its right. */}
             <ToggleGroup
               type="single"
               value={audience}
@@ -899,60 +1016,34 @@ export default function ConversationsPage() {
               </ToggleGroupItem>
             </ToggleGroup>
 
-            {/* Group by — Task #535. Available across every bucket so reps
-                can pivot any view by account or carrier. Persisted per user. */}
-            <Select value={groupBy} onValueChange={(v) => setGroupBy(v as ConversationGroupBy)}>
-              <SelectTrigger className="h-8 w-36 text-xs" data-testid="select-group-by">
-                <SelectValue placeholder="Group by" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none" data-testid="option-group-by-none">No grouping</SelectItem>
-                <SelectItem value="account" data-testid="option-group-by-account">Group by account</SelectItem>
-                <SelectItem value="carrier" data-testid="option-group-by-carrier">Group by carrier</SelectItem>
-              </SelectContent>
-            </Select>
+            <DatePopover
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              onChangeFrom={setDateFrom}
+              onChangeTo={setDateTo}
+              onApplyPreset={applyDatePreset}
+              onClear={clearDateRange}
+              isInvalid={isDateRangeInvalid}
+            />
 
-            {bucket !== "mine" && bucket !== "unowned" && (
-              <RepFilterCombobox value={filterRep} onChange={setFilterRep} users={sortedReps} />
-            )}
+            <FiltersPopover
+              bucket={bucket}
+              groupBy={groupBy}
+              setGroupBy={setGroupBy}
+              filterState={filterState}
+              setFilterState={setFilterState}
+              filterPriority={filterPriority}
+              setFilterPriority={setFilterPriority}
+              filterOverdue={filterOverdue}
+              setFilterOverdue={setFilterOverdue}
+              filterRep={filterRep}
+              setFilterRep={setFilterRep}
+              reps={sortedReps}
+            />
 
-            {bucket === "all" && (
-              <>
-                <Select value={filterState} onValueChange={setFilterState}>
-                  <SelectTrigger className="h-8 w-36 text-xs" data-testid="select-filter-state">
-                    <SelectValue placeholder="Waiting state" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All states</SelectItem>
-                    <SelectItem value="waiting_on_us">Waiting on us</SelectItem>
-                    <SelectItem value="waiting_on_them">Waiting on them</SelectItem>
-                    <SelectItem value="resolved">Resolved</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Select value={filterPriority} onValueChange={setFilterPriority}>
-                  <SelectTrigger className="h-8 w-32 text-xs" data-testid="select-filter-priority">
-                    <SelectValue placeholder="Priority" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All priorities</SelectItem>
-                    <SelectItem value="high">High</SelectItem>
-                    <SelectItem value="normal">Normal</SelectItem>
-                    <SelectItem value="low">Low</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Button
-                  variant={filterOverdue ? "default" : "outline"}
-                  size="sm"
-                  className="h-8 text-xs"
-                  onClick={() => setFilterOverdue(!filterOverdue)}
-                  data-testid="button-filter-overdue"
-                >
-                  <AlertTriangle className="w-3 h-3 mr-1" />
-                  Overdue only
-                </Button>
-              </>
-            )}
-
+            {/* Archive search stays inline because reps type into it
+                continuously when scrubbing the archive — burying it
+                inside a popover would force constant clicks. */}
             {bucket === "archived" && (
               <div className="relative flex-1 min-w-[180px]">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
@@ -980,106 +1071,36 @@ export default function ConversationsPage() {
                 )}
               </div>
             )}
-
-            {/* Date range filter — visible in every bucket (Task #787).
-                Replaces the archive-only date inputs so there is exactly one
-                date range UI no matter which bucket is active. */}
-            <div className="flex flex-wrap items-center gap-1.5" data-testid="date-range-filter">
-              <Label htmlFor="input-date-from" className="text-xs text-muted-foreground hidden sm:inline">
-                From
-              </Label>
-              <Input
-                id="input-date-from"
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                max={dateTo || undefined}
-                className={cn(
-                  "w-[9.5rem] h-8 text-xs",
-                  isDateRangeInvalid && "border-destructive focus-visible:ring-destructive",
-                )}
-                data-testid="input-date-from"
-                aria-invalid={isDateRangeInvalid}
-              />
-              <Label htmlFor="input-date-to" className="text-xs text-muted-foreground hidden sm:inline">
-                To
-              </Label>
-              <Input
-                id="input-date-to"
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                min={dateFrom || undefined}
-                className={cn(
-                  "w-[9.5rem] h-8 text-xs",
-                  isDateRangeInvalid && "border-destructive focus-visible:ring-destructive",
-                )}
-                data-testid="input-date-to"
-                aria-invalid={isDateRangeInvalid}
-              />
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-8 text-xs gap-1.5"
-                    data-testid="button-date-preset"
-                  >
-                    <Calendar className="w-3 h-3" />
-                    Quick range
-                    <ChevronDown className="w-3 h-3 opacity-60" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start">
-                  <DropdownMenuItem
-                    onSelect={() => applyDatePreset("today")}
-                    data-testid="option-date-preset-today"
-                  >
-                    Today
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onSelect={() => applyDatePreset("last7")}
-                    data-testid="option-date-preset-last7"
-                  >
-                    Last 7 days
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onSelect={() => applyDatePreset("last30")}
-                    data-testid="option-date-preset-last30"
-                  >
-                    Last 30 days
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onSelect={() => applyDatePreset("thisMonth")}
-                    data-testid="option-date-preset-this-month"
-                  >
-                    This month
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              {(dateFrom || dateTo) && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 text-xs"
-                  onClick={clearDateRange}
-                  data-testid="button-clear-date-range"
-                >
-                  <X className="w-3 h-3 mr-1" />
-                  Clear dates
-                </Button>
-              )}
-              {isDateRangeInvalid && (
-                <span
-                  className="text-xs text-destructive"
-                  role="alert"
-                  data-testid="text-date-range-error"
-                >
-                  "From" date must be on or before "To" date.
-                </span>
-              )}
-            </div>
           </div>
+
+          {/* Active-filter chip row + inline "Save as view" button. The
+              chips give reps an at-a-glance view of every active filter
+              and a one-click way to drop any of them. We render the row
+              whenever there's at least one chip to show OR when the
+              "Save as view" affordance is available, so the row never
+              flashes in and out as a single chip is dismissed. */}
+          <ActiveFilterChips
+            bucket={bucket}
+            groupBy={groupBy}
+            setGroupBy={setGroupBy}
+            filterState={filterState}
+            setFilterState={setFilterState}
+            filterPriority={filterPriority}
+            setFilterPriority={setFilterPriority}
+            filterOverdue={filterOverdue}
+            setFilterOverdue={setFilterOverdue}
+            filterRep={filterRep}
+            setFilterRep={setFilterRep}
+            reps={sortedReps}
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            isDateRangeInvalid={isDateRangeInvalid}
+            onClearDate={clearDateRange}
+            archiveSearch={archiveSearch}
+            onClearArchiveSearch={() => { setArchiveSearch(""); setDebouncedSearch(""); }}
+            showSaveAsView={!activeSavedViewId}
+            onSaveAsView={() => { setSaveViewName(""); setSaveViewDialogOpen(true); }}
+          />
 
           {/* Bulk action bar — sticky above the list when ≥1 thread is checked. */}
           <BulkActionBar
@@ -1102,24 +1123,6 @@ export default function ConversationsPage() {
             reps={sortedReps}
             currentUserId={user?.id}
           />
-
-          {/* "Save as view" button — visible whenever the current bucket+filters
-              aren't already from a saved view. Lets the user freeze the
-              current screen for one-click access later. */}
-          {!activeSavedViewId && (
-            <div className="px-3 py-1.5 border-b shrink-0 flex items-center justify-end gap-2 bg-background">
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7 text-xs gap-1"
-                onClick={() => { setSaveViewName(""); setSaveViewDialogOpen(true); }}
-                data-testid="button-open-save-view"
-              >
-                <Bookmark className="w-3 h-3" />
-                Save as view
-              </Button>
-            </div>
-          )}
 
           {/* Scrollable thread list */}
           <div className="flex-1 overflow-y-auto" data-testid="thread-list-scroll">

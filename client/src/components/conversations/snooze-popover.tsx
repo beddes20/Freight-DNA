@@ -11,6 +11,11 @@ interface SnoozePopoverProps {
   onSnooze: (until: Date) => void | Promise<void>;
   disabled?: boolean;
   testId?: string;
+  // Optional controlled-open mode so a parent (e.g. an overflow menu) can
+  // open the snooze panel programmatically without nesting popovers in the
+  // trigger.
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 function laterToday(): Date {
@@ -49,8 +54,21 @@ function formatPresetTime(d: Date): string {
   });
 }
 
-export function SnoozePopover({ trigger, onSnooze, disabled, testId }: SnoozePopoverProps) {
-  const [open, setOpen] = useState(false);
+export function SnoozePopover({
+  trigger,
+  onSnooze,
+  disabled,
+  testId,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
+}: SnoozePopoverProps) {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : uncontrolledOpen;
+  const setOpen = (next: boolean) => {
+    if (isControlled) controlledOnOpenChange?.(next);
+    else setUncontrolledOpen(next);
+  };
   const [customValue, setCustomValue] = useState(() => toLocalInputValue(tomorrowMorning()));
   const [busy, setBusy] = useState(false);
 
