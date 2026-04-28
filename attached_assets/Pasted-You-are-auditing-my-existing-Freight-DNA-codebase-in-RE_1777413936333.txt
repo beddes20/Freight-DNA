@@ -1,0 +1,142 @@
+You are auditing my existing Freight-DNA codebase in READ-ONLY mode.
+
+This is a diagnostic pass only. Do NOT change any code, do NOT create/edit/delete files, do NOT install packages, do NOT run migrations, do NOT modify secrets, do NOT refactor, and do NOT “helpfully fix” anything yet.
+
+My goal is to give this report to another AI advisor so we can decide what, if anything, should be changed later with minimal risk.
+
+Follow this exact process:
+
+1. INSPECT FIRST
+- Read the current repository structure thoroughly before making any suggestions.
+- Inspect client, server, database/schema, integrations, config, tests, and any background-job/email/AI-related areas.
+- Identify the real current architecture as it exists now, not what you think it should be.
+
+2. DO NOT IMPLEMENT
+- No code changes.
+- No package installs.
+- No environment/secrets edits.
+- No migrations.
+- No formatting-only edits.
+- No “I went ahead and fixed X.”
+- Output report only.
+
+3. OUTPUT A STRUCTURED AUDIT REPORT IN THE EXACT FORMAT BELOW
+
+A. EXECUTIVE SUMMARY
+- In 8-12 bullets, explain the current health of the codebase in plain English.
+- Separate “working but messy” from “actually risky.”
+- Call out whether the main problems are architecture, prompt drift, duplication, integration fragility, UI overlap, or true bugs.
+
+B. REPOSITORY MAP
+- Show a concise tree of the main folders/files.
+- Highlight the major app surfaces/domains (examples: dashboard, accounts, tasks, commitments, lanes, carrier hub, email, AI, analytics, admin, auth, etc.).
+- Note where frontend and backend boundaries are clear vs blurry.
+
+C. TOP 15 LARGEST / MOST COMPLEX FILES
+For each file include:
+- path
+- approximate responsibility
+- why it is large/complex
+- risk level: low / medium / high
+- recommendation: leave alone / inspect later / refactor candidate
+
+D. MIXED-RESPONSIBILITY FILES
+Identify files that are doing too many jobs at once.
+For each one include:
+- path
+- responsibilities mixed together
+- why this creates confusion or fragility
+- whether it is safe to leave for now
+
+E. DUPLICATION / DRIFT
+Identify:
+- duplicated logic
+- similar features implemented in multiple places
+- overlapping UI surfaces
+- old vs new systems competing with each other
+- naming inconsistencies
+For each item, say whether it is:
+- harmless
+- causing confusion
+- likely causing bugs
+
+F. INTEGRATION / INFRA RISK REVIEW
+List all major external connections you can identify, such as:
+- email / Outlook / Microsoft
+- AI providers
+- third-party APIs
+- database
+- storage
+- auth
+- webhooks / background jobs / schedulers
+For each one include:
+- what it appears to power
+- where it lives in the codebase
+- what seems stable
+- what seems brittle
+- what would likely need special care if I ever moved off Replit
+
+Do NOT reveal secret values. Only identify dependencies and usage points.
+
+G. ROUTES / ENDPOINTS / SERVICE BOUNDARIES
+- Summarize the main backend route domains/modules.
+- Note where route organization looks clean vs overloaded.
+- Flag auth inconsistencies, validation inconsistencies, or giant routing bottlenecks if present.
+
+H. FRONTEND WORKFLOW / UX OVERLAP
+- Identify places where multiple widgets, tabs, portlets, panels, or systems appear to compete for the same user job.
+- Call out places where users may have “two sources of truth” or too many similar action surfaces.
+- Distinguish between “slightly messy” and “likely harming adoption.”
+
+I. STATE / DATA FLOW RISK
+- Identify areas where state management, fetch patterns, optimistic updates, caching, or data dependencies look fragile.
+- Flag any screens likely to become slow, stale, or inconsistent.
+- If some areas look well-structured, say that too.
+
+J. TEST / VALIDATION POSTURE
+- Summarize what tests or validation mechanisms exist.
+- Call out areas with good protection vs areas that appear under-tested.
+- Say whether the app seems safe to modify in small increments or risky due to lack of guardrails.
+
+K. TOP 10 STRUCTURAL BOTTLENECKS
+Rank the top 10 bottlenecks slowing future development.
+For each include:
+- bottleneck
+- why it matters
+- current impact
+- risk if ignored
+- safest possible next step
+Important: safest possible next step does NOT mean “do a big rewrite.”
+
+L. LEAVE-ALONE LIST
+Make a specific list of things that appear good enough and should NOT be touched right now unless there is a proven bug or business reason.
+
+M. LOW-RISK OPPORTUNITIES
+List the best low-risk improvements only.
+These should be:
+- additive, not disruptive
+- narrowly scoped
+- unlikely to break production
+- high leverage for clarity, stability, or maintainability
+
+N. HIGH-RISK / NOT NOW
+List changes that may sound attractive but should probably NOT be done right now because they create unnecessary risk.
+
+O. FINAL CALL
+End with these 4 sections:
+1. What is actually wrong
+2. What only looks ugly but is acceptable for now
+3. What I should fix next if I want the least-risk path
+4. What I should absolutely avoid doing prematurely
+
+4. IMPORTANT OUTPUT RULES
+- Be concrete, not generic.
+- Base everything on the actual codebase you inspected.
+- If unsure, say “unclear from inspection” rather than guessing.
+- Do not recommend a full rewrite.
+- Do not recommend changing platforms as the first answer.
+- Prioritize preserving working production behavior.
+- Assume my main goal is stability, clarity, and smarter next steps.
+
+5. FINAL INSTRUCTION
+After producing the full report, stop. Do not start implementing anything.
