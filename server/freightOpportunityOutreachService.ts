@@ -58,27 +58,26 @@ export const FOLLOW_UP_DELAY_HOURS = 48;
 export const MAX_CARRIERS_PER_WAVE = 8;
 
 // ── Default templates (seeded on first read per org) ────────────────────────
-
+// Carrier-bound only. Must not reference customer/shipper identity (Task #820).
 export const DEFAULT_FREIGHT_OUTREACH_TEMPLATES: Record<
   FreightOutreachTemplateKind,
   { subject: string; body: string }
 > = {
   exact_load: {
-    subject: "{{customer_name}} — load on {{lane_display}} ({{pickup_window}})",
+    subject: "Available freight - {{lane_display_to}} ({{pickup_window_short}})",
     body:
-      "Hi {{carrier_name}} team,\n\n" +
-      "I have a {{equipment}} load for {{customer_name}} running {{lane_display}}, " +
-      "picking up {{pickup_window}}.{{history_phrase}}\n\n" +
-      "If you've got capacity, reply to this email and I'll send over the rate confirmation. " +
-      "If the timing's tight, let me know what you can cover near {{origin}} and I'll work backwards from there.\n\n" +
+      "Hey {{carrier_name}} team,\n\n" +
+      "I've got a {{equipment_human}} load picking up in {{origin}} to {{destination}}. " +
+      "P/U {{pickup_date_short}} and delivers {{delivery_date_short}}.\n\n" +
+      "Do you have capacity? If not, what lanes are you working on?\n\n" +
       "Thanks,\n{{rep_name}}",
   },
   lane_building: {
-    subject: "Capacity on {{lane_display}}? — {{customer_name}}",
+    subject: "Available freight - {{lane_display_to}} ({{pickup_window_short}})",
     body:
-      "Hi {{carrier_name}} team,\n\n" +
-      "I'm building out coverage on {{lane_display}} ({{equipment}}) for {{customer_name}} — " +
-      "we move loads on this lane on a recurring basis and I'm looking for steady carriers.{{history_phrase}}\n\n" +
+      "Hey {{carrier_name}} team,\n\n" +
+      "I'm building out steady coverage on {{lane_display_to}} ({{equipment_human}}). " +
+      "Next pickup is {{pickup_date_short}} delivering {{delivery_date_short}}.\n\n" +
       "Does this lane fit your network? Even rough timing (this week, next few weeks, or future) is helpful so I know when to call.\n\n" +
       "Thanks,\n{{rep_name}}",
   },
@@ -94,6 +93,43 @@ export function renderTemplate(template: string, vars: TemplateVars): string {
   });
 }
 
+/**
+ * Format an ISO-like calendar date string ("YYYY-MM-DD" or anything `Date`
+ * can parse) as `M/D` (no year, no leading zeros). Returns "" for any input
+ * that doesn't parse — callers fall back to other dates rather than letting
+ * a stray "1/1" leak into a carrier email.
+ */
+export function formatShortDate(input: string | null | undefined): string {
+  if (!input) return "";
+  const s = String(input).trim();
+  if (!s) return "";
+  // Fast path for the canonical "YYYY-MM-DD" we store in pickup_window_start
+  // and delivery_date — avoids the Date timezone trap.
+  const isoMatch = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) {
+    return `${parseInt(isoMatch[2], 10)}/${parseInt(isoMatch[3], 10)}`;
+  }
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return "";
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+/**
+ * Humanize a TMS equipment label for use in a sentence ("dry van",
+ * "reefer", "flatbed"). The base normalizer (`normalizeEquipmentType`)
+ * already handles the common short codes; this layer just lower-cases the
+ * canonical labels so the body reads naturally ("a dry van load" instead
+ * of "a Dry Van load").
+ */
+export function humanizeEquipmentLabel(raw: string | null | undefined): string {
+  const normalized = normalizeEquipmentType(raw ?? "");
+  if (!normalized) return "dry van";
+  // Preserve true acronyms like "LTL" — anything that's all caps + short
+  // we leave alone. Everything else lowercases for natural sentence flow.
+  if (/^[A-Z]{2,4}$/.test(normalized)) return normalized;
+  return normalized.toLowerCase();
+}
+
 export function buildTemplateVars(opts: {
   carrier: Pick<Carrier, "name">;
   rep: Pick<User, "name" | "username">;
@@ -102,15 +138,28 @@ export function buildTemplateVars(opts: {
   hasHistory: boolean;
   loadsOnLane?: number | null;
 }): TemplateVars {
-  const { carrier, rep, company, opportunity, hasHistory, loadsOnLane } = opts;
+  const { carrier, rep, opportunity, hasHistory, loadsOnLane } = opts;
   const equipment = normalizeEquipmentType(opportunity.equipmentType ?? "");
+  const equipmentHuman = humanizeEquipmentLabel(opportunity.equipmentType);
   const lane = formatLaneDisplay(
     opportunity.origin,
     opportunity.originState,
     opportunity.destination,
     opportunity.destinationState,
   );
+  // "to" form for the rep-approved subject; `lane_display` keeps the arrow form for legacy templates.
+  const laneDisplayTo = lane.replace(/\s*→\s*/g, " to ");
   const pickupWindow = `${opportunity.pickupWindowStart} → ${opportunity.pickupWindowEnd}`;
+  const pickupShort = formatShortDate(opportunity.pickupWindowStart);
+  // Prefer delivery_date; fall back to pickup_window_end then pickup_window_start so the body always has a date.
+  const deliveryRaw = opportunity.deliveryDate
+    || opportunity.pickupWindowEnd
+    || opportunity.pickupWindowStart;
+  const deliveryShort = formatShortDate(deliveryRaw);
+  // Subject window: "(M/D - M/D)" when pickup ≠ delivery, "(M/D)" otherwise.
+  const pickupWindowShort = pickupShort && deliveryShort && pickupShort !== deliveryShort
+    ? `${pickupShort} - ${deliveryShort}`
+    : (pickupShort || deliveryShort || "");
   const historyPhrase = hasHistory && loadsOnLane && loadsOnLane > 0
     ? ` We've worked together on ${loadsOnLane} load${loadsOnLane === 1 ? "" : "s"} like this before.`
     : "";
@@ -119,12 +168,18 @@ export function buildTemplateVars(opts: {
     carrier_name: carrier.name ?? "",
     rep_name: rep.name?.trim() || (rep.username ?? "").split("@")[0],
     rep_email: rep.username ?? "",
-    customer_name: company.name ?? "",
+    // Empty by design (Task #820): legacy {{customer_name}} tokens render to nothing.
+    customer_name: "",
     lane_display: lane,
+    lane_display_to: laneDisplayTo,
     origin: opportunity.origin,
     destination: opportunity.destination,
     equipment: equipment || "your equipment",
+    equipment_human: equipmentHuman,
     pickup_window: pickupWindow,
+    pickup_window_short: pickupWindowShort,
+    pickup_date_short: pickupShort,
+    delivery_date_short: deliveryShort,
     load_count: String(opportunity.loadCount ?? 1),
     has_history: hasHistory ? "yes" : "no",
     history_phrase: historyPhrase,

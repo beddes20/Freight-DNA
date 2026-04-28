@@ -3980,6 +3980,12 @@ export const freightOpportunities = pgTable("freight_opportunities", {
   equipmentType: text("equipment_type"),
   pickupWindowStart: text("pickup_window_start").notNull(),
   pickupWindowEnd: text("pickup_window_end").notNull(),
+  // Task #820 — separate delivery date captured from the TMS daily upload
+  // ("Early del dt" / "Delivery Date"). Distinct from pickupWindowEnd, which
+  // is collapsed to the pickup day for AVL rows. Surfaced in carrier-bound
+  // outreach so reps can advertise both pickup and delivery dates without
+  // having to look up the TMS row separately.
+  deliveryDate: text("delivery_date"),
   loadCount: integer("load_count").notNull().default(1),
   sourceRef: jsonb("source_ref"),
   urgencyScore: integer("urgency_score").notNull().default(50),

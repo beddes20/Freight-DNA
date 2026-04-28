@@ -9,10 +9,15 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { FreightOutreachTemplate } from "@shared/schema";
 
+// {{customer_name}} intentionally absent — carrier-bound only (Task #820).
 const AVAILABLE_VARS = [
-  "{{carrier_name}}", "{{rep_name}}", "{{rep_email}}", "{{customer_name}}",
-  "{{lane_display}}", "{{origin}}", "{{destination}}", "{{equipment}}",
-  "{{pickup_window}}", "{{load_count}}", "{{has_history}}", "{{history_phrase}}",
+  "{{carrier_name}}", "{{rep_name}}", "{{rep_email}}",
+  "{{lane_display}}", "{{lane_display_to}}",
+  "{{origin}}", "{{destination}}",
+  "{{equipment}}", "{{equipment_human}}",
+  "{{pickup_window}}", "{{pickup_window_short}}",
+  "{{pickup_date_short}}", "{{delivery_date_short}}",
+  "{{load_count}}", "{{has_history}}", "{{history_phrase}}",
 ];
 
 const KIND_LABELS: Record<string, { title: string; description: string }> = {
@@ -41,6 +46,12 @@ export default function AdminFreightOutreachTemplatesPage() {
           Edit the subject + body the proactive freight outreach engine sends. Variables in
           double braces are substituted at send time. Unknown variables render as empty
           strings, so typos won't break sends.
+        </p>
+        <p className="mt-2 text-xs text-muted-foreground">
+          <strong>Note:</strong> Customer/shipper name is intentionally not available — these
+          emails go to carriers, who must not see who the freight is for. The legacy
+          <code className="mx-1 px-1 rounded bg-muted">{"{{customer_name}}"}</code>
+          token still parses but renders as empty.
         </p>
       </div>
       <Card>

@@ -197,6 +197,8 @@ interface ParsedLoad {
   equipmentType: string | null;
   pickupWindowStart: string;
   pickupWindowEnd: string;
+  // Delivery date from "Early del dt" (Task #820). Distinct from pickupWindowEnd; empty when absent.
+  deliveryDate: string;
   loadCount: number;
   notes: string | null;
   ownerEmail: string | null;
@@ -471,6 +473,7 @@ function parseSheetToLoads(
         equipmentType,
         pickupWindowStart: start,
         pickupWindowEnd: end,
+        deliveryDate: deliveryDate ?? "",
         loadCount: Number.isFinite(stops) ? Math.max(1, stops + 1) : loadCount,
         notes: null, // planning comment intentionally excluded
         ownerEmail,
@@ -870,6 +873,7 @@ export async function runImportFromWorkbook(
         loadCount: load.loadCount,
         pickupWindowStart: load.pickupWindowStart,
         pickupWindowEnd: load.pickupWindowEnd,
+        deliveryDate: load.deliveryDate || null,
         equipmentType: load.equipmentType,
         notes: load.notes,
         sourceFileName: fileName,
@@ -1042,6 +1046,7 @@ export async function runImportFromWorkbook(
       equipmentType: load.equipmentType,
       pickupWindowStart: load.pickupWindowStart,
       pickupWindowEnd: load.pickupWindowEnd,
+      deliveryDate: load.deliveryDate || null,
       loadCount: load.loadCount,
       sourceRef: {
         kind: "available_freight_import",

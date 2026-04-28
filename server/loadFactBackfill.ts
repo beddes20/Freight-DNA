@@ -176,7 +176,11 @@ export function freightOpportunityToInsert(
     accountManager,
     equipmentType: opp.equipmentType ?? null,
     pickupDate: opp.pickupWindowStart,
-    deliveryDate: opp.pickupWindowEnd,
+    // Task #820 — prefer the dedicated delivery_date column captured from
+    // the TMS daily upload. Fall back to pickup_window_end (which AVL rows
+    // collapse to the pickup day) only when delivery_date is null so legacy
+    // rows that predate the column still mirror something sensible.
+    deliveryDate: opp.deliveryDate ?? opp.pickupWindowEnd,
     month: opp.pickupWindowStart ? opp.pickupWindowStart.slice(0, 7) : null,
     moveStatus: opp.status, // freight_opportunities.status acts as the canonical state here
     // Canonical bucketing: only Move Status from the TMS extract can promote

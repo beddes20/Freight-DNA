@@ -61,6 +61,9 @@ function buildPseudoLane(
     id: "pseudo",
     orgId,
     companyId: null,
+    // Task #820: customerName is allowed here as a scoring-only signal for
+    // rankCarriersForLane. It must never leak into AI prompts or template
+    // bodies — the draft-outreach-emails path below intentionally rejects it.
     companyName: customerName ?? null,
     origin,
     originState: originState ?? null,
@@ -102,7 +105,8 @@ export function registerProcurementOutreachRoutes(app: Express): void {
    *   destination   — lane destination
    *   volume        — annual loads (number)
    *   equipmentType — optional equipment type string
-   *   customerName  — optional customer name for scoring boost
+   *   customerName  — optional, used as a scoring signal only
+   *                   (Task #820: never forwarded to prompt/email surfaces).
    */
   app.get("/api/procurement/carrier-bench", async (req, res) => {
     const user = await getCurrentUser(req);
@@ -200,7 +204,6 @@ export function registerProcurementOutreachRoutes(app: Express): void {
       destination: z.string().min(1),
       volume: z.number().default(0),
       equipmentType: z.string().optional().nullable(),
-      customerName: z.string().optional().nullable(),
       carriers: z.array(z.object({
         carrierId: z.string().nullable(),
         carrierName: z.string().min(1),
@@ -210,7 +213,8 @@ export function registerProcurementOutreachRoutes(app: Express): void {
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    const { origin, destination, volume, equipmentType, customerName, carriers } = parsed.data;
+    // Task #820: customerName intentionally absent from this contract.
+    const { origin, destination, volume, equipmentType, carriers } = parsed.data;
 
     const [originCity, originState] = origin.includes(",")
       ? origin.split(",").map(s => s.trim())
@@ -263,6 +267,12 @@ House style — follow every rule:
   "reaching out about", "love to connect", "top of mind",
   "lane runs consistently", "this lane runs consistently",
   "keep you in mind", "would love to", "I'd love to"
+- NEVER mention the shipper, customer, account, or any company name other
+  than the carrier. Do not say things like "for our customer", "for one of
+  our shippers", "for ACME", "on behalf of …", or anything that hints at
+  the underlying customer. Refer to the freight only as "the load", "the
+  freight", "this lane", or "this run". (Task #820 — customer/shipper
+  identity must never appear in carrier-bound emails.)
 - End with a direct operational ask: "Does that fit your network?" or "If that fits your network, I'd be glad to talk through it."
 - If this week doesn't work, say "if this week's tight, no worries" — not "I'd still love to connect."
 - Vary sentence structure. Do not copy examples verbatim.

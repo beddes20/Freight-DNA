@@ -4852,6 +4852,116 @@ export async function runMigrations() {
     clientFixturePurge.release();
   }
 
+  // Task #820: add freight_opportunities.delivery_date and overwrite any
+  // freight_outreach_templates rows that still leak {{customer_name}} or a
+  // hardcoded company name. Idempotent.
+  const clientFreightOpp820 = await pool.connect();
+  try {
+    await clientFreightOpp820.query(
+      `ALTER TABLE freight_opportunities ADD COLUMN IF NOT EXISTS delivery_date text`,
+    );
+
+    // Force-overwrite every freight_outreach_templates row whose subject OR
+    // body still references `{{customer_name}}` — replacing the entire row
+    // (subject + body) with the new rep-approved default for that kind. We
+    // do NOT try to surgically strip the token: a partial scrub leaves the
+    // surrounding sentence ("Load for  on …") in a fragile, half-edited
+    // state and the row would still need a human pass. Overwriting in full
+    // guarantees every send after this migration uses safe copy. Reps who
+    // need org-specific tweaks can re-customize from the new clean baseline.
+    const NEW_EXACT_SUBJECT =
+      "Available freight - {{lane_display_to}} ({{pickup_window_short}})";
+    const NEW_EXACT_BODY =
+      "Hey {{carrier_name}} team,\n\n" +
+      "I've got a {{equipment_human}} load picking up in {{origin}} to {{destination}}. " +
+      "P/U {{pickup_date_short}} and delivers {{delivery_date_short}}.\n\n" +
+      "Do you have capacity? If not, what lanes are you working on?\n\n" +
+      "Thanks,\n{{rep_name}}";
+    const NEW_LANE_SUBJECT =
+      "Available freight - {{lane_display_to}} ({{pickup_window_short}})";
+    const NEW_LANE_BODY =
+      "Hey {{carrier_name}} team,\n\n" +
+      "I'm building out steady coverage on {{lane_display_to}} ({{equipment_human}}). " +
+      "Next pickup is {{pickup_date_short}} delivering {{delivery_date_short}}.\n\n" +
+      "Does this lane fit your network? Even rough timing (this week, next few weeks, or future) is helpful so I know when to call.\n\n" +
+      "Thanks,\n{{rep_name}}";
+
+    const overwriteExact = await clientFreightOpp820.query(
+      `UPDATE freight_outreach_templates
+         SET subject = $1, body = $2, updated_at = NOW()
+       WHERE kind = 'exact_load'
+         AND (subject LIKE '%{{customer_name}}%' OR body LIKE '%{{customer_name}}%')`,
+      [NEW_EXACT_SUBJECT, NEW_EXACT_BODY],
+    );
+    const overwriteLane = await clientFreightOpp820.query(
+      `UPDATE freight_outreach_templates
+         SET subject = $1, body = $2, updated_at = NOW()
+       WHERE kind = 'lane_building'
+         AND (subject LIKE '%{{customer_name}}%' OR body LIKE '%{{customer_name}}%')`,
+      [NEW_LANE_SUBJECT, NEW_LANE_BODY],
+    );
+
+    // ALSO scan for hardcoded customer-name leakage: any template whose
+    // saved subject/body contains the literal text of one of *that org's*
+    // companies. This catches reps who pasted "ACME Foods" verbatim into a
+    // custom override (so the customer name is on the page even though
+    // `{{customer_name}}` isn't). We compare case-insensitively, ignore
+    // very short company names (≤3 chars — too noisy, e.g. "USA"), and
+    // limit to non-archived rows. Hits get overwritten with the safe
+    // default for that kind, same as above.
+    //
+    // This is intentionally conservative: it can only catch leaks of the
+    // *currently saved* company name string. If a customer rebrands, an
+    // older saved template with the old name remains until the next edit.
+    // Combined with the runtime `customer_name: ""` substitution and the
+    // overwrite above, the residual blast radius is acceptable.
+    const hardcodedRows = await clientFreightOpp820.query(
+      `SELECT t.id, t.kind, t.org_id, t.subject, t.body, c.name AS company_name
+         FROM freight_outreach_templates t
+         JOIN companies c ON c.org_id = t.org_id
+        WHERE c.name IS NOT NULL
+          AND length(c.name) > 3
+          AND (
+            position(lower(c.name) in lower(t.subject)) > 0
+            OR position(lower(c.name) in lower(t.body)) > 0
+          )`,
+    );
+    let hardcodedFixed = 0;
+    for (const row of hardcodedRows.rows as Array<{
+      id: string;
+      kind: string;
+      company_name: string;
+    }>) {
+      const newSubject = row.kind === "exact_load" ? NEW_EXACT_SUBJECT : NEW_LANE_SUBJECT;
+      const newBody = row.kind === "exact_load" ? NEW_EXACT_BODY : NEW_LANE_BODY;
+      await clientFreightOpp820.query(
+        `UPDATE freight_outreach_templates
+           SET subject = $1, body = $2, updated_at = NOW()
+         WHERE id = $3`,
+        [newSubject, newBody, row.id],
+      );
+      hardcodedFixed += 1;
+      console.warn(
+        `[migrations] task-820: overwrote freight_outreach_templates row ${row.id} (kind=${row.kind}) — saved copy contained literal customer name "${row.company_name}"`,
+      );
+    }
+
+    const totalOverwritten =
+      (overwriteExact.rowCount ?? 0) + (overwriteLane.rowCount ?? 0) + hardcodedFixed;
+    if (totalOverwritten > 0) {
+      console.log(
+        `[migrations] task-820: overwrote ${totalOverwritten} freight_outreach_templates row(s) to safe defaults ` +
+        `(token leak: ${(overwriteExact.rowCount ?? 0) + (overwriteLane.rowCount ?? 0)}, hardcoded customer name: ${hardcodedFixed})`,
+      );
+    } else {
+      console.log("[migrations] task-820: no freight_outreach_templates needed customer_name scrub");
+    }
+  } catch (err) {
+    console.error("[migrations] task-820 freight outreach scrub error:", err);
+  } finally {
+    clientFreightOpp820.release();
+  }
+
   // ────────────────────────────────────────────────────────────────────────
   // Cross-table fixture contamination AUDIT (read-only).
   //

@@ -839,6 +839,8 @@ function LanePanel({ laneInfo, fallbackTaskId }: LanePanelProps) {
   const { data: benchData, isLoading: benchLoading } = useQuery<{ carriers: RankedBenchCarrier[] }>({
     queryKey: ["/api/procurement/carrier-bench", laneInfo.origin, laneInfo.destination, laneInfo.volume, laneInfo.equipmentType ?? null, laneInfo.customerName ?? null],
     queryFn: async () => {
+      // customerName is forwarded ONLY to the bench/scoring endpoint.
+      // The draft-outreach-emails POSTs below intentionally omit it (Task #820).
       const params = new URLSearchParams({
         origin: laneInfo.origin,
         destination: laneInfo.destination,
@@ -959,7 +961,6 @@ function LanePanel({ laneInfo, fallbackTaskId }: LanePanelProps) {
         origin: laneInfo.origin,
         destination: laneInfo.destination,
         volume: laneInfo.volume ?? 0,
-        customerName: laneInfo.customerName ?? null,
         equipmentType: laneInfo.equipmentType ?? null,
         carriers: [{
           carrierId: null,
@@ -992,7 +993,6 @@ function LanePanel({ laneInfo, fallbackTaskId }: LanePanelProps) {
         origin: laneInfo.origin,
         destination: laneInfo.destination,
         volume: laneInfo.volume ?? 0,
-        customerName: laneInfo.customerName ?? null,
         equipmentType: laneInfo.equipmentType ?? null,
         carriers: selectedCarriers.map(c => ({
           carrierId: c.carrierId,
@@ -1030,7 +1030,6 @@ function LanePanel({ laneInfo, fallbackTaskId }: LanePanelProps) {
         origin: laneInfo.origin,
         destination: laneInfo.destination,
         volume: laneInfo.volume ?? 0,
-        customerName: laneInfo.customerName ?? null,
         equipmentType: laneInfo.equipmentType ?? null,
         carriers: [{ carrierId: carrier.carrierId, carrierName: carrier.carrierName }],
       });

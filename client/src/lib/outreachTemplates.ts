@@ -1,13 +1,12 @@
 /**
  * Curated outreach message templates for Lane Work Queue carrier outreach.
  *
- * Templates support the following lane-level variables (substituted before display):
- *   {{origin}}       — e.g. "Phoenix, AZ"
- *   {{destination}}  — e.g. "Kent, WA"
- *   {{equipmentType}} — e.g. "Dry Van"
+ * Carrier-bound only — variables must never carry customer/shipper identity (Task #820).
  *
- * And the following per-carrier variable (substituted at draft generation time):
- *   {{carrierName}}  — e.g. "Starline Logistics LLC"
+ * Lane-level vars (substituted before display):
+ *   {{origin}}, {{destination}}, {{equipmentType}}
+ * Per-carrier var (substituted at draft generation time):
+ *   {{carrierName}}
  */
 
 export interface OutreachTemplate {

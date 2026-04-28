@@ -1,6 +1,8 @@
 /**
  * Lane outreach email builder helpers.
  * Exported separately so they can be unit-tested without starting the server.
+ *
+ * Carrier-bound only — do not add customer/shipper identity to this surface (Task #820).
  */
 
 import { formatLaneDisplay, formatWeeklyLoadRange, normalizeEquipmentType } from "@shared/laneFormatters";
