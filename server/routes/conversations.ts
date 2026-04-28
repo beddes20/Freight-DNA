@@ -57,6 +57,10 @@ import {
   recordSuggestionFeedback,
 } from "../services/conversationThreadSuggestionService";
 import { getErrorMessage } from "../lib/errors";
+import {
+  renewUserMailboxSubscriptions,
+  renewExpiringSoonSubscriptions,
+} from "../graphSubscriptionService";
 
 export function registerConversationsRoutes(app: Express): void {
 
@@ -1649,6 +1653,44 @@ export function registerConversationsRoutes(app: Express): void {
       } catch (err) {
         console.error("[conversations] POST /admin/self-heal-sweep error:", err);
         res.status(500).json({ error: "Self-heal sweep failed" });
+      }
+    },
+  );
+
+  // ── POST /api/internal/admin/conversations/renew-mailbox-subscriptions ────
+  // Admin-only manual trigger for the Graph mailbox subscription renewer.
+  // The periodic cron runs every 6h, but when the Webhook health pill goes
+  // red an admin can press this to recover instantly without waiting for
+  // the next tick.
+  //
+  // Scope rules (mirror /admin/self-heal-sweep above):
+  //   - default: only the caller's org's mailboxes are touched
+  //   - admin role + body.allOrgs === true: org-wide pass
+  // This prevents a director in org A from triggering Microsoft Graph
+  // re-registrations on org B's mailboxes.
+  app.post(
+    "/api/internal/admin/conversations/renew-mailbox-subscriptions",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        if (!["admin", "director", "sales_director"].includes(user.role)) {
+          return res.status(403).json({ error: "Admin access required" });
+        }
+        const scopeAllOrgs = req.body?.allOrgs === true && user.role === "admin";
+        const targetOrgId = scopeAllOrgs ? undefined : user.organizationId;
+        const summary = await renewUserMailboxSubscriptions(targetOrgId);
+        const expiringPass = await renewExpiringSoonSubscriptions(undefined, targetOrgId);
+        res.json({
+          ok: true,
+          scope: scopeAllOrgs ? "all_orgs" : "current_org",
+          summary,
+          expiringPass,
+        });
+      } catch (err) {
+        console.error("[conversations] POST /admin/renew-mailbox-subscriptions error:", err);
+        res.status(500).json({ error: "Renewal failed" });
       }
     },
   );

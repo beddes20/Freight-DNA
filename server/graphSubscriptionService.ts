@@ -11,6 +11,7 @@
  *   - Mail.Read application permission granted by IT in Azure AD
  */
 
+import cron from "node-cron";
 import { azureCredentialsConfigured, getGraphAccessToken } from "./graphService";
 import { storage, db } from "./storage";
 import { sql } from "drizzle-orm";
@@ -547,13 +548,13 @@ export function stopGraphSubscriptionService(): void {
     clearInterval(_activationTimer);
     _activationTimer = null;
   }
-  if (_userMailboxRenewalTimer) {
-    clearInterval(_userMailboxRenewalTimer);
-    _userMailboxRenewalTimer = null;
+  if (_userMailboxRenewalCron) {
+    _userMailboxRenewalCron.stop();
+    _userMailboxRenewalCron = null;
   }
 }
 
-let _userMailboxRenewalTimer: ReturnType<typeof setInterval> | null = null;
+let _userMailboxRenewalCron: ReturnType<typeof cron.schedule> | null = null;
 
 export async function registerMailboxSubscription(mailboxEmail: string, mailboxId: string): Promise<string | null> {
   if (!azureCredentialsConfigured()) return null;
@@ -699,39 +700,160 @@ export async function removeMailboxSubscription(subscriptionId: string, mailboxI
   });
 }
 
-async function renewUserMailboxSubscriptions(): Promise<void> {
-  if (!azureCredentialsConfigured()) return;
-
+// In-process mutex so the periodic cron, the boot pass, and a manual
+// admin trigger never overlap and double-register the same subscription.
+// Concurrent renewals can produce phantom Graph subscription IDs that
+// then look orphaned on Microsoft's side.
+let _renewalInFlight = false;
+async function withRenewalLock<T>(label: string, fn: () => Promise<T>, fallback: T): Promise<T> {
+  if (_renewalInFlight) {
+    log(`[user-mailbox] ${label} skipped — another renewal pass is in flight`);
+    return fallback;
+  }
+  _renewalInFlight = true;
   try {
-    const mailboxes = await storage.getEnabledMonitoredMailboxes();
-    for (const mb of mailboxes) {
-      if (!mb.subscriptionId && !mb.sentItemsSubscriptionId) {
-        await registerMailboxSubscription(mb.email, mb.id);
-        continue;
-      }
+    return await fn();
+  } finally {
+    _renewalInFlight = false;
+  }
+}
 
-      let allRenewed = true;
-      for (const sid of [mb.subscriptionId, mb.sentItemsSubscriptionId]) {
-        if (sid) {
-          const renewed = await renewSubscription(sid);
-          if (!renewed) allRenewed = false;
+/**
+ * Renew (or re-register) every enabled monitored mailbox's Graph
+ * subscriptions. Safe to call repeatedly — idempotent per-mailbox.
+ *
+ * If `orgId` is provided, only that org's mailboxes are touched. The
+ * periodic cron and boot pass call this without an orgId (system-wide);
+ * the admin endpoint always passes the caller's org unless an admin
+ * explicitly requests `allOrgs`.
+ *
+ * Returns a small summary that admin endpoints surface back to the UI so
+ * a "Renew now" click can show what happened.
+ */
+type RenewSummary = {
+  attempted: number;
+  renewed: number;
+  reregistered: number;
+  failed: number;
+  skipped?: boolean;
+};
+
+export async function renewUserMailboxSubscriptions(orgId?: string): Promise<RenewSummary> {
+  const summary: RenewSummary = { attempted: 0, renewed: 0, reregistered: 0, failed: 0 };
+  if (!azureCredentialsConfigured()) return summary;
+
+  return withRenewalLock(
+    "renewUserMailboxSubscriptions",
+    async () => {
+      try {
+        const mailboxes = await storage.getEnabledMonitoredMailboxes(orgId);
+        for (const mb of mailboxes) {
+          summary.attempted++;
+          // Either subscription missing → re-register both. The previous `&&`
+          // skipped re-registration when one was missing, which left the
+          // capture-audit pill stuck red because missing SentItems alone is
+          // counted as an unhealthy mailbox.
+          if (!mb.subscriptionId || !mb.sentItemsSubscriptionId) {
+            const id = await registerMailboxSubscription(mb.email, mb.id);
+            if (id) summary.reregistered++; else summary.failed++;
+            continue;
+          }
+
+          let allRenewed = true;
+          for (const sid of [mb.subscriptionId, mb.sentItemsSubscriptionId]) {
+            if (sid) {
+              const renewed = await renewSubscription(sid);
+              if (!renewed) allRenewed = false;
+            }
+          }
+
+          if (allRenewed) {
+            const SUB_TTL_MS = 4200 * 60 * 1000;
+            await storage.updateMonitoredMailbox(mb.id, {
+              subscriptionExpiresAt: new Date(Date.now() + SUB_TTL_MS),
+              syncStatus: "active",
+            });
+            summary.renewed++;
+          } else {
+            log(`[user-mailbox] Renewal failed for ${mb.email} — re-registering`);
+            const id = await registerMailboxSubscription(mb.email, mb.id);
+            if (id) summary.reregistered++; else summary.failed++;
+          }
+        }
+      } catch (err) {
+        log(`[user-mailbox] Error renewing subscriptions: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      return summary;
+    },
+    { attempted: 0, renewed: 0, reregistered: 0, failed: 0, skipped: true as const },
+  );
+}
+
+/**
+ * Boot-time pass: re-register expired subs AND proactively renew anything
+ * expiring within the next 24h. The previous boot only touched
+ * already-expired rows, which left a window where a fresh deploy a few
+ * hours before TTL would silently roll into expiry before the periodic
+ * renewer's first tick. With this we also pre-renew the imminent ones.
+ *
+ * Like the renewer, accepts an optional `orgId` to scope the pass.
+ */
+type ExpiringPassResult = {
+  expired: number;
+  expiringSoon: number;
+  skipped?: boolean;
+};
+
+export async function renewExpiringSoonSubscriptions(
+  thresholdMs: number = 24 * 60 * 60 * 1000,
+  orgId?: string,
+): Promise<ExpiringPassResult> {
+  const result: ExpiringPassResult = { expired: 0, expiringSoon: 0 };
+  if (!azureCredentialsConfigured()) return result;
+
+  return withRenewalLock(
+    "renewExpiringSoonSubscriptions",
+    async () => {
+      const mailboxes = await storage.getEnabledMonitoredMailboxes(orgId);
+      const now = Date.now();
+      for (const mb of mailboxes) {
+        const exp = mb.subscriptionExpiresAt?.getTime() ?? 0;
+        const noSub = !mb.subscriptionId || !mb.sentItemsSubscriptionId;
+        const isExpired = !!mb.subscriptionExpiresAt && exp < now;
+        const isExpiringSoon = !!mb.subscriptionExpiresAt && exp >= now && exp - now < thresholdMs;
+
+        if (noSub || isExpired) {
+          await registerMailboxSubscription(mb.email, mb.id);
+          result.expired++;
+          continue;
+        }
+
+        if (isExpiringSoon) {
+          let allRenewed = true;
+          for (const sid of [mb.subscriptionId, mb.sentItemsSubscriptionId]) {
+            if (sid) {
+              const renewed = await renewSubscription(sid);
+              if (!renewed) allRenewed = false;
+            }
+          }
+          if (allRenewed) {
+            const SUB_TTL_MS = 4200 * 60 * 1000;
+            await storage.updateMonitoredMailbox(mb.id, {
+              subscriptionExpiresAt: new Date(Date.now() + SUB_TTL_MS),
+              syncStatus: "active",
+            });
+            result.expiringSoon++;
+          } else {
+            log(`[user-mailbox] Pre-renewal failed for ${mb.email} — re-registering`);
+            await registerMailboxSubscription(mb.email, mb.id);
+            result.expiringSoon++;
+          }
         }
       }
-
-      if (allRenewed) {
-        const SUB_TTL_MS = 4200 * 60 * 1000;
-        await storage.updateMonitoredMailbox(mb.id, {
-          subscriptionExpiresAt: new Date(Date.now() + SUB_TTL_MS),
-          syncStatus: "active",
-        });
-      } else {
-        log(`[user-mailbox] Renewal failed for ${mb.email} — re-registering`);
-        await registerMailboxSubscription(mb.email, mb.id);
-      }
-    }
-  } catch (err) {
-    log(`[user-mailbox] Error renewing subscriptions: ${err instanceof Error ? err.message : String(err)}`);
-  }
+      return result;
+    },
+    { expired: 0, expiringSoon: 0, skipped: true as const },
+  );
 }
 
 async function initUserMailboxSubscriptions(): Promise<void> {
@@ -746,19 +868,26 @@ async function initUserMailboxSubscriptions(): Promise<void> {
 
     log(`[user-mailbox] Initializing subscriptions for ${mailboxes.length} monitored mailbox(es)`);
 
-    for (const mb of mailboxes) {
-      if (mb.subscriptionId) {
-        const expired = mb.subscriptionExpiresAt && mb.subscriptionExpiresAt.getTime() < Date.now();
-        if (!expired) {
-          log(`[user-mailbox] ${mb.email}: existing subscription still valid`);
-          continue;
-        }
-      }
-      await registerMailboxSubscription(mb.email, mb.id);
+    // Boot pass: cover both expired AND about-to-expire-within-24h subs
+    // so a deploy near the end of TTL doesn't leak into red-pill territory
+    // before the periodic renewer's next tick.
+    const bootStats = await renewExpiringSoonSubscriptions();
+    if (bootStats.expired > 0 || bootStats.expiringSoon > 0) {
+      log(`[user-mailbox] Boot pass: re-registered=${bootStats.expired}, pre-renewed=${bootStats.expiringSoon}`);
     }
 
-    const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
-    _userMailboxRenewalTimer = setInterval(renewUserMailboxSubscriptions, TWO_DAYS_MS);
+    // Periodic renewal: cron-anchored so workflow restarts no longer reset
+    // the renewal clock. Every 6h is generous against the 70h TTL — even
+    // if a renewal cycle fails, the next two attempts arrive well before
+    // expiry.
+    if (_userMailboxRenewalCron) {
+      _userMailboxRenewalCron.stop();
+      _userMailboxRenewalCron = null;
+    }
+    _userMailboxRenewalCron = cron.schedule("7 */6 * * *", () => {
+      void renewUserMailboxSubscriptions();
+    });
+    log("[user-mailbox] Renewal scheduler registered (every 6h via node-cron)");
   } catch (err) {
     log(`[user-mailbox] Init error: ${err instanceof Error ? err.message : String(err)}`);
   }

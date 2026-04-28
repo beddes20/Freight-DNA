@@ -1231,7 +1231,7 @@ getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined>;
   getMonitoredMailboxes(orgId: string): Promise<MonitoredMailbox[]>;
   getMonitoredMailbox(id: string): Promise<MonitoredMailbox | undefined>;
   getMonitoredMailboxByEmail(orgId: string, email: string): Promise<MonitoredMailbox | undefined>;
-  getEnabledMonitoredMailboxes(): Promise<MonitoredMailbox[]>;
+  getEnabledMonitoredMailboxes(orgId?: string): Promise<MonitoredMailbox[]>;
   createMonitoredMailbox(data: InsertMonitoredMailbox): Promise<MonitoredMailbox>;
   updateMonitoredMailbox(id: string, data: Partial<InsertMonitoredMailbox>): Promise<MonitoredMailbox | undefined>;
   deleteMonitoredMailbox(id: string): Promise<boolean>;
@@ -8393,7 +8393,14 @@ export class DatabaseStorage implements IStorage {
     return row;
   }
 
-  async getEnabledMonitoredMailboxes(): Promise<MonitoredMailbox[]> {
+  async getEnabledMonitoredMailboxes(orgId?: string): Promise<MonitoredMailbox[]> {
+    if (orgId) {
+      return db.select().from(monitoredMailboxes)
+        .where(and(
+          eq(monitoredMailboxes.enabled, true),
+          eq(monitoredMailboxes.orgId, orgId),
+        ));
+    }
     return db.select().from(monitoredMailboxes)
       .where(eq(monitoredMailboxes.enabled, true));
   }

@@ -24,10 +24,12 @@ import {
   ShieldAlert,
   ShieldCheck,
   TriangleAlert,
+  Webhook,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { cn } from "@/lib/utils";
 
@@ -160,6 +162,8 @@ export function CaptureAuditStatusPill({
 }) {
   const [open, setOpen] = useState(false);
   const { toast } = useToast();
+  const { user } = useAuth();
+  const canRenew = !!user && ["admin", "director", "sales_director"].includes(user.role);
 
   const { data, isLoading, refetch } = useQuery<HealthPayload>({
     queryKey: ["/api/internal/conversations/capture-audit-health"],
@@ -197,6 +201,44 @@ export function CaptureAuditStatusPill({
     onError: (err: unknown) => {
       toast({
         title: "Capture audit failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Admin-only escape hatch: re-renews every monitored mailbox's Graph
+  // subscription right now. The periodic cron (every 6h) covers the normal
+  // case; this button is for the rare moment when the pill goes red and
+  // the admin doesn't want to wait for the next tick.
+  const renewSubs = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest(
+        "POST",
+        "/api/internal/admin/conversations/renew-mailbox-subscriptions",
+        {},
+      );
+      return res.json() as Promise<{
+        ok: boolean;
+        summary: { attempted: number; renewed: number; reregistered: number; failed: number };
+        expiringPass: { expired: number; expiringSoon: number };
+      }>;
+    },
+    onSuccess: (result) => {
+      const s = result.summary;
+      toast({
+        title: s.failed > 0
+          ? `${s.failed} mailbox${s.failed === 1 ? "" : "es"} still failing`
+          : "Subscriptions renewed",
+        description: `Renewed ${s.renewed}, re-registered ${s.reregistered} of ${s.attempted} mailboxes`,
+        variant: s.failed > 0 ? "destructive" : "default",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations/capture-audit-health"] });
+      refetch();
+    },
+    onError: (err: unknown) => {
+      toast({
+        title: "Renewal failed",
         description: err instanceof Error ? err.message : "Unknown error",
         variant: "destructive",
       });
@@ -429,24 +471,42 @@ export function CaptureAuditStatusPill({
           )}
         </div>
 
-        <div className="px-4 py-2 border-t flex items-center justify-between gap-2">
+        <div className="px-4 py-2 border-t flex items-center justify-between gap-2 flex-wrap">
           <span className="text-[11px] text-muted-foreground">
-            Polls every 60s
+            Polls every 60s · Subs auto-renew every 6h
           </span>
-          <Button
-            size="sm"
-            variant="default"
-            className="gap-1 h-7"
-            disabled={runNow.isPending}
-            onClick={() => runNow.mutate()}
-            data-testid="button-run-capture-audit-now"
-            title="Force a capture-audit pass across the threads visible to you"
-          >
-            {runNow.isPending
-              ? <Loader2 className="w-3 h-3 animate-spin" />
-              : <RefreshCw className="w-3 h-3" />}
-            Run capture audit now
-          </Button>
+          <div className="flex items-center gap-2">
+            {canRenew && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1 h-7"
+                disabled={renewSubs.isPending}
+                onClick={() => renewSubs.mutate()}
+                data-testid="button-renew-mailbox-subscriptions"
+                title="Re-register every monitored mailbox's webhook subscription with Microsoft Graph right now"
+              >
+                {renewSubs.isPending
+                  ? <Loader2 className="w-3 h-3 animate-spin" />
+                  : <Webhook className="w-3 h-3" />}
+                Renew subscriptions now
+              </Button>
+            )}
+            <Button
+              size="sm"
+              variant="default"
+              className="gap-1 h-7"
+              disabled={runNow.isPending}
+              onClick={() => runNow.mutate()}
+              data-testid="button-run-capture-audit-now"
+              title="Force a capture-audit pass across the threads visible to you"
+            >
+              {runNow.isPending
+                ? <Loader2 className="w-3 h-3 animate-spin" />
+                : <RefreshCw className="w-3 h-3" />}
+              Run capture audit now
+            </Button>
+          </div>
         </div>
       </PopoverContent>
     </Popover>

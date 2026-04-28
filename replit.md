@@ -28,7 +28,7 @@ FreightDNA is built on a React frontend, an Express.js backend, and a PostgreSQL
 -   **Carrier Hub**: Centralized carrier intelligence, contact management, and Carrier Reliability Score.
 -   **Rate Intelligence & Rep Coaching**: SONAR-driven benchmarks and GPT-4o coaching cards.
 -   **Email Intelligence**: Customer contact capture, two-way carrier email integration, and inbound email intent signal extraction.
--   **Conversations Inbox**: Org-scoped email thread management with AI summaries and suggested actions.
+-   **Conversations Inbox**: Org-scoped email thread management with AI summaries and suggested actions. Graph mailbox subscriptions are renewed by a `node-cron` schedule running every 6 hours (clock-anchored, survives workflow restarts), and the boot pass proactively renews anything expiring within 24 hours rather than only re-registering already-expired subs. Admins can hit the new "Renew subscriptions now" button in the Capture Audit Status pill (`POST /api/internal/admin/conversations/renew-mailbox-subscriptions`) to recover instantly without waiting for the next cron tick. This combination eliminates the recurring "Webhook unhealthy" pill that used to appear whenever the app restarted more than once per 48h (the previous `setInterval(..., 48h)` renewer would reset on every restart and never fire before the 70h subscription TTL expired).
 -   **Geographic Lane Patterns**: Defines corridor patterns and tracks contact responsibilities.
 -   **AI Intelligence Hub**: A unified dashboard providing various AI-driven insights.
 -   **Automated Processes**: Auto-sync customer emails, Tactical Learning Engine, Quote Request SLA Alerting, and Auto Weekly Account Review generation.
