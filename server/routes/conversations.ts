@@ -1657,6 +1657,34 @@ export function registerConversationsRoutes(app: Express): void {
     },
   );
 
+  // ── POST /api/internal/admin/conversations/sync-mailboxes-now ─────────────
+  // Admin-triggered manual delta-sync cycle. The cron runs every 5 minutes;
+  // this gives an admin (or the "Sync now" button on the Capture Audit pill)
+  // an immediate pass without waiting for the next tick. Fire-and-forget —
+  // returns as soon as the cycle is queued so the HTTP response isn't held
+  // open for a multi-mailbox sweep.
+  app.post(
+    "/api/internal/admin/conversations/sync-mailboxes-now",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        if (!["admin", "director", "sales_director"].includes(user.role)) {
+          return res.status(403).json({ error: "Admin access required" });
+        }
+        const { triggerImmediateDeltaSyncCycle } = await import(
+          "../services/mailboxDeltaSyncService"
+        );
+        const result = triggerImmediateDeltaSyncCycle();
+        res.json({ ok: true, ...result });
+      } catch (err) {
+        console.error("[conversations] POST /admin/sync-mailboxes-now error:", err);
+        res.status(500).json({ error: "Sync trigger failed" });
+      }
+    },
+  );
+
   // ── POST /api/internal/admin/conversations/renew-mailbox-subscriptions ────
   // Admin-only manual trigger for the Graph mailbox subscription renewer.
   // The periodic cron runs every 6h, but when the Webhook health pill goes

@@ -19,6 +19,7 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   CheckCircle2,
+  Download,
   Loader2,
   RefreshCw,
   ShieldAlert,
@@ -201,6 +202,54 @@ export function CaptureAuditStatusPill({
     onError: (err: unknown) => {
       toast({
         title: "Capture audit failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Admin-only "Sync now" — kicks off an immediate delta-sync poll across
+  // every enabled monitored mailbox. The cron polls every 5 minutes
+  // automatically; this is for when the admin wants the freshest mail in
+  // the platform right now without waiting for the next tick.
+  const syncNow = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest(
+        "POST",
+        "/api/internal/admin/conversations/sync-mailboxes-now",
+        {},
+      );
+      return res.json() as Promise<{
+        ok: boolean;
+        started: boolean;
+        reason?: string;
+      }>;
+    },
+    onSuccess: (result) => {
+      if (result.started) {
+        toast({
+          title: "Sync started",
+          description:
+            "Pulling the latest mail from every monitored inbox. New messages will appear within a minute or two.",
+        });
+      } else if (result.reason === "cycle_in_progress") {
+        toast({
+          title: "Sync already running",
+          description: "A sync cycle is in progress — no need to start another.",
+        });
+      } else {
+        toast({
+          title: "Sync not started",
+          description: result.reason ?? "Unknown reason",
+          variant: "destructive",
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations/capture-audit-health"] });
+      refetch();
+    },
+    onError: (err: unknown) => {
+      toast({
+        title: "Sync failed",
         description: err instanceof Error ? err.message : "Unknown error",
         variant: "destructive",
       });
@@ -473,9 +522,25 @@ export function CaptureAuditStatusPill({
 
         <div className="px-4 py-2 border-t flex items-center justify-between gap-2 flex-wrap">
           <span className="text-[11px] text-muted-foreground">
-            Polls every 60s · Subs auto-renew every 6h
+            Mail polled every 5 min · Webhooks push in real time · Subs auto-renew every 6h
           </span>
           <div className="flex items-center gap-2">
+            {canRenew && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1 h-7"
+                disabled={syncNow.isPending}
+                onClick={() => syncNow.mutate()}
+                data-testid="button-sync-mailboxes-now"
+                title="Pull the latest mail from every monitored inbox right now (cron does this automatically every 5 minutes)"
+              >
+                {syncNow.isPending
+                  ? <Loader2 className="w-3 h-3 animate-spin" />
+                  : <Download className="w-3 h-3" />}
+                Sync mail now
+              </Button>
+            )}
             {canRenew && (
               <Button
                 size="sm"

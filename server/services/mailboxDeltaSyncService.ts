@@ -14,6 +14,7 @@
  * exponential backoff and resolved automatically when they succeed.
  */
 
+import cron, { type ScheduledTask } from "node-cron";
 import { storage } from "../storage";
 import { azureCredentialsConfigured, getGraphAccessToken } from "../graphService";
 import { resilientFetch } from "../lib/httpRetry";
@@ -409,45 +410,105 @@ export async function retryMailboxSyncFailure(failureId: string): Promise<{ ok: 
   }
 }
 
-let _deltaSyncTimer: ReturnType<typeof setInterval> | null = null;
+let _deltaSyncCron: ScheduledTask | null = null;
 
-async function runDeltaSyncCycle(): Promise<void> {
+// In-process mutex so a slow cycle (lots of mailboxes / Graph latency) can't
+// overlap with the next cron tick. With ~40 mailboxes × 2 folders × ~1-3s of
+// Graph latency, a single cycle can take a couple of minutes — comfortably
+// under our 5-minute cadence, but if Graph is degraded we don't want a pile-on.
+let _cycleInFlight = false;
+
+async function runDeltaSyncCycle(trigger: "boot" | "cron"): Promise<void> {
   if (!azureCredentialsConfigured()) return;
+  if (_cycleInFlight) {
+    log(`Skipping ${trigger} cycle — previous cycle still running`);
+    return;
+  }
+  _cycleInFlight = true;
 
   try {
     const mailboxes = await storage.getEnabledMonitoredMailboxes();
     if (mailboxes.length === 0) return;
 
-    log(`Running delta sync cycle for ${mailboxes.length} mailbox(es)`);
+    const startedAt = Date.now();
+    log(`Running delta sync cycle (${trigger}) for ${mailboxes.length} mailbox(es)`);
 
+    let totalProcessed = 0;
+    let totalErrors = 0;
     for (const mb of mailboxes) {
       const result = await syncMailboxDelta(mb.id);
+      totalProcessed += result.processed;
+      totalErrors += result.errors;
       if (result.processed > 0 || result.errors > 0) {
         log(`Delta sync ${mb.email}: ${result.processed} processed, ${result.errors} errors`);
       }
     }
+
+    const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
+    log(`Cycle done (${trigger}): ${mailboxes.length} mailbox(es), ${totalProcessed} processed, ${totalErrors} errors, ${elapsedSec}s`);
   } catch (err) {
     log(`Delta sync cycle error: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    _cycleInFlight = false;
   }
 }
 
+/**
+ * Polling-based mailbox sync. Webhooks are still the primary real-time path
+ * (Microsoft Graph pushes arrive in seconds while a subscription is healthy),
+ * but this poll guarantees a maximum staleness of ~5 minutes regardless of
+ * webhook health. Even if every webhook subscription were silently broken,
+ * no mailbox would go more than 5 minutes without a refresh.
+ *
+ * Implementation notes:
+ *   - Cron expression is clock-anchored ("at minutes 0, 5, 10, …"), so it
+ *     keeps firing on schedule even if the workflow restarts. setInterval was
+ *     deliberately removed because it resets to t+5min on every restart.
+ *   - `_cycleInFlight` mutex prevents overlap if Graph latency drags one
+ *     cycle past the next tick.
+ *   - Per-mailbox work goes through `syncMailboxDelta`, which is idempotent
+ *     (delta tokens + per-message dedupe in `processUserMailboxEmailForDelta`),
+ *     so racing with a webhook push for the same message is safe.
+ */
 export function initDeltaSyncScheduler(): void {
   if (!azureCredentialsConfigured()) {
     log("Azure credentials not configured — delta sync disabled");
     return;
   }
 
-  const FIFTEEN_MIN_MS = 15 * 60 * 1000;
+  // Boot kick: 30s after start, run an immediate cycle so a freshly restarted
+  // workflow doesn't have to wait up to 5 minutes for the first tick.
+  setTimeout(() => { void runDeltaSyncCycle("boot"); }, 30_000);
 
-  setTimeout(() => runDeltaSyncCycle(), 30_000);
+  // Every 5 minutes, on the wall clock. node-cron survives drift and is the
+  // same primitive used by the subscription renewer.
+  _deltaSyncCron = cron.schedule("*/5 * * * *", () => {
+    void runDeltaSyncCycle("cron");
+  });
 
-  _deltaSyncTimer = setInterval(runDeltaSyncCycle, FIFTEEN_MIN_MS);
-  log("Delta sync scheduler started (every 15 minutes)");
+  log("Delta sync scheduler started (every 5 minutes, clock-anchored)");
 }
 
 export function stopDeltaSyncScheduler(): void {
-  if (_deltaSyncTimer) {
-    clearInterval(_deltaSyncTimer);
-    _deltaSyncTimer = null;
+  if (_deltaSyncCron) {
+    _deltaSyncCron.stop();
+    _deltaSyncCron = null;
   }
+}
+
+/**
+ * Admin-triggerable manual cycle used by the "Sync now" button on the
+ * Capture Audit Status pill. Runs the same loop as the cron tick but is
+ * fire-and-forget so the HTTP response isn't held open. Returns immediately
+ * with whether a cycle was kicked off (false if one is already in flight).
+ */
+export function triggerImmediateDeltaSyncCycle(): { started: boolean; reason?: string } {
+  if (!azureCredentialsConfigured()) {
+    return { started: false, reason: "azure_not_configured" };
+  }
+  if (_cycleInFlight) {
+    return { started: false, reason: "cycle_in_progress" };
+  }
+  void runDeltaSyncCycle("cron");
+  return { started: true };
 }
