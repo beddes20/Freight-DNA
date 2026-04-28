@@ -475,8 +475,20 @@ export default function ConversationsPage() {
   const { data: repsData = [] } = useQuery<Array<{ id: string; name: string; username: string; role: string }>>({
     queryKey: ["/api/users?includeManagers=true"],
   });
+  // Restrict the rep filter to customer-facing + logistics roles only.
+  // Admins (and other internal roles like generic "sales" / "sales_director")
+  // shouldn't appear here — sales leadership wants to filter the inbox by
+  // the people who actually own customer relationships and freight execution.
+  const CONVERSATIONS_FILTER_ROLES = new Set([
+    "director",
+    "national_account_manager",
+    "account_manager",
+    "logistics_manager",
+    "logistics_coordinator",
+  ]);
   const sortedReps = useMemo(
     () => [...repsData]
+      .filter(r => CONVERSATIONS_FILTER_ROLES.has(r.role))
       .map(r => ({ id: r.id, fullName: r.name || r.username, email: r.username }))
       .sort((a, b) => a.fullName.localeCompare(b.fullName)),
     [repsData]
