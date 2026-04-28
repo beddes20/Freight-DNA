@@ -35,6 +35,9 @@ import {
   Tooltip as UITooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  Tabs, TabsContent, TabsList, TabsTrigger,
+} from "@/components/ui/tabs";
+import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import {
@@ -106,6 +109,13 @@ interface LeaderboardRowDto {
   avgMs: number | null;
   medianMs: number | null;
   unattributed?: boolean;
+  /** Raw users.role value, populated by the leaderboard endpoint (Task #798). */
+  role?: string | null;
+  /**
+   * Cohort used by the Customer Facing / Carrier Facing tabs (Task #798).
+   * "customer" = NAM/AM, "carrier" = LM, null = Unattributed or other roles.
+   */
+  cohort?: "customer" | "carrier" | null;
 }
 
 interface LeaderboardResponse {
@@ -341,6 +351,10 @@ export default function ResponseTimeTab() {
   const [selectedRepIds, setSelectedRepIds] = useState<string[]>([]);
   const [granularity, setGranularity] = useState<"day" | "week" | "month">("day");
   const [leaderSort, setLeaderSort] = useState<{ key: "avg" | "median" | "count" | "name"; dir: "asc" | "desc" }>({ key: "avg", dir: "asc" });
+  // Per-rep leaderboard cohort tab (Task #798). Customer Facing = NAM/AM,
+  // Carrier Facing = LM. Not persisted across reloads — leadership tends
+  // to bounce between cohorts in a single session.
+  const [leaderTab, setLeaderTab] = useState<"customer" | "carrier">("customer");
   const [selectedThread, setSelectedThread] = useState<ConversationThread | null>(null);
   const [unattributedOnly, setUnattributedOnly] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
@@ -546,6 +560,126 @@ export default function ResponseTimeTab() {
 
   const toggleSort = (key: typeof leaderSort.key) => {
     setLeaderSort((s) => s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" });
+  };
+
+  // Split the sorted rows into cohort tabs (Task #798). The Unattributed
+  // synthetic row appears in BOTH tabs since unattributed replies could
+  // belong to either cohort, and the existing pin-to-bottom sort in
+  // sortedLeaderboard keeps it last in each tab.
+  const customerLeaderboard = useMemo(
+    () => sortedLeaderboard.filter((r) => r.unattributed || r.cohort === "customer"),
+    [sortedLeaderboard],
+  );
+  const carrierLeaderboard = useMemo(
+    () => sortedLeaderboard.filter((r) => r.unattributed || r.cohort === "carrier"),
+    [sortedLeaderboard],
+  );
+
+  // Renders the leaderboard table for one cohort tab. Extracted so the
+  // header/sort/freshness chrome around the table can stay shared while
+  // the body changes per tab (Task #798).
+  const renderLeaderboardTable = (rows: LeaderboardRowDto[], cohort: "customer" | "carrier") => {
+    if (rows.length === 0) {
+      return (
+        <div
+          className="py-8 text-center text-sm text-muted-foreground"
+          data-testid={`text-rt-leaderboard-empty-${cohort}`}
+        >
+          No replies in this range
+        </div>
+      );
+    }
+    return (
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="cursor-pointer" onClick={() => toggleSort("name")} data-testid="th-rt-name">Rep</TableHead>
+            <TableHead className="cursor-pointer text-right" onClick={() => toggleSort("avg")} data-testid="th-rt-avg">
+              <span className="inline-flex items-center gap-1 justify-end">
+                Avg
+                <UITooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex items-center justify-center p-1 -m-1 text-muted-foreground hover:text-foreground"
+                      aria-label="Avg column info"
+                      data-testid="tooltip-trigger-rt-avg"
+                    >
+                      <Info className="w-3 h-3" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-xs text-xs" data-testid="tooltip-rt-avg">
+                    Average reply time using {businessHours
+                      ? "business hours only (Mon–Fri 8a–6p ET)"
+                      : "wall-clock elapsed time"}.
+                  </TooltipContent>
+                </UITooltip>
+              </span>
+            </TableHead>
+            <TableHead className="cursor-pointer text-right" onClick={() => toggleSort("median")} data-testid="th-rt-median">
+              <span className="inline-flex items-center gap-1 justify-end">
+                Median
+                <UITooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex items-center justify-center p-1 -m-1 text-muted-foreground hover:text-foreground"
+                      aria-label="Median column info"
+                      data-testid="tooltip-trigger-rt-median"
+                    >
+                      <Info className="w-3 h-3" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-xs text-xs" data-testid="tooltip-rt-median">
+                    Median reply time using {businessHours
+                      ? "business hours only (Mon–Fri 8a–6p ET)"
+                      : "wall-clock elapsed time"}.
+                  </TooltipContent>
+                </UITooltip>
+              </span>
+            </TableHead>
+            <TableHead className="cursor-pointer text-right" onClick={() => toggleSort("count")} data-testid="th-rt-count">Replies</TableHead>
+            <TableHead className="text-right">Waiting</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody data-testid={`tbody-rt-leaderboard-${cohort}`}>
+          {rows.map((row) => {
+            const clickable = row.unattributed;
+            return (
+              <TableRow
+                key={row.ownerUserId}
+                className={clickable ? "cursor-pointer hover:bg-muted/40" : undefined}
+                onClick={clickable ? () => handleLeaderboardRowClick(row) : undefined}
+                data-testid={`row-rt-rep-${row.ownerUserId}`}
+              >
+                <TableCell className="font-medium" data-testid={`text-rt-rep-name-${row.ownerUserId}`}>
+                  {row.ownerName}
+                  {row.unattributed && (
+                    <Badge variant="outline" className="ml-2 text-[10px] text-amber-400 border-amber-400/40">
+                      unattributed · click to triage
+                    </Badge>
+                  )}
+                </TableCell>
+                <TableCell className="text-right" data-testid={`text-rt-rep-avg-${row.ownerUserId}`}>
+                  {formatDuration(row.avgMs)}
+                </TableCell>
+                <TableCell className="text-right">{formatDuration(row.medianMs)}</TableCell>
+                <TableCell className="text-right">{row.count}</TableCell>
+                <TableCell className="text-right">
+                  {row.waiting > 0 ? (
+                    <Badge variant="outline" className="text-amber-500 border-amber-500/40">{row.waiting}</Badge>
+                  ) : (
+                    <span className="text-muted-foreground">0</span>
+                  )}
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    );
   };
 
   const handleOpenThread = (row: SlowestRowDto) => {
@@ -1083,101 +1217,27 @@ export default function ResponseTimeTab() {
         <CardContent>
           {leaderboard.isLoading ? (
             <Skeleton className="h-40 w-full" />
-          ) : sortedLeaderboard.length === 0 ? (
-            <div className="py-8 text-center text-sm text-muted-foreground" data-testid="text-rt-leaderboard-empty">
-              No replies in this range
-            </div>
           ) : (
             <TooltipProvider delayDuration={200}>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="cursor-pointer" onClick={() => toggleSort("name")} data-testid="th-rt-name">Rep</TableHead>
-                  <TableHead className="cursor-pointer text-right" onClick={() => toggleSort("avg")} data-testid="th-rt-avg">
-                    <span className="inline-flex items-center gap-1 justify-end">
-                      Avg
-                      <UITooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            onClick={(e) => e.stopPropagation()}
-                            className="inline-flex items-center justify-center p-1 -m-1 text-muted-foreground hover:text-foreground"
-                            aria-label="Avg column info"
-                            data-testid="tooltip-trigger-rt-avg"
-                          >
-                            <Info className="w-3 h-3" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="max-w-xs text-xs" data-testid="tooltip-rt-avg">
-                          Average reply time using {businessHours
-                            ? "business hours only (Mon–Fri 8a–6p ET)"
-                            : "wall-clock elapsed time"}.
-                        </TooltipContent>
-                      </UITooltip>
-                    </span>
-                  </TableHead>
-                  <TableHead className="cursor-pointer text-right" onClick={() => toggleSort("median")} data-testid="th-rt-median">
-                    <span className="inline-flex items-center gap-1 justify-end">
-                      Median
-                      <UITooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            onClick={(e) => e.stopPropagation()}
-                            className="inline-flex items-center justify-center p-1 -m-1 text-muted-foreground hover:text-foreground"
-                            aria-label="Median column info"
-                            data-testid="tooltip-trigger-rt-median"
-                          >
-                            <Info className="w-3 h-3" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="max-w-xs text-xs" data-testid="tooltip-rt-median">
-                          Median reply time using {businessHours
-                            ? "business hours only (Mon–Fri 8a–6p ET)"
-                            : "wall-clock elapsed time"}.
-                        </TooltipContent>
-                      </UITooltip>
-                    </span>
-                  </TableHead>
-                  <TableHead className="cursor-pointer text-right" onClick={() => toggleSort("count")} data-testid="th-rt-count">Replies</TableHead>
-                  <TableHead className="text-right">Waiting</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sortedLeaderboard.map((row) => {
-                  const clickable = row.unattributed;
-                  return (
-                    <TableRow
-                      key={row.ownerUserId}
-                      className={clickable ? "cursor-pointer hover:bg-muted/40" : undefined}
-                      onClick={clickable ? () => handleLeaderboardRowClick(row) : undefined}
-                      data-testid={`row-rt-rep-${row.ownerUserId}`}
-                    >
-                      <TableCell className="font-medium" data-testid={`text-rt-rep-name-${row.ownerUserId}`}>
-                        {row.ownerName}
-                        {row.unattributed && (
-                          <Badge variant="outline" className="ml-2 text-[10px] text-amber-400 border-amber-400/40">
-                            unattributed · click to triage
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right" data-testid={`text-rt-rep-avg-${row.ownerUserId}`}>
-                        {formatDuration(row.avgMs)}
-                      </TableCell>
-                      <TableCell className="text-right">{formatDuration(row.medianMs)}</TableCell>
-                      <TableCell className="text-right">{row.count}</TableCell>
-                      <TableCell className="text-right">
-                        {row.waiting > 0 ? (
-                          <Badge variant="outline" className="text-amber-500 border-amber-500/40">{row.waiting}</Badge>
-                        ) : (
-                          <span className="text-muted-foreground">0</span>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+              <Tabs
+                value={leaderTab}
+                onValueChange={(v) => setLeaderTab(v as "customer" | "carrier")}
+              >
+                <TabsList className="mb-3" data-testid="tabs-rt-leaderboard">
+                  <TabsTrigger value="customer" data-testid="tab-rt-leaderboard-customer">
+                    Customer Facing
+                  </TabsTrigger>
+                  <TabsTrigger value="carrier" data-testid="tab-rt-leaderboard-carrier">
+                    Carrier Facing
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="customer" data-testid="tab-content-rt-leaderboard-customer">
+                  {renderLeaderboardTable(customerLeaderboard, "customer")}
+                </TabsContent>
+                <TabsContent value="carrier" data-testid="tab-content-rt-leaderboard-carrier">
+                  {renderLeaderboardTable(carrierLeaderboard, "carrier")}
+                </TabsContent>
+              </Tabs>
             </TooltipProvider>
           )}
         </CardContent>

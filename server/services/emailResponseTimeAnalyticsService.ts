@@ -658,9 +658,40 @@ export interface RepLeaderboardRow {
   medianMs: number | null;
   /** True for the synthetic "Unattributed" row. */
   unattributed?: boolean;
+  /**
+   * Raw role from the users table for this rep, used by the client to
+   * split the leaderboard into Customer Facing vs Carrier Facing tabs
+   * (Task #798). null for the synthetic "Unattributed" row and for any
+   * rep whose role can't be resolved.
+   */
+  role?: string | null;
+  /**
+   * Derived cohort for the per-rep leaderboard tabs (Task #798):
+   *   "customer" — National Account Manager (NAM) or Account Manager (AM)
+   *   "carrier"  — Logistics Manager (LM)
+   *   null       — Unattributed row, or any role outside NAM/AM/LM
+   */
+  cohort?: "customer" | "carrier" | null;
 }
 
-export function buildLeaderboard(pairs: ResponsePair[], biz: boolean): RepLeaderboardRow[] {
+/**
+ * Map a users.role value to the leaderboard cohort used by the
+ * Customer/Carrier Facing tabs (Task #798). Anyone outside NAM/AM/LM
+ * (e.g. logistics_coordinator, sales, directors, admins) is excluded
+ * from both tabs by getting a null cohort.
+ */
+export function roleToCohort(role: string | null | undefined): "customer" | "carrier" | null {
+  if (!role) return null;
+  if (role === "national_account_manager" || role === "account_manager") return "customer";
+  if (role === "logistics_manager") return "carrier";
+  return null;
+}
+
+export function buildLeaderboard(
+  pairs: ResponsePair[],
+  biz: boolean,
+  userRoleById?: Map<string, string | null>,
+): RepLeaderboardRow[] {
   const byRep = new Map<string, ResponsePair[]>();
   // Bucket replies by their attributed sender (real rep, or Unattributed).
   for (const p of pairs.filter((p) => p.outboundAt != null)) {
@@ -684,14 +715,18 @@ export function buildLeaderboard(pairs: ResponsePair[], biz: boolean): RepLeader
     const responded = list.filter((p) => p.outboundAt != null);
     const ms = responded.map((p) => pickMs(p, biz)).filter((v): v is number => v != null && v >= 0);
     const namedSample = list.find((p) => attributedSenderId(p) === id);
+    const isUnattributed = id === UNATTRIBUTED_SENDER_ID;
+    const role = isUnattributed ? null : (userRoleById?.get(id) ?? null);
     rows.push({
       ownerUserId: id,
-      ownerName: id === UNATTRIBUTED_SENDER_ID ? "Unattributed" : (namedSample ? attributedSenderName(namedSample) : "Unknown"),
+      ownerName: isUnattributed ? "Unattributed" : (namedSample ? attributedSenderName(namedSample) : "Unknown"),
       count: responded.length,
       waiting: list.length - responded.length,
       avgMs: avg(ms),
       medianMs: median(ms),
-      unattributed: id === UNATTRIBUTED_SENDER_ID,
+      unattributed: isUnattributed,
+      role,
+      cohort: isUnattributed ? null : roleToCohort(role),
     });
   }
   rows.sort((a, b) => {

@@ -251,7 +251,17 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
 
       const filters = parseRtFilters(req, orgId);
       const pairs = await getCachedPairs(filters);
-      const rows = buildLeaderboard(pairs, filters.businessHours);
+      // Pull per-rep roles so the leaderboard rows can carry a cohort
+      // (Customer Facing vs Carrier Facing — Task #798). The synthetic
+      // Unattributed row gets a null role/cohort inside buildLeaderboard.
+      const userRoleResult = await storage.pool.query<{ id: string; role: string | null }>(
+        `SELECT id, role FROM users WHERE organization_id = $1`,
+        [orgId],
+      );
+      const userRoleById = new Map<string, string | null>(
+        userRoleResult.rows.map((r) => [r.id, r.role]),
+      );
+      const rows = buildLeaderboard(pairs, filters.businessHours, userRoleById);
 
       res.json({ businessHours: filters.businessHours, rows });
     } catch (err) {

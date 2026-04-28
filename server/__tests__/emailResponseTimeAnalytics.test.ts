@@ -173,6 +173,48 @@ describe("buildLeaderboard", () => {
     // Unattributed always sorts last.
     expect(rows[rows.length - 1].ownerUserId).toBe(UNATTRIBUTED_SENDER_ID);
   });
+
+  // Task #798 — leaderboard rows carry a cohort derived from the rep's
+  // role so the client can split into Customer Facing (NAM/AM) vs
+  // Carrier Facing (LM) tabs.
+  it("tags each rep with role/cohort and leaves Unattributed null", () => {
+    const pairs: ResponsePair[] = [
+      pair({ id: "1", senderUserId: "u-nam", senderName: "Nina NAM" }),
+      pair({ id: "2", senderUserId: "u-am", senderName: "Alex AM" }),
+      pair({ id: "3", senderUserId: "u-lm", senderName: "Luca LM" }),
+      pair({ id: "4", senderUserId: "u-coord", senderName: "Casey Coord" }),
+      pair({ id: "5" }), // unattributed reply
+    ];
+    const roles = new Map<string, string | null>([
+      ["u-nam", "national_account_manager"],
+      ["u-am", "account_manager"],
+      ["u-lm", "logistics_manager"],
+      ["u-coord", "logistics_coordinator"],
+    ]);
+    const rows = buildLeaderboard(pairs, false, roles);
+    const find = (id: string) => rows.find((r) => r.ownerUserId === id)!;
+    expect(find("u-nam").role).toBe("national_account_manager");
+    expect(find("u-nam").cohort).toBe("customer");
+    expect(find("u-am").cohort).toBe("customer");
+    expect(find("u-lm").cohort).toBe("carrier");
+    // Logistics coordinators (and any role outside NAM/AM/LM) are excluded
+    // from both cohorts by getting a null cohort.
+    expect(find("u-coord").role).toBe("logistics_coordinator");
+    expect(find("u-coord").cohort).toBeNull();
+    const un = find(UNATTRIBUTED_SENDER_ID);
+    expect(un.role).toBeNull();
+    expect(un.cohort).toBeNull();
+  });
+
+  it("falls back to null role/cohort when no role map is provided", () => {
+    const pairs: ResponsePair[] = [
+      pair({ id: "1", senderUserId: "u-alice", senderName: "Alice" }),
+    ];
+    const rows = buildLeaderboard(pairs, false);
+    const alice = rows.find((r) => r.ownerUserId === "u-alice")!;
+    expect(alice.role).toBeNull();
+    expect(alice.cohort).toBeNull();
+  });
 });
 
 describe("buildSlowestThreads", () => {
