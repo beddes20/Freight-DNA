@@ -489,8 +489,8 @@ vi.mock("../storage", () => ({
     countFreightOpportunitiesCoveredSince: vi.fn(async () => 0),
   },
 }));
-vi.mock("../pricingBlendService", () => ({
-  getBlendedRate: vi.fn(async () => ({
+vi.mock("../pricingBlendService", () => {
+  const blend = vi.fn(async () => ({
     targetBuyRpm: 2.45,
     confidence: "medium" as const,
     reason: "median of carrier history (24 loads)",
@@ -502,8 +502,15 @@ vi.mock("../pricingBlendService", () => ({
         avgCost30d: 2.40,
       },
     },
-  })),
-}));
+  }));
+  return {
+    getBlendedRate: blend,
+    // Cockpit + Auto-Pilot preview now go through the cached wrapper (Task #819).
+    // The cache itself is exercised by pricingBlendCache.test.ts; this mock just
+    // keeps the existing buildCockpitRow tests pricing-stub behavior.
+    getBlendedRateCached: blend,
+  };
+});
 
 describe("FREIGHT_COCKPIT_SORTS", () => {
   it("includes all Task #601-required sort dimensions", () => {

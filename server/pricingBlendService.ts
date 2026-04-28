@@ -88,6 +88,10 @@ export interface BlendInput {
 }
 
 export async function getBlendedRate(input: BlendInput): Promise<BlendedRate> {
+  return computeBlendedRate(input);
+}
+
+async function computeBlendedRate(input: BlendInput): Promise<BlendedRate> {
   const { orgId, origin, destination, originState, destinationState, equipmentType, customerName } = input;
   const baseCfg = await getBlendConfig(orgId);
   const cfg = resolveBlendForCustomer(baseCfg, customerName);
@@ -192,4 +196,194 @@ export async function getBlendedRate(input: BlendInput): Promise<BlendedRate> {
     refusedBelowThreshold,
     reason,
   };
+}
+
+/**
+ * Short-TTL in-process cache in front of `getBlendedRate` (Task #819).
+ *
+ * Why: the Available Freight cockpit calls the pricing service once per row,
+ * and on a typical page many rows share the same lane. The blend itself
+ * round-trips Sonar TRAC + the lane_rate_history table, which dominates the
+ * cockpit's response time. Caching by the inputs that actually drive the
+ * blend collapses dozens of pricing calls down to one per unique lane key
+ * within a 90-second window without changing what the user sees (Sonar's
+ * own cache TTL is 6h; lane history is recomputed on a slower cadence).
+ *
+ * Properties:
+ *   - LRU-bounded so a long-running process can't grow the map unbounded.
+ *   - Successful results AND "refused/none" outcomes are cached so the second
+ *     hit on a cold lane is just as cheap as the second hit on a hot one.
+ *     Thrown errors are NOT cached — callers should re-attempt and the
+ *     existing try/catch in the cockpit row builder will swallow them as
+ *     `{ rate: null, reason: "blend failed" }` exactly like before.
+ *   - Request coalescing: concurrent callers requesting the same key share a
+ *     single in-flight promise so a cockpit page with 50 rows on the same
+ *     lane only makes one pricing call total (instead of 50 racing each
+ *     other into the cache and triggering 50 Sonar lookups).
+ */
+const BLEND_CACHE_TTL_MS = 90_000;
+const BLEND_CACHE_MAX_ENTRIES = 500;
+const BLEND_LOG_SAMPLE_RATE = 0.02;
+
+interface BlendCacheEntry {
+  value: BlendedRate;
+  expiresAt: number;
+}
+
+const blendCache = new Map<string, BlendCacheEntry>();
+const blendInFlight = new Map<string, Promise<BlendedRate>>();
+
+const blendCacheMetrics = {
+  hits: 0,
+  misses: 0,
+  coalesced: 0,
+  evicted: 0,
+  errors: 0,
+};
+
+function blendCacheKey(input: BlendInput): string {
+  return [
+    input.orgId,
+    (input.origin ?? "").toUpperCase(),
+    (input.destination ?? "").toUpperCase(),
+    (input.originState ?? "").toUpperCase(),
+    (input.destinationState ?? "").toUpperCase(),
+    (input.equipmentType ?? "").toUpperCase(),
+    (input.customerName ?? "").toLowerCase(),
+    input.marginPctGuard ?? "",
+  ].join("|");
+}
+
+function evictExpired(now: number): void {
+  // Cheap pass: walk the map in insertion order and drop expired entries.
+  // The Map iteration is ordered, and in the LRU bump path we delete+set
+  // to keep insertion order = recency order, so the head is always the
+  // oldest entry which lets us early-exit once we hit a fresh one.
+  for (const [key, entry] of blendCache) {
+    if (entry.expiresAt > now) break;
+    blendCache.delete(key);
+    blendCacheMetrics.evicted++;
+  }
+}
+
+function evictLruIfFull(): void {
+  while (blendCache.size >= BLEND_CACHE_MAX_ENTRIES) {
+    const oldest = blendCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    blendCache.delete(oldest);
+    blendCacheMetrics.evicted++;
+    maybeLogBlendMetrics("evicted", oldest);
+  }
+}
+
+/**
+ * Strict-bound trim. Called after a successful insert so that even under
+ * burst concurrency (many distinct-key misses racing in) the cache cannot
+ * exceed `BLEND_CACHE_MAX_ENTRIES`. The pre-compute `evictLruIfFull` is
+ * still useful for the steady state because it trims before we add work
+ * that might be in flight, but it can be undercut by parallel inserts;
+ * this post-insert pass closes that window.
+ */
+function enforceMaxSize(): void {
+  while (blendCache.size > BLEND_CACHE_MAX_ENTRIES) {
+    const oldest = blendCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    blendCache.delete(oldest);
+    blendCacheMetrics.evicted++;
+    maybeLogBlendMetrics("evicted", oldest);
+  }
+}
+
+function maybeLogBlendMetrics(
+  event: "hit" | "miss" | "coalesced" | "error" | "evicted",
+  key: string,
+): void {
+  if (Math.random() > BLEND_LOG_SAMPLE_RATE) return;
+  console.log("[pricing-blend-cache]", {
+    event,
+    key,
+    size: blendCache.size,
+    inFlight: blendInFlight.size,
+    ...blendCacheMetrics,
+  });
+}
+
+/**
+ * Cached + request-coalesced wrapper around `getBlendedRate`.
+ *
+ * Use this from request paths that fan out the pricing call across many rows
+ * (the Available Freight cockpit row builder, the Auto-Pilot preview). Other
+ * callers — single-shot quote workbenches, agent tools — can keep using the
+ * uncached `getBlendedRate` since they don't repeat the same lane many times
+ * in one request.
+ *
+ * Errors thrown by the underlying service are NOT cached and are re-thrown so
+ * the caller's existing try/catch contract (null rate + "blend failed"
+ * reason) is preserved exactly.
+ */
+export async function getBlendedRateCached(input: BlendInput): Promise<BlendedRate> {
+  const key = blendCacheKey(input);
+  const now = Date.now();
+
+  const cached = blendCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    // Touch for LRU recency: re-insert at the tail.
+    blendCache.delete(key);
+    blendCache.set(key, cached);
+    blendCacheMetrics.hits++;
+    maybeLogBlendMetrics("hit", key);
+    return cached.value;
+  }
+  if (cached) {
+    blendCache.delete(key);
+    blendCacheMetrics.evicted++;
+  }
+
+  const inFlight = blendInFlight.get(key);
+  if (inFlight) {
+    blendCacheMetrics.coalesced++;
+    maybeLogBlendMetrics("coalesced", key);
+    return inFlight;
+  }
+
+  blendCacheMetrics.misses++;
+  evictExpired(now);
+  evictLruIfFull();
+
+  const promise = (async () => {
+    try {
+      const value = await computeBlendedRate(input);
+      blendCache.set(key, { value, expiresAt: Date.now() + BLEND_CACHE_TTL_MS });
+      // Strict bound enforcement after the insert in case multiple races
+      // landed before any of them got to the pre-compute trim.
+      enforceMaxSize();
+      maybeLogBlendMetrics("miss", key);
+      return value;
+    } catch (err) {
+      blendCacheMetrics.errors++;
+      maybeLogBlendMetrics("error", key);
+      throw err;
+    } finally {
+      blendInFlight.delete(key);
+    }
+  })();
+
+  blendInFlight.set(key, promise);
+  return promise;
+}
+
+/** Test-only: reset the blend cache + metrics so tests start from a clean slate. */
+export function _resetBlendedRateCache(): void {
+  blendCache.clear();
+  blendInFlight.clear();
+  blendCacheMetrics.hits = 0;
+  blendCacheMetrics.misses = 0;
+  blendCacheMetrics.coalesced = 0;
+  blendCacheMetrics.evicted = 0;
+  blendCacheMetrics.errors = 0;
+}
+
+/** Test-only: snapshot of the cache metrics counters. */
+export function _getBlendedRateCacheMetrics(): Readonly<typeof blendCacheMetrics> & { size: number } {
+  return { ...blendCacheMetrics, size: blendCache.size };
 }

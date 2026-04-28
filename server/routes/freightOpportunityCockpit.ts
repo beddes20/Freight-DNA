@@ -19,7 +19,7 @@ import {
 } from "@shared/schema";
 import { ensureShortlistRanked } from "../proactiveOpportunityService";
 import { sendOpportunityWave } from "../freightOpportunityOutreachService";
-import { getBlendedRate } from "../pricingBlendService";
+import { getBlendedRateCached } from "../pricingBlendService";
 import {
   listAutoPilotPendingForOrg,
   buildSkipNextRunPolicyUpsert,
@@ -367,7 +367,7 @@ export async function buildCockpitRow(
     loads30d?: number | null;
   } | null = null;
   try {
-    const blended = await getBlendedRate({
+    const blended = await getBlendedRateCached({
       orgId: org,
       origin: opp.origin,
       destination: opp.destination,
@@ -1112,7 +1112,7 @@ export function registerFreightCockpitRoutes(app: Express) {
           // preview since the scheduler doesn't compute it either.
           let suggestedBuy: { rate: number | null; confidence: string; reason: string } | null = null;
           try {
-            const blended = await getBlendedRate({
+            const blended = await getBlendedRateCached({
               orgId: org,
               origin: opp.origin,
               destination: opp.destination,
