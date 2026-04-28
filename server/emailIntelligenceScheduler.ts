@@ -366,11 +366,102 @@ export async function runEmailIntelligenceBatch(
   return { processed: messages.length };
 }
 
-// Reentrancy guard so the admin "Run AI batch now" button can't pile up
-// overlapping batches if pressed repeatedly while a manual drain is mid-run.
-// The cron path remains untouched (node-cron itself doesn't mutex; the
-// freshness-first slice keeps concurrent ticks productive).
-let _manualBatchInFlight = false;
+// ─── Reentrancy guard + wall-clock (April 28 hot patch, follow-up) ──────────
+//
+// Three cron-tick failure modes existed before this guard:
+//
+//   1. node-cron fires every 2 min regardless of whether the prior tick
+//      finished. If a tick took 33 min (which happened on April 28 because
+//      the OpenAI call had no per-request timeout — the SDK default is 10
+//      min) you got 16 overlapping ticks all hammering OpenAI and the DB
+//      pool, eventually killing the cron loop entirely for ~4 hours.
+//
+//   2. The admin "Run AI batch now" button could pile a manual batch on top
+//      of a still-running cron tick, doubling the load.
+//
+//   3. A body that hung indefinitely (DB pool exhaustion, infinite retry,
+//      etc.) had no upper bound — it would just sit in `running` forever
+//      and only the heartbeat staleness detector would surface it.
+//
+// The fix is two layers:
+//
+//   - A single shared `_batchInFlight` flag covers all three call sites
+//     (initial pass, cron tick, manual trigger). If a batch is already
+//     running, subsequent ticks are skipped (logged, not silently dropped)
+//     and the manual trigger returns `batch_in_progress`.
+//
+//   - A wall-clock `BATCH_WALL_CLOCK_MS` (5 min) races the body via
+//     `Promise.race`. If the body exceeds it, the wall clock wins, the
+//     wrapping promise rejects with a TimeoutError, withHeartbeat records
+//     it as `error`, the finally clears the flag, and the next cron tick
+//     starts fresh. The body promise itself is left to drain in the
+//     background (it's bounded by the per-call OpenAI timeout in
+//     emailIntelligenceService.ts).
+//
+let _batchInFlight = false;
+
+const BATCH_WALL_CLOCK_MS = 5 * 60 * 1000;
+
+class BatchTimeoutError extends Error {
+  constructor(ms: number) {
+    super(`email_intelligence_batch exceeded ${ms}ms wall clock`);
+    this.name = "BatchTimeoutError";
+  }
+}
+
+function runWithWallClock<T>(fn: () => Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new BatchTimeoutError(ms));
+    }, ms);
+    timer.unref?.();
+    fn().then(
+      result => {
+        clearTimeout(timer);
+        resolve(result);
+      },
+      err => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+/**
+ * Internal: the single execution path used by all three callers (initial
+ * pass, cron tick, manual trigger). Enforces the in-flight guard, the
+ * heartbeat wrapper, and the wall clock. Returns whether the batch was
+ * actually started.
+ */
+function _invokeBatch(opts: { source: "initial" | "cron" | "manual"; orgId?: string }): boolean {
+  if (_batchInFlight) {
+    console.log(
+      `[emailIntelligenceScheduler] skipping ${opts.source} tick: previous batch still running`,
+    );
+    return false;
+  }
+  _batchInFlight = true;
+  void withHeartbeat(JOB_NAMES.emailIntelligenceBatch, EMAIL_INTEL_INTERVAL_MS, () =>
+    runWithWallClock(
+      () => runEmailIntelligenceBatch(undefined, opts.orgId),
+      BATCH_WALL_CLOCK_MS,
+    ),
+  )
+    .catch(err => {
+      if (err instanceof BatchTimeoutError) {
+        console.error(
+          `[emailIntelligenceScheduler] ${opts.source} batch killed by wall clock (${BATCH_WALL_CLOCK_MS}ms) — next tick will start fresh`,
+        );
+      } else {
+        console.error(`[emailIntelligenceScheduler] ${opts.source} batch error:`, err);
+      }
+    })
+    .finally(() => {
+      _batchInFlight = false;
+    });
+  return true;
+}
 
 /**
  * Admin-triggerable manual run of the email intelligence batch. Used by the
@@ -382,46 +473,47 @@ let _manualBatchInFlight = false;
 export function triggerImmediateEmailIntelligenceBatch(opts?: {
   orgId?: string;
 }): { started: boolean; reason?: string } {
-  if (_manualBatchInFlight) {
+  const started = _invokeBatch({ source: "manual", orgId: opts?.orgId });
+  if (!started) {
     return { started: false, reason: "batch_in_progress" };
   }
-  _manualBatchInFlight = true;
-  void withHeartbeat(JOB_NAMES.emailIntelligenceBatch, EMAIL_INTEL_INTERVAL_MS, () =>
-    runEmailIntelligenceBatch(undefined, opts?.orgId),
-  )
-    .catch(err =>
-      console.error("[emailIntelligenceScheduler] manual batch error:", err),
-    )
-    .finally(() => {
-      _manualBatchInFlight = false;
-    });
   return { started: true };
 }
 
+/** Test-only: snapshot whether a batch is currently in flight. */
+export function _isBatchInFlightForTests(): boolean {
+  return _batchInFlight;
+}
+
+/** Test-only: reset the in-flight flag between tests. */
+export function _resetBatchInFlightForTests(): void {
+  _batchInFlight = false;
+}
+
+/** Test-only: surface the wall-clock budget. */
+export function _getBatchWallClockMsForTests(): number {
+  return BATCH_WALL_CLOCK_MS;
+}
+
 export function startEmailIntelligenceScheduler(): void {
-  console.log(`[emailIntelligenceScheduler] starting — every 2 min (cron: */2 * * * *), batch=${BATCH_SIZE}`);
+  console.log(
+    `[emailIntelligenceScheduler] starting — every 2 min (cron: */2 * * * *), batch=${BATCH_SIZE}, wall_clock=${BATCH_WALL_CLOCK_MS}ms, in-flight guard=on`,
+  );
 
   // Run an initial pass shortly after startup (30s delay to let DB settle).
-  // Wrapped in withHeartbeat so a dead initial pass is observable from the
-  // capture-audit pill within the next tick rather than going silent.
+  // Routed through _invokeBatch so the in-flight guard + wall clock apply
+  // even if a manual trigger races the boot sequence.
   const initTimeout = setTimeout(() => {
-    withHeartbeat(JOB_NAMES.emailIntelligenceBatch, EMAIL_INTEL_INTERVAL_MS, () =>
-      runEmailIntelligenceBatch(),
-    ).catch(err =>
-      console.error("[emailIntelligenceScheduler] initial batch error:", err),
-    );
+    _invokeBatch({ source: "initial" });
   }, 30_000);
   initTimeout.unref?.();
 
-  // Cron-anchored every 2 min, heartbeated. The previous unwrapped path
-  // meant a silently-failing extractor (e.g. OpenAI 500 storm) stopped
-  // producing quote_opportunities for hours without any visible signal —
-  // exactly the bug that left the Customer Quotes dashboard frozen.
+  // Cron-anchored every 2 min, heartbeated, in-flight-guarded, wall-clocked.
+  // Skipping a tick when the previous one is still running is *desirable* —
+  // the next tick will pick up wherever the in-flight one leaves off, and we
+  // avoid the 16-overlapping-ticks pile-up that crashed the cron loop on
+  // April 28.
   cron.schedule("*/2 * * * *", () => {
-    withHeartbeat(JOB_NAMES.emailIntelligenceBatch, EMAIL_INTEL_INTERVAL_MS, () =>
-      runEmailIntelligenceBatch(),
-    ).catch(err =>
-      console.error("[emailIntelligenceScheduler] batch error:", err),
-    );
+    _invokeBatch({ source: "cron" });
   }, { timezone: "America/Chicago" });
 }

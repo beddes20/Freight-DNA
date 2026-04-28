@@ -33,7 +33,6 @@ import {
 } from "@shared/schema";
 import { z } from "zod";
 import { getErrorMessage } from "../lib/errors";
-import { pStr } from "../lib/req";
 import { notifyFreightDelegated, notifyFreightApproved } from "../freightOpportunityNotifications";
 
 // Narrowed update shape for freight_opportunities mutations driven by the

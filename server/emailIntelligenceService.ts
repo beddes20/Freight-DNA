@@ -232,6 +232,13 @@ async function getOpenAiClient() {
 export async function extractEmailSignals(msg: EmailMessage): Promise<ExtractionResult> {
   try {
     const client = await getOpenAiClient();
+    // Per-request timeout. The OpenAI SDK defaults to 10 min — way too long
+    // for a 2-min cron tick. A single hung call used to stall the entire
+    // batch (April 28 outage: one 33-min tick triggered cascading overlap and
+    // killed the cron loop for 4 hours). 60s is well above the p99 for
+    // gpt-4o-mini extractions (~3s) so legit calls aren't affected; anything
+    // slower is treated as a failure and the message is marked processed so
+    // the batch keeps draining.
     const completion = await client.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -241,7 +248,7 @@ export async function extractEmailSignals(msg: EmailMessage): Promise<Extraction
       response_format: { type: "json_object" },
       temperature: 0.1,
       max_tokens: 1000,
-    });
+    }, { timeout: 60_000, maxRetries: 1 });
 
     const raw = completion.choices[0]?.message?.content ?? "{}";
     let parsed: unknown;
