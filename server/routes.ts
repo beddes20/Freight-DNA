@@ -1060,7 +1060,31 @@ RULES FOR YOUR RESPONSES:
           }
           data.role = req.body.role;
         }
-        if (req.body.managerId !== undefined) data.managerId = req.body.managerId;
+        if (req.body.managerId !== undefined) {
+          // Normalize falsy values ("" / undefined-as-string) to null so the
+          // DB column stores a real NULL and downstream chain walks terminate
+          // cleanly instead of hitting an empty-string lookup.
+          const rawManagerId = req.body.managerId;
+          const normalizedManagerId =
+            typeof rawManagerId === "string" && rawManagerId.trim().length > 0
+              ? rawManagerId
+              : null;
+          if (normalizedManagerId) {
+            const targetUserId = pStr(req.params.id);
+            const wouldCycle = await storage.wouldCreateManagerCycle(
+              targetUserId,
+              normalizedManagerId,
+              currentUser.organizationId,
+            );
+            if (wouldCycle) {
+              return res.status(400).json({
+                error:
+                  "This Reports To assignment would create a circular reporting loop. A user cannot report to themselves or to one of their own descendants.",
+              });
+            }
+          }
+          data.managerId = normalizedManagerId;
+        }
         if (req.body.financialRepId !== undefined) data.financialRepId = req.body.financialRepId || null;
       }
       const user = await storage.updateUser((pStr(req.params.id)), currentUser.organizationId, data);
@@ -1076,6 +1100,10 @@ RULES FOR YOUR RESPONSES:
       const { password: _, ...safeUser } = user;
       res.json(safeUser);
     } catch (error) {
+      // Log the actual stack so we can diagnose the (previously silent) 500s
+      // that surfaced as 503s when the request was cut short before a response
+      // could be written.
+      console.error("[PATCH /api/users/:id] update failed:", error);
       res.status(500).json({ error: "Failed to update user" });
     }
   });

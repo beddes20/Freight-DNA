@@ -214,6 +214,74 @@ async function testPinnedCompanies(): Promise<void> {
   await storage.deleteCompany(company.id, orgA.id);
 }
 
+// ── Manager assignment & cycle detection (Task #815) ─────────────────────────
+//
+// Regression coverage for the 503 admins hit when changing a user's "Reports
+// To". The PATCH /api/users/:id flow now goes through
+// storage.wouldCreateManagerCycle before writing managerId, so this exercises
+// (a) plain reassignment + null reset still works, and (b) the cycle guard
+// rejects the assignments that previously crashed downstream chain walks.
+
+async function testManagerAssignment(): Promise<void> {
+  console.log("\n── Manager Assignment & Cycle Detection ──────────────────────────────\n");
+
+  const manager1 = await seedUser(orgA.id, "Mgr1");
+  const manager2 = await seedUser(orgA.id, "Mgr2");
+  const rep = await seedUser(orgA.id, "Rep");
+
+  // Successfully assign rep → manager1
+  const assigned = await storage.updateUser(rep.id, orgA.id, { managerId: manager1.id });
+  assert("updateUser — assigns managerId successfully", assigned?.managerId === manager1.id);
+
+  // Switch to a different manager
+  const switched = await storage.updateUser(rep.id, orgA.id, { managerId: manager2.id });
+  assert("updateUser — switches managerId to a different manager", switched?.managerId === manager2.id);
+
+  // Clear back to null
+  const cleared = await storage.updateUser(rep.id, orgA.id, { managerId: null });
+  assert("updateUser — clears managerId back to null", cleared?.managerId === null);
+
+  // Cycle detection — self-reference
+  const selfCycle = await storage.wouldCreateManagerCycle(rep.id, rep.id, orgA.id);
+  assert("wouldCreateManagerCycle — flags self-reference as a cycle", selfCycle === true);
+
+  // Cycle detection — descendant cycle. Set up rep → manager1 (rep reports to
+  // manager1). Then assigning manager1.managerId = rep would close a cycle.
+  await storage.updateUser(rep.id, orgA.id, { managerId: manager1.id });
+  const descendantCycle = await storage.wouldCreateManagerCycle(manager1.id, rep.id, orgA.id);
+  assert(
+    "wouldCreateManagerCycle — flags assigning a manager to one of its own descendants as a cycle",
+    descendantCycle === true,
+  );
+
+  // Non-cycle: assigning manager1 → manager2 is fine
+  const notACycle = await storage.wouldCreateManagerCycle(manager1.id, manager2.id, orgA.id);
+  assert("wouldCreateManagerCycle — returns false for a normal assignment", notACycle === false);
+
+  // Cycle detection terminates even if the data already contains a cycle.
+  // Force one in raw SQL (storage.updateUser would otherwise refuse via the
+  // route layer, but the storage method itself doesn't gate writes).
+  await db.update(users).set({ managerId: manager2.id }).where(eq(users.id, manager1.id));
+  await db.update(users).set({ managerId: manager1.id }).where(eq(users.id, manager2.id));
+  const start = Date.now();
+  const preExistingCycle = await storage.wouldCreateManagerCycle(rep.id, manager1.id, orgA.id);
+  const elapsedMs = Date.now() - start;
+  assert(
+    "wouldCreateManagerCycle — terminates quickly even with a pre-existing cycle in data",
+    elapsedMs < 1000,
+    `elapsed=${elapsedMs}ms`,
+  );
+  assert(
+    "wouldCreateManagerCycle — returns a boolean for a pre-existing cycle (no infinite loop)",
+    typeof preExistingCycle === "boolean",
+  );
+
+  // Reset so cleanup() can proceed without FK headaches.
+  await db.update(users).set({ managerId: null }).where(eq(users.id, manager1.id));
+  await db.update(users).set({ managerId: null }).where(eq(users.id, manager2.id));
+  await db.update(users).set({ managerId: null }).where(eq(users.id, rep.id));
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -226,6 +294,7 @@ async function main(): Promise<void> {
     await testCompaniesCrud();
     await testContactsCrud();
     await testPinnedCompanies();
+    await testManagerAssignment();
   } finally {
     await cleanup();
   }

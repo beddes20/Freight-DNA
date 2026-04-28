@@ -428,6 +428,14 @@ export interface IStorage {
   getTeamMemberIds(userId: string, organizationId: string): Promise<string[]>;
   /** Walk the managerId chain upward, returning all ancestor manager IDs. */
   getManagerChainIds(userId: string, organizationId: string): Promise<string[]>;
+  /**
+   * Returns true if assigning `newManagerId` as the manager of `userId` would
+   * create a self-reference or a circular reporting loop (i.e. `newManagerId`
+   * is `userId` itself, or its manager chain transitively passes through
+   * `userId`). Walking is bounded so a pre-existing cycle in the data never
+   * loops forever.
+   */
+  wouldCreateManagerCycle(userId: string, newManagerId: string, organizationId: string): Promise<boolean>;
 
   getCompanies(organizationId: string): Promise<Company[]>;
   getCompaniesByIds(ids: string[], organizationId: string): Promise<Company[]>;
@@ -1593,6 +1601,27 @@ export class DatabaseStorage implements IStorage {
       currentId = user.managerId;
     }
     return ids;
+  }
+
+  async wouldCreateManagerCycle(userId: string, newManagerId: string, organizationId: string): Promise<boolean> {
+    // Self-reference: a user can never report to themselves.
+    if (userId === newManagerId) return true;
+    // Walk the proposed manager's chain upward; if we hit `userId`, the new
+    // assignment would close a cycle. Bounded by the seen-set so any
+    // pre-existing cycle in the data exits cleanly instead of looping forever.
+    const seen = new Set<string>();
+    let currentId: string | null = newManagerId;
+    while (currentId) {
+      if (currentId === userId) return true;
+      if (seen.has(currentId)) break;
+      seen.add(currentId);
+      const [user] = await db.select().from(users).where(
+        and(eq(users.id, currentId), eq(users.organizationId, organizationId))
+      );
+      if (!user) break;
+      currentId = user.managerId ?? null;
+    }
+    return false;
   }
 
   async getCompanies(organizationId: string): Promise<Company[]> {
