@@ -60,6 +60,7 @@ import { getErrorMessage } from "../lib/errors";
 import {
   renewUserMailboxSubscriptions,
   renewExpiringSoonSubscriptions,
+  renewSingleMailboxSubscription,
 } from "../graphSubscriptionService";
 
 export function registerConversationsRoutes(app: Express): void {
@@ -1719,6 +1720,44 @@ export function registerConversationsRoutes(app: Express): void {
       } catch (err) {
         console.error("[conversations] POST /admin/renew-mailbox-subscriptions error:", err);
         res.status(500).json({ error: "Renewal failed" });
+      }
+    },
+  );
+
+  // ── POST /admin/conversations/renew-mailbox-subscriptions/:mailboxId ──────
+  // Task #794 — Per-mailbox retry path used by the "Retry this mailbox"
+  // button on the capture-audit pill. Re-registers (or renews) just the one
+  // mailbox's Graph subscriptions and auto-runs delta-sync + per-thread
+  // self-heal so missed mail is pulled in immediately. Org-scoped so a
+  // director in org A can never trigger Graph work on org B's mailboxes.
+  app.post(
+    "/api/internal/admin/conversations/renew-mailbox-subscriptions/:mailboxId",
+    requireAuth,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        if (!["admin", "director", "sales_director"].includes(user.role)) {
+          return res.status(403).json({ error: "Admin access required" });
+        }
+        const mailboxId = pStr(req.params.mailboxId);
+        if (!mailboxId) {
+          return res.status(400).json({ error: "mailboxId is required" });
+        }
+        const mailbox = await storage.getMonitoredMailbox(mailboxId);
+        if (!mailbox) {
+          return res.status(404).json({ error: "Mailbox not found" });
+        }
+        // Org gate — admins on the same tenant can act, but a director in
+        // another org cannot poke this mailbox even with a guessed UUID.
+        if (mailbox.orgId !== user.organizationId && user.role !== "admin") {
+          return res.status(403).json({ error: "Cross-org renewal is not permitted" });
+        }
+        const result = await renewSingleMailboxSubscription(mailboxId);
+        res.json({ ok: true, mailboxId, email: mailbox.email, result });
+      } catch (err) {
+        console.error("[conversations] POST /admin/renew-mailbox-subscriptions/:mailboxId error:", err);
+        res.status(500).json({ error: "Single-mailbox renewal failed" });
       }
     },
   );

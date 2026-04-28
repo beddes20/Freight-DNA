@@ -19,9 +19,12 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Download,
   Loader2,
   RefreshCw,
+  RotateCw,
   ShieldAlert,
   ShieldCheck,
   TriangleAlert,
@@ -43,7 +46,55 @@ interface MailboxHealth {
   sentItemsHealth: "active" | "expired" | "missing" | "stale" | "unknown";
   lastSentItemsNotificationAt: string | null;
   lastOutboundCapturedAt: string | null;
+  /** Server-side syncStatus / syncError surfaced to the pill so the per-row
+   * remediation hint can match the underlying error mode (Task #794). */
+  syncStatus?: string;
+  syncError?: string | null;
   reason: string;
+}
+
+interface MailboxRenewResultPayload {
+  mailboxId: string;
+  email: string;
+  outcome: "renewed" | "reregistered" | "failed";
+  syncError: string | null;
+  backfill: {
+    delta: { processed: number; errors: number };
+    selfHeal: { scanned: number; threadsRecovered: number; errors: number };
+  } | null;
+}
+
+/**
+ * Map a mailbox's syncError / reason into a single short, actionable
+ * remediation hint shown on the failing-mailbox row. Mirrors the most
+ * common failure modes the renewal path produces in graphSubscriptionService:
+ * webhook secret missing, mailbox 404, Mail.Read consent denied, and
+ * generic 5xx Graph errors.
+ */
+function remediationHintFor(reason: string, syncError: string | null | undefined): string {
+  const blob = `${syncError ?? ""} ${reason}`.toLowerCase();
+  if (blob.includes("outlook_webhook_secret")) {
+    return "Set OUTLOOK_WEBHOOK_SECRET in IT settings, then click Retry.";
+  }
+  if (blob.includes("mail.read") || blob.includes("admin consent") || blob.includes("permission denied")) {
+    return "Have IT grant Mail.Read admin consent in Azure AD, then click Retry.";
+  }
+  if (blob.includes("not found") || blob.includes("404")) {
+    return "Verify the mailbox email is exact and the user has an Outlook mailbox.";
+  }
+  if (blob.includes("notificationurl") || blob.includes("app_base_url")) {
+    return "Set APP_BASE_URL to a public HTTPS URL Microsoft can reach.";
+  }
+  if (blob.includes("disabled")) {
+    return "Re-enable this mailbox on the Monitored Mailboxes page first.";
+  }
+  if (blob.includes("expired") || blob.includes("subscription")) {
+    return "Subscription needs re-registering — click Retry to refresh it now.";
+  }
+  if (/\b5\d{2}\b/.test(blob) || blob.includes("graph") || blob.includes("microsoft")) {
+    return "Microsoft Graph returned an error — wait a minute and click Retry.";
+  }
+  return "Click Retry to re-register this mailbox.";
 }
 
 interface RecentRun {
@@ -269,20 +320,55 @@ export function CaptureAuditStatusPill({
       );
       return res.json() as Promise<{
         ok: boolean;
-        summary: { attempted: number; renewed: number; reregistered: number; failed: number };
+        summary: {
+          attempted: number;
+          renewed: number;
+          reregistered: number;
+          failed: number;
+          results: MailboxRenewResultPayload[];
+        };
         expiringPass: { expired: number; expiringSoon: number };
       }>;
     },
     onSuccess: (result) => {
       const s = result.summary;
+      const failing = (s.results ?? []).filter(r => r.outcome === "failed");
+      const recoveredThreads = (s.results ?? []).reduce(
+        (acc, r) => acc + (r.backfill?.selfHeal.threadsRecovered ?? 0),
+        0,
+      );
+      const backfilledMessages = (s.results ?? []).reduce(
+        (acc, r) => acc + (r.backfill?.delta.processed ?? 0),
+        0,
+      );
+
+      // Task #794 — name the failing mailbox(es) and the first reason so the
+      // toast is actionable (used to be just a count). Cap at 2 emails to
+      // keep the toast from overflowing on 40+ mailbox tenants.
+      let description: string;
+      if (failing.length > 0) {
+        const sampleEmails = failing.slice(0, 2).map(f => f.email).join(", ");
+        const overflow = failing.length > 2 ? ` +${failing.length - 2} more` : "";
+        const firstReason = failing[0].syncError ?? "unknown error";
+        description = `${sampleEmails}${overflow}: ${firstReason}`;
+      } else {
+        const parts = [`Renewed ${s.renewed}, re-registered ${s.reregistered} of ${s.attempted} mailboxes`];
+        if (backfilledMessages > 0) parts.push(`pulled ${backfilledMessages} new message${backfilledMessages === 1 ? "" : "s"}`);
+        if (recoveredThreads > 0) parts.push(`recovered ${recoveredThreads} thread${recoveredThreads === 1 ? "" : "s"}`);
+        description = parts.join(" · ");
+      }
+
       toast({
         title: s.failed > 0
           ? `${s.failed} mailbox${s.failed === 1 ? "" : "es"} still failing`
           : "Subscriptions renewed",
-        description: `Renewed ${s.renewed}, re-registered ${s.reregistered} of ${s.attempted} mailboxes`,
+        description,
         variant: s.failed > 0 ? "destructive" : "default",
       });
       queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations/capture-audit-health"] });
+      // Backfill ran on the server — invalidate the conversations list/threads
+      // so the user sees the recovered messages without a manual refresh.
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
       refetch();
     },
     onError: (err: unknown) => {
@@ -293,6 +379,71 @@ export function CaptureAuditStatusPill({
       });
     },
   });
+
+  // Task #794 — Per-mailbox retry mutation backing the "Retry this mailbox"
+  // button on each failing-mailbox row in the popover. Tracks the in-flight
+  // mailboxId so only that row's button shows a spinner instead of the
+  // whole list freezing.
+  const [retryingMailboxId, setRetryingMailboxId] = useState<string | null>(null);
+  const retryMailbox = useMutation({
+    mutationFn: async (mailboxId: string) => {
+      setRetryingMailboxId(mailboxId);
+      const res = await apiRequest(
+        "POST",
+        `/api/internal/admin/conversations/renew-mailbox-subscriptions/${mailboxId}`,
+        {},
+      );
+      return res.json() as Promise<{
+        ok: boolean;
+        mailboxId: string;
+        email: string;
+        result:
+          | (MailboxRenewResultPayload & { skipped?: undefined })
+          | { skipped: true; reason: string };
+      }>;
+    },
+    onSuccess: (data) => {
+      const r = data.result;
+      if ("skipped" in r && r.skipped) {
+        toast({
+          title: `Couldn't retry ${data.email}`,
+          description: r.reason,
+          variant: "destructive",
+        });
+      } else if (r.outcome === "failed") {
+        toast({
+          title: `${data.email} still failing`,
+          description: r.syncError ?? "Unknown error",
+          variant: "destructive",
+        });
+      } else {
+        const recovered = r.backfill?.selfHeal.threadsRecovered ?? 0;
+        const newMessages = r.backfill?.delta.processed ?? 0;
+        const parts: string[] = [r.outcome === "renewed" ? "Subscription renewed" : "Subscription re-registered"];
+        if (newMessages > 0) parts.push(`pulled ${newMessages} new message${newMessages === 1 ? "" : "s"}`);
+        if (recovered > 0) parts.push(`recovered ${recovered} thread${recovered === 1 ? "" : "s"}`);
+        toast({
+          title: `${data.email} fixed`,
+          description: parts.join(" · "),
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations/capture-audit-health"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
+      refetch();
+    },
+    onError: (err: unknown) => {
+      toast({
+        title: "Retry failed",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    },
+    onSettled: () => {
+      setRetryingMailboxId(null);
+    },
+  });
+
+  const [showHealthyMailboxes, setShowHealthyMailboxes] = useState(false);
 
   const status: OverallStatus = data?.status ?? "healthy";
   const visuals = pillVisuals(status, data);
@@ -389,46 +540,110 @@ export function CaptureAuditStatusPill({
                 </div>
               </div>
 
-              {data.mailboxes.length > 0 && (
-                <div className="space-y-1">
-                  <div className="font-medium text-muted-foreground uppercase tracking-wide">
-                    Mailbox health
-                  </div>
-                  <ul className="space-y-1" data-testid="list-mailbox-health">
-                    {data.mailboxes.slice(0, 6).map((m) => {
-                      const ok = m.sentItemsHealth === "active";
-                      return (
-                        <li
-                          key={m.mailboxId}
-                          className="flex items-start justify-between gap-2"
-                          data-testid={`mailbox-health-${m.mailboxId}`}
-                        >
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              {ok
-                                ? <ShieldCheck className="w-3 h-3 text-emerald-600" />
-                                : <ShieldAlert className="w-3 h-3 text-amber-600" />}
-                              <span className="font-medium truncate" title={m.email}>{m.email}</span>
-                              <span className="text-muted-foreground">·</span>
-                              <span className={ok ? "text-emerald-600" : "text-amber-600"}>
-                                {m.sentItemsHealth}
-                              </span>
+              {data.mailboxes.length > 0 && (() => {
+                // Task #794: pin failing mailboxes (anything not "active") to
+                // the top, never hide them behind a "…and N more" cutoff. The
+                // healthy mailboxes are collapsed by default into a single
+                // expander so a 40-mailbox tenant doesn't drown the popover.
+                const failingMailboxes = data.mailboxes.filter(m => m.sentItemsHealth !== "active");
+                const healthyMailboxes = data.mailboxes.filter(m => m.sentItemsHealth === "active");
+                const renderMailbox = (m: MailboxHealth) => {
+                  const ok = m.sentItemsHealth === "active";
+                  const reasonText = m.syncError && m.syncError !== m.reason
+                    ? `${m.reason} — ${m.syncError}`
+                    : m.reason;
+                  const isRetryingThis = retryingMailboxId === m.mailboxId && retryMailbox.isPending;
+                  return (
+                    <li
+                      key={m.mailboxId}
+                      className="flex items-start justify-between gap-2"
+                      data-testid={`mailbox-health-${m.mailboxId}`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          {ok
+                            ? <ShieldCheck className="w-3 h-3 text-emerald-600 flex-shrink-0" />
+                            : <ShieldAlert className="w-3 h-3 text-amber-600 flex-shrink-0" />}
+                          <span className="font-medium truncate" title={m.email} data-testid={`text-mailbox-email-${m.mailboxId}`}>{m.email}</span>
+                          <span className="text-muted-foreground">·</span>
+                          <span className={ok ? "text-emerald-600" : "text-amber-600"} data-testid={`text-mailbox-health-${m.mailboxId}`}>
+                            {m.sentItemsHealth}
+                          </span>
+                        </div>
+                        {!ok && (
+                          <>
+                            <div
+                              className="text-muted-foreground pl-4 break-words"
+                              data-testid={`text-mailbox-reason-${m.mailboxId}`}
+                            >
+                              {reasonText}
                             </div>
-                            {!ok && (
-                              <div className="text-muted-foreground pl-4">{m.reason}</div>
-                            )}
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  {data.mailboxes.length > 6 && (
-                    <div className="text-muted-foreground">
-                      …and {data.mailboxes.length - 6} more
+                            <div
+                              className="pl-4 mt-0.5 text-[11px] text-amber-700 dark:text-amber-400"
+                              data-testid={`text-mailbox-remediation-${m.mailboxId}`}
+                            >
+                              → {remediationHintFor(m.reason, m.syncError)}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      {!ok && canRenew && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-6 px-2 text-[11px] gap-1 flex-shrink-0"
+                          disabled={isRetryingThis || retryMailbox.isPending}
+                          onClick={() => retryMailbox.mutate(m.mailboxId)}
+                          data-testid={`button-retry-mailbox-${m.mailboxId}`}
+                          title={`Re-register ${m.email} and pull any missed mail right now`}
+                        >
+                          {isRetryingThis
+                            ? <Loader2 className="w-3 h-3 animate-spin" />
+                            : <RotateCw className="w-3 h-3" />}
+                          Retry
+                        </Button>
+                      )}
+                    </li>
+                  );
+                };
+
+                return (
+                  <div className="space-y-1">
+                    <div className="font-medium text-muted-foreground uppercase tracking-wide">
+                      Mailbox health
                     </div>
-                  )}
-                </div>
-              )}
+                    <ul className="space-y-1.5" data-testid="list-mailbox-health">
+                      {failingMailboxes.map(renderMailbox)}
+                      {failingMailboxes.length === 0 && healthyMailboxes.length > 0 && (
+                        <li className="text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5" data-testid="text-all-mailboxes-healthy">
+                          <ShieldCheck className="w-3 h-3" />
+                          All {healthyMailboxes.length} mailbox{healthyMailboxes.length === 1 ? "" : "es"} healthy
+                        </li>
+                      )}
+                    </ul>
+                    {failingMailboxes.length > 0 && healthyMailboxes.length > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setShowHealthyMailboxes(v => !v)}
+                          className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+                          data-testid="button-toggle-healthy-mailboxes"
+                        >
+                          {showHealthyMailboxes
+                            ? <ChevronDown className="w-3 h-3" />
+                            : <ChevronRight className="w-3 h-3" />}
+                          {showHealthyMailboxes ? "Hide" : "Show"} {healthyMailboxes.length} healthy
+                        </button>
+                        {showHealthyMailboxes && (
+                          <ul className="space-y-1.5 mt-1" data-testid="list-healthy-mailboxes">
+                            {healthyMailboxes.map(renderMailbox)}
+                          </ul>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
 
               {data.affectedThreads.length > 0 && (
                 <div className="space-y-1">

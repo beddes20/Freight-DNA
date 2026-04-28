@@ -17,6 +17,7 @@ import { storage, db } from "./storage";
 import { sql } from "drizzle-orm";
 import { resilientFetch } from "./lib/httpRetry";
 import { JOB_NAMES, withHeartbeat } from "./lib/cronHeartbeat";
+import type { MonitoredMailbox } from "@shared/schema";
 
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -747,16 +748,128 @@ async function withRenewalLock<T>(label: string, fn: () => Promise<T>, fallback:
  * Returns a small summary that admin endpoints surface back to the UI so
  * a "Renew now" click can show what happened.
  */
+export type MailboxRenewOutcome = "renewed" | "reregistered" | "failed";
+
+export interface MailboxRenewResult {
+  mailboxId: string;
+  email: string;
+  outcome: MailboxRenewOutcome;
+  /** When the outcome is "failed", the human-friendly reason mirrored from
+   * the mailbox row's syncError. Null on success. */
+  syncError: string | null;
+  /** Auto-backfill summary when the renewal succeeded. Null when skipped
+   * (e.g. failed renewals or backfill itself errored beyond recovery). */
+  backfill: {
+    delta: { processed: number; errors: number };
+    selfHeal: { scanned: number; threadsRecovered: number; errors: number };
+  } | null;
+}
+
 type RenewSummary = {
   attempted: number;
   renewed: number;
   reregistered: number;
   failed: number;
   skipped?: boolean;
+  /** Per-mailbox outcome — Task #794. The capture-audit pill uses this to
+   * name which mailbox(es) failed in the toast, and to rank failing
+   * mailboxes to the top of the popover. */
+  results: MailboxRenewResult[];
 };
 
+/**
+ * After we successfully renew (or re-register) a mailbox's Graph
+ * subscriptions, the mailbox may have missed messages while the webhook
+ * was down. This kicks off a delta-sync poll for that mailbox and a
+ * mailbox-scoped self-heal pass for any waiting_on_us threads — so the
+ * "Renew subscriptions" button in the capture-audit pill isn't followed by
+ * "now please also click Sync now and Run capture audit now" (Task #794).
+ */
+async function backfillAfterRenew(mailbox: MonitoredMailbox): Promise<MailboxRenewResult["backfill"]> {
+  const result: NonNullable<MailboxRenewResult["backfill"]> = {
+    delta: { processed: 0, errors: 0 },
+    selfHeal: { scanned: 0, threadsRecovered: 0, errors: 0 },
+  };
+  try {
+    const { syncMailboxDelta } = await import("./services/mailboxDeltaSyncService");
+    const r = await syncMailboxDelta(mailbox.id);
+    result.delta = { processed: r.processed, errors: r.errors };
+  } catch (err) {
+    log(`[user-mailbox] backfill delta error for ${mailbox.email}: ${err instanceof Error ? err.message : String(err)}`);
+    result.delta.errors++;
+  }
+  try {
+    const { selfHealStuckThreads } = await import("./services/conversationReplyCaptureService");
+    // recentAuditDedupeMs: 0 — the user just clicked "Renew now" and is
+    // expecting a fresh attempt. minStuckMs: 0 so even very recent waits
+    // get a recovery pass. Cap to 25 threads so a misconfigured mailbox
+    // can't burn Graph quota in a single click.
+    const sweep = await selfHealStuckThreads({
+      orgId: mailbox.orgId,
+      mailboxIds: [mailbox.id],
+      triggeredBy: "manual",
+      minStuckMs: 0,
+      perMailboxLimit: 25,
+      maxThreads: 50,
+      recentAuditDedupeMs: 0,
+    });
+    result.selfHeal = { scanned: sweep.scanned, threadsRecovered: sweep.threadsRecovered, errors: sweep.errors };
+  } catch (err) {
+    log(`[user-mailbox] backfill self-heal error for ${mailbox.email}: ${err instanceof Error ? err.message : String(err)}`);
+    result.selfHeal.errors++;
+  }
+  return result;
+}
+
+async function renewOneMailbox(mb: MonitoredMailbox): Promise<MailboxRenewResult> {
+  // Either subscription missing → re-register both. The previous `&&`
+  // skipped re-registration when one was missing, which left the
+  // capture-audit pill stuck red because missing SentItems alone is
+  // counted as an unhealthy mailbox.
+  if (!mb.subscriptionId || !mb.sentItemsSubscriptionId) {
+    const id = await registerMailboxSubscription(mb.email, mb.id);
+    if (id) {
+      const fresh = (await storage.getMonitoredMailbox(mb.id)) ?? mb;
+      const backfill = await backfillAfterRenew(fresh);
+      return { mailboxId: mb.id, email: mb.email, outcome: "reregistered", syncError: null, backfill };
+    }
+    const fresh = await storage.getMonitoredMailbox(mb.id);
+    return { mailboxId: mb.id, email: mb.email, outcome: "failed", syncError: fresh?.syncError ?? "Re-registration failed", backfill: null };
+  }
+
+  let allRenewed = true;
+  for (const sid of [mb.subscriptionId, mb.sentItemsSubscriptionId]) {
+    if (sid) {
+      const renewed = await renewSubscription(sid);
+      if (!renewed) allRenewed = false;
+    }
+  }
+
+  if (allRenewed) {
+    const SUB_TTL_MS = 4200 * 60 * 1000;
+    await storage.updateMonitoredMailbox(mb.id, {
+      subscriptionExpiresAt: new Date(Date.now() + SUB_TTL_MS),
+      syncStatus: "active",
+      syncError: null,
+    });
+    const fresh = (await storage.getMonitoredMailbox(mb.id)) ?? mb;
+    const backfill = await backfillAfterRenew(fresh);
+    return { mailboxId: mb.id, email: mb.email, outcome: "renewed", syncError: null, backfill };
+  }
+
+  log(`[user-mailbox] Renewal failed for ${mb.email} — re-registering`);
+  const id = await registerMailboxSubscription(mb.email, mb.id);
+  if (id) {
+    const fresh = (await storage.getMonitoredMailbox(mb.id)) ?? mb;
+    const backfill = await backfillAfterRenew(fresh);
+    return { mailboxId: mb.id, email: mb.email, outcome: "reregistered", syncError: null, backfill };
+  }
+  const fresh = await storage.getMonitoredMailbox(mb.id);
+  return { mailboxId: mb.id, email: mb.email, outcome: "failed", syncError: fresh?.syncError ?? "Renewal failed", backfill: null };
+}
+
 export async function renewUserMailboxSubscriptions(orgId?: string): Promise<RenewSummary> {
-  const summary: RenewSummary = { attempted: 0, renewed: 0, reregistered: 0, failed: 0 };
+  const summary: RenewSummary = { attempted: 0, renewed: 0, reregistered: 0, failed: 0, results: [] };
   if (!azureCredentialsConfigured()) return summary;
 
   return withRenewalLock(
@@ -766,43 +879,47 @@ export async function renewUserMailboxSubscriptions(orgId?: string): Promise<Ren
         const mailboxes = await storage.getEnabledMonitoredMailboxes(orgId);
         for (const mb of mailboxes) {
           summary.attempted++;
-          // Either subscription missing → re-register both. The previous `&&`
-          // skipped re-registration when one was missing, which left the
-          // capture-audit pill stuck red because missing SentItems alone is
-          // counted as an unhealthy mailbox.
-          if (!mb.subscriptionId || !mb.sentItemsSubscriptionId) {
-            const id = await registerMailboxSubscription(mb.email, mb.id);
-            if (id) summary.reregistered++; else summary.failed++;
-            continue;
-          }
-
-          let allRenewed = true;
-          for (const sid of [mb.subscriptionId, mb.sentItemsSubscriptionId]) {
-            if (sid) {
-              const renewed = await renewSubscription(sid);
-              if (!renewed) allRenewed = false;
-            }
-          }
-
-          if (allRenewed) {
-            const SUB_TTL_MS = 4200 * 60 * 1000;
-            await storage.updateMonitoredMailbox(mb.id, {
-              subscriptionExpiresAt: new Date(Date.now() + SUB_TTL_MS),
-              syncStatus: "active",
-            });
-            summary.renewed++;
-          } else {
-            log(`[user-mailbox] Renewal failed for ${mb.email} — re-registering`);
-            const id = await registerMailboxSubscription(mb.email, mb.id);
-            if (id) summary.reregistered++; else summary.failed++;
-          }
+          const result = await renewOneMailbox(mb);
+          summary.results.push(result);
+          if (result.outcome === "renewed") summary.renewed++;
+          else if (result.outcome === "reregistered") summary.reregistered++;
+          else summary.failed++;
         }
       } catch (err) {
         log(`[user-mailbox] Error renewing subscriptions: ${err instanceof Error ? err.message : String(err)}`);
       }
       return summary;
     },
-    { attempted: 0, renewed: 0, reregistered: 0, failed: 0, skipped: true as const },
+    { attempted: 0, renewed: 0, reregistered: 0, failed: 0, results: [], skipped: true as const },
+  );
+}
+
+/**
+ * Single-mailbox retry path used by the capture-audit pill's "Retry this
+ * mailbox" button (Task #794). Reuses the same renewOneMailbox helper as
+ * the org-wide pass so the auto-backfill behavior is identical. Returns
+ * `null` when the mailbox isn't found or doesn't belong to the caller's
+ * org (the route enforces org scoping).
+ */
+export type SingleMailboxRetryResult =
+  | (MailboxRenewResult & { skipped?: undefined })
+  | { skipped: true; reason: string };
+
+export async function renewSingleMailboxSubscription(mailboxId: string): Promise<SingleMailboxRetryResult> {
+  if (!azureCredentialsConfigured()) {
+    return { skipped: true, reason: "Azure credentials not configured" };
+  }
+  const mailbox = await storage.getMonitoredMailbox(mailboxId);
+  if (!mailbox) {
+    return { skipped: true, reason: "Mailbox not found" };
+  }
+  if (!mailbox.enabled) {
+    return { skipped: true, reason: "Mailbox is disabled — enable it before retrying" };
+  }
+  return withRenewalLock<SingleMailboxRetryResult>(
+    `renewSingleMailboxSubscription:${mailboxId}`,
+    async () => renewOneMailbox(mailbox),
+    { skipped: true, reason: "Another renewal pass is in flight — try again in a few seconds" },
   );
 }
 

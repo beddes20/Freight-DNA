@@ -88,11 +88,15 @@ export function getMailboxSentItemsHealth(mb: MonitoredMailbox): MailboxHealthSn
     reason = `Subscription expired ${mb.subscriptionExpiresAt.toISOString()}`;
   } else {
     // We have a sub — but has it actually delivered anything in the last 24h?
-    // Use lastSentItemsNotificationAt OR lastOutboundCapturedAt as the
-    // "we saw traffic" signal (capture via delta also counts as healthy).
+    // Use lastSentItemsNotificationAt OR lastOutboundCapturedAt OR lastSyncAt
+    // as the "we saw traffic" signal. lastSyncAt is included so a fresh
+    // delta-sync poll (Task #794: auto-triggered after a manual renewal)
+    // counts as proof we're connected, even when the mailbox simply hasn't
+    // had outbound traffic in the lookback window.
     const lastTraffic = Math.max(
       mb.lastSentItemsNotificationAt?.getTime() ?? 0,
       mb.lastOutboundCapturedAt?.getTime() ?? 0,
+      mb.lastSyncAt?.getTime() ?? 0,
     );
     if (lastTraffic > 0 && now - lastTraffic > SENTITEMS_STALE_MS) {
       health = "stale";
@@ -453,6 +457,8 @@ export async function selfHealStuckThreads(opts: {
   recentAuditDedupeMs?: number;
   /** Cap number of threads per mailbox per sweep (default 25). */
   perMailboxLimit?: number;
+  /** Restrict the sweep to threads owned by these mailboxes (Task #794). */
+  mailboxIds?: string[];
 } = {}): Promise<SweepResult> {
   const {
     orgId,
@@ -461,6 +467,7 @@ export async function selfHealStuckThreads(opts: {
     maxThreads = 200,
     recentAuditDedupeMs = 10 * 60 * 1000,
     perMailboxLimit = 25,
+    mailboxIds,
   } = opts;
 
   const cutoff = new Date(Date.now() - minStuckMs);
@@ -484,14 +491,21 @@ export async function selfHealStuckThreads(opts: {
     .where(and(
       eq(emailConversationThreads.waitingState, "waiting_on_us"),
       orgId ? eq(emailConversationThreads.orgId, orgId) : drizzleSql`true`,
+      mailboxIds && mailboxIds.length > 0
+        ? drizzleSql`${monitoredMailboxes.id} = ANY(${mailboxIds})`
+        : drizzleSql`true`,
       drizzleSql`(${emailConversationThreads.waitingSinceAt} IS NULL OR ${emailConversationThreads.waitingSinceAt} < ${cutoff})`,
-      // Dedupe: skip threads already healed/checked very recently.
-      drizzleSql`NOT EXISTS (
-        SELECT 1 FROM conversation_thread_capture_audits a
-        WHERE a.org_id = ${emailConversationThreads.orgId}
-          AND a.thread_id = ${emailConversationThreads.threadId}
-          AND a.created_at > ${recentAuditCutoff}
-      )`,
+      // Dedupe: skip threads already healed/checked very recently. When
+      // recentAuditDedupeMs is 0 (e.g. callers that just kicked off a manual
+      // recovery and want a fresh pass), the dedupe is disabled.
+      recentAuditDedupeMs > 0
+        ? drizzleSql`NOT EXISTS (
+            SELECT 1 FROM conversation_thread_capture_audits a
+            WHERE a.org_id = ${emailConversationThreads.orgId}
+              AND a.thread_id = ${emailConversationThreads.threadId}
+              AND a.created_at > ${recentAuditCutoff}
+          )`
+        : drizzleSql`true`,
     ))
     .limit(maxThreads);
 
@@ -644,7 +658,11 @@ export async function getCaptureAuditHealthForUsers(opts: {
   const staleCount = mailboxHealth.filter(h => h.sentItemsHealth === "stale").length;
 
   const lastSuccessfulSyncAt = visibleMailboxes.reduce<Date | null>((acc, m) => {
-    const candidates = [m.lastSentItemsNotificationAt, m.lastOutboundCapturedAt]
+    // Task #794: include lastSyncAt so the pill flips green right after a
+    // successful manual renewal/backfill cycle (which always pumps lastSyncAt
+    // via syncMailboxDelta), without having to wait for a real outbound to
+    // happen on the mailbox.
+    const candidates = [m.lastSentItemsNotificationAt, m.lastOutboundCapturedAt, m.lastSyncAt]
       .filter((d): d is Date => !!d);
     if (candidates.length === 0) return acc;
     const best = candidates.reduce((a, b) => (a > b ? a : b));
