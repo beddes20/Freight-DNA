@@ -106,6 +106,7 @@ import AiHubPage from "@/pages/ai-hub";
 import EmailIntelligencePage from "@/pages/email-intelligence";
 import ContactSuggestionsPage from "@/pages/contact-suggestions";
 import FreightTriagePage from "@/pages/freight-triage";
+import ArchitectureSketchPage from "@/pages/architecture-sketch";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -256,6 +257,7 @@ function Router() {
       <Route path="/conversations" component={ConversationsPage} />
       <Route path="/contact-suggestions" component={ContactSuggestionsPage} />
       <Route path="/freight-triage" component={FreightTriagePage} />
+      <Route path="/architecture-sketch" component={ArchitectureSketchPage} />
       <Route path="/email-intelligence" component={EmailIntelligencePage} />
       <Route path="/proven-tactics" component={ProvenTacticsPage} />
       <Route path="/playbook" component={PlaybookPage} />
