@@ -3827,6 +3827,7 @@ export const FREIGHT_OPPORTUNITY_MODES = ["exact_load", "lane_building", "both"]
 export type FreightOpportunityMode = typeof FREIGHT_OPPORTUNITY_MODES[number];
 
 export const FREIGHT_OPPORTUNITY_STATUSES = [
+  "pending_approval",
   "new",
   "ready_to_send",
   "sent",
@@ -3997,6 +3998,15 @@ export const freightOpportunities = pgTable("freight_opportunities", {
   // wake time passes. Audit log records who snoozed and why; status is left
   // untouched so SLA / coverage continue to work after un-snooze.
   snoozedUntil: timestamp("snoozed_until"),
+  // Task #803 — Won Load Autopilot. When a customer quote is auto-flipped to
+  // "won" by the email pipeline we create a freight_opportunities row in
+  // status="pending_approval" linked back to the source quote, pre-filled with
+  // the quoted rate. The NAM/AM popup uses sourceQuoteId to render the quote
+  // summary; quotedRate carries the customer-facing sell price; targetBuyRate
+  // is the LM-editable ceiling shown to carriers.
+  sourceQuoteId: varchar("source_quote_id"),
+  quotedRate: decimal("quoted_rate", { precision: 12, scale: 2 }),
+  targetBuyRate: decimal("target_buy_rate", { precision: 12, scale: 2 }),
 }, (t) => ({
   orgStatusUrgencyIdx: index("freight_opps_org_status_urgency_idx").on(t.orgId, t.status, t.urgencyScore),
   companyPickupIdx: index("freight_opps_company_pickup_idx").on(t.companyId, t.pickupWindowStart),
@@ -4004,7 +4014,28 @@ export const freightOpportunities = pgTable("freight_opportunities", {
   ownerIdx: index("freight_opps_owner_idx").on(t.ownerUserId),
   delegatedIdx: index("freight_opps_delegated_idx").on(t.delegatedToUserId),
   awaitingIdx: index("freight_opps_awaiting_idx").on(t.awaitingApprovalSince),
+  sourceQuoteIdx: index("freight_opps_source_quote_idx").on(t.sourceQuoteId),
 }));
+
+// Task #803 — Audit trail for rate edits on freight_opportunities. Both the
+// owner NAM/AM and the delegated LM can edit the customer-facing quotedRate
+// and the carrier-facing targetBuyRate after a load is built; this table
+// preserves the prior values so disputes can be traced back to a person.
+export const freightOpportunityRateHistory = pgTable("freight_opportunity_rate_history", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  opportunityId: varchar("opportunity_id").notNull().references(() => freightOpportunities.id, { onDelete: "cascade" }),
+  field: text("field").notNull(), // "quotedRate" | "targetBuyRate"
+  oldRate: decimal("old_rate", { precision: 12, scale: 2 }),
+  newRate: decimal("new_rate", { precision: 12, scale: 2 }),
+  changedById: varchar("changed_by_id").references(() => users.id, { onDelete: "set null" }),
+  changedAt: timestamp("changed_at").defaultNow().notNull(),
+  reason: text("reason"),
+}, (t) => ({
+  oppIdx: index("freight_opp_rate_history_opp_idx").on(t.opportunityId, t.changedAt),
+}));
+export const insertFreightOpportunityRateHistorySchema = createInsertSchema(freightOpportunityRateHistory).omit({ id: true, changedAt: true });
+export type InsertFreightOpportunityRateHistory = z.infer<typeof insertFreightOpportunityRateHistorySchema>;
+export type FreightOpportunityRateHistory = typeof freightOpportunityRateHistory.$inferSelect;
 export const insertFreightOpportunitySchema = createInsertSchema(freightOpportunities)
   .omit({ id: true, generatedAt: true })
   .extend({

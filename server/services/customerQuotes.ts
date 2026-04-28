@@ -2242,7 +2242,7 @@ export async function setAutoWonQuoteAfHandoffEnabled(orgId: string, enabled: bo
  * `null` on any skip-or-fail path. Every outcome is logged with a
  * `[customer-quotes] AF handoff …` prefix so the audit trail is grep-able.
  */
-async function createFreightOpportunityFromWonQuote(
+export async function createFreightOpportunityFromWonQuote(
   orgId: string,
   opp: QuoteOpportunity,
   actorUserId: string | null,
@@ -2255,23 +2255,12 @@ async function createFreightOpportunityFromWonQuote(
       return null;
     }
 
-    // 2. Pickup-window check. requestDate is the proxy (see header comment).
-    //    Window is the *next* 0–72h: a quote whose pickup is already in the
-    //    past (e.g. a stale won quote being re-marked weeks later) is not a
-    //    same-day cover candidate and must not generate an AF row.
-    const pickupAt = opp.requestDate.getTime();
-    const now = Date.now();
-    const deltaMs = pickupAt - now;
-    if (deltaMs > SAME_DAY_HANDOFF_WINDOW_MS) {
-      const hours = Math.round(deltaMs / 3600000);
-      console.log(`[customer-quotes] AF handoff skipped (>72h, pickup in ${hours}h) quote=${opp.id}`);
-      return null;
-    }
-    if (deltaMs < 0) {
-      const hoursPast = Math.round(-deltaMs / 3600000);
-      console.log(`[customer-quotes] AF handoff skipped (pickup ${hoursPast}h in the past) quote=${opp.id}`);
-      return null;
-    }
+    // Task #803 — Won Load Autopilot supersedes the previous 72h pickup
+    // restriction: every won quote now generates a pending_approval freight
+    // row regardless of pickup distance, because the NAM/AM popup is the
+    // unified gate for "build this load and assign an LM." Past-pickup
+    // quotes (e.g. a manually-late win) still build; we just clamp the
+    // pickup window to today so the LM picks up the row immediately.
 
     // 3. Resolve company. freight_opportunities.companyId is NOT NULL, so a
     //    customer name with no matching CRM company can't be handed off.
@@ -2316,13 +2305,25 @@ async function createFreightOpportunityFromWonQuote(
     }
 
     const equipment = normalizeEquipmentType(opp.equipment);
-    const pickupDay = opp.requestDate.toISOString().slice(0, 10);
+    // Task #803 — clamp pickup to today if requestDate is in the past so the
+    // LM picks up the row immediately rather than seeing a stale window.
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const reqDateIso = opp.requestDate.toISOString().slice(0, 10);
+    const pickupDay = reqDateIso < todayIso ? todayIso : reqDateIso;
     const sourceRef = {
       type: "won_quote" as const,
       quoteId: opp.id,
       buy: opp.carrierPaid,   // null until the rep records carrier cost
       sell: opp.quotedAmount, // the customer-facing rate locked in at win
     };
+    // Task #803 — pre-fill the carrier-facing target buy at 85% of the sell
+    // price as a safe starting ceiling. The LM can edit it before sending.
+    const quotedRateStr = opp.quotedAmount;
+    let targetBuyRateStr: string | null = null;
+    if (quotedRateStr) {
+      const n = Number(quotedRateStr);
+      if (isFinite(n) && n > 0) targetBuyRateStr = (n * 0.85).toFixed(2);
+    }
 
     // 4. Idempotent upsert. We can't add a unique constraint on a JSONB
     //    expression without a migration, so we serialize concurrent calls
@@ -2345,6 +2346,8 @@ async function createFreightOpportunityFromWonQuote(
         .limit(1);
 
       if (existing) {
+        // Task #803 — refresh known fields from the latest quote snapshot but
+        // do NOT reset status/approval state on an idempotent re-save.
         await tx.update(freightOpportunities).set({
           companyId,
           origin: opp.originCity,
@@ -2355,6 +2358,8 @@ async function createFreightOpportunityFromWonQuote(
           pickupWindowStart: pickupDay,
           pickupWindowEnd: pickupDay,
           sourceRef,
+          sourceQuoteId: opp.id,
+          quotedRate: quotedRateStr,
           ownerUserId,
           notes: opp.notes,
         }).where(and(
@@ -2378,16 +2383,41 @@ async function createFreightOpportunityFromWonQuote(
         pickupWindowEnd: pickupDay,
         loadCount: 1,
         sourceRef,
+        sourceQuoteId: opp.id,
+        quotedRate: quotedRateStr,
+        targetBuyRate: targetBuyRateStr,
         urgencyScore: 70,
-        status: "ready_to_send",
+        // Task #803 — Won Load Autopilot: every won quote starts in
+        // pending_approval and waits for the NAM/AM popup to assign an LM.
+        status: "pending_approval",
+        awaitingApprovalSince: new Date(),
         createdById: actorUserId,
         ownerUserId,
         notes: opp.notes,
       };
       const [createdRow] = await tx.insert(freightOpportunities).values(insert)
         .returning({ id: freightOpportunities.id });
-      console.log(`[customer-quotes] AF handoff created opp=${createdRow?.id} quote=${opp.id} pickup=${pickupDay}`);
+      console.log(`[customer-quotes] AF handoff created opp=${createdRow?.id} quote=${opp.id} pickup=${pickupDay} status=pending_approval`);
       return createdRow ? { id: createdRow.id, created: true } : null;
+    }).then(async (result) => {
+      // Task #803 — fire the autopilot notification AFTER commit so the popup
+      // never beats the row into the DB. Best-effort: a notification failure
+      // must not retract the freight row.
+      if (result?.created && ownerUserId) {
+        try {
+          await storage.createNotification({
+            organizationId: orgId,
+            userId: ownerUserId,
+            type: "won_load_pending_approval",
+            title: "Won load needs an LM",
+            body: `${opp.originCity} → ${opp.destCity} (${equipment ?? "load"}) just won. Assign a Logistics Manager to start carrier outreach.`,
+            actionUrl: `/my-procurement?wonLoad=${result.id}`,
+          });
+        } catch (err) {
+          console.error(`[customer-quotes] won-load notification failed opp=${result.id}:`, err);
+        }
+      }
+      return result;
     });
   } catch (err) {
     console.error(`[customer-quotes] AF handoff failed quote=${opp.id}:`, err);
