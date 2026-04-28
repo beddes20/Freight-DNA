@@ -12,6 +12,7 @@ import { DetailDrawerProvider } from "@/components/detail-drawer";
 import "@/components/customer-drawer-body";
 import { NotificationBell } from "@/components/notification-bell";
 import { NotificationToasts } from "@/components/notification-toasts";
+import { WonLoadApprovalModal } from "@/components/won-load-approval-modal";
 import { CrmChatbot } from "@/components/crm-chatbot";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
@@ -576,6 +577,7 @@ function AuthenticatedAppContent({ user, isLoading, handleInactivityLogout }: {
       <CommandPalette />
       <CrmChatbot />
       <NotificationToasts />
+      <WonLoadApprovalModal />
       <LaneSwitchboard open={switchboardOpen} onOpenChange={setSwitchboardOpen} />
     </>
   );

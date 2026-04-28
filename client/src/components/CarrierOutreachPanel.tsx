@@ -331,6 +331,15 @@ interface CarrierOutreachPanelProps {
   open: boolean;
   onClose: () => void;
   onCarriersContacted?: () => void;
+  /**
+   * Task #803 — When set, the panel auto-selects the first N non-excluded
+   * carriers from the canonical ranker once per (lane, open) cycle. The
+   * "Send to top 30 carriers" button on a Won-Load freight row passes
+   * preselectTopN={30}; everywhere else, the panel opens with no carriers
+   * selected (current behaviour). User de-selections are sticky — the
+   * preselect only fires once per panel open, gated by a ref.
+   */
+  preselectTopN?: number;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -341,6 +350,7 @@ export function CarrierOutreachPanel({
   open,
   onClose,
   onCarriersContacted,
+  preselectTopN,
 }: CarrierOutreachPanelProps) {
   const { data: companyLanes } = useQuery<RecurringLane[]>({
     queryKey: ["/api/recurring-lanes"],
@@ -559,6 +569,34 @@ export function CarrierOutreachPanel({
       return next;
     });
   }, [suggestionsData]);
+
+  // Task #803 — Won-Load "Send to top 30" preselect.
+  //
+  // When the panel is opened with `preselectTopN`, auto-check the first N
+  // non-excluded carriers from the canonical ranker exactly once per
+  // (lane, open) cycle. Gated by a ref so user de-selections during the
+  // 60s polling refresh aren't undone.
+  const preselectFiredRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open) {
+      // Reset on close so reopening with the same lane will preselect again.
+      preselectFiredRef.current = null;
+      return;
+    }
+    if (!preselectTopN || preselectTopN <= 0) return;
+    if (!laneId) return;
+    if (preselectFiredRef.current === laneId) return;
+    const carriers = suggestionsData?.carriers;
+    if (!carriers || carriers.length === 0) return;
+
+    const keys = carriers
+      .filter(c => (c.suppressionReasons?.length ?? 0) === 0)
+      .slice(0, preselectTopN)
+      .map(c => c.carrierId ?? c.carrierName);
+    if (keys.length === 0) return;
+    setSelectedCarriers(new Set(keys));
+    preselectFiredRef.current = laneId;
+  }, [open, preselectTopN, laneId, suggestionsData]);
 
   // Apply the default template (with lane vars substituted) the first time a lane loads.
   // Skips re-application if the rep has already edited the content.

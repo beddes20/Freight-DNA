@@ -1111,6 +1111,23 @@ export async function applyClosedWonToOpenQuote(
     },
   });
 
+  // Task #803 — Won Load Autopilot. The manual UI win path already invokes
+  // the freight handoff via applyOutcomeUpdate; the email auto-win path did
+  // not, so a customer reply that flipped a quote to won never produced a
+  // pending_approval freight row. Wire the same helper here. Fault-isolated
+  // via the helper's internal try/catch — never blocks the won-status flip.
+  try {
+    const { createFreightOpportunityFromWonQuote } = await import("./customerQuotes");
+    // Re-fetch so we pass the freshly-updated row (with outcomeStatus="won").
+    const [freshOpp] = await db.select().from(quoteOpportunities)
+      .where(eq(quoteOpportunities.id, open.id)).limit(1);
+    if (freshOpp) {
+      await createFreightOpportunityFromWonQuote(message.orgId, freshOpp, null);
+    }
+  } catch (err) {
+    console.error(`[quote-email] won-load autopilot handoff failed quote=${open.id}:`, err);
+  }
+
   return { status: "closed_won", quoteId: open.id };
 }
 

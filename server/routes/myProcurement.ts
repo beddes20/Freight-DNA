@@ -585,6 +585,10 @@ export function registerMyProcurementRoutes(app: Express) {
         templateOverrideBody: string | null;
         sourceFileName: string | null;
         generatedAt: Date | string | null;
+        // Task #803 — Won Load Autopilot rate fields.
+        quotedRate: string | null;
+        targetBuyRate: string | null;
+        sourceQuoteId: string | null;
       }> = [];
       try {
       freightOppRows = await db.select({
@@ -608,6 +612,12 @@ export function registerMyProcurementRoutes(app: Express) {
         templateOverrideBody: freightOpportunities.templateOverrideBody,
         sourceFileName: freightOpportunities.sourceFileName,
         generatedAt: freightOpportunities.generatedAt,
+        // Task #803 — Won Load Autopilot: surface the rate columns and quote
+        // link so the LM card can show the customer-facing sell + LM-editable
+        // target buy without a separate fetch.
+        quotedRate: freightOpportunities.quotedRate,
+        targetBuyRate: freightOpportunities.targetBuyRate,
+        sourceQuoteId: freightOpportunities.sourceQuoteId,
       })
         .from(freightOpportunities)
         .where(and(
@@ -616,7 +626,10 @@ export function registerMyProcurementRoutes(app: Express) {
           // into opps that are awaiting carrier reply or customer confirmation
           // (so they don't double-pitch and so the queue reflects real WIP).
           // Terminal states (covered/expired/cancelled) stay excluded.
+          // Task #803 — pending_approval added so the NAM/AM owner sees their
+          // own un-assigned won-load row right next to the popup CTA.
           inArray(freightOpportunities.status, [
+            "pending_approval",
             "new",
             "ready_to_send",
             "sent",
@@ -748,6 +761,10 @@ export function registerMyProcurementRoutes(app: Express) {
           isDelegatedToMe: r.delegatedToUserId === user.id,
           needsApproval: !r.approvedAt && r.status === "ready_to_send",
           isUnassigned: !r.ownerUserId && !r.delegatedToUserId,
+          // Task #803 — Won Load Autopilot rate fields.
+          quotedRate: r.quotedRate,
+          targetBuyRate: r.targetBuyRate,
+          sourceQuoteId: r.sourceQuoteId,
           // Task #364 — SLA fields surfaced for the badge + dashboard count.
           awaitingApprovalSince: slaInfo.awaitingSince,
           slaState: slaInfo.state,

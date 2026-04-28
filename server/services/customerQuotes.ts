@@ -2406,12 +2406,12 @@ export async function createFreightOpportunityFromWonQuote(
       if (result?.created && ownerUserId) {
         try {
           await storage.createNotification({
-            organizationId: orgId,
             userId: ownerUserId,
             type: "won_load_pending_approval",
             title: "Won load needs an LM",
             body: `${opp.originCity} → ${opp.destCity} (${equipment ?? "load"}) just won. Assign a Logistics Manager to start carrier outreach.`,
-            actionUrl: `/my-procurement?wonLoad=${result.id}`,
+            link: `/my-procurement?wonLoad=${result.id}`,
+            relatedId: result.id,
           });
         } catch (err) {
           console.error(`[customer-quotes] won-load notification failed opp=${result.id}:`, err);

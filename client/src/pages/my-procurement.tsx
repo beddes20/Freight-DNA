@@ -58,6 +58,9 @@ import {
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+// Task #803 — Won Load Autopilot: one-click "Send to top 30 carriers"
+// reuses the existing CarrierOutreachPanel via the new preselectTopN prop.
+import { CarrierOutreachPanel } from "@/components/CarrierOutreachPanel";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -142,6 +145,12 @@ interface AvailableFreightOpp {
   awaitingApprovalSince: string | null;
   slaState: "ok" | "warning" | "over" | "escalated";
   slaAgeHours: number | null;
+  // Task #803 — Won Load Autopilot rate fields. Null on legacy rows that
+  // were imported via the daily Available Freight upload rather than from
+  // a won quote.
+  quotedRate: string | null;
+  targetBuyRate: string | null;
+  sourceQuoteId: string | null;
   // Task #365 — latest customer email signal for the company (last 7 days).
   latestCustomerSignal: {
     intentType: string;
@@ -1526,6 +1535,11 @@ function AvailableFreightCard({
   const [body, setBody] = useState("");
   const [delegateUserId, setDelegateUserId] = useState<string>("");
   const [assignUserId, setAssignUserId] = useState<string>("");
+  // Task #803 — Won Load Autopilot UI state for the LM card.
+  const [topCarriersOpen, setTopCarriersOpen] = useState(false);
+  const [rateEditOpen, setRateEditOpen] = useState(false);
+  const [editedQuoted, setEditedQuoted] = useState<string>("");
+  const [editedTarget, setEditedTarget] = useState<string>("");
 
   // Managers can act on any opportunity in their org, including when viewing
   // another rep. Reps can only act on their own (owner or current delegate).
@@ -1574,6 +1588,22 @@ function AvailableFreightCard({
       queryClient.invalidateQueries({ queryKey });
     },
     onError: (err: Error) => toast({ title: "Assign failed", description: err.message, variant: "destructive" }),
+  });
+
+  // Task #803 — Won Load Autopilot rate edit. The LM (or owning NAM/AM) can
+  // tune `quotedRate` (sell to customer) and `targetBuyRate` (max buy from
+  // carrier) before pushing the lane out. Every change is audited via the
+  // server's freight_opportunity_rate_history table.
+  const rateMutation = useMutation({
+    mutationFn: (vals: { quotedRate: string | null; targetBuyRate: string | null }) =>
+      apiRequest("PATCH", `/api/freight-opportunities/${item.id}/rate`, vals).then((r) => r.json()),
+    onSuccess: () => {
+      toast({ title: "Rate updated" });
+      setRateEditOpen(false);
+      queryClient.invalidateQueries({ queryKey });
+    },
+    onError: (err: Error) =>
+      toast({ title: "Rate update failed", description: err.message, variant: "destructive" }),
   });
 
   const overrideMutation = useMutation({
@@ -1677,6 +1707,44 @@ function AvailableFreightCard({
               <span>{item.loadCount} load{item.loadCount === 1 ? "" : "s"}</span>
               {item.sourceFileName && <span className="opacity-70">{item.sourceFileName}</span>}
             </div>
+            {/* Task #803 — Won Load Autopilot rate strip. Only renders when
+                the row was born from a won quote (sourceQuoteId is set), so
+                legacy daily-import rows look unchanged. */}
+            {item.sourceQuoteId && (item.quotedRate || item.targetBuyRate) && (
+              <div className="mt-1.5 flex items-center gap-2 text-xs" data-testid={`rate-strip-${item.id}`}>
+                <Badge
+                  variant="outline"
+                  className="text-[11px] border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                  title="Sell rate quoted to the customer (from the won quote)"
+                  data-testid={`badge-quoted-rate-${item.id}`}
+                >
+                  Sell {item.quotedRate ? `$${Number(item.quotedRate).toLocaleString()}` : "—"}
+                </Badge>
+                <Badge
+                  variant="outline"
+                  className="text-[11px] border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300"
+                  title="Max buy rate to offer carriers (default = 85% of sell). Edit anytime — every change is audited."
+                  data-testid={`badge-target-buy-${item.id}`}
+                >
+                  Buy ≤ {item.targetBuyRate ? `$${Number(item.targetBuyRate).toLocaleString()}` : "—"}
+                </Badge>
+                {canActOnIt && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-2 text-[11px]"
+                    onClick={() => {
+                      setEditedQuoted(item.quotedRate ?? "");
+                      setEditedTarget(item.targetBuyRate ?? "");
+                      setRateEditOpen(true);
+                    }}
+                    data-testid={`button-edit-rate-${item.id}`}
+                  >
+                    <Pencil className="w-3 h-3 mr-1" /> Edit
+                  </Button>
+                )}
+              </div>
+            )}
             {item.latestCustomerSignal && (
               <div className="mt-1.5">
                 <Badge
@@ -1775,9 +1843,97 @@ function AvailableFreightCard({
                 <Send className="w-3.5 h-3.5 mr-1.5" /> Send
               </Button>
             )}
+            {/* Task #803 — One-click "Send to top 30 carriers" for won-load
+                rows. Only renders when the row originated from a won quote
+                AND the LM/owner can act on it AND it's been assigned out
+                of pending_approval. Opens CarrierOutreachPanel pre-selected
+                with the top 30 ranker hits. */}
+            {canActOnIt && item.sourceQuoteId && item.status !== "pending_approval" && (
+              <Button
+                size="sm"
+                variant="default"
+                className="bg-amber-500 text-black hover:bg-amber-400"
+                onClick={() => setTopCarriersOpen(true)}
+                data-testid={`button-send-top30-${item.id}`}
+              >
+                <Send className="w-3.5 h-3.5 mr-1.5" /> Send to Top 30 Carriers
+              </Button>
+            )}
           </div>
         </div>
       </div>
+
+      {/* Task #803 — Top 30 carriers outreach panel mounted per card. The
+          panel itself is a heavy component but it's lazy-rendered (only
+          when topCarriersOpen flips true) and unmounts on close. */}
+      {topCarriersOpen && (
+        <CarrierOutreachPanel
+          laneId={item.id}
+          companyId={item.companyId}
+          open={topCarriersOpen}
+          onClose={() => setTopCarriersOpen(false)}
+          onCarriersContacted={() => {
+            setTopCarriersOpen(false);
+            queryClient.invalidateQueries({ queryKey });
+          }}
+          preselectTopN={30}
+        />
+      )}
+
+      {/* Task #803 — Inline rate edit dialog. */}
+      <Dialog open={rateEditOpen} onOpenChange={setRateEditOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Edit rates</DialogTitle>
+            <DialogDescription>
+              Sell is what the customer pays. Buy is the most you'll pay a carrier.
+              Every change is audited.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs text-muted-foreground">Sell rate (customer-facing)</label>
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                value={editedQuoted}
+                onChange={(e) => setEditedQuoted(e.target.value)}
+                className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
+                placeholder="0.00"
+                data-testid={`input-edit-quoted-rate-${item.id}`}
+              />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">Target buy rate (max to carrier)</label>
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                value={editedTarget}
+                onChange={(e) => setEditedTarget(e.target.value)}
+                className="mt-1 w-full rounded-md border bg-background px-3 py-2 text-sm"
+                placeholder="0.00"
+                data-testid={`input-edit-target-buy-${item.id}`}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRateEditOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => rateMutation.mutate({
+                quotedRate: editedQuoted.trim() ? editedQuoted.trim() : null,
+                targetBuyRate: editedTarget.trim() ? editedTarget.trim() : null,
+              })}
+              disabled={rateMutation.isPending}
+              data-testid={`button-save-rate-${item.id}`}
+            >
+              {rateMutation.isPending && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+              Save rates
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {editorOpen && (
         <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
