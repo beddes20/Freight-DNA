@@ -195,10 +195,15 @@ type Filters = {
   expiringOnly?: boolean;
 };
 
+// Task #816 — `carrierPaid` / `marginDollar` / `marginPct` were retired
+// when the carrier columns came off the customer-only Quote
+// Opportunities table. The list endpoint still tolerates a stale saved
+// view that requested one (it falls back to default request-date order)
+// so old rows don't crash the page.
 type SortKey =
   | "requestDate" | "customerName" | "originCity" | "destCity" | "equipment"
   | "quotedAmount" | "validThrough" | "outcomeStatus" | "outcomeReasonLabel"
-  | "carrierPaid" | "marginDollar" | "marginPct" | "repName" | "responseTimeHours"
+  | "repName" | "responseTimeHours"
   | "source" | "score";
 
 type SavedView = { id: string; name: string; filters: Filters; createdAt: string };
@@ -929,15 +934,15 @@ function CustomerQuotesPageInner(): JSX.Element {
             <ActionQueueCard onOpenQuote={(id) => setDrawerId(id)} />
 
             {/* KPI strip */}
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-11 gap-2" data-testid="kpi-strip">
+            {/* Task #816 — carrier cost / margin KPIs were stripped from
+                this customer-only surface. Margin data is preserved in
+                the database for LWQ; it just isn't shown here. */}
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-2" data-testid="kpi-strip">
               <KpiCard testId="kpi-total" label="Total" value={data.kpis.total.toString()} trend={data.kpis.trend.total} onClick={clearAll} />
               <KpiCard testId="kpi-won" label="Won" value={data.kpis.won.toString()} onClick={() => updateFilter({ wonOnly: true, lostOnly: undefined, activeOnly: undefined, expiringOnly: undefined })} />
               <KpiCard testId="kpi-lost" label="Lost" value={data.kpis.lost.toString()} onClick={() => updateFilter({ lostOnly: true, wonOnly: undefined, activeOnly: undefined, expiringOnly: undefined })} />
               <KpiCard testId="kpi-win-rate" label="Win rate" value={fmtPct(data.kpis.winRate)} trend={data.kpis.trend.winRate} onClick={() => updateFilter({ wonOnly: true, lostOnly: undefined })} />
               <KpiCard testId="kpi-avg-quoted" label="Avg quoted" value={fmtMoney(data.kpis.avgQuoted)} onClick={() => { setSortKey("quotedAmount"); setSortDir("desc"); }} />
-              <KpiCard testId="kpi-avg-carrier" label="Avg carrier" value={fmtMoney(data.kpis.avgCarrierCost)} onClick={() => { updateFilter({ wonOnly: true }); setSortKey("carrierPaid"); setSortDir("desc"); }} />
-              <KpiCard testId="kpi-avg-margin-d" label="Avg margin $" value={fmtMoney(data.kpis.avgMarginDollar)} trend={data.kpis.trend.avgMargin} onClick={() => { updateFilter({ wonOnly: true }); setSortKey("marginDollar"); setSortDir("desc"); }} />
-              <KpiCard testId="kpi-avg-margin-pct" label="Avg margin %" value={fmtPct(data.kpis.avgMarginPct)} trend={data.kpis.trend.avgMargin} onClick={() => { updateFilter({ wonOnly: true }); setSortKey("marginPct"); setSortDir("desc"); }} />
               <KpiCard testId="kpi-avg-response" label="Avg response" value={fmtHours(data.kpis.avgResponseTime)} trend={-data.kpis.trend.avgResponse} onClick={() => { setSortKey("responseTimeHours"); setSortDir("desc"); }} />
               <KpiCard testId="kpi-pending" label="Pending" value={data.kpis.pending.toString()} onClick={() => updateFilter({ activeOnly: true, wonOnly: undefined, lostOnly: undefined, expiringOnly: undefined })} />
               <KpiCard testId="kpi-expiring" label="Expiring soon" value={data.kpis.expiringSoon.toString()} sub="<3 days" onClick={() => updateFilter({ expiringOnly: true, activeOnly: undefined, wonOnly: undefined, lostOnly: undefined })} />
@@ -1131,9 +1136,9 @@ function CustomerQuotesPageInner(): JSX.Element {
                 <Card className="bg-card border-border" data-testid="current-slice-panel">
                   <CardHeader className="py-3 px-4"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Current Slice</CardTitle></CardHeader>
                   <CardContent className="px-4 pb-3 text-xs text-foreground/90 space-y-1">
+                    {/* Task #816 — Avg margin row removed; this surface is customer-only. */}
                     <div><span className="text-muted-foreground">Quotes:</span> {data.kpis.total}</div>
                     <div><span className="text-muted-foreground">Win rate:</span> {fmtPct(data.kpis.winRate)}</div>
-                    <div><span className="text-muted-foreground">Avg margin:</span> {fmtMoney(data.kpis.avgMarginDollar)} ({fmtPct(data.kpis.avgMarginPct)})</div>
                     <div><span className="text-muted-foreground">Pending:</span> {data.kpis.pending}</div>
                   </CardContent>
                 </Card>
@@ -1199,7 +1204,6 @@ function CustomerQuotesPageInner(): JSX.Element {
         onPickRelated={(id) => setDrawerId(id)}
         customers={data?.customers ?? []}
         reps={data?.reps ?? []}
-        carriers={data?.carriers ?? []}
         reasons={data?.reasons ?? []}
         onSave={(id, patch) => {
           // Task #501 — when the QuoteEditForm is changing the outcome to
@@ -1470,6 +1474,9 @@ function QuoteSlaBadgeCell({ quote }: { quote: Quote }): JSX.Element | null {
 type ColumnDef =
   | { key: SortKey; label: string; align?: "right"; sortable?: true }
   | { key: string; label: string; align?: "right"; sortable: false };
+// Task #816 — Carrier $, Margin $, Margin % were stripped from this
+// customer-only surface. Underlying data is still persisted for LWQ; it
+// just isn't surfaced in the Quote Opportunities table or drawer.
 const COLUMNS: ColumnDef[] = [
   { key: "requestDate", label: "Request" },
   { key: "slaState", label: "SLA", sortable: false },
@@ -1481,9 +1488,6 @@ const COLUMNS: ColumnDef[] = [
   { key: "validThrough", label: "Valid" },
   { key: "outcomeStatus", label: "Outcome" },
   { key: "outcomeReasonLabel", label: "Reason" },
-  { key: "carrierPaid", label: "Carrier $", align: "right" },
-  { key: "marginDollar", label: "Margin $", align: "right" },
-  { key: "marginPct", label: "Margin %", align: "right" },
   { key: "repName", label: "Rep" },
   { key: "responseTimeHours", label: "Resp", align: "right" },
   { key: "source", label: "Source" },
@@ -1678,9 +1682,7 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
           {padTop > 0 && <tr style={{ height: padTop }} aria-hidden="true"><td colSpan={COLUMNS.length + 1} /></tr>}
           {visible.map(q => {
             const quoted = num(q.quotedAmount);
-            const paid = num(q.carrierPaid);
-            const margin = quoted - paid;
-            const marginPct = quoted > 0 && paid > 0 ? (margin / quoted) * 100 : null;
+            // Task #816 — paid / margin / marginPct removed; surface is customer-only.
             return (
               <tr key={q.id} onClick={() => onRowClick(q.id)}
                 className={`border-b border-border/50 hover:bg-muted/60 cursor-pointer ${selectedIds.has(q.id) ? "bg-amber-500/5" : ""}`}
@@ -1747,9 +1749,7 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
                   />
                 </td>
                 <td className="px-2 whitespace-nowrap text-muted-foreground max-w-[140px] truncate">{q.outcomeReasonLabel ?? "—"}</td>
-                <td className="px-2 whitespace-nowrap text-right tabular-nums text-foreground/90">{paid ? fmtMoney(paid) : "—"}</td>
-                <td className="px-2 whitespace-nowrap text-right tabular-nums text-foreground">{paid ? fmtMoney(margin) : "—"}</td>
-                <td className="px-2 whitespace-nowrap text-right tabular-nums text-foreground/90">{marginPct !== null ? fmtPct(marginPct) : "—"}</td>
+                {/* Task #816 — Carrier $, Margin $, Margin % cells removed; surface is customer-only. */}
                 <td className="px-2 whitespace-nowrap text-muted-foreground">{q.repName}</td>
                 <td className="px-2 whitespace-nowrap text-right tabular-nums text-muted-foreground">{num(q.responseTimeHours).toFixed(1)}h</td>
                 <td className="px-2 whitespace-nowrap text-[10px]">
@@ -1795,7 +1795,7 @@ function CustomerPerformancePanel({ cp }: { cp: CustomerPerformance }): JSX.Elem
           <div className="text-2xl font-semibold text-foreground">{fmtPct(winRate)}</div>
           <div className="text-xs text-muted-foreground mt-0.5">{cp.winCount} won · {cp.lossCount} lost</div>
           <div className="mt-2 text-xs text-muted-foreground">Avg quoted: <span className="text-foreground">{fmtMoney(cp.avgQuoted)}</span></div>
-          <div className="text-xs text-muted-foreground">Avg carrier: <span className="text-foreground">{fmtMoney(cp.avgCarrierBuy)}</span></div>
+          {/* Task #816 — "Avg carrier" line removed; this surface is customer-only. */}
         </div>
         <div>
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Top Lanes</div>
@@ -1921,7 +1921,10 @@ function AttractivenessModule({ items }: { items: AttractivenessItem[] }): JSX.E
             </div>
             <div className="text-right shrink-0">
               <span className={`inline-block text-[10px] px-1.5 py-0.5 rounded border ${ATTRACT_COLORS[item.label]}`}>{item.label}</span>
-              <div className="text-[10px] text-muted-foreground mt-0.5">{fmtPct(item.winRate)} · {fmtMoney(item.avgMargin)}</div>
+              {/* Task #816 — avgMargin trailing the win-rate has been
+                  stripped from the customer-only attractiveness module
+                  alongside the rest of the margin/carrier surface. */}
+              <div className="text-[10px] text-muted-foreground mt-0.5">{fmtPct(item.winRate)}</div>
             </div>
           </div>
         ))}
@@ -2023,18 +2026,10 @@ function ChartStrip({ charts, taxonomy, agingBuckets, onPickLane, onPickCustomer
           </BarChart></ResponsiveContainer>
         </CardContent>
       </Card>
-      <Card className="bg-card border-border">
-        <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Avg Margin by Customer</CardTitle></CardHeader>
-        <CardContent className="px-2 pb-2 h-[160px]">
-          <ResponsiveContainer><BarChart data={charts.marginByCustomer} layout="vertical">
-            <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" />
-            <XAxis type="number" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} />
-            <YAxis type="category" dataKey="customer" tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} width={110} />
-            <RTooltip contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", color: "hsl(var(--popover-foreground))", fontSize: 11 }} formatter={(v: number) => fmtMoney(v)} />
-            <Bar dataKey="avgMargin" fill="#facc15" onClick={handleCustomerClick} cursor="pointer" />
-          </BarChart></ResponsiveContainer>
-        </CardContent>
-      </Card>
+      {/* Task #816 — "Avg Margin by Customer" chart card removed alongside
+          the carrier/margin KPIs and Quote Opportunities columns; the
+          underlying snapshot still ships `marginByCustomer` for the LWQ
+          surface, so we just stop rendering it here. */}
       <Card className="bg-card border-border">
         <CardHeader className="py-2 px-4"><CardTitle className="text-xs uppercase tracking-wider text-muted-foreground">Top Lanes</CardTitle></CardHeader>
         <CardContent className="px-2 pb-2 h-[160px]">
@@ -2144,9 +2139,10 @@ function PartyTypeControl({ customer }: { customer: Customer }): JSX.Element {
   );
 }
 
-function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, carriers, reasons, onSave, isSaving }: {
+function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, reasons, onSave, isSaving }: {
+  // Task #816 — `carriers` prop dropped from the customer-only drawer.
   quoteId: string | null; onClose: () => void; onPickRelated: (id: string) => void;
-  customers: Customer[]; reps: Rep[]; carriers: Carrier[]; reasons: Reason[];
+  customers: Customer[]; reps: Rep[]; reasons: Reason[];
   onSave: (id: string, patch: Record<string, unknown>) => void;
   isSaving: boolean;
 }): JSX.Element {
@@ -2213,7 +2209,6 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
                 quote={data.opp}
                 customers={customers}
                 reps={reps}
-                carriers={carriers}
                 reasons={reasons}
                 draft={draft}
                 onChange={setDraft}
@@ -2222,11 +2217,12 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
                 isSaving={isSaving}
               />
             )}
+            {/* Task #816 — Carrier paid / Margin $ / Margin % tiles
+                stripped from the customer-only drawer. The underlying
+                values are still persisted (LWQ + reporting still use
+                them), they just aren't shown on this surface. */}
             <div className="grid grid-cols-2 gap-2">
               <Stat label="Quoted" value={fmtMoney(data.opp.quotedAmount)} />
-              <Stat label="Carrier paid" value={fmtMoney(data.opp.carrierPaid, { dash: true })} />
-              <Stat label="Margin $" value={num(data.opp.carrierPaid) ? fmtMoney(num(data.opp.quotedAmount) - num(data.opp.carrierPaid)) : "—"} />
-              <Stat label="Margin %" value={num(data.opp.carrierPaid) && num(data.opp.quotedAmount) ? fmtPct(((num(data.opp.quotedAmount) - num(data.opp.carrierPaid)) / num(data.opp.quotedAmount)) * 100) : "—"} />
               <Stat label="Response time" value={fmtHours(num(data.opp.responseTimeHours))} />
               <Stat label="Valid through" value={data.opp.validThrough ? new Date(data.opp.validThrough).toLocaleDateString() : "—"} />
             </div>
@@ -2262,7 +2258,7 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
                   )}
                 </div>
               )}
-              <div className="text-xs text-muted-foreground mt-1">Carrier: {data.carrier?.name ?? "—"}</div>
+              {/* Task #816 — "Carrier:" line removed from drawer Source panel; surface is customer-only. */}
             </div>
             {data.opp.needsNewContactReview && (
               <NewContactReviewSection
@@ -2604,8 +2600,11 @@ function InlineOutcome({ quote, reasons, onChange, pending }: {
   );
 }
 
-function QuoteEditForm({ quote, customers, reps, carriers, reasons, draft, onChange, onCancel, onSave, isSaving }: {
-  quote: Quote; customers: Customer[]; reps: Rep[]; carriers: Carrier[]; reasons: Reason[];
+function QuoteEditForm({ quote, customers, reps, reasons, draft, onChange, onCancel, onSave, isSaving }: {
+  // Task #816 — `carriers` prop was retired with the Carrier select in
+  // the Edit form. Margin/carrier persistence is unchanged on the API;
+  // the surface is just customer-only now.
+  quote: Quote; customers: Customer[]; reps: Rep[]; reasons: Reason[];
   draft: Record<string, unknown>; onChange: (d: Record<string, unknown>) => void;
   onCancel: () => void; onSave: () => void; isSaving: boolean;
 }): JSX.Element {
@@ -2667,18 +2666,10 @@ function QuoteEditForm({ quote, customers, reps, carriers, reasons, draft, onCha
         <FormCol label="Quoted $">
           <Input type="number" step="0.01" className="h-8 bg-background border-border text-xs" value={String(get("quotedAmount", quote.quotedAmount ?? ""))} onChange={(e) => set("quotedAmount", e.target.value)} data-testid="edit-quoted-amount" />
         </FormCol>
-        <FormCol label="Carrier paid $">
-          <Input type="number" step="0.01" className="h-8 bg-background border-border text-xs" value={String(get("carrierPaid", quote.carrierPaid ?? ""))} onChange={(e) => set("carrierPaid", e.target.value)} data-testid="edit-carrier-paid" />
-        </FormCol>
-        <FormCol label="Carrier">
-          <Select value={get("carrierId", quote.carrierId ?? "_none") as string} onValueChange={(v) => set("carrierId", v === "_none" ? null : v)}>
-            <SelectTrigger className="h-8 bg-background border-border text-xs" data-testid="edit-carrier"><SelectValue /></SelectTrigger>
-            <SelectContent container={overlayPortal}>
-              <SelectItem value="_none">— None —</SelectItem>
-              {carriers.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </FormCol>
+        {/* Task #816 — "Carrier paid $" and "Carrier" form fields removed
+            from the customer-only Edit form. Underlying values are still
+            persisted by the API (LWQ continues to read them); the rep
+            just can't enter or change them from this surface. */}
         <FormCol label="Valid through">
           <Input type="date" className="h-8 bg-background border-border text-xs" value={validThroughInput} onChange={(e) => set("validThrough", e.target.value ? new Date(e.target.value).toISOString() : null)} data-testid="edit-valid-through" />
         </FormCol>

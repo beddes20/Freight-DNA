@@ -19,6 +19,7 @@ import {
   type QuoteOpportunity, type QuoteCustomer, type QuoteRep,
 } from "@shared/schema";
 import { publish as publishLiveSync } from "./liveSync";
+import { loadNonCustomerCustomerIds } from "./customerOnlyChokepoint";
 
 const FLOOR_HOURS = 24;
 const CEILING_HOURS = 14 * 24;
@@ -194,10 +195,19 @@ export async function getStaleQuoteFollowUps(
   const repMap = new Map<string, QuoteRep>(reps.map(r => [r.id, r]));
   const now = Date.now();
 
+  // Task #816 — apply the hardened customer-only chokepoint here so the
+  // badge count, SSE membership-transition detector, and the snapshot's
+  // stale-follow-up rail all see the same truth. Carriers (and stored-as-
+  // customer rows that match a carrier-suffix token / known carrier name /
+  // known carrier sender domain) are dropped before items are built so a
+  // misclassified row can never reach the Quote Opportunities page.
+  const nonCustomerIds = await loadNonCustomerCustomerIds(orgId, customerMap);
+
   const items: StaleQuoteFollowUp[] = [];
   for (const opp of pending as QuoteOpportunity[]) {
     const cust = customerMap.get(opp.customerId);
     if (!cust) continue;
+    if (nonCustomerIds.has(opp.customerId)) continue;
     const win = windows.get(opp.customerId)?.pTypicalHours ?? DEFAULT_WINDOW_HOURS;
     const ageHours = (now - opp.requestDate.getTime()) / 3_600_000;
     if (ageHours <= win) continue;

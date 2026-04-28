@@ -93,15 +93,20 @@ const queryFiltersSchema = filtersSchema.extend({
   needsReviewOnly: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
 });
 
-const SORT_KEYS = [
+// Task #816 — `carrierPaid` / `marginDollar` / `marginPct` were retired
+// from the Quote Opportunities surface (the table, drawer, and CSV are
+// customer-only). Keep them tolerated by the route schema as a free-form
+// string so a stale saved view that still references one doesn't 400 the
+// list endpoint; the service layer's sort switch falls back to the
+// default request-date ordering for any unknown sort key.
+const KNOWN_SORT_KEYS = new Set<string>([
   "requestDate", "customerName", "originCity", "destCity", "equipment",
   "quotedAmount", "validThrough", "outcomeStatus", "outcomeReasonLabel",
-  "carrierPaid", "marginDollar", "marginPct", "repName", "responseTimeHours",
-  "source", "score",
-] as const;
+  "repName", "responseTimeHours", "source", "score",
+]);
 
 const listQuerySchema = queryFiltersSchema.extend({
-  sortKey: z.enum(SORT_KEYS).optional(),
+  sortKey: z.string().optional(),
   sortDir: z.enum(["asc", "desc"]).optional(),
   offset: z.preprocess(v => v === undefined ? 0 : Number(v), z.number().int().min(0).max(100000)),
   limit: z.preprocess(v => v === undefined ? 50 : Number(v), z.number().int().min(1).max(500)),
@@ -185,7 +190,13 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       if (!parsed.success) return res.status(400).json({ error: "Invalid query", issues: parsed.error.issues });
       const d = parsed.data;
       const filters = parseFilters(req);
-      const sortKey: ListSortKey = (d.sortKey ?? "requestDate") as ListSortKey;
+      // Task #816 — coerce stale saved-view sort keys (carrierPaid /
+      // marginDollar / marginPct, retired with the carrier columns) into
+      // the safe default so the request can't crash the list endpoint.
+      const requestedSort = d.sortKey ?? "requestDate";
+      const sortKey: ListSortKey = (KNOWN_SORT_KEYS.has(requestedSort)
+        ? requestedSort
+        : "requestDate") as ListSortKey;
       const sortDir = d.sortDir ?? "desc";
       const result = await listQuotes(user.organizationId, filters, sortKey, sortDir, d.offset, d.limit);
       res.json(result);

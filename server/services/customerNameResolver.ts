@@ -71,7 +71,11 @@ const COMPANY_SUFFIX_RE = new RegExp(`\\b(?:${COMPANY_SUFFIX})\\b`, "i");
 // words too — which is why the dashboard always shows a manual override
 // button next to the auto-classification in the drawer.
 const CARRIER_TOKEN = "Carrier|Carriers|Freight|Logistics|Logistic|Transport|Transportation|Trucking|Lines|Express|Haulage|Hauling|Cartage|Dispatch";
-const CARRIER_TOKEN_RE = new RegExp(`\\b(?:${CARRIER_TOKEN})\\b`, "i");
+// Task #816 — exported so the customer-only chokepoint on the Quote
+// Opportunities feed can re-check stored `partyType="customer"` rows
+// whose name still carries a carrier-suffix token (a misclassification
+// signal that should hide the row from every customer-only surface).
+export const CARRIER_TOKEN_RE = new RegExp(`\\b(?:${CARRIER_TOKEN})\\b`, "i");
 
 /**
  * Heuristic classifier for a `quote_customers` row. Returns:

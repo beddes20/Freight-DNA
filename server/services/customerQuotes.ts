@@ -12,6 +12,7 @@ import {
   type InsertFreightOpportunity,
 } from "@shared/schema";
 import { UNKNOWN_CUSTOMER_NAME, classifyPartyType, sanitizeCustomerName, isFreeMailProviderName } from "./customerNameResolver";
+import { loadNonCustomerCustomerIds } from "./customerOnlyChokepoint";
 import { isFunnelEligibleRep } from "@shared/quoteOpportunitiesRoles";
 import { users } from "@shared/schema";
 import { learnFromReassign } from "./quoteSenderMappings";
@@ -159,10 +160,15 @@ export type Snapshot = {
   alerts: Alert[];
 };
 
+// Task #816 — `carrierPaid` / `marginDollar` / `marginPct` were retired
+// when the carrier columns came off the Quote Opportunities table. The
+// list endpoint still tolerates a stale saved view that requested one of
+// them (the route schema accepts it; the service-level switch falls back
+// to default request-date ordering) so old rows don't 400 the request.
 export type ListSortKey =
   | "requestDate" | "customerName" | "originCity" | "destCity" | "equipment"
   | "quotedAmount" | "validThrough" | "outcomeStatus" | "outcomeReasonLabel"
-  | "carrierPaid" | "marginDollar" | "marginPct" | "repName" | "responseTimeHours"
+  | "repName" | "responseTimeHours"
   | "source" | "score";
 
 export type ListResult = {
@@ -563,21 +569,10 @@ function applyFilters(
   });
 }
 
-/**
- * Task #615 — derive the set of `quote_customers.id` values that the
- * Quote Opportunities feed must NEVER surface. Anything not explicitly
- * classified as `partyType === "customer"` (i.e. carrier OR unknown OR
- * a row missing a partyType for any reason) lands in here. Returns an
- * empty set when nothing in the org needs filtering so callers can pass
- * it unconditionally.
- */
-function nonCustomerCustomerIdsFromMap(customerMap: Map<string, QuoteCustomer>): Set<string> {
-  const out = new Set<string>();
-  customerMap.forEach((c, id) => {
-    if (c.partyType !== "customer") out.add(id);
-  });
-  return out;
-}
+// Task #816 — `loadNonCustomerCustomerIds` lives in
+// ./customerOnlyChokepoint so that the satellite services
+// (`staleQuoteFollowup`, etc.) share the same hardened logic without
+// pulling in this module (and its circular-dependency risk).
 
 /**
  * Task #597 — best-effort backfill that classifies every `quote_customers`
@@ -793,7 +788,7 @@ export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: 
   const ctx = await loadContext(orgId);
   const all = await db.select().from(quoteOpportunities)
     .where(eq(quoteOpportunities.organizationId, orgId));
-  const nonCustomerIds = nonCustomerCustomerIdsFromMap(ctx.customerMap);
+  const nonCustomerIds = await loadNonCustomerCustomerIds(orgId, ctx.customerMap);
   const filtered = applyFilters(all, filters, nonCustomerIds);
   const enriched = enrich(filtered, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, {
     funnelEligibleRepIds: ctx.customerFacingRepIds,
@@ -803,6 +798,11 @@ export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: 
   enriched.sort((a, b) => {
     let av: number | string = "";
     let bv: number | string = "";
+    // Task #816 — `carrierPaid`, `marginDollar`, `marginPct` were retired
+    // when carrier columns were stripped from this surface. They're no
+    // longer in `ListSortKey`, but a stale saved view that still requests
+    // one falls through this switch and gets the default (request-date)
+    // ordering instead of crashing the request.
     switch (sortKey) {
       case "requestDate":
         av = a.requestDate.getTime(); bv = b.requestDate.getTime(); break;
@@ -810,17 +810,8 @@ export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: 
         av = a.validThrough ? a.validThrough.getTime() : 0;
         bv = b.validThrough ? b.validThrough.getTime() : 0; break;
       case "quotedAmount": av = num(a.quotedAmount); bv = num(b.quotedAmount); break;
-      case "carrierPaid": av = num(a.carrierPaid); bv = num(b.carrierPaid); break;
       case "responseTimeHours": av = num(a.responseTimeHours); bv = num(b.responseTimeHours); break;
       case "score": av = num(a.score); bv = num(b.score); break;
-      case "marginDollar":
-        av = num(a.quotedAmount) - num(a.carrierPaid);
-        bv = num(b.quotedAmount) - num(b.carrierPaid); break;
-      case "marginPct": {
-        const ad = num(a.quotedAmount), bd = num(b.quotedAmount);
-        av = ad > 0 && num(a.carrierPaid) > 0 ? (ad - num(a.carrierPaid)) / ad : 0;
-        bv = bd > 0 && num(b.carrierPaid) > 0 ? (bd - num(b.carrierPaid)) / bd : 0; break;
-      }
       case "customerName": av = a.customerName.toLowerCase(); bv = b.customerName.toLowerCase(); break;
       case "originCity": av = `${a.originCity},${a.originState}`.toLowerCase(); bv = `${b.originCity},${b.originState}`.toLowerCase(); break;
       case "destCity": av = `${a.destCity},${a.destState}`.toLowerCase(); bv = `${b.destCity},${b.destState}`.toLowerCase(); break;
@@ -829,6 +820,8 @@ export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: 
       case "outcomeReasonLabel": av = (a.outcomeReasonLabel ?? "").toLowerCase(); bv = (b.outcomeReasonLabel ?? "").toLowerCase(); break;
       case "repName": av = a.repName.toLowerCase(); bv = b.repName.toLowerCase(); break;
       case "source": av = a.source; bv = b.source; break;
+      default:
+        av = a.requestDate.getTime(); bv = b.requestDate.getTime(); break;
     }
     if (av < bv) return -1 * dir;
     if (av > bv) return 1 * dir;
@@ -919,7 +912,7 @@ export async function getActionQueue(
   const all = await db.select().from(quoteOpportunities)
     .where(eq(quoteOpportunities.organizationId, orgId));
 
-  const nonCustomerIds = nonCustomerCustomerIdsFromMap(ctx.customerMap);
+  const nonCustomerIds = await loadNonCustomerCustomerIds(orgId, ctx.customerMap);
 
   const pending = all.filter(r =>
     r.outcomeStatus === "pending" && !nonCustomerIds.has(r.customerId)
@@ -1219,7 +1212,7 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
     .where(eq(quoteOpportunities.organizationId, orgId))
     .orderBy(desc(quoteOpportunities.requestDate));
 
-  const nonCustomerIds = nonCustomerCustomerIdsFromMap(ctx.customerMap);
+  const nonCustomerIds = await loadNonCustomerCustomerIds(orgId, ctx.customerMap);
   const filtered = applyFilters(allOpps, filters, nonCustomerIds);
   const won = filtered.filter(r => isWon(r.outcomeStatus));
   const lost = filtered.filter(r => isLost(r.outcomeStatus));
@@ -1496,14 +1489,17 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
     }
     // Surface a count of pending new-contact prompts even when the last
     // 24h has been quiet — that's the action item users need to clear.
+    // Task #816 — exclude carrier-classified rows from the prompt count
+    // so the customer-only Operational Alerts rail never advertises a
+    // carrier mention.
     const pendingPromptsRows = await db
-      .select({ id: quoteOpportunities.id })
+      .select({ id: quoteOpportunities.id, customerId: quoteOpportunities.customerId })
       .from(quoteOpportunities)
       .where(and(
         eq(quoteOpportunities.organizationId, orgId),
         sql`${quoteOpportunities.needsNewContactReview} IS NOT NULL`,
       ));
-    const pendingPrompts = pendingPromptsRows.length;
+    const pendingPrompts = pendingPromptsRows.filter(r => !nonCustomerIds.has(r.customerId)).length;
     const totalAuto = newSender + outboundReply + noResponse + pendingPrompts;
     if (totalAuto > 0) {
       const parts: string[] = [];
@@ -1525,11 +1521,14 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
 
   // Pattern-shift alerts (Task #481) — surfaced from the persisted detector.
   // Honor the customer filter so the panel stays scoped to the active slice.
+  // Task #816 — never surface a pattern-shift alert that points at a
+  // carrier/unknown customer; the Quote Opportunities page is customer-only.
   try {
     const patternAlerts = await getActivePatternAlertsForOrg(orgId);
     const startDate = new Date(now.getTime() - 30 * dayMs).toISOString().slice(0, 10);
     for (const pa of patternAlerts) {
       if (filters.customerId && pa.customerId !== filters.customerId) continue;
+      if (nonCustomerIds.has(pa.customerId)) continue;
       const cust = ctx.customerMap.get(pa.customerId);
       if (!cust) continue;
       alerts.push({
@@ -1547,7 +1546,12 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
   // Lost-streak alerts (Task #478) — competitive-displacement early warning.
   // Computed against the entire org dataset (allOpps), not the user-filtered slice,
   // so the alert fires even when the user has narrowed the page to a different view.
-  const streakAlerts = computeLostStreakAlerts(allOpps, ctx.customerMap, new Map(ctx.laneGroups.map(lg => [lg.id, lg])));
+  // Task #816 — pre-filter to customer-only rows so a misclassified
+  // carrier never appears in a "X losses in a row" alert.
+  const streakOpps = nonCustomerIds.size > 0
+    ? allOpps.filter(o => !nonCustomerIds.has(o.customerId))
+    : allOpps;
+  const streakAlerts = computeLostStreakAlerts(streakOpps, ctx.customerMap, new Map(ctx.laneGroups.map(lg => [lg.id, lg])));
   for (const sa of streakAlerts) alerts.push(sa.alert);
 
   return {
@@ -2187,24 +2191,24 @@ export async function deleteSavedView(orgId: string, userId: string, id: string)
 }
 
 export function quotesToCsv(quotes: EnrichedQuote[]): string {
+  // Task #816 — carrier cost / margin columns are intentionally absent
+  // here because the Quote Opportunities surface (table + export +
+  // drawer) is customer-only. Margin data is preserved in the database
+  // for other surfaces (LWQ, etc.) but never exported through this CSV.
   const headers = [
     "Request Date", "Customer", "Origin", "Destination", "Equipment",
     "Quoted Amount", "Valid Through", "Outcome Status", "Outcome Reason",
-    "Carrier Paid", "Margin $", "Margin %", "Rep", "Response Time (h)", "Source", "Score",
+    "Rep", "Response Time (h)", "Source", "Score",
   ];
   const rows = quotes.map(q => {
     const quoted = num(q.quotedAmount);
-    const paid = num(q.carrierPaid);
-    const margin = quoted - paid;
-    const marginPct = quoted > 0 && paid > 0 ? (margin / quoted) * 100 : 0;
     return [
       q.requestDate ? new Date(q.requestDate).toISOString().slice(0, 10) : "",
       q.customerName, `${q.originCity}, ${q.originState}`, `${q.destCity}, ${q.destState}`,
       q.equipment, quoted ? quoted.toFixed(2) : "",
       q.validThrough ? new Date(q.validThrough).toISOString().slice(0, 10) : "",
       q.outcomeStatus, q.outcomeReasonLabel ?? "",
-      paid ? paid.toFixed(2) : "", paid ? margin.toFixed(2) : "",
-      paid ? marginPct.toFixed(1) : "", q.repName, num(q.responseTimeHours).toFixed(1),
+      q.repName, num(q.responseTimeHours).toFixed(1),
       q.source, num(q.score).toFixed(0),
     ];
   });
@@ -2952,7 +2956,7 @@ export async function loadLostStreakAlertsForOrg(orgId: string, opts?: { thresho
 export async function exportCsv(orgId: string, filters: QuoteFilters): Promise<string> {
   const ctx = await loadContext(orgId);
   const all = await db.select().from(quoteOpportunities).where(eq(quoteOpportunities.organizationId, orgId));
-  const nonCustomerIds = nonCustomerCustomerIdsFromMap(ctx.customerMap);
+  const nonCustomerIds = await loadNonCustomerCustomerIds(orgId, ctx.customerMap);
   const filtered = applyFilters(all, filters, nonCustomerIds);
   const enriched = enrich(filtered, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
   enriched.sort((a, b) => b.requestDate.getTime() - a.requestDate.getTime());
@@ -4091,7 +4095,7 @@ export async function getFunnel(
     .where(eq(quoteOpportunities.organizationId, orgId))
     .orderBy(desc(quoteOpportunities.requestDate));
 
-  const nonCustomerIds = nonCustomerCustomerIdsFromMap(ctx.customerMap);
+  const nonCustomerIds = await loadNonCustomerCustomerIds(orgId, ctx.customerMap);
   // Compose viewer scoping with caller filters. We OR the rep filter onto
   // the existing filters so an admin can still drill into a rep view via
   // the UI filter bar, while a scoped rep cannot see anyone else.
@@ -4395,7 +4399,7 @@ export async function getFunnelDiagnostics(
   const allOpps = await db.select().from(quoteOpportunities)
     .where(eq(quoteOpportunities.organizationId, orgId));
 
-  const nonCustomerIds = nonCustomerCustomerIdsFromMap(ctx.customerMap);
+  const nonCustomerIds = await loadNonCustomerCustomerIds(orgId, ctx.customerMap);
   const effectiveFilters: QuoteFilters = scopedRepId
     ? { ...filters, repId: scopedRepId }
     : filters;
