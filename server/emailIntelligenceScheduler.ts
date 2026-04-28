@@ -28,8 +28,18 @@ import { ingestPatternEvidence, maybeFireResponsibilityNba } from "./accountCont
 import { mapLaneToPatternIds, extractStateFromLocation } from "./geographicLanePatternUtils";
 import { inferContactGeography } from "./contactGeographyInferenceService";
 import { fireQuoteRequestAlert } from "./quoteRequestSlaService";
+import {
+  ingestQuoteFromEmail,
+  applyClosedLostToOpenQuote,
+  applyClosedWonToOpenQuote,
+  isWonLanguage,
+  isLostLanguage,
+} from "./services/quoteEmailIngestion";
+import { JOB_NAMES, withHeartbeat } from "./lib/cronHeartbeat";
 import { createHash } from "crypto";
 import type { InsertEmailSignal } from "@shared/schema";
+
+const EMAIL_INTEL_INTERVAL_MS = 2 * 60 * 1000;
 
 // Task #751: bumped default 50 → 200 to drain the historical backlog.
 // Each message is one OpenAI call so this caps at ~200 calls / 2 minutes
@@ -83,6 +93,60 @@ export async function runEmailIntelligenceBatch(
 
       const saved = inserts.length > 0 ? await storage.insertEmailSignals(inserts) : [];
       await storage.markEmailMessageProcessed(msg.id);
+
+      // ── Consumer area 0: Customer Quotes pipeline (Task #470) ──────────────
+      // Mirror the quote-side ingest behavior from `processEmailMessage` so
+      // every inbound customer email that classifies as a pricing/quote
+      // request becomes a `quote_opportunity` row. Without this the cron
+      // path silently dropped every signal — emails got classified but
+      // never made it into the Customer Quotes dashboard until someone
+      // hit the manual backfill button. Fault-isolated: a failure here
+      // never stops downstream NBA / win-loss / enrichment paths from
+      // running, and idempotency on (org, source=email, providerMessageId)
+      // inside `ingestQuoteFromEmail` makes a same-message replay a no-op.
+      if (msg.direction === "inbound" && result.actorType === "customer") {
+        const quoteSignal = result.signals.find(
+          (s) => s.intentType === "pricing_request" || s.intentType === "new_opportunity",
+        );
+        if (quoteSignal) {
+          try {
+            await ingestQuoteFromEmail(msg, { extractedData: quoteSignal.extractedData ?? null });
+          } catch (err) {
+            console.error(`[emailIntelligenceScheduler] quote ingest failed for ${msg.id}:`, err);
+          }
+        }
+
+        // Won-language path runs FIRST. Both Won and Lost detectors bail
+        // when the quote is no longer pending, so Won claims the pending
+        // row before Lost gets a chance on ambiguous-but-positive replies.
+        const wonSignal = result.signals.find(
+          (s) => s.intentType === "closed_won_indicator" || s.intentSubtype === "closed_won_indicator",
+        );
+        const shouldTryWon = !!wonSignal || isWonLanguage(msg.body) || isWonLanguage(msg.subject);
+        if (shouldTryWon) {
+          try {
+            await applyClosedWonToOpenQuote(msg, {
+              extractedData: wonSignal?.extractedData ?? null,
+              intentSubtype: wonSignal?.intentSubtype ?? null,
+            });
+          } catch (err) {
+            console.error(`[emailIntelligenceScheduler] closed-won handling failed for ${msg.id}:`, err);
+          }
+        }
+
+        const lostSignal = result.signals.find((s) => s.intentType === "closed_lost_indicator");
+        const shouldTryLost = !!lostSignal || isLostLanguage(msg.body) || isLostLanguage(msg.subject);
+        if (shouldTryLost) {
+          try {
+            await applyClosedLostToOpenQuote(msg, {
+              extractedData: lostSignal?.extractedData ?? null,
+              intentSubtype: lostSignal?.intentSubtype ?? null,
+            });
+          } catch (err) {
+            console.error(`[emailIntelligenceScheduler] closed-lost handling failed for ${msg.id}:`, err);
+          }
+        }
+      }
 
       // ── Consumer area 5: Account contact capture (Task #201) ───────────────
       // Runs for every account-linked message regardless of signal count.
@@ -274,17 +338,27 @@ export async function runEmailIntelligenceBatch(
 export function startEmailIntelligenceScheduler(): void {
   console.log(`[emailIntelligenceScheduler] starting — every 2 min (cron: */2 * * * *), batch=${BATCH_SIZE}`);
 
-  // Run an initial pass shortly after startup (30s delay to let DB settle)
+  // Run an initial pass shortly after startup (30s delay to let DB settle).
+  // Wrapped in withHeartbeat so a dead initial pass is observable from the
+  // capture-audit pill within the next tick rather than going silent.
   const initTimeout = setTimeout(() => {
-    runEmailIntelligenceBatch().catch(err =>
-      console.error("[emailIntelligenceScheduler] initial batch error:", err)
+    withHeartbeat(JOB_NAMES.emailIntelligenceBatch, EMAIL_INTEL_INTERVAL_MS, () =>
+      runEmailIntelligenceBatch(),
+    ).catch(err =>
+      console.error("[emailIntelligenceScheduler] initial batch error:", err),
     );
   }, 30_000);
   initTimeout.unref?.();
 
+  // Cron-anchored every 2 min, heartbeated. The previous unwrapped path
+  // meant a silently-failing extractor (e.g. OpenAI 500 storm) stopped
+  // producing quote_opportunities for hours without any visible signal —
+  // exactly the bug that left the Customer Quotes dashboard frozen.
   cron.schedule("*/2 * * * *", () => {
-    runEmailIntelligenceBatch().catch(err =>
-      console.error("[emailIntelligenceScheduler] batch error:", err)
+    withHeartbeat(JOB_NAMES.emailIntelligenceBatch, EMAIL_INTEL_INTERVAL_MS, () =>
+      runEmailIntelligenceBatch(),
+    ).catch(err =>
+      console.error("[emailIntelligenceScheduler] batch error:", err),
     );
   }, { timezone: "America/Chicago" });
 }

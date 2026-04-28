@@ -31,7 +31,7 @@
 
 import cron from "node-cron";
 import { storage, db } from "../storage";
-import { JOB_NAMES, withHeartbeat, EMAIL_PIPELINE_JOBS } from "../lib/cronHeartbeat";
+import { JOB_NAMES, withHeartbeat, EMAIL_PIPELINE_JOBS, CRITICAL_EMAIL_PIPELINE_JOBS } from "../lib/cronHeartbeat";
 import {
   conversationThreadCaptureAudits,
   emailMessages,
@@ -738,13 +738,26 @@ export async function getCaptureAuditHealthForUsers(opts: {
       lastError: row.lastError,
     };
   });
-  const cronUnhealthy = cronJobs.some(c => c.status === "stale" || c.status === "failing");
+  // Split cron health into two tiers (Issue #2026-04-28):
+  //   - critical-job staleness/failure → "unhealthy" (red)
+  //   - any other email-pipeline-job staleness/failure → "recovering" (amber)
+  // The previous "any stale heartbeat → unhealthy" rule produced a recurring
+  // false-positive red pill whenever a 6-hourly subscription renewer was
+  // briefly behind, even though Graph subs survive ~70h and missing one
+  // tick is not user-visible. Reserving red for the fast-cadence jobs
+  // whose silence directly translates to mail starvation keeps the badge
+  // meaningful.
+  const cronCritical = cronJobs.some(
+    c => CRITICAL_EMAIL_PIPELINE_JOBS.has(c.jobName as any)
+      && (c.status === "stale" || c.status === "failing"),
+  );
+  const cronDegraded = cronJobs.some(c => c.status === "stale" || c.status === "failing");
 
   // 5. Roll up to a single status. Unhealthy wins over recovering.
   let status: CaptureAuditOverallStatus = "healthy";
-  if (webhookFailureCount > 0 || cronUnhealthy) {
+  if (webhookFailureCount > 0 || cronCritical) {
     status = "unhealthy";
-  } else if (affectedThreads.length > 0 || staleCount > 0) {
+  } else if (affectedThreads.length > 0 || staleCount > 0 || cronDegraded) {
     status = "recovering";
   }
 

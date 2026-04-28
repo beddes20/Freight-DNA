@@ -43,6 +43,8 @@ export const JOB_NAMES = {
   sonarBreakerLongOpenPoll: "sonar_breaker_long_open_poll",
   /** PAFOE scheduled-wave dispatcher. Every 2min. */
   pafoeWaveDispatcher: "pafoe_wave_dispatcher",
+  /** Email intelligence extraction + quote ingest batch. Every 2min. */
+  emailIntelligenceBatch: "email_intelligence_batch",
 } as const;
 
 export type JobName = typeof JOB_NAMES[keyof typeof JOB_NAMES];
@@ -95,5 +97,22 @@ export const EMAIL_PIPELINE_JOBS: ReadonlySet<JobName> = new Set([
   JOB_NAMES.graphSharedMailboxRenewal,
   JOB_NAMES.graphSharedMailboxActivationRetry,
   JOB_NAMES.mailboxDeltaSyncPoll,
+  JOB_NAMES.replyCaptureSelfHealSweep,
+  JOB_NAMES.emailIntelligenceBatch,
+]);
+
+/**
+ * Critical email-pipeline jobs whose missed tick should escalate the audit
+ * pill all the way to "unhealthy" (red). Reserved for the fast-cadence cron
+ * paths whose silence directly translates to user-visible mail starvation.
+ *
+ * Slower jobs (the 6-hourly subscription renewers, hourly activation retry)
+ * are still surfaced via the heartbeat layer but only escalate to
+ * "recovering" (amber) — missing one of their ticks does not immediately
+ * break user-facing mail flow because Graph subs survive ~70h.
+ */
+export const CRITICAL_EMAIL_PIPELINE_JOBS: ReadonlySet<JobName> = new Set([
+  JOB_NAMES.mailboxDeltaSyncPoll,
+  JOB_NAMES.emailIntelligenceBatch,
   JOB_NAMES.replyCaptureSelfHealSweep,
 ]);
