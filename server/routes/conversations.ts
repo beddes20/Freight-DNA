@@ -1042,6 +1042,36 @@ export function registerConversationsRoutes(app: Express): void {
         } catch (matErr) {
           console.error("[conversations] thread materialise error:", matErr);
         }
+      } else if (idParam.startsWith("message:")) {
+        // Task #809: resolve by email_messages row id so callers that only
+        // know the source message id (Customer Quotes drawer / flip context
+        // payloads) can open the surrounding thread without having to chase
+        // the providerThreadId on the client first.
+        const msgId = idParam.slice("message:".length);
+        if (msgId) {
+          const [msg] = await db.select()
+            .from(emailMessages)
+            .where(and(
+              eq(emailMessages.id, msgId),
+              eq(emailMessages.orgId, user.organizationId),
+            ))
+            .limit(1);
+          if (msg?.threadId) {
+            threadIdForMessages = msg.threadId;
+            try {
+              await materializeConversationThreadIfMissing(user.organizationId, msg.threadId);
+            } catch (matErr) {
+              console.error("[conversations] thread materialise error:", matErr);
+            }
+          } else if (msg) {
+            // Standalone message with no thread row — return just this
+            // single message so the modal can still render the body the
+            // rep clicked through to. Auth is already enforced via the
+            // org-scoped lookup above (we'd never reach here for another
+            // tenant's message).
+            return res.json({ messages: [msg] });
+          }
+        }
       } else {
         const thread = await storage.getEmailConversationThreadById(idParam);
         if (thread && thread.orgId === user.organizationId) {

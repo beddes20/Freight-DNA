@@ -33,7 +33,19 @@ import {
 } from "@shared/schema";
 import { z } from "zod";
 import { getErrorMessage } from "../lib/errors";
+import { pStr } from "../lib/req";
 import { notifyFreightDelegated, notifyFreightApproved } from "../freightOpportunityNotifications";
+
+// Narrowed update shape for freight_opportunities mutations driven by the
+// assign endpoint. Mirrors the columns the route actually writes so we can
+// keep the typed Drizzle inference instead of escaping to `any`.
+type FreightOpportunityAssignUpdate = {
+  delegatedToUserId: string;
+  status: "ready_to_send";
+  approvedAt?: Date;
+  approvedById?: string;
+  awaitingApprovalSince?: null;
+};
 
 const ADMIN_ROLES = new Set(["admin", "director"]);
 
@@ -174,16 +186,14 @@ export function registerWonLoadAutopilotRoutes(app: Express) {
         return res.status(403).json({ error: "Assignee must be your direct report" });
       }
 
-      const updates: Record<string, unknown> = {
+      const updates: FreightOpportunityAssignUpdate = {
         delegatedToUserId: assignedToId,
         status: "ready_to_send",
+        ...(approved
+          ? { approvedAt: new Date(), approvedById: user.id, awaitingApprovalSince: null }
+          : {}),
       };
-      if (approved) {
-        updates.approvedAt = new Date();
-        updates.approvedById = user.id;
-        updates.awaitingApprovalSince = null;
-      }
-      await db.update(freightOpportunities).set(updates as any)
+      await db.update(freightOpportunities).set(updates)
         .where(and(eq(freightOpportunities.id, id), eq(freightOpportunities.orgId, user.organizationId)));
 
       const [fresh] = await db.select().from(freightOpportunities).where(eq(freightOpportunities.id, id)).limit(1);

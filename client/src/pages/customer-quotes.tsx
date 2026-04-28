@@ -21,6 +21,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { EmailThreadViewerModal } from "@/components/conversations/email-thread-viewer-modal";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -2152,7 +2153,18 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
   const overlayPortal = useCqOverlayPortal();
   const [editMode, setEditMode] = useState(false);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
-  useEffect(() => { setEditMode(false); setDraft({}); }, [quoteId]);
+  // Task #809 — peek-modal state for the email thread viewer. Tracking
+  // both threadId and messageId lets the same modal serve the Source
+  // portlet (always has a threadId) and Timeline flip context (may have
+  // only the messageId on older auto-flip events). `subjectHint` keeps
+  // the modal header from flickering "Email thread → Re: …" while the
+  // messages query loads.
+  const [emailViewer, setEmailViewer] = useState<{
+    threadId: string | null;
+    messageId: string | null;
+    subjectHint: string | null;
+  } | null>(null);
+  useEffect(() => { setEditMode(false); setDraft({}); setEmailViewer(null); }, [quoteId]);
   const detailQuery = useQuery<QuoteDetail>({
     queryKey: ["/api/customer-quotes/quote", quoteId],
     queryFn: async (): Promise<QuoteDetail> => {
@@ -2223,19 +2235,25 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
               <div className="text-xs text-foreground/90">{data.opp.source.toUpperCase()} <span className="text-muted-foreground ml-2">{data.opp.sourceReference}</span></div>
               {data.sourceMessage && (data.sourceMessage.threadId || data.sourceMessage.messageId) && (
                 <div className="mt-2 text-xs">
-                  <a
-                    href={
-                      data.sourceMessage.threadId
-                        ? `/conversations?threadId=${encodeURIComponent(data.sourceMessage.threadId)}`
-                        : `/conversations?messageId=${encodeURIComponent(data.sourceMessage.messageId)}`
-                    }
-                    className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300 hover:underline"
+                  {/* Task #809: was a hard navigation to /conversations
+                      that destroyed drawer state, filters, and scroll
+                      position. Now opens a peek modal layered over the
+                      drawer so reps can read email context and dismiss
+                      back to the same load. */}
+                  <button
+                    type="button"
+                    onClick={() => setEmailViewer({
+                      threadId: data.sourceMessage!.threadId ?? null,
+                      messageId: data.sourceMessage!.messageId ?? null,
+                      subjectHint: data.sourceMessage!.subject ?? null,
+                    })}
+                    className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300 hover:underline focus:outline-none focus:ring-2 focus:ring-ring rounded-sm"
                     data-testid="link-source-conversation"
                     title={data.sourceMessage.subject ?? "Open the source email thread"}
                   >
                     View email thread
                     <ChevronRight className="h-3 w-3" />
-                  </a>
+                  </button>
                   {data.sourceMessage.fromEmail && (
                     <div className="text-[10px] text-muted-foreground mt-0.5 truncate">
                       From {data.sourceMessage.fromEmail}
@@ -2312,19 +2330,20 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
                               </div>
                             )}
                             {flip.source === "email" && (flip.threadId || flip.messageId) && (
-                              <a
-                                href={
-                                  flip.threadId
-                                    ? `/conversations?threadId=${encodeURIComponent(flip.threadId)}`
-                                    : `/conversations?messageId=${encodeURIComponent(flip.messageId!)}`
-                                }
-                                className="inline-flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300 hover:underline"
+                              <button
+                                type="button"
+                                onClick={() => setEmailViewer({
+                                  threadId: flip.threadId ?? null,
+                                  messageId: flip.messageId ?? null,
+                                  subjectHint: flip.emailSubject ?? null,
+                                })}
+                                className="inline-flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300 hover:underline focus:outline-none focus:ring-2 focus:ring-ring rounded-sm"
                                 data-testid={`link-flip-email-${e.id}`}
                                 title="Open the email that triggered this auto-flip"
                               >
                                 View triggering email
                                 <ChevronRight className="h-3 w-3" />
-                              </a>
+                              </button>
                             )}
                           </div>
                         )}
@@ -2362,6 +2381,20 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
           </div>
         )}
       </SheetContent>
+      {/* Task #809: Email thread peek modal — mounted at the drawer level
+          and routed through the same Customer Quotes overlay portal so it
+          layers above both the drawer and the rest of the page without
+          tearing down drawer state. */}
+      {emailViewer && (
+        <EmailThreadViewerModal
+          open={!!emailViewer}
+          onClose={() => setEmailViewer(null)}
+          threadId={emailViewer.threadId}
+          messageId={emailViewer.messageId}
+          subjectHint={emailViewer.subjectHint}
+          container={overlayPortal}
+        />
+      )}
     </Sheet>
   );
 }
