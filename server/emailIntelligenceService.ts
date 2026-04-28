@@ -228,8 +228,16 @@ async function getOpenAiClient() {
 /**
  * Extract intent signals from an email message using OpenAI.
  * Returns an empty signals array on any extraction or parse failure — never throws.
+ *
+ * Pass `opts.signal` to allow a wrapping wall-clock to cancel the in-flight
+ * OpenAI call. Without this, a wall clock that fires only resolves the
+ * wrapping promise — the underlying network/SDK work continues in the
+ * background and can overlap with the next cron tick.
  */
-export async function extractEmailSignals(msg: EmailMessage): Promise<ExtractionResult> {
+export async function extractEmailSignals(
+  msg: EmailMessage,
+  opts?: { signal?: AbortSignal },
+): Promise<ExtractionResult> {
   try {
     const client = await getOpenAiClient();
     // Per-request timeout. The OpenAI SDK defaults to 10 min — way too long
@@ -248,7 +256,7 @@ export async function extractEmailSignals(msg: EmailMessage): Promise<Extraction
       response_format: { type: "json_object" },
       temperature: 0.1,
       max_tokens: 1000,
-    }, { timeout: 60_000, maxRetries: 1 });
+    }, { timeout: 60_000, maxRetries: 1, signal: opts?.signal });
 
     const raw = completion.choices[0]?.message?.content ?? "{}";
     let parsed: unknown;

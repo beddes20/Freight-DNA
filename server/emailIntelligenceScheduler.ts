@@ -61,6 +61,7 @@ const FRESH_LOOKBACK_HOURS = 6;
 export async function runEmailIntelligenceBatch(
   overrideBatchSize?: number,
   orgId?: string,
+  opts?: { signal?: AbortSignal },
 ): Promise<{ processed: number }> {
   const size = overrideBatchSize ?? BATCH_SIZE;
   // Task #751: when an operator triggers a manual drain we MUST scope the
@@ -93,14 +94,28 @@ export async function runEmailIntelligenceBatch(
     (orgId ? ` (org=${orgId})` : ` (fresh-first split: ≤${FRESH_SLICE} from last ${FRESH_LOOKBACK_HOURS}h, rest oldest-first)`)
   );
 
+  let processedCount = 0;
   for (const msg of messages) {
+    // Cooperative cancellation. When the wall clock fires it aborts the
+    // shared AbortController; we exit the loop here so the wrapping promise
+    // can resolve cleanly and the in-flight guard releases. Without this
+    // check the loop would continue running in the background after the
+    // wall clock killed the wrapper, racing the next cron tick (the exact
+    // pile-up the in-flight guard is meant to prevent).
+    if (opts?.signal?.aborted) {
+      console.log(
+        `[emailIntelligenceScheduler] aborted mid-batch after ${processedCount}/${messages.length} messages`,
+      );
+      break;
+    }
     try {
       let result;
       try {
-        result = await extractEmailSignals(msg);
+        result = await extractEmailSignals(msg, { signal: opts?.signal });
       } catch (extractionErr) {
         console.error(`[emailIntelligenceScheduler] extraction error for message ${msg.id}:`, extractionErr);
         await storage.markEmailMessageProcessed(msg.id);
+        processedCount++;
         continue;
       }
 
@@ -361,9 +376,10 @@ export async function runEmailIntelligenceBatch(
         // ignore secondary error
       }
     }
+    processedCount++;
   }
 
-  return { processed: messages.length };
+  return { processed: processedCount };
 }
 
 // ─── Reentrancy guard + wall-clock (April 28 hot patch, follow-up) ──────────
@@ -391,12 +407,18 @@ export async function runEmailIntelligenceBatch(
 //     and the manual trigger returns `batch_in_progress`.
 //
 //   - A wall-clock `BATCH_WALL_CLOCK_MS` (5 min) races the body via
-//     `Promise.race`. If the body exceeds it, the wall clock wins, the
-//     wrapping promise rejects with a TimeoutError, withHeartbeat records
-//     it as `error`, the finally clears the flag, and the next cron tick
-//     starts fresh. The body promise itself is left to drain in the
-//     background (it's bounded by the per-call OpenAI timeout in
-//     emailIntelligenceService.ts).
+//     `Promise.race` AND propagates an AbortSignal into the OpenAI calls
+//     and the message loop. When the wall clock fires:
+//       (a) the wrapping promise rejects with BatchTimeoutError,
+//       (b) the AbortController is aborted, which cancels the in-flight
+//           OpenAI fetch and is observed by the loop's `if (signal.aborted)`
+//           check so subsequent iterations exit cleanly,
+//       (c) withHeartbeat records `error: killed by wall clock`,
+//       (d) the finally clears the flag so the next cron tick starts fresh.
+//     Without (b), the underlying loop would keep running in the background
+//     for up to BATCH_SIZE * 60s after the wrapper rejected, racing the next
+//     tick — exactly the overlap pattern the in-flight guard is meant to
+//     prevent.
 //
 let _batchInFlight = false;
 
@@ -409,13 +431,23 @@ class BatchTimeoutError extends Error {
   }
 }
 
-function runWithWallClock<T>(fn: () => Promise<T>, ms: number): Promise<T> {
+/**
+ * Race `fn(controller.signal)` against an `ms` deadline. On timeout the
+ * controller is aborted (so cooperative cancellation can stop the body)
+ * AND the returned promise rejects with BatchTimeoutError.
+ */
+function runWithWallClock<T>(
+  fn: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+): Promise<T> {
+  const controller = new AbortController();
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
+      controller.abort();
       reject(new BatchTimeoutError(ms));
     }, ms);
     timer.unref?.();
-    fn().then(
+    fn(controller.signal).then(
       result => {
         clearTimeout(timer);
         resolve(result);
@@ -431,8 +463,8 @@ function runWithWallClock<T>(fn: () => Promise<T>, ms: number): Promise<T> {
 /**
  * Internal: the single execution path used by all three callers (initial
  * pass, cron tick, manual trigger). Enforces the in-flight guard, the
- * heartbeat wrapper, and the wall clock. Returns whether the batch was
- * actually started.
+ * heartbeat wrapper, and the wall clock with cooperative abort. Returns
+ * whether the batch was actually started.
  */
 function _invokeBatch(opts: { source: "initial" | "cron" | "manual"; orgId?: string }): boolean {
   if (_batchInFlight) {
@@ -444,7 +476,7 @@ function _invokeBatch(opts: { source: "initial" | "cron" | "manual"; orgId?: str
   _batchInFlight = true;
   void withHeartbeat(JOB_NAMES.emailIntelligenceBatch, EMAIL_INTEL_INTERVAL_MS, () =>
     runWithWallClock(
-      () => runEmailIntelligenceBatch(undefined, opts.orgId),
+      signal => runEmailIntelligenceBatch(undefined, opts.orgId, { signal }),
       BATCH_WALL_CLOCK_MS,
     ),
   )
@@ -494,6 +526,21 @@ export function _resetBatchInFlightForTests(): void {
 export function _getBatchWallClockMsForTests(): number {
   return BATCH_WALL_CLOCK_MS;
 }
+
+/**
+ * Test-only: expose the wall-clock helper so behavioral tests can verify
+ * the AbortController is actually aborted on timeout, not just that the
+ * outer promise rejects.
+ */
+export function _runWithWallClockForTests<T>(
+  fn: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+): Promise<T> {
+  return runWithWallClock(fn, ms);
+}
+
+/** Test-only: surface the BatchTimeoutError class for assertion. */
+export const _BatchTimeoutErrorForTests = BatchTimeoutError;
 
 export function startEmailIntelligenceScheduler(): void {
   console.log(

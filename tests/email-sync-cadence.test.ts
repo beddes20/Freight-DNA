@@ -373,6 +373,143 @@ async function main(): Promise<void> {
     fileContains("server/routes/graphWebhook.ts", "Duplicate email skipped"),
   );
 
+  // ─── 7b. Email-intelligence batch hang protections (April 28 follow-up) ──
+  // Three layers must remain in place. Removing any of them would let the
+  // April 28 outage recur — a single OpenAI hang or one slow tick used to
+  // cascade into 16 overlapping batches that killed the cron loop for 4h.
+  console.log("── 7b. emailIntelligenceBatch hang protections still in place ──");
+
+  // (a) Per-OpenAI-request timeout. The SDK default is 10 minutes which is
+  //     longer than the entire 2-min cron interval. 60s is the negotiated cap.
+  assert(
+    "extractEmailSignals passes a per-request timeout to OpenAI",
+    fileContains("server/emailIntelligenceService.ts", "timeout: 60_000"),
+    "Removing the timeout means a single hung OpenAI call can stall the entire batch indefinitely",
+  );
+  assert(
+    "extractEmailSignals caps OpenAI retries to keep tick budget bounded",
+    fileContains("server/emailIntelligenceService.ts", "maxRetries: 1"),
+  );
+
+  // (b) Single shared in-flight guard across all three call sites.
+  assert(
+    "scheduler declares the unified _batchInFlight guard",
+    fileContains("server/emailIntelligenceScheduler.ts", "let _batchInFlight = false"),
+  );
+  assert(
+    "scheduler routes cron ticks through _invokeBatch",
+    fileContains("server/emailIntelligenceScheduler.ts", `_invokeBatch({ source: "cron" })`),
+    "If the cron tick bypasses _invokeBatch, overlapping ticks can pile up again",
+  );
+  assert(
+    "scheduler routes the initial pass through _invokeBatch",
+    fileContains("server/emailIntelligenceScheduler.ts", `_invokeBatch({ source: "initial" })`),
+  );
+  assert(
+    "scheduler routes the manual trigger through _invokeBatch",
+    fileContains("server/emailIntelligenceScheduler.ts", `_invokeBatch({ source: "manual"`),
+  );
+  assert(
+    "scheduler logs skipped ticks instead of silently dropping them",
+    fileContains("server/emailIntelligenceScheduler.ts", "skipping ${opts.source} tick: previous batch still running"),
+  );
+
+  // (c) Wall clock so a hung body can't sit in `running` forever.
+  assert(
+    "scheduler defines BATCH_WALL_CLOCK_MS at 5 minutes",
+    fileContains("server/emailIntelligenceScheduler.ts", "BATCH_WALL_CLOCK_MS = 5 * 60 * 1000"),
+    "A wall clock is what bounds the worst case if the in-flight body itself hangs",
+  );
+  assert(
+    "scheduler races the body against the wall clock via runWithWallClock",
+    fileContains("server/emailIntelligenceScheduler.ts", "runWithWallClock("),
+  );
+  assert(
+    "scheduler logs wall-clock kills distinctly so they're greppable in production logs",
+    fileContains("server/emailIntelligenceScheduler.ts", "killed by wall clock"),
+  );
+
+  // (d) Cooperative cancellation. Without these, a wall-clock kill leaves
+  //     the underlying for-loop running in the background — so a 5-min
+  //     wall clock against a 7-min batch would cause the next cron tick
+  //     to fire while the orphaned loop is still hammering OpenAI. That
+  //     recreates the exact pile-up problem the in-flight guard is meant
+  //     to prevent.
+  assert(
+    "extractEmailSignals accepts an AbortSignal so the wall clock can cancel it",
+    fileContains("server/emailIntelligenceService.ts", "opts?: { signal?: AbortSignal }"),
+    "Without this, a wall-clock kill cannot stop the in-flight OpenAI fetch",
+  );
+  assert(
+    "extractEmailSignals forwards the signal to the OpenAI request options",
+    fileContains("server/emailIntelligenceService.ts", "signal: opts?.signal"),
+  );
+  assert(
+    "runEmailIntelligenceBatch accepts an AbortSignal",
+    fileContains("server/emailIntelligenceScheduler.ts", "opts?: { signal?: AbortSignal }"),
+  );
+  assert(
+    "runEmailIntelligenceBatch checks signal.aborted between iterations",
+    fileContains("server/emailIntelligenceScheduler.ts", "if (opts?.signal?.aborted)"),
+    "Without this check the loop continues after the wall clock fires, racing the next tick",
+  );
+  assert(
+    "runEmailIntelligenceBatch threads the signal into extractEmailSignals",
+    fileContains("server/emailIntelligenceScheduler.ts", "extractEmailSignals(msg, { signal: opts?.signal })"),
+  );
+  assert(
+    "_invokeBatch threads the wall-clock signal into the batch",
+    fileContains("server/emailIntelligenceScheduler.ts", "runEmailIntelligenceBatch(undefined, opts.orgId, { signal })"),
+  );
+  assert(
+    "runWithWallClock aborts the controller on timeout (not just rejects)",
+    fileContains("server/emailIntelligenceScheduler.ts", "controller.abort()"),
+    "The whole point of the AbortController is that it must fire when the wall clock does",
+  );
+
+  // (e) Functional checks: the in-flight test helpers behave as advertised
+  //     and runWithWallClock actually aborts the inner signal on timeout.
+  const sched = await import("../server/emailIntelligenceScheduler");
+  sched._resetBatchInFlightForTests();
+  assert(
+    "_isBatchInFlightForTests returns false after reset",
+    sched._isBatchInFlightForTests() === false,
+  );
+  assert(
+    "_getBatchWallClockMsForTests reports the 5-min budget",
+    sched._getBatchWallClockMsForTests() === 5 * 60 * 1000,
+  );
+
+  // Behavioral test: when the wall clock fires, the inner fn's AbortSignal
+  // must be aborted BEFORE the wrapping promise rejects. This is what
+  // guarantees no orphaned background work.
+  let observedSignalAbortedAtReject = false;
+  let rejectedWith: unknown = null;
+  let capturedSignal: AbortSignal | null = null;
+  try {
+    await sched._runWithWallClockForTests(signal => {
+      capturedSignal = signal;
+      // Hang forever; only resolve when aborted.
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          reject(new Error("inner-aborted"));
+        });
+      });
+    }, 50);
+  } catch (err) {
+    rejectedWith = err;
+    observedSignalAbortedAtReject = capturedSignal?.aborted === true;
+  }
+  assert(
+    "runWithWallClock rejects with BatchTimeoutError on timeout",
+    rejectedWith instanceof sched._BatchTimeoutErrorForTests,
+  );
+  assert(
+    "runWithWallClock aborts the inner AbortSignal on timeout",
+    observedSignalAbortedAtReject === true,
+    "Without abort propagation, the inner work continues running after the wrapper rejects",
+  );
+
   // ─── 8. Cleanup ──────────────────────────────────────────────────────
   await db.delete(cronHeartbeats).where(eq(cronHeartbeats.jobName, testJobOk));
   await db.delete(cronHeartbeats).where(eq(cronHeartbeats.jobName, testJobErr));
