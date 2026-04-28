@@ -60,3 +60,26 @@ The codebase maintains a zero-error typecheck baseline. Express handlers normali
 -   **FreightWaves TRAC**: Spot rates, forecasts, and market signals.
 -   **ZoomInfo**: Contact intelligence.
 -   **Clerk**: Authentication.
+## Architecture Clarifications (read before deleting anything)
+
+### Auth boundary
+
+-   In production (`NODE_ENV === "production"`), **Clerk is the only auth system**.
+-   `server/auth.ts` always calls `clerkMiddleware()` first on every request, and `client/src/App.tsx` wraps the entire app in `<ClerkProvider>`.
+-   The session + `password_reset_tokens` + bcrypt path inside `server/auth.ts` is wrapped in `if (!IS_PROD) { ... }` and exists **only** for: dev/test login, the `DEV_AUTH_BYPASS_USER_ID` developer convenience, and keeping the automated test suite working.
+-   This is **not** "hybrid auth in production." Do **not** delete `server/auth.ts` thinking it is unused legacy production code — removing it will break local development and the test suite.
+
+### Agent vs agentic layering
+
+-   `server/agent/` is the **LLM tooling runtime**: prompts, tool dispatch, retrieval and memory primitives, the OpenAI client, persona, classifier, router. It is the lower-level library the AI features sit on top of.
+-   `server/agentic/` is the **control plane / HITL / autonomy layer**: agent registry, autonomy levels, human-in-the-loop approvals, outcome tracking, AI Center routes.
+-   They are **complementary layers, not "old vs new."** Many features depend on both — weekly account reviews, ValueIQ, conversation thread suggestions and summaries, and the AI Center all import from one or the other (and several from both).
+-   Do **not** "pick a winner" and delete the other folder. Renaming either one is also risky because importers across `server/routes/`, `server/services/`, and the schedulers reference the directory names directly.
+
+### AI Hub and "today" surfaces
+
+-   `/ai-hub` is the **canonical AI user destination** (driven by `aiHubItem` in `client/src/lib/nav-items.ts` and rendered as `AiHubPage`).
+-   `/daily-priorities`, `/admin/copilot-analytics`, and `/admin/ai-engagement` are **aliases** — all three already resolve to `AiHubPage` in `client/src/App.tsx` with the matching tab pre-selected via `resolveAiHubTab` (Task #742). Do not treat them as separate pages.
+-   `/ai/*` (e.g. `/ai/agents`, `/ai/pods`, `/ai/admin`, `/ai/approvals`, `/ai/adapters`) is the **agentic control plane** (admin/ops surface for AI agents), **not** where reps do their daily work.
+-   `/ai-intelligence-legacy` is a **defensive fallback** to the older AI page. Do **not** delete it without first measuring usage telemetry.
+-   For "work my day" there are only **two real surfaces**: `/today` (`TodayQueuePage`) and `/dashboard` (`Dashboard`). The home route `/` reads the user's `prefersToday` preference in `HomeLandingRouter` and redirects accordingly. `/daily-priorities` is **not** a third "today" surface — it is the AI Hub alias described above.
