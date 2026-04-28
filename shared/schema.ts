@@ -3372,6 +3372,19 @@ export const agentOrgSettings = pgTable(
     valueiqLandingEnabled: boolean("valueiq_landing_enabled").notNull().default(true),
     valueiqTodaySeedEnabled: boolean("valueiq_today_seed_enabled").notNull().default(true),
     valueiqTodayTimezone: text("valueiq_today_timezone").notNull().default("America/Chicago"),
+    // Task #803 — Quote Lifecycle Autopilot (C). The cron auto-closes
+    // pending quotes whose last event is older than this many hours AND
+    // have had no inbound customer reply since. Default 2h matches the
+    // task brief; admins can tune live without a code change.
+    quoteNoResponseTimeoutHours: integer("quote_no_response_timeout_hours").notNull().default(2),
+    // Task #803 — Forward-only activation gate. The autopilot sweep sets
+    // this on the first cycle for an org and then ignores any pending
+    // quote whose last event is older than this timestamp. Without this
+    // gate the very first deployment would auto-close every historical
+    // pending quote in one go, which would be indistinguishable from a
+    // mass data-loss event from a rep's perspective. Nullable so the
+    // sweep can detect a brand-new org and seed it.
+    quoteAutopilotStartedAt: timestamp("quote_autopilot_started_at"),
     notes: text("notes"),
     updatedBy: varchar("updated_by"),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -5242,6 +5255,7 @@ export type CompanyCollaborator = typeof companyCollaborators.$inferSelect;
 // =====================================================================
 export const QUOTE_OUTCOME_STATUSES = [
   "pending",
+  "quoted",
   "won",
   "lost_price",
   "lost_service",
@@ -5350,6 +5364,15 @@ export const quoteOpportunities = pgTable("quote_opportunities", {
   notes: text("notes"),
   score: decimal("score", { precision: 6, scale: 2 }),
   sonarBenchmark: decimal("sonar_benchmark", { precision: 12, scale: 2 }),
+  // Task #803 — Quote Lifecycle Autopilot (A): when an inbound quote arrives
+  // from a known customer DOMAIN but a NEW sender email, we still create
+  // the opp against the matched customer and stash the new sender's
+  // contact details here. The Quote Opportunities table surfaces a
+  // "New contact at {Customer}" prompt with Add/Dismiss buttons; once
+  // either action fires the column is cleared back to NULL.
+  // Shape: { senderEmail: string, senderName: string|null, companyId: string|null,
+  //          customerName: string, detectedAt: ISO string } | null
+  needsNewContactReview: jsonb("needs_new_contact_review"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
   orgIdx: index("quote_opportunities_org_idx").on(t.organizationId),

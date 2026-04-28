@@ -45,6 +45,10 @@ export const JOB_NAMES = {
   pafoeWaveDispatcher: "pafoe_wave_dispatcher",
   /** Email intelligence extraction + quote ingest batch. Every 2min. */
   emailIntelligenceBatch: "email_intelligence_batch",
+  /** Task #803 — auto-close stale pending quotes (default 2h timeout). Every 15min. */
+  quoteNoResponseSweep: "quote_no_response_sweep",
+  /** Task #803 — daily per-org rollup of auto:* quote_events. 09:00 UTC. */
+  quoteAutopilotDailySummary: "quote_autopilot_daily_summary",
 } as const;
 
 export type JobName = typeof JOB_NAMES[keyof typeof JOB_NAMES];

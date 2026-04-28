@@ -32,6 +32,7 @@ import {
   isFreeMailProviderName,
   sanitizeCustomerName,
   classifyPartyType,
+  parseFromHeader,
   type ResolvedCustomer,
 } from "./customerNameResolver";
 import { lookupMapping, bumpHit } from "./quoteSenderMappings";
@@ -627,6 +628,14 @@ export async function ingestQuoteFromEmail(
   let customerId: string;
   let customerName: string;
   let learnedMappingId: string | null = null;
+  // Task #803 (A) — when a learned mapping matches by DOMAIN (not email)
+  // and we've never seen this exact sender email before in our CRM
+  // contacts table, we still create the opp against the matched customer
+  // — but we tag the row so the Quote Opportunities table can prompt the
+  // rep with "New contact at {Customer}" + Add/Dismiss buttons.
+  let domainMatchedNewSender:
+    | { senderEmail: string; senderName: string | null }
+    | null = null;
   if (opts?.customerName) {
     customerName = opts.customerName;
     customerId = await findOrCreateCustomer(message.orgId, customerName, message.fromEmail ?? null);
@@ -641,6 +650,44 @@ export async function ingestQuoteFromEmail(
       const [cust] = await db.select().from(quoteCustomers)
         .where(eq(quoteCustomers.id, customerId)).limit(1);
       customerName = cust?.name ?? deriveCustomerName(message).name;
+      // Task #803 (A) — domain-level mapping + never-seen-before email →
+      // queue a contact-suggestion prompt. We deliberately ignore email-
+      // level mappings (those are explicit per-sender pins from the rep).
+      if (learned.senderDomain && !learned.senderEmail && message.fromEmail) {
+        const senderEmailLc = message.fromEmail.trim().toLowerCase();
+        if (senderEmailLc) {
+          // Company-scoped novelty check. We only want to flag the row
+          // when the sender's email is brand-new for the matched
+          // customer's underlying CRM company — not just brand-new across
+          // the entire org. Without this, an existing contact who also
+          // happens to email a different account would silently look new.
+          // Falls back to org-scope when we can't resolve a company (free
+          // email providers, name-only matches), preserving prior
+          // behaviour rather than failing closed.
+          const { storage } = await import("../storage");
+          const { matchAccountByEmailDomain } = await import("../routes/graphWebhook");
+          const companyId = await matchAccountByEmailDomain(senderEmailLc, message.orgId).catch(() => null);
+          let existingContact: unknown = null;
+          if (companyId) {
+            existingContact = await storage
+              .getContactByEmailAndCompany(senderEmailLc, companyId)
+              .catch(() => null);
+          } else {
+            existingContact = await storage
+              .getContactByEmailInOrg(senderEmailLc, message.orgId)
+              .catch(() => null);
+          }
+          if (!existingContact) {
+            // EmailMessage doesn't carry a separate display-name column,
+            // so we extract one from the From header if it parsed cleanly.
+            const parsedFrom = parseFromHeader(message.fromEmail);
+            domainMatchedNewSender = {
+              senderEmail: senderEmailLc,
+              senderName: parsedFrom?.displayName ?? null,
+            };
+          }
+        }
+      }
     } else {
       customerName = deriveCustomerName(message).name;
       // Task #597 — pass the inbound from-email so brand-new rows get auto-classified.
@@ -677,6 +724,15 @@ export async function ingestQuoteFromEmail(
     sourceReference: ref,
     notes: message.subject ?? null,
     score: null,
+    needsNewContactReview: domainMatchedNewSender
+      ? {
+          senderEmail: domainMatchedNewSender.senderEmail,
+          senderName: domainMatchedNewSender.senderName,
+          customerId,
+          customerName,
+          detectedAt: new Date().toISOString(),
+        }
+      : null,
   }).returning();
 
   await db.insert(quoteEvents).values({
@@ -693,6 +749,29 @@ export async function ingestQuoteFromEmail(
       learnedMappingId: learnedMappingId ?? undefined,
     },
   });
+
+  // Task #803 (A) — emit an `auto:new_sender` event at the moment we
+  // detect + flag the new contact, separate from the later resolution
+  // event written by `resolveNewContactReview`. Without this, the
+  // timeline would only attribute the prompt to the rep's eventual
+  // Add/Dismiss action — losing the autopilot's role in flagging it.
+  if (domainMatchedNewSender) {
+    await db.insert(quoteEvents).values({
+      quoteId: opp.id,
+      eventType: "note",
+      occurredAt: new Date(),
+      actor: "auto:new_sender",
+      payload: {
+        source: "new_contact_review",
+        action: "detected",
+        senderEmail: domainMatchedNewSender.senderEmail,
+        senderName: domainMatchedNewSender.senderName,
+        customerId,
+        customerName,
+        learnedMappingId: learnedMappingId ?? undefined,
+      },
+    });
+  }
 
   // Customer Quotes #3 — bump the learned-mapping hit counter so the
   // admin UI can show "last used" and sample volume. Fire-and-forget;
@@ -923,8 +1002,12 @@ export async function applyClosedLostToOpenQuote(
   // thread (rare, but possible when a customer sends two RFQs in the same
   // chain), close the most recently requested one — the customer's "we're
   // covered" reply almost always references the latest ask.
+  // Task #803 — `quoted` is a non-terminal intermediate state (auto- or
+  // manually flipped after a rep replies with a rate). The auto-lost
+  // detector must still close it: customer "we're covered" replies very
+  // commonly arrive AFTER we've quoted them.
   const pending = candidates
-    .filter(c => c.outcomeStatus === "pending")
+    .filter(c => c.outcomeStatus === "pending" || c.outcomeStatus === "quoted")
     .sort((a, b) => b.requestDate.getTime() - a.requestDate.getTime());
   const open = pending[0];
   if (!open) return { status: "skipped_already_closed", quoteId: candidates[0].id };
@@ -1085,8 +1168,12 @@ export async function applyClosedWonToOpenQuote(
   ));
   if (candidates.length === 0) return { status: "skipped_no_open_quote" };
 
+  // Task #803 — accept both `pending` and the new intermediate `quoted`
+  // state as open. A customer "sounds good, book it" reply most commonly
+  // arrives AFTER we've already quoted them; without this the auto-win
+  // path silently stops working for any thread the autopilot has touched.
   const pending = candidates
-    .filter(c => c.outcomeStatus === "pending")
+    .filter(c => c.outcomeStatus === "pending" || c.outcomeStatus === "quoted")
     .sort((a, b) => b.requestDate.getTime() - a.requestDate.getTime());
   const open = pending[0];
   if (!open) return { status: "skipped_already_closed", quoteId: candidates[0].id };

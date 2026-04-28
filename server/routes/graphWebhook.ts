@@ -773,6 +773,32 @@ async function processUserMailboxEmail(params: {
     }
   }
 
+  // Task #803 — Quote Lifecycle Autopilot (B). When a rep sends an
+  // outbound reply on a thread that already has a pending quote
+  // opportunity, AI-extract the offered rate. Confident extraction
+  // flips the quote to `quoted` with quotedAmount + validThrough +
+  // quote_event(actor='auto:outbound_reply'). Uncertain extraction
+  // drops a `note` event onto the timeline. Idempotent on
+  // providerMessageId; best-effort + non-fatal.
+  if (direction === "outbound" && conversationId) {
+    try {
+      const { applyOutboundReplyToOpenQuote } = await import(
+        "../services/outboundQuoteAutoQuote"
+      );
+      const result = await applyOutboundReplyToOpenQuote(message);
+      if (result.status === "quoted" || result.status === "noted") {
+        log(
+          `[user-mailbox] quote-autopilot ${result.status} oppId=${result.quoteId} ` +
+            `${result.quotedAmount ? `amount=$${result.quotedAmount}` : ""}`,
+        );
+      }
+    } catch (e) {
+      log(
+        `[user-mailbox] quote-autopilot outbound error: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
   // Task #435: track outbound capture so the SentItems health classifier
   // counts ANY successful capture path (webhook OR delta OR self-heal).
   await storage.updateMonitoredMailbox(monitoredMailbox.id, {

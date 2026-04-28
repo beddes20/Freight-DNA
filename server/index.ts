@@ -526,6 +526,12 @@ process.on("uncaughtException", (err) => {
         import("./services/conversationReplyCaptureService")
           .then(({ initReplyCaptureSelfHealScheduler }) => initReplyCaptureSelfHealScheduler())
           .catch(err => console.error("[reply-capture] scheduler init error:", err));
+        // Task #803 — Quote Lifecycle Autopilot (C). Auto-close pending
+        // quotes whose last event is older than the org's no-response
+        // timeout (default 2h) AND have no inbound reply since.
+        import("./services/quoteNoResponseSweep")
+          .then(({ startQuoteNoResponseSweepScheduler }) => startQuoteNoResponseSweepScheduler())
+          .catch(err => console.error("[quoteNoResponseSweep] scheduler init error:", err));
       }, 4000);
       // Pre-warm the financial uploads cache so the first carrier-suggestions
       // request doesn't trigger a cold full-table JSONB scan in production.

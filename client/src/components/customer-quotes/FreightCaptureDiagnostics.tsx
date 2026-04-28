@@ -58,6 +58,11 @@ type DiagnosticsResult = {
    *  point at them. Surfaced as its own tile so admins can spot a leak
    *  regression before the cleanup script runs. */
   needsReview: { customers: number; opportunities: number };
+  /** Task #803 — count of pending Quote Lifecycle Autopilot prompts in the
+   *  current slice (inbound from a known customer DOMAIN but a NEW
+   *  sender email). Cleared by Add-as-contact / Dismiss in the Quote
+   *  Opportunities table. */
+  newSendersToReview: number;
 };
 
 interface Props {
@@ -190,6 +195,7 @@ export function FreightCaptureDiagnostics({ filters, enabled, open: openProp, on
                   items={[
                     { label: "Customer rows", value: data.needsReview.customers },
                     { label: "Opps in slice", value: data.needsReview.opportunities },
+                    { label: "New senders @ known customer", value: data.newSendersToReview },
                   ]}
                 />
               </DiagnosticTile>

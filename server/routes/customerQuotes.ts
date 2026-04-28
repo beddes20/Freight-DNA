@@ -18,6 +18,8 @@ import {
   setAutoWonQuoteAfHandoffEnabled,
   getFunnel,
   getFunnelDiagnostics,
+  listNewContactReviews,
+  resolveNewContactReview,
   resolveFunnelRepScope,
   markQuoteOutcome,
   type ManualMarkOutcomeStatus,
@@ -856,6 +858,57 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     } catch (err) {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] funnel-diagnostics error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Task #803 — Quote Lifecycle Autopilot prompt queue. Lists every
+  // pending "new sender at known customer" prompt scoped to the org so
+  // the Quote Opportunities page can render the Add/Dismiss strip.
+  // Returns a flat array sorted newest-first; we deliberately do NOT
+  // apply rep-scope filtering here — the prompt is a one-window shared
+  // chore and any rep with quote-list access should be able to clear it.
+  app.get("/api/customer-quotes/new-contact-reviews", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const items = await listNewContactReviews(user.organizationId);
+      res.json({ items });
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      console.error("[customer-quotes] new-contact-reviews list error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  const newContactActionSchema = z.object({
+    action: z.enum(["add", "dismiss"]),
+    name: z.string().trim().min(1).max(120).optional(),
+    companyId: z.string().min(1).optional(),
+  });
+  app.post("/api/customer-quotes/quote/:id/new-contact-review", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const parsed = newContactActionSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid payload", details: parsed.error.format() });
+      }
+      const quoteId = pStr(req.params.id);
+      const result = await resolveNewContactReview(
+        user.organizationId,
+        quoteId,
+        parsed.data.action,
+        user.id,
+        { name: parsed.data.name, companyIdHint: parsed.data.companyId ?? null },
+      );
+      switch (result.status) {
+        case "not_found":            return res.status(404).json({ error: "Quote not found" });
+        case "no_pending_prompt":    return res.status(409).json({ error: "No pending prompt for this quote" });
+        case "no_company_match":     return res.status(409).json({ error: "Could not match sender domain to an existing customer; create the contact manually." });
+        default:                     return res.json(result);
+      }
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      console.error("[customer-quotes] new-contact-review action error:", err);
       res.status(500).json({ error: msg });
     }
   });

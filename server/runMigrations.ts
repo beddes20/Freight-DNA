@@ -4056,6 +4056,34 @@ export async function runMigrations() {
     client468.release();
   }
 
+  // ── Task #803: Quote Lifecycle Autopilot — additive columns ────────────
+  // (A) quote_opportunities.needs_new_contact_review jsonb — populated by
+  //     ingestQuoteFromEmail when sender's domain matched but the email is
+  //     new. Cleared once the rep clicks Add-as-contact or Dismiss.
+  // (B) quoted is now a valid outcome_status; nothing to migrate (text col).
+  // (C) agent_org_settings.quote_no_response_timeout_hours integer default 2 —
+  //     drives the auto-close cron threshold.
+  const client803 = await pool.connect();
+  try {
+    await client803.query(
+      `ALTER TABLE quote_opportunities ADD COLUMN IF NOT EXISTS needs_new_contact_review jsonb`,
+    );
+    await client803.query(
+      `ALTER TABLE agent_org_settings ADD COLUMN IF NOT EXISTS quote_no_response_timeout_hours integer NOT NULL DEFAULT 2`,
+    );
+    // Forward-only activation gate. Set on first sweep run per org so the
+    // autopilot only acts on quotes that became stale AFTER deployment —
+    // not on the org's entire historical pending backlog.
+    await client803.query(
+      `ALTER TABLE agent_org_settings ADD COLUMN IF NOT EXISTS quote_autopilot_started_at timestamp`,
+    );
+    console.log("[migrations] Task #803 quote autopilot columns ensured");
+  } catch (err) {
+    console.error("[migrations] Task #803 quote autopilot column error:", err);
+  } finally {
+    client803.release();
+  }
+
   // ── Task #508: Mailbox 30-day historical backfill state ────────────────────
   // Per-mailbox backfill tracking row. Idempotent: re-runs are safe because
   // ingestion is keyed on the unique (org_id, provider_message_id) index on

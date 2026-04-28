@@ -4,7 +4,7 @@ import { logQuoteTouchpointFromEvent } from "./quoteTouchpoints";
 import { carriers as carriersCatalog } from "@shared/schema";
 import {
   quoteCustomers, quoteReps, quoteCarriers, quoteLaneGroups, quoteOutcomeReasons,
-  quoteOpportunities, quoteEvents, quoteSavedViews,
+  quoteOpportunities, quoteEvents, quoteSavedViews, quoteSenderMappings,
   recurringLanes, companies, emailMessages,
   freightOpportunities,
   type QuoteOpportunity, type QuoteOutcomeStatus, type QuoteCustomer, type QuoteRep,
@@ -1092,6 +1092,17 @@ export interface MarkQuoteOutcomeOptions {
    * means "no rep restriction" — admins/directors/national_account_managers.
    */
   enforceRepScope?: string;
+  /**
+   * Task #803 (C) — autopilot variant. When the no-response sweep closes a
+   * quote, it routes through this same canonical write path so all the
+   * normal side effects (status update, reason resolution, touchpoint log)
+   * fire — but it overrides the event type from `manual_lost` to
+   * `auto_lost` and merges in extra payload diagnostics (timeout hours,
+   * last event metadata) so the event log honestly attributes the close to
+   * the cron rather than a rep. Production callers omit these.
+   */
+  eventTypeOverride?: string;
+  payloadExtras?: Record<string, unknown>;
 }
 
 export async function markQuoteOutcome(
@@ -1120,14 +1131,17 @@ export async function markQuoteOutcome(
 
   // Idempotency: never overwrite a terminal status. Lets a rep harmlessly
   // re-click the same action without us re-firing the touchpoint.
-  if (opp.outcomeStatus !== "pending") {
+  // Task #803 — `quoted` is an intermediate (non-terminal) state; manual
+  // close actions (Mark Won / Mark Lost) and the no-response sweep must
+  // be allowed to transition out of it just like out of `pending`.
+  if (opp.outcomeStatus !== "pending" && opp.outcomeStatus !== "quoted") {
     return { status: "already_terminal", quoteId, outcomeStatus: opp.outcomeStatus as QuoteOutcomeStatus };
   }
 
   // The reason is required for losses and ignored for wins (the won_low_margin
   // tier is decided by margin math elsewhere — manual won maps to plain "won").
   const isWonStatus = outcomeStatus === "won" || outcomeStatus === "won_low_margin";
-  const eventType = isWonStatus ? "manual_won" : "manual_lost";
+  const eventType = opts?.eventTypeOverride ?? (isWonStatus ? "manual_won" : "manual_lost");
 
   // ── Loss-reason resolution (Task #723 review fix) ────────────────────────
   // The UI used to send `outcomeReasonId: null` even for lost_* statuses,
@@ -1174,6 +1188,7 @@ export async function markQuoteOutcome(
       previousStatus: opp.outcomeStatus,
       newStatus: outcomeStatus,
       outcomeReasonId: isWonStatus ? null : resolvedReasonId,
+      ...(opts?.payloadExtras ?? {}),
     },
   }).returning();
 
@@ -1453,6 +1468,59 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
       detail: `Top: ${top.customerName} — ${Math.round(top.hoursOverdue)}h past typical (${Math.round(top.pTypicalHours)}h).`,
       data: { quoteId: top.quoteId },
     });
+  }
+
+  // Task #803 — Quote Lifecycle Autopilot daily summary alert. Counts
+  // every quote_event whose actor begins with "auto:" in the last 24h
+  // so the Operational Alerts rail can show one consolidated line:
+  // "Autopilot last 24h — 4 new-contact prompts, 2 auto-quoted, 1
+  // auto-closed". Cheap query (single quote_events scan with org join);
+  // wrapped in a try/catch so a slow/missing index never breaks the
+  // snapshot.
+  try {
+    const since = new Date(now.getTime() - 24 * 3600 * 1000);
+    const autopilotRows = await db
+      .select({ actor: quoteEvents.actor })
+      .from(quoteEvents)
+      .innerJoin(quoteOpportunities, eq(quoteEvents.quoteId, quoteOpportunities.id))
+      .where(and(
+        eq(quoteOpportunities.organizationId, orgId),
+        sql`${quoteEvents.occurredAt} >= ${since}`,
+        sql`${quoteEvents.actor} LIKE 'auto:%'`,
+      ));
+    let newSender = 0, outboundReply = 0, noResponse = 0;
+    for (const r of autopilotRows) {
+      if (r.actor === "auto:new_sender") newSender += 1;
+      else if (r.actor === "auto:outbound_reply") outboundReply += 1;
+      else if (r.actor === "auto:no_response_timeout") noResponse += 1;
+    }
+    // Surface a count of pending new-contact prompts even when the last
+    // 24h has been quiet — that's the action item users need to clear.
+    const pendingPromptsRows = await db
+      .select({ id: quoteOpportunities.id })
+      .from(quoteOpportunities)
+      .where(and(
+        eq(quoteOpportunities.organizationId, orgId),
+        sql`${quoteOpportunities.needsNewContactReview} IS NOT NULL`,
+      ));
+    const pendingPrompts = pendingPromptsRows.length;
+    const totalAuto = newSender + outboundReply + noResponse + pendingPrompts;
+    if (totalAuto > 0) {
+      const parts: string[] = [];
+      if (pendingPrompts > 0) parts.push(`${pendingPrompts} new-contact prompt${pendingPrompts === 1 ? "" : "s"}`);
+      if (outboundReply > 0) parts.push(`${outboundReply} auto-quoted`);
+      if (noResponse > 0) parts.push(`${noResponse} auto-closed (no reply)`);
+      if (newSender > 0) parts.push(`${newSender} auto-tagged inbound`);
+      alerts.push({
+        id: "autopilot-summary",
+        severity: pendingPrompts > 0 ? "medium" : "low",
+        type: "autopilot_summary",
+        title: "Quote autopilot — last 24h",
+        detail: parts.join(" · "),
+      });
+    }
+  } catch (err) {
+    console.error("[customer-quotes] autopilot summary error:", err);
   }
 
   // Pattern-shift alerts (Task #481) — surfaced from the persisted detector.
@@ -4292,6 +4360,11 @@ export interface FunnelDiagnostics {
    *  filter slice (rep / customer / equipment / lane / dates). */
   nearMissCandidates: import("./quoteTmsSync").ProbableCandidate[];
   needsReview: NeedsReviewCounts;
+  /** Task #803 — pending Quote Lifecycle Autopilot prompts: opps where
+   *  the inbound sender's domain matched a known customer but their
+   *  email is not yet in our CRM contacts. Cleared when the rep clicks
+   *  Add-as-contact or Dismiss in the Quote Opportunities table. */
+  newSendersToReview: number;
 }
 
 export async function getFunnelDiagnostics(
@@ -4310,6 +4383,7 @@ export async function getFunnelDiagnostics(
       emailClassifier: { windowDays, won: 0, lost: 0, neither: 0 },
       nearMissCandidates: [],
       needsReview: { customers: 0, opportunities: 0 },
+      newSendersToReview: 0,
     };
   }
 
@@ -4415,6 +4489,11 @@ export async function getFunnelDiagnostics(
     ? 0
     : sliceWithoutChokepoint.filter(o => o.customerId && needsReviewCustomerIds.has(o.customerId)).length;
 
+  // Task #803 — count opps in the slice with a pending new-contact prompt.
+  const newSendersInSlice = sliceWithoutChokepoint.filter(
+    (o) => o.needsNewContactReview != null,
+  ).length;
+
   return {
     scopedToRepId: scopedRepId ?? null,
     lastSync: lastSync ?? null,
@@ -4429,5 +4508,227 @@ export async function getFunnelDiagnostics(
       customers: needsReviewCustomerIds.size,
       opportunities: needsReviewOppCount,
     },
+    newSendersToReview: newSendersInSlice,
+  };
+}
+
+// ─── Task #803 — New-contact-review queue helpers ────────────────────────
+
+export interface NewContactReviewItem {
+  quoteId: string;
+  customerId: string;
+  customerName: string;
+  senderEmail: string;
+  senderName: string | null;
+  detectedAt: string | null;
+  lane: string;
+  requestDate: string;
+}
+
+interface NewContactReviewPayload {
+  senderEmail: string;
+  senderName: string | null;
+  customerId: string;
+  customerName: string;
+  detectedAt: string;
+}
+
+function readReviewPayload(raw: unknown): NewContactReviewPayload | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const senderEmail = typeof r.senderEmail === "string" ? r.senderEmail : null;
+  const customerId = typeof r.customerId === "string" ? r.customerId : null;
+  const customerName = typeof r.customerName === "string" ? r.customerName : null;
+  if (!senderEmail || !customerId || !customerName) return null;
+  return {
+    senderEmail,
+    customerId,
+    customerName,
+    senderName: typeof r.senderName === "string" ? r.senderName : null,
+    detectedAt: typeof r.detectedAt === "string" ? r.detectedAt : new Date().toISOString(),
+  };
+}
+
+/**
+ * List every pending new-contact-review prompt in the org. Sorted newest-
+ * first so the rep sees the freshest customer activity at the top.
+ */
+export async function listNewContactReviews(
+  orgId: string,
+): Promise<NewContactReviewItem[]> {
+  const rows = await db
+    .select()
+    .from(quoteOpportunities)
+    .where(and(
+      eq(quoteOpportunities.organizationId, orgId),
+      sql`${quoteOpportunities.needsNewContactReview} IS NOT NULL`,
+    ))
+    .orderBy(desc(quoteOpportunities.requestDate));
+  const out: NewContactReviewItem[] = [];
+  for (const r of rows) {
+    const payload = readReviewPayload(r.needsNewContactReview);
+    if (!payload) continue;
+    out.push({
+      quoteId: r.id,
+      customerId: r.customerId,
+      customerName: payload.customerName,
+      senderEmail: payload.senderEmail,
+      senderName: payload.senderName,
+      detectedAt: payload.detectedAt,
+      lane: `${r.originCity}, ${r.originState} → ${r.destCity}, ${r.destState}`,
+      requestDate: r.requestDate.toISOString(),
+    });
+  }
+  return out;
+}
+
+export type NewContactReviewActionResult =
+  | { status: "dismissed"; quoteId: string }
+  | { status: "added"; quoteId: string; contactId: string; companyId: string }
+  | { status: "not_found" }
+  | { status: "no_pending_prompt" }
+  | { status: "no_company_match" };
+
+/**
+ * Resolve a pending new-contact prompt. `action='dismiss'` simply clears
+ * the JSONB flag; `action='add'` resolves the inbound sender's domain to
+ * a CRM company and inserts a contacts row, then clears the flag.
+ *
+ * Both actions also write an `auto:new_sender` quote_event so the daily
+ * summary alert can count it.
+ */
+export async function resolveNewContactReview(
+  orgId: string,
+  quoteId: string,
+  action: "add" | "dismiss",
+  actor: string,
+  opts?: { name?: string; companyIdHint?: string | null },
+): Promise<NewContactReviewActionResult> {
+  const [opp] = await db
+    .select()
+    .from(quoteOpportunities)
+    .where(and(
+      eq(quoteOpportunities.organizationId, orgId),
+      eq(quoteOpportunities.id, quoteId),
+    ))
+    .limit(1);
+  if (!opp) return { status: "not_found" };
+  const payload = readReviewPayload(opp.needsNewContactReview);
+  if (!payload) return { status: "no_pending_prompt" };
+
+  let createdContactId: string | null = null;
+  let resolvedCompanyId: string | null = null;
+  if (action === "add") {
+    // Prefer the explicit hint; otherwise resolve the company by sender
+    // email domain. We never invent a brand-new company row from here —
+    // if neither path yields one, surface a precise error so the UI can
+    // route the rep into the manual contact-create flow instead.
+    //
+    // SECURITY (Task #803 review): the client-supplied companyIdHint MUST
+    // be validated against the caller's org before being passed to
+    // storage.createContact, otherwise an authenticated user could
+    // create a contact under a company belonging to another tenant just
+    // by guessing/knowing its UUID. We fall through to the
+    // domain-matching path (which is org-scoped internally) if the hint
+    // fails the cross-tenant check.
+    let companyId: string | null = null;
+    if (opts?.companyIdHint) {
+      const owned = await storage.getCompanyInOrg(opts.companyIdHint, orgId);
+      if (owned) companyId = owned.id;
+    }
+    if (!companyId) {
+      const { matchAccountByEmailDomain } = await import("../routes/graphWebhook");
+      companyId = await matchAccountByEmailDomain(payload.senderEmail, orgId).catch(() => null);
+    }
+    if (!companyId) return { status: "no_company_match" };
+    const displayName = (opts?.name ?? "").trim() || payload.senderName || payload.senderEmail;
+    const created = await storage.createContact({
+      companyId,
+      name: displayName,
+      email: payload.senderEmail,
+      sourceType: "quote_autopilot",
+      isPrimary: false,
+      status: "active",
+    });
+    createdContactId = created.id;
+    resolvedCompanyId = companyId;
+  }
+
+  // Clear the flag and write the audit event together. We don't gate on
+  // outcomeStatus here — even on a re-opened or already-quoted row the
+  // prompt must clear once the rep acts on it.
+  await db
+    .update(quoteOpportunities)
+    .set({ needsNewContactReview: null })
+    .where(and(
+      eq(quoteOpportunities.organizationId, orgId),
+      eq(quoteOpportunities.id, quoteId),
+    ));
+
+  // Suppress future prompts for this exact sender-email by writing an
+  // email-level row into quote_sender_mappings. The DB CHECK constraint
+  // requires EXACTLY ONE of (sender_email, sender_domain) be set, so we
+  // explicitly pass senderDomain: null. The novelty-flagger in
+  // quoteEmailIngestion.ts only triggers on domain-only matches
+  // (`learned.senderDomain && !learned.senderEmail`), and `lookupMapping`
+  // returns the email-level row in preference to the domain-level one,
+  // so the presence of this email row short-circuits the prompt
+  // permanently regardless of action (add/dismiss). We use the existing
+  // `manual` source value (the only DB-supported value other than the
+  // trigger-written `auto`) to comply with the existing schema contract;
+  // the audit event below carries the more specific action context.
+  // onConflictDoUpdate handles the race where a dismissal and add fire
+  // back-to-back — the row keeps pointing at the latest customer.
+  try {
+    const senderEmailLc = payload.senderEmail.toLowerCase();
+    await db
+      .insert(quoteSenderMappings)
+      .values({
+        organizationId: orgId,
+        senderEmail: senderEmailLc,
+        senderDomain: null,
+        customerId: payload.customerId,
+        source: "manual",
+      })
+      .onConflictDoUpdate({
+        target: [quoteSenderMappings.organizationId, quoteSenderMappings.senderEmail],
+        targetWhere: sql`${quoteSenderMappings.senderEmail} IS NOT NULL`,
+        set: {
+          customerId: sql`EXCLUDED.customer_id`,
+          lastUsedAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
+  } catch (err) {
+    // Suppression is best-effort — failing here would block the rep from
+    // dismissing the prompt, which is worse UX than the prompt resurfacing
+    // on a future inbound from the same address.
+    console.error("[resolveNewContactReview] sender mapping insert error:", err instanceof Error ? err.message : err);
+  }
+
+  await db.insert(quoteEvents).values({
+    quoteId,
+    eventType: "note",
+    occurredAt: new Date(),
+    actor: "auto:new_sender",
+    payload: {
+      source: "new_contact_review",
+      action,
+      resolvedBy: actor,
+      senderEmail: payload.senderEmail,
+      senderName: payload.senderName,
+      customerId: payload.customerId,
+      customerName: payload.customerName,
+      contactId: createdContactId,
+      companyId: resolvedCompanyId,
+    },
+  });
+
+  if (action === "dismiss") return { status: "dismissed", quoteId };
+  return {
+    status: "added",
+    quoteId,
+    contactId: createdContactId!,
+    companyId: resolvedCompanyId!,
   };
 }

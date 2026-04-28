@@ -43,6 +43,7 @@ import { MarginFloorsSettings } from "@/components/MarginFloorsSettings";
 import { SenderMappingsDialog } from "@/components/SenderMappingsDialog";
 import { SpotQuoteSearch } from "@/components/SpotQuoteSearch";
 import { ActionQueueCard } from "@/components/customer-quotes/ActionQueueCard";
+import { NewContactReviewStrip } from "@/components/customer-quotes/NewContactReviewStrip";
 import { computeQuoteSla, formatSlaBadge } from "@shared/quoteSla";
 
 // ---------- Types (mirror server contract) ----------
@@ -74,6 +75,17 @@ type Quote = {
   // recomputes off requestDate so it ticks between refetches.
   slaState?: "ok" | "warning" | "breached" | "na";
   minutesSinceRequest?: number;
+  // Task #803 (A) — populated when the autopilot detects a domain-matched
+  // sender whose exact email is brand-new for the matched customer. The
+  // row renders a "New contact" pill and the drawer surfaces an
+  // Add/Dismiss prompt that calls /api/customer-quotes/:id/contact-review.
+  needsNewContactReview?: {
+    senderEmail: string;
+    senderName: string | null;
+    customerId: string;
+    customerName: string;
+    detectedAt: string;
+  } | null;
 };
 
 type ListResult = { rows: Quote[]; total: number; offset: number; limit: number };
@@ -245,14 +257,19 @@ const FLIP_EVENT_LABELS: Record<string, { label: string; tone: "won" | "lost" }>
 };
 
 // ---------- Constants ----------
+// Task #803 — `quoted` is an active intermediate state (rep has sent a
+// quote but customer hasn't accepted/rejected/timed out). The autopilot
+// flips here automatically; manual Mark Quoted overrides also land here.
+// It is NOT an outcome bucket.
 const STATUS_LABELS: Record<string, string> = {
-  pending: "Pending", won: "Won", won_low_margin: "Won (low margin)",
+  pending: "Pending", quoted: "Quoted", won: "Won", won_low_margin: "Won (low margin)",
   lost_price: "Lost — price", lost_service: "Lost — service",
   lost_timing: "Lost — timing", lost_incumbent: "Lost — incumbent",
   no_response: "No response", expired: "Expired",
 };
 const STATUS_COLORS: Record<string, string> = {
   pending: "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30",
+  quoted: "bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/30",
   won: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30",
   won_low_margin: "bg-yellow-500/15 text-yellow-700 dark:text-yellow-300 border-yellow-500/30",
   lost_price: "bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30",
@@ -973,6 +990,12 @@ function CustomerQuotesPageInner(): JSX.Element {
                     });
                   }}
                 />
+
+                {/* Task #803 — Quote Lifecycle Autopilot prompt strip.
+                 *  Shown above the table when an inbound quote arrived from
+                 *  a known customer DOMAIN but a NEW sender email; one-click
+                 *  Add-as-contact / Dismiss clears it. */}
+                <NewContactReviewStrip />
 
                 {/* Quote opportunities table */}
                 <Card className="bg-card border-border" data-testid="quote-table-card">
@@ -1699,6 +1722,15 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
                   ) : (
                     formatCustomerName(q.customerName)
                   )}
+                  {q.needsNewContactReview ? (
+                    <span
+                      className="ml-1.5 inline-flex items-center gap-0.5 rounded-sm border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 px-1 text-[9px] font-semibold uppercase text-amber-800 dark:text-amber-200"
+                      title={`Domain matched ${q.needsNewContactReview.customerName} but ${q.needsNewContactReview.senderEmail} is a new sender`}
+                      data-testid={`pill-new-contact-${q.id}`}
+                    >
+                      New contact
+                    </span>
+                  ) : null}
                 </td>
                 <td className="px-2 whitespace-nowrap text-foreground/90">{q.originCity}, {q.originState}</td>
                 <td className="px-2 whitespace-nowrap text-foreground/90">{q.destCity}, {q.destState}</td>
@@ -2214,6 +2246,12 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
               )}
               <div className="text-xs text-muted-foreground mt-1">Carrier: {data.carrier?.name ?? "—"}</div>
             </div>
+            {data.opp.needsNewContactReview && (
+              <NewContactReviewSection
+                quoteId={data.opp.id}
+                review={data.opp.needsNewContactReview}
+              />
+            )}
             <div className="rounded bg-card border border-border p-3">
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Timeline & revisions</div>
               <ol className="space-y-2">
@@ -2241,6 +2279,12 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
                         </div>
                         <div className="text-muted-foreground text-[10px]">{new Date(e.occurredAt).toLocaleString()}</div>
                         {amt && <div className="text-muted-foreground text-[10px]">Amount: {fmtMoney(amt)}</div>}
+                        {/* Task #803 (B) — direct deep-link to the outbound rep
+                            email that triggered the auto-quote (or that we
+                            looked at and chose not to auto-quote). The
+                            payload always carries either threadId or
+                            messageId from graphWebhook ingestion. */}
+                        <OutboundReplyEventLink event={e} />
                         {flip && (
                           <div className="mt-1 rounded border border-border/60 bg-muted/40 p-2 space-y-1" data-testid={`flip-context-${e.id}`}>
                             {flip.matchedPhrase && (
@@ -2319,6 +2363,128 @@ function QuoteDetailDrawer({ quoteId, onClose, onPickRelated, customers, reps, c
         )}
       </SheetContent>
     </Sheet>
+  );
+}
+
+// Task #803 (B) — Renders a "View sent message" deep-link inside the
+// QuoteDetailDrawer timeline for `auto:outbound_reply` events. The
+// extractor + flipper writes both threadId (preferred) and messageId
+// into the event payload at write time; this component pulls them back
+// out and routes the rep to the Conversations tab. Returns null for
+// every other event so the timeline stays uncluttered.
+function OutboundReplyEventLink({ event }: { event: QuoteEvent }): JSX.Element | null {
+  if (event.actor !== "auto:outbound_reply") return null;
+  const payload = (event.payload ?? {}) as Record<string, unknown>;
+  const threadId = typeof payload.threadId === "string" ? payload.threadId : null;
+  const messageId = typeof payload.messageId === "string" ? payload.messageId : null;
+  const providerMessageId = typeof payload.providerMessageId === "string" ? payload.providerMessageId : null;
+  const targetId = threadId ?? messageId ?? providerMessageId;
+  if (!targetId) return null;
+  const href = threadId
+    ? `/conversations?threadId=${encodeURIComponent(threadId)}`
+    : `/conversations?messageId=${encodeURIComponent(messageId ?? providerMessageId!)}`;
+  return (
+    <a
+      href={href}
+      className="inline-flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300 hover:underline mt-0.5"
+      data-testid={`link-outbound-reply-${event.id}`}
+      title="Open the sent rep email that triggered this auto-quote"
+    >
+      View sent message
+      <ChevronRight className="h-3 w-3" />
+    </a>
+  );
+}
+
+// Task #803 (A) — Add/Dismiss prompt rendered inside the QuoteDetailDrawer.
+// Calls /api/customer-quotes/:id/contact-review which short-circuits via
+// resolveNewContactReview (clears the flag, writes a sender-mapping
+// suppression row, and emits an auto:new_sender event). On success we
+// invalidate the detail + list queries so the pill disappears immediately.
+function NewContactReviewSection({
+  quoteId,
+  review,
+}: {
+  quoteId: string;
+  review: NonNullable<Quote["needsNewContactReview"]>;
+}): JSX.Element {
+  const [name, setName] = useState<string>(review.senderName ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const mutation = useMutation({
+    mutationFn: async (action: "add" | "dismiss") => {
+      // Defensive: apiRequest already throws on !res.ok (see queryClient
+      // throwIfResNotOk), but we re-check here so a future refactor of the
+      // helper or a streaming/non-throwing branch can never silently turn
+      // a 404/409 from this endpoint into a "success" toast for the rep.
+      const res = await apiRequest(
+        "POST",
+        `/api/customer-quotes/quote/${quoteId}/new-contact-review`,
+        action === "add" ? { action, name } : { action },
+      );
+      if (!res.ok) {
+        const text = (await res.text().catch(() => "")) || res.statusText;
+        throw new Error(`${res.status}: ${text}`);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setError(null);
+      // Task #803 review fix: drawer detail query is keyed
+      // ['/api/customer-quotes/quote', quoteId] (see useQuery at ~L2157),
+      // not ['/api/customer-quotes', quoteId]. Wrong key meant the prompt
+      // stayed visible until manual reopen. Also invalidate the
+      // new-contact-reviews list so the inbox/badge clears.
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/quote", quoteId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/new-contact-reviews"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/list"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/snapshot"] });
+    },
+    onError: (err: unknown) => {
+      setError(err instanceof Error ? err.message : "Failed to update contact review");
+    },
+  });
+  return (
+    <div
+      className="rounded border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 p-3"
+      data-testid={`section-new-contact-review-${quoteId}`}
+    >
+      <div className="text-[10px] uppercase tracking-wider text-amber-800 dark:text-amber-200 mb-1">
+        New contact at {review.customerName}
+      </div>
+      <div className="text-xs text-foreground/90">
+        <span className="font-medium">{review.senderEmail}</span> emailed for the first time. Add as a contact or dismiss.
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Contact name"
+          className="text-xs px-2 py-1 rounded border border-border bg-background min-w-[160px]"
+          data-testid={`input-new-contact-name-${quoteId}`}
+        />
+        <button
+          type="button"
+          onClick={() => mutation.mutate("add")}
+          disabled={mutation.isPending}
+          className="text-xs px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-50"
+          data-testid={`button-add-new-contact-${quoteId}`}
+        >
+          Add contact
+        </button>
+        <button
+          type="button"
+          onClick={() => mutation.mutate("dismiss")}
+          disabled={mutation.isPending}
+          className="text-xs px-2 py-1 rounded border border-border hover:bg-muted disabled:opacity-50"
+          data-testid={`button-dismiss-new-contact-${quoteId}`}
+        >
+          Dismiss
+        </button>
+        {mutation.isPending && <span className="text-[10px] text-muted-foreground">Saving…</span>}
+      </div>
+      {error && <div className="mt-1 text-[11px] text-red-600 dark:text-red-400">{error}</div>}
+    </div>
   );
 }
 
