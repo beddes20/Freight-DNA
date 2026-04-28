@@ -395,6 +395,12 @@ export default function ConversationsPage() {
       if (!res.ok) throw new Error("Failed to fetch conversations");
       return res.json();
     },
+    // Always-fresh: pull every 30s while the page is open, and force a refetch
+    // the moment the user comes back to the tab. The backend webhook + 5-min
+    // poll keep messages flowing into the DB; without this the page would
+    // happily display 30-minute-stale rows after any window blur.
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   });
 
   useEffect(() => {
@@ -424,6 +430,12 @@ export default function ConversationsPage() {
   // All bucket counts respect the audience filter so the sidebar numbers
   // match the visible thread count for the rep's chosen slice.
   const audienceParam = audience !== "all" ? `&audience=${audience}` : "";
+  // Bucket counts are sidebar badges, not the primary feed — they refresh at
+  // 60s (vs 30s for the main list) so a busy org with many concurrent reps
+  // doesn't fan out 5 polling queries every 30s per user. Window-focus refetch
+  // still snaps them current the moment a rep returns to the tab.
+  const COUNT_REFRESH_OPTS = { refetchInterval: 60_000, refetchOnWindowFocus: true } as const;
+
   const { data: mineData } = useQuery<ThreadsResponse>({
     queryKey: ["/api/internal/conversations", "mine-count", user?.id, audience],
     queryFn: async () => {
@@ -435,6 +447,7 @@ export default function ConversationsPage() {
       return res.json();
     },
     enabled: !!user?.id,
+    ...COUNT_REFRESH_OPTS,
   });
 
   const { data: unownedData } = useQuery<ThreadsResponse>({
@@ -444,6 +457,7 @@ export default function ConversationsPage() {
       if (!res.ok) throw new Error("");
       return res.json();
     },
+    ...COUNT_REFRESH_OPTS,
   });
 
   const { data: highPriData } = useQuery<ThreadsResponse>({
@@ -453,6 +467,7 @@ export default function ConversationsPage() {
       if (!res.ok) throw new Error("");
       return res.json();
     },
+    ...COUNT_REFRESH_OPTS,
   });
 
   const { data: quoteData } = useQuery<ThreadsResponse>({
@@ -462,6 +477,7 @@ export default function ConversationsPage() {
       if (!res.ok) throw new Error("");
       return res.json();
     },
+    ...COUNT_REFRESH_OPTS,
   });
 
   const counts: Partial<Record<ConversationBucket, number>> = {

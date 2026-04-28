@@ -1081,6 +1081,7 @@ getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined>;
   getEmailSignalsForLoad(loadId: string, limit?: number): Promise<import('@shared/schema').EmailSignal[]>;
   getUnprocessedEmailMessages(limit?: number): Promise<import('@shared/schema').EmailMessage[]>;
   getUnprocessedEmailMessagesForOrg(orgId: string, limit?: number): Promise<import('@shared/schema').EmailMessage[]>;
+  getRecentUnprocessedEmailMessages(sinceHours: number, limit?: number): Promise<import('@shared/schema').EmailMessage[]>;
   getEmailSignalsByThread(threadId: string, since?: Date): Promise<import('@shared/schema').EmailSignal[]>;
   markEmailMessageProcessed(id: string): Promise<void>;
   // Task #751 — backlog drain + ops view support
@@ -6997,6 +6998,24 @@ export class DatabaseStorage implements IStorage {
         isNull(emailMessages.processedForSignalsAt),
       ))
       .orderBy(asc(emailMessages.createdAt))
+      .limit(limit);
+  }
+
+  // Freshness-first companion to getUnprocessedEmailMessages — returns the
+  // newest unprocessed messages from the last `sinceHours` window. Used by the
+  // cron path so today's mail gets classified within ~2 minutes regardless of
+  // how big the historical backlog is. Without this, a stalled extractor (e.g.
+  // an OpenAI 500 storm followed by a 10k-message queue) leaves new inbound
+  // mail untagged for hours, breaking signal-driven UI like Quote requests
+  // and Win/loss analytics.
+  async getRecentUnprocessedEmailMessages(sinceHours: number, limit = 50): Promise<EmailMessage[]> {
+    const since = new Date(Date.now() - sinceHours * 60 * 60 * 1000);
+    return db.select().from(emailMessages)
+      .where(and(
+        isNull(emailMessages.processedForSignalsAt),
+        gte(emailMessages.createdAt, since),
+      ))
+      .orderBy(desc(emailMessages.createdAt))
       .limit(limit);
   }
 

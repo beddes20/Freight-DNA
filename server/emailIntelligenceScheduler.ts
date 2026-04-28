@@ -37,7 +37,7 @@ import {
 } from "./services/quoteEmailIngestion";
 import { JOB_NAMES, withHeartbeat } from "./lib/cronHeartbeat";
 import { createHash } from "crypto";
-import type { InsertEmailSignal } from "@shared/schema";
+import type { EmailMessage, InsertEmailSignal } from "@shared/schema";
 
 const EMAIL_INTEL_INTERVAL_MS = 2 * 60 * 1000;
 
@@ -45,6 +45,18 @@ const EMAIL_INTEL_INTERVAL_MS = 2 * 60 * 1000;
 // Each message is one OpenAI call so this caps at ~200 calls / 2 minutes
 // = 6000 / hour, well under typical org rate limits.
 const BATCH_SIZE = parseInt(process.env.EMAIL_INTEL_BATCH_SIZE ?? "200", 10);
+
+// Freshness-first split. Of every cron tick's BATCH_SIZE budget, the first
+// FRESH_SLICE messages come from the newest unprocessed mail in the last
+// FRESH_LOOKBACK_HOURS window (newest-first). The remainder drains the
+// oldest backlog as before. This guarantees that today's inbound mail is
+// classified within ~one cron tick (≤2 min) regardless of how big the
+// historical queue is. Without this split a stalled extractor (OpenAI 500
+// storm, restart, etc.) builds a backlog of 10k+ messages and the
+// oldest-first cron then takes 24+ hours to reach today's mail — exactly
+// what made the Quote Requests tab go silent on April 28.
+const FRESH_SLICE = Math.max(1, Math.floor(BATCH_SIZE * 0.75));
+const FRESH_LOOKBACK_HOURS = 6;
 
 export async function runEmailIntelligenceBatch(
   overrideBatchSize?: number,
@@ -55,12 +67,31 @@ export async function runEmailIntelligenceBatch(
   // batch to their org or one tenant's admin can spend OpenAI quota
   // processing other tenants' inboxes. The cron path passes no orgId and
   // continues to process the global queue.
-  const messages = orgId
-    ? await storage.getUnprocessedEmailMessagesForOrg(orgId, size)
-    : await storage.getUnprocessedEmailMessages(size);
+  let messages: EmailMessage[];
+  if (orgId) {
+    // Manual drain (admin-triggered): keep oldest-first behavior so the
+    // operator sees the backlog actually shrink.
+    messages = await storage.getUnprocessedEmailMessagesForOrg(orgId, size);
+  } else {
+    // Cron path: freshness-first slice + oldest-first remainder, deduped on id.
+    const fresh = await storage.getRecentUnprocessedEmailMessages(
+      FRESH_LOOKBACK_HOURS,
+      Math.min(size, FRESH_SLICE),
+    );
+    const remaining = Math.max(0, size - fresh.length);
+    const backlog = remaining > 0
+      ? await storage.getUnprocessedEmailMessages(remaining + fresh.length)
+      : [];
+    const seen = new Set(fresh.map(m => m.id));
+    const backlogDeduped = backlog.filter(m => !seen.has(m.id)).slice(0, remaining);
+    messages = [...fresh, ...backlogDeduped];
+  }
   if (messages.length === 0) return { processed: 0 };
 
-  console.log(`[emailIntelligenceScheduler] processing ${messages.length} unprocessed messages`);
+  console.log(
+    `[emailIntelligenceScheduler] processing ${messages.length} unprocessed messages` +
+    (orgId ? ` (org=${orgId})` : ` (fresh-first split: ≤${FRESH_SLICE} from last ${FRESH_LOOKBACK_HOURS}h, rest oldest-first)`)
+  );
 
   for (const msg of messages) {
     try {
