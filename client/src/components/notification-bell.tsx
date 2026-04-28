@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Bell, CheckCheck, ListTodo, MessageSquare, Loader2, Target, CheckCircle2, Users, BellRing, Building2, CalendarOff, SquareCheck, Lightbulb, Star, Truck, TrendingDown, BarChart2, Zap, AlertTriangle, Trophy, FileText } from "lucide-react";
+import { Bell, CheckCheck, ListTodo, MessageSquare, Loader2, Target, CheckCircle2, Users, BellRing, Building2, CalendarOff, SquareCheck, Lightbulb, Star, Truck, TrendingDown, BarChart2, Zap, AlertTriangle, Trophy, FileText, Inbox, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -11,6 +11,7 @@ import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useLocation } from "wouter";
 import type { Notification } from "@shared/schema";
 import { formatTimeAgo } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 const typeIcon: Record<string, React.ReactNode> = {
   task_reminder: <BellRing className="h-3.5 w-3.5 text-red-500" />,
@@ -40,9 +41,55 @@ const typeIcon: Record<string, React.ReactNode> = {
   new_opportunity:          <FileText className="h-3.5 w-3.5 text-green-500" />,
 };
 
+type FilterKey = "all" | "tasks" | "quotes" | "lanes" | "ai" | "conversations" | "system";
+
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: "all",           label: "All" },
+  { key: "tasks",         label: "Tasks" },
+  { key: "quotes",        label: "Quotes" },
+  { key: "lanes",         label: "Lanes" },
+  { key: "ai",            label: "AI" },
+  { key: "conversations", label: "Conversations" },
+  { key: "system",        label: "System" },
+];
+
+// Single source of truth: which notification.type values fall into which chip.
+// Anything not listed here lands in "system".
+const TYPE_TO_FILTER: Record<string, Exclude<FilterKey, "all">> = {
+  task_reminder: "tasks",
+  task_assigned: "tasks",
+  task_comment:  "tasks",
+  task_completed: "tasks",
+  goal_set:      "tasks",
+  goal_updated:  "tasks",
+  goal_comment:  "tasks",
+
+  quote_request_alert:      "quotes",
+  quote_request_escalation: "quotes",
+  new_win:                  "quotes",
+  new_opportunity:          "quotes",
+
+  lane_assigned: "lanes",
+  votri_alert:   "lanes",
+
+  app_suggestion: "ai",
+  momentum_drop:          "ai",
+  momentum_weekly_digest: "ai",
+
+  topic_added:    "conversations",
+  topic_reply:    "conversations",
+  session_closed: "conversations",
+  post_reply:     "conversations",
+  new_post:       "conversations",
+};
+
+function bucketFor(type: string): Exclude<FilterKey, "all"> {
+  return TYPE_TO_FILTER[type] ?? "system";
+}
 
 export function NotificationBell({ navBar }: { navBar?: boolean }) {
   const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState<FilterKey>("all");
   const [, navigate] = useLocation();
 
   const { data: notifications = [], isLoading } = useQuery<Notification[]>({
@@ -52,6 +99,20 @@ export function NotificationBell({ navBar }: { navBar?: boolean }) {
 
   const safeNotifications = notifications ?? [];
   const unreadCount = safeNotifications.filter(n => !n.read).length;
+
+  const counts = useMemo(() => {
+    const c: Record<FilterKey, number> = {
+      all: safeNotifications.length,
+      tasks: 0, quotes: 0, lanes: 0, ai: 0, conversations: 0, system: 0,
+    };
+    for (const n of safeNotifications) c[bucketFor(n.type)]++;
+    return c;
+  }, [safeNotifications]);
+
+  const visible = useMemo(() => {
+    if (filter === "all") return safeNotifications;
+    return safeNotifications.filter(n => bucketFor(n.type) === filter);
+  }, [safeNotifications, filter]);
 
   const markRead = useMutation({
     mutationFn: (id: string) => apiRequest("PATCH", `/api/notifications/${id}/read`),
@@ -87,7 +148,7 @@ export function NotificationBell({ navBar }: { navBar?: boolean }) {
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-80 p-0" data-testid="notification-popover">
+      <PopoverContent align="end" className="w-96 p-0" data-testid="notification-popover">
         <div className="flex items-center justify-between px-4 py-3 border-b">
           <p className="text-sm font-semibold">Notifications</p>
           {unreadCount > 0 && (
@@ -104,18 +165,43 @@ export function NotificationBell({ navBar }: { navBar?: boolean }) {
             </Button>
           )}
         </div>
-        <div className="max-h-80 overflow-y-auto">
+        <div className="px-3 py-2 border-b flex flex-wrap gap-1" data-testid="notification-filters">
+          {FILTERS.map(f => {
+            const count = counts[f.key];
+            const active = filter === f.key;
+            return (
+              <button
+                key={f.key}
+                onClick={() => setFilter(f.key)}
+                disabled={count === 0 && f.key !== "all"}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium border transition-colors",
+                  active
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-muted/40 text-muted-foreground border-transparent hover:bg-muted",
+                  count === 0 && f.key !== "all" && "opacity-40 cursor-not-allowed",
+                )}
+                data-testid={`notification-filter-${f.key}`}
+                data-active={active ? "true" : "false"}
+              >
+                <span>{f.label}</span>
+                {count > 0 && <span className="tabular-nums">· {count}</span>}
+              </button>
+            );
+          })}
+        </div>
+        <div className="max-h-[480px] overflow-y-auto">
           {isLoading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
-          ) : safeNotifications.length === 0 ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">
+          ) : visible.length === 0 ? (
+            <div className="py-8 text-center text-sm text-muted-foreground" data-testid="notification-empty">
               <Bell className="h-8 w-8 mx-auto mb-2 opacity-30" />
-              <p>No notifications yet</p>
+              <p>{filter === "all" ? "No notifications yet" : `No ${filter} notifications`}</p>
             </div>
           ) : (
-            safeNotifications.map(notif => (
+            visible.map(notif => (
               <button
                 key={notif.id}
                 onClick={() => handleNotifClick(notif)}
@@ -142,6 +228,20 @@ export function NotificationBell({ navBar }: { navBar?: boolean }) {
               </button>
             ))
           )}
+        </div>
+        <div className="border-t">
+          <button
+            type="button"
+            onClick={() => { setOpen(false); navigate("/notifications"); }}
+            className="w-full flex items-center justify-between px-4 py-2.5 text-sm text-muted-foreground hover:bg-muted/50 transition-colors"
+            data-testid="button-view-all-inbox"
+          >
+            <span className="inline-flex items-center gap-2">
+              <Inbox className="h-3.5 w-3.5" />
+              View all in Inbox
+            </span>
+            <ArrowRight className="h-3.5 w-3.5" />
+          </button>
         </div>
       </PopoverContent>
     </Popover>

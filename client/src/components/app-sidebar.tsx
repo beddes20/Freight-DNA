@@ -1,5 +1,4 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, KeyRound, Inbox, Crosshair, Truck, Calendar, Medal, Settings, Phone, PhoneCall, ListFilter, Building2, Briefcase, Radio, MessageSquare, PanelLeftClose, PanelLeftOpen, UserPlus, HelpCircle, Keyboard, BrainCircuit, Lightbulb, Brain, MailCheck, ChevronDown, Sparkles, Activity, Compass, GitMerge, Filter, BotMessageSquare, type LucideIcon } from "lucide-react";
-import { AI_HUB_ANY_TAB_ROLES } from "@/pages/ai-hub";
+import { LayoutGrid, Trophy, Users, LogOut, BarChart3, History, MessagesSquare, ListTodo, TrendingUp, Plane, GraduationCap, Wrench, KeyRound, Inbox, Truck, Medal, Settings, Phone, PhoneCall, Building2, PanelLeftClose, PanelLeftOpen, HelpCircle, Keyboard, BrainCircuit, Brain, MailCheck, ChevronDown, Activity, GitMerge, Filter, BotMessageSquare, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
@@ -32,164 +31,16 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { SIDEBAR_TOOLTIP_DEFAULT_MAP } from "@/lib/sidebar-tooltip-catalog";
 import type { SidebarTooltip } from "@shared/schema";
-import { QUOTE_OPPORTUNITIES_ROLES } from "@shared/quoteOpportunitiesRoles";
+import {
+  navItems,
+  customerFacingItems,
+  carrierFacingItems,
+  aiHubItem,
+  DAILY_PRIORITIES_ROLES,
+  type NavItem,
+} from "@/lib/nav-items";
 import vtLogoWhite from "@assets/value-truck-logo-white.png";
 
-const SALES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
-const PROSPECTS_ROLES = ["admin", "sales", "sales_director"];
-const DAILY_PRIORITIES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
-// Task #714 — sidebar visibility shares the page-gate role list (see
-// `shared/quoteOpportunitiesRoles.ts`). Materialised as a mutable array
-// because `NavItem.roles` is typed as `string[]`.
-const QUOTE_OPPORTUNITIES_SIDEBAR_ROLES: string[] = Array.from(QUOTE_OPPORTUNITIES_ROLES);
-
-type NavItem = {
-  title: string;
-  url: string;
-  icon: LucideIcon;
-  description: string;
-  roles?: string[];
-  badge?: number;
-};
-
-const CARRIER_INTEL_ROLES = ["admin", "director", "national_account_manager", "logistics_manager", "logistics_coordinator", "sales_director"];
-const CARRIER_INTEL_SETTINGS_ROLES = ["admin", "director"];
-
-const navItems: NavItem[] = [
-  { title: "Dashboard",         url: "/",                 icon: LayoutGrid,    description: "Your home view with daily priorities and updates." },
-  { title: "1:1's",             url: "/one-on-one",       icon: MessagesSquare,description: "Manager check-ins and one-on-one notes." },
-  { title: "Tasks",             url: "/tasks",            icon: ListTodo,      description: "Your personal to-do list and reminders." },
-  { title: "Goals",        url: "/goals",      icon: Target,        description: "Track personal and team sales goals." },
-  { title: "My Scorecard", url: "/report/me",  icon: FileBarChart2, description: "Your individual performance scorecard.", roles: ["account_manager", "sales", "logistics_manager", "logistics_coordinator"] },
-  {
-    title: "Team Performance",
-    url: "/team-performance",
-    icon: TrendingUp,
-    description: "Team metrics, leaderboards, and performance trends.",
-    roles: ["admin", "director", "national_account_manager", "sales", "sales_director"],
-  },
-];
-
-const customerFacingItems: NavItem[] = [
-  { title: "Launchpad",         url: "/prospects",        icon: Crosshair,     description: "Find and qualify new prospects to pursue.", roles: PROSPECTS_ROLES },
-  { title: "Customers",         url: "/customers",        icon: Network,       description: "Browse customer accounts and account history.", roles: SALES_ROLES },
-  { title: "Customer Quotes",   url: "/customer-quotes",  icon: FileBarChart2, description: "Quote requests, outcomes, and lane performance — drillable analytics across customers and reps.", roles: QUOTE_OPPORTUNITIES_SIDEBAR_ROLES },
-  { title: "Freight Capture",   url: "/freight-capture",  icon: Filter,        description: "Quote-to-book funnel: stages from request received through win, with loss reasons and best/worst performers.", roles: ["admin", "director", "sales_director", "national_account_manager", "account_manager", "sales"] },
-  { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           description: "High-value opportunities ranked by potential impact.", roles: SALES_ROLES },
-  { title: "RFP & Awards",    url: "/rfp-awards",      icon: Trophy,   description: "Active RFPs and awarded business tracking." },
-  { title: "RFP Calendar",    url: "/rfp-calendar",    icon: Calendar, description: "Upcoming RFP deadlines and key dates." },
-  {
-    title: "Email Intelligence",
-    url: "/email-intelligence",
-    icon: MailCheck,
-    description: "AI signals extracted from your inbound email — urgency, win/loss patterns, and recent activity.",
-    roles: ["admin", "director", "national_account_manager", "sales_director"],
-  },
-  {
-    title: "Contact Suggestions",
-    url: "/contact-suggestions",
-    icon: UserPlus,
-    description: "Suggested new contacts to add to accounts, learned from inbound email.",
-    roles: ["admin", "director", "sales_director", "national_account_manager", "account_manager", "logistics_manager"],
-  },
-  {
-    title: "Proven Tactics",
-    url: "/proven-tactics",
-    icon: Lightbulb,
-    description: "Reusable plays that have closed deals.",
-    roles: ["admin", "director", "national_account_manager", "logistics_manager", "account_manager"],
-  },
-  {
-    title: "Playbook",
-    url: "/playbook",
-    icon: ClipboardList,
-    description: "Step-by-step guides for common sales situations.",
-    roles: ["admin", "director", "national_account_manager", "sales_director", "logistics_manager", "account_manager", "sales"],
-  },
-  {
-    title: "Freight Attribution Triage",
-    url: "/freight-triage",
-    icon: GitMerge,
-    description: "Margin-sorted gaps from your relationship-freight book — unworked accounts, unattributed lanes, and unassigned contacts in one ranked worklist.",
-    roles: SALES_ROLES,
-  },
-  { title: "Coaching",        url: "/coaching",        icon: Sparkles, description: "Coaching notes and rep development plans.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
-  { title: "Rep Scorecard",   url: "/rep-scorecard",   icon: Medal,    description: "Compare reps and review performance metrics.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
-  {
-    title: "Conversations",
-    url: "/conversations",
-    icon: MessageSquare,
-    description: "Inbound carrier and customer messages.",
-    roles: ["admin", "director", "national_account_manager", "sales_director", "account_manager", "sales"],
-  },
-];
-
-// Task #742 — chat-style AI surfaces (Today's Priorities, ValueIQ, AI
-// Center, Engagement, Copilot Analytics) live behind a single sidebar
-// entry that opens the AI Hub (/ai-hub) — a tabbed page mounting the
-// existing page components unchanged. Email Intelligence and Contact
-// Suggestions used to live in the hub too, but they're really domain
-// analytics dashboards rather than AI chat surfaces, so they were
-// promoted back to standalone Customer-Facing entries above.
-// Visibility is the union of every hub tab's role list (see
-// AI_HUB_ANY_TAB_ROLES); tab-level role gating happens inside the hub
-// so a user only sees the tabs they have access to.
-const aiHubItem: NavItem = {
-  title: "AI",
-  url: "/ai-hub",
-  icon: Sparkles,
-  description: "Today's Priorities, ValueIQ, AI Center, Engagement, and Copilot Analytics — all in one tabbed page.",
-  roles: AI_HUB_ANY_TAB_ROLES,
-};
-
-const carrierFacingItems: NavItem[] = [
-  { title: "Lane Intelligence",  url: "/research-tasks",  icon: ClipboardList, description: "Research lanes and gather pricing intelligence." },
-  { title: "My Procurement",     url: "/my-procurement",  icon: Briefcase,     description: "Lanes you're actively procuring carriers for." },
-  { title: "Lane Work Queue",    url: "/lanes/work-queue",icon: ListFilter,    description: "Lanes awaiting your reply or next action." },
-  { title: "Lane Inbox",         url: "/lane-inbox",      icon: Inbox,         description: "Cross-surface activity feed — AF, LWQ, Customer Quotes, Carrier Hub." },
-  { title: "My PODs",            url: "/my-pods",         icon: MailCheck,
-    description: "Proofs of delivery received for loads you cover or own." },
-  { title: "Available Freight",  url: "/available-freight", icon: Truck,
-    description: "Freight loads currently available to cover.",
-    roles: ["admin", "director", "national_account_manager", "sales_director", "logistics_manager", "account_manager", "sales"] },
-  {
-    title: "Carrier Hub",
-    url: "/carrier-hub",
-    icon: Building2,
-    description: "Manage carriers and review their submitted intel.",
-    roles: ["admin", "director", "national_account_manager", "logistics_manager"],
-  },
-  {
-    title: "Conversations",
-    url: "/conversations",
-    icon: MessageSquare,
-    description: "Inbound carrier and customer messages.",
-    roles: ["admin", "director", "national_account_manager", "logistics_manager", "account_manager"],
-  },
-  { title: "Phone Usage",     url: "/phone-usage",     icon: Phone,    description: "Org-wide phone usage trends and rep activity.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
-  { title: "Call Performance", url: "/calls",          icon: PhoneCall, description: "Org-wide call pace, weekly trendline, and quality scorecard under one shared window.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
-  { title: "LM Check-In Log", url: "/lm-checkin-history", icon: History, description: "History of logistics manager check-ins.", roles: ["admin", "director", "national_account_manager", "account_manager", "sales_director"] },
-  {
-    title: "Carrier Scorecard", url: "/carrier-intelligence/scorecard", icon: Trophy,
-    description: "Tiered carrier performance from realized loads, with active and available counts.",
-    roles: CARRIER_INTEL_ROLES,
-  },
-  {
-    title: "Available Loads", url: "/carrier-intelligence/available-loads", icon: Truck,
-    description: "Open loads ranked with the top 3 suggested carriers and a target buy rate.",
-    roles: CARRIER_INTEL_ROLES,
-  },
-  {
-    title: "Lane Pricing", url: "/carrier-intelligence/lane-pricing", icon: Compass,
-    description: "Blend Sonar TRAC with your realized history and a confidence chip.",
-    roles: CARRIER_INTEL_ROLES,
-  },
-  {
-    title: "Settings", url: "/admin/carrier-intelligence/settings", icon: Settings,
-    description: "Imports, scoring math, and org-wide UI defaults.",
-    roles: CARRIER_INTEL_SETTINGS_ROLES,
-  },
-];
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Admin",

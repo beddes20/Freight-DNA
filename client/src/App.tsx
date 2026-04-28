@@ -7,6 +7,9 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { useAuth } from "@/hooks/use-auth";
 import { GlobalSearch } from "@/components/global-search";
+import { CommandPalette } from "@/components/command-palette";
+import { DetailDrawerProvider } from "@/components/detail-drawer";
+import "@/components/customer-drawer-body";
 import { NotificationBell } from "@/components/notification-bell";
 import { NotificationToasts } from "@/components/notification-toasts";
 import { CrmChatbot } from "@/components/crm-chatbot";
@@ -570,6 +573,7 @@ function AuthenticatedAppContent({ user, isLoading, handleInactivityLogout }: {
       </SidebarProvider>
       <GlobalLogTouchDialog />
       <LogTouchFabWithShortcut />
+      <CommandPalette />
       <CrmChatbot />
       <NotificationToasts />
       <LaneSwitchboard open={switchboardOpen} onOpenChange={setSwitchboardOpen} />
@@ -583,10 +587,12 @@ function AppCore() {
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <LogTouchProvider>
-            <TourProvider>
-              <AuthenticatedApp />
-            </TourProvider>
-            <Toaster />
+            <DetailDrawerProvider>
+              <TourProvider>
+                <AuthenticatedApp />
+              </TourProvider>
+              <Toaster />
+            </DetailDrawerProvider>
           </LogTouchProvider>
         </TooltipProvider>
       </QueryClientProvider>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CustomerQuotesPortalContext, useCqOverlayPortal } from "@/lib/customer-quotes-portal";
 import { formatCustomerName } from "@shared/laneFormatters";
+import { EntityLink } from "@/components/entity-link";
 import { isQuoteOpportunitiesRole } from "@shared/quoteOpportunitiesRoles";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -1669,9 +1670,9 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
                 <td className="px-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                   <QuoteSlaBadgeCell quote={q} />
                 </td>
-                <td className="px-2 whitespace-nowrap text-foreground font-medium">
+                <td className="px-2 whitespace-nowrap text-foreground font-medium" onClick={(e) => e.stopPropagation()}>
                   {q.customerName === UNKNOWN_CUSTOMER_NAME ? (
-                    <span className="inline-flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                    <span className="inline-flex items-center gap-1.5">
                       <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300" title="Resolver could not match this opportunity to a customer">
                         <AlertTriangle className="h-3 w-3" />
                         {q.customerName}
@@ -1682,6 +1683,15 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
                         onReassign={onReassign}
                       />
                     </span>
+                  ) : q.customerId ? (
+                    <EntityLink
+                      kind="customer"
+                      id={q.customerId}
+                      name={q.customerName}
+                      className="text-foreground font-medium"
+                    >
+                      {formatCustomerName(q.customerName)}
+                    </EntityLink>
                   ) : (
                     formatCustomerName(q.customerName)
                   )}
