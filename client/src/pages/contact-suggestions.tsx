@@ -115,6 +115,8 @@ function ContactSuggestionsPageInner() {
       return res.json();
     },
     staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   });
 
   const accountsWithSuggestions = counts.filter(c => c.pendingCount > 0);
@@ -306,6 +308,8 @@ function AccountSuggestionGroup({ accountId, accountName, pendingCount, onNaviga
       return res.json();
     },
     staleTime: 60_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   });
 
   const pending = suggestions.filter(

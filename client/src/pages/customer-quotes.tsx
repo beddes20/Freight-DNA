@@ -476,6 +476,8 @@ function CustomerQuotesPageInner(): JSX.Element {
       if (!res.ok) throw new Error("Failed to load snapshot");
       return res.json() as Promise<Snapshot>;
     },
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   });
 
   const listQs = useMemo(() => {
@@ -492,6 +494,8 @@ function CustomerQuotesPageInner(): JSX.Element {
       if (!res.ok) throw new Error("Failed to load list");
       return res.json() as Promise<ListResult>;
     },
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   });
 
   const savedViewsQuery = useQuery<SavedView[]>({

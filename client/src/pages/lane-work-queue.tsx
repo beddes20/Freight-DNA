@@ -2074,6 +2074,8 @@ export default function LaneWorkQueuePage() {
   const { data: queue, isLoading, isError, refetch } = useQuery<WorkQueue>({
     queryKey: ["/api/recurring-lanes/work-queue"],
     queryFn: () => fetch("/api/recurring-lanes/work-queue").then(r => r.json()),
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
   });
 
   const { data: outreachConfig } = useQuery<{ completionCarriersContacted: number }>({

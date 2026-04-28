@@ -539,6 +539,8 @@ export function CarrierOutreachPanel({
     gcTime: 5 * 60 * 1000,
     retry: 1,
     retryDelay: 2000,
+    refetchInterval: open ? 60_000 : false,
+    refetchOnWindowFocus: true,
   });
 
   // Pre-populate capturedEmails from carrier primaryEmail so the email input
