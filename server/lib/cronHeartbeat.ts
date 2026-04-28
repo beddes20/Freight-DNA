@@ -49,6 +49,10 @@ export const JOB_NAMES = {
   quoteNoResponseSweep: "quote_no_response_sweep",
   /** Task #803 — daily per-org rollup of auto:* quote_events. 09:00 UTC. */
   quoteAutopilotDailySummary: "quote_autopilot_daily_summary",
+  /** load_fact PowerBI import — morning slot, 5:30 AM CT daily. */
+  loadFactImportMorning: "load_fact_import_morning",
+  /** load_fact PowerBI import — afternoon slot, 1:30 PM CT daily. */
+  loadFactImportAfternoon: "load_fact_import_afternoon",
 } as const;
 
 export type JobName = typeof JOB_NAMES[keyof typeof JOB_NAMES];
