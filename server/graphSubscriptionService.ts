@@ -16,6 +16,7 @@ import { azureCredentialsConfigured, getGraphAccessToken } from "./graphService"
 import { storage, db } from "./storage";
 import { sql } from "drizzle-orm";
 import { resilientFetch } from "./lib/httpRetry";
+import { JOB_NAMES, withHeartbeat } from "./lib/cronHeartbeat";
 
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -28,7 +29,11 @@ export interface ReplyEmailConfig {
 }
 
 let _subscriptionId: string | null = null;
-let _renewalTimer: ReturnType<typeof setInterval> | null = null;
+// Cron-anchored renewer for the shared OUTLOOK_REPLY_EMAIL subscription.
+// Was previously setInterval(48h) which reset on every workflow restart and
+// could miss the 70h Graph TTL during back-to-back deploys. Now matches the
+// per-rep mailbox renewer cadence (every 6h, clock-anchored).
+let _renewalTimer: ReturnType<typeof cron.schedule> | null = null;
 
 let _mailReadGranted = false;
 
@@ -450,7 +455,9 @@ async function renewSubscription(subscriptionId: string): Promise<boolean> {
   }
 }
 
-let _activationTimer: ReturnType<typeof setInterval> | null = null;
+// Cron-anchored activation retry. Was previously setInterval(1h) — same
+// restart-resets-the-clock vulnerability as the renewer.
+let _activationTimer: ReturnType<typeof cron.schedule> | null = null;
 
 async function tryActivate(config: { mailbox: string; webhookUrl: string }): Promise<boolean> {
   if (_subscriptionId) return true;
@@ -497,18 +504,24 @@ async function tryActivate(config: { mailbox: string; webhookUrl: string }): Pro
 
   _subscriptionId = subId;
 
-  const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
-  _renewalTimer = setInterval(async () => {
-    if (!_subscriptionId) return;
-    const renewed = await renewSubscription(_subscriptionId);
-    if (!renewed) {
-      log("Renewal failed — attempting to re-register subscription");
-      _subscriptionId = await registerSubscription(config);
-    }
-  }, TWO_DAYS_MS);
+  // Cron-anchored: every 6 hours at minute 13 (offset from the user-mailbox
+  // renewer at minute 7 to avoid lockstep API hits). Heartbeated so a
+  // silently-failing renewer is detectable within ~9 minutes (graceFactor 1.5).
+  const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+  if (_renewalTimer) _renewalTimer.stop();
+  _renewalTimer = cron.schedule("13 */6 * * *", () => {
+    void withHeartbeat(JOB_NAMES.graphSharedMailboxRenewal, SIX_HOURS_MS, async () => {
+      if (!_subscriptionId) return;
+      const renewed = await renewSubscription(_subscriptionId);
+      if (!renewed) {
+        log("Renewal failed — attempting to re-register subscription");
+        _subscriptionId = await registerSubscription(config);
+      }
+    });
+  });
 
   if (_activationTimer) {
-    clearInterval(_activationTimer);
+    _activationTimer.stop();
     _activationTimer = null;
   }
 
@@ -530,7 +543,11 @@ export async function initGraphSubscriptionService(): Promise<void> {
     if (!activated) {
       log("Mail.Read not yet granted — reply tracking dormant. Will retry every hour until granted.");
       const ONE_HOUR_MS = 60 * 60 * 1000;
-      _activationTimer = setInterval(() => tryActivate(config), ONE_HOUR_MS);
+      // Cron at minute 19 each hour. Heartbeated so an admin can see whether
+      // the retry loop is actually firing.
+      _activationTimer = cron.schedule("19 * * * *", () => {
+        void withHeartbeat(JOB_NAMES.graphSharedMailboxActivationRetry, ONE_HOUR_MS, () => tryActivate(config));
+      });
     }
   } else {
     log("OUTLOOK_REPLY_EMAIL or APP_BASE_URL not set — shared mailbox reply tracking disabled");
@@ -541,11 +558,11 @@ export async function initGraphSubscriptionService(): Promise<void> {
 
 export function stopGraphSubscriptionService(): void {
   if (_renewalTimer) {
-    clearInterval(_renewalTimer);
+    _renewalTimer.stop();
     _renewalTimer = null;
   }
   if (_activationTimer) {
-    clearInterval(_activationTimer);
+    _activationTimer.stop();
     _activationTimer = null;
   }
   if (_userMailboxRenewalCron) {
@@ -884,8 +901,9 @@ async function initUserMailboxSubscriptions(): Promise<void> {
       _userMailboxRenewalCron.stop();
       _userMailboxRenewalCron = null;
     }
+    const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
     _userMailboxRenewalCron = cron.schedule("7 */6 * * *", () => {
-      void renewUserMailboxSubscriptions();
+      void withHeartbeat(JOB_NAMES.graphUserMailboxRenewal, SIX_HOURS_MS, renewUserMailboxSubscriptions);
     });
     log("[user-mailbox] Renewal scheduler registered (every 6h via node-cron)");
   } catch (err) {

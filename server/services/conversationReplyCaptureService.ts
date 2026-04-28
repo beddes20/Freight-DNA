@@ -29,7 +29,9 @@
  * platform did to repair it.
  */
 
+import cron from "node-cron";
 import { storage, db } from "../storage";
+import { JOB_NAMES, withHeartbeat, EMAIL_PIPELINE_JOBS } from "../lib/cronHeartbeat";
 import {
   conversationThreadCaptureAudits,
   emailMessages,
@@ -560,6 +562,23 @@ export interface CaptureAuditHealthAffectedThread {
   lastAuditAt: string;
 }
 
+/** Liveness state for one of the email-pipeline cron jobs. Surfaced on the
+ * Capture Audit pill so admins can see "the renewer hasn't run in 9 hours"
+ * before it turns into a Webhook Unhealthy red pill. */
+export interface CronJobHealth {
+  jobName: string;
+  /** "ok" = recent successful tick. "stale" = no tick within the expected
+   *  interval × graceFactor. "failing" = last tick errored or repeated
+   *  failures. "unknown" = never ran (boot row not yet written). */
+  status: "ok" | "stale" | "failing" | "unknown";
+  expectedIntervalMs: number;
+  lastStartedAt: string | null;
+  lastFinishedAt: string | null;
+  nextExpectedAt: string | null;
+  consecutiveFailures: number;
+  lastError: string | null;
+}
+
 export interface CaptureAuditHealthSnapshot {
   status: CaptureAuditOverallStatus;
   generatedAt: string;
@@ -573,6 +592,10 @@ export interface CaptureAuditHealthSnapshot {
   mailboxes: MailboxHealthSnapshot[];
   recentRuns: CaptureAuditHealthRecentRun[];
   affectedThreads: CaptureAuditHealthAffectedThread[];
+  /** Liveness for the email-pipeline cron jobs. Status rolls into the
+   * pill's overall status: any "stale" or "failing" job upgrades to
+   * "unhealthy". */
+  cronJobs: CronJobHealth[];
 }
 
 /** Root-cause labels that mean "this thread still has an unresolved
@@ -680,9 +703,46 @@ export async function getCaptureAuditHealthForUsers(opts: {
       createdAt: a.createdAt.toISOString(),
     }));
 
-  // 4. Roll up to a single status. Unhealthy wins over recovering.
+  // 4. Cron-job liveness for the email pipeline. Any "stale" or "failing"
+  //    job upgrades the overall pill to "unhealthy" — the whole point of
+  //    the heartbeat layer is that a silently-dead cron is treated with the
+  //    same urgency as a webhook expiry.
+  const allHeartbeats = await storage.getCronHeartbeats();
+  const staleHeartbeats = await storage.getStaleCronHeartbeats(1.5);
+  const staleNames = new Set(staleHeartbeats.map(s => s.jobName));
+  const cronJobs: CronJobHealth[] = Array.from(EMAIL_PIPELINE_JOBS).map(jobName => {
+    const row = allHeartbeats.find(h => h.jobName === jobName);
+    if (!row) {
+      return {
+        jobName,
+        status: "unknown",
+        expectedIntervalMs: 0,
+        lastStartedAt: null,
+        lastFinishedAt: null,
+        nextExpectedAt: null,
+        consecutiveFailures: 0,
+        lastError: null,
+      };
+    }
+    let s: CronJobHealth["status"] = "ok";
+    if (staleNames.has(row.jobName)) s = "stale";
+    else if (row.lastStatus === "error" || row.consecutiveFailures > 0) s = "failing";
+    return {
+      jobName: row.jobName,
+      status: s,
+      expectedIntervalMs: row.expectedIntervalMs,
+      lastStartedAt: row.lastStartedAt?.toISOString() ?? null,
+      lastFinishedAt: row.lastFinishedAt?.toISOString() ?? null,
+      nextExpectedAt: row.nextExpectedAt?.toISOString() ?? null,
+      consecutiveFailures: row.consecutiveFailures,
+      lastError: row.lastError,
+    };
+  });
+  const cronUnhealthy = cronJobs.some(c => c.status === "stale" || c.status === "failing");
+
+  // 5. Roll up to a single status. Unhealthy wins over recovering.
   let status: CaptureAuditOverallStatus = "healthy";
-  if (webhookFailureCount > 0) {
+  if (webhookFailureCount > 0 || cronUnhealthy) {
     status = "unhealthy";
   } else if (affectedThreads.length > 0 || staleCount > 0) {
     status = "recovering";
@@ -698,12 +758,17 @@ export async function getCaptureAuditHealthForUsers(opts: {
     mailboxes: mailboxHealth,
     recentRuns,
     affectedThreads: trimmedAffected,
+    cronJobs,
   };
 }
 
 // ─── Periodic scheduler ──────────────────────────────────────────────────────
 
-let _sweepTimer: ReturnType<typeof setInterval> | null = null;
+// Cron-anchored every 5 minutes. The previous setInterval(5min) reset on
+// every workflow restart, so a workflow that flapped multiple times within
+// 5 min could go a long time without sweeping. Heartbeated so a silently-
+// dead sweeper is observable from the Capture Audit pill.
+let _sweepTimer: ReturnType<typeof cron.schedule> | null = null;
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
 export function initReplyCaptureSelfHealScheduler(): void {
@@ -723,17 +788,23 @@ export function initReplyCaptureSelfHealScheduler(): void {
   // query). No incident-specific startup logic is needed — the generic
   // mechanism is the durable answer.
 
-  _sweepTimer = setInterval(() => {
-    selfHealStuckThreads({ triggeredBy: "scheduled" }).catch(err => {
-      log(`scheduler sweep error: ${err instanceof Error ? err.message : String(err)}`);
+  if (_sweepTimer) _sweepTimer.stop();
+  _sweepTimer = cron.schedule("*/5 * * * *", () => {
+    void withHeartbeat(JOB_NAMES.replyCaptureSelfHealSweep, SWEEP_INTERVAL_MS, async () => {
+      try {
+        await selfHealStuckThreads({ triggeredBy: "scheduled" });
+      } catch (err) {
+        log(`scheduler sweep error: ${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      }
     });
-  }, SWEEP_INTERVAL_MS);
-  log(`Reply-capture self-heal scheduler started (every ${Math.round(SWEEP_INTERVAL_MS / 60000)}m)`);
+  });
+  log(`Reply-capture self-heal scheduler started (every ${Math.round(SWEEP_INTERVAL_MS / 60000)}m, clock-anchored)`);
 }
 
 export function stopReplyCaptureSelfHealScheduler(): void {
   if (_sweepTimer) {
-    clearInterval(_sweepTimer);
+    _sweepTimer.stop();
     _sweepTimer = null;
   }
 }

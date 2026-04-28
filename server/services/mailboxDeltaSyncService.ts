@@ -18,6 +18,7 @@ import cron, { type ScheduledTask } from "node-cron";
 import { storage } from "../storage";
 import { azureCredentialsConfigured, getGraphAccessToken } from "../graphService";
 import { resilientFetch } from "../lib/httpRetry";
+import { JOB_NAMES, withHeartbeat } from "../lib/cronHeartbeat";
 import type { MailboxSyncFailure, MonitoredMailbox } from "@shared/schema";
 
 function log(msg: string) {
@@ -482,8 +483,9 @@ export function initDeltaSyncScheduler(): void {
 
   // Every 5 minutes, on the wall clock. node-cron survives drift and is the
   // same primitive used by the subscription renewer.
+  const FIVE_MIN_MS = 5 * 60 * 1000;
   _deltaSyncCron = cron.schedule("*/5 * * * *", () => {
-    void runDeltaSyncCycle("cron");
+    void withHeartbeat(JOB_NAMES.mailboxDeltaSyncPoll, FIVE_MIN_MS, () => runDeltaSyncCycle("cron"));
   });
 
   log("Delta sync scheduler started (every 5 minutes, clock-anchored)");

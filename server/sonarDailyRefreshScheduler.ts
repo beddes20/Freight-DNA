@@ -20,6 +20,7 @@ import {
   withSonarCaller,
 } from "./sonarClient";
 import { notifyAdminsOfSystemEvent, checkBreakerLongOpen } from "./sonarAlertNotifier";
+import { JOB_NAMES, withHeartbeat } from "./lib/cronHeartbeat";
 
 function log(msg: string) {
   const t = new Date().toISOString();
@@ -76,14 +77,19 @@ export function initSonarDailyRefreshScheduler(): void {
 
   // Long-open breaker monitor (Task #740): every 5 minutes, check whether the
   // SONAR circuit breaker has been open for ≥60 minutes during business
-  // hours and notify admins once per breaker-open episode.
+  // hours and notify admins once per breaker-open episode. Cron-anchored and
+  // heartbeated — was previously setInterval(5min) which reset on every
+  // workflow restart and left no liveness signal.
   const BREAKER_POLL_MS = 5 * 60 * 1000;
-  setInterval(() => {
-    try {
-      void checkBreakerLongOpen(getSonarCircuitBreakerStatus());
-    } catch (err: any) {
-      log(`Breaker long-open check error (non-fatal): ${err?.message ?? err}`);
-    }
-  }, BREAKER_POLL_MS).unref();
-  log("Sonar long-open breaker monitor registered (5-min poll)");
+  cron.schedule("*/5 * * * *", () => {
+    void withHeartbeat(JOB_NAMES.sonarBreakerLongOpenPoll, BREAKER_POLL_MS, async () => {
+      try {
+        await checkBreakerLongOpen(getSonarCircuitBreakerStatus());
+      } catch (err: any) {
+        log(`Breaker long-open check error (non-fatal): ${err?.message ?? err}`);
+        throw err;
+      }
+    });
+  });
+  log("Sonar long-open breaker monitor registered (5-min cron, clock-anchored)");
 }

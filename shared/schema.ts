@@ -5825,3 +5825,27 @@ export const integrationHealthSnapshots = pgTable(
   ],
 );
 export type IntegrationHealthSnapshot = typeof integrationHealthSnapshots.$inferSelect;
+
+// ─── Cron heartbeats (Task: never-fail-again pass) ───────────────────────────
+// Every recurring background job writes a row here on each tick (start +
+// finish), so we can detect when a cron silently dies. The capture-audit
+// status pill reads getStaleCronHeartbeats() and reports any job whose
+// nextExpectedAt is older than now + a small grace window. This was added
+// because the recurring "Webhook unhealthy" issue went undetected for five
+// iterations — there was no positive heartbeat signal to alarm on.
+//
+// jobName is the primary key (one row per job, upsert on every tick); status
+// values are: pending | running | success | error.
+export const cronHeartbeats = pgTable("cron_heartbeats", {
+  jobName: varchar("job_name").primaryKey(),
+  expectedIntervalMs: integer("expected_interval_ms").notNull(),
+  lastStartedAt: timestamp("last_started_at"),
+  lastFinishedAt: timestamp("last_finished_at"),
+  lastDurationMs: integer("last_duration_ms"),
+  lastStatus: varchar("last_status").notNull().default("pending"),
+  lastError: text("last_error"),
+  nextExpectedAt: timestamp("next_expected_at"),
+  consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export type CronHeartbeat = typeof cronHeartbeats.$inferSelect;

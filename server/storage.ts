@@ -194,6 +194,8 @@ import {
   type ContactGeographySuggestion,
   type InsertContactGeographySuggestion,
   monitoredMailboxes,
+  cronHeartbeats,
+  type CronHeartbeat,
   type MonitoredMailbox,
   type InsertMonitoredMailbox,
   mailboxSyncFailures,
@@ -1257,6 +1259,19 @@ getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined>;
   countUnresolvedMailboxSyncFailures(mailboxId: string): Promise<number>;
   getDueMailboxSyncFailures(now: Date): Promise<MailboxSyncFailure[]>;
   getDueMailboxSyncFailuresForMailbox(mailboxId: string, now: Date): Promise<MailboxSyncFailure[]>;
+
+  // Cron heartbeats (never-fail-again pass) — every recurring background
+  // job writes here so we can detect when one silently dies. See
+  // server/lib/cronHeartbeat.ts for the wrapper that drives these.
+  recordCronHeartbeatStart(jobName: string, expectedIntervalMs: number): Promise<void>;
+  recordCronHeartbeatFinish(
+    jobName: string,
+    status: "success" | "error",
+    durationMs: number,
+    error?: string,
+  ): Promise<void>;
+  getCronHeartbeats(): Promise<CronHeartbeat[]>;
+  getStaleCronHeartbeats(graceFactor?: number): Promise<CronHeartbeat[]>;
 
   // Webex user mappings (Task #258)
   getWebexUserMappings(orgId: string): Promise<WebexUserMapping[]>;
@@ -8546,6 +8561,83 @@ export class DatabaseStorage implements IStorage {
         inArray(mailboxSyncFailures.status, ["pending", "give_up"]),
       ))
       .orderBy(desc(mailboxSyncFailures.lastAttemptAt));
+  }
+
+  // ─── Cron heartbeats ───────────────────────────────────────────────────
+  // upsert-on-start writes pending state and pushes nextExpectedAt forward
+  // so the staleness detector can immediately see this job is "alive."
+  // upsert-on-finish records duration and resets / increments the failure
+  // counter so consecutive errors are observable.
+  async recordCronHeartbeatStart(jobName: string, expectedIntervalMs: number): Promise<void> {
+    const now = new Date();
+    const nextExpectedAt = new Date(now.getTime() + expectedIntervalMs);
+    await db
+      .insert(cronHeartbeats)
+      .values({
+        jobName,
+        expectedIntervalMs,
+        lastStartedAt: now,
+        lastStatus: "running",
+        nextExpectedAt,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: cronHeartbeats.jobName,
+        set: {
+          expectedIntervalMs,
+          lastStartedAt: now,
+          lastStatus: "running",
+          nextExpectedAt,
+          updatedAt: now,
+        },
+      });
+  }
+
+  async recordCronHeartbeatFinish(
+    jobName: string,
+    status: "success" | "error",
+    durationMs: number,
+    error?: string,
+  ): Promise<void> {
+    const now = new Date();
+    const existing = await db
+      .select()
+      .from(cronHeartbeats)
+      .where(eq(cronHeartbeats.jobName, jobName))
+      .limit(1);
+    const consecutiveFailures = status === "error"
+      ? (existing[0]?.consecutiveFailures ?? 0) + 1
+      : 0;
+    await db
+      .update(cronHeartbeats)
+      .set({
+        lastFinishedAt: now,
+        lastDurationMs: durationMs,
+        lastStatus: status,
+        lastError: status === "error" ? (error ?? null) : null,
+        consecutiveFailures,
+        updatedAt: now,
+      })
+      .where(eq(cronHeartbeats.jobName, jobName));
+  }
+
+  async getCronHeartbeats(): Promise<CronHeartbeat[]> {
+    return await db.select().from(cronHeartbeats).orderBy(cronHeartbeats.jobName);
+  }
+
+  // A job is "stale" when nextExpectedAt + grace has passed AND it isn't
+  // currently mid-tick (status === "running"). graceFactor defaults to 1.5
+  // so a job that's expected every 5min won't be flagged until it's been
+  // 7.5 minutes since the last start. Tunable per call site.
+  async getStaleCronHeartbeats(graceFactor: number = 1.5): Promise<CronHeartbeat[]> {
+    const rows = await db.select().from(cronHeartbeats);
+    const now = Date.now();
+    return rows.filter(r => {
+      if (r.lastStatus === "running") return false;
+      if (!r.nextExpectedAt) return false;
+      const grace = r.expectedIntervalMs * (graceFactor - 1);
+      return now - r.nextExpectedAt.getTime() > grace;
+    });
   }
 
   async countUnresolvedMailboxSyncFailures(mailboxId: string): Promise<number> {
