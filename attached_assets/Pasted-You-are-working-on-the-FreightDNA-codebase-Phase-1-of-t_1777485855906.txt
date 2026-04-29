@@ -1,0 +1,115 @@
+You are working on the FreightDNA codebase. Phase 1 of the Capture Leak Queue is live, and Phase 2A added review decisions so admins can dismiss or ignore leak rows.
+
+Now implement Phase 2B: manual “Create quote” from Missed Inbound rows only.
+
+IMPORTANT GUARDRAILS
+- Read replit.md first and follow all guardrails.
+- Keep scope tightly limited to Missed Inbound rows only.
+- Do NOT add create behavior for Orphan Outbound in this task.
+- Do NOT add bulk create.
+- Do NOT add AI auto-create.
+- Do NOT redesign Customer Quotes or the quote drawer.
+- Reuse existing quote ingestion logic as much as possible.
+- Every created quote must be auditable and idempotent.
+
+GOAL
+Allow an admin reviewing a Missed Inbound leak row to manually create a quote opportunity from that email using the same ingestion pathway the automatic pipeline would ideally have used.
+
+The action should:
+- create the quote if possible,
+- avoid duplicates,
+- preserve the email as the source,
+- remove the row from the active queue after success,
+- and send the user directly to the created quote or Customer Quotes filtered to that quote.
+
+BEFORE CODING
+Do a read-only audit of:
+- the missed inbound leak queue implementation,
+- quote ingestion entry points (especially ingestQuoteFromEmail and related helpers),
+- how duplicate prevention currently works for email-created quotes,
+- any route/service patterns for manual quote creation/admin-triggered replay,
+- current review-decision behavior from Phase 2A.
+
+Then give me a concise implementation plan covering:
+1. whether the best approach is to call existing ingestQuoteFromEmail directly or through a small wrapper,
+2. how duplicate prevention will work,
+3. what should happen if customer resolution is weak or missing,
+4. the route shape,
+5. the UI behavior,
+6. tests,
+7. edge cases.
+
+Stop and wait for approval before editing.
+
+DESIRED PRODUCT BEHAVIOR AFTER APPROVAL
+1) Scope
+Only Missed Inbound rows get a new action:
+- “Create quote”
+
+Orphan Outbound rows do not get any new create/attach behavior in this task.
+
+2) Backend
+Implement a safe manual create path that:
+- takes orgId + messageId,
+- locates the source email message,
+- runs the existing quote-ingestion logic using that email,
+- preserves source='email' and sourceReference/providerMessageId semantics,
+- respects existing dedup rules,
+- returns:
+  - created quote id if new quote created,
+  - existing quote id if duplicate already exists,
+  - clear status code/result if creation is impossible.
+
+If the existing ingest function can already do this safely, reuse it rather than duplicating parsing logic.
+
+3) Customer resolution
+If customer resolution is weak or ambiguous:
+- prefer the same behavior the auto-ingest path already uses,
+- do NOT invent a separate quote-creation model here,
+- if the result is “unknown customer” but the current ingestion path legitimately allows that, preserve that behavior,
+- if creation truly cannot proceed, return a clear, user-friendly failure response.
+
+4) Queue behavior
+After successful create:
+- the row should disappear from the active Missed Inbound queue,
+- either because it now no longer qualifies as a leak, or because a review state is written, whichever is cleaner and more correct.
+Do not hack this with frontend-only hiding.
+
+5) UI
+Add a compact “Create quote” action on Missed Inbound rows only.
+On success:
+- show toast,
+- navigate to the created/existing quote if there is a clean route for that,
+  OR fall back to opening Customer Quotes with enough context to find it quickly.
+
+On duplicate:
+- say something like “Quote already exists; opening existing quote.”
+
+On failure:
+- show a clear admin-facing message.
+
+6) Auditability
+Write enough event/audit metadata so we can tell this quote was manually created from the leak queue.
+Do this using existing quote_events or payload structures if possible.
+Do not add more schema unless absolutely necessary.
+
+7) Tests
+Add/update focused tests for:
+- successful create from a valid missed inbound email,
+- duplicate path returns existing quote,
+- invalid messageId / wrong org / wrong leak type rejected,
+- queue row no longer appears after successful create,
+- route auth/validation,
+- any frontend interaction tests that match existing patterns.
+
+FINAL OUTPUT
+When done, return:
+1. files changed,
+2. route(s)/service(s) added or updated,
+3. exact create behavior,
+4. duplicate behavior,
+5. audit trail behavior,
+6. tests added/updated and results,
+7. any limitations or follow-up suggestions.
+
+Stop there.
