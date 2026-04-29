@@ -1,6 +1,6 @@
 # FreightDNA — Platform Report
-**Date:** April 26, 2026  
-**Version:** Current main branch (commit `3f76c3d`)
+**Date:** April 29, 2026  
+**Version:** Current main branch (commit `f4b6ebf`)
 
 ---
 
@@ -34,10 +34,10 @@ FreightDNA is a specialized mini-CRM built for transportation brokerage sales te
 
 | Artifact | Count / Size |
 |---|---|
-| Route modules (`server/routes/*.ts`) | 51 modules |
-| Test files (`tests/`) | 33 files (`.ts` + `.cjs`) |
-| `shared/schema.ts` | ~5,620 lines |
-| `server/routes.ts` (orchestrator) | ~9,597 lines |
+| Route modules (`server/routes/*.ts`) | 56 modules |
+| Test files (`tests/`) | 55 files (`.ts` + `.cjs`) |
+| `shared/schema.ts` | ~5,911 lines |
+| `server/routes.ts` (orchestrator) | ~10,306 lines |
 | `server/storage.ts` exported methods | 16 top-level exports |
 
 ---
@@ -128,14 +128,28 @@ FreightDNA is a specialized mini-CRM built for transportation brokerage sales te
 - Contact responsibility tracking per corridor
 - AI-derived contact-to-lane suggestions
 
-### 4.13 AI Intelligence Hub
-A unified dashboard providing 11 intelligence cards:
-Meeting Prep Briefs, Sentiment Tracking, Smart Follow-Up Timing, Relationship Health Coaching, Org Chart Gap Analysis, Warm Introduction Paths, Look-Alike Prospecting, Cross-Sell / Lane Gap Intelligence, Wallet Share Expansion Playbook, Win/Loss Pattern Engine, Competitive Signal Detection.
+### 4.13 AI Hub (Canonical Surface)
+Single consolidated surface at `/ai-hub` with five role-aware tabs: **Today's Priorities**, **ValueIQ**, **AI Center**, **Engagement**, **Copilot Analytics**. Replaces the previous standalone URLs — `/daily-priorities`, `/valueiq`, `/ai`, `/ai/agents`, `/ai/approvals`, `/admin/ai-engagement`, and `/admin/copilot-analytics` all resolve to the AI Hub with the matching tab pre-selected. The legacy `/ai-intelligence` URL redirects to `/valueiq?tab=insights` (with a defensive `/ai-intelligence-legacy` fallback page).
 
 ### 4.14 AI Center (Admin)
 - Consolidated admin module for AI agent management
 - Approval workflows for AI actions
-- Pod management and adapter configuration
+- Pod, adapter, persona, and play configuration
+- Reachable as the "AI Center" tab inside the AI Hub
+
+### 4.14a DNA Copilot — Phase 5
+Trust-and-observability layer for the global chatbot:
+- **Confidence chips** (High / Medium / Low) on every assistant turn, with an amber callout on Low
+- **Clarifying-question chips** rendered when the agent detects ambiguity — clicking re-issues the prompt with disambiguating context
+- **Sanitized error reports** — user-flagged "Report this answer" submissions pass through `sanitizeReportText` (`server/routes/agentAnalytics.ts`) which redacts `sk-...` keys, Bearer tokens, and long stack traces
+- **Per-turn audit trail** persisted to `copilot_actions` (with partial unique index `copilot_actions_turn_tool_unique`); rendered as a `CopilotActionsCard` on rep profiles and on company detail Activity tabs
+- **Copilot Analytics** admin page (`/admin/copilot-analytics` → AI Hub tab) — KPIs, "Needs Attention" queue for failures and low-confidence turns, full Action Audit log; gated to admin / director / sales_director
+
+### 4.14b Plays / Playbook
+- Rep view at `/playbook` lists triggered plays (e.g., "Quote no response," "Reactivate stale account") with Run / Snooze / Dismiss
+- Admin authoring under AI Center → Plays (`/ai/plays`); Excel bulk import via `server/lib/playbookImport.ts`
+- Persona system prompts and channel overlays edited under AI Center → Persona (`/ai/persona`)
+- Outcomes auto-classified by GPT-4o-mini and fed back into Proven Tactics
 
 ### 4.15 Rate Intelligence & Rep Coaching
 - SONAR-driven lane benchmarks
@@ -200,7 +214,7 @@ Meeting Prep Briefs, Sentiment Tracking, Smart Follow-Up Timing, Relationship He
 - Separate rate limiter middleware in `server/lib/rateLimiter.ts`
 
 ### Known Open Item
-- ~54 pre-existing TypeScript errors remain in `npm run check` in files not touched this session (primarily `err?.message` on `unknown` catch variables in routes.ts non-company sections, `sonar.ts`, `valueiq.ts`, `marketSignals.ts`). These do not affect runtime behavior. Planned fix: replace with `getErrorMessage(err)` from `server/lib/errors.ts`.
+- ~54 pre-existing TypeScript errors remain in `npm run check` in files not touched this session (primarily `err?.message` on `unknown` catch variables in `server/routes.ts` non-company sections, `sonar.ts`, `valueiq.ts`, `marketSignals.ts`). These do not affect runtime behavior; the typecheck workflow continues to run as a tracking baseline. Planned fix: replace with `getErrorMessage(err)` from `server/lib/errors.ts`.
 
 ---
 
@@ -228,12 +242,16 @@ Routes are organized as modular Express registrations. Each feature area has its
 | `financials.ts` | OneDrive sync, financial uploads |
 | `dashboard.ts` | KPI aggregation |
 | `agentic.ts` | AI action execution |
-| `agentAdmin.ts`, `agentAnalytics.ts` | AI Center admin |
+| `agentAdmin.ts`, `agentAnalytics.ts` | AI Center admin (incl. `sanitizeReportText` for Phase 5 report ingestion) |
 | `laneInbox.ts` | Unified lane event feed |
 | `liveSync.ts` | SSE pub/sub stream |
-| + 30 additional modules | Tasks, goals, notifications, playbook, procurement, prospects, etc. |
+| `integrationsHealth.ts` | Live status, circuit-breaker state, Sonar call budget |
+| `playbook.ts` | Plays admin and rep run-flow |
+| `valueiq.ts` | ValueIQ daily briefing + Threads |
+| `aiEngagement.ts` | AI engagement metrics |
+| + ~30 additional modules | Tasks, goals, notifications, prospects, customer quotes, lane carrier outreach, won-load autopilot, etc. |
 
-`server/routes.ts` orchestrates all 51 modules and houses routes not yet extracted.
+`server/routes.ts` orchestrates all 56 modules and houses routes not yet extracted.
 
 ---
 
@@ -255,12 +273,19 @@ Routes are organized as modular Express registrations. Each feature area has its
 | `email-signal-consumers.test.ts` | Email intent extraction |
 | `my-procurement.test.ts` | Procurement outreach flow |
 | `performance.test.ts` | Query performance benchmarks |
-| + 13 additional test files | Carrier import, formatters, sharing, sessions, etc. |
+| `ai-hub-consolidation.spec.cjs`, `ai-hub-role-gating.test.ts` | AI Hub canonical-URL + role-gating coverage |
+| `ai-engagement-*.spec.cjs / .test.ts` | AI engagement aggregates and persistence |
+| `daily-priorities-workspace.test.ts` | Today's Priorities workspace |
+| `lane-signals-shared-cache.spec.cjs` | Pricing-blend cache + shared lane signals |
+| `customer-quotes-*.test.ts / .spec.cjs` | Customer Quotes presets, default sort, theme stability |
+| `endpoint-perf.test.ts`, `email-health-instrumentation.test.ts`, `integration-probes.test.ts` | Integrations Health observability surfaces |
+| `fixture-pollution-guards.test.ts` | Schema-Drift Guard / fixture-domain detection |
+| + ~30 additional test files | Carrier import, formatters, sharing, sessions, freight capture funnel, lane stable coverage, etc. |
 
 ### Validation Commands (CI)
 | Command | What It Checks |
 |---|---|
-| `typecheck` (`npm run check`) | TypeScript compilation (zero-error baseline target) |
+| `typecheck` (`npm run check`) | TypeScript compilation; ~54 pre-existing errors tracked as a baseline (see Section 6 — Known Open Item) |
 | `guardrails` | 86 code-quality assertions |
 | `storage-integration` | 24 live-DB storage layer assertions |
 

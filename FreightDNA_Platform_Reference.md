@@ -47,6 +47,12 @@
 39. [Keyboard Shortcuts & Power User Tools](#39-keyboard-shortcuts--power-user-tools)
 40. [Roles & Permissions](#40-roles--permissions)
 41. [Key Terminology](#41-key-terminology)
+42. [AI Hub (Canonical Surface)](#42-ai-hub-canonical-surface)
+43. [DNA Copilot — Phase 5](#43-dna-copilot--phase-5)
+44. [Available Freight Cockpit](#44-available-freight-cockpit)
+45. [Lane Inbox & Cross-Tab Live Sync](#45-lane-inbox--cross-tab-live-sync)
+46. [Plays / Playbook (Admin & Rep)](#46-plays--playbook-admin--rep)
+47. [Integrations Health & Schema-Drift Guard](#47-integrations-health--schema-drift-guard)
 
 ---
 
@@ -984,11 +990,11 @@ Grid of cards showing each rep's activity breakdown:
 
 ---
 
-## 23. AI Features (DNA Guru & More)
+## 23. AI Features (DNA Copilot & More)
 
-### DNA Guru (Chatbot)
+### DNA Copilot (Global Chatbot)
 
-An AI assistant that understands your CRM data and can take actions on your behalf.
+An AI assistant that understands your CRM data and can take actions on your behalf. Available from anywhere in the app via the floating chat launcher; the underlying conversation runtime is the same one ValueIQ Threads uses inside the AI Hub.
 
 **What It Can Do:**
 - Answer questions about your accounts, contacts, and pipeline in natural language
@@ -996,6 +1002,9 @@ An AI assistant that understands your CRM data and can take actions on your beha
 - **Create tasks** - Mention a follow-up and it suggests a task
 - **Complete tasks** - Mark tasks done through conversation
 - **Navigate** - Ask it to "take me to the Carrier Hub"
+- **Show its work** - Every answer renders with a confidence chip (High / Medium / Low), source chips, and clarifying-question suggestions when the model is unsure
+
+For full Phase 5 detail (audit trail, Copilot Analytics, error sanitization, clarifying questions), see Section 43.
 
 ### AI Email Drafting
 
@@ -1738,5 +1747,203 @@ Some features are accessible by direct URL even if they don't appear in a user's
 
 ---
 
-*Last updated: April 2026*
+## 42. AI Hub (Canonical Surface)
+
+### What It Does
+
+A single consolidated surface at `/ai-hub` that hosts every AI-related view in the platform behind one set of role-aware tabs. Replaces the previous per-feature URLs (`/daily-priorities`, `/valueiq`, `/ai`, `/ai/agents`, `/ai/approvals`, `/admin/ai-engagement`, `/admin/copilot-analytics`), all of which now resolve to the AI Hub with the matching tab pre-selected. Existing bookmarks continue to work.
+
+### Tabs
+
+| Tab | URL alias | What it shows |
+|-----|-----------|---------------|
+| **Today's Priorities** | `/daily-priorities` → `/ai-hub?hub=priorities` | All active NBA signals bucketed by action type (Deepen / Grow / Protect / Execute), with Run / Snooze / Dismiss controls. Rule-engine driven. |
+| **ValueIQ** | `/valueiq` → `/ai-hub?hub=valueiq` | Daily AI briefing (heuristic SQL aggregation), Threads (live LLM chat using the DNA Copilot runtime), and personal Library. |
+| **AI Center** | `/ai`, `/ai/agents`, `/ai/agents/:slug`, `/ai/approvals`, `/ai/pods`, `/ai/adapters`, `/ai/admin` → `/ai-hub?hub=center` | Admin module for AI agents, approvals queue, pods, and adapters. Persona/play configuration and the AI activity log live as sub-views inside `/ai/admin`. The first time an admin lands on the hub, they are routed to `/ai/adapters` so they can confirm which integrations are wired before reviewing the agent fleet. |
+| **Engagement** | `/admin/ai-engagement` → `/ai-hub?hub=engagement` | Per-surface impressions, click-through, accept rate, and zero-engagement candidates. |
+| **Copilot Analytics** | `/admin/copilot-analytics` → `/ai-hub?hub=copilot` | Top questions, failure modes, latency, full Action Audit log, and a "Needs Attention" queue for failures and low-confidence turns. |
+
+### Visibility & Role Gating
+
+- The AI Hub sidebar entry is currently `admin_preview`: it is **hidden** for non-admin users in the sidebar (per `client/src/lib/feature-visibility.ts`), but is rendered visible-but-disabled for admins with an "In development" tag so the surface stays discoverable while we iterate. The page itself is reachable by direct URL for any role on a tab's allow-list.
+- Tabs render only if the user's role is on that tab's allow-list. An AM, for example, sees Today's Priorities and ValueIQ but not the AI Center, Engagement, or Copilot Analytics tabs.
+- The legacy `/ai-intelligence` URL redirects to `/valueiq?tab=insights`. A defensive `/ai-intelligence-legacy` fallback page also exists in case a redirect breaks.
+
+### Why It Was Consolidated
+
+Reps were getting lost across seven separate AI pages with overlapping names. Consolidating to one hub gives a single mental model ("AI lives here") and lets us evolve sub-views without changing URLs that have been bookmarked or shared.
+
+---
+
+## 43. DNA Copilot — Phase 5
+
+### What It Is
+
+Phase 5 is the trust-and-observability layer for the DNA Copilot global chatbot. It adds confidence chips, clarifying-question suggestions, sanitized error reports, a persistent per-turn audit trail, and the admin-facing **Copilot Analytics** page.
+
+### Confidence Chips
+
+Every assistant turn renders with a confidence badge in its answer card:
+
+| Badge | Meaning |
+|-------|---------|
+| **High** | The model returned a definitive answer with named sources |
+| **Medium** | The model is reasonably confident but the request was ambiguous or sources were partial |
+| **Low** | The model is uncertain — the answer card also surfaces an amber callout encouraging the rep to verify |
+
+The badge is computed server-side from the agent's response metadata and is part of the persisted turn record.
+
+### Clarifying-Question Chips
+
+When the agent detects ambiguity (e.g., "log a call with John" when the user has three Johns in their book), the answer card renders dashed-border **clarifying chips** below the answer. Clicking a chip re-issues the prompt with the disambiguating context appended. This avoids forcing the user to retype.
+
+### Sanitized Error Reports
+
+Users can flag a bad turn by clicking "Report this answer" inside the message. Before the report is persisted, the report text passes through `sanitizeReportText` which redacts:
+
+- OpenAI keys (`sk-...`)
+- Authorization Bearer tokens
+- Long stack traces
+
+Reports land in the admin **Needs Attention** queue under Copilot Analytics. *Note: this sanitization currently applies only to the explicit "Report this" path; secrets pasted directly into a normal prompt still reach the agent activity log and should be avoided.*
+
+### Per-Turn Audit Trail
+
+Every Copilot turn writes to the `copilot_actions` table (one row per tool call, with a partial unique index `copilot_actions_turn_tool_unique` to prevent duplicates on retry). The audit trail surfaces in three places:
+
+- **Per-rep** — the rep's profile page renders the **Copilot Actions** card showing recent turns and tool invocations attributed to that rep.
+- **Per-company** — the company detail page's Activity tab renders the same card scoped to that account.
+- **Org-wide** — the Copilot Analytics page (below) shows the full audit log with filters.
+
+### Copilot Analytics (Admin)
+
+The `/admin/copilot-analytics` alias of the AI Hub adds an admin observability surface:
+
+- **KPIs** — Turns / Latency / Feedback rate
+- **Needs Attention queue** — failures, low-confidence turns, reported answers
+- **Action Audit log** — chronological turn-by-turn record with tool invocations, latencies, and per-turn drawer for full inspection
+- **Role gating** — admins, directors, and sales directors
+
+### Known Limitations
+
+- The turn-detail drawer does not live-stream new tool rows. If the underlying turn updates after the drawer is opened, close/re-open to refresh.
+- Turn-level retries that race the unique index are silently no-op'd by design.
+
+---
+
+## 44. Available Freight Cockpit
+
+### What It Does
+
+The triage cockpit for inbound freight opportunities. Replaces the older standalone "Freight Triage" page as the daily worksurface for LMs.
+
+### Key Surfaces
+
+- **KPI header** — total opps, urgent count, ready-to-cover, blended-margin estimate
+- **Ranked carrier chips per row** — top-3 carrier suggestions with target buy rate and a one-click "Send outreach" affordance
+- **Coverage / Freshness / Urgency scores** — visible on every row
+- **Bulk actions** — multi-select for assign, snooze, mark recurring, dispatch outreach
+- **Make Recurring** — promote a one-off freight opportunity into the Lane Work Queue as a recurring lane
+- **Refresh pill** — SSE-driven; refreshes inline when another tab or another rep mutates the underlying freight opp
+
+### Pricing-Blend Cache
+
+To keep the cockpit responsive when many rows share the same lane, the pricing-blend service uses a **90-second in-process cache** (`getBlendedRateCached` in `server/pricingBlendService.ts`) with request coalescing:
+
+- Within a single page render, duplicate lane lookups dedupe to one underlying call
+- Repeat lookups within 90 seconds resolve from cache
+- The blended rate combines SONAR / TRAC market signal with realized carrier-history rate from `load_fact`
+- A circuit breaker on the upstream Sonar client keeps the cockpit responsive during Sonar outages by serving the last cached snapshot
+
+### Approval-Overdue Notifications
+
+Freight opps that sit unapproved past the org's threshold trigger an `approval_overdue` notification on the responsible LM. The notification routes back to the cockpit row.
+
+---
+
+## 45. Lane Inbox & Cross-Tab Live Sync
+
+### Live Sync (SSE)
+
+A persistent server-sent-events stream (`server/services/liveSync.ts`, exposed via `server/routes/liveSync.ts`, consumed by `client/src/hooks/useLiveSync.ts`) broadcasts data-mutation events across every open tab for the same user and org. When the user updates a quote, accepts a freight opp, completes a procurement task, or records a touchpoint in one tab, the other tabs invalidate the matching React Query caches and re-fetch automatically — no manual reload.
+
+The same SSE stream powers the Available Freight cockpit's refresh pill, the Customer Quotes "stale follow-ups" sidebar badge, and the Conversations sidebar live count.
+
+### Lane Inbox
+
+A unified activity feed at `/lane-inbox` that aggregates recent high-signal events from across the platform into a single chronological view:
+
+- Approvals (granted, overdue, escalated)
+- Won quotes
+- Carrier replies (especially "available now" signals)
+- Make-recurring promotions
+- Coverage events on the Lane Work Queue
+
+The Lane Inbox is currently `admin_preview` while we settle on filter UX. The page is reachable directly by URL for permitted roles even when the sidebar entry is hidden.
+
+---
+
+## 46. Plays / Playbook (Admin & Rep)
+
+### Rep View
+
+The **Playbook** page (`/playbook`) lists triggered plays that are eligible to run for the rep right now (e.g., "Quote no response," "Reactivate stale account," "Single-thread risk"). Each play card shows:
+
+- The trigger condition that fired
+- A preview of the templated outreach (email subject + body)
+- Run / Snooze / Dismiss controls
+
+When the rep clicks **Run**, the play either drafts an email into the user's compose dialog, creates a task, or schedules a follow-up — depending on the play's action type. Outcomes are auto-classified by `gpt-4o-mini` into win / no-response / explicit-no, and the success rate feeds back into Proven Tactics.
+
+### Admin View
+
+Admins author and version plays through the **AI Center → Plays** sub-view (`/ai/plays`):
+
+- Create a new play (trigger conditions, system prompt, channel, suggested action)
+- Publish a new version of an existing play (older versions remain queryable for analytics)
+- Import plays from Excel via the bulk import path
+- Manage the persona system prompts that the play's AI draft inherits
+
+### Persona Admin
+
+The **AI Center → Persona** sub-view (`/ai/persona`) controls the base system prompt for the DNA Copilot and channel-specific overlays (email vs. SMS vs. agent). Changes are versioned and applied to the live agent.
+
+### Playbook Analytics
+
+A separate `/playbook/analytics` page surfaces play execution counts, by-rep usage, and outcome rates so coaching tiers can see which plays are working.
+
+---
+
+## 47. Integrations Health & Schema-Drift Guard
+
+### Integrations Health
+
+The admin **Integrations Health** page (`/admin/integrations-health`) is the single dashboard for monitoring every external system the platform depends on:
+
+| Integration | What's surfaced |
+|-------------|-----------------|
+| **OpenAI / Anthropic** | Last-success / last-error timestamp, recent error rate |
+| **Microsoft Graph (Outlook)** | Mailbox count, last delta-sync, webhook subscription expiry, historical-backfill status |
+| **Microsoft Graph (OneDrive)** | Last financial sync, file count |
+| **FreightWaves SONAR** | Live status, circuit-breaker state, **Sonar Call Budget** tracker (live calls vs. cached snapshots) |
+| **FreightWaves TRAC** | Last successful spot-rate fetch |
+| **Webex Calling** | OAuth status per org, last CDR sync, recording-download success rate |
+| **ZoomInfo** | Daily API quota and recent enrichment count |
+| **Stripe** | Checkout session count and recent webhook deliveries |
+
+Each row has a **"Test Now"** button that issues a synchronous probe against the integration and reports back inline. Healthy / Degraded / Down badges color each row.
+
+### Schema-Drift Guard
+
+A startup audit runs at the end of the migration sequence (`server/runMigrations.ts`) and scans production tables for fixture-style data:
+
+- Email addresses on routable-domain blocklists (e.g., `example.com`, `.test`, `.localhost`)
+- Companies, contacts, or users that match seeded test patterns
+- Mailbox attachments tagged as fixture mailboxes (state managed in `server/lib/fixtureMailboxes.ts`)
+
+If anything is detected, the Integrations Health page renders a **"Fixture-style addresses detected"** warning banner at the top so an admin can clean it up before it pollutes downstream analytics or AI signals.
+
+---
+
+*Last updated: April 29, 2026*
 *Platform version: FreightDNA by Freight-DNA, LLC*
