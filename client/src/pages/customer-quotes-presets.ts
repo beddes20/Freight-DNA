@@ -43,16 +43,22 @@ export type PresetSortDir = "asc" | "desc";
 export type PresetKey = "myOpen" | "stale" | "wonWeek" | "lost" | "all";
 
 /**
- * Default sort for the Customer Quotes table — `requestDate asc`
- * surfaces the OLDEST actionable quotes at the top so reps see
- * pending work that needs a price first. Reps can still flip the
- * column header to switch direction; saved views do not persist
- * sort, so they pick up this default too.
+ * Default sort for the Customer Quotes table — `requestDate desc`
+ * (newest first) so the portlet behaves like a recent Customer
+ * Quotes list at first paint and after `clearAll`. The SLA / oldest-
+ * first workflow remains one click away via the My Open and Stale
+ * presets, both of which pin their own `requestDate asc` sort
+ * (see `presetToFilters`). Reps can still flip the column header.
  *
- * Old default was `requestDate desc` (newest-first).
+ * History:
+ *   - Original default: `requestDate desc` (newest-first).
+ *   - Task #780 era: flipped to `asc` to surface oldest-actionable.
+ *   - Task #837: flipped back to `desc` after the SLA workflow was
+ *     fully covered by the My Open / Stale preset chips, so the
+ *     default surface no longer needs to double as the SLA queue.
  */
 export const DEFAULT_SORT_KEY: PresetSortKey = "requestDate";
-export const DEFAULT_SORT_DIR: PresetSortDir = "asc";
+export const DEFAULT_SORT_DIR: PresetSortDir = "desc";
 
 export interface PresetState {
   filters: PresetFilters;

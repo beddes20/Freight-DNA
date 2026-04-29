@@ -1125,7 +1125,7 @@ function CustomerQuotesPageInner(): JSX.Element {
                 <Card className="bg-card border-border" data-testid="quote-table-card">
                   <CardHeader className="py-3 px-4 flex flex-row items-center justify-between">
                     <CardTitle className="text-sm text-foreground">
-                      Quote Opportunities <span className="text-muted-foreground font-normal">({list?.total ?? 0})</span>
+                      Customer Quotes <span className="text-muted-foreground font-normal">({list?.total ?? 0})</span>
                     </CardTitle>
                     <div className="flex items-center gap-2">
                       <Button size="sm" variant="ghost" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0} className="h-7 w-7 p-0" data-testid="button-page-prev"><ChevronLeft className="h-4 w-4" /></Button>
@@ -1868,7 +1868,13 @@ function VirtualTable({ rows, sortKey, sortDir, onSort, onRowClick, isLoading, r
                 </td>
                 <td className="px-2 whitespace-nowrap text-muted-foreground max-w-[140px] truncate">{q.outcomeReasonLabel ?? "—"}</td>
                 {/* Task #816 — Carrier $, Margin $, Margin % cells removed; surface is customer-only. */}
-                <td className="px-2 whitespace-nowrap text-muted-foreground">{q.repName}</td>
+                {/* Task #837 — display fallback: empty / unresolved rep renders as
+                    a muted "Unassigned" so the column is never visually blank. */}
+                <td className="px-2 whitespace-nowrap text-muted-foreground">
+                  {q.repName && q.repName !== "—"
+                    ? q.repName
+                    : <span className="italic text-muted-foreground/70" data-testid={`text-rep-unassigned-${q.id}`}>Unassigned</span>}
+                </td>
                 <td className="px-2 whitespace-nowrap text-right tabular-nums text-muted-foreground">{num(q.responseTimeHours).toFixed(1)}h</td>
                 <td className="px-2 whitespace-nowrap text-[10px]">
                   {q.source === "email" && (q.sourceThreadId || q.sourceMessageId) ? (

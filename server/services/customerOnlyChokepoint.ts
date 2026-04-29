@@ -33,7 +33,7 @@ import {
   carriers as carriersCatalog,
   type QuoteCustomer,
 } from "@shared/schema";
-import { CARRIER_TOKEN_RE } from "./customerNameResolver";
+import { CARRIER_TOKEN_RE, UNKNOWN_CUSTOMER_NAME } from "./customerNameResolver";
 
 /**
  * Internal — load every distinct email domain present on the org's
@@ -92,10 +92,17 @@ export async function loadNonCustomerCustomerIds(
   }
 
   const out = new Set<string>();
+  const unknownLower = UNKNOWN_CUSTOMER_NAME.toLowerCase();
   customerMap.forEach((c, id) => {
     if (c.partyType !== "customer") { out.add(id); return; }
     const name = (c.name ?? "").trim();
     if (!name) { out.add(id); return; }
+    // Task #837 — also exclude the shared "Unknown — needs review"
+    // placeholder bucket. Even when its row carries `partyType =
+    // "customer"` (e.g. classifier hasn't run yet), it represents
+    // unresolved senders and must never appear on a customer-only
+    // surface. Belt-and-suspenders alongside the partyType check.
+    if (name.toLowerCase() === unknownLower) { out.add(id); return; }
     if (CARRIER_TOKEN_RE.test(name)) { out.add(id); return; }
     if (knownCarrierNames.has(name.toLowerCase())) { out.add(id); return; }
     const doms = customerSenderDomains.get(id);

@@ -71,12 +71,17 @@ for (const p of PRESETS) {
   assert.equal(s.sortDir, "desc");
 }
 
-// 1e. all — empty filters at the page default sort.
+// 1e. all — empty filters at the page default sort. Task #837 flipped
+//     the default to `requestDate desc` (newest first); we pin that
+//     concretely here so a future regression of the constants would
+//     fail this test loudly.
 {
   const s = presetToFilters("all", REP, WED);
   assert.deepEqual(s.filters, {});
   assert.equal(s.sortKey, DEFAULT_SORT_KEY);
   assert.equal(s.sortDir, DEFAULT_SORT_DIR);
+  assert.equal(s.sortKey, "requestDate", "all preset sort key");
+  assert.equal(s.sortDir, "desc", "all preset sort dir (newest-first default)");
 }
 
 // 2. Round-trip: detectActivePreset recognises every preset's own state.

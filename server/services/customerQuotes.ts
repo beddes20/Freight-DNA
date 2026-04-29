@@ -697,10 +697,24 @@ function enrich(
   repMap: Map<string, QuoteRep>,
   carrierMap: Map<string, QuoteCarrier>,
   reasonMap: Map<string, QuoteOutcomeReason>,
-  opts: { now?: number; funnelEligibleRepIds?: Set<string> } = {},
+  opts: {
+    now?: number;
+    funnelEligibleRepIds?: Set<string>;
+    /**
+     * Task #837 — preferred rep display name per `quote_reps.id`,
+     * built in `loadContext` from the linked `users.name` (when
+     * present and non-empty). When the caller supplies this map,
+     * `enrich()` resolves a rep's display name as
+     *   linked-user-name → quote_reps.name → "—"
+     * The bare `"—"` is the empty/Unassigned sentinel and is what
+     * the frontend falls back to "Unassigned" on.
+     */
+    repDisplayNames?: Map<string, string>;
+  } = {},
 ): EnrichedQuote[] {
   const now = opts.now ?? Date.now();
   const eligible = opts.funnelEligibleRepIds;
+  const displayNames = opts.repDisplayNames;
   return rows.map(r => {
     const sla = computeQuoteSla(r.requestDate, r.outcomeStatus, { now });
     // Task #752 — when the caller passes a `funnelEligibleRepIds` set
@@ -709,12 +723,15 @@ function enrich(
     // The repId is preserved on the row so the audit page can still
     // resolve who the rep was.
     const repHidden = eligible !== undefined && r.repId !== null && r.repId !== undefined && !eligible.has(r.repId);
+    let repName = "—";
+    if (!repHidden && r.repId) {
+      const preferred = displayNames?.get(r.repId);
+      repName = preferred ?? repMap.get(r.repId)?.name ?? "—";
+    }
     return {
       ...r,
       customerName: customerMap.get(r.customerId)?.name ?? "—",
-      repName: repHidden
-        ? "—"
-        : r.repId ? repMap.get(r.repId)?.name ?? "—" : "—",
+      repName,
       carrierName: r.carrierId ? carrierMap.get(r.carrierId)?.name ?? null : null,
       outcomeReasonLabel: r.outcomeReasonId ? reasonMap.get(r.outcomeReasonId)?.label ?? null : null,
       slaState: sla.state,
@@ -748,6 +765,12 @@ async function loadContext(orgId: string) {
         email: quoteReps.email,
         suppressed: quoteReps.suppressed,
         linkedUserRole: users.role,
+        // Task #837 — also bring back the linked user's display name
+        // so we can prefer it over `quote_reps.name` for any
+        // customer-facing rep cell. The legacy `name` column on
+        // quote_reps is often a stale email-signature string; the
+        // linked user's name is the canonical one.
+        linkedUserName: users.name,
       })
       .from(quoteReps)
       .leftJoin(users, eq(users.id, quoteReps.userId))
@@ -761,11 +784,22 @@ async function loadContext(orgId: string) {
   // rep's display name even when that rep is hidden from the dropdowns.
   // `reps` is the public-facing list returned to the client (snapshot.reps)
   // and is filtered to funnel-eligible reps only (Task #752).
-  const allReps: QuoteRep[] = repsJoined.map(({ linkedUserRole: _r, ...rest }) => rest);
+  const allReps: QuoteRep[] = repsJoined.map(({ linkedUserRole: _r, linkedUserName: _n, ...rest }) => rest);
   const customerFacingReps: QuoteRep[] = repsJoined
     .filter(r => isFunnelEligibleRep({ linkedUserRole: r.linkedUserRole, suppressed: r.suppressed }))
-    .map(({ linkedUserRole: _r, ...rest }) => rest);
+    .map(({ linkedUserRole: _r, linkedUserName: _n, ...rest }) => rest);
   const customerFacingRepIds = new Set<string>(customerFacingReps.map(r => r.id));
+  // Task #837 — preferred display name per rep (linked-user-name wins
+  // over the legacy `quote_reps.name`). Empty string entries are
+  // dropped so `repDisplayNames.get()` returning undefined naturally
+  // falls through to the `quote_reps.name` fallback in `enrich()`.
+  const repDisplayNames = new Map<string, string>();
+  for (const r of repsJoined) {
+    const linked = (r.linkedUserName ?? "").trim();
+    const legacy = (r.name ?? "").trim();
+    const display = linked || legacy;
+    if (display) repDisplayNames.set(r.id, display);
+  }
   return {
     customers,
     // Public rep list (snapshot.reps consumes this directly).
@@ -775,6 +809,7 @@ async function loadContext(orgId: string) {
     // repMap retains every rep so name lookups in list rows / drawers /
     // funnel-bucket labels still resolve for legacy / hidden rows.
     repMap: new Map(allReps.map(r => [r.id, r])),
+    repDisplayNames,
     reasonMap: new Map(reasons.map(r => [r.id, r])),
     carrierMap: new Map(carriers.map(c => [c.id, c])),
     // Set used by the funnel performers aggregation to drop quotes
@@ -792,9 +827,23 @@ export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: 
   const all = await db.select().from(quoteOpportunities)
     .where(eq(quoteOpportunities.organizationId, orgId));
   const nonCustomerIds = await loadNonCustomerCustomerIds(orgId, ctx.customerMap);
-  const filtered = applyFilters(all, filters, nonCustomerIds);
+  // Task #837 — also exclude "orphan" rows whose `customerId` does not
+  // resolve to any `quote_customers` row in the org's customer map.
+  // These appear when a customer record was deleted (or never created)
+  // but the opportunity row was kept; they have no reachable customer
+  // name and would otherwise render as a bare em-dash on the portlet.
+  // Union with `nonCustomerIds` so the same applyFilters chokepoint
+  // drops them — keeping `list.total` consistent with the rendered
+  // rows. Scoped to this list path; other consumers handle missing
+  // customers their own way.
+  const exclusionIds = new Set<string>(nonCustomerIds);
+  for (const r of all) {
+    if (!ctx.customerMap.has(r.customerId)) exclusionIds.add(r.customerId);
+  }
+  const filtered = applyFilters(all, filters, exclusionIds);
   const enriched = enrich(filtered, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, {
     funnelEligibleRepIds: ctx.customerFacingRepIds,
+    repDisplayNames: ctx.repDisplayNames,
   });
 
   const dir = sortDir === "asc" ? 1 : -1;
