@@ -25,6 +25,7 @@ import {
   startOfWeekMondayIso,
   DEFAULT_SORT_KEY,
   DEFAULT_SORT_DIR,
+  isRepUnassigned,
   type PresetKey,
 } from "../client/src/pages/customer-quotes-presets";
 
@@ -157,6 +158,26 @@ for (const p of PRESETS) {
   for (const p of PRESETS) {
     assert.ok(allKeys.includes(p.key), `unknown preset key: ${p.key}`);
   }
+}
+
+// 8. Task #837 — isRepUnassigned collapses every "no real owner"
+//    server signal (null, "", whitespace, em-dash, ascii dash) to the
+//    "render Unassigned" path; real names always read as assigned.
+{
+  // Unassigned signals from the server.
+  assert.equal(isRepUnassigned(null), true, "null repName must be unassigned");
+  assert.equal(isRepUnassigned(undefined), true, "undefined repName must be unassigned");
+  assert.equal(isRepUnassigned(""), true, "empty repName must be unassigned");
+  assert.equal(isRepUnassigned("   "), true, "whitespace repName must be unassigned");
+  assert.equal(isRepUnassigned("—"), true, "em-dash repName must be unassigned");
+  assert.equal(isRepUnassigned(" — "), true, "padded em-dash repName must be unassigned");
+  assert.equal(isRepUnassigned("-"), true, "ascii dash repName must be unassigned");
+
+  // Real names (linked-user or quote_reps fallback) must NOT collapse.
+  assert.equal(isRepUnassigned("Jordan Reyes"), false, "real name must render as-is");
+  assert.equal(isRepUnassigned("J"), false, "single-char name must render as-is");
+  // Edge: a name that *contains* an em-dash (e.g. team alias) is real.
+  assert.equal(isRepUnassigned("Team — Northeast"), false, "name containing em-dash is real");
 }
 
 console.log("customer-quotes-presets.test.ts OK");

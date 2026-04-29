@@ -60,6 +60,26 @@ export type PresetKey = "myOpen" | "stale" | "wonWeek" | "lost" | "all";
 export const DEFAULT_SORT_KEY: PresetSortKey = "requestDate";
 export const DEFAULT_SORT_DIR: PresetSortDir = "desc";
 
+/**
+ * Task #837 — true when the server-resolved `repName` should render as
+ * the literal "Unassigned" pill on the Quote Opportunities table. The
+ * server returns the em-dash placeholder ("—") both when no rep is
+ * attached AND when the rep is hidden by the funnel-eligibility filter
+ * (Task #752). From the rep-on-the-page POV both cases are
+ * "this row needs a real owner", so we collapse them to one literal
+ * label rather than letting the dash bleed through.
+ *
+ * Lives in the presets module so the test suite can exercise it
+ * without dragging React, recharts, etc. into the test process.
+ */
+export function isRepUnassigned(name: string | null | undefined): boolean {
+  if (!name) return true;
+  const trimmed = name.trim();
+  if (!trimmed) return true;
+  if (trimmed === "—" || trimmed === "-") return true;
+  return false;
+}
+
 export interface PresetState {
   filters: PresetFilters;
   sortKey: PresetSortKey;

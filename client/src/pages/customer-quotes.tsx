@@ -39,6 +39,7 @@ import {
   detectActivePreset,
   DEFAULT_SORT_KEY,
   DEFAULT_SORT_DIR,
+  isRepUnassigned,
   type PresetKey,
 } from "@/pages/customer-quotes-presets";
 import {
@@ -1243,7 +1244,12 @@ function CustomerQuotesPageInner(): JSX.Element {
                           </div>
                           <div className="text-[10px] text-muted-foreground mt-0.5 truncate">{s.lane}</div>
                           <div className="text-[10px] text-muted-foreground mt-0.5">
-                            {fmtMoney(s.quotedAmount)} · typical {typicalLabel}{s.repName ? ` · ${s.repName}` : ""}
+                            {/* Task #837 — share the same "Unassigned" fallback
+                                the main Rep column uses so the stale-followup
+                                strip never leaks an em-dash placeholder. */}
+                            {fmtMoney(s.quotedAmount)} · typical {typicalLabel} · {isRepUnassigned(s.repName)
+                              ? <span className="italic">Unassigned</span>
+                              : s.repName}
                           </div>
                         </button>
                       );

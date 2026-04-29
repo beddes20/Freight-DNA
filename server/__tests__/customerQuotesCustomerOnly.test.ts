@@ -20,6 +20,15 @@ const CUST_UNKNOWN = "cust-unknown";
 // `partyType: "customer"` whose name carries a carrier suffix
 // ("FastHaul Freight") must still be hidden by the chokepoint.
 const CUST_LEAKED = "cust-leaked";
+// Task #837 — a customer-tagged row whose name is the canonical
+// "Unknown — needs review" placeholder. The hardened chokepoint must
+// still drop it from the customer-only Quote Opportunities surface.
+const CUST_UNKNOWN_TAGGED = "cust-unknown-tagged";
+// Task #837 — orphan opportunity points at a customerId that no
+// longer exists in `quote_customers` (deleted, re-keyed, or stale
+// inbox capture). listQuotes must filter the row out before the
+// pagination math runs.
+const CUST_DELETED = "cust-deleted-id";
 // Customer-facing rep (NAM) and a back-office user that must be
 // excluded from the rep filter dropdown surfaced by getSnapshot().
 const REP_NAM = "rep-nam";
@@ -58,6 +67,9 @@ vi.mock("../storage", async () => {
       // Task #816 — repsJoined includes a `linkedUserRole` field from a
       // left-join with `users`. The shape we return matches what
       // `loadContext` selects so `isFunnelEligibleRep` evaluates each rep.
+      // Task #837 — also surface `linkedUserName` so loadContext can
+      // build its rep-display-name map (prefers users.name over
+      // quote_reps.name).
       return state.reps.map(r => ({
         id: r.id,
         organizationId: r.organizationId ?? ORG,
@@ -66,6 +78,7 @@ vi.mock("../storage", async () => {
         email: r.email ?? null,
         suppressed: r.suppressed ?? false,
         linkedUserRole: r.linkedUserRole ?? null,
+        linkedUserName: r.linkedUserName ?? null,
       }));
     }
     if (table === schema.quoteOutcomeReasons) return state.reasons;
@@ -133,15 +146,23 @@ function seed() {
     // still drop this row from every customer-only surface regardless of
     // the partyType column.
     { id: CUST_LEAKED, organizationId: ORG, name: "Sneaky Freight Inc", segment: null, partyType: "customer", partyTypeManual: true },
+    // Task #837 — partyType=customer leaks where the persisted name is
+    // the canonical UNKNOWN placeholder. Excluded by the chokepoint's
+    // unknown-name guard.
+    { id: CUST_UNKNOWN_TAGGED, organizationId: ORG, name: "Unknown — needs review", segment: null, partyType: "customer", partyTypeManual: false },
   ];
   state.reps = [
     // Task #816 — customer-facing rep (NAM). MUST surface in snapshot.reps.
-    { id: REP_NAM, organizationId: ORG, userId: "user-nam", name: "Nina NAM",
-      email: "nina@valuetruck.com", suppressed: false, linkedUserRole: "national_account_manager" },
+    // Task #837 — `linkedUserName` is the canonical name from `users.name`
+    // (preferred over the historical `quote_reps.name` value).
+    { id: REP_NAM, organizationId: ORG, userId: "user-nam", name: "old quotes-table name",
+      email: "nina@valuetruck.com", suppressed: false, linkedUserRole: "national_account_manager",
+      linkedUserName: "Nina NAM" },
     // Back-office user (admin). MUST be filtered out of snapshot.reps by
     // the funnel-eligibility predicate.
     { id: REP_ADMIN, organizationId: ORG, userId: "user-admin", name: "Andy Admin",
-      email: "admin@valuetruck.com", suppressed: false, linkedUserRole: "admin" },
+      email: "admin@valuetruck.com", suppressed: false, linkedUserRole: "admin",
+      linkedUserName: "Andy Admin" },
   ];
   state.reasons = [];
   state.laneGroups = [];
@@ -156,7 +177,10 @@ function seed() {
       originCity: "Chicago", originState: "IL", destCity: "Dallas", destState: "TX",
       equipment: "VAN", quotedAmount: "1500", carrierPaid: null, responseTimeHours: "2",
       score: 60, source: "email", sourceReference: null, notes: null,
-      laneGroupId: null, repId: null, carrierId: null, outcomeReasonId: null,
+      // Task #837 — wired to REP_NAM whose `users.name` is "Nina NAM"
+      // and stale `quote_reps.name` is "old quotes-table name". Used by
+      // the rep-display-name preference test.
+      laneGroupId: null, repId: REP_NAM, carrierId: null, outcomeReasonId: null,
     },
     {
       id: "q-carrier-1", organizationId: ORG, customerId: CUST_CARRIER,
@@ -183,6 +207,28 @@ function seed() {
       equipment: "VAN", quotedAmount: "1700", carrierPaid: null, responseTimeHours: "4",
       score: 50, source: "email", sourceReference: null, notes: null,
       laneGroupId: null, repId: REP_NAM, carrierId: null, outcomeReasonId: null,
+    },
+    // Task #837 — partyType=customer + persisted name === UNKNOWN
+    // placeholder. Excluded via the chokepoint's unknown-name guard.
+    {
+      id: "q-unknown-tagged-1", organizationId: ORG, customerId: CUST_UNKNOWN_TAGGED,
+      outcomeStatus: "pending", requestDate: oldDate, validThrough: null,
+      originCity: "Reno", originState: "NV", destCity: "Boise", destState: "ID",
+      equipment: "VAN", quotedAmount: "900", carrierPaid: null, responseTimeHours: "1",
+      score: 30, source: "email", sourceReference: null, notes: null,
+      laneGroupId: null, repId: null, carrierId: null, outcomeReasonId: null,
+    },
+    // Task #837 — orphan row whose customerId is no longer present in
+    // `quote_customers`. listQuotes must skip the row before the
+    // pagination math (otherwise empty pages spawn at the bottom of
+    // the table for ghost owners).
+    {
+      id: "q-orphan-1", organizationId: ORG, customerId: CUST_DELETED,
+      outcomeStatus: "pending", requestDate: oldDate, validThrough: null,
+      originCity: "Tulsa", originState: "OK", destCity: "Wichita", destState: "KS",
+      equipment: "VAN", quotedAmount: "1100", carrierPaid: null, responseTimeHours: "2",
+      score: 40, source: "email", sourceReference: null, notes: null,
+      laneGroupId: null, repId: null, carrierId: null, outcomeReasonId: null,
     },
   ];
 }
@@ -279,5 +325,70 @@ describe("Quote Opportunities — customer-only chokepoint", () => {
     const repIds = snap.reps.map(r => r.id);
     expect(repIds).toContain(REP_NAM);
     expect(repIds).not.toContain(REP_ADMIN);
+  });
+
+  // Task #837 — partyType=customer rows whose persisted display name is
+  // the canonical UNKNOWN_CUSTOMER_NAME placeholder must be hidden from
+  // the customer-only Quote Opportunities surface even though the
+  // partyType column still says "customer". Belt-and-suspenders for the
+  // partyType chokepoint.
+  it("hides partyType=customer rows whose name is the UNKNOWN placeholder (Task #837)", async () => {
+    const { listQuotes, getSnapshot, exportCsv } = await import("../services/customerQuotes");
+    const result = await listQuotes(ORG, {}, "requestDate", "asc", 0, 50);
+    const ids = result.rows.map(r => r.id);
+    expect(ids).not.toContain("q-unknown-tagged-1");
+    expect(ids).toEqual(["q-real-1"]);
+    expect(result.total).toBe(1);
+    const snap = await getSnapshot(ORG, {});
+    expect(snap.total).toBe(1);
+    const csv = await exportCsv(ORG, {});
+    expect(csv).not.toContain("Unknown — needs review");
+  });
+
+  // Task #837 — orphan opportunities (customerId not present in
+  // `quote_customers`) inflate the header count badge and render with a
+  // "—" fallback name. Drop them before pagination so list.total tracks
+  // what's actually visible.
+  it("filters out opportunities whose customerId is missing from quote_customers (Task #837)", async () => {
+    const { listQuotes, getSnapshot, exportCsv } = await import("../services/customerQuotes");
+    const result = await listQuotes(ORG, {}, "requestDate", "asc", 0, 50);
+    const ids = result.rows.map(r => r.id);
+    expect(ids).not.toContain("q-orphan-1");
+    expect(ids).toEqual(["q-real-1"]);
+    expect(result.total).toBe(1);
+    const snap = await getSnapshot(ORG, {});
+    expect(snap.total).toBe(1);
+    const csv = await exportCsv(ORG, {});
+    // No row from the orphan customerId leaks into the CSV either.
+    expect(csv).not.toContain("Tulsa");
+  });
+
+  // Task #837 — Rep column must prefer the linked `users.name` value
+  // over the historical `quote_reps.name` (the latter is often a stale
+  // alias from an old import). The hidden rep behavior (`repHidden`
+  // from Task #752) is preserved: hidden reps still resolve to the
+  // em-dash fallback regardless of which name source we pick.
+  it("Rep column prefers linked users.name over quote_reps.name (Task #837)", async () => {
+    const { listQuotes } = await import("../services/customerQuotes");
+    const result = await listQuotes(ORG, {}, "requestDate", "asc", 0, 50);
+    const row = result.rows.find(r => r.id === "q-real-1");
+    expect(row).toBeDefined();
+    // REP_NAM has linkedUserName="Nina NAM" + quote_reps.name="old quotes-table name".
+    // The new behavior must surface "Nina NAM" as the rep label.
+    expect(row!.repName).toBe("Nina NAM");
+    // repId is preserved on the row even when the display name was
+    // sourced from the linked user.
+    expect(row!.repId).toBe(REP_NAM);
+  });
+
+  // Task #837 — default sort. The unfiltered list endpoint must default
+  // to requestDate ASC (oldest-first) so the customer-only Quote
+  // Opportunities table opens on the rows that need attention first.
+  it("listQuotes defaults to oldest-first when sort key/direction match the page default (Task #837)", async () => {
+    const { listQuotes } = await import("../services/customerQuotes");
+    const result = await listQuotes(ORG, {}, "requestDate", "asc", 0, 50);
+    // Single visible row, but the assertion still pins the contract
+    // for the sort param the page sends on first load.
+    expect(result.rows.map(r => r.id)).toEqual(["q-real-1"]);
   });
 });
