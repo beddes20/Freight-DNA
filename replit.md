@@ -39,7 +39,7 @@ FreightDNA is built on a React frontend, an Express.js backend, and a PostgreSQL
 -   **Available Freight Cockpit**: A triage cockpit for freight opportunities.
 -   **Won Load Autopilot**: Automates the conversion of won quotes into freight opportunities, triggering notifications and an approval modal.
 -   **Schema-Drift Guard**: Compares Drizzle schema against `information_schema` at boot.
--   **Capture Leak Queue**: Manages missed inbound/orphan outbound emails with admin actions for review, manual quote creation, and analytics.
+-   **Capture Leak Queue**: Manages missed inbound/orphan outbound emails with admin actions for review, manual quote creation, attaching orphan outbounds to existing quotes, and analytics. Attach action writes a paired `quote_events` (`actor='manual_leak_attach'`) + `capture_leak_reviews` (`decision='attached'`) audit row, decrements the diagnostics counter in lock-step, and surfaces an "attached" segment in the analytics mix; gated to admin/director/sales_director with an in-process mutex preventing duplicate-attach races.
 -   **Cross-Tab UX Layer**: Provides hover-card previews, deep-linking, SSE pub/sub for real-time updates, and a unified Lane Inbox feed with cross-tab navigation.
 -   **Universal Flow Primitives**: Includes a command palette for quick actions and navigation, and consistent `DetailDrawer` and `EntityLink` patterns.
 
