@@ -23,6 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ChevronDown, ChevronRight, AlertCircle, Wrench, Wifi, WifiOff } from "lucide-react";
 import type { FunnelFilters } from "./FreightCaptureFunnel";
 import { CaptureLeakQueue } from "./CaptureLeakQueue";
+import { CaptureLeakAnalytics } from "./CaptureLeakAnalytics";
 
 type SyncStats = {
   ranAt: string;
@@ -284,10 +285,15 @@ export function FreightCaptureDiagnostics({ filters, enabled, open: openProp, on
               </DiagnosticTile>
             </div>
           )}
+          {/* Phase 3 — Capture leak analytics strip (KPIs, resolution
+              mix, aging buckets, 30d discovered-vs-resolved trend).
+              Mounted directly above the queue so admins see the
+              outcome shape before drilling into individual rows. */}
+          <CaptureLeakAnalytics enabled={open} />
           {/* Phase 1 — Capture Leak Queue: row-level expansion of the
               missingIntentInbound / orphanOutbound counters in the
-              "Capture leaks" tile above. Read-only; Open-thread is the
-              only row action. */}
+              "Capture leaks" tile above. Phase 2A/2B/3 add review,
+              create-quote, aging chip, sticky header, focus next row. */}
           <CaptureLeakQueue enabled={open} />
           <div className="mt-2 flex justify-end">
             <Button

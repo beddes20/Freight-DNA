@@ -3,8 +3,9 @@
  *
  * Row-level expansion of the missingIntentInbound / orphanOutbound
  * counters surfaced by the FreightCaptureDiagnostics tile. Two tabs
- * (Missed inbound default), an Open-thread link, a small customer-state
- * chip, and a Load-more pager driven by the server's `hasMore` flag.
+ * (Missed inbound default), an Open-thread link, customer-state
+ * chip, an aging severity chip, and a Load-more pager driven by the
+ * server's `hasMore` flag.
  *
  * Phase 2A — adds two admin triage actions on every row:
  *   • Not a quote   → records `decision="not_quote"`
@@ -19,10 +20,20 @@
  *     rows have no inbound payload to parse, so the action is omitted
  *     there. No bulk; no AI auto-create.
  *
+ * Phase 3 — UX polish (no new workflows):
+ *   • Per-row aging chip (Today / 1d / 3d+ / 7d+ / 14d+) with colour
+ *     escalation so old rows draw the eye.
+ *   • Sticky tab + meta header inside a scrollable list region so long
+ *     queues stay navigable without losing context.
+ *   • Focus the next row's first action after a successful review or
+ *     create, so the rep can keep working from the keyboard.
+ *   • Larger, row-height-matched skeletons and a friendlier empty state.
+ *   • Clearer toast titles ("Quote created — opening drawer", etc.).
+ *
  * Mounted by FreightCaptureDiagnostics; admin-only at the parent level
  * (the route itself also 403s for non-admin).
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -96,6 +107,70 @@ function fmtRel(iso: string): string {
   return `${d}d ago`;
 }
 
+interface AgingChipShape {
+  label: string;
+  className: string;
+  testId: string;
+}
+function classifyAging(iso: string): AgingChipShape {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) {
+    return {
+      label: "—",
+      className: "border-border text-muted-foreground",
+      testId: "leak-aging-chip-unknown",
+    };
+  }
+  const ms = Date.now() - t;
+  const dayMs = 24 * 3600 * 1000;
+  if (ms < dayMs) {
+    return {
+      label: "Today",
+      className: "border-emerald-500/40 text-emerald-700 dark:text-emerald-300",
+      testId: "leak-aging-chip-today",
+    };
+  }
+  if (ms < 3 * dayMs) {
+    return {
+      label: "1–3d",
+      className: "border-emerald-500/40 text-emerald-700 dark:text-emerald-300",
+      testId: "leak-aging-chip-1to3",
+    };
+  }
+  if (ms < 7 * dayMs) {
+    return {
+      label: "3–7d",
+      className: "border-amber-500/40 text-amber-700 dark:text-amber-300",
+      testId: "leak-aging-chip-3to7",
+    };
+  }
+  if (ms < 14 * dayMs) {
+    return {
+      label: "7d+",
+      className: "border-orange-500/50 text-orange-700 dark:text-orange-300",
+      testId: "leak-aging-chip-7plus",
+    };
+  }
+  return {
+    label: "14d+",
+    className: "border-rose-500/50 text-rose-700 dark:text-rose-300",
+    testId: "leak-aging-chip-14plus",
+  };
+}
+
+function AgingChip({ iso }: { iso: string }): JSX.Element {
+  const { label, className, testId } = classifyAging(iso);
+  return (
+    <Badge
+      variant="outline"
+      className={`text-[10px] font-medium ${className}`}
+      data-testid={testId}
+    >
+      {label}
+    </Badge>
+  );
+}
+
 function CustomerChip({ state, name }: { state: CustomerState; name: string | null }): JSX.Element {
   if (state === "known_customer") {
     return (
@@ -160,6 +235,9 @@ interface RowActionsProps {
   isCreating: boolean;
   onReview: (decision: LeakDecision) => void;
   onCreateQuote?: () => void;
+  /** First-action button ref so the parent can focus the next row after
+   *  the current row is removed. */
+  firstActionRef?: (el: HTMLButtonElement | null) => void;
 }
 
 function RowActions({
@@ -169,6 +247,7 @@ function RowActions({
   isCreating,
   onReview,
   onCreateQuote,
+  firstActionRef,
 }: RowActionsProps): JSX.Element {
   const busy = isReviewing || isCreating;
   return (
@@ -183,6 +262,7 @@ function RowActions({
           variant="outline"
           disabled={busy}
           onClick={onCreateQuote}
+          ref={firstActionRef}
           className="h-6 px-2 text-[11px] gap-1 border-emerald-600/40 text-emerald-700 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-950/30"
           data-testid={`leak-action-create-quote-${messageId}`}
           aria-label="Create a quote from this email"
@@ -197,6 +277,7 @@ function RowActions({
         variant="ghost"
         disabled={busy}
         onClick={() => onReview("not_quote")}
+        ref={onCreateQuote ? undefined : firstActionRef}
         className="h-6 px-2 text-[11px] gap-1 text-muted-foreground hover:text-foreground"
         data-testid={`leak-action-not-quote-${messageId}`}
         aria-label="Mark this row as not a quote"
@@ -228,6 +309,7 @@ interface InboundRowViewProps {
   creatingId: string | null;
   onReview: (messageId: string, decision: LeakDecision) => void;
   onCreateQuote: (messageId: string) => void;
+  firstActionRef?: (el: HTMLButtonElement | null) => void;
 }
 
 function InboundRowView({
@@ -236,6 +318,7 @@ function InboundRowView({
   creatingId,
   onReview,
   onCreateQuote,
+  firstActionRef,
 }: InboundRowViewProps): JSX.Element {
   const sender = row.fromName
     ? `${row.fromName} <${row.fromEmail ?? "?"}>`
@@ -247,11 +330,12 @@ function InboundRowView({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 mb-0.5">
+          <div className="flex items-center gap-2 mb-0.5 flex-wrap">
             <span className="text-xs font-medium text-foreground truncate" title={sender}>
               {sender}
             </span>
             <CustomerChip state={row.customerState} name={row.linkedCustomerName} />
+            <AgingChip iso={row.receivedAt} />
           </div>
           <div className="text-xs text-foreground truncate" title={row.subject ?? ""}>
             {row.subject ?? <span className="italic text-muted-foreground">(no subject)</span>}
@@ -268,6 +352,7 @@ function InboundRowView({
             isCreating={creatingId === row.messageId}
             onReview={(d) => onReview(row.messageId, d)}
             onCreateQuote={() => onCreateQuote(row.messageId)}
+            firstActionRef={firstActionRef}
           />
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
@@ -283,12 +368,14 @@ interface OutboundRowViewProps {
   row: OutboundRow;
   reviewingId: string | null;
   onReview: (messageId: string, decision: LeakDecision) => void;
+  firstActionRef?: (el: HTMLButtonElement | null) => void;
 }
 
 function OutboundRowView({
   row,
   reviewingId,
   onReview,
+  firstActionRef,
 }: OutboundRowViewProps): JSX.Element {
   return (
     <div
@@ -297,11 +384,12 @@ function OutboundRowView({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 mb-0.5">
+          <div className="flex items-center gap-2 mb-0.5 flex-wrap">
             <span className="text-xs font-medium text-foreground truncate" title={row.toEmail ?? ""}>
               To: {row.toEmail ?? "Unknown recipient"}
             </span>
             <CustomerChip state={row.customerState} name={row.linkedCustomerName} />
+            <AgingChip iso={row.sentAt} />
           </div>
           <div className="text-xs text-foreground truncate" title={row.subject ?? ""}>
             {row.subject ?? <span className="italic text-muted-foreground">(no subject)</span>}
@@ -326,6 +414,7 @@ function OutboundRowView({
             isReviewing={reviewingId === row.messageId}
             isCreating={false}
             onReview={(d) => onReview(row.messageId, d)}
+            firstActionRef={firstActionRef}
           />
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
@@ -348,6 +437,11 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
   const [limit, setLimit] = useState<number>(PAGE_SIZE);
   const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [creatingId, setCreatingId] = useState<string | null>(null);
+  // Index of the row to focus next after the current row is removed.
+  // Captured at action-time so we focus by *position* rather than by id
+  // (which has just disappeared from the list).
+  const [focusAfterIndex, setFocusAfterIndex] = useState<number | null>(null);
+  const rowFirstActionRefs = useRef<Map<number, HTMLButtonElement | null>>(new Map());
   const { toast } = useToast();
   const [, navigate] = useLocation();
   const qc = useQueryClient();
@@ -366,11 +460,32 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
     staleTime: 30_000,
   });
 
+  // After a successful action, focus the row that took the position of
+  // the removed one (or the last row if we acted on the tail). Runs
+  // after the next render so the new row at that index is mounted.
+  // Skips silently on edge paths (index unknown, list emptied, refs
+  // not yet attached) so a focus glitch never blocks the rep.
+  useEffect(() => {
+    if (focusAfterIndex == null) return;
+    if (!data) return;
+    const rows = data.rows;
+    if (focusAfterIndex < 0 || rows.length === 0) {
+      setFocusAfterIndex(null);
+      return;
+    }
+    const target = Math.min(focusAfterIndex, rows.length - 1);
+    const btn = rowFirstActionRefs.current.get(target);
+    if (btn) btn.focus();
+    setFocusAfterIndex(null);
+  }, [data, focusAfterIndex]);
+
   // Both writes need to invalidate BOTH the queue and the funnel-diagnostics
-  // counts so the badge total drops in lock-step with the queue row.
+  // counts so the badge total drops in lock-step with the queue row, and
+  // the analytics tile re-totals its resolution mix.
   function invalidateLeakViews(): void {
     qc.invalidateQueries({ queryKey: ["/api/customer-quotes/funnel-diagnostics/leaks"] });
     qc.invalidateQueries({ queryKey: ["/api/customer-quotes/funnel-diagnostics"] });
+    qc.invalidateQueries({ queryKey: ["/api/customer-quotes/funnel-diagnostics/leaks/analytics"] });
   }
 
   const reviewMutation = useMutation({
@@ -386,10 +501,10 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
     onSuccess: (_data, vars) => {
       invalidateLeakViews();
       toast({
-        title: vars.decision === "not_quote" ? "Marked as not a quote" : "Hidden from queue",
+        title: vars.decision === "not_quote" ? "Marked as not a quote" : "Hidden for now",
         description: vars.decision === "not_quote"
-          ? "This row will no longer appear in the leak queue."
-          : "Use the funnel diagnostics later to re-review.",
+          ? "Removed from queue."
+          : "Removed from queue. Use diagnostics later to re-review.",
       });
     },
     onError: (err) => {
@@ -420,8 +535,8 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
       switch (data.status) {
         case "created":
           toast({
-            title: "Quote created",
-            description: "Opening the new quote…",
+            title: "Quote created — opening drawer",
+            description: "The leak row has been resolved.",
           });
           if (data.quoteId) {
             navigate(`/customer-quotes?quote=${encodeURIComponent(data.quoteId)}`);
@@ -429,9 +544,9 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
           break;
         case "duplicate":
           toast({
-            title: "Quote already exists",
+            title: "Quote already exists — opening it",
             description: data.quoteId
-              ? "Opening the existing quote…"
+              ? "Another path created this quote first."
               : "A quote for this email already exists.",
           });
           if (data.quoteId) {
@@ -483,68 +598,84 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
     if (next === type) return;
     setType(next);
     setLimit(PAGE_SIZE);
+    rowFirstActionRefs.current.clear();
+  }
+
+  function indexOfMessageId(messageId: string): number {
+    if (!data) return -1;
+    return data.rows.findIndex(r => r.messageId === messageId);
   }
 
   function handleReview(messageId: string, decision: LeakDecision): void {
+    setFocusAfterIndex(indexOfMessageId(messageId));
     reviewMutation.mutate({ messageId, decision, leakType: type });
   }
 
   function handleCreateQuote(messageId: string): void {
+    setFocusAfterIndex(indexOfMessageId(messageId));
     createMutation.mutate({ messageId });
   }
 
+  const skeletonCount = 5;
+
   return (
     <div className="rounded border border-border bg-card mt-3" data-testid="capture-leak-queue">
-      <div className="px-3 py-2 border-b border-border flex items-center justify-between">
-        <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
-          Capture leak review
+      {/* Single scroll container so `position: sticky` on the header
+          actually pins to the top of THIS card's scroll region (not the
+          window). Tabs + window meta stay visible while rows below
+          scroll. */}
+      <div className="max-h-[420px] overflow-y-auto" data-testid="leak-queue-scroll">
+        <div className="sticky top-0 z-10 bg-card rounded-t border-b border-border">
+          <div className="px-3 py-2 flex items-center justify-between">
+            <div className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              Capture leak review
+            </div>
+            <div className="text-[10px] text-muted-foreground">
+              {data ? `Last ${data.windowDays} days` : ""}
+            </div>
+          </div>
+          <div className="px-3 pt-1 flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => pickType("missed_inbound")}
+              className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-t border-b-2 transition-colors ${
+                type === "missed_inbound"
+                  ? "border-amber-500 text-foreground font-medium"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+              data-testid="leak-tab-missed-inbound"
+            >
+              <Inbox className="h-3.5 w-3.5" />
+              Missed inbound
+              {type === "missed_inbound" && data && (
+                <span className="text-[10px] tabular-nums text-muted-foreground">({data.total})</span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => pickType("orphan_outbound")}
+              className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-t border-b-2 transition-colors ${
+                type === "orphan_outbound"
+                  ? "border-amber-500 text-foreground font-medium"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+              data-testid="leak-tab-orphan-outbound"
+            >
+              <Send className="h-3.5 w-3.5" />
+              Orphan outbound
+              {type === "orphan_outbound" && data && (
+                <span className="text-[10px] tabular-nums text-muted-foreground">({data.total})</span>
+              )}
+            </button>
+          </div>
         </div>
-        <div className="text-[10px] text-muted-foreground">
-          {data ? `Last ${data.windowDays} days` : ""}
-        </div>
-      </div>
 
-      <div className="px-3 pt-2 flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => pickType("missed_inbound")}
-          className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-t border-b-2 transition-colors ${
-            type === "missed_inbound"
-              ? "border-amber-500 text-foreground font-medium"
-              : "border-transparent text-muted-foreground hover:text-foreground"
-          }`}
-          data-testid="leak-tab-missed-inbound"
-        >
-          <Inbox className="h-3.5 w-3.5" />
-          Missed inbound
-          {type === "missed_inbound" && data && (
-            <span className="text-[10px] tabular-nums text-muted-foreground">({data.total})</span>
-          )}
-        </button>
-        <button
-          type="button"
-          onClick={() => pickType("orphan_outbound")}
-          className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-t border-b-2 transition-colors ${
-            type === "orphan_outbound"
-              ? "border-amber-500 text-foreground font-medium"
-              : "border-transparent text-muted-foreground hover:text-foreground"
-          }`}
-          data-testid="leak-tab-orphan-outbound"
-        >
-          <Send className="h-3.5 w-3.5" />
-          Orphan outbound
-          {type === "orphan_outbound" && data && (
-            <span className="text-[10px] tabular-nums text-muted-foreground">({data.total})</span>
-          )}
-        </button>
-      </div>
-
-      <div className="px-2 pb-2">
+        <div className="px-2 pb-2">
         {isLoading && (
           <div className="space-y-2 px-1 py-2" data-testid="leak-queue-loading">
-            <Skeleton className="h-12 w-full bg-card" />
-            <Skeleton className="h-12 w-full bg-card" />
-            <Skeleton className="h-12 w-full bg-card" />
+            {Array.from({ length: skeletonCount }).map((_, i) => (
+              <Skeleton key={i} className="h-16 w-full bg-muted/40" />
+            ))}
           </div>
         )}
 
@@ -559,15 +690,22 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
         )}
 
         {data && data.rows.length === 0 && (
-          <div className="px-1 py-6 text-center text-xs text-muted-foreground" data-testid="leak-queue-empty">
-            Nothing to review — your capture pipeline is healthy for the last {data.windowDays} days.
+          <div
+            className="px-1 py-8 flex flex-col items-center text-center gap-2"
+            data-testid="leak-queue-empty"
+          >
+            <Inbox className="h-6 w-6 text-muted-foreground/60" />
+            <div className="text-xs text-foreground font-medium">All caught up</div>
+            <div className="text-[11px] text-muted-foreground max-w-[28ch]">
+              No {type === "missed_inbound" ? "missed inbound" : "orphan outbound"} emails to review for the last {data.windowDays} days.
+            </div>
           </div>
         )}
 
         {data && data.rows.length > 0 && (
           <div data-testid={`leak-queue-list-${type}`}>
             {type === "missed_inbound"
-              ? (data.rows as InboundRow[]).map(r => (
+              ? (data.rows as InboundRow[]).map((r, i) => (
                   <InboundRowView
                     key={r.messageId}
                     row={r}
@@ -575,14 +713,22 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
                     creatingId={creatingId}
                     onReview={handleReview}
                     onCreateQuote={handleCreateQuote}
+                    firstActionRef={(el) => {
+                      if (el) rowFirstActionRefs.current.set(i, el);
+                      else rowFirstActionRefs.current.delete(i);
+                    }}
                   />
                 ))
-              : (data.rows as OutboundRow[]).map(r => (
+              : (data.rows as OutboundRow[]).map((r, i) => (
                   <OutboundRowView
                     key={r.messageId}
                     row={r}
                     reviewingId={reviewingId}
                     onReview={handleReview}
+                    firstActionRef={(el) => {
+                      if (el) rowFirstActionRefs.current.set(i, el);
+                      else rowFirstActionRefs.current.delete(i);
+                    }}
                   />
                 ))}
           </div>
@@ -608,6 +754,7 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
             Showing {data.rows.length} of {data.total}
           </div>
         )}
+        </div>
       </div>
     </div>
   );

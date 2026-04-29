@@ -4600,106 +4600,9 @@ async function buildLeakCandidateIds(
   orgId: string,
   windowDays: number,
 ): Promise<LeakCandidateIds> {
-  const leakSince = new Date(Date.now() - windowDays * 24 * 3600 * 1000);
-
-  // ── Missed inbound ─────────────────────────────────────────────────────
-  // Inbound + processed-for-signals + in window. We pull a small
-  // projection so we can do the two anti-joins in JS without re-querying
-  // the candidate row to read its providerMessageId.
-  const inboundCandidates = await db
-    .select({
-      id: emailMessages.id,
-      providerMessageId: emailMessages.providerMessageId,
-      providerSentAt: emailMessages.providerSentAt,
-    })
-    .from(emailMessages)
-    .where(and(
-      eq(emailMessages.orgId, orgId),
-      eq(emailMessages.direction, "inbound"),
-      sql`${emailMessages.processedForSignalsAt} IS NOT NULL`,
-      sql`${emailMessages.providerSentAt} >= ${leakSince}`,
-    ))
-    .orderBy(desc(emailMessages.providerSentAt));
-
-  const missedInboundIds: string[] = [];
-  if (inboundCandidates.length > 0) {
-    const candidateIds = inboundCandidates.map(m => m.id);
-    const candidateProviderIds = inboundCandidates
-      .map(m => m.providerMessageId)
-      .filter((v): v is string => !!v);
-
-    const hasQuoteIntentRows = await db
-      .selectDistinct({ messageId: emailSignals.messageId })
-      .from(emailSignals)
-      .where(and(
-        inArray(emailSignals.messageId, candidateIds),
-        inArray(emailSignals.intentType, QUOTE_INTENT_TYPES_FOR_LEAK),
-      ));
-    const messagesWithQuoteIntent = new Set(hasQuoteIntentRows.map(r => r.messageId));
-
-    const refUniverse = Array.from(new Set([...candidateIds, ...candidateProviderIds]));
-    const referencedRows = refUniverse.length > 0
-      ? await db
-          .selectDistinct({ ref: quoteOpportunities.sourceReference })
-          .from(quoteOpportunities)
-          .where(and(
-            eq(quoteOpportunities.organizationId, orgId),
-            eq(quoteOpportunities.source, "email"),
-            inArray(quoteOpportunities.sourceReference, refUniverse),
-          ))
-      : [];
-    const referencedSet = new Set(referencedRows.map(r => r.ref).filter((v): v is string => !!v));
-
-    for (const m of inboundCandidates) {
-      if (messagesWithQuoteIntent.has(m.id)) continue;
-      if (referencedSet.has(m.id)) continue;
-      if (m.providerMessageId && referencedSet.has(m.providerMessageId)) continue;
-      missedInboundIds.push(m.id);
-    }
-  }
-
-  // ── Orphan outbound ────────────────────────────────────────────────────
-  const outboundCandidates = await db
-    .select({
-      id: emailMessages.id,
-      threadId: emailMessages.threadId,
-      providerSentAt: emailMessages.providerSentAt,
-    })
-    .from(emailMessages)
-    .where(and(
-      eq(emailMessages.orgId, orgId),
-      eq(emailMessages.direction, "outbound"),
-      sql`${emailMessages.threadId} IS NOT NULL`,
-      sql`${emailMessages.providerSentAt} >= ${leakSince}`,
-    ))
-    .orderBy(desc(emailMessages.providerSentAt));
-
-  const orphanOutboundIds: string[] = [];
-  if (outboundCandidates.length > 0) {
-    const pendingThreadRows = await db
-      .selectDistinct({ threadId: emailMessages.threadId })
-      .from(quoteOpportunities)
-      .innerJoin(
-        emailMessages,
-        and(
-          eq(emailMessages.orgId, orgId),
-          sql`(${emailMessages.id} = ${quoteOpportunities.sourceReference}
-               OR ${emailMessages.providerMessageId} = ${quoteOpportunities.sourceReference})`,
-        ),
-      )
-      .where(and(
-        eq(quoteOpportunities.organizationId, orgId),
-        eq(quoteOpportunities.source, "email"),
-        eq(quoteOpportunities.outcomeStatus, "pending"),
-      ));
-    const threadsWithPendingQuote = new Set(
-      pendingThreadRows.map(r => r.threadId).filter((v): v is string => !!v),
-    );
-    for (const m of outboundCandidates) {
-      if (m.threadId && threadsWithPendingQuote.has(m.threadId)) continue;
-      orphanOutboundIds.push(m.id);
-    }
-  }
+  const raw = await buildRawLeakCandidates(orgId, windowDays);
+  const missedInboundIds = raw.missedInbound.map(r => r.id);
+  const orphanOutboundIds = raw.orphanOutbound.map(r => r.id);
 
   // Phase 2A — exclude any (messageId, leakType) the admin has already
   // reviewed (decision = "not_quote" or "ignored"). Filtering at this
@@ -4732,14 +4635,151 @@ async function buildLeakCandidateIds(
         : orphanOutboundIds;
       return {
         windowDays,
-        leakSince,
+        leakSince: raw.leakSince,
         missedInboundIds: filteredMissed,
         orphanOutboundIds: filteredOrphan,
       };
     }
   }
 
-  return { windowDays, leakSince, missedInboundIds, orphanOutboundIds };
+  return {
+    windowDays,
+    leakSince: raw.leakSince,
+    missedInboundIds,
+    orphanOutboundIds,
+  };
+}
+
+/**
+ * Phase 3 — extracted underlying candidate query (pre-review-filter).
+ * Returns the raw missed-inbound / orphan-outbound rows along with their
+ * provider sent timestamps so analytics callers can bucket by date or
+ * compute aging without a second emailMessages round-trip. The review
+ * filter lives in `buildLeakCandidateIds` so the queue + counters stay
+ * in lock-step; the trendline in `getLeakAnalytics` reads this raw view
+ * directly because it needs to count rows discovered on day X regardless
+ * of whether they were later resolved.
+ */
+interface RawLeakCandidate {
+  id: string;
+  providerSentAt: Date;
+}
+interface RawOrphanCandidate extends RawLeakCandidate {
+  threadId: string | null;
+}
+interface RawLeakCandidates {
+  windowDays: number;
+  leakSince: Date;
+  missedInbound: RawLeakCandidate[];
+  orphanOutbound: RawOrphanCandidate[];
+}
+async function buildRawLeakCandidates(
+  orgId: string,
+  windowDays: number,
+): Promise<RawLeakCandidates> {
+  const leakSince = new Date(Date.now() - windowDays * 24 * 3600 * 1000);
+
+  // ── Missed inbound ─────────────────────────────────────────────────────
+  const inboundCandidates = await db
+    .select({
+      id: emailMessages.id,
+      providerMessageId: emailMessages.providerMessageId,
+      providerSentAt: emailMessages.providerSentAt,
+    })
+    .from(emailMessages)
+    .where(and(
+      eq(emailMessages.orgId, orgId),
+      eq(emailMessages.direction, "inbound"),
+      sql`${emailMessages.processedForSignalsAt} IS NOT NULL`,
+      sql`${emailMessages.providerSentAt} >= ${leakSince}`,
+    ))
+    .orderBy(desc(emailMessages.providerSentAt));
+
+  const missedInbound: RawLeakCandidate[] = [];
+  if (inboundCandidates.length > 0) {
+    const candidateIds = inboundCandidates.map(m => m.id);
+    const candidateProviderIds = inboundCandidates
+      .map(m => m.providerMessageId)
+      .filter((v): v is string => !!v);
+
+    const hasQuoteIntentRows = await db
+      .selectDistinct({ messageId: emailSignals.messageId })
+      .from(emailSignals)
+      .where(and(
+        inArray(emailSignals.messageId, candidateIds),
+        inArray(emailSignals.intentType, QUOTE_INTENT_TYPES_FOR_LEAK),
+      ));
+    const messagesWithQuoteIntent = new Set(hasQuoteIntentRows.map(r => r.messageId));
+
+    const refUniverse = Array.from(new Set([...candidateIds, ...candidateProviderIds]));
+    const referencedRows = refUniverse.length > 0
+      ? await db
+          .selectDistinct({ ref: quoteOpportunities.sourceReference })
+          .from(quoteOpportunities)
+          .where(and(
+            eq(quoteOpportunities.organizationId, orgId),
+            eq(quoteOpportunities.source, "email"),
+            inArray(quoteOpportunities.sourceReference, refUniverse),
+          ))
+      : [];
+    const referencedSet = new Set(referencedRows.map(r => r.ref).filter((v): v is string => !!v));
+
+    for (const m of inboundCandidates) {
+      if (messagesWithQuoteIntent.has(m.id)) continue;
+      if (referencedSet.has(m.id)) continue;
+      if (m.providerMessageId && referencedSet.has(m.providerMessageId)) continue;
+      missedInbound.push({ id: m.id, providerSentAt: m.providerSentAt ?? new Date(0) });
+    }
+  }
+
+  // ── Orphan outbound ────────────────────────────────────────────────────
+  const outboundCandidates = await db
+    .select({
+      id: emailMessages.id,
+      threadId: emailMessages.threadId,
+      providerSentAt: emailMessages.providerSentAt,
+    })
+    .from(emailMessages)
+    .where(and(
+      eq(emailMessages.orgId, orgId),
+      eq(emailMessages.direction, "outbound"),
+      sql`${emailMessages.threadId} IS NOT NULL`,
+      sql`${emailMessages.providerSentAt} >= ${leakSince}`,
+    ))
+    .orderBy(desc(emailMessages.providerSentAt));
+
+  const orphanOutbound: RawOrphanCandidate[] = [];
+  if (outboundCandidates.length > 0) {
+    const pendingThreadRows = await db
+      .selectDistinct({ threadId: emailMessages.threadId })
+      .from(quoteOpportunities)
+      .innerJoin(
+        emailMessages,
+        and(
+          eq(emailMessages.orgId, orgId),
+          sql`(${emailMessages.id} = ${quoteOpportunities.sourceReference}
+               OR ${emailMessages.providerMessageId} = ${quoteOpportunities.sourceReference})`,
+        ),
+      )
+      .where(and(
+        eq(quoteOpportunities.organizationId, orgId),
+        eq(quoteOpportunities.source, "email"),
+        eq(quoteOpportunities.outcomeStatus, "pending"),
+      ));
+    const threadsWithPendingQuote = new Set(
+      pendingThreadRows.map(r => r.threadId).filter((v): v is string => !!v),
+    );
+    for (const m of outboundCandidates) {
+      if (m.threadId && threadsWithPendingQuote.has(m.threadId)) continue;
+      orphanOutbound.push({
+        id: m.id,
+        providerSentAt: m.providerSentAt ?? new Date(0),
+        threadId: m.threadId,
+      });
+    }
+  }
+
+  return { windowDays, leakSince, missedInbound, orphanOutbound };
 }
 
 /** Per-row classification of whether the message has a useful customer
@@ -4999,6 +5039,235 @@ export async function getLeakedQuoteEmails(
     };
   });
   return { type, windowDays, total, hasMore, rows };
+}
+
+// ─── Phase 3 — Capture leak analytics ────────────────────────────────────
+
+export interface LeakResolutionMix {
+  notQuote: number;
+  ignored: number;
+  createdQuote: number;
+  total: number;
+}
+
+export interface LeakAgingBuckets {
+  lt1d: number;
+  d1to3: number;
+  d3to7: number;
+  d7to14: number;
+  gt14: number;
+  total: number;
+  /** Oldest sentAt across this slice (ISO) — drives the headline "oldest
+   *  unresolved age" tile. `null` when the slice is empty. */
+  oldestSentAt: string | null;
+}
+
+export interface LeakTrendPoint {
+  /** ISO date (YYYY-MM-DD) in UTC. */
+  date: string;
+  discovered: number;
+  resolved: number;
+}
+
+export interface LeakAnalyticsResult {
+  /** Window used for the aging slice (mirrors the queue default). */
+  agingWindowDays: number;
+  /** Window used for the trendline + 30-day resolution mix. */
+  trendWindowDays: number;
+  generatedAt: string;
+  resolutionMix: { sevenDay: LeakResolutionMix; thirtyDay: LeakResolutionMix };
+  aging: { missedInbound: LeakAgingBuckets; orphanOutbound: LeakAgingBuckets };
+  trend: LeakTrendPoint[];
+}
+
+const EMPTY_MIX: LeakResolutionMix = { notQuote: 0, ignored: 0, createdQuote: 0, total: 0 };
+const EMPTY_BUCKETS: LeakAgingBuckets = {
+  lt1d: 0, d1to3: 0, d3to7: 0, d7to14: 0, gt14: 0, total: 0, oldestSentAt: null,
+};
+
+function bucketByAge(sentAt: Date, now: number): keyof Omit<LeakAgingBuckets, "total" | "oldestSentAt"> {
+  const ms = now - sentAt.getTime();
+  const dayMs = 24 * 3600 * 1000;
+  if (ms < 1 * dayMs) return "lt1d";
+  if (ms < 3 * dayMs) return "d1to3";
+  if (ms < 7 * dayMs) return "d3to7";
+  if (ms < 14 * dayMs) return "d7to14";
+  return "gt14";
+}
+
+function bucketsFromSentAts(sentAts: Date[]): LeakAgingBuckets {
+  if (sentAts.length === 0) return { ...EMPTY_BUCKETS };
+  const now = Date.now();
+  const out: LeakAgingBuckets = { ...EMPTY_BUCKETS, total: sentAts.length };
+  let oldest = sentAts[0];
+  for (const t of sentAts) {
+    const k = bucketByAge(t, now);
+    out[k] += 1;
+    if (t.getTime() < oldest.getTime()) oldest = t;
+  }
+  out.oldestSentAt = oldest.toISOString();
+  return out;
+}
+
+function utcDateKey(d: Date): string {
+  // YYYY-MM-DD in UTC so day boundaries align across timezones.
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Phase 3 — analytics powering the Capture Leak Queue header strip.
+ *
+ *   • Resolution mix (7d / 30d): how many leaks were resolved in the
+ *     window, split by `not_quote` / `ignored` (from `capture_leak_reviews`)
+ *     and `created_quote` (from `quote_events.actor='manual_leak_create'`).
+ *   • Aging buckets: current unresolved leaks (`buildLeakCandidateIds` —
+ *     same chokepoint as the queue, so the totals match the badge) bucketed
+ *     by sender-age (<1d, 1-3d, 3-7d, 7-14d, >14d).
+ *   • Trendline (last 30d): per-day discovered-vs-resolved. Discovered
+ *     reads the raw candidate set for the 30-day window (no review filter)
+ *     so resolved rows still appear on their original discovery day.
+ *
+ * Same admin gating + rep-scope contract as `getLeakedQuoteEmails`. When
+ * the caller has no funnel access (`__none__`), returns an empty shell.
+ */
+export async function getLeakAnalytics(
+  orgId: string,
+  scopedRepId: string | null | "__none__",
+): Promise<LeakAnalyticsResult> {
+  const trendWindowDays = 30;
+  const agingWindowDays = 14; // mirrors the queue default
+  const now = Date.now();
+  const generatedAt = new Date(now).toISOString();
+
+  if (scopedRepId === "__none__") {
+    return {
+      agingWindowDays,
+      trendWindowDays,
+      generatedAt,
+      resolutionMix: { sevenDay: { ...EMPTY_MIX }, thirtyDay: { ...EMPTY_MIX } },
+      aging: { missedInbound: { ...EMPTY_BUCKETS }, orphanOutbound: { ...EMPTY_BUCKETS } },
+      trend: emptyTrend(trendWindowDays, now),
+    };
+  }
+
+  const since30 = new Date(now - 30 * 24 * 3600 * 1000);
+  const since7 = new Date(now - 7 * 24 * 3600 * 1000);
+
+  // ── Resolution mix sources ──────────────────────────────────────────
+  const reviewRows = await db
+    .select({
+      decision: captureLeakReviews.decision,
+      decidedAt: captureLeakReviews.decidedAt,
+    })
+    .from(captureLeakReviews)
+    .where(and(
+      eq(captureLeakReviews.organizationId, orgId),
+      sql`${captureLeakReviews.decidedAt} >= ${since30}`,
+    ));
+
+  const manualCreateEvents = await db
+    .select({ occurredAt: quoteEvents.occurredAt })
+    .from(quoteEvents)
+    .innerJoin(quoteOpportunities, eq(quoteEvents.quoteId, quoteOpportunities.id))
+    .where(and(
+      eq(quoteOpportunities.organizationId, orgId),
+      eq(quoteEvents.actor, "manual_leak_create"),
+      sql`${quoteEvents.occurredAt} >= ${since30}`,
+    ));
+
+  const sevenDay: LeakResolutionMix = { ...EMPTY_MIX };
+  const thirtyDay: LeakResolutionMix = { ...EMPTY_MIX };
+  for (const r of reviewRows) {
+    const t = r.decidedAt instanceof Date ? r.decidedAt : new Date(r.decidedAt);
+    const inSeven = t.getTime() >= since7.getTime();
+    if (r.decision === "not_quote") {
+      thirtyDay.notQuote += 1;
+      if (inSeven) sevenDay.notQuote += 1;
+    } else if (r.decision === "ignored") {
+      thirtyDay.ignored += 1;
+      if (inSeven) sevenDay.ignored += 1;
+    }
+  }
+  for (const e of manualCreateEvents) {
+    const t = e.occurredAt instanceof Date ? e.occurredAt : new Date(e.occurredAt);
+    thirtyDay.createdQuote += 1;
+    if (t.getTime() >= since7.getTime()) sevenDay.createdQuote += 1;
+  }
+  thirtyDay.total = thirtyDay.notQuote + thirtyDay.ignored + thirtyDay.createdQuote;
+  sevenDay.total = sevenDay.notQuote + sevenDay.ignored + sevenDay.createdQuote;
+
+  // ── Aging buckets — current unresolved leaks ────────────────────────
+  const candidates = await buildLeakCandidateIds(orgId, agingWindowDays);
+  const agingIds = [...candidates.missedInboundIds, ...candidates.orphanOutboundIds];
+  const sentAtById = new Map<string, Date>();
+  if (agingIds.length > 0) {
+    const rows = await db
+      .select({ id: emailMessages.id, providerSentAt: emailMessages.providerSentAt })
+      .from(emailMessages)
+      .where(and(
+        eq(emailMessages.orgId, orgId),
+        inArray(emailMessages.id, agingIds),
+      ));
+    for (const r of rows) {
+      sentAtById.set(r.id, r.providerSentAt ?? new Date(0));
+    }
+  }
+  const missedInboundBuckets = bucketsFromSentAts(
+    candidates.missedInboundIds.map(id => sentAtById.get(id) ?? new Date(0)),
+  );
+  const orphanOutboundBuckets = bucketsFromSentAts(
+    candidates.orphanOutboundIds.map(id => sentAtById.get(id) ?? new Date(0)),
+  );
+
+  // ── Trendline — discovered vs resolved per day ──────────────────────
+  // Discovered reads the raw (pre-review-filter) candidate set so a
+  // leak that was later reviewed still shows up on its discovery day.
+  const raw30 = await buildRawLeakCandidates(orgId, trendWindowDays);
+  const trendIndex = new Map<string, LeakTrendPoint>();
+  for (let i = trendWindowDays - 1; i >= 0; i--) {
+    const d = new Date(now - i * 24 * 3600 * 1000);
+    const key = utcDateKey(d);
+    trendIndex.set(key, { date: key, discovered: 0, resolved: 0 });
+  }
+  for (const r of raw30.missedInbound) {
+    const key = utcDateKey(r.providerSentAt);
+    const point = trendIndex.get(key);
+    if (point) point.discovered += 1;
+  }
+  for (const r of raw30.orphanOutbound) {
+    const key = utcDateKey(r.providerSentAt);
+    const point = trendIndex.get(key);
+    if (point) point.discovered += 1;
+  }
+  for (const r of reviewRows) {
+    const t = r.decidedAt instanceof Date ? r.decidedAt : new Date(r.decidedAt);
+    const point = trendIndex.get(utcDateKey(t));
+    if (point) point.resolved += 1;
+  }
+  for (const e of manualCreateEvents) {
+    const t = e.occurredAt instanceof Date ? e.occurredAt : new Date(e.occurredAt);
+    const point = trendIndex.get(utcDateKey(t));
+    if (point) point.resolved += 1;
+  }
+  const trend = Array.from(trendIndex.values());
+
+  return {
+    agingWindowDays,
+    trendWindowDays,
+    generatedAt,
+    resolutionMix: { sevenDay, thirtyDay },
+    aging: { missedInbound: missedInboundBuckets, orphanOutbound: orphanOutboundBuckets },
+    trend,
+  };
+}
+
+function emptyTrend(days: number, now: number): LeakTrendPoint[] {
+  const out: LeakTrendPoint[] = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now - i * 24 * 3600 * 1000);
+    out.push({ date: utcDateKey(d), discovered: 0, resolved: 0 });
+  }
+  return out;
 }
 
 // ─── Phase 2A — Capture leak review decisions ────────────────────────────

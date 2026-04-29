@@ -1,7 +1,7 @@
 # FreightDNA - Transportation Brokerage Sales Tool
 
 ## Overview
-FreightDNA is a mini CRM application designed for transportation brokerage sales teams. Its primary goal is to boost efficiency, streamline sales workflows, and manage customer accounts, contacts, and shipping data. The platform aims to facilitate strategic account penetration through RFP and Award management, advanced analytics, and AI-powered tools, ultimately increasing revenue. It incorporates comprehensive role-based access control, AI-driven insights, automated processes, and real-time communication tools.
+FreightDNA is a mini CRM application designed to enhance the efficiency and sales workflows of transportation brokerage sales teams. It focuses on managing customer accounts, contacts, and shipping data, facilitating strategic account penetration through RFP and Award management, advanced analytics, and AI-powered tools. The platform aims to increase revenue by providing comprehensive role-based access control, AI-driven insights, automated processes, and real-time communication tools.
 
 ## User Preferences
 I prefer clear and concise information. I like iterative development with regular updates. Please ask for my approval before implementing any major architectural changes or significant feature modifications. I value clean code and well-documented solutions.
@@ -9,13 +9,13 @@ I prefer clear and concise information. I like iterative development with regula
 ## System Architecture
 
 ### UI/UX Decisions
-The application features a modern, responsive UI built with React, TypeScript, Tailwind CSS, and `shadcn/ui`. It supports dark/light mode, with a black sidebar/header, amber gold accents, the Value Truck logo, KPI stat cards, and a responsive sidebar. Shared UI primitives are used for consistent loading, empty, and error states.
+The application utilizes a modern, responsive UI built with React, TypeScript, Tailwind CSS, and `shadcn/ui`. It supports dark/light mode, features a black sidebar/header with amber gold accents, incorporates the Value Truck logo, KPI stat cards, and a responsive sidebar. Consistent loading, empty, and error states are managed through shared UI primitives. The primary AI user destination is `/ai-hub`, with `/daily-priorities`, `/admin/copilot-analytics`, and `/admin/ai-engagement` serving as aliases that resolve to the `AiHubPage`.
 
 ### Technical Implementations
-FreightDNA is built on a React frontend, an Express.js backend, and a PostgreSQL database with Drizzle ORM, employing session-based authentication with dynamic Role-Based Access Control (RBAC). Key functionalities include:
--   **CRM**: Comprehensive CRUD for companies and contacts.
+FreightDNA is built on a React frontend, an Express.js backend, and a PostgreSQL database with Drizzle ORM. It employs session-based authentication with dynamic Role-Based Access Control (RBAC). Key features include:
+-   **CRM**: CRUD operations for companies and contacts.
 -   **RFP & Award Management**: AI-assisted Excel uploads.
--   **Advanced Analytics**: Lane research, facility coverage gap analysis, lane pattern analysis, historical data, and wallet share.
+-   **Advanced Analytics**: Lane research, coverage gap analysis, lane pattern analysis, historical data, and wallet share.
 -   **User & Team Management**: Administration, hierarchy management, and account reassignment.
 -   **Data Integration**: Global search, OneDrive synchronization, and file attachments.
 -   **Communication & Collaboration**: Task assignment, shared insights, and discussion topics.
@@ -28,8 +28,8 @@ FreightDNA is built on a React frontend, an Express.js backend, and a PostgreSQL
 -   **Carrier Hub**: Centralized carrier intelligence, contact management, and Carrier Reliability Score.
 -   **Rate Intelligence & Rep Coaching**: SONAR-driven benchmarks and GPT-4o coaching cards.
 -   **Email Intelligence**: Customer contact capture, two-way carrier email integration, and inbound email intent signal extraction.
--   **Conversations Inbox**: Org-scoped email thread management with AI summaries and suggested actions, featuring a hybrid real-time webhook and polling email sync model. Background jobs are observability-instrumented via `withHeartbeat()` (`server/lib/cronHeartbeat.ts`); the Capture Audit Status pill flags both standard staleness AND stuck-running corpses (a tick whose `lastStatus="running"` exceeds the per-job-class threshold from `getStuckRunningThresholdMs` — `max(intervalMs*3, 6 min)` for critical pipeline jobs, `max(intervalMs*5, 10 min)` for non-critical). Admins have manual recovery hatches: "Sync mail now", "Renew subscriptions now", and "Run AI batch now" buttons that bypass cron timing and trigger immediate ticks (each guarded against duplicate invocation). The `email_intelligence_batch` job is hardened against silent stalls with three layered protections: (1) every OpenAI `chat.completions.create` call passes `{ timeout: 60_000, maxRetries: 1 }` instead of the SDK's 10-min default, (2) a process-wide `_batchInFlight` mutex makes initial/cron/manual ticks share one slot — overlapping ticks log `skipping <source> tick: previous batch still running` instead of piling up, (3) every batch body races against `BATCH_WALL_CLOCK_MS = 5 * 60 * 1000` via `runWithWallClock()` (`server/emailIntelligenceScheduler.ts`). The wall clock uses **cooperative cancellation via AbortSignal**: on timeout the controller is aborted (canceling the in-flight OpenAI HTTP request, which honors `signal` in its RequestOptions) AND the batch loop checks `signal.aborted` between iterations to exit cleanly — so the orphaned body cannot keep running in the background and overlap with the next tick. The heartbeat row records `error: email_intelligence_batch exceeded 300000ms wall clock` and the in-flight flag is cleared so the next tick starts fresh. Test helpers `_isBatchInFlightForTests`, `_resetBatchInFlightForTests`, `_getBatchWallClockMsForTests`, `_runWithWallClockForTests`, and `_BatchTimeoutErrorForTests` are exported for regression coverage in `tests/email-sync-cadence.test.ts` (section 7b).
--   **Quote Lifecycle Autopilot**: Automates quote processing from email ingestion, outbound reply analysis, and no-response timeouts.
+-   **Conversations Inbox**: Org-scoped email thread management with AI summaries and suggested actions. Email synchronization uses a hybrid real-time webhook and polling model, with robust background job monitoring and recovery mechanisms.
+-   **Quote Lifecycle Autopilot**: Automates quote processing, including email ingestion and outbound reply analysis.
 -   **Geographic Lane Patterns**: Defines corridor patterns and tracks contact responsibilities.
 -   **AI Intelligence Hub**: A unified dashboard for various AI-driven insights.
 -   **Automated Processes**: Auto-sync customer emails, Tactical Learning Engine, Quote Request SLA Alerting, and Auto Weekly Account Review generation.
@@ -39,12 +39,12 @@ FreightDNA is built on a React frontend, an Express.js backend, and a PostgreSQL
 -   **Available Freight Cockpit**: A triage cockpit for freight opportunities.
 -   **Won Load Autopilot**: Automates the conversion of won quotes into freight opportunities, triggering notifications and an approval modal.
 -   **Schema-Drift Guard**: Compares Drizzle schema against `information_schema` at boot.
--   **Capture Leak Queue (Phase 1 read-only + Phase 2A review/dismiss + Phase 2B manual create)**: Row-level expansion of the missed-inbound / orphan-outbound counters surfaced by the Capture funnel diagnostics panel on `/freight-capture`. `getLeakedQuoteEmails`, `getFunnelDiagnostics`, and `manuallyCreateQuoteFromLeakRow` all share `buildLeakCandidateIds` so the count, the queue, and the manual-create race-guard cannot drift. Two tabs (Missed inbound default), per-row customer-state chip ("Known customer" / "Unknown customer" / "No linked customer"), Open-thread on every row. **Phase 2A** adds two admin actions on every row — "Not a quote" (`decision="not_quote"`) and "Ignore for now" (`decision="ignored"`) — backed by the `capture_leak_reviews` table and the `reviewLeakRow` service. The (orgId, messageId, leakType) review uniqueness is enforced by an `onConflictDoUpdate` so re-reviews are idempotent. `buildLeakCandidateIds` filters out reviewed (messageId, leakType) pairs at the end, so a single write drops both the diagnostics counter and the queue row in lock-step (no client-side hiding). **Phase 2B** adds a third action ("Create quote") on Missed Inbound rows ONLY (Orphan Outbound has no inbound payload to parse) — `manuallyCreateQuoteFromLeakRow` reuses the autopilot `ingestQuoteFromEmail` path, writes one `quote_events` audit row with `actor="manual_leak_create"` on success, and the new quote's `sourceReference` (the `providerMessageId`) becomes the resolution evidence (no `capture_leak_reviews` row written for create — single source of truth). The route maps statuses → `201 created` / `200 duplicate` / `422 unparseable` / `409 not_a_leak` / `400 wrong_direction` / `404 not_found`. The UI deep-links to the new/existing quote via `/customer-quotes?quote=<id>`. Admin-gated routes: `GET /api/customer-quotes/funnel-diagnostics/leaks`, `POST .../leaks/review`, `POST .../leaks/create-quote` — all mirror the diagnostics route's `elevated.has(user.role)` + `resolveFunnelRepScope` gating. Regression coverage: `server/__tests__/captureLeakActions.test.ts` (9 tests covering review removal, idempotency, cross-tenant isolation, manual create lock-step, duplicate detection, wrong-direction, not-a-leak after Phase 2A review).
--   **Cross-Tab UX Layer**: Hover-card previews, deep-linking, SSE pub/sub for real-time updates across tabs, and a unified Lane Inbox feed with cross-tab navigation.
--   **Universal Flow Primitives**: Includes a command palette for quick actions and navigation, and a consistent `DetailDrawer` and `EntityLink` pattern.
+-   **Capture Leak Queue**: Manages missed inbound/orphan outbound emails with admin actions for review, manual quote creation, and analytics.
+-   **Cross-Tab UX Layer**: Provides hover-card previews, deep-linking, SSE pub/sub for real-time updates, and a unified Lane Inbox feed with cross-tab navigation.
+-   **Universal Flow Primitives**: Includes a command palette for quick actions and navigation, and consistent `DetailDrawer` and `EntityLink` patterns.
 
 ### System Design Choices
-The codebase has ~54 pre-existing TypeScript errors in `npm run check` (primarily `err?.message` on `unknown` catch variables in `server/routes.ts` non-company sections, `sonar.ts`, `valueiq.ts`, `marketSignals.ts`); these are tracked as a baseline to drive down and do not affect runtime. New work is held to a zero-new-error standard. Express handlers normalize `req.params` and `req.query` using helpers. AI chat conversation endpoints are user-scoped. The database schema includes tables for caching, contact suggestions, lane patterns, email conversations, proven tactics, and Webex integration. `freight_opportunities` and `load_fact` are canonical freight data sources. Performance is optimized via dashboard query optimization, server-side caching, and in-memory caching. Engineering patterns include visibility expansion, multi-layered caching, keyset pagination, rate-limited external calls, background workers, and webhook-driven reactivity. Customer sender domain learning is implemented, and the Carrier Ranker integrates history from `financial_uploads` and `load_fact`. A dedicated `/admin/integrations-health` page provides live status for external integrations, polling health probes and notifying administrators of degraded services. Reusable handler helpers enforce consistent request parsing, authentication, and error handling.
+The codebase maintains a zero-new-error standard for new work, with existing TypeScript errors being tracked for future resolution. Express handlers use helpers for normalizing `req.params` and `req.query`. AI chat conversation endpoints are user-scoped. The database schema includes tables for caching, contact suggestions, lane patterns, email conversations, proven tactics, and Webex integration. `freight_opportunities` and `load_fact` serve as canonical freight data sources. Performance is optimized through dashboard query optimization, server-side, and in-memory caching. Engineering patterns include visibility expansion, multi-layered caching, keyset pagination, rate-limited external calls, background workers, and webhook-driven reactivity. Customer sender domain learning is implemented, and the Carrier Ranker integrates history from `financial_uploads` and `load_fact`. A dedicated `/admin/integrations-health` page monitors external integrations. `server/agent/` provides the LLM tooling runtime, while `server/agentic/` handles the control plane and autonomy layers; both are complementary. For development and testing, a specific `if (!IS_PROD)` block in `server/auth.ts` allows for local authentication bypass, separate from the production Clerk authentication.
 
 ## External Dependencies
 -   **PostgreSQL**: Primary database.
@@ -60,27 +60,4 @@ The codebase has ~54 pre-existing TypeScript errors in `npm run check` (primaril
 -   **Webex Calling API**: Telephony integration.
 -   **FreightWaves TRAC**: Spot rates, forecasts, and market signals.
 -   **ZoomInfo**: Contact intelligence.
--   **Clerk**: Authentication.
-## Architecture Clarifications (read before deleting anything)
-
-### Auth boundary
-
--   In production (`NODE_ENV === "production"`), **Clerk is the only auth system**.
--   `server/auth.ts` always calls `clerkMiddleware()` first on every request, and `client/src/App.tsx` wraps the entire app in `<ClerkProvider>`.
--   The session + `password_reset_tokens` + bcrypt path inside `server/auth.ts` is wrapped in `if (!IS_PROD) { ... }` and exists **only** for: dev/test login, the `DEV_AUTH_BYPASS_USER_ID` developer convenience, and keeping the automated test suite working.
--   This is **not** "hybrid auth in production." Do **not** delete `server/auth.ts` thinking it is unused legacy production code — removing it will break local development and the test suite.
-
-### Agent vs agentic layering
-
--   `server/agent/` is the **LLM tooling runtime**: prompts, tool dispatch, retrieval and memory primitives, the OpenAI client, persona, classifier, router. It is the lower-level library the AI features sit on top of.
--   `server/agentic/` is the **control plane / HITL / autonomy layer**: agent registry, autonomy levels, human-in-the-loop approvals, outcome tracking, AI Center routes.
--   They are **complementary layers, not "old vs new."** Many features depend on both — weekly account reviews, ValueIQ, conversation thread suggestions and summaries, and the AI Center all import from one or the other (and several from both).
--   Do **not** "pick a winner" and delete the other folder. Renaming either one is also risky because importers across `server/routes/`, `server/services/`, and the schedulers reference the directory names directly.
-
-### AI Hub and "today" surfaces
-
--   `/ai-hub` is the **canonical AI user destination** (driven by `aiHubItem` in `client/src/lib/nav-items.ts` and rendered as `AiHubPage`).
--   `/daily-priorities`, `/admin/copilot-analytics`, and `/admin/ai-engagement` are **aliases** — all three already resolve to `AiHubPage` in `client/src/App.tsx` with the matching tab pre-selected via `resolveAiHubTab` (Task #742). Do not treat them as separate pages.
--   `/ai/*` (e.g. `/ai/agents`, `/ai/pods`, `/ai/admin`, `/ai/approvals`, `/ai/adapters`) is the **agentic control plane** (admin/ops surface for AI agents), **not** where reps do their daily work.
--   `/ai-intelligence-legacy` is a **defensive fallback** to the older AI page. Do **not** delete it without first measuring usage telemetry.
--   For "work my day" there are only **two real surfaces**: `/today` (`TodayQueuePage`) and `/dashboard` (`Dashboard`). The home route `/` reads the user's `prefersToday` preference in `HomeLandingRouter` and redirects accordingly. `/daily-priorities` is **not** a third "today" surface — it is the AI Hub alias described above.
+-   **Clerk**: Authentication (production).

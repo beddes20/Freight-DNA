@@ -19,6 +19,7 @@ import {
   getFunnel,
   getFunnelDiagnostics,
   getLeakedQuoteEmails,
+  getLeakAnalytics,
   reviewLeakRow,
   manuallyCreateQuoteFromLeakRow,
   listNewContactReviews,
@@ -908,6 +909,29 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     } catch (err) {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] funnel-diagnostics/leaks error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Phase 3 — Capture leak analytics: 7/30-day resolution mix, current
+  // unresolved aging buckets, and a 30-day discovered-vs-resolved
+  // trendline. Same admin gating + rep-scope rules as the queue.
+  // Read-only; no writes; data sources are already-existing tables
+  // (capture_leak_reviews, quote_events with actor=manual_leak_create,
+  // and the same buildLeakCandidateIds chokepoint as the queue).
+  app.get("/api/customer-quotes/funnel-diagnostics/leaks/analytics", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const elevated = new Set(["admin", "director", "sales_director"]);
+      if (!elevated.has(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const scope = await resolveFunnelRepScope(user.organizationId, { id: user.id, role: user.role });
+      const result = await getLeakAnalytics(user.organizationId, scope);
+      res.json(result);
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      console.error("[customer-quotes] funnel-diagnostics/leaks/analytics error:", err);
       res.status(500).json({ error: msg });
     }
   });
