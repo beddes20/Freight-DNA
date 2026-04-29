@@ -5424,7 +5424,14 @@ export type QuoteEvent = typeof quoteEvents.$inferSelect;
 
 export const CAPTURE_LEAK_TYPES = ["missed_inbound", "orphan_outbound"] as const;
 export type CaptureLeakType = typeof CAPTURE_LEAK_TYPES[number];
-export const CAPTURE_LEAK_REVIEW_DECISIONS = ["not_quote", "ignored"] as const;
+// Phase 4 — `attached` records that an admin manually linked an Orphan
+// Outbound row to an existing quote_opportunity. The chokepoint
+// (`buildLeakCandidateIds`) excludes any (messageId, leakType) with ANY
+// review row, so attached rows naturally drop out of the queue alongside
+// the existing not_quote/ignored decisions. The companion
+// quote_events row (actor=manual_leak_attach, eventType=email_attached)
+// is audit/analytics only — this row is the resolution evidence.
+export const CAPTURE_LEAK_REVIEW_DECISIONS = ["not_quote", "ignored", "attached"] as const;
 export type CaptureLeakReviewDecision = typeof CAPTURE_LEAK_REVIEW_DECISIONS[number];
 
 export const captureLeakReviews = pgTable(

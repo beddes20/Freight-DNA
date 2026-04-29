@@ -41,7 +41,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import { AlertCircle, ExternalLink, Inbox, Send, X, Clock, Plus } from "lucide-react";
+import { AlertCircle, ExternalLink, Inbox, Send, X, Clock, Plus, Link2 } from "lucide-react";
+import { AttachLeakToQuoteDialog, type AttachStatus } from "./AttachLeakToQuoteDialog";
 
 type LeakType = "missed_inbound" | "orphan_outbound";
 type LeakDecision = "not_quote" | "ignored";
@@ -233,8 +234,11 @@ interface RowActionsProps {
   leakType: LeakType;
   isReviewing: boolean;
   isCreating: boolean;
+  isAttaching: boolean;
   onReview: (decision: LeakDecision) => void;
   onCreateQuote?: () => void;
+  /** Phase 4 — Orphan Outbound only. Opens the picker dialog. */
+  onAttach?: () => void;
   /** First-action button ref so the parent can focus the next row after
    *  the current row is removed. */
   firstActionRef?: (el: HTMLButtonElement | null) => void;
@@ -245,11 +249,18 @@ function RowActions({
   leakType,
   isReviewing,
   isCreating,
+  isAttaching,
   onReview,
   onCreateQuote,
+  onAttach,
   firstActionRef,
 }: RowActionsProps): JSX.Element {
-  const busy = isReviewing || isCreating;
+  const busy = isReviewing || isCreating || isAttaching;
+  // The first interactive control receives the ref so keyboard focus can
+  // hop to the next row's primary action after the current row is removed.
+  // Order of preference matches visual order: Create > Attach > Not a quote.
+  const firstSlot: "create" | "attach" | "notquote" =
+    onCreateQuote ? "create" : onAttach ? "attach" : "notquote";
   return (
     <div
       className="flex flex-wrap items-center gap-1 mt-1.5"
@@ -262,7 +273,7 @@ function RowActions({
           variant="outline"
           disabled={busy}
           onClick={onCreateQuote}
-          ref={firstActionRef}
+          ref={firstSlot === "create" ? firstActionRef : undefined}
           className="h-6 px-2 text-[11px] gap-1 border-emerald-600/40 text-emerald-700 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-950/30"
           data-testid={`leak-action-create-quote-${messageId}`}
           aria-label="Create a quote from this email"
@@ -271,13 +282,29 @@ function RowActions({
           {isCreating ? "Creating…" : "Create quote"}
         </Button>
       )}
+      {onAttach && (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={onAttach}
+          ref={firstSlot === "attach" ? firstActionRef : undefined}
+          className="h-6 px-2 text-[11px] gap-1 border-sky-600/40 text-sky-700 hover:bg-sky-50 dark:text-sky-300 dark:hover:bg-sky-950/30"
+          data-testid={`leak-action-attach-${messageId}`}
+          aria-label="Attach this email to an existing quote"
+        >
+          <Link2 className="h-3 w-3" />
+          {isAttaching ? "Attaching…" : "Attach to quote"}
+        </Button>
+      )}
       <Button
         type="button"
         size="sm"
         variant="ghost"
         disabled={busy}
         onClick={() => onReview("not_quote")}
-        ref={onCreateQuote ? undefined : firstActionRef}
+        ref={firstSlot === "notquote" ? firstActionRef : undefined}
         className="h-6 px-2 text-[11px] gap-1 text-muted-foreground hover:text-foreground"
         data-testid={`leak-action-not-quote-${messageId}`}
         aria-label="Mark this row as not a quote"
@@ -307,6 +334,7 @@ interface InboundRowViewProps {
   row: InboundRow;
   reviewingId: string | null;
   creatingId: string | null;
+  attachingId: string | null;
   onReview: (messageId: string, decision: LeakDecision) => void;
   onCreateQuote: (messageId: string) => void;
   firstActionRef?: (el: HTMLButtonElement | null) => void;
@@ -316,6 +344,7 @@ function InboundRowView({
   row,
   reviewingId,
   creatingId,
+  attachingId,
   onReview,
   onCreateQuote,
   firstActionRef,
@@ -350,6 +379,7 @@ function InboundRowView({
             leakType="missed_inbound"
             isReviewing={reviewingId === row.messageId}
             isCreating={creatingId === row.messageId}
+            isAttaching={attachingId === row.messageId}
             onReview={(d) => onReview(row.messageId, d)}
             onCreateQuote={() => onCreateQuote(row.messageId)}
             firstActionRef={firstActionRef}
@@ -367,14 +397,18 @@ function InboundRowView({
 interface OutboundRowViewProps {
   row: OutboundRow;
   reviewingId: string | null;
+  attachingId: string | null;
   onReview: (messageId: string, decision: LeakDecision) => void;
+  onAttach: (row: OutboundRow) => void;
   firstActionRef?: (el: HTMLButtonElement | null) => void;
 }
 
 function OutboundRowView({
   row,
   reviewingId,
+  attachingId,
   onReview,
+  onAttach,
   firstActionRef,
 }: OutboundRowViewProps): JSX.Element {
   return (
@@ -407,13 +441,17 @@ function OutboundRowView({
             </div>
           )}
           {/* Phase 2B intentionally omits "Create quote" on Orphan Outbound:
-              there's no inbound email payload to parse. */}
+              there's no inbound email payload to parse. Phase 4 adds
+              "Attach to quote" instead — a picker over existing quotes
+              for this customer. */}
           <RowActions
             messageId={row.messageId}
             leakType="orphan_outbound"
             isReviewing={reviewingId === row.messageId}
             isCreating={false}
+            isAttaching={attachingId === row.messageId}
             onReview={(d) => onReview(row.messageId, d)}
+            onAttach={() => onAttach(row)}
             firstActionRef={firstActionRef}
           />
         </div>
@@ -437,10 +475,24 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
   const [limit, setLimit] = useState<number>(PAGE_SIZE);
   const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [creatingId, setCreatingId] = useState<string | null>(null);
-  // Index of the row to focus next after the current row is removed.
-  // Captured at action-time so we focus by *position* rather than by id
-  // (which has just disappeared from the list).
-  const [focusAfterIndex, setFocusAfterIndex] = useState<number | null>(null);
+  // Phase 4 — Orphan Outbound attach picker. Holds the row we opened the
+  // dialog for so the parent can re-focus by index after the dialog closes.
+  // Includes a `capturedType` snapshot so the focus effect can bail if the
+  // user switched tabs while the dialog was open (otherwise the index
+  // would address a row in the *new* tab's list).
+  const [attachDialog, setAttachDialog] = useState<
+    { row: OutboundRow; index: number; capturedType: LeakType } | null
+  >(null);
+  // Pending row-focus snapshot. We store the type at action-time so the
+  // post-mutation focus effect doesn't fire against rows from a different
+  // tab if the rep switched tabs in the interim. (Without this guard the
+  // useEffect would happily focus the wrong row from the new list.)
+  const [pendingFocus, setPendingFocus] = useState<
+    { index: number; capturedType: LeakType } | null
+  >(null);
+  // Polite live-region message: announces queue state changes to AT users
+  // ("Marked as not a quote", "Attached to quote", etc.).
+  const [liveMessage, setLiveMessage] = useState<string>("");
   const rowFirstActionRefs = useRef<Map<number, HTMLButtonElement | null>>(new Map());
   const { toast } = useToast();
   const [, navigate] = useLocation();
@@ -464,20 +516,28 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
   // the removed one (or the last row if we acted on the tail). Runs
   // after the next render so the new row at that index is mounted.
   // Skips silently on edge paths (index unknown, list emptied, refs
-  // not yet attached) so a focus glitch never blocks the rep.
+  // not yet attached, or the user switched tabs in the meantime) so a
+  // focus glitch never blocks the rep.
   useEffect(() => {
-    if (focusAfterIndex == null) return;
+    if (pendingFocus == null) return;
     if (!data) return;
-    const rows = data.rows;
-    if (focusAfterIndex < 0 || rows.length === 0) {
-      setFocusAfterIndex(null);
+    // Bail if the rep switched tabs since the action fired — the row
+    // refs map now describes a different list and the index would
+    // resolve to the wrong row.
+    if (pendingFocus.capturedType !== type) {
+      setPendingFocus(null);
       return;
     }
-    const target = Math.min(focusAfterIndex, rows.length - 1);
+    const rows = data.rows;
+    if (pendingFocus.index < 0 || rows.length === 0) {
+      setPendingFocus(null);
+      return;
+    }
+    const target = Math.min(pendingFocus.index, rows.length - 1);
     const btn = rowFirstActionRefs.current.get(target);
     if (btn) btn.focus();
-    setFocusAfterIndex(null);
-  }, [data, focusAfterIndex]);
+    setPendingFocus(null);
+  }, [data, pendingFocus, type]);
 
   // Both writes need to invalidate BOTH the queue and the funnel-diagnostics
   // counts so the badge total drops in lock-step with the queue row, and
@@ -500,12 +560,14 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
     onMutate: ({ messageId }) => setReviewingId(messageId),
     onSuccess: (_data, vars) => {
       invalidateLeakViews();
+      const title = vars.decision === "not_quote" ? "Marked as not a quote" : "Hidden for now";
       toast({
-        title: vars.decision === "not_quote" ? "Marked as not a quote" : "Hidden for now",
+        title,
         description: vars.decision === "not_quote"
           ? "Removed from queue."
           : "Removed from queue. Use diagnostics later to re-review.",
       });
+      setLiveMessage(`${title}. Removed from queue.`);
     },
     onError: (err) => {
       toast({
@@ -607,13 +669,86 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
   }
 
   function handleReview(messageId: string, decision: LeakDecision): void {
-    setFocusAfterIndex(indexOfMessageId(messageId));
+    setPendingFocus({ index: indexOfMessageId(messageId), capturedType: type });
     reviewMutation.mutate({ messageId, decision, leakType: type });
   }
 
   function handleCreateQuote(messageId: string): void {
-    setFocusAfterIndex(indexOfMessageId(messageId));
+    setPendingFocus({ index: indexOfMessageId(messageId), capturedType: type });
     createMutation.mutate({ messageId });
+  }
+
+  function handleOpenAttach(row: OutboundRow): void {
+    setAttachDialog({ row, index: indexOfMessageId(row.messageId), capturedType: type });
+  }
+
+  // Called by AttachLeakToQuoteDialog with the server's status union.
+  // Maps each terminal outcome to a toast + live-region message and,
+  // when the row was actually removed from the queue, schedules focus
+  // for the next row at the same position (only if the rep didn't
+  // switch tabs in the meantime, enforced inside the focus effect).
+  function handleAttachResult(result: { status: AttachStatus; quoteId?: string }): void {
+    if (!attachDialog) return;
+    const { index, capturedType } = attachDialog;
+    setAttachDialog(null);
+    switch (result.status) {
+      case "attached": {
+        invalidateLeakViews();
+        queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes"] });
+        setPendingFocus({ index, capturedType });
+        toast({
+          title: "Attached to quote",
+          description: "The leak row has been resolved and the email is linked to the quote.",
+        });
+        setLiveMessage("Attached to quote. Removed from queue.");
+        if (result.quoteId) {
+          navigate(`/customer-quotes?quote=${encodeURIComponent(result.quoteId)}`);
+        }
+        break;
+      }
+      case "already_attached": {
+        invalidateLeakViews();
+        toast({
+          title: "Already attached",
+          description: "Another reviewer attached this email already — opening the quote.",
+        });
+        setLiveMessage("Already attached to a quote.");
+        if (result.quoteId) {
+          navigate(`/customer-quotes?quote=${encodeURIComponent(result.quoteId)}`);
+        }
+        break;
+      }
+      case "not_a_leak":
+        invalidateLeakViews();
+        toast({
+          title: "Row no longer in queue",
+          description: "Another reviewer or the autopilot resolved this row already.",
+        });
+        setLiveMessage("Row no longer in queue.");
+        break;
+      case "not_found":
+        toast({
+          title: "Email not found",
+          description: "This row no longer exists in your organization.",
+          variant: "destructive",
+        });
+        setLiveMessage("Email not found.");
+        break;
+      case "wrong_leak_type":
+        toast({
+          title: "Cannot attach this row",
+          description: "Attach is only available on orphan outbound rows.",
+          variant: "destructive",
+        });
+        break;
+      case "invalid_quote":
+        toast({
+          title: "Quote not found",
+          description: "The selected quote no longer exists or belongs to a different org.",
+          variant: "destructive",
+        });
+        break;
+    }
   }
 
   const skeletonCount = 5;
@@ -711,6 +846,7 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
                     row={r}
                     reviewingId={reviewingId}
                     creatingId={creatingId}
+                    attachingId={null}
                     onReview={handleReview}
                     onCreateQuote={handleCreateQuote}
                     firstActionRef={(el) => {
@@ -724,7 +860,9 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
                     key={r.messageId}
                     row={r}
                     reviewingId={reviewingId}
+                    attachingId={attachDialog?.row.messageId ?? null}
                     onReview={handleReview}
+                    onAttach={handleOpenAttach}
                     firstActionRef={(el) => {
                       if (el) rowFirstActionRefs.current.set(i, el);
                       else rowFirstActionRefs.current.delete(i);
@@ -756,6 +894,29 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
         )}
         </div>
       </div>
+
+      {/* Polite live region for AT users — announces decisions and attach
+          outcomes without stealing focus. Visually hidden. */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+        data-testid="leak-queue-live"
+      >
+        {liveMessage}
+      </div>
+
+      <AttachLeakToQuoteDialog
+        open={attachDialog !== null}
+        messageId={attachDialog?.row.messageId ?? null}
+        rowSubject={attachDialog?.row.subject ?? null}
+        customerNameHint={attachDialog?.row.linkedCustomerName ?? null}
+        onOpenChange={(next) => {
+          if (!next) setAttachDialog(null);
+        }}
+        onAttached={handleAttachResult}
+      />
     </div>
   );
 }

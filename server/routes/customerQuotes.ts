@@ -22,6 +22,8 @@ import {
   getLeakAnalytics,
   reviewLeakRow,
   manuallyCreateQuoteFromLeakRow,
+  attachOrphanOutboundToQuote,
+  listAttachCandidateQuotes,
   listNewContactReviews,
   resolveNewContactReview,
   resolveFunnelRepScope,
@@ -1024,6 +1026,81 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     } catch (err) {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] funnel-diagnostics/leaks/create-quote error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Phase 4 — List candidate quote_opportunities to attach an
+  // Orphan Outbound row to. Scoped to the row's linked customer
+  // (default = open quotes; toggle = recent terminal). Same admin
+  // gating as the queue.
+  app.get("/api/customer-quotes/funnel-diagnostics/leaks/attach-candidates", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const elevated = new Set(["admin", "director", "sales_director"]);
+      if (!elevated.has(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const messageId = qStr(req.query.messageId);
+      if (!messageId) {
+        return res.status(400).json({ error: "messageId is required" });
+      }
+      const closed = qStr(req.query.closed) === "true";
+      const q = qStr(req.query.q) ?? undefined;
+      const result = await listAttachCandidateQuotes(user.organizationId, messageId, { closed, q });
+      res.json(result);
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      console.error("[customer-quotes] funnel-diagnostics/leaks/attach-candidates error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Phase 4 — Attach an Orphan Outbound leak row to an existing
+  // quote_opportunity. Writes a `capture_leak_reviews(decision='attached')`
+  // row (the chokepoint excludes ANY review row, so the queue + counters
+  // shrink in lock-step) AND a `quote_events(actor='manual_leak_attach',
+  // eventType='email_attached')` audit row keyed off the target quote.
+  // Idempotent at the DB level via the unique index on
+  // (orgId, messageId, leakType).
+  const attachLeakBodySchema = z.object({
+    messageId: z.string().min(1),
+    targetQuoteId: z.string().min(1),
+  });
+  app.post("/api/customer-quotes/funnel-diagnostics/leaks/attach", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const elevated = new Set(["admin", "director", "sales_director"]);
+      if (!elevated.has(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const parsed = attachLeakBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      const result = await attachOrphanOutboundToQuote(
+        user.organizationId,
+        user.id,
+        parsed.data.messageId,
+        parsed.data.targetQuoteId,
+      );
+      switch (result.status) {
+        case "attached":
+          return res.status(201).json({ status: "attached", quoteId: result.quoteId });
+        case "already_attached":
+          return res.status(200).json({ status: "already_attached", quoteId: result.quoteId });
+        case "not_a_leak":
+          return res.status(409).json({ status: "not_a_leak" });
+        case "not_found":
+          return res.status(404).json({ status: "not_found" });
+        case "wrong_leak_type":
+          return res.status(400).json({ status: "wrong_leak_type" });
+        case "invalid_quote":
+          return res.status(404).json({ status: "invalid_quote" });
+      }
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      console.error("[customer-quotes] funnel-diagnostics/leaks/attach error:", err);
       res.status(500).json({ error: msg });
     }
   });

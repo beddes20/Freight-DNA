@@ -5096,6 +5096,9 @@ export interface LeakResolutionMix {
   notQuote: number;
   ignored: number;
   createdQuote: number;
+  /** Phase 4 — orphan_outbound rows manually attached to an existing
+   *  quote_opportunity. Sourced from `capture_leak_reviews.decision='attached'`. */
+  attached: number;
   total: number;
 }
 
@@ -5129,7 +5132,7 @@ export interface LeakAnalyticsResult {
   trend: LeakTrendPoint[];
 }
 
-const EMPTY_MIX: LeakResolutionMix = { notQuote: 0, ignored: 0, createdQuote: 0, total: 0 };
+const EMPTY_MIX: LeakResolutionMix = { notQuote: 0, ignored: 0, createdQuote: 0, attached: 0, total: 0 };
 const EMPTY_BUCKETS: LeakAgingBuckets = {
   lt1d: 0, d1to3: 0, d3to7: 0, d7to14: 0, gt14: 0, total: 0, oldestSentAt: null,
 };
@@ -5235,6 +5238,9 @@ export async function getLeakAnalytics(
     } else if (r.decision === "ignored") {
       thirtyDay.ignored += 1;
       if (inSeven) sevenDay.ignored += 1;
+    } else if (r.decision === "attached") {
+      thirtyDay.attached += 1;
+      if (inSeven) sevenDay.attached += 1;
     }
   }
   for (const e of manualCreateEvents) {
@@ -5242,8 +5248,8 @@ export async function getLeakAnalytics(
     thirtyDay.createdQuote += 1;
     if (t.getTime() >= since7.getTime()) sevenDay.createdQuote += 1;
   }
-  thirtyDay.total = thirtyDay.notQuote + thirtyDay.ignored + thirtyDay.createdQuote;
-  sevenDay.total = sevenDay.notQuote + sevenDay.ignored + sevenDay.createdQuote;
+  thirtyDay.total = thirtyDay.notQuote + thirtyDay.ignored + thirtyDay.createdQuote + thirtyDay.attached;
+  sevenDay.total = sevenDay.notQuote + sevenDay.ignored + sevenDay.createdQuote + sevenDay.attached;
 
   // ── Aging buckets — current unresolved leaks ────────────────────────
   const candidates = await buildLeakCandidateIds(orgId, agingWindowDays);
@@ -5567,6 +5573,420 @@ async function _runManualLeakCreate(
       // surfaces this status, so handle it explicitly rather than fall through.
       return { status: "wrong_direction" };
   }
+}
+
+// ─── Phase 4 — Attach Orphan Outbound row to an existing quote ────────────
+
+export type AttachLeakStatus =
+  | "attached"          // a fresh capture_leak_reviews(decision='attached') row inserted
+  | "already_attached"  // (orgId,messageId,'orphan_outbound') already had a review row
+  | "not_a_leak"        // race: row no longer in the orphan_outbound candidate set
+  | "not_found"         // messageId doesn't belong to this org (or doesn't exist)
+  | "wrong_leak_type"   // not an orphan_outbound row (direction != "outbound")
+  | "invalid_quote";    // targetQuoteId not found in this org
+
+export interface AttachLeakResult {
+  status: AttachLeakStatus;
+  quoteId?: string;
+}
+
+// Per-(orgId, messageId) in-process mutex — same pattern as
+// `_manualLeakCreateInFlight`. Two concurrent admin clicks on the same
+// row would both pass the "no existing review" check and both call
+// `INSERT … ON CONFLICT DO NOTHING`; the unique index guarantees only
+// one row, but the second caller's `quote_events` audit row would
+// orphan-link to a decision they didn't make. Serializing per row makes
+// the audit cleanly attribute to whichever click won the race.
+const _leakAttachInFlight = new Map<string, Promise<AttachLeakResult>>();
+
+/**
+ * Extract the previously-attached quote id from a `capture_leak_reviews.note`
+ * value. Notes for `decision='attached'` are stored as `attached:<qid>` so
+ * the `attached:` prefix is stripped before the id is surfaced back to the
+ * caller (the UI uses it for deep-linking). Returns undefined when the note
+ * is empty or doesn't follow the expected shape — callers treat that as
+ * "we know it's already attached but we don't have a deep-link target".
+ */
+function parseAttachedNoteQuoteId(note: string | null | undefined): string | undefined {
+  const raw = (note ?? "").trim();
+  if (!raw) return undefined;
+  const stripped = raw.startsWith("attached:") ? raw.slice("attached:".length) : raw;
+  const trimmed = stripped.trim();
+  return trimmed || undefined;
+}
+
+/**
+ * Attach an Orphan Outbound leak row to an existing quote_opportunity.
+ *
+ * Side effects on success ("attached"):
+ *   1) Inserts a `capture_leak_reviews` row with `decision='attached'`
+ *      (and `note` carrying the targetQuoteId for audit). The chokepoint
+ *      `buildLeakCandidateIds` filters out ANY (messageId, leakType) with
+ *      a review row, so the row drops out of the queue + diagnostics
+ *      counters on the next refetch — same lock-step behaviour as the
+ *      other decisions.
+ *   2) Inserts a `quote_events` row with `actor='manual_leak_attach'`
+ *      and `eventType='email_attached'`. This is audit/analytics input
+ *      only — the chokepoint reads `capture_leak_reviews`, never
+ *      `quote_events`.
+ *
+ * Cross-tenant safety: BOTH the email AND the target quote must belong
+ * to `orgId`. A user in org A cannot attach an org A email to an org B
+ * quote (or vice versa).
+ *
+ * Idempotency: the unique index on (orgId, messageId, leakType) is the
+ * source of truth. A replay returns `already_attached` without writing
+ * a second `quote_events` row (we only write the event on a fresh
+ * insert).
+ */
+export async function attachOrphanOutboundToQuote(
+  orgId: string,
+  userId: string | null,
+  messageId: string,
+  targetQuoteId: string,
+): Promise<AttachLeakResult> {
+  const id = (messageId ?? "").trim();
+  const qid = (targetQuoteId ?? "").trim();
+  if (!id) return { status: "not_found" };
+  if (!qid) return { status: "invalid_quote" };
+
+  const mutexKey = `${orgId}::${id}`;
+  const existing = _leakAttachInFlight.get(mutexKey);
+  if (existing) return existing;
+
+  const work = _runLeakAttach(orgId, userId, id, qid);
+  _leakAttachInFlight.set(mutexKey, work);
+  try {
+    return await work;
+  } finally {
+    _leakAttachInFlight.delete(mutexKey);
+  }
+}
+
+// Test helpers — see captureLeakAttach.test.ts.
+export function _isLeakAttachInFlightForTests(orgId: string, messageId: string): boolean {
+  return _leakAttachInFlight.has(`${orgId}::${messageId}`);
+}
+export function _resetLeakAttachInFlightForTests(): void {
+  _leakAttachInFlight.clear();
+}
+
+async function _runLeakAttach(
+  orgId: string,
+  userId: string | null,
+  id: string,
+  qid: string,
+): Promise<AttachLeakResult> {
+  // 1) Cross-tenant + direction check on the email row.
+  const [msg] = await db
+    .select({
+      id: emailMessages.id,
+      direction: emailMessages.direction,
+      providerMessageId: emailMessages.providerMessageId,
+      threadId: emailMessages.threadId,
+    })
+    .from(emailMessages)
+    .where(and(
+      eq(emailMessages.id, id),
+      eq(emailMessages.orgId, orgId),
+    ))
+    .limit(1);
+  if (!msg) return { status: "not_found" };
+  if (msg.direction !== "outbound") return { status: "wrong_leak_type" };
+
+  // 2) Cross-tenant check on the target quote.
+  const [quote] = await db
+    .select({ id: quoteOpportunities.id })
+    .from(quoteOpportunities)
+    .where(and(
+      eq(quoteOpportunities.id, qid),
+      eq(quoteOpportunities.organizationId, orgId),
+    ))
+    .limit(1);
+  if (!quote) return { status: "invalid_quote" };
+
+  // 3) Race guard — the row must still be in the orphan_outbound
+  //    candidate set. Same window as the queue default (14d) so the
+  //    user's "is this row still attachable?" mental model matches what
+  //    they were just looking at.
+  const candidates = await buildLeakCandidateIds(orgId, 14);
+  if (!candidates.orphanOutboundIds.includes(id)) {
+    // Distinguish "already reviewed" from "no longer a candidate". If a
+    // review row already exists, surface that as already_attached so the
+    // UI can deep-link to the (note-stored) target quote on a re-click.
+    const [reviewRow] = await db
+      .select({
+        decision: captureLeakReviews.decision,
+        note: captureLeakReviews.note,
+      })
+      .from(captureLeakReviews)
+      .where(and(
+        eq(captureLeakReviews.organizationId, orgId),
+        eq(captureLeakReviews.messageId, id),
+        eq(captureLeakReviews.leakType, "orphan_outbound"),
+      ))
+      .limit(1);
+    if (reviewRow && reviewRow.decision === "attached") {
+      // Recover the previously-attached quote id from the note. The
+      // note is stored as `attached:<qid>` (see step 4 below) so we
+      // strip the prefix before surfacing it to the caller.
+      const noteQid = parseAttachedNoteQuoteId(reviewRow.note);
+      return { status: "already_attached", quoteId: noteQid };
+    }
+    return { status: "not_a_leak" };
+  }
+
+  // 4) Insert the review row idempotently. We use INSERT … DO NOTHING
+  //    rather than DO UPDATE because we want to detect the
+  //    already_attached path (returning row count = 0) without
+  //    overwriting the previous decision.
+  const note = `attached:${qid}`;
+  const inserted = await db
+    .insert(captureLeakReviews)
+    .values({
+      organizationId: orgId,
+      messageId: id,
+      leakType: "orphan_outbound",
+      decision: "attached",
+      decidedByUserId: userId,
+      note,
+    })
+    .onConflictDoNothing({
+      target: [
+        captureLeakReviews.organizationId,
+        captureLeakReviews.messageId,
+        captureLeakReviews.leakType,
+      ],
+    })
+    .returning({ id: captureLeakReviews.id });
+
+  if (inserted.length === 0) {
+    // Another reviewer (or click) won the race. Surface the existing
+    // attachment if its decision was 'attached' — otherwise report
+    // already_attached without a quoteId so the UI can refresh.
+    const [reviewRow] = await db
+      .select({
+        decision: captureLeakReviews.decision,
+        note: captureLeakReviews.note,
+      })
+      .from(captureLeakReviews)
+      .where(and(
+        eq(captureLeakReviews.organizationId, orgId),
+        eq(captureLeakReviews.messageId, id),
+        eq(captureLeakReviews.leakType, "orphan_outbound"),
+      ))
+      .limit(1);
+    const prevQid = parseAttachedNoteQuoteId(reviewRow?.note ?? null);
+    return { status: "already_attached", quoteId: prevQid };
+  }
+
+  // 5) Audit row. Failures here MUST NOT roll back the attachment —
+  //    the resolution evidence is the capture_leak_reviews row above;
+  //    the event is for analytics + the cross-tab feed.
+  try {
+    await db.insert(quoteEvents).values({
+      quoteId: qid,
+      eventType: "email_attached",
+      occurredAt: new Date(),
+      actor: "manual_leak_attach",
+      payload: {
+        source: "capture_leak_queue",
+        messageId: id,
+        providerMessageId: msg.providerMessageId,
+        threadId: msg.threadId,
+        leakType: "orphan_outbound" as CaptureLeakType,
+        triggeredByUserId: userId,
+        targetQuoteId: qid,
+      },
+    });
+  } catch (err) {
+    console.error("[capture-leak-attach] failed to write audit event:", err);
+  }
+
+  return { status: "attached", quoteId: qid };
+}
+
+// ─── Phase 4 — Attach candidate picker (open quotes for a row's customer) ─
+
+export interface AttachCandidateQuote {
+  quoteId: string;
+  customerId: string;
+  customerName: string;
+  lane: string;
+  equipment: string;
+  outcomeStatus: string;
+  requestDate: string;
+  quotedAmount: string | null;
+}
+
+export interface ListAttachCandidatesResult {
+  /** True when the row is linked to a known customer; the picker scopes
+   *  to that customer. False ⇒ no scoping is possible and the picker
+   *  surfaces an explanatory empty state. */
+  customerScoped: boolean;
+  customerId: string | null;
+  customerName: string | null;
+  /** "open" ⇒ open quotes (pending/quoted); "closed" ⇒ recent terminal
+   *  quotes (won, any lost_*, no_response, expired) within the last 14d. */
+  scope: "open" | "closed";
+  quotes: AttachCandidateQuote[];
+}
+
+const OPEN_QUOTE_STATUSES = ["pending", "quoted"] as const;
+const TERMINAL_QUOTE_STATUSES = [
+  "won", "lost_price", "lost_service", "lost_timing", "lost_incumbent",
+  "no_response", "expired", "won_low_margin",
+] as const;
+
+/**
+ * List quote_opportunities rows that are valid attach targets for the
+ * given orphan_outbound message. Scope:
+ *
+ *   • The message MUST belong to `orgId` and MUST be linked to a
+ *     companies row (`emailMessages.linkedAccountId`). Without a linked
+ *     customer we have no defensible default scope, so return an empty
+ *     `customerScoped:false` shell — the UI explains and offers
+ *     Open Thread / Not a Quote instead.
+ *   • The companies row resolves to a quote_customers row by case-
+ *     insensitive name match scoped to the same org. (We don't add a
+ *     foreign key here — quote_customers and companies are different
+ *     domains and the cross-link is intentionally name-based across the
+ *     codebase.)
+ *   • Default scope = open quotes for that customer, requestDate desc,
+ *     capped at 25.
+ *   • `closed:true` toggle = recent terminal quotes within last 14d,
+ *     same cap.
+ *   • Optional `q` substring filters on origin/dest/equipment/notes
+ *     (case-insensitive, server-side).
+ */
+export async function listAttachCandidateQuotes(
+  orgId: string,
+  messageId: string,
+  opts: { closed?: boolean; q?: string } = {},
+): Promise<ListAttachCandidatesResult> {
+  const closed = !!opts.closed;
+  const scope: "open" | "closed" = closed ? "closed" : "open";
+  const empty: ListAttachCandidatesResult = {
+    customerScoped: false,
+    customerId: null,
+    customerName: null,
+    scope,
+    quotes: [],
+  };
+
+  const id = (messageId ?? "").trim();
+  if (!id) return empty;
+
+  const [msg] = await db
+    .select({
+      linkedAccountId: emailMessages.linkedAccountId,
+      direction: emailMessages.direction,
+    })
+    .from(emailMessages)
+    .where(and(
+      eq(emailMessages.id, id),
+      eq(emailMessages.orgId, orgId),
+    ))
+    .limit(1);
+  if (!msg) return empty;
+  if (msg.direction !== "outbound") return empty;
+  if (!msg.linkedAccountId) return empty;
+
+  const [account] = await db
+    .select({ id: companies.id, name: companies.name })
+    .from(companies)
+    .where(eq(companies.id, msg.linkedAccountId))
+    .limit(1);
+  if (!account) return empty;
+
+  // Resolve the companies row to a quote_customers row by case-insensitive
+  // name within the same org. There may be multiple matches (legacy
+  // dupes); we OR them all into the candidate query below.
+  const customerRows = await db
+    .select({ id: quoteCustomers.id, name: quoteCustomers.name })
+    .from(quoteCustomers)
+    .where(and(
+      eq(quoteCustomers.organizationId, orgId),
+      sql`LOWER(${quoteCustomers.name}) = LOWER(${account.name})`,
+    ));
+  if (customerRows.length === 0) {
+    return {
+      ...empty,
+      customerScoped: true,
+      customerId: null,
+      customerName: account.name,
+    };
+  }
+
+  const customerIds = customerRows.map(c => c.id);
+  const statuses = closed
+    ? [...TERMINAL_QUOTE_STATUSES] as string[]
+    : [...OPEN_QUOTE_STATUSES] as string[];
+
+  // For closed scope, restrict to the last 14d so the picker doesn't
+  // surface ancient terminal rows that are clearly not what the user
+  // is looking for.
+  const recentSince = closed
+    ? new Date(Date.now() - 14 * 24 * 3600 * 1000)
+    : null;
+
+  const conds = [
+    eq(quoteOpportunities.organizationId, orgId),
+    inArray(quoteOpportunities.customerId, customerIds),
+    inArray(quoteOpportunities.outcomeStatus, statuses),
+  ];
+  if (recentSince) {
+    conds.push(sql`${quoteOpportunities.requestDate} >= ${recentSince}`);
+  }
+
+  const q = (opts.q ?? "").trim();
+  if (q.length > 0) {
+    const like = `%${q.replace(/[%_]/g, "")}%`;
+    conds.push(sql`(
+      ${quoteOpportunities.originCity} ILIKE ${like}
+      OR ${quoteOpportunities.originState} ILIKE ${like}
+      OR ${quoteOpportunities.destCity} ILIKE ${like}
+      OR ${quoteOpportunities.destState} ILIKE ${like}
+      OR ${quoteOpportunities.equipment} ILIKE ${like}
+      OR ${quoteOpportunities.notes} ILIKE ${like}
+    )`);
+  }
+
+  const rows = await db
+    .select({
+      id: quoteOpportunities.id,
+      customerId: quoteOpportunities.customerId,
+      originCity: quoteOpportunities.originCity,
+      originState: quoteOpportunities.originState,
+      destCity: quoteOpportunities.destCity,
+      destState: quoteOpportunities.destState,
+      equipment: quoteOpportunities.equipment,
+      outcomeStatus: quoteOpportunities.outcomeStatus,
+      requestDate: quoteOpportunities.requestDate,
+      quotedAmount: quoteOpportunities.quotedAmount,
+    })
+    .from(quoteOpportunities)
+    .where(and(...conds))
+    .orderBy(desc(quoteOpportunities.requestDate))
+    .limit(25);
+
+  const customerNameById = new Map(customerRows.map(c => [c.id, c.name]));
+  return {
+    customerScoped: true,
+    customerId: customerRows[0].id, // representative
+    customerName: account.name,
+    scope,
+    quotes: rows.map(r => ({
+      quoteId: r.id,
+      customerId: r.customerId,
+      customerName: customerNameById.get(r.customerId) ?? account.name,
+      lane: `${r.originCity}, ${r.originState} → ${r.destCity}, ${r.destState}`,
+      equipment: r.equipment,
+      outcomeStatus: r.outcomeStatus,
+      requestDate: r.requestDate.toISOString(),
+      quotedAmount: r.quotedAmount,
+    })),
+  };
 }
 
 // ─── Task #803 — New-contact-review queue helpers ────────────────────────

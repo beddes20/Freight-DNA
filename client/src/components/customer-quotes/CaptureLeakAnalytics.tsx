@@ -21,6 +21,8 @@ interface ResolutionMix {
   notQuote: number;
   ignored: number;
   createdQuote: number;
+  /** Phase 4 — orphan_outbound rows manually attached to an existing quote. */
+  attached: number;
   total: number;
 }
 interface AgingBuckets {
@@ -73,6 +75,12 @@ function MixBar({ mix }: { mix: ResolutionMix }): JSX.Element {
         data-testid="leak-analytics-mix-created"
       />
       <div
+        className="bg-sky-500/80"
+        style={{ width: seg(mix.attached) }}
+        title={`Attached to quote: ${mix.attached}`}
+        data-testid="leak-analytics-mix-attached"
+      />
+      <div
         className="bg-slate-400/70 dark:bg-slate-500/70"
         style={{ width: seg(mix.notQuote) }}
         title={`Not a quote: ${mix.notQuote}`}
@@ -94,6 +102,10 @@ function MixLegend({ mix }: { mix: ResolutionMix }): JSX.Element {
       <span className="inline-flex items-center gap-1" data-testid="leak-analytics-legend-created">
         <span className="inline-block h-2 w-2 rounded-sm bg-emerald-500/80" />
         Created <span className="text-foreground tabular-nums">{mix.createdQuote}</span>
+      </span>
+      <span className="inline-flex items-center gap-1" data-testid="leak-analytics-legend-attached">
+        <span className="inline-block h-2 w-2 rounded-sm bg-sky-500/80" />
+        Attached <span className="text-foreground tabular-nums">{mix.attached}</span>
       </span>
       <span className="inline-flex items-center gap-1" data-testid="leak-analytics-legend-notquote">
         <span className="inline-block h-2 w-2 rounded-sm bg-slate-400/70 dark:bg-slate-500/70" />
