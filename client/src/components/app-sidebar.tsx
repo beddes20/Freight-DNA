@@ -39,6 +39,11 @@ import {
   DAILY_PRIORITIES_ROLES,
   type NavItem,
 } from "@/lib/nav-items";
+import {
+  isFeatureVisibleFor,
+  isFeatureDisabledFor,
+  featurePreviewLabel,
+} from "@/lib/feature-visibility";
 import vtLogoWhite from "@assets/value-truck-logo-white.png";
 
 
@@ -151,16 +156,58 @@ function resolveDescription(key: string, fallback: string, overrides?: Record<st
   return fallback;
 }
 
-function NavLink({ item, isActive, badge, badgeColor, overrides }: { item: NavItem; isActive: boolean; badge?: number; badgeColor?: "red" | "green" | "amber"; overrides?: Record<string, string> }) {
+function NavLink({
+  item,
+  isActive,
+  badge,
+  badgeColor,
+  overrides,
+  disabled,
+  previewLabel,
+}: {
+  item: NavItem;
+  isActive: boolean;
+  badge?: number;
+  badgeColor?: "red" | "green" | "amber";
+  overrides?: Record<string, string>;
+  /** When true, the entry renders greyed and clicks are intercepted. */
+  disabled?: boolean;
+  /** Small tag rendered next to a disabled entry (e.g. "In development"). */
+  previewLabel?: string | null;
+}) {
   const Icon = item.icon;
   const description = resolveDescription(item.title, item.description, overrides);
+  const tooltipText = disabled && previewLabel
+    ? `${item.title} — ${previewLabel}`
+    : navTooltip(item.title, description);
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton asChild isActive={isActive} tooltip={navTooltip(item.title, description)}>
-        <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(/[\s&]+/g, "-")}`} className="relative">
+      <SidebarMenuButton
+        asChild
+        isActive={!disabled && isActive}
+        tooltip={tooltipText}
+        aria-disabled={disabled || undefined}
+        className={disabled ? "opacity-60" : undefined}
+      >
+        <Link
+          href={item.url}
+          data-testid={`link-${item.title.toLowerCase().replace(/[\s&]+/g, "-")}`}
+          className="relative"
+          aria-disabled={disabled || undefined}
+          tabIndex={disabled ? -1 : undefined}
+          onClick={disabled ? (e) => e.preventDefault() : undefined}
+        >
           <Icon className="h-4 w-4" />
           <span>{item.title}</span>
-          {badge !== undefined && <NotificationBadge count={badge} color={badgeColor} />}
+          {disabled && previewLabel && (
+            <span
+              className="ml-auto text-[9px] uppercase tracking-wide font-semibold text-muted-foreground/70 border border-muted-foreground/30 rounded px-1 py-0.5"
+              data-testid={`badge-feature-${item.title.toLowerCase().replace(/[\s&]+/g, "-")}`}
+            >
+              {previewLabel}
+            </span>
+          )}
+          {!disabled && badge !== undefined && <NotificationBadge count={badge} color={badgeColor} />}
         </Link>
       </SidebarMenuButton>
     </SidebarMenuItem>
@@ -389,42 +436,52 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems
-                .filter(item => !item.roles || (user?.role && item.roles.includes(user.role)))
-                .map(item => (
-                  <NavLink
-                    key={item.title}
-                    item={item}
-                    isActive={isActive(item.url)}
-                    badge={item.title === "Tasks" ? taskCount : undefined}
-                    overrides={tooltipOverrides}
-                  />
-                ))}
+                .filter(item => isFeatureVisibleFor(item, user?.role))
+                .map(item => {
+                  const disabled = isFeatureDisabledFor(item, user?.role);
+                  return (
+                    <NavLink
+                      key={item.title}
+                      item={item}
+                      isActive={isActive(item.url)}
+                      badge={item.title === "Tasks" ? taskCount : undefined}
+                      overrides={tooltipOverrides}
+                      disabled={disabled}
+                      previewLabel={disabled ? featurePreviewLabel(item.status) : undefined}
+                    />
+                  );
+                })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
 
         {/* ── Customer-Facing ── */}
         {(() => {
-          const visible = customerFacingItems.filter(item => !item.roles || (user?.role && item.roles.includes(user.role)));
+          const visible = customerFacingItems.filter(item => isFeatureVisibleFor(item, user?.role));
           if (visible.length === 0) return null;
           return (
             <CollapsibleGroup label="Customer-Facing">
-              {visible.map(item => (
-                <NavLink
-                  key={item.title}
-                  item={item}
-                  isActive={isActive(item.url)}
-                  overrides={tooltipOverrides}
-                  badge={
-                    item.title === "Customer Quotes" && staleFollowupCount > 0
-                      ? staleFollowupCount
-                      : item.title === "Conversations"
-                        ? conversationsWaitingCount
-                        : undefined
-                  }
-                  badgeColor={item.title === "Conversations" ? "red" : "amber"}
-                />
-              ))}
+              {visible.map(item => {
+                const disabled = isFeatureDisabledFor(item, user?.role);
+                return (
+                  <NavLink
+                    key={item.title}
+                    item={item}
+                    isActive={isActive(item.url)}
+                    overrides={tooltipOverrides}
+                    disabled={disabled}
+                    previewLabel={disabled ? featurePreviewLabel(item.status) : undefined}
+                    badge={
+                      item.title === "Customer Quotes" && staleFollowupCount > 0
+                        ? staleFollowupCount
+                        : item.title === "Conversations"
+                          ? conversationsWaitingCount
+                          : undefined
+                    }
+                    badgeColor={item.title === "Conversations" ? "red" : "amber"}
+                  />
+                );
+              })}
             </CollapsibleGroup>
           );
         })()}
@@ -437,56 +494,86 @@ export function AppSidebar() {
             render this as a label-less SidebarGroup so it sits as a single
             clean row between the Customer-Facing and Carrier-Facing groups
             without earning its own collapsible header. */}
-        {aiHubItem.roles!.some(r => user?.role === r) && (
-          <SidebarGroup>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={isActive(aiHubItem.url) || isActive("/daily-priorities") || isActive("/valueiq") || location.startsWith("/ai/") || location === "/ai" || isActive("/admin/ai-engagement") || isActive("/admin/copilot-analytics")}
-                    tooltip={navTooltip(aiHubItem.title, resolveDescription(aiHubItem.title, aiHubItem.description, tooltipOverrides))}
-                  >
-                    <Link href={aiHubItem.url} data-testid="link-ai-hub" data-tour="tour-ai-hub" className="relative">
-                      <BotMessageSquare className="h-4 w-4" />
-                      <span>{aiHubItem.title}</span>
-                      {dailyWorkspaceCount > 0 && DAILY_PRIORITIES_ROLES.includes(user?.role ?? "") && (
-                        <NotificationBadge count={dailyWorkspaceCount} color="green" />
-                      )}
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        )}
+        {isFeatureVisibleFor(aiHubItem, user?.role) && (() => {
+          const aiDisabled = isFeatureDisabledFor(aiHubItem, user?.role);
+          const aiPreviewLabel = aiDisabled ? featurePreviewLabel(aiHubItem.status) : null;
+          const aiTooltip = aiDisabled && aiPreviewLabel
+            ? `${aiHubItem.title} — ${aiPreviewLabel}`
+            : navTooltip(aiHubItem.title, resolveDescription(aiHubItem.title, aiHubItem.description, tooltipOverrides));
+          return (
+            <SidebarGroup>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={!aiDisabled && (isActive(aiHubItem.url) || isActive("/daily-priorities") || isActive("/valueiq") || location.startsWith("/ai/") || location === "/ai" || isActive("/admin/ai-engagement") || isActive("/admin/copilot-analytics"))}
+                      tooltip={aiTooltip}
+                      aria-disabled={aiDisabled || undefined}
+                      className={aiDisabled ? "opacity-60" : undefined}
+                    >
+                      <Link
+                        href={aiHubItem.url}
+                        data-testid="link-ai-hub"
+                        data-tour="tour-ai-hub"
+                        className="relative"
+                        aria-disabled={aiDisabled || undefined}
+                        tabIndex={aiDisabled ? -1 : undefined}
+                        onClick={aiDisabled ? (e) => e.preventDefault() : undefined}
+                      >
+                        <BotMessageSquare className="h-4 w-4" />
+                        <span>{aiHubItem.title}</span>
+                        {aiDisabled && aiPreviewLabel && (
+                          <span
+                            className="ml-auto text-[9px] uppercase tracking-wide font-semibold text-muted-foreground/70 border border-muted-foreground/30 rounded px-1 py-0.5"
+                            data-testid="badge-feature-ai"
+                          >
+                            {aiPreviewLabel}
+                          </span>
+                        )}
+                        {!aiDisabled && dailyWorkspaceCount > 0 && DAILY_PRIORITIES_ROLES.includes(user?.role ?? "") && (
+                          <NotificationBadge count={dailyWorkspaceCount} color="green" />
+                        )}
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          );
+        })()}
 
         {/* ── Carrier-Facing ── */}
         {(() => {
-          const visible = carrierFacingItems.filter(item => !item.roles || (user?.role && item.roles.includes(user.role)));
+          const visible = carrierFacingItems.filter(item => isFeatureVisibleFor(item, user?.role));
           if (visible.length === 0) return null;
           return (
             <CollapsibleGroup label="Carrier-Facing">
-              {visible.map(item => (
-                <NavLink
-                  key={item.title}
-                  item={item}
-                  isActive={isActive(item.url)}
-                  overrides={tooltipOverrides}
-                  badge={
-                    (item.title === "Lane Work Queue" || item.title === "My Procurement")
-                      ? unactionedReplyCount
-                      : item.title === "Conversations"
-                        ? conversationsWaitingCount
-                        : item.title === "Carrier Hub"
-                          ? pendingIntelCount
-                          : item.title === "My PODs"
-                            ? podCount
-                            : undefined
-                  }
-                  badgeColor={item.title === "Conversations" ? "red" : item.title === "Carrier Hub" ? "red" : "green"}
-                />
-              ))}
+              {visible.map(item => {
+                const disabled = isFeatureDisabledFor(item, user?.role);
+                return (
+                  <NavLink
+                    key={item.title}
+                    item={item}
+                    isActive={isActive(item.url)}
+                    overrides={tooltipOverrides}
+                    disabled={disabled}
+                    previewLabel={disabled ? featurePreviewLabel(item.status) : undefined}
+                    badge={
+                      (item.title === "Lane Work Queue" || item.title === "My Procurement")
+                        ? unactionedReplyCount
+                        : item.title === "Conversations"
+                          ? conversationsWaitingCount
+                          : item.title === "Carrier Hub"
+                            ? pendingIntelCount
+                            : item.title === "My PODs"
+                              ? podCount
+                              : undefined
+                    }
+                    badgeColor={item.title === "Conversations" ? "red" : item.title === "Carrier Hub" ? "red" : "green"}
+                  />
+                );
+              })}
             </CollapsibleGroup>
           );
         })()}

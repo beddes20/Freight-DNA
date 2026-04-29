@@ -5,6 +5,21 @@
 // `adminItems` so every navigation destination the user can reach from
 // the sidebar is also reachable via cmd-K. Keep both consumers in sync
 // by editing this one file.
+//
+// Each entry may declare a `status` field controlling sidebar visibility:
+//   - "active"         (default) — visible + clickable for everyone whose
+//                      role satisfies the existing `roles` gate.
+//   - "admin_preview"  — hidden for non-admin users, visible-but-disabled
+//                      for admins, with an "In development" tag. Reserved
+//                      for incubating product surfaces; working admin
+//                      utilities (the items in `adminItems` below) stay
+//                      "active" because they're already admin-gated by
+//                      role and are not in development.
+//   - "hidden"         — not rendered for anyone.
+// See `client/src/lib/feature-visibility.ts` for the helpers. The
+// command palette intentionally still surfaces every role-allowed
+// destination (it does not consult `status`) so admins can jump to
+// preview surfaces directly via cmd-K.
 
 import {
   ClipboardList, LayoutGrid, Network, Trophy, Users, BarChart3, History, Zap,
@@ -16,6 +31,7 @@ import {
 } from "lucide-react";
 import { AI_HUB_ANY_TAB_ROLES } from "@/pages/ai-hub";
 import { QUOTE_OPPORTUNITIES_ROLES } from "@shared/quoteOpportunitiesRoles";
+import type { FeatureStatus } from "./feature-visibility";
 
 export type NavItem = {
   title: string;
@@ -24,6 +40,8 @@ export type NavItem = {
   description: string;
   roles?: string[];
   badge?: number;
+  /** Sidebar visibility status. Defaults to "active" when omitted. */
+  status?: FeatureStatus;
 };
 
 export const SALES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
@@ -39,7 +57,7 @@ export const navItems: NavItem[] = [
   { title: "1:1's",        url: "/one-on-one", icon: MessagesSquare, description: "Manager check-ins and one-on-one notes." },
   { title: "Tasks",        url: "/tasks",      icon: ListTodo,      description: "Your personal to-do list and reminders." },
   { title: "Goals",        url: "/goals",      icon: Target,        description: "Track personal and team sales goals." },
-  { title: "My Scorecard", url: "/report/me",  icon: FileBarChart2, description: "Your individual performance scorecard.", roles: ["account_manager", "sales", "logistics_manager", "logistics_coordinator"] },
+  { title: "My Scorecard", url: "/report/me",  icon: FileBarChart2, description: "Your individual performance scorecard.", roles: ["account_manager", "sales", "logistics_manager", "logistics_coordinator"], status: "admin_preview" },
   {
     title: "Team Performance",
     url: "/team-performance",
@@ -50,19 +68,24 @@ export const navItems: NavItem[] = [
 ];
 
 export const customerFacingItems: NavItem[] = [
-  { title: "Launchpad",         url: "/prospects",        icon: Crosshair,     description: "Find and qualify new prospects to pursue.", roles: PROSPECTS_ROLES },
+  // Lane Intelligence lives in the Customer-Facing group per product
+  // direction (the route `/research-tasks` is unchanged). It used to be
+  // the first entry of `carrierFacingItems`.
+  { title: "Lane Intelligence", url: "/research-tasks",  icon: ClipboardList, description: "Research lanes and gather pricing intelligence." },
+  { title: "Launchpad",         url: "/prospects",        icon: Crosshair,     description: "Find and qualify new prospects to pursue.", roles: PROSPECTS_ROLES, status: "admin_preview" },
   { title: "Customers",         url: "/customers",        icon: Network,       description: "Browse customer accounts and account history.", roles: SALES_ROLES },
   { title: "Customer Quotes",   url: "/customer-quotes",  icon: FileBarChart2, description: "Quote requests, outcomes, and lane performance — drillable analytics across customers and reps.", roles: QUOTE_OPPORTUNITIES_SIDEBAR_ROLES },
-  { title: "Freight Capture",   url: "/freight-capture",  icon: Filter,        description: "Quote-to-book funnel: stages from request received through win, with loss reasons and best/worst performers.", roles: ["admin", "director", "sales_director", "national_account_manager", "account_manager", "sales"] },
+  { title: "Freight Capture",   url: "/freight-capture",  icon: Filter,        description: "Quote-to-book funnel: stages from request received through win, with loss reasons and best/worst performers.", roles: ["admin", "director", "sales_director", "national_account_manager", "account_manager", "sales"], status: "admin_preview" },
   { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           description: "High-value opportunities ranked by potential impact.", roles: SALES_ROLES },
   { title: "RFP & Awards",      url: "/rfp-awards",       icon: Trophy,        description: "Active RFPs and awarded business tracking." },
-  { title: "RFP Calendar",      url: "/rfp-calendar",     icon: Calendar,      description: "Upcoming RFP deadlines and key dates." },
+  { title: "RFP Calendar",      url: "/rfp-calendar",     icon: Calendar,      description: "Upcoming RFP deadlines and key dates.", status: "admin_preview" },
   {
     title: "Email Intelligence",
     url: "/email-intelligence",
     icon: MailCheck,
     description: "AI signals extracted from your inbound email — urgency, win/loss patterns, and recent activity.",
     roles: ["admin", "director", "national_account_manager", "sales_director"],
+    status: "admin_preview",
   },
   {
     title: "Contact Suggestions",
@@ -77,6 +100,7 @@ export const customerFacingItems: NavItem[] = [
     icon: ClipboardList,
     description: "Reusable plays that have closed deals.",
     roles: ["admin", "director", "national_account_manager", "logistics_manager", "account_manager"],
+    status: "admin_preview",
   },
   {
     title: "Playbook",
@@ -84,6 +108,7 @@ export const customerFacingItems: NavItem[] = [
     icon: ClipboardList,
     description: "Step-by-step guides for common sales situations.",
     roles: ["admin", "director", "national_account_manager", "sales_director", "logistics_manager", "account_manager", "sales"],
+    status: "admin_preview",
   },
   {
     title: "Freight Attribution Triage",
@@ -91,9 +116,10 @@ export const customerFacingItems: NavItem[] = [
     icon: GitMerge,
     description: "Margin-sorted gaps from your relationship-freight book — unworked accounts, unattributed lanes, and unassigned contacts in one ranked worklist.",
     roles: SALES_ROLES,
+    status: "admin_preview",
   },
-  { title: "Coaching",      url: "/coaching",       icon: Sparkles, description: "Coaching notes and rep development plans.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
-  { title: "Rep Scorecard", url: "/rep-scorecard",  icon: Medal,    description: "Compare reps and review performance metrics.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
+  { title: "Coaching",      url: "/coaching",       icon: Sparkles, description: "Coaching notes and rep development plans.", roles: ["admin", "director", "national_account_manager", "sales_director"], status: "admin_preview" },
+  { title: "Rep Scorecard", url: "/rep-scorecard",  icon: Medal,    description: "Compare reps and review performance metrics.", roles: ["admin", "director", "national_account_manager", "sales_director"], status: "admin_preview" },
   {
     title: "Conversations",
     url: "/conversations",
@@ -109,14 +135,15 @@ export const aiHubItem: NavItem = {
   icon: BotMessageSquare,
   description: "Today's Priorities, ValueIQ, AI Center, Engagement, and Copilot Analytics — all in one tabbed page.",
   roles: AI_HUB_ANY_TAB_ROLES,
+  status: "admin_preview",
 };
 
 export const carrierFacingItems: NavItem[] = [
-  { title: "Lane Intelligence", url: "/research-tasks",   icon: ClipboardList, description: "Research lanes and gather pricing intelligence." },
+  // Lane Intelligence moved to `customerFacingItems`. Route unchanged.
   { title: "My Procurement",    url: "/my-procurement",   icon: Briefcase,     description: "Lanes you're actively procuring carriers for." },
   { title: "Lane Work Queue",   url: "/lanes/work-queue", icon: ListFilter,    description: "Lanes awaiting your reply or next action." },
-  { title: "Lane Inbox",        url: "/lane-inbox",       icon: Inbox,         description: "Cross-surface activity feed — AF, LWQ, Customer Quotes, Carrier Hub." },
-  { title: "My PODs",           url: "/my-pods",          icon: MailCheck,     description: "Proofs of delivery received for loads you cover or own." },
+  { title: "Lane Inbox",        url: "/lane-inbox",       icon: Inbox,         description: "Cross-surface activity feed — AF, LWQ, Customer Quotes, Carrier Hub.", status: "admin_preview" },
+  { title: "My PODs",           url: "/my-pods",          icon: MailCheck,     description: "Proofs of delivery received for loads you cover or own.", status: "admin_preview" },
   {
     title: "Available Freight",
     url: "/available-freight",
@@ -130,6 +157,7 @@ export const carrierFacingItems: NavItem[] = [
     icon: Building2,
     description: "Manage carriers and review their submitted intel.",
     roles: ["admin", "director", "national_account_manager", "logistics_manager"],
+    status: "admin_preview",
   },
   {
     title: "Conversations",
@@ -138,13 +166,13 @@ export const carrierFacingItems: NavItem[] = [
     description: "Inbound carrier and customer messages.",
     roles: ["admin", "director", "national_account_manager", "logistics_manager", "account_manager"],
   },
-  { title: "Phone Usage",      url: "/phone-usage",        icon: Phone,    description: "Org-wide phone usage trends and rep activity.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
-  { title: "Call Performance", url: "/calls",              icon: PhoneCall, description: "Org-wide call pace, weekly trendline, and quality scorecard under one shared window.", roles: ["admin", "director", "national_account_manager", "sales_director"] },
+  { title: "Phone Usage",      url: "/phone-usage",        icon: Phone,    description: "Org-wide phone usage trends and rep activity.", roles: ["admin", "director", "national_account_manager", "sales_director"], status: "admin_preview" },
+  { title: "Call Performance", url: "/calls",              icon: PhoneCall, description: "Org-wide call pace, weekly trendline, and quality scorecard under one shared window.", roles: ["admin", "director", "national_account_manager", "sales_director"], status: "admin_preview" },
   { title: "LM Check-In Log",  url: "/lm-checkin-history", icon: History,  description: "History of logistics manager check-ins.", roles: ["admin", "director", "national_account_manager", "account_manager", "sales_director"] },
-  { title: "Carrier Scorecard", url: "/carrier-intelligence/scorecard",       icon: Trophy,  description: "Tiered carrier performance from realized loads, with active and available counts.", roles: CARRIER_INTEL_ROLES },
+  { title: "Carrier Scorecard", url: "/carrier-intelligence/scorecard",       icon: Trophy,  description: "Tiered carrier performance from realized loads, with active and available counts.", roles: CARRIER_INTEL_ROLES, status: "admin_preview" },
   { title: "Available Loads",   url: "/carrier-intelligence/available-loads", icon: Truck,   description: "Open loads ranked with the top 3 suggested carriers and a target buy rate.", roles: CARRIER_INTEL_ROLES },
-  { title: "Lane Pricing",      url: "/carrier-intelligence/lane-pricing",    icon: Compass, description: "Blend Sonar TRAC with your realized history and a confidence chip.", roles: CARRIER_INTEL_ROLES },
-  { title: "Settings",          url: "/admin/carrier-intelligence/settings",  icon: Settings, description: "Imports, scoring math, and org-wide UI defaults.", roles: CARRIER_INTEL_SETTINGS_ROLES },
+  { title: "Lane Pricing",      url: "/carrier-intelligence/lane-pricing",    icon: Compass, description: "Blend Sonar TRAC with your realized history and a confidence chip.", roles: CARRIER_INTEL_ROLES, status: "admin_preview" },
+  { title: "Settings",          url: "/admin/carrier-intelligence/settings",  icon: Settings, description: "Imports, scoring math, and org-wide UI defaults.", roles: CARRIER_INTEL_SETTINGS_ROLES, status: "admin_preview" },
 ];
 
 const ADMIN_GROUP_ROLES = ["admin", "director", "national_account_manager", "sales", "sales_director"];
@@ -153,6 +181,10 @@ const ADMIN_GROUP_ROLES = ["admin", "director", "national_account_manager", "sal
 // can offer every admin/team destination too. Keep titles and roles in
 // sync; the sidebar still renders these inline (intentional — its
 // per-item conditional logic is more readable than a generic loop).
+//
+// These are working admin utilities, not incubating surfaces — they
+// stay "active" (the default). Their `roles` arrays already restrict
+// them to admin/director/etc., so non-admins never see them anyway.
 export const adminItems: NavItem[] = [
   { title: "User Management",     url: "/admin/users",                       icon: Users,      description: "Manage users, roles, and team structure.", roles: ADMIN_GROUP_ROLES },
   { title: "Carrier Catalog",     url: "/admin/carriers",                    icon: Truck,      description: "Org-wide carrier catalog and reviewable intel.", roles: ["admin", "director"] },
@@ -180,6 +212,11 @@ export function visibleNavItems(items: NavItem[], role: string | undefined): Nav
 }
 
 export function allVisibleDestinations(role: string | undefined): NavItem[] {
+  // Note: this helper backs the cmd-K command palette and intentionally
+  // still surfaces every role-allowed destination — including
+  // `admin_preview` ones — so admins can jump directly to incubating
+  // surfaces. Sidebar render decisions live in
+  // `client/src/lib/feature-visibility.ts`.
   const all = [
     ...navItems,
     ...customerFacingItems,
