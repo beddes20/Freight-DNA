@@ -4526,125 +4526,13 @@ export async function getFunnelDiagnostics(
   // counts use above so dashboards can correlate the four values
   // (won/lost/neither/missing-intent) on the same axis.
   //
-  // Implementation note: each counter is computed via a few small,
-  // independent queries instead of one big correlated NOT EXISTS subquery.
-  // The big-subquery shape was both ambiguous (the orphan path
-  // self-references `email_messages` from inside its own NOT EXISTS) and
-  // pathologically slow on real org volumes. Splitting keeps planning
-  // simple and lets PG hit the (org_id, provider_sent_at) usage paths
-  // already exercised by the email_classifier counts above.
-  const leakSince = new Date(Date.now() - windowDays * 24 * 3600 * 1000);
-  const QUOTE_INTENT_TYPES = [
-    "pricing_request",
-    "new_opportunity",
-    "closed_won_indicator",
-    "closed_lost_indicator",
-  ];
-
-  // missingIntentInboundCount — inbound, processed messages in the window
-  // where (a) no email_signal with a quote-related intentType points at
-  // this message AND (b) no quote_opportunity points back at this message
-  // via sourceReference (matched against either providerMessageId or the
-  // internal message id — the same two refs `ingestQuoteFromEmail` keys off).
-  const inboundCandidates = await db
-    .select({
-      id: emailMessages.id,
-      providerMessageId: emailMessages.providerMessageId,
-    })
-    .from(emailMessages)
-    .where(and(
-      eq(emailMessages.orgId, orgId),
-      eq(emailMessages.direction, "inbound"),
-      sql`${emailMessages.processedForSignalsAt} IS NOT NULL`,
-      sql`${emailMessages.providerSentAt} >= ${leakSince}`,
-    ));
-
-  let missingIntentInboundCount = 0;
-  if (inboundCandidates.length > 0) {
-    const candidateIds = inboundCandidates.map(m => m.id);
-    const candidateProviderIds = inboundCandidates
-      .map(m => m.providerMessageId)
-      .filter((v): v is string => !!v);
-
-    // Anti-join 1: messages with at least one quote-intent signal.
-    const hasQuoteIntentRows = await db
-      .selectDistinct({ messageId: emailSignals.messageId })
-      .from(emailSignals)
-      .where(and(
-        inArray(emailSignals.messageId, candidateIds),
-        inArray(emailSignals.intentType, QUOTE_INTENT_TYPES),
-      ));
-    const messagesWithQuoteIntent = new Set(hasQuoteIntentRows.map(r => r.messageId));
-
-    // Anti-join 2: messages referenced by a quote_opportunity.sourceReference.
-    const refUniverse = Array.from(new Set([...candidateIds, ...candidateProviderIds]));
-    const referencedRows = refUniverse.length > 0
-      ? await db
-          .selectDistinct({ ref: quoteOpportunities.sourceReference })
-          .from(quoteOpportunities)
-          .where(and(
-            eq(quoteOpportunities.organizationId, orgId),
-            eq(quoteOpportunities.source, "email"),
-            inArray(quoteOpportunities.sourceReference, refUniverse),
-          ))
-      : [];
-    const referencedSet = new Set(referencedRows.map(r => r.ref).filter((v): v is string => !!v));
-
-    for (const m of inboundCandidates) {
-      if (messagesWithQuoteIntent.has(m.id)) continue;
-      if (referencedSet.has(m.id)) continue;
-      if (m.providerMessageId && referencedSet.has(m.providerMessageId)) continue;
-      missingIntentInboundCount += 1;
-    }
-  }
-
-  // orphanOutboundCount — outbound messages in the window on threads
-  // with no pending email-source quote_opportunity. Mirrors the
-  // autopilot's `skipped_no_pending_quote` short-circuit
-  // (outboundQuoteAutoQuote.ts:286) without invoking the AI extractor:
-  // we only need to know "we sent a reply on a thread with nowhere to
-  // attach a rate." Conservative — includes outbound emails that
-  // aren't actually quote-bearing — but bounded by org email volume.
-  const outboundCandidates = await db
-    .select({ id: emailMessages.id, threadId: emailMessages.threadId })
-    .from(emailMessages)
-    .where(and(
-      eq(emailMessages.orgId, orgId),
-      eq(emailMessages.direction, "outbound"),
-      sql`${emailMessages.threadId} IS NOT NULL`,
-      sql`${emailMessages.providerSentAt} >= ${leakSince}`,
-    ));
-
-  let orphanOutboundCount = 0;
-  if (outboundCandidates.length > 0) {
-    // Resolve every threadId that currently has a pending email-source
-    // quote_opportunity. quote_opportunities.sourceReference is a message
-    // id (or providerMessageId) — join through email_messages to read the
-    // thread the message belongs to. One query, not one per outbound row.
-    const pendingThreadRows = await db
-      .selectDistinct({ threadId: emailMessages.threadId })
-      .from(quoteOpportunities)
-      .innerJoin(
-        emailMessages,
-        and(
-          eq(emailMessages.orgId, orgId),
-          sql`(${emailMessages.id} = ${quoteOpportunities.sourceReference}
-               OR ${emailMessages.providerMessageId} = ${quoteOpportunities.sourceReference})`,
-        ),
-      )
-      .where(and(
-        eq(quoteOpportunities.organizationId, orgId),
-        eq(quoteOpportunities.source, "email"),
-        eq(quoteOpportunities.outcomeStatus, "pending"),
-      ));
-    const threadsWithPendingQuote = new Set(
-      pendingThreadRows.map(r => r.threadId).filter((v): v is string => !!v),
-    );
-    for (const m of outboundCandidates) {
-      if (m.threadId && threadsWithPendingQuote.has(m.threadId)) continue;
-      orphanOutboundCount += 1;
-    }
-  }
+  // The actual candidate-id resolution lives in `buildLeakCandidateIds`
+  // so `getLeakedQuoteEmails` (the row-level queue endpoint) computes
+  // the same set the counts derive from. Counts here are .length of the
+  // returned arrays — they cannot drift from the queue.
+  const leakCandidates = await buildLeakCandidateIds(orgId, windowDays);
+  const missingIntentInboundCount = leakCandidates.missedInboundIds.length;
+  const orphanOutboundCount = leakCandidates.orphanOutboundIds.length;
 
   // Webhook secret presence — flagged at the diagnostics layer so admins
   // can confirm the webhook validation gate is configured without us
@@ -4670,6 +4558,406 @@ export async function getFunnelDiagnostics(
     orphanOutboundCount,
     hasWebhookSecret,
   };
+}
+
+// ─── Capture leak queue (Phase 1, read-only) ─────────────────────────────
+// Row-level expansion of the two leak counters surfaced by
+// `getFunnelDiagnostics`. Both functions share `buildLeakCandidateIds` so
+// the count and the list cannot drift.
+//
+// Phase 1 is intentionally minimal: read-only, Open thread is the only
+// row action, no dismissals, no auto-create. See the diagnostics panel
+// in client/src/components/customer-quotes/FreightCaptureDiagnostics.tsx
+// for the consumer.
+
+const QUOTE_INTENT_TYPES_FOR_LEAK = [
+  "pricing_request",
+  "new_opportunity",
+  "closed_won_indicator",
+  "closed_lost_indicator",
+];
+
+interface LeakCandidateIds {
+  windowDays: number;
+  leakSince: Date;
+  /** Inbound message ids that meet the missed-intent criteria, sorted
+   *  by providerSentAt DESC for direct slicing into a paginated queue. */
+  missedInboundIds: string[];
+  /** Outbound message ids that meet the orphan criteria, sorted by
+   *  providerSentAt DESC. */
+  orphanOutboundIds: string[];
+}
+
+/**
+ * Resolve the candidate id sets for both leak categories. Pure data-
+ * shaping function — no business logic, no side effects, no auth. The
+ * caller is responsible for org/role gating.
+ */
+async function buildLeakCandidateIds(
+  orgId: string,
+  windowDays: number,
+): Promise<LeakCandidateIds> {
+  const leakSince = new Date(Date.now() - windowDays * 24 * 3600 * 1000);
+
+  // ── Missed inbound ─────────────────────────────────────────────────────
+  // Inbound + processed-for-signals + in window. We pull a small
+  // projection so we can do the two anti-joins in JS without re-querying
+  // the candidate row to read its providerMessageId.
+  const inboundCandidates = await db
+    .select({
+      id: emailMessages.id,
+      providerMessageId: emailMessages.providerMessageId,
+      providerSentAt: emailMessages.providerSentAt,
+    })
+    .from(emailMessages)
+    .where(and(
+      eq(emailMessages.orgId, orgId),
+      eq(emailMessages.direction, "inbound"),
+      sql`${emailMessages.processedForSignalsAt} IS NOT NULL`,
+      sql`${emailMessages.providerSentAt} >= ${leakSince}`,
+    ))
+    .orderBy(desc(emailMessages.providerSentAt));
+
+  const missedInboundIds: string[] = [];
+  if (inboundCandidates.length > 0) {
+    const candidateIds = inboundCandidates.map(m => m.id);
+    const candidateProviderIds = inboundCandidates
+      .map(m => m.providerMessageId)
+      .filter((v): v is string => !!v);
+
+    const hasQuoteIntentRows = await db
+      .selectDistinct({ messageId: emailSignals.messageId })
+      .from(emailSignals)
+      .where(and(
+        inArray(emailSignals.messageId, candidateIds),
+        inArray(emailSignals.intentType, QUOTE_INTENT_TYPES_FOR_LEAK),
+      ));
+    const messagesWithQuoteIntent = new Set(hasQuoteIntentRows.map(r => r.messageId));
+
+    const refUniverse = Array.from(new Set([...candidateIds, ...candidateProviderIds]));
+    const referencedRows = refUniverse.length > 0
+      ? await db
+          .selectDistinct({ ref: quoteOpportunities.sourceReference })
+          .from(quoteOpportunities)
+          .where(and(
+            eq(quoteOpportunities.organizationId, orgId),
+            eq(quoteOpportunities.source, "email"),
+            inArray(quoteOpportunities.sourceReference, refUniverse),
+          ))
+      : [];
+    const referencedSet = new Set(referencedRows.map(r => r.ref).filter((v): v is string => !!v));
+
+    for (const m of inboundCandidates) {
+      if (messagesWithQuoteIntent.has(m.id)) continue;
+      if (referencedSet.has(m.id)) continue;
+      if (m.providerMessageId && referencedSet.has(m.providerMessageId)) continue;
+      missedInboundIds.push(m.id);
+    }
+  }
+
+  // ── Orphan outbound ────────────────────────────────────────────────────
+  const outboundCandidates = await db
+    .select({
+      id: emailMessages.id,
+      threadId: emailMessages.threadId,
+      providerSentAt: emailMessages.providerSentAt,
+    })
+    .from(emailMessages)
+    .where(and(
+      eq(emailMessages.orgId, orgId),
+      eq(emailMessages.direction, "outbound"),
+      sql`${emailMessages.threadId} IS NOT NULL`,
+      sql`${emailMessages.providerSentAt} >= ${leakSince}`,
+    ))
+    .orderBy(desc(emailMessages.providerSentAt));
+
+  const orphanOutboundIds: string[] = [];
+  if (outboundCandidates.length > 0) {
+    const pendingThreadRows = await db
+      .selectDistinct({ threadId: emailMessages.threadId })
+      .from(quoteOpportunities)
+      .innerJoin(
+        emailMessages,
+        and(
+          eq(emailMessages.orgId, orgId),
+          sql`(${emailMessages.id} = ${quoteOpportunities.sourceReference}
+               OR ${emailMessages.providerMessageId} = ${quoteOpportunities.sourceReference})`,
+        ),
+      )
+      .where(and(
+        eq(quoteOpportunities.organizationId, orgId),
+        eq(quoteOpportunities.source, "email"),
+        eq(quoteOpportunities.outcomeStatus, "pending"),
+      ));
+    const threadsWithPendingQuote = new Set(
+      pendingThreadRows.map(r => r.threadId).filter((v): v is string => !!v),
+    );
+    for (const m of outboundCandidates) {
+      if (m.threadId && threadsWithPendingQuote.has(m.threadId)) continue;
+      orphanOutboundIds.push(m.id);
+    }
+  }
+
+  return { windowDays, leakSince, missedInboundIds, orphanOutboundIds };
+}
+
+/** Per-row classification of whether the message has a useful customer
+ *  link — Phase 1 cue so the rep can triage at a glance. */
+export type LeakCustomerState =
+  | "known_customer"     // linkedAccountId + real-looking name
+  | "unknown_customer"   // linkedAccountId set but the company is in the
+                         // shared "Unknown" / free-mail bucket
+  | "no_linked_customer";// no linkedAccountId at all
+
+export interface LeakedInboundRow {
+  messageId: string;
+  threadId: string | null;
+  fromEmail: string | null;
+  fromName: string | null;
+  subject: string | null;
+  bodySnippet: string | null;
+  receivedAt: string;
+  linkedCustomerId: string | null;
+  linkedCustomerName: string | null;
+  customerState: LeakCustomerState;
+}
+
+export interface LeakedOutboundRow {
+  messageId: string;
+  threadId: string;
+  toEmail: string | null;
+  subject: string | null;
+  bodySnippet: string | null;
+  sentAt: string;
+  linkedCustomerId: string | null;
+  linkedCustomerName: string | null;
+  customerState: LeakCustomerState;
+  /** Best-effort context: most recent inbound message on the same thread
+   *  (if any) so the rep can tell at a glance whether the thread looked
+   *  quote-shaped before we replied. Phase 1 leaves this read-only. */
+  lastInboundFromEmail: string | null;
+  lastInboundSubject: string | null;
+  lastInboundAt: string | null;
+}
+
+export interface LeakedQueueResult {
+  type: "missed_inbound" | "orphan_outbound";
+  windowDays: number;
+  /** Total candidate rows for this slice + window, for paging math. */
+  total: number;
+  hasMore: boolean;
+  rows: LeakedInboundRow[] | LeakedOutboundRow[];
+}
+
+export interface GetLeakedQuoteEmailsOpts {
+  type: "missed_inbound" | "orphan_outbound";
+  windowDays?: number;
+  limit?: number;
+  offset?: number;
+}
+
+const LEAK_LIMIT_DEFAULT = 50;
+const LEAK_LIMIT_MAX = 100;
+const LEAK_OFFSET_MAX = 1000;
+const LEAK_BODY_SNIPPET_LEN = 200;
+
+function clamp(n: number, lo: number, hi: number): number {
+  if (Number.isNaN(n)) return lo;
+  if (n < lo) return lo;
+  if (n > hi) return hi;
+  return n;
+}
+
+function trimSnippet(body: string | null): string | null {
+  if (!body) return null;
+  const collapsed = body.replace(/\s+/g, " ").trim();
+  if (collapsed.length === 0) return null;
+  return collapsed.length > LEAK_BODY_SNIPPET_LEN
+    ? collapsed.slice(0, LEAK_BODY_SNIPPET_LEN) + "…"
+    : collapsed;
+}
+
+/** Parse a "Display Name <addr@host>" header into its two pieces. We
+ *  store the raw value in `from_email`, so this is best-effort and never
+ *  throws — falls back to the raw string. */
+function parseFromHeader(raw: string | null): { name: string | null; email: string | null } {
+  if (!raw) return { name: null, email: null };
+  const trimmed = raw.trim();
+  const m = trimmed.match(/^\s*(?:"?([^"<]*?)"?\s*)?<([^>]+)>\s*$/);
+  if (m) {
+    const name = (m[1] ?? "").trim();
+    return { name: name.length > 0 ? name : null, email: m[2].trim() || null };
+  }
+  // No display name; raw is just the address.
+  return { name: null, email: trimmed };
+}
+
+function classifyCustomerState(
+  linkedAccountId: string | null,
+  customerName: string | null,
+): LeakCustomerState {
+  if (!linkedAccountId) return "no_linked_customer";
+  const n = (customerName ?? "").trim();
+  if (!n) return "unknown_customer";
+  if (n.toLowerCase() === UNKNOWN_CUSTOMER_NAME.toLowerCase()) return "unknown_customer";
+  if (isFreeMailProviderName(n)) return "unknown_customer";
+  return "known_customer";
+}
+
+/**
+ * Page through the leak rows behind `getFunnelDiagnostics`'s counters.
+ * Read-only. Returns `{ total, hasMore, rows }` so the UI can show
+ * "Showing 1–50 of N" without a separate count call.
+ */
+export async function getLeakedQuoteEmails(
+  orgId: string,
+  scopedRepId: string | null | "__none__",
+  opts: GetLeakedQuoteEmailsOpts,
+): Promise<LeakedQueueResult> {
+  const type = opts.type;
+  const windowDays = opts.windowDays ?? 14;
+  const limit = clamp(opts.limit ?? LEAK_LIMIT_DEFAULT, 1, LEAK_LIMIT_MAX);
+  const offset = clamp(opts.offset ?? 0, 0, LEAK_OFFSET_MAX);
+
+  // Same short-circuit getFunnelDiagnostics uses: if the caller can see
+  // no funnel data at all (rep with no quote access), they see no leaks.
+  if (scopedRepId === "__none__") {
+    return { type, windowDays, total: 0, hasMore: false, rows: [] };
+  }
+
+  const candidates = await buildLeakCandidateIds(orgId, windowDays);
+  const idPool = type === "missed_inbound"
+    ? candidates.missedInboundIds
+    : candidates.orphanOutboundIds;
+  const total = idPool.length;
+  const pageIds = idPool.slice(offset, offset + limit);
+  const hasMore = offset + limit < total;
+
+  if (pageIds.length === 0) {
+    return { type, windowDays, total, hasMore: false, rows: [] };
+  }
+
+  // Pull the full message rows for the page (only the page — never the
+  // whole id pool) and resolve the linked-account name in one batch.
+  const messages = await db
+    .select({
+      id: emailMessages.id,
+      threadId: emailMessages.threadId,
+      fromEmail: emailMessages.fromEmail,
+      toEmail: emailMessages.toEmail,
+      subject: emailMessages.subject,
+      body: emailMessages.body,
+      providerSentAt: emailMessages.providerSentAt,
+      linkedAccountId: emailMessages.linkedAccountId,
+    })
+    .from(emailMessages)
+    .where(and(
+      eq(emailMessages.orgId, orgId),
+      inArray(emailMessages.id, pageIds),
+    ));
+
+  const accountIds = Array.from(new Set(
+    messages.map(m => m.linkedAccountId).filter((v): v is string => !!v),
+  ));
+  const accountNameById = new Map<string, string>();
+  if (accountIds.length > 0) {
+    const rows = await db
+      .select({ id: companies.id, name: companies.name })
+      .from(companies)
+      .where(inArray(companies.id, accountIds));
+    for (const r of rows) accountNameById.set(r.id, r.name);
+  }
+
+  // Preserve the providerSentAt-DESC order from `idPool` — `inArray`
+  // doesn't guarantee row order. Build a position map and sort.
+  const positionById = new Map<string, number>();
+  pageIds.forEach((id, i) => positionById.set(id, i));
+  const ordered = [...messages].sort((a, b) => {
+    const ai = positionById.get(a.id) ?? 0;
+    const bi = positionById.get(b.id) ?? 0;
+    return ai - bi;
+  });
+
+  if (type === "missed_inbound") {
+    const rows: LeakedInboundRow[] = ordered.map(m => {
+      const parsed = parseFromHeader(m.fromEmail);
+      const customerName = m.linkedAccountId
+        ? accountNameById.get(m.linkedAccountId) ?? null
+        : null;
+      return {
+        messageId: m.id,
+        threadId: m.threadId,
+        fromEmail: parsed.email,
+        fromName: parsed.name,
+        subject: m.subject,
+        bodySnippet: trimSnippet(m.body),
+        receivedAt: (m.providerSentAt ?? new Date(0)).toISOString(),
+        linkedCustomerId: m.linkedAccountId,
+        linkedCustomerName: customerName,
+        customerState: classifyCustomerState(m.linkedAccountId, customerName),
+      };
+    });
+    return { type, windowDays, total, hasMore, rows };
+  }
+
+  // orphan_outbound — additionally fetch one "most recent inbound on
+  // this thread" per row, in a single bounded query.
+  const threadIds = Array.from(new Set(
+    ordered.map(m => m.threadId).filter((v): v is string => !!v),
+  ));
+  const lastInboundByThread = new Map<string, {
+    fromEmail: string | null;
+    subject: string | null;
+    sentAt: Date | null;
+  }>();
+  if (threadIds.length > 0) {
+    const inboundRows = await db
+      .select({
+        threadId: emailMessages.threadId,
+        fromEmail: emailMessages.fromEmail,
+        subject: emailMessages.subject,
+        providerSentAt: emailMessages.providerSentAt,
+      })
+      .from(emailMessages)
+      .where(and(
+        eq(emailMessages.orgId, orgId),
+        eq(emailMessages.direction, "inbound"),
+        inArray(emailMessages.threadId, threadIds),
+      ))
+      .orderBy(desc(emailMessages.providerSentAt));
+    for (const r of inboundRows) {
+      if (!r.threadId) continue;
+      if (lastInboundByThread.has(r.threadId)) continue; // first row wins (DESC sort)
+      const parsed = parseFromHeader(r.fromEmail);
+      lastInboundByThread.set(r.threadId, {
+        fromEmail: parsed.email,
+        subject: r.subject,
+        sentAt: r.providerSentAt,
+      });
+    }
+  }
+
+  const rows: LeakedOutboundRow[] = ordered.map(m => {
+    const customerName = m.linkedAccountId
+      ? accountNameById.get(m.linkedAccountId) ?? null
+      : null;
+    const lastInbound = m.threadId ? lastInboundByThread.get(m.threadId) : undefined;
+    return {
+      messageId: m.id,
+      threadId: m.threadId ?? "", // candidate-id query already required NOT NULL
+      toEmail: m.toEmail,
+      subject: m.subject,
+      bodySnippet: trimSnippet(m.body),
+      sentAt: (m.providerSentAt ?? new Date(0)).toISOString(),
+      linkedCustomerId: m.linkedAccountId,
+      linkedCustomerName: customerName,
+      customerState: classifyCustomerState(m.linkedAccountId, customerName),
+      lastInboundFromEmail: lastInbound?.fromEmail ?? null,
+      lastInboundSubject: lastInbound?.subject ?? null,
+      lastInboundAt: lastInbound?.sentAt?.toISOString() ?? null,
+    };
+  });
+  return { type, windowDays, total, hasMore, rows };
 }
 
 // ─── Task #803 — New-contact-review queue helpers ────────────────────────

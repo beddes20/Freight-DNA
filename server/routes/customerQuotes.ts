@@ -18,6 +18,7 @@ import {
   setAutoWonQuoteAfHandoffEnabled,
   getFunnel,
   getFunnelDiagnostics,
+  getLeakedQuoteEmails,
   listNewContactReviews,
   resolveNewContactReview,
   resolveFunnelRepScope,
@@ -869,6 +870,42 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     } catch (err) {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] funnel-diagnostics error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Capture leak queue (Phase 1, read-only). Row-level expansion of the
+  // missingIntentInbound / orphanOutbound counters surfaced by
+  // /funnel-diagnostics. Same admin gating, same rep-scope rules; the
+  // queue inherits windowDays from the diagnostics defaults so the count
+  // and the rows are computed against the same window.
+  app.get("/api/customer-quotes/funnel-diagnostics/leaks", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const elevated = new Set(["admin", "director", "sales_director"]);
+      if (!elevated.has(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const typeRaw = qStr(req.query.type);
+      if (typeRaw !== "missed_inbound" && typeRaw !== "orphan_outbound") {
+        return res.status(400).json({ error: "type must be 'missed_inbound' or 'orphan_outbound'" });
+      }
+      // qInt collapses missing / non-numeric to the fallback. Sentinel
+      // -1 ⇒ "use service default" (50 / 0). The service also clamps,
+      // so a user-supplied 9999 still gets capped — we don't have to
+      // duplicate the bounds here.
+      const limitParsed = qInt(req.query.limit, -1);
+      const offsetParsed = qInt(req.query.offset, -1);
+      const scope = await resolveFunnelRepScope(user.organizationId, { id: user.id, role: user.role });
+      const result = await getLeakedQuoteEmails(user.organizationId, scope, {
+        type: typeRaw,
+        limit: limitParsed >= 0 ? limitParsed : undefined,
+        offset: offsetParsed >= 0 ? offsetParsed : undefined,
+      });
+      res.json(result);
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      console.error("[customer-quotes] funnel-diagnostics/leaks error:", err);
       res.status(500).json({ error: msg });
     }
   });

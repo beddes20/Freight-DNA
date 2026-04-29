@@ -20,8 +20,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ChevronDown, ChevronRight, AlertCircle, Wrench } from "lucide-react";
+import { ChevronDown, ChevronRight, AlertCircle, Wrench, Wifi, WifiOff } from "lucide-react";
 import type { FunnelFilters } from "./FreightCaptureFunnel";
+import { CaptureLeakQueue } from "./CaptureLeakQueue";
 
 type SyncStats = {
   ranAt: string;
@@ -63,6 +64,15 @@ type DiagnosticsResult = {
    *  sender email). Cleared by Add-as-contact / Dismiss in the Quote
    *  Opportunities table. */
   newSendersToReview: number;
+  /** Phase 1 — additive leak counters surfaced by the Capture leaks
+   *  tile + queue below. `missingIntentInboundCount` = inbound replies
+   *  that landed but produced no quote intent + no opportunity;
+   *  `orphanOutboundCount` = outbound on threads with no pending
+   *  email-sourced quote_opportunity; `hasWebhookSecret` = boolean
+   *  reflecting OUTLOOK_WEBHOOK_SECRET presence on the server. */
+  missingIntentInboundCount: number;
+  orphanOutboundCount: number;
+  hasWebhookSecret: boolean;
 };
 
 interface Props {
@@ -213,6 +223,35 @@ export function FreightCaptureDiagnostics({ filters, enabled, open: openProp, on
                 />
               </DiagnosticTile>
 
+              <DiagnosticTile title="Capture leaks" testId="diag-leaks">
+                <div className="text-[11px] text-muted-foreground mb-1.5 flex items-center gap-1.5">
+                  <span>Inbound + outbound that did not produce a quote · last 14d · org-wide</span>
+                  {data.hasWebhookSecret ? (
+                    <span
+                      className="inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400"
+                      title="OUTLOOK_WEBHOOK_SECRET is configured — webhook validation gate is on"
+                      data-testid="diag-leaks-webhook-on"
+                    >
+                      <Wifi className="h-3 w-3" />
+                    </span>
+                  ) : (
+                    <span
+                      className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-400"
+                      title="OUTLOOK_WEBHOOK_SECRET is not configured — webhook gate is off"
+                      data-testid="diag-leaks-webhook-off"
+                    >
+                      <WifiOff className="h-3 w-3" />
+                    </span>
+                  )}
+                </div>
+                <KvGrid
+                  items={[
+                    { label: "Missed inbound", value: data.missingIntentInboundCount },
+                    { label: "Orphan outbound", value: data.orphanOutboundCount },
+                  ]}
+                />
+              </DiagnosticTile>
+
               <DiagnosticTile title="Near-miss TMS candidates" testId="diag-nearmiss" wide>
                 {data.nearMissCandidates.length === 0 ? (
                   <p className="text-xs text-muted-foreground" data-testid="diag-nearmiss-empty">
@@ -245,6 +284,11 @@ export function FreightCaptureDiagnostics({ filters, enabled, open: openProp, on
               </DiagnosticTile>
             </div>
           )}
+          {/* Phase 1 — Capture Leak Queue: row-level expansion of the
+              missingIntentInbound / orphanOutbound counters in the
+              "Capture leaks" tile above. Read-only; Open-thread is the
+              only row action. */}
+          <CaptureLeakQueue enabled={open} />
           <div className="mt-2 flex justify-end">
             <Button
               size="sm"
