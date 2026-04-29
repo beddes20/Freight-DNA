@@ -7,9 +7,11 @@ import {
   quoteOpportunities, quoteEvents, quoteSavedViews, quoteSenderMappings,
   recurringLanes, companies, emailMessages, emailSignals,
   freightOpportunities,
+  captureLeakReviews,
   type QuoteOpportunity, type QuoteOutcomeStatus, type QuoteCustomer, type QuoteRep,
   type QuoteCarrier, type QuoteLaneGroup, type QuoteOutcomeReason, type QuoteSavedView,
   type InsertFreightOpportunity,
+  type CaptureLeakType, type CaptureLeakReviewDecision, type CaptureLeakReview,
 } from "@shared/schema";
 import { UNKNOWN_CUSTOMER_NAME, classifyPartyType, sanitizeCustomerName, isFreeMailProviderName } from "./customerNameResolver";
 import { loadNonCustomerCustomerIds } from "./customerOnlyChokepoint";
@@ -21,6 +23,7 @@ import { getStaleQuoteFollowUps } from "./staleQuoteFollowup";
 import {
   LOST_INCUMBENT, LOST_PRICE, LOST_SERVICE, LOST_TIMING,
   findOrCreateLostReasonExported,
+  ingestQuoteFromEmail,
   type LostReason,
 } from "./quoteEmailIngestion";
 import { getActivePatternAlertsForOrg } from "./quotePatternShift";
@@ -4698,6 +4701,44 @@ async function buildLeakCandidateIds(
     }
   }
 
+  // Phase 2A — exclude any (messageId, leakType) the admin has already
+  // reviewed (decision = "not_quote" or "ignored"). Filtering at this
+  // single chokepoint preserves the no-drift guarantee between
+  // `getFunnelDiagnostics`'s counters and `getLeakedQuoteEmails`'s rows.
+  const allCandidateIds = [...missedInboundIds, ...orphanOutboundIds];
+  if (allCandidateIds.length > 0) {
+    const reviewed = await db
+      .select({
+        messageId: captureLeakReviews.messageId,
+        leakType: captureLeakReviews.leakType,
+      })
+      .from(captureLeakReviews)
+      .where(and(
+        eq(captureLeakReviews.organizationId, orgId),
+        inArray(captureLeakReviews.messageId, allCandidateIds),
+      ));
+    if (reviewed.length > 0) {
+      const reviewedInbound = new Set<string>();
+      const reviewedOutbound = new Set<string>();
+      for (const r of reviewed) {
+        if (r.leakType === "missed_inbound") reviewedInbound.add(r.messageId);
+        else if (r.leakType === "orphan_outbound") reviewedOutbound.add(r.messageId);
+      }
+      const filteredMissed = reviewedInbound.size > 0
+        ? missedInboundIds.filter(id => !reviewedInbound.has(id))
+        : missedInboundIds;
+      const filteredOrphan = reviewedOutbound.size > 0
+        ? orphanOutboundIds.filter(id => !reviewedOutbound.has(id))
+        : orphanOutboundIds;
+      return {
+        windowDays,
+        leakSince,
+        missedInboundIds: filteredMissed,
+        orphanOutboundIds: filteredOrphan,
+      };
+    }
+  }
+
   return { windowDays, leakSince, missedInboundIds, orphanOutboundIds };
 }
 
@@ -4958,6 +4999,256 @@ export async function getLeakedQuoteEmails(
     };
   });
   return { type, windowDays, total, hasMore, rows };
+}
+
+// ─── Phase 2A — Capture leak review decisions ────────────────────────────
+
+export type ReviewLeakRowStatus = "ok" | "not_found";
+
+export interface ReviewLeakRowResult {
+  status: ReviewLeakRowStatus;
+  review?: CaptureLeakReview;
+}
+
+/**
+ * Record (or overwrite) a "not a quote" / "ignored" decision for a single
+ * capture-leak row. Idempotent via the
+ * `(organization_id, message_id, leak_type)` unique index — replays from
+ * the same admin or two admins racing each other collapse to one row.
+ *
+ * Cross-tenant safety: the `messageId` must belong to `orgId` in
+ * `email_messages`. Passing a foreign-org id returns `not_found` and
+ * writes nothing — so an admin in org A cannot guess at org B's ids and
+ * silently mutate their leak queue.
+ *
+ * After a successful write, `buildLeakCandidateIds` will exclude the
+ * `(messageId, leakType)` pair on its next call, so both
+ * `getFunnelDiagnostics` counts AND `getLeakedQuoteEmails` rows update
+ * in lock-step (no client-side hiding).
+ */
+export async function reviewLeakRow(
+  orgId: string,
+  userId: string | null,
+  input: {
+    messageId: string;
+    leakType: CaptureLeakType;
+    decision: CaptureLeakReviewDecision;
+    note?: string | null;
+  },
+): Promise<ReviewLeakRowResult> {
+  const messageId = input.messageId.trim();
+  if (!messageId) return { status: "not_found" };
+
+  // Cross-tenant safety. We deliberately don't check direction here —
+  // both leak types come from `email_messages` and the leakType arg is
+  // what tells us which queue the row belongs to. The route layer
+  // validates leakType against the enum.
+  const [msg] = await db
+    .select({ id: emailMessages.id })
+    .from(emailMessages)
+    .where(and(
+      eq(emailMessages.id, messageId),
+      eq(emailMessages.orgId, orgId),
+    ))
+    .limit(1);
+  if (!msg) return { status: "not_found" };
+
+  const note = (input.note ?? "").trim();
+  const now = new Date();
+  const [row] = await db
+    .insert(captureLeakReviews)
+    .values({
+      organizationId: orgId,
+      messageId,
+      leakType: input.leakType,
+      decision: input.decision,
+      decidedByUserId: userId,
+      note: note.length > 0 ? note : null,
+    })
+    .onConflictDoUpdate({
+      target: [
+        captureLeakReviews.organizationId,
+        captureLeakReviews.messageId,
+        captureLeakReviews.leakType,
+      ],
+      set: {
+        decision: input.decision,
+        decidedByUserId: userId,
+        note: note.length > 0 ? note : null,
+        updatedAt: now,
+      },
+    })
+    .returning();
+
+  return { status: "ok", review: row };
+}
+
+// ─── Phase 2B — Manual "Create quote" from a Missed Inbound leak row ─────
+
+export type ManualLeakCreateStatus =
+  | "created"          // a fresh quote_opportunities row was inserted
+  | "duplicate"        // an existing quote already references this providerMessageId
+  | "unparseable"      // ingestQuoteFromEmail couldn't extract a quote shape
+  | "not_a_leak"       // race: row no longer in the leak set
+  | "not_found"        // messageId doesn't belong to this org
+  | "wrong_direction"; // outbound message — not a Missed Inbound row
+
+export interface ManualLeakCreateResult {
+  status: ManualLeakCreateStatus;
+  quoteId?: string;
+  reason?: string;
+}
+
+/**
+ * Manually convert a Missed Inbound leak row into a quote_opportunity.
+ *
+ * Reuses `ingestQuoteFromEmail` so parsing, idempotency (collision on
+ * `(orgId, source="email", sourceReference=providerMessageId??id)`), customer
+ * resolution, learned-mapping behaviour, and downstream events stay
+ * identical to the autopilot pipeline. The only addition is a single
+ * `quote_events` audit row written on a real "created" outcome — see below.
+ *
+ * Phase 2B is intentionally narrow: only inbound rows are accepted.
+ * Orphan Outbound rows have no inbound payload to parse and are rejected
+ * with `wrong_direction`. The route layer also restricts the UI to the
+ * Missed Inbound tab so reaching this path with an outbound id requires
+ * a hand-crafted request.
+ *
+ * Queue removal is implicit and drift-free: once the new quote exists,
+ * `buildLeakCandidateIds` excludes its `sourceReference` via the
+ * `existingQuoteRefs` set on the next refetch — so the row falls out of
+ * BOTH the diagnostics counters and the queue list automatically. We
+ * deliberately do NOT write a `captureLeakReviews` row for create —
+ * the quote_opportunities row IS the resolution evidence, and writing a
+ * second resolution marker would create two sources of truth.
+ */
+// Per-(orgId, messageId) in-process mutex. `ingestQuoteFromEmail` does a
+// SELECT-then-INSERT on (organization_id, source, source_reference) but
+// has no DB unique constraint — so two concurrent manual-create clicks
+// (or one click racing the autopilot tick) could both pass the dup check
+// and insert two rows. The autopilot tick is single-threaded per process,
+// so we only need to serialize manual create calls against each other and
+// against an already-running autopilot pass within the same process. This
+// mirrors the `_batchInFlight` mutex pattern used by the email-intelligence
+// scheduler. Keyed by (orgId :: messageId) — cross-tenant calls never
+// share a slot.
+const _manualLeakCreateInFlight = new Map<string, Promise<ManualLeakCreateResult>>();
+
+export async function manuallyCreateQuoteFromLeakRow(
+  orgId: string,
+  userId: string,
+  messageId: string,
+): Promise<ManualLeakCreateResult> {
+  const id = (messageId ?? "").trim();
+  if (!id) return { status: "not_found" };
+
+  const mutexKey = `${orgId}::${id}`;
+  const existing = _manualLeakCreateInFlight.get(mutexKey);
+  if (existing) {
+    // A concurrent click (or another tick) is already creating this
+    // exact (orgId, messageId). Await its result and return the same
+    // outcome — both callers will see `created` (first) / `duplicate`
+    // (second), never two distinct quote rows.
+    return existing;
+  }
+
+  const work = _runManualLeakCreate(orgId, userId, id);
+  _manualLeakCreateInFlight.set(mutexKey, work);
+  try {
+    return await work;
+  } finally {
+    _manualLeakCreateInFlight.delete(mutexKey);
+  }
+}
+
+// Test helpers — see captureLeakActions.test.ts.
+export function _isManualLeakCreateInFlightForTests(orgId: string, messageId: string): boolean {
+  return _manualLeakCreateInFlight.has(`${orgId}::${messageId}`);
+}
+export function _resetManualLeakCreateInFlightForTests(): void {
+  _manualLeakCreateInFlight.clear();
+}
+
+async function _runManualLeakCreate(
+  orgId: string,
+  userId: string,
+  id: string,
+): Promise<ManualLeakCreateResult> {
+  // 1) Cross-tenant + direction check. We must load the row so we can
+  // (a) verify the message belongs to this org, (b) reject outbound
+  // rows up-front, and (c) hand the EmailMessage to ingestQuoteFromEmail.
+  const [msg] = await db.select().from(emailMessages).where(and(
+    eq(emailMessages.id, id),
+    eq(emailMessages.orgId, orgId),
+  )).limit(1);
+  if (!msg) return { status: "not_found" };
+  if (msg.direction !== "inbound") return { status: "wrong_direction" };
+
+  // 2) Race guard — between page load and click, another admin could
+  // have reviewed the row, autopilot could have ingested it, or the
+  // window could have rolled. Re-check the candidate set so we don't
+  // create a quote for a row the user can no longer see. We use the
+  // same default window as `getLeakedQuoteEmails` (14 days) so the
+  // race-guard view matches what the UI was showing.
+  const candidates = await buildLeakCandidateIds(orgId, 14);
+  if (!candidates.missedInboundIds.includes(id)) {
+    // It's possible the message was already converted to a quote by
+    // the autopilot pipeline in the interim. Surface that quote so the
+    // client can still deep-link to it (treated as `duplicate` below).
+    const ref = msg.providerMessageId ?? msg.id;
+    const [existing] = await db.select({ id: quoteOpportunities.id })
+      .from(quoteOpportunities)
+      .where(and(
+        eq(quoteOpportunities.organizationId, orgId),
+        eq(quoteOpportunities.source, "email"),
+        eq(quoteOpportunities.sourceReference, ref),
+      ))
+      .limit(1);
+    if (existing) return { status: "duplicate", quoteId: existing.id };
+    return { status: "not_a_leak" };
+  }
+
+  // 3) Hand off to the canonical ingestion path. `useAiFallback` is left
+  // at its default (true) — manual triage is exactly when the AI fallback
+  // should fire, since these are the rows the regex parser already
+  // failed to capture. The function is idempotent on the providerMessageId.
+  const result = await ingestQuoteFromEmail(msg);
+
+  switch (result.status) {
+    case "ingested": {
+      const quoteId = result.quoteId!;
+      // Audit trail: one `quote_events` row per manual creation, keyed
+      // off the new quoteId. `eventType: "note"` keeps the existing
+      // event-type vocabulary intact (no schema changes needed).
+      try {
+        await db.insert(quoteEvents).values({
+          quoteId,
+          eventType: "note",
+          occurredAt: new Date(),
+          actor: "manual_leak_create",
+          payload: {
+            source: "capture_leak_queue",
+            messageId: id,
+            triggeredByUserId: userId,
+            leakType: "missed_inbound" as CaptureLeakType,
+          },
+        });
+      } catch (err) {
+        // Audit failures must not roll back a successful create.
+        // Log and move on — the quote itself is what the user wanted.
+        console.error("[capture-leak-create] failed to write audit event:", err);
+      }
+      return { status: "created", quoteId };
+    }
+    case "skipped_duplicate":
+      return { status: "duplicate", quoteId: result.quoteId };
+    case "skipped_unparseable":
+      return { status: "unparseable", reason: "Could not extract a quote from this email" };
+    case "skipped_outbound":
+      // Defensive — we already filtered above, but the upstream contract
+      // surfaces this status, so handle it explicitly rather than fall through.
+      return { status: "wrong_direction" };
+  }
 }
 
 // ─── Task #803 — New-contact-review queue helpers ────────────────────────

@@ -4049,6 +4049,25 @@ export async function runMigrations() {
     // Hard guarantee: at most one active alert per (org, customer).
     await client468.query(`CREATE UNIQUE INDEX IF NOT EXISTS quote_pattern_alerts_active_uq ON quote_pattern_alerts (organization_id, customer_id) WHERE status = 'active'`);
 
+    // Capture Leak Queue Phase 2A — admin-triaged "Not a quote" / "Ignore"
+    // decisions on individual leak rows. Required by the schema-drift guard
+    // alongside the Drizzle table `captureLeakReviews` in shared/schema.ts.
+    await client468.query(`
+      CREATE TABLE IF NOT EXISTS capture_leak_reviews (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        message_id varchar NOT NULL,
+        leak_type text NOT NULL,
+        decision text NOT NULL,
+        decided_by_user_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        note text,
+        decided_at timestamp NOT NULL DEFAULT NOW(),
+        updated_at timestamp NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client468.query(`CREATE UNIQUE INDEX IF NOT EXISTS capture_leak_reviews_org_msg_type_uidx ON capture_leak_reviews (organization_id, message_id, leak_type)`);
+    await client468.query(`CREATE INDEX IF NOT EXISTS capture_leak_reviews_org_decided_at_idx ON capture_leak_reviews (organization_id, decided_at)`);
+
     console.log("[migrations] Task #468 customer quotes tables ensured");
   } catch (err) {
     console.error("[migrations] Task #468 customer quotes table create error:", err);

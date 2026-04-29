@@ -1,24 +1,39 @@
 /**
- * Capture Leak Queue (Phase 1, read-only).
+ * Capture Leak Queue.
  *
  * Row-level expansion of the missingIntentInbound / orphanOutbound
  * counters surfaced by the FreightCaptureDiagnostics tile. Two tabs
- * (Missed inbound default), an Open-thread link as the only row action,
- * a small customer-state chip, and a Load-more pager driven by the
- * server's `hasMore` flag. Intentionally has no create / dismiss /
- * attach actions in Phase 1.
+ * (Missed inbound default), an Open-thread link, a small customer-state
+ * chip, and a Load-more pager driven by the server's `hasMore` flag.
+ *
+ * Phase 2A — adds two admin triage actions on every row:
+ *   • Not a quote   → records `decision="not_quote"`
+ *   • Ignore for now → records `decision="ignored"`
+ * Both reads and writes invalidate the diagnostics counts so the leak
+ * count and the queue list stay in lock-step (no client-side hiding).
+ *
+ * Phase 2B — adds a third action on Missed Inbound rows ONLY:
+ *   • Create quote → reuses the autopilot ingestion path to make a real
+ *     quote_opportunity from the email, then deep-links the user to it
+ *     via `?quote=<id>` on the customer-quotes page. Orphan Outbound
+ *     rows have no inbound payload to parse, so the action is omitted
+ *     there. No bulk; no AI auto-create.
  *
  * Mounted by FreightCaptureDiagnostics; admin-only at the parent level
  * (the route itself also 403s for non-admin).
  */
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { AlertCircle, ExternalLink, Inbox, Send } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { AlertCircle, ExternalLink, Inbox, Send, X, Clock, Plus } from "lucide-react";
 
 type LeakType = "missed_inbound" | "orphan_outbound";
+type LeakDecision = "not_quote" | "ignored";
 
 type CustomerState = "known_customer" | "unknown_customer" | "no_linked_customer";
 
@@ -53,6 +68,17 @@ interface QueueResponse {
   total: number;
   hasMore: boolean;
   rows: InboundRow[] | OutboundRow[];
+}
+
+interface ReviewLeakResponse {
+  status: "ok";
+  review: { id: string; decision: LeakDecision; messageId: string };
+}
+
+interface CreateQuoteResponse {
+  status: "created" | "duplicate" | "unparseable" | "not_a_leak" | "not_found" | "wrong_direction";
+  quoteId?: string;
+  reason?: string;
 }
 
 const PAGE_SIZE = 50;
@@ -127,7 +153,90 @@ function OpenThreadLink({ threadId }: { threadId: string | null }): JSX.Element 
   );
 }
 
-function InboundRowView({ row }: { row: InboundRow }): JSX.Element {
+interface RowActionsProps {
+  messageId: string;
+  leakType: LeakType;
+  isReviewing: boolean;
+  isCreating: boolean;
+  onReview: (decision: LeakDecision) => void;
+  onCreateQuote?: () => void;
+}
+
+function RowActions({
+  messageId,
+  leakType,
+  isReviewing,
+  isCreating,
+  onReview,
+  onCreateQuote,
+}: RowActionsProps): JSX.Element {
+  const busy = isReviewing || isCreating;
+  return (
+    <div
+      className="flex flex-wrap items-center gap-1 mt-1.5"
+      data-testid={`leak-row-actions-${messageId}`}
+    >
+      {onCreateQuote && (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={onCreateQuote}
+          className="h-6 px-2 text-[11px] gap-1 border-emerald-600/40 text-emerald-700 hover:bg-emerald-50 dark:text-emerald-300 dark:hover:bg-emerald-950/30"
+          data-testid={`leak-action-create-quote-${messageId}`}
+          aria-label="Create a quote from this email"
+        >
+          <Plus className="h-3 w-3" />
+          {isCreating ? "Creating…" : "Create quote"}
+        </Button>
+      )}
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled={busy}
+        onClick={() => onReview("not_quote")}
+        className="h-6 px-2 text-[11px] gap-1 text-muted-foreground hover:text-foreground"
+        data-testid={`leak-action-not-quote-${messageId}`}
+        aria-label="Mark this row as not a quote"
+      >
+        <X className="h-3 w-3" />
+        Not a quote
+      </Button>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled={busy}
+        onClick={() => onReview("ignored")}
+        className="h-6 px-2 text-[11px] gap-1 text-muted-foreground hover:text-foreground"
+        data-testid={`leak-action-ignore-${messageId}`}
+        aria-label="Hide this row from the queue"
+      >
+        <Clock className="h-3 w-3" />
+        Ignore for now
+      </Button>
+      <span className="sr-only">Type: {leakType}</span>
+    </div>
+  );
+}
+
+interface InboundRowViewProps {
+  row: InboundRow;
+  reviewingId: string | null;
+  creatingId: string | null;
+  onReview: (messageId: string, decision: LeakDecision) => void;
+  onCreateQuote: (messageId: string) => void;
+}
+
+function InboundRowView({
+  row,
+  reviewingId,
+  creatingId,
+  onReview,
+  onCreateQuote,
+}: InboundRowViewProps): JSX.Element {
   const sender = row.fromName
     ? `${row.fromName} <${row.fromEmail ?? "?"}>`
     : row.fromEmail ?? "Unknown sender";
@@ -152,6 +261,14 @@ function InboundRowView({ row }: { row: InboundRow }): JSX.Element {
               {row.bodySnippet}
             </div>
           )}
+          <RowActions
+            messageId={row.messageId}
+            leakType="missed_inbound"
+            isReviewing={reviewingId === row.messageId}
+            isCreating={creatingId === row.messageId}
+            onReview={(d) => onReview(row.messageId, d)}
+            onCreateQuote={() => onCreateQuote(row.messageId)}
+          />
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
           <span className="text-[11px] text-muted-foreground tabular-nums">{fmtRel(row.receivedAt)}</span>
@@ -162,7 +279,17 @@ function InboundRowView({ row }: { row: InboundRow }): JSX.Element {
   );
 }
 
-function OutboundRowView({ row }: { row: OutboundRow }): JSX.Element {
+interface OutboundRowViewProps {
+  row: OutboundRow;
+  reviewingId: string | null;
+  onReview: (messageId: string, decision: LeakDecision) => void;
+}
+
+function OutboundRowView({
+  row,
+  reviewingId,
+  onReview,
+}: OutboundRowViewProps): JSX.Element {
   return (
     <div
       className="border-b border-border/60 last:border-0 py-2 px-1"
@@ -191,6 +318,15 @@ function OutboundRowView({ row }: { row: OutboundRow }): JSX.Element {
               {row.lastInboundAt ? ` · ${fmtRel(row.lastInboundAt)}` : ""}
             </div>
           )}
+          {/* Phase 2B intentionally omits "Create quote" on Orphan Outbound:
+              there's no inbound email payload to parse. */}
+          <RowActions
+            messageId={row.messageId}
+            leakType="orphan_outbound"
+            isReviewing={reviewingId === row.messageId}
+            isCreating={false}
+            onReview={(d) => onReview(row.messageId, d)}
+          />
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
           <span className="text-[11px] text-muted-foreground tabular-nums">{fmtRel(row.sentAt)}</span>
@@ -210,6 +346,11 @@ interface Props {
 export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
   const [type, setType] = useState<LeakType>("missed_inbound");
   const [limit, setLimit] = useState<number>(PAGE_SIZE);
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [creatingId, setCreatingId] = useState<string | null>(null);
+  const { toast } = useToast();
+  const [, navigate] = useLocation();
+  const qc = useQueryClient();
 
   const { data, isLoading, isError, error, isFetching } = useQuery<QueueResponse>({
     queryKey: ["/api/customer-quotes/funnel-diagnostics/leaks", type, limit] as const,
@@ -225,12 +366,131 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
     staleTime: 30_000,
   });
 
+  // Both writes need to invalidate BOTH the queue and the funnel-diagnostics
+  // counts so the badge total drops in lock-step with the queue row.
+  function invalidateLeakViews(): void {
+    qc.invalidateQueries({ queryKey: ["/api/customer-quotes/funnel-diagnostics/leaks"] });
+    qc.invalidateQueries({ queryKey: ["/api/customer-quotes/funnel-diagnostics"] });
+  }
+
+  const reviewMutation = useMutation({
+    mutationFn: async (input: { messageId: string; decision: LeakDecision; leakType: LeakType }) => {
+      const res = await apiRequest(
+        "POST",
+        "/api/customer-quotes/funnel-diagnostics/leaks/review",
+        input,
+      );
+      return (await res.json()) as ReviewLeakResponse;
+    },
+    onMutate: ({ messageId }) => setReviewingId(messageId),
+    onSuccess: (_data, vars) => {
+      invalidateLeakViews();
+      toast({
+        title: vars.decision === "not_quote" ? "Marked as not a quote" : "Hidden from queue",
+        description: vars.decision === "not_quote"
+          ? "This row will no longer appear in the leak queue."
+          : "Use the funnel diagnostics later to re-review.",
+      });
+    },
+    onError: (err) => {
+      toast({
+        title: "Could not record decision",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    },
+    onSettled: () => setReviewingId(null),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (input: { messageId: string }) => {
+      const res = await apiRequest(
+        "POST",
+        "/api/customer-quotes/funnel-diagnostics/leaks/create-quote",
+        input,
+      );
+      return (await res.json()) as CreateQuoteResponse;
+    },
+    onMutate: ({ messageId }) => setCreatingId(messageId),
+    onSuccess: (data) => {
+      invalidateLeakViews();
+      // Also invalidate the customer-quotes list/drawer so the new row
+      // shows up if the user navigates to the page.
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes"] });
+      switch (data.status) {
+        case "created":
+          toast({
+            title: "Quote created",
+            description: "Opening the new quote…",
+          });
+          if (data.quoteId) {
+            navigate(`/customer-quotes?quote=${encodeURIComponent(data.quoteId)}`);
+          }
+          break;
+        case "duplicate":
+          toast({
+            title: "Quote already exists",
+            description: data.quoteId
+              ? "Opening the existing quote…"
+              : "A quote for this email already exists.",
+          });
+          if (data.quoteId) {
+            navigate(`/customer-quotes?quote=${encodeURIComponent(data.quoteId)}`);
+          }
+          break;
+        case "unparseable":
+          toast({
+            title: "Could not extract a quote",
+            description: data.reason ?? "The email body didn't yield a usable quote shape. Try Open thread to handle it manually.",
+            variant: "destructive",
+          });
+          break;
+        case "not_a_leak":
+          toast({
+            title: "Row no longer in queue",
+            description: "Another reviewer or the autopilot resolved this row already.",
+          });
+          break;
+        case "not_found":
+          toast({
+            title: "Email not found",
+            description: "This row no longer exists in your organization.",
+            variant: "destructive",
+          });
+          break;
+        case "wrong_direction":
+          toast({
+            title: "Cannot create from outbound",
+            description: "Manual create is only available on inbound emails.",
+            variant: "destructive",
+          });
+          break;
+      }
+    },
+    onError: (err) => {
+      toast({
+        title: "Could not create quote",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    },
+    onSettled: () => setCreatingId(null),
+  });
+
   if (!enabled) return null;
 
   function pickType(next: LeakType): void {
     if (next === type) return;
     setType(next);
     setLimit(PAGE_SIZE);
+  }
+
+  function handleReview(messageId: string, decision: LeakDecision): void {
+    reviewMutation.mutate({ messageId, decision, leakType: type });
+  }
+
+  function handleCreateQuote(messageId: string): void {
+    createMutation.mutate({ messageId });
   }
 
   return (
@@ -307,8 +567,24 @@ export function CaptureLeakQueue({ enabled }: Props): JSX.Element | null {
         {data && data.rows.length > 0 && (
           <div data-testid={`leak-queue-list-${type}`}>
             {type === "missed_inbound"
-              ? (data.rows as InboundRow[]).map(r => <InboundRowView key={r.messageId} row={r} />)
-              : (data.rows as OutboundRow[]).map(r => <OutboundRowView key={r.messageId} row={r} />)}
+              ? (data.rows as InboundRow[]).map(r => (
+                  <InboundRowView
+                    key={r.messageId}
+                    row={r}
+                    reviewingId={reviewingId}
+                    creatingId={creatingId}
+                    onReview={handleReview}
+                    onCreateQuote={handleCreateQuote}
+                  />
+                ))
+              : (data.rows as OutboundRow[]).map(r => (
+                  <OutboundRowView
+                    key={r.messageId}
+                    row={r}
+                    reviewingId={reviewingId}
+                    onReview={handleReview}
+                  />
+                ))}
           </div>
         )}
 

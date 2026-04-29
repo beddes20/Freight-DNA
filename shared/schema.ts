@@ -5422,6 +5422,39 @@ export const insertQuoteEventSchema = createInsertSchema(quoteEvents).omit({ id:
 export type InsertQuoteEvent = z.infer<typeof insertQuoteEventSchema>;
 export type QuoteEvent = typeof quoteEvents.$inferSelect;
 
+export const CAPTURE_LEAK_TYPES = ["missed_inbound", "orphan_outbound"] as const;
+export type CaptureLeakType = typeof CAPTURE_LEAK_TYPES[number];
+export const CAPTURE_LEAK_REVIEW_DECISIONS = ["not_quote", "ignored"] as const;
+export type CaptureLeakReviewDecision = typeof CAPTURE_LEAK_REVIEW_DECISIONS[number];
+
+export const captureLeakReviews = pgTable(
+  "capture_leak_reviews",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    messageId: varchar("message_id").notNull(),
+    leakType: text("leak_type").notNull(),
+    decision: text("decision").notNull(),
+    decidedByUserId: varchar("decided_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    note: text("note"),
+    decidedAt: timestamp("decided_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    orgMsgTypeUidx: uniqueIndex("capture_leak_reviews_org_msg_type_uidx")
+      .on(t.organizationId, t.messageId, t.leakType),
+    orgDecidedAtIdx: index("capture_leak_reviews_org_decided_at_idx")
+      .on(t.organizationId, t.decidedAt),
+  }),
+);
+export const insertCaptureLeakReviewSchema = createInsertSchema(captureLeakReviews).omit({
+  id: true,
+  decidedAt: true,
+  updatedAt: true,
+});
+export type InsertCaptureLeakReview = z.infer<typeof insertCaptureLeakReviewSchema>;
+export type CaptureLeakReview = typeof captureLeakReviews.$inferSelect;
+
 export const quoteSavedViews = pgTable("quote_saved_views", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),

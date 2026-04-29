@@ -19,6 +19,8 @@ import {
   getFunnel,
   getFunnelDiagnostics,
   getLeakedQuoteEmails,
+  reviewLeakRow,
+  manuallyCreateQuoteFromLeakRow,
   listNewContactReviews,
   resolveNewContactReview,
   resolveFunnelRepScope,
@@ -26,7 +28,7 @@ import {
   type ManualMarkOutcomeStatus,
   type QuoteFilters, type ListSortKey,
 } from "../services/customerQuotes";
-import { QUOTE_PARTY_TYPES } from "@shared/schema";
+import { QUOTE_PARTY_TYPES, CAPTURE_LEAK_TYPES, CAPTURE_LEAK_REVIEW_DECISIONS } from "@shared/schema";
 import { syncQuoteOutcomesFromTms } from "../services/quoteTmsSync";
 import { backfillQuotesFromEmails, ensureEmailBackfill, getEmailBackfillStatus } from "../services/quoteEmailIngestion";
 import {
@@ -906,6 +908,98 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     } catch (err) {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] funnel-diagnostics/leaks error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Phase 2A — Record a "Not a quote" / "Ignore for now" decision on a
+  // single leak row. Same admin gating as the GET. Idempotent at the DB
+  // level via `(organization_id, message_id, leak_type)` unique index.
+  // The reviewed (messageId, leakType) is filtered out by
+  // `buildLeakCandidateIds`, so the diagnostics counts AND the queue
+  // both shrink on the next refetch — no client-side hiding.
+  const reviewLeakBodySchema = z.object({
+    messageId: z.string().min(1),
+    leakType: z.enum(CAPTURE_LEAK_TYPES),
+    decision: z.enum(CAPTURE_LEAK_REVIEW_DECISIONS),
+    note: z.string().max(2000).optional(),
+  });
+  app.post("/api/customer-quotes/funnel-diagnostics/leaks/review", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const elevated = new Set(["admin", "director", "sales_director"]);
+      if (!elevated.has(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const parsed = reviewLeakBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      const result = await reviewLeakRow(user.organizationId, user.id, parsed.data);
+      if (result.status === "not_found") {
+        return res.status(404).json({ error: "Leak row not found in this organization" });
+      }
+      res.json({ status: "ok", review: result.review });
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      console.error("[customer-quotes] funnel-diagnostics/leaks/review error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Phase 2B — Manually create a quote opportunity from a Missed Inbound
+  // leak row. Reuses `ingestQuoteFromEmail` so parsing, idempotency
+  // (provider message id), and customer resolution behave identically
+  // to the autopilot pipeline. Orphan Outbound rows are intentionally
+  // out of scope (no inbound email payload to parse).
+  //
+  // On success, the route returns `{ quoteId }` so the client can
+  // navigate to `?quote=<id>` (the existing customer-quotes drawer
+  // deep-link). The leak row disappears from the queue automatically
+  // because `quote_opportunities.sourceReference = providerMessageId`
+  // is what `buildLeakCandidateIds` already excludes via the
+  // `existingQuoteRefs` set.
+  const createLeakQuoteBodySchema = z.object({
+    messageId: z.string().min(1),
+  });
+  app.post("/api/customer-quotes/funnel-diagnostics/leaks/create-quote", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const elevated = new Set(["admin", "director", "sales_director"]);
+      if (!elevated.has(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const parsed = createLeakQuoteBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      const result = await manuallyCreateQuoteFromLeakRow(
+        user.organizationId,
+        user.id,
+        parsed.data.messageId,
+      );
+      switch (result.status) {
+        case "created":
+          return res.status(201).json({ status: "created", quoteId: result.quoteId });
+        case "duplicate":
+          // Quote already exists for this provider message id (race
+          // with autopilot, or row was already converted). Surface the
+          // existing quote so the client can still deep-link to it.
+          return res.status(200).json({ status: "duplicate", quoteId: result.quoteId });
+        case "unparseable":
+          return res.status(422).json({ status: "unparseable", reason: result.reason });
+        case "not_a_leak":
+          // Race: someone else reviewed/created in between page load
+          // and click, or the email is no longer a candidate.
+          return res.status(409).json({ status: "not_a_leak" });
+        case "not_found":
+          return res.status(404).json({ status: "not_found" });
+        case "wrong_direction":
+          return res.status(400).json({ status: "wrong_direction" });
+      }
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      console.error("[customer-quotes] funnel-diagnostics/leaks/create-quote error:", err);
       res.status(500).json({ error: msg });
     }
   });
