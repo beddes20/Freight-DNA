@@ -11,13 +11,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Mail,
   AlertTriangle,
-  ArrowUpRight,
-  ArrowDownLeft,
   ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { EmailBody } from "./email-body";
-import { formatDate } from "./utils";
+import { MessageHeader } from "./message-header";
 import type { EmailMessage } from "./types";
 
 // Task #809: read-only "peek" viewer for an email thread that layers on top
@@ -249,53 +247,29 @@ export function EmailThreadViewerModal({
                 <div
                   key={msg.id}
                   className={cn(
-                    "rounded-lg border px-3 py-2",
-                    isOutbound
-                      ? "bg-indigo-50/60 dark:bg-indigo-950/20 border-indigo-200 dark:border-indigo-900/50 ml-6"
-                      : "bg-white dark:bg-muted/30 border-border mr-6",
+                    "rounded-lg border bg-card text-card-foreground border-card-border shadow-sm overflow-hidden",
+                    isOutbound && "border-l-[3px] border-l-primary",
                   )}
                   data-testid={`thread-viewer-message-${msg.id}`}
                 >
-                  <div className="flex items-center justify-between mb-2 gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span
-                        className={cn(
-                          "flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full shrink-0",
-                          isOutbound
-                            ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300"
-                            : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300",
-                        )}
-                      >
-                        {isOutbound ? (
-                          <ArrowUpRight className="w-3 h-3" />
-                        ) : (
-                          <ArrowDownLeft className="w-3 h-3" />
-                        )}
-                        {isOutbound ? "Sent" : "Received"}
-                      </span>
-                      <span
-                        className="text-xs text-muted-foreground font-medium truncate"
-                        data-testid={`text-thread-viewer-from-${msg.id}`}
-                      >
-                        {msg.fromEmail ?? "Unknown sender"}
-                      </span>
-                    </div>
-                    <span
-                      className="text-xs text-muted-foreground shrink-0"
-                      data-testid={`text-thread-viewer-date-${msg.id}`}
-                    >
-                      {formatDate(msg.providerSentAt ?? msg.createdAt)}
-                    </span>
+                  <div className="px-4 py-3 border-b border-border/60 bg-muted/20">
+                    <MessageHeader
+                      fromEmail={msg.fromEmail}
+                      toEmail={msg.toEmail}
+                      ccEmail={msg.ccEmail}
+                      date={msg.providerSentAt ?? msg.createdAt}
+                      isOutbound={isOutbound}
+                      testIdPrefix={`thread-viewer-message-${msg.id}`}
+                      legacyFromTestId={`text-thread-viewer-from-${msg.id}`}
+                      legacyDateTestId={`text-thread-viewer-date-${msg.id}`}
+                    />
                   </div>
-                  {msg.toEmail && (
-                    <div className="text-xs text-muted-foreground mb-2 break-words">
-                      To: {msg.toEmail}
-                    </div>
-                  )}
-                  <EmailBody
-                    body={msg.body}
-                    testId={`text-thread-viewer-body-${msg.id}`}
-                  />
+                  <div className="px-4 py-3">
+                    <EmailBody
+                      body={msg.body}
+                      testId={`text-thread-viewer-body-${msg.id}`}
+                    />
+                  </div>
                 </div>
               );
             })

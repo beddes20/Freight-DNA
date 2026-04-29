@@ -7,8 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Mail,
-  ArrowUpRight,
-  ArrowDownLeft,
   ArrowLeft,
   Sparkles,
   Check,
@@ -21,9 +19,9 @@ import { cn } from "@/lib/utils";
 import { DraftEmailModal } from "@/components/DraftEmailModal";
 import { WaitingStateBadge, PriorityDot } from "./badges";
 import { EmailBody } from "./email-body";
+import { MessageHeader } from "./message-header";
 import { ReplyCaptureAuditButton } from "./capture-audit-popover";
 import { CorrectionDialog } from "./correction-dialog";
-import { formatDate } from "./utils";
 import { ThreadSummaryCard, ThreadSuggestionCard, ThreadEventsTimeline } from "./smart-pane-blocks";
 import type { ConversationThread, EmailMessage } from "./types";
 
@@ -282,85 +280,81 @@ export function ThreadDetailPane({
         ) : (
           messages.map((msg, idx) => {
             const isOutbound = msg.direction === "outbound";
+            const corrected = isOutbound && correctedMessageIds.has(msg.id);
             return (
               <div
                 key={msg.id}
                 className={cn(
-                  "rounded-lg border px-3 py-2",
-                  isOutbound
-                    ? "bg-indigo-50/60 dark:bg-indigo-950/20 border-indigo-200 dark:border-indigo-900/50 ml-6"
-                    : "bg-white dark:bg-muted/30 border-border mr-6"
+                  // Outlook-style reading-pane card; outbound gets a gold
+                  // left-border accent instead of the old indigo bubble.
+                  "rounded-lg border bg-card text-card-foreground border-card-border shadow-sm overflow-hidden",
+                  isOutbound && "border-l-[3px] border-l-primary",
                 )}
                 data-testid={`message-${msg.id}`}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <span className={cn(
-                      "flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full",
-                      isOutbound
-                        ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300"
-                        : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
-                    )}>
-                      {isOutbound ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownLeft className="w-3 h-3" />}
-                      {isOutbound ? "Sent" : "Received"}
-                    </span>
-                    <span className="text-xs text-muted-foreground font-medium" data-testid={`text-from-${msg.id}`}>
-                      {msg.fromEmail}
-                    </span>
-                    {isOutbound && correctedMessageIds.has(msg.id) && (
-                      <span className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400" data-testid={`badge-corrected-${msg.id}`}>
-                        <Check className="w-3 h-3" />
-                        Corrected
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    {!isOutbound && !readOnly && (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-6 px-2 gap-1 text-xs text-muted-foreground hover:text-indigo-600"
-                        title="Draft an AI reply specifically to this message"
-                        onClick={() => {
-                          setDraftTargetMessageId(msg.id);
-                          setShowDraftEmail(true);
-                        }}
-                        data-testid={`button-draft-reply-${msg.id}`}
-                      >
-                        <Sparkles className="w-3 h-3" />
-                        Draft Reply
-                      </Button>
-                    )}
-                    {isOutbound && canCorrect && !readOnly && !correctedMessageIds.has(msg.id) && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 px-2 gap-1 text-xs border-amber-400 bg-amber-50 text-amber-700 hover:bg-amber-100 hover:text-amber-800 dark:bg-amber-950/30 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-950/60"
-                        title="Teach the AI — rewrite what this email should have said"
-                        onClick={() => {
-                          const prevInbound = [...messages.slice(0, idx)].reverse().find(m => m.direction !== "outbound");
-                          setCorrectionMsg(msg);
-                          setCorrectionRepliedToId(prevInbound?.id ?? null);
-                          setCorrectedText(msg.body || "");
-                          setCorrectionNotes("");
-                        }}
-                        data-testid={`button-correct-${msg.id}`}
-                      >
-                        <PenLine className="w-3.5 h-3.5" />
-                        Teach AI
-                      </Button>
-                    )}
-                    <span className="text-xs text-muted-foreground" data-testid={`text-date-${msg.id}`}>
-                      {formatDate(msg.providerSentAt ?? msg.createdAt)}
-                    </span>
-                  </div>
+                <div className="px-4 py-3 border-b border-border/60 bg-muted/20">
+                  <MessageHeader
+                    fromEmail={msg.fromEmail}
+                    toEmail={msg.toEmail}
+                    ccEmail={msg.ccEmail}
+                    date={msg.providerSentAt ?? msg.createdAt}
+                    isOutbound={isOutbound}
+                    testIdPrefix={`message-${msg.id}`}
+                    legacyFromTestId={`text-from-${msg.id}`}
+                    legacyDateTestId={`text-date-${msg.id}`}
+                    actions={
+                      <>
+                        {corrected && (
+                          <span
+                            className="inline-flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400"
+                            data-testid={`badge-corrected-${msg.id}`}
+                          >
+                            <Check className="w-3 h-3" />
+                            Corrected
+                          </span>
+                        )}
+                        {!isOutbound && !readOnly && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 gap-1 text-xs text-muted-foreground hover:text-primary"
+                            title="Draft an AI reply specifically to this message"
+                            onClick={() => {
+                              setDraftTargetMessageId(msg.id);
+                              setShowDraftEmail(true);
+                            }}
+                            data-testid={`button-draft-reply-${msg.id}`}
+                          >
+                            <Sparkles className="w-3 h-3" />
+                            Draft Reply
+                          </Button>
+                        )}
+                        {isOutbound && canCorrect && !readOnly && !corrected && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2 gap-1 text-xs border-amber-400 bg-amber-50 text-amber-700 hover:bg-amber-100 hover:text-amber-800 dark:bg-amber-950/30 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-950/60"
+                            title="Teach the AI — rewrite what this email should have said"
+                            onClick={() => {
+                              const prevInbound = [...messages.slice(0, idx)].reverse().find(m => m.direction !== "outbound");
+                              setCorrectionMsg(msg);
+                              setCorrectionRepliedToId(prevInbound?.id ?? null);
+                              setCorrectedText(msg.body || "");
+                              setCorrectionNotes("");
+                            }}
+                            data-testid={`button-correct-${msg.id}`}
+                          >
+                            <PenLine className="w-3.5 h-3.5" />
+                            Teach AI
+                          </Button>
+                        )}
+                      </>
+                    }
+                  />
                 </div>
-                {msg.toEmail && (
-                  <div className="text-xs text-muted-foreground mb-2">
-                    To: {msg.toEmail}
-                  </div>
-                )}
-                <EmailBody body={msg.body} testId={`text-body-${msg.id}`} />
+                <div className="px-4 py-3">
+                  <EmailBody body={msg.body} testId={`text-body-${msg.id}`} />
+                </div>
               </div>
             );
           })
