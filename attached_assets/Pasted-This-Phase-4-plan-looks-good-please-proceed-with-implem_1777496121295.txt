@@ -1,0 +1,41 @@
+This Phase 4 plan looks good — please proceed with implementation with two clarifications:
+
+Chokepoint for removal
+
+Use capture_leak_reviews.decision = 'attached' as the only signal for excluding attached orphan outbound rows from buildLeakCandidateIds.
+
+Treat the quote_events row (actor = 'manual_leak_attach', eventType = 'email_attached') as audit + analytics input only, not as a second exclusion path.
+
+Keep the exclusion logic entirely declarative on the review table (extend the decision IN (...) list to include 'attached'), just like not_quote / ignored.
+
+Picker scope
+
+Default candidate list: open quotes for that customer, ordered by requestDate desc, capped at a reasonable count (25 is fine).
+
+The “Show recent (closed) quotes” toggle should surface only recent terminal quotes (for example, last 14 days), and be clearly labeled as such so reps understand they’re attaching to a closed quote.
+
+With those clarifications, the rest of the plan is approved:
+
+attachOrphanOutboundToQuote service that writes a capture_leak_reviews row with decision = 'attached' and a quote_events row with actor = 'manual_leak_attach' / eventType = 'email_attached'.
+
+buildLeakCandidateIds extended to exclude decision = 'attached', keeping diagnostics and the queue in sync.
+
+Leak analytics extended with an attached segment in the resolution mix and counted as resolved in the trend.
+
+New POST .../leaks/attach + GET .../leaks/attach-candidates routes.
+
+Queue UX changes: Attach button for orphan outbound rows, tab-snapshot focus fix, aria-live="polite" announcements, all on top of the existing Phase 3 polish.
+
+Tests as described (service, route, analytics, and a lightweight Playwright e2e).
+
+Please implement this Phase 4 plan and then come back with:
+
+files changed,
+
+final attach behavior (including how races / already-attached are handled),
+
+exact analytics response shape with the attached segment,
+
+UX details (especially picker behavior and aria-live strings),
+
+tests run and their results, plus any flakes you observed.
