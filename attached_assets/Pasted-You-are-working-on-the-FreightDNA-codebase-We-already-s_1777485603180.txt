@@ -1,0 +1,142 @@
+You are working on the FreightDNA codebase. We already shipped Phase 1 of the Capture Leak Queue inside the Freight Capture diagnostics panel: read-only tabs for Missed Inbound and Orphan Outbound, row context, and Open thread deep-links.
+
+Now implement Phase 2A: resolution actions for the leak queue, with a strong focus on safety, auditability, and trust.
+
+IMPORTANT GUARDRAILS
+- Read replit.md first and follow all project guardrails.
+- Keep scope focused on the Capture Leak Queue only.
+- Do NOT redesign Freight Capture, Customer Quotes, Conversations, or the email pipeline.
+- Do NOT change webhook/sync behavior.
+- Do NOT introduce auto-create or automatic status mutation in this task.
+- Do NOT create bulk actions in this task.
+- Do NOT add new top-level nav items or pages.
+- Prefer the smallest safe schema change if needed.
+- Every mutation must be auditable.
+
+GOAL
+Turn the Phase 1 read-only queue into a lightweight admin resolution queue so users can:
+1. dismiss a row as “not a quote,” and
+2. mark a row as “reviewed / ignore for now,”
+without yet creating a quote or attaching an orphan outbound to an existing quote.
+
+The purpose of this task is to:
+- reduce repeat noise,
+- improve trust in the queue,
+- create a durable review state,
+- and preserve evidence for future tuning.
+
+PRODUCT BEHAVIOR
+For each leak row:
+- Keep “Open thread” as-is.
+- Add two new actions:
+  - “Not a quote”
+  - “Ignore for now”
+- Once actioned, the row should disappear from the active queue.
+- Diagnostics counts should no longer include dismissed/ignored rows in the active queue totals.
+- We must retain an audit trail of what happened.
+
+STATE MODEL
+Introduce a small persistence layer for leak review state. Recommended approach:
+- new table dedicated to leak review decisions
+- keyed by org + messageId + leakType
+- stores:
+  - id
+  - orgId
+  - messageId
+  - leakType ("missed_inbound" | "orphan_outbound")
+  - decision ("not_quote" | "ignored")
+  - decidedByUserId
+  - decidedAt
+  - optional note nullable
+- unique constraint on (orgId, messageId, leakType)
+
+If the existing schema patterns suggest a better naming convention, follow them, but keep the model this small.
+
+BEFORE CODING
+Do a short read-only audit of:
+- current queue code
+- current diagnostics code
+- schema conventions for small review/audit tables
+- existing mutation route patterns in customerQuotes routes
+- test patterns for admin-only mutations
+
+Then give me a concise implementation plan covering:
+1. exact schema addition,
+2. exact backend service changes,
+3. exact route(s) to add,
+4. exact UI changes,
+5. exact test plan,
+6. any risks or edge cases.
+
+Stop and wait for approval before making changes.
+
+IMPLEMENTATION REQUIREMENTS AFTER APPROVAL
+If approved, implement:
+
+1) Schema
+Add a small table for leak review decisions with the fields above.
+No extra complexity beyond what is needed for Phase 2A.
+
+2) Backend service behavior
+Update the existing leak candidate logic so:
+- active queue rows exclude reviewed decisions,
+- diagnostics counts exclude reviewed decisions,
+- decisions are org-scoped and leak-type scoped.
+
+Add a service mutation like:
+reviewLeakRow(orgId, userId, { messageId, leakType, decision, note? })
+
+Behavior:
+- idempotent upsert by (orgId, messageId, leakType)
+- later decisions overwrite earlier ones
+- return the saved decision
+
+3) Routes
+Add minimal admin-only mutation route(s) under the existing customer quotes/funnel diagnostics namespace.
+Prefer one POST route such as:
+POST /api/customer-quotes/funnel-diagnostics/leaks/review
+Body:
+{
+  messageId: string,
+  leakType: "missed_inbound" | "orphan_outbound",
+  decision: "not_quote" | "ignored",
+  note?: string
+}
+
+Use existing auth + elevated role gating patterns.
+Validate body carefully.
+
+4) UI
+In CaptureLeakQueue:
+- add row actions:
+  - Not a quote
+  - Ignore for now
+- optimistic UI is fine only if rollback is safe; otherwise use standard invalidate/refetch
+- rows disappear after success
+- show a small toast
+- add empty-state copy that reflects reviewed items appropriately
+- keep UI compact and admin-oriented
+
+5) Auditability
+Make sure the decision is queryable later.
+If there is an existing internal admin/debug surface where this should lightly appear, note it in the summary but do not expand scope.
+
+6) Tests
+Add/update focused tests for:
+- schema uniqueness / upsert behavior
+- diagnostics counts excluding reviewed rows
+- leak queue results excluding reviewed rows
+- route auth / validation
+- mutation happy path
+- UI action success state if there is an existing frontend test pattern for this component
+
+FINAL OUTPUT
+When done, return:
+1. files changed,
+2. schema added,
+3. route(s) added,
+4. exact decision behavior,
+5. tests added/updated and results,
+6. any edge cases or follow-up recommendations.
+
+Stop there.
