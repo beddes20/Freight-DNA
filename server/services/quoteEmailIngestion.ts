@@ -839,6 +839,11 @@ export function findOrCreateLostReasonExported(orgId: string, reason: LostReason
  * Defaults to lost_incumbent ("they went with someone else") because that is
  * the dominant pattern behind a "load is covered" reply on a quote thread.
  * Exposed for unit testing.
+ *
+ * Synchronous and regex-only on purpose — it stays the deterministic
+ * fallback behind the LLM-first `resolveLostReason` wrapper below and is
+ * the unit under test for the existing classifier suites. Do NOT change
+ * the signature without auditing every caller.
  */
 export function decideLostReason(language: string | null | undefined): LostReason {
   const s = (language ?? "").toLowerCase();
@@ -847,6 +852,154 @@ export function decideLostReason(language: string | null | undefined): LostReaso
   if (/\b(too high|cheaper|lower rate|price|rate is too|found cheaper)\b/.test(s)) return LOST_PRICE;
   if (/\b(service|transit|fit|equipment|reliability)\b/.test(s)) return LOST_SERVICE;
   return LOST_INCUMBENT;
+}
+
+// ─── LLM-first lost-reason resolver ─────────────────────────────────────────
+// The regex `decideLostReason` is precise but narrow — it misses paraphrased
+// loss reasons ("the rate isn't competitive", "we already gave it to someone",
+// "doesn't work with our pickup window"). We layer a small gpt-4o-mini call
+// that picks one of the 4 canonical reasons and fall back to the regex on
+// any failure. The wrapper is additive: `decideLostReason` keeps its
+// synchronous regex-only contract for the existing test suites.
+
+export type ReasonSource = "llm" | "regex" | "default";
+
+export interface LostReasonResolution {
+  reason: LostReason;
+  reasonSource: ReasonSource;
+}
+
+const LOST_REASON_BY_CODE: Record<LostReason["code"], LostReason> = {
+  lost_price: LOST_PRICE,
+  lost_timing: LOST_TIMING,
+  lost_service: LOST_SERVICE,
+  lost_incumbent: LOST_INCUMBENT,
+};
+
+const LOST_REASON_LLM_PROMPT =
+  "You classify a freight broker's lost-quote reason from a customer's reply. " +
+  "Return STRICT JSON only, no prose. Schema: " +
+  "{\"reason\": \"lost_price\" | \"lost_timing\" | \"lost_service\" | \"lost_incumbent\"}. " +
+  "Definitions:\n" +
+  "- lost_price: customer says our rate is too high, found cheaper coverage, " +
+  "or chose another carrier explicitly because of price.\n" +
+  "- lost_timing: load was cancelled, pulled, on hold, or no longer needed " +
+  "(timing/cancellation, not a competitive loss).\n" +
+  "- lost_service: customer cites transit time, equipment fit, reliability, " +
+  "or service capability as the reason.\n" +
+  "- lost_incumbent: customer is going with another carrier / already covered / " +
+  "passing without a price or timing reason. Use this when nothing else fits.\n" +
+  "Choose exactly one. When evidence is ambiguous, prefer lost_incumbent.";
+
+type LostReasonLlmFn = (language: string) => Promise<LostReason | null>;
+
+let _lostReasonLlmFn: LostReasonLlmFn | null = null;
+
+/**
+ * Test-only DI seam — lets unit tests stub the LLM classifier without
+ * standing up an OpenAI client. Pass `null` to restore the real
+ * `classifyLostReasonWithLlm` implementation.
+ */
+export function _setLostReasonLlmForTests(fn: LostReasonLlmFn | null): void {
+  _lostReasonLlmFn = fn;
+}
+
+/**
+ * Calls gpt-4o-mini to pick one of the 4 canonical lost reasons from the
+ * provided language. Returns null on:
+ *   - empty/whitespace input
+ *   - no OPENAI_API_KEY
+ *   - timeout / network error / non-2xx
+ *   - JSON parse failure
+ *   - returned reason not in the 4-code allowlist
+ *
+ * Mirrors the existing `parseQuoteEmailAi` integration pattern: lazy
+ * client init, low temperature, JSON response_format, tight timeout.
+ */
+export async function classifyLostReasonWithLlm(
+  language: string | null | undefined,
+): Promise<LostReason | null> {
+  const trimmed = (language ?? "").trim();
+  if (!trimmed) return null;
+  const client = getOpenAi();
+  if (!client) return null;
+
+  // Cap input length so token cost stays bounded — loss-reason language
+  // is usually a sentence or two, anything longer is almost always boilerplate.
+  const truncated = trimmed.length > 1500 ? trimmed.slice(0, 1500) : trimmed;
+
+  try {
+    const completion = await client.chat.completions.create(
+      {
+        model: "gpt-4o-mini",
+        temperature: 0,
+        max_tokens: 50,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: LOST_REASON_LLM_PROMPT },
+          { role: "user", content: truncated },
+        ],
+      },
+      { timeout: 15_000, maxRetries: 1 },
+    );
+    const raw = completion.choices?.[0]?.message?.content?.trim();
+    if (!raw) return null;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    if (!parsed || typeof parsed !== "object") return null;
+    const reasonStr = (parsed as { reason?: unknown }).reason;
+    if (typeof reasonStr !== "string") return null;
+    const match = LOST_REASON_BY_CODE[reasonStr as LostReason["code"]];
+    return match ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * LLM-first resolver. Tries `classifyLostReasonWithLlm` (or the test stub),
+ * falls back to the regex `decideLostReason` on null/throw, and reports
+ * which path produced the answer via `reasonSource`:
+ *   - "llm"     → LLM returned a valid reason
+ *   - "regex"   → regex matched a recognizable phrase (non-default fallback)
+ *   - "default" → no language OR regex returned the lost_incumbent default
+ *
+ * The "default" bucket is what surfaces "we had no signal at all" in the
+ * quote_events audit, so dashboards can distinguish a reasoned classification
+ * from a guess.
+ */
+export async function resolveLostReason(
+  language: string | null | undefined,
+): Promise<LostReasonResolution> {
+  const trimmed = (language ?? "").trim();
+  if (!trimmed) {
+    return { reason: LOST_INCUMBENT, reasonSource: "default" };
+  }
+
+  const llm = _lostReasonLlmFn ?? classifyLostReasonWithLlm;
+  let llmResult: LostReason | null = null;
+  try {
+    llmResult = await llm(trimmed);
+  } catch {
+    llmResult = null;
+  }
+  if (llmResult) {
+    return { reason: llmResult, reasonSource: "llm" };
+  }
+
+  const regexResult = decideLostReason(trimmed);
+  // Distinguish a real regex match from the lost_incumbent default. The
+  // regex returns lost_incumbent both when (a) language explicitly says
+  // "going with someone else" AND (b) when nothing matched at all. We
+  // call (a) "regex" only when the language matches a known Lost pattern.
+  if (regexResult.code !== "lost_incumbent" || isLostLanguage(trimmed)) {
+    return { reason: regexResult, reasonSource: "regex" };
+  }
+  return { reason: LOST_INCUMBENT, reasonSource: "default" };
 }
 
 // ─── Phrase-level Lost detector (mirrors WON_LANGUAGE_PATTERNS) ──────────────
@@ -1014,12 +1167,13 @@ export async function applyClosedLostToOpenQuote(
 
   // Reason mapping: prefer the structured AI hint; fall back to the message
   // body/subject so a phrase-only match can still classify (e.g. "found a
-  // cheaper carrier" → lost_price). decideLostReason defaults to
-  // lost_incumbent when nothing is recognizable.
+  // cheaper carrier" → lost_price). resolveLostReason is LLM-first with
+  // regex fallback and reports the answering path via `reasonSource` for
+  // the audit payload below — see `LostReasonResolution` for the contract.
   const reasonLanguage = lossLanguageHint
     ?? (isLostLanguage(message.body) ? message.body : null)
     ?? (isLostLanguage(message.subject) ? message.subject : null);
-  const reason = decideLostReason(reasonLanguage);
+  const { reason, reasonSource } = await resolveLostReason(reasonLanguage);
   const reasonId = await findOrCreateLostReason(message.orgId, reason);
 
   await db.update(quoteOpportunities).set({
@@ -1044,6 +1198,7 @@ export async function applyClosedLostToOpenQuote(
         : null,
       intentSubtype,
       reasonCode: reason.code,
+      reasonSource,
     },
   });
 

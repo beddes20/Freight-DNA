@@ -5,7 +5,7 @@ import { carriers as carriersCatalog } from "@shared/schema";
 import {
   quoteCustomers, quoteReps, quoteCarriers, quoteLaneGroups, quoteOutcomeReasons,
   quoteOpportunities, quoteEvents, quoteSavedViews, quoteSenderMappings,
-  recurringLanes, companies, emailMessages,
+  recurringLanes, companies, emailMessages, emailSignals,
   freightOpportunities,
   type QuoteOpportunity, type QuoteOutcomeStatus, type QuoteCustomer, type QuoteRep,
   type QuoteCarrier, type QuoteLaneGroup, type QuoteOutcomeReason, type QuoteSavedView,
@@ -4369,6 +4369,26 @@ export interface FunnelDiagnostics {
    *  email is not yet in our CRM contacts. Cleared when the rep clicks
    *  Add-as-contact or Dismiss in the Quote Opportunities table. */
   newSendersToReview: number;
+  /** Inbound customer emails the org processed in the recent
+   *  `emailClassifier.windowDays` window that produced no quote-intent
+   *  signal AND did not lead to a quote opportunity — the "we saw it but
+   *  didn't interpret it as quote-related" leak counter. Computed from
+   *  email_messages × email_signals × quote_opportunities; never null. */
+  missingIntentInboundCount: number;
+  /** Outbound emails the org sent in the recent
+   *  `emailClassifier.windowDays` window that landed on an email thread
+   *  with no pending quote opportunity — the autopilot's "extracted a
+   *  rate but had nowhere to attach it" approximation. Conservative
+   *  counter: includes outbound emails on threads we never quoted from,
+   *  not just rate-bearing replies (the AI extractor doesn't run on the
+   *  no-pending path so we cannot cheaply distinguish the two without a
+   *  behaviour change). Never null. */
+  orphanOutboundCount: number;
+  /** True when `OUTLOOK_WEBHOOK_SECRET` is configured. Surfaces the
+   *  webhook validation gate to admins without exposing the value
+   *  itself. When false, real-time Graph notifications are refused at
+   *  the webhook handler — see `server/routes/graphWebhook.ts`. */
+  hasWebhookSecret: boolean;
 }
 
 export async function getFunnelDiagnostics(
@@ -4388,6 +4408,9 @@ export async function getFunnelDiagnostics(
       nearMissCandidates: [],
       needsReview: { customers: 0, opportunities: 0 },
       newSendersToReview: 0,
+      missingIntentInboundCount: 0,
+      orphanOutboundCount: 0,
+      hasWebhookSecret: Boolean(process.env.OUTLOOK_WEBHOOK_SECRET?.trim()),
     };
   }
 
@@ -4498,6 +4521,136 @@ export async function getFunnelDiagnostics(
     (o) => o.needsNewContactReview != null,
   ).length;
 
+  // ─── Leak counters (additive metrics, no behavior change) ────────────────
+  // Both counters share the same `windowDays` window the email classifier
+  // counts use above so dashboards can correlate the four values
+  // (won/lost/neither/missing-intent) on the same axis.
+  //
+  // Implementation note: each counter is computed via a few small,
+  // independent queries instead of one big correlated NOT EXISTS subquery.
+  // The big-subquery shape was both ambiguous (the orphan path
+  // self-references `email_messages` from inside its own NOT EXISTS) and
+  // pathologically slow on real org volumes. Splitting keeps planning
+  // simple and lets PG hit the (org_id, provider_sent_at) usage paths
+  // already exercised by the email_classifier counts above.
+  const leakSince = new Date(Date.now() - windowDays * 24 * 3600 * 1000);
+  const QUOTE_INTENT_TYPES = [
+    "pricing_request",
+    "new_opportunity",
+    "closed_won_indicator",
+    "closed_lost_indicator",
+  ];
+
+  // missingIntentInboundCount — inbound, processed messages in the window
+  // where (a) no email_signal with a quote-related intentType points at
+  // this message AND (b) no quote_opportunity points back at this message
+  // via sourceReference (matched against either providerMessageId or the
+  // internal message id — the same two refs `ingestQuoteFromEmail` keys off).
+  const inboundCandidates = await db
+    .select({
+      id: emailMessages.id,
+      providerMessageId: emailMessages.providerMessageId,
+    })
+    .from(emailMessages)
+    .where(and(
+      eq(emailMessages.orgId, orgId),
+      eq(emailMessages.direction, "inbound"),
+      sql`${emailMessages.processedForSignalsAt} IS NOT NULL`,
+      sql`${emailMessages.providerSentAt} >= ${leakSince}`,
+    ));
+
+  let missingIntentInboundCount = 0;
+  if (inboundCandidates.length > 0) {
+    const candidateIds = inboundCandidates.map(m => m.id);
+    const candidateProviderIds = inboundCandidates
+      .map(m => m.providerMessageId)
+      .filter((v): v is string => !!v);
+
+    // Anti-join 1: messages with at least one quote-intent signal.
+    const hasQuoteIntentRows = await db
+      .selectDistinct({ messageId: emailSignals.messageId })
+      .from(emailSignals)
+      .where(and(
+        inArray(emailSignals.messageId, candidateIds),
+        inArray(emailSignals.intentType, QUOTE_INTENT_TYPES),
+      ));
+    const messagesWithQuoteIntent = new Set(hasQuoteIntentRows.map(r => r.messageId));
+
+    // Anti-join 2: messages referenced by a quote_opportunity.sourceReference.
+    const refUniverse = Array.from(new Set([...candidateIds, ...candidateProviderIds]));
+    const referencedRows = refUniverse.length > 0
+      ? await db
+          .selectDistinct({ ref: quoteOpportunities.sourceReference })
+          .from(quoteOpportunities)
+          .where(and(
+            eq(quoteOpportunities.organizationId, orgId),
+            eq(quoteOpportunities.source, "email"),
+            inArray(quoteOpportunities.sourceReference, refUniverse),
+          ))
+      : [];
+    const referencedSet = new Set(referencedRows.map(r => r.ref).filter((v): v is string => !!v));
+
+    for (const m of inboundCandidates) {
+      if (messagesWithQuoteIntent.has(m.id)) continue;
+      if (referencedSet.has(m.id)) continue;
+      if (m.providerMessageId && referencedSet.has(m.providerMessageId)) continue;
+      missingIntentInboundCount += 1;
+    }
+  }
+
+  // orphanOutboundCount — outbound messages in the window on threads
+  // with no pending email-source quote_opportunity. Mirrors the
+  // autopilot's `skipped_no_pending_quote` short-circuit
+  // (outboundQuoteAutoQuote.ts:286) without invoking the AI extractor:
+  // we only need to know "we sent a reply on a thread with nowhere to
+  // attach a rate." Conservative — includes outbound emails that
+  // aren't actually quote-bearing — but bounded by org email volume.
+  const outboundCandidates = await db
+    .select({ id: emailMessages.id, threadId: emailMessages.threadId })
+    .from(emailMessages)
+    .where(and(
+      eq(emailMessages.orgId, orgId),
+      eq(emailMessages.direction, "outbound"),
+      sql`${emailMessages.threadId} IS NOT NULL`,
+      sql`${emailMessages.providerSentAt} >= ${leakSince}`,
+    ));
+
+  let orphanOutboundCount = 0;
+  if (outboundCandidates.length > 0) {
+    // Resolve every threadId that currently has a pending email-source
+    // quote_opportunity. quote_opportunities.sourceReference is a message
+    // id (or providerMessageId) — join through email_messages to read the
+    // thread the message belongs to. One query, not one per outbound row.
+    const pendingThreadRows = await db
+      .selectDistinct({ threadId: emailMessages.threadId })
+      .from(quoteOpportunities)
+      .innerJoin(
+        emailMessages,
+        and(
+          eq(emailMessages.orgId, orgId),
+          sql`(${emailMessages.id} = ${quoteOpportunities.sourceReference}
+               OR ${emailMessages.providerMessageId} = ${quoteOpportunities.sourceReference})`,
+        ),
+      )
+      .where(and(
+        eq(quoteOpportunities.organizationId, orgId),
+        eq(quoteOpportunities.source, "email"),
+        eq(quoteOpportunities.outcomeStatus, "pending"),
+      ));
+    const threadsWithPendingQuote = new Set(
+      pendingThreadRows.map(r => r.threadId).filter((v): v is string => !!v),
+    );
+    for (const m of outboundCandidates) {
+      if (m.threadId && threadsWithPendingQuote.has(m.threadId)) continue;
+      orphanOutboundCount += 1;
+    }
+  }
+
+  // Webhook secret presence — flagged at the diagnostics layer so admins
+  // can confirm the webhook validation gate is configured without us
+  // exposing the secret value itself.
+  const hasWebhookSecret = Boolean(process.env.OUTLOOK_WEBHOOK_SECRET?.trim());
+
   return {
     scopedToRepId: scopedRepId ?? null,
     lastSync: lastSync ?? null,
@@ -4513,6 +4666,9 @@ export async function getFunnelDiagnostics(
       opportunities: needsReviewOppCount,
     },
     newSendersToReview: newSendersInSlice,
+    missingIntentInboundCount,
+    orphanOutboundCount,
+    hasWebhookSecret,
   };
 }
 
