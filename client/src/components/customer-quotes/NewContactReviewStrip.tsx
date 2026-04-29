@@ -37,11 +37,25 @@ interface ListResponse { items: ReviewItem[]; }
 
 const QK = ["/api/customer-quotes/new-contact-reviews"] as const;
 
-export function NewContactReviewStrip(): JSX.Element | null {
+interface StripProps {
+  /**
+   * Optional gate. When `false`, the underlying query is paused (no
+   * initial fetch, no refetches) and the component renders nothing.
+   * Defaults to `true` so existing call sites are unaffected.
+   *
+   * The Customer Quotes page wires this to a user-controlled
+   * collapsible section so reps who don't use the autopilot prompt
+   * can suppress the per-page round-trip.
+   */
+  enabled?: boolean;
+}
+
+export function NewContactReviewStrip({ enabled = true }: StripProps = {}): JSX.Element | null {
   const { toast } = useToast();
   const { data, isLoading } = useQuery<ListResponse>({
     queryKey: QK,
     staleTime: 30_000,
+    enabled,
   });
 
   const [draftNames, setDraftNames] = useState<Record<string, string>>({});

@@ -11,13 +11,36 @@
  * triage workflow now lives outside the customer-only Quote
  * Opportunities feed.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { AlertTriangle, ChevronDown, ChevronUp, Clock, Hourglass } from "lucide-react";
 import { computeQuoteSla, formatSlaBadge } from "@shared/quoteSla";
+
+// localStorage key for the collapsed/expanded preference. Default is
+// expanded so existing users see no behavior change on first load.
+const OPEN_LS_KEY = "cq.actionQueue.open";
+
+function readOpenPref(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    const v = window.localStorage.getItem(OPEN_LS_KEY);
+    return v === null ? true : v === "1";
+  } catch {
+    return true;
+  }
+}
+
+function writeOpenPref(open: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(OPEN_LS_KEY, open ? "1" : "0");
+  } catch {
+    /* ignore quota / privacy-mode failures */
+  }
+}
 
 type QueueRow = {
   id: string;
@@ -41,7 +64,11 @@ interface Props {
 }
 
 export function ActionQueueCard({ onOpenQuote }: Props): JSX.Element | null {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState<boolean>(() => readOpenPref());
+  useEffect(() => { writeOpenPref(open); }, [open]);
+  // Gate the network call on the user-controlled collapse state — when
+  // the section is collapsed we pause both the initial fetch and the
+  // 60s polling so reps who never expand the queue pay no cost.
   const { data, isLoading } = useQuery<ActionQueueResponse>({
     queryKey: ["/api/customer-quotes/action-queue"],
     queryFn: async () => {
@@ -49,15 +76,22 @@ export function ActionQueueCard({ onOpenQuote }: Props): JSX.Element | null {
       if (!res.ok) throw new Error("Failed to load action queue");
       return res.json() as Promise<ActionQueueResponse>;
     },
-    refetchInterval: 60_000,
+    enabled: open,
+    refetchInterval: open ? 60_000 : false,
   });
 
   const slaCount = data?.slaBreaching.length ?? 0;
   const expiringCount = data?.expiringToday.length ?? 0;
   const total = slaCount + expiringCount;
 
-  // Hide entirely when there's nothing to do — keeps the dashboard tidy.
-  if (!isLoading && total === 0) return null;
+  // Hide entirely only when EXPANDED, fetched, and empty — keeps the
+  // dashboard tidy without trapping the user. When the card is
+  // collapsed (`!open`) the network query is paused, so `total` is 0
+  // by definition; we must still render the header/toggle so the
+  // user can re-expand. Without this guard the early-return removes
+  // the toggle and the localStorage-persisted collapsed state
+  // becomes a permanent hidden state across sessions.
+  if (open && !isLoading && total === 0) return null;
 
   return (
     <Card className="bg-card border-border" data-testid="action-queue-card">
@@ -76,13 +110,16 @@ export function ActionQueueCard({ onOpenQuote }: Props): JSX.Element | null {
           variant="ghost"
           className="h-7 px-2 text-xs"
           onClick={() => setOpen(o => !o)}
+          aria-label={open ? "Collapse action queue" : "Expand action queue"}
+          aria-expanded={open}
+          aria-controls="action-queue-body"
           data-testid="button-action-queue-toggle"
         >
           {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
         </Button>
       </CardHeader>
       {open && (
-        <CardContent className="px-4 pb-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <CardContent id="action-queue-body" className="px-4 pb-4 grid grid-cols-1 md:grid-cols-2 gap-4">
           <ActionSection
             title="SLA breaching"
             icon={<Clock className="h-3.5 w-3.5 text-red-500" />}

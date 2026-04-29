@@ -30,8 +30,17 @@ import {
   Search, Download, RefreshCw, Bookmark, X, ArrowUp, ArrowDown,
   TrendingUp, TrendingDown, Minus, AlertTriangle, Hourglass, Trophy,
   Trash2, Plus, ChevronsUpDown, Check, ChevronLeft, ChevronRight,
+  ChevronDown, ChevronUp, Sparkles,
   Sun, Moon,
 } from "lucide-react";
+import {
+  PRESETS,
+  presetToFilters,
+  detectActivePreset,
+  DEFAULT_SORT_KEY,
+  DEFAULT_SORT_DIR,
+  type PresetKey,
+} from "@/pages/customer-quotes-presets";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip as RTooltip,
   LineChart, Line, CartesianGrid,
@@ -442,6 +451,11 @@ export default function CustomerQuotesPage(): JSX.Element {
 
 function CustomerQuotesPageInner(): JSX.Element {
   const { theme, toggle: toggleTheme } = useCustomerQuotesTheme();
+  // Re-read the auth user inside the inner component so the "My Open"
+  // preset can match the rep by email. The outer wrapper already
+  // gated `hasAccess`, so we know we're past the loading/no-access
+  // states by the time this hook runs.
+  const { user: currentUser } = useAuth();
   const initialSearch = typeof window !== "undefined" ? window.location.search : "";
   const [filters, setFilters] = useState<Filters>(() => filtersFromUrl(initialSearch));
   const [drawerId, setDrawerId] = useState<string | null>(() => {
@@ -461,8 +475,29 @@ function CustomerQuotesPageInner(): JSX.Element {
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [newViewName, setNewViewName] = useState("");
   const [newQuoteOpen, setNewQuoteOpen] = useState(false);
-  const [sortKey, setSortKey] = useState<SortKey>("requestDate");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // User-controlled gate for the Quote Lifecycle Autopilot prompt
+  // strip. Pauses the strip's network query when collapsed (parallel
+  // to the Action Queue card's collapse mechanic). Default expanded.
+  const [showNewContactReviews, setShowNewContactReviews] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    try {
+      const v = window.localStorage.getItem("cq.newContactReviews.open");
+      return v === null ? true : v === "1";
+    } catch { return true; }
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { window.localStorage.setItem("cq.newContactReviews.open", showNewContactReviews ? "1" : "0"); }
+    catch { /* ignore */ }
+  }, [showNewContactReviews]);
+  // Default sort flipped to `requestDate asc` so the OLDEST actionable
+  // (pending) quotes float to the top of the table on first load. The
+  // column header still toggles direction normally, and Saved Views
+  // do not persist sort, so opening a saved view also lands here.
+  // Constants live in customer-quotes-presets.ts so the test suite can
+  // assert the contract without rendering the page.
+  const [sortKey, setSortKey] = useState<SortKey>(DEFAULT_SORT_KEY);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">(DEFAULT_SORT_DIR);
   const [page, setPage] = useState(0);
   const { toast } = useToast();
 
@@ -715,6 +750,36 @@ function CustomerQuotesPageInner(): JSX.Element {
   const list = listQuery.data;
   const totalPages = list ? Math.max(1, Math.ceil(list.total / PAGE_SIZE)) : 1;
 
+  // Match the logged-in user to their `quote_reps` row by email so the
+  // "My Open" preset can scope the table. `null` if no mapping exists
+  // (e.g. user is admin without a sales-rep identity); the chip is
+  // rendered disabled in that case.
+  const myRepId = useMemo<string | null>(() => {
+    const u = currentUser as { email?: string | null } | null | undefined;
+    const email = u?.email?.trim().toLowerCase();
+    if (!email) return null;
+    const reps = data?.reps ?? [];
+    const match = reps.find(r => (r.email ?? "").trim().toLowerCase() === email);
+    return match?.id ?? null;
+  }, [currentUser, data?.reps]);
+
+  // Derived: which preset chip (if any) matches the current
+  // filter+sort signature. Re-derived on every render — no extra
+  // state, so manually editing a filter naturally drops the active
+  // chip highlight.
+  const activePreset = useMemo<PresetKey | null>(
+    () => detectActivePreset(filters, sortKey, sortDir, myRepId, new Date()),
+    [filters, sortKey, sortDir, myRepId],
+  );
+
+  const applyPreset = (key: PresetKey): void => {
+    if (key === "myOpen" && !myRepId) return;
+    const next = presetToFilters(key, myRepId, new Date());
+    setFilters(next.filters);
+    setSortKey(next.sortKey);
+    setSortDir(next.sortDir);
+  };
+
   // Task #651 — warm the shared lane-signal cache for the rows on the
   // current page so LWQ + Available Freight see them populated for free.
   const visibleLaneSigs = useMemo<string[]>(() => {
@@ -933,6 +998,35 @@ function CustomerQuotesPageInner(): JSX.Element {
             {/* Customer Quotes #2 — Action Queue (work board, below Spot Quote Search) */}
             <ActionQueueCard onOpenQuote={(id) => setDrawerId(id)} />
 
+            {/* Sub-view presets — fast operating modes for reps. Each
+             *  chip applies an existing filter+sort combination; the
+             *  active chip highlights when the current state matches.
+             *  Manually editing a filter naturally drops the highlight. */}
+            <div className="flex flex-wrap items-center gap-1.5" data-testid="preset-bar" role="group" aria-label="Customer quote view presets">
+              <span className="text-[11px] uppercase tracking-wider text-muted-foreground mr-1">View:</span>
+              {PRESETS.map(p => {
+                const isActive = activePreset === p.key;
+                const isDisabled = p.key === "myOpen" && !myRepId;
+                return (
+                  <Button
+                    key={p.key}
+                    type="button"
+                    size="sm"
+                    variant={isActive ? "default" : "outline"}
+                    disabled={isDisabled}
+                    onClick={() => applyPreset(p.key)}
+                    className={`h-7 px-2.5 text-xs ${isActive ? "bg-amber-500 hover:bg-amber-600 text-zinc-950 border-amber-500" : "border-border hover:bg-muted"}`}
+                    title={isDisabled ? "No quote rep mapped to your account." : undefined}
+                    aria-pressed={isActive}
+                    data-testid={p.testId}
+                    data-active={isActive ? "true" : "false"}
+                  >
+                    {p.label}
+                  </Button>
+                );
+              })}
+            </div>
+
             {/* KPI strip */}
             {/* Task #816 — carrier cost / margin KPIs were stripped from
                 this customer-only surface. Margin data is preserved in
@@ -1000,8 +1094,32 @@ function CustomerQuotesPageInner(): JSX.Element {
                 {/* Task #803 — Quote Lifecycle Autopilot prompt strip.
                  *  Shown above the table when an inbound quote arrived from
                  *  a known customer DOMAIN but a NEW sender email; one-click
-                 *  Add-as-contact / Dismiss clears it. */}
-                <NewContactReviewStrip />
+                 *  Add-as-contact / Dismiss clears it.
+                 *
+                 *  User-controlled gate (mirrors Action Queue): the strip's
+                 *  `enabled` prop pauses its query when collapsed so reps
+                 *  who don't use the prompt pay no per-page round-trip. */}
+                <div className="flex items-center" data-testid="new-contact-reviews-section">
+                  <button
+                    type="button"
+                    onClick={() => setShowNewContactReviews(v => !v)}
+                    className="inline-flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+                    aria-expanded={showNewContactReviews}
+                    aria-controls="new-contact-reviews-body"
+                    data-testid="button-toggle-new-contact-reviews"
+                  >
+                    {showNewContactReviews
+                      ? <ChevronDown className="h-3 w-3" />
+                      : <ChevronRight className="h-3 w-3" />}
+                    <Sparkles className="h-3 w-3 text-amber-500" />
+                    Inbound contact prompts
+                  </button>
+                </div>
+                {showNewContactReviews && (
+                  <div id="new-contact-reviews-body">
+                    <NewContactReviewStrip enabled={showNewContactReviews} />
+                  </div>
+                )}
 
                 {/* Quote opportunities table */}
                 <Card className="bg-card border-border" data-testid="quote-table-card">
