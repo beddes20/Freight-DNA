@@ -119,6 +119,15 @@ interface AffectedThread {
   recordId: string | null;
 }
 
+interface SharedReplyMailboxHealth {
+  configured: boolean;
+  enabled: boolean;
+  subscriptionActive: boolean;
+  mailbox: string | null;
+  missingPermissions: string[];
+  warnings: string[];
+}
+
 interface HealthPayload {
   ok: boolean;
   status: OverallStatus;
@@ -130,6 +139,11 @@ interface HealthPayload {
   mailboxes: MailboxHealth[];
   recentRuns: RecentRun[];
   affectedThreads: AffectedThread[];
+  /** Shared OUTLOOK_REPLY_EMAIL mailbox status. `null` when Azure creds
+   * aren't configured (no shared mailbox to report on). When degraded
+   * (configured && !enabled), the server rolls overall status to
+   * "unhealthy" — we surface a one-line explanation in the popover. */
+  sharedReplyMailbox?: SharedReplyMailboxHealth | null;
 }
 
 const ROOT_CAUSE_LABELS: Record<string, string> = {
@@ -593,6 +607,40 @@ export function CaptureAuditStatusPill({
                   </div>
                 </div>
               </div>
+
+              {data.sharedReplyMailbox && data.sharedReplyMailbox.configured && !data.sharedReplyMailbox.enabled && (
+                <div
+                  className="rounded border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 p-2"
+                  data-testid="shared-reply-mailbox-degraded"
+                >
+                  <div className="flex items-center gap-1.5 text-red-700 dark:text-red-300 font-medium">
+                    <ShieldAlert className="w-3 h-3 flex-shrink-0" />
+                    <span>Shared reply mailbox not capturing</span>
+                  </div>
+                  <div className="text-[11px] text-red-700 dark:text-red-400 mt-1 pl-4 break-words">
+                    Mailbox:{" "}
+                    <span data-testid="text-shared-reply-mailbox-address">
+                      {data.sharedReplyMailbox.mailbox ?? "(not configured)"}
+                    </span>
+                  </div>
+                  {data.sharedReplyMailbox.missingPermissions.length > 0 && (
+                    <div
+                      className="text-[11px] text-red-700 dark:text-red-400 mt-0.5 pl-4 break-words"
+                      data-testid="text-shared-reply-mailbox-missing"
+                    >
+                      Missing: {data.sharedReplyMailbox.missingPermissions.join(" · ")}
+                    </div>
+                  )}
+                  {data.sharedReplyMailbox.warnings.length > 0 && (
+                    <div
+                      className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5 pl-4 break-words"
+                      data-testid="text-shared-reply-mailbox-warnings"
+                    >
+                      {data.sharedReplyMailbox.warnings.join(" · ")}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {data.mailboxes.length > 0 && (() => {
                 // Task #794: pin failing mailboxes (anything not "active") to

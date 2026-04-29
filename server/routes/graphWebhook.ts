@@ -23,6 +23,7 @@ import {
   matchInboundCarrier,
   normalizeEmailAddress,
 } from "../services/carrierContactMatchService";
+import { recordIntegrationEvent } from "../integrations/probeRegistry";
 
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -398,7 +399,13 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
         orgId, conversationId, fromEmail, subject, bodyFull, providerMessageId,
       });
     } catch (e) {
-      log(`[play-outcome] classify error: ${e instanceof Error ? e.message : String(e)}`);
+      const errMsg = e instanceof Error ? e.message : String(e);
+      log(`[play-outcome] classify error: ${errMsg}`);
+      recordIntegrationEvent({
+        source: "graph",
+        outcome: "error",
+        errorMessage: `play_outcome_classify:${providerMessageId}: ${errMsg.slice(0, 200)}`,
+      });
     }
   }
 
@@ -418,7 +425,13 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
       emailMessageId: null,
     });
   } catch (e) {
-    log(`[pafoe-classify] error: ${e instanceof Error ? e.message : String(e)}`);
+    const errMsg = e instanceof Error ? e.message : String(e);
+    log(`[pafoe-classify] error: ${errMsg}`);
+    recordIntegrationEvent({
+      source: "graph",
+      outcome: "error",
+      errorMessage: `pafoe_classify:${providerMessageId}: ${errMsg.slice(0, 200)}`,
+    });
   }
 
   if (carrierMatch.confidence === "unmatched" && !accountMatch) {
@@ -681,7 +694,17 @@ async function processUserMailboxEmail(params: {
         providerMessageId,
       });
     } catch (e) {
-      log(`[user-mailbox] play-outcome classify error: ${e instanceof Error ? e.message : String(e)}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      log(`[user-mailbox] play-outcome classify error: ${msg}`);
+      // Surface this swallow on the Integrations Health console so an
+      // outage in the play-outcome classifier doesn't go invisible.
+      // Tag suffix `_user_mailbox` keeps it distinct from the
+      // shared-mailbox classifier emit above.
+      recordIntegrationEvent({
+        source: "graph",
+        outcome: "error",
+        errorMessage: `play_outcome_classify_user_mailbox:${providerMessageId ?? "unknown"}: ${msg}`,
+      });
     }
     // PAFOE Phase 4 freight-opportunity classifier (parallel to play-outcome)
     try {
@@ -697,7 +720,16 @@ async function processUserMailboxEmail(params: {
         emailMessageId: null,
       });
     } catch (e) {
-      log(`[user-mailbox] pafoe-classify error: ${e instanceof Error ? e.message : String(e)}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      log(`[user-mailbox] pafoe-classify error: ${msg}`);
+      // Same rationale as the play-outcome emit above — the PAFOE
+      // freight-opportunity classifier silently failing was previously
+      // invisible outside the raw log.
+      recordIntegrationEvent({
+        source: "graph",
+        outcome: "error",
+        errorMessage: `pafoe_classify_user_mailbox:${providerMessageId ?? "unknown"}: ${msg}`,
+      });
     }
   }
 

@@ -36,6 +36,7 @@ import {
   isLostLanguage,
 } from "./services/quoteEmailIngestion";
 import { JOB_NAMES, withHeartbeat } from "./lib/cronHeartbeat";
+import { recordIntegrationEvent } from "./integrations/probeRegistry";
 import { createHash } from "crypto";
 import type { EmailMessage, InsertEmailSignal } from "@shared/schema";
 
@@ -158,7 +159,16 @@ export async function runEmailIntelligenceBatch(
           try {
             await ingestQuoteFromEmail(msg, { extractedData: quoteSignal.extractedData ?? null });
           } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
             console.error(`[emailIntelligenceScheduler] quote ingest failed for ${msg.id}:`, err);
+            // Surface this previously-silent failure so admins can see
+            // "customer pricing emails are classifying but failing to land
+            // in the Customer Quotes dashboard" without having to grep logs.
+            recordIntegrationEvent({
+              source: "graph",
+              outcome: "error",
+              errorMessage: `quote_ingest:${msg.id}: ${errMsg.slice(0, 200)}`,
+            });
           }
         }
 
@@ -176,7 +186,13 @@ export async function runEmailIntelligenceBatch(
               intentSubtype: wonSignal?.intentSubtype ?? null,
             });
           } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
             console.error(`[emailIntelligenceScheduler] closed-won handling failed for ${msg.id}:`, err);
+            recordIntegrationEvent({
+              source: "graph",
+              outcome: "error",
+              errorMessage: `closed_won_handling:${msg.id}: ${errMsg.slice(0, 200)}`,
+            });
           }
         }
 
@@ -189,7 +205,13 @@ export async function runEmailIntelligenceBatch(
               intentSubtype: lostSignal?.intentSubtype ?? null,
             });
           } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
             console.error(`[emailIntelligenceScheduler] closed-lost handling failed for ${msg.id}:`, err);
+            recordIntegrationEvent({
+              source: "graph",
+              outcome: "error",
+              errorMessage: `closed_lost_handling:${msg.id}: ${errMsg.slice(0, 200)}`,
+            });
           }
         }
       }
@@ -329,9 +351,15 @@ export async function runEmailIntelligenceBatch(
       // ── Consumer area 2: Account NBA generation ────────────────────────────
       if (msg.orgId) {
         // Legacy email → NBA card path (from Task #190 — kept for backward compat)
-        generateNbasFromEmailSignals(msg.orgId, msg, saved).catch(err =>
-          console.error(`[emailIntelligenceScheduler] legacy NBA error for ${msg.id}:`, err)
-        );
+        generateNbasFromEmailSignals(msg.orgId, msg, saved).catch(err => {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.error(`[emailIntelligenceScheduler] legacy NBA error for ${msg.id}:`, err);
+          recordIntegrationEvent({
+            source: "graph",
+            outcome: "error",
+            errorMessage: `legacy_nba:${msg.id}: ${errMsg.slice(0, 200)}`,
+          });
+        });
 
         // New account email NBA consumer (Task #191)
         if (msg.linkedAccountId) {

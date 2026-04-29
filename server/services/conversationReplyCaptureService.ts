@@ -43,6 +43,8 @@ import {
 } from "@shared/schema";
 import { and, eq, desc, gte, isNotNull, sql as drizzleSql } from "drizzle-orm";
 import { azureCredentialsConfigured, getGraphAccessToken } from "../graphService";
+import { getReplyTrackingStatus } from "../graphSubscriptionService";
+import { recordIntegrationEvent } from "../integrations/probeRegistry";
 
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -69,8 +71,22 @@ export interface MailboxHealthSnapshot {
   reason: string;
 }
 
-/** 24h staleness threshold for "no SentItems traffic seen". */
-const SENTITEMS_STALE_MS = 24 * 60 * 60 * 1000;
+/**
+ * 4-hour staleness threshold for "no SentItems traffic seen".
+ *
+ * History: was 24h, but combined with `lastSyncAt` in the staleness verdict
+ * the signal almost never fired in practice — a delta-sync poll every 5 min
+ * kept `lastSyncAt` fresh enough to mask a silently-dropped subscription for
+ * up to a full day. We now (a) lower the window to 4h to match an AM/NAM
+ * half-workday cadence and (b) compute the staleness verdict from
+ * SentItems-specific timestamps only (excluding `lastSyncAt`) so a dropped
+ * subscription is detectable even when delta-sync polling is healthy.
+ *
+ * `lastSyncAt` is still consulted by `getCaptureAuditHealthForUsers` for the
+ * `lastSuccessfulSyncAt` field (Task #794: pill flips green right after a
+ * manual renewal/backfill), so this change does not regress that behavior.
+ */
+const SENTITEMS_STALE_MS = 4 * 60 * 60 * 1000;
 
 export function getMailboxSentItemsHealth(mb: MonitoredMailbox): MailboxHealthSnapshot {
   const now = Date.now();
@@ -87,22 +103,19 @@ export function getMailboxSentItemsHealth(mb: MonitoredMailbox): MailboxHealthSn
     health = "expired";
     reason = `Subscription expired ${mb.subscriptionExpiresAt.toISOString()}`;
   } else {
-    // We have a sub — but has it actually delivered anything in the last 24h?
-    // Use lastSentItemsNotificationAt OR lastOutboundCapturedAt OR lastSyncAt
-    // as the "we saw traffic" signal. lastSyncAt is included so a fresh
-    // delta-sync poll (Task #794: auto-triggered after a manual renewal)
-    // counts as proof we're connected, even when the mailbox simply hasn't
-    // had outbound traffic in the lookback window.
-    const lastTraffic = Math.max(
+    // We have a sub — but has the SentItems channel itself delivered anything
+    // in the staleness window? Compute the verdict from SentItems-specific
+    // timestamps ONLY (excluding `lastSyncAt`) so a silently-dropped sub is
+    // detectable even when the unrelated delta-sync poll is healthy.
+    const lastSentItemsTraffic = Math.max(
       mb.lastSentItemsNotificationAt?.getTime() ?? 0,
       mb.lastOutboundCapturedAt?.getTime() ?? 0,
-      mb.lastSyncAt?.getTime() ?? 0,
     );
-    if (lastTraffic > 0 && now - lastTraffic > SENTITEMS_STALE_MS) {
+    if (lastSentItemsTraffic > 0 && now - lastSentItemsTraffic > SENTITEMS_STALE_MS) {
       health = "stale";
-      const ageHrs = Math.round((now - lastTraffic) / (60 * 60 * 1000));
+      const ageHrs = Math.round((now - lastSentItemsTraffic) / (60 * 60 * 1000));
       reason = `No SentItems traffic in ${ageHrs}h — webhook may be silently dropped`;
-    } else if (lastTraffic === 0 && mb.createdAt && now - mb.createdAt.getTime() > SENTITEMS_STALE_MS) {
+    } else if (lastSentItemsTraffic === 0 && mb.createdAt && now - mb.createdAt.getTime() > SENTITEMS_STALE_MS) {
       health = "stale";
       reason = "Subscription registered but never delivered an outbound notification";
     }
@@ -334,7 +347,17 @@ export async function selfHealConversationThread(opts: {
                   }
                 }
               } catch (msgErr) {
-                log(`[self-heal] message ingest error msgId=${msg.id}: ${msgErr instanceof Error ? msgErr.message : String(msgErr)}`);
+                const errMsg = msgErr instanceof Error ? msgErr.message : String(msgErr);
+                log(`[self-heal] message ingest error msgId=${msg.id}: ${errMsg}`);
+                // Surface this previously-silent failure on the Integrations
+                // Health console so admins can see "self-heal is finding
+                // messages but failing to persist them" instead of only
+                // discovering it via per-thread audit drilldown.
+                recordIntegrationEvent({
+                  source: "graph",
+                  outcome: "error",
+                  errorMessage: `self_heal_message_ingest:${msg.id}: ${errMsg.slice(0, 200)}`,
+                });
               }
             }
 
@@ -610,6 +633,22 @@ export interface CaptureAuditHealthSnapshot {
    * pill's overall status: any "stale" or "failing" job upgrades to
    * "unhealthy". */
   cronJobs: CronJobHealth[];
+  /**
+   * Shared reply-tracking mailbox health (the OUTLOOK_REPLY_EMAIL inbox
+   * carriers reply into). `null` when the org doesn't have Azure (Graph)
+   * credentials configured at all — there is no shared mailbox to report
+   * on. When non-null, a `configured && !enabled` state rolls the overall
+   * pill into `unhealthy` so a silently re-init-failed shared subscription
+   * is visible without admins having to open the carrier outreach panel.
+   */
+  sharedReplyMailbox: {
+    configured: boolean;
+    enabled: boolean;
+    subscriptionActive: boolean;
+    mailbox: string | null;
+    missingPermissions: string[];
+    warnings: string[];
+  } | null;
 }
 
 /** Root-cause labels that mean "this thread still has an unresolved
@@ -771,9 +810,41 @@ export async function getCaptureAuditHealthForUsers(opts: {
   );
   const cronDegraded = cronJobs.some(c => c.status === "stale" || c.status === "failing");
 
-  // 5. Roll up to a single status. Unhealthy wins over recovering.
+  // 5. Shared reply-tracking mailbox. Reads in-process state from
+  //    graphSubscriptionService — no external call. Surfaced as `null` when
+  //    Azure creds aren't configured at all (the org doesn't have a shared
+  //    mailbox to report on); otherwise surfaced with the same shape the
+  //    /api/admin/graph-reply-status endpoint returns.
+  const replyTracking = getReplyTrackingStatus();
+  const hasAzureCreds = !!(
+    process.env.OUTLOOK_TENANT_ID &&
+    process.env.OUTLOOK_CLIENT_ID &&
+    process.env.OUTLOOK_CLIENT_SECRET
+  );
+  const sharedReplyMailbox: CaptureAuditHealthSnapshot["sharedReplyMailbox"] = hasAzureCreds
+    ? {
+        configured: !!replyTracking.mailbox,
+        enabled: replyTracking.enabled,
+        subscriptionActive: replyTracking.subscriptionActive,
+        mailbox: replyTracking.mailbox,
+        missingPermissions: replyTracking.missingPermissions,
+        warnings: replyTracking.warnings,
+      }
+    : null;
+  // A shared mailbox that's *configured* but not *enabled* (Mail.Read
+  // pending, webhook secret missing, subscription failed to register, etc.)
+  // means carrier replies are silently NOT being captured. That's the same
+  // operational severity as a per-rep mailbox subscription expiry, so it
+  // rolls into the same "unhealthy" tier.
+  const sharedReplyDegraded = !!(
+    sharedReplyMailbox &&
+    sharedReplyMailbox.configured &&
+    !sharedReplyMailbox.enabled
+  );
+
+  // 6. Roll up to a single status. Unhealthy wins over recovering.
   let status: CaptureAuditOverallStatus = "healthy";
-  if (webhookFailureCount > 0 || cronCritical) {
+  if (webhookFailureCount > 0 || cronCritical || sharedReplyDegraded) {
     status = "unhealthy";
   } else if (affectedThreads.length > 0 || staleCount > 0 || cronDegraded) {
     status = "recovering";
@@ -790,6 +861,7 @@ export async function getCaptureAuditHealthForUsers(opts: {
     recentRuns,
     affectedThreads: trimmedAffected,
     cronJobs,
+    sharedReplyMailbox,
   };
 }
 

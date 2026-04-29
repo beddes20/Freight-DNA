@@ -86,6 +86,18 @@ export function _resetIntegrationEventsForTests(): void {
   lastEvents.clear();
 }
 
+/** Read the latest event for a source. Test-only — never used by production code. */
+export function _getIntegrationEventForTests(source: IntegrationSource): {
+  lastSuccessAt: Date | null;
+  lastErrorAt: Date | null;
+  lastErrorMessage: string | null;
+  breakerState: "closed" | "open" | "half_open" | null;
+  totalSuccess: number;
+  totalError: number;
+} | undefined {
+  return lastEvents.get(source);
+}
+
 /**
  * Returns the env-var name that an admin will most likely recognize as the
  * "primary credential" for a source. Used as the `reason` string when the
