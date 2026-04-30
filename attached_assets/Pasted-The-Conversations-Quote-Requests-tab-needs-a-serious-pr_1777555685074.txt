@@ -1,0 +1,145 @@
+The Conversations → Quote Requests tab needs a serious product and data-model pass. I want you to investigate it as a core workflow surface, not just an inbox screen.
+
+My vision for this tab
+
+This tab should become the system of record for inbound quote-request email workflow:
+
+every quote-request email we receive,
+
+who owns it,
+
+whether we responded,
+
+how we responded,
+
+whether AI can learn from that response behavior,
+
+and how it connects to Customer Quotes, analytics, and eventual won/lost/no-response outcomes.
+
+Right now it feels siloed and not aligned with that vision.
+
+Specific problems visible today
+
+The UI is hard to scan and digest.
+
+Freshness / “Updated” values appear misleading.
+
+Example: in the list, thread 157168 / 620787 shows Updated 22h ago,
+
+but when opened, the visible email content is from 4/10 (roughly 20 days ago).
+
+I need to know exactly what “Updated” currently means, why it diverges from actual thread activity, and what it should mean in this workflow.
+
+The tab does not feel deeply connected enough to quote workflow, response tracking, or downstream analytics.
+
+What I want you to investigate first
+
+Before coding, do a full investigation of:
+
+A. Data model / freshness semantics
+
+What data source drives the Quote Requests list?
+
+What field currently powers the list’s “Updated” timestamp?
+
+Is that timestamp based on:
+
+latest inbound/outbound email event,
+
+thread summary regeneration,
+
+assignment/status mutation,
+
+quote-request classification time,
+
+or some other internal update?
+
+What timestamp should the list use instead for user trust?
+
+What timestamps should exist separately (last email activity, last internal workflow change, last AI summary refresh, etc.)?
+
+B. Workflow linkage
+
+For each quote-request thread, determine:
+
+how it links (or fails to link) to Customer Quotes / quote_opportunities,
+
+how response state is derived,
+
+how “waiting on us / waiting on them / resolved” is determined,
+
+how win/loss/no-response should eventually attach to this view,
+
+and what fields/events are missing to support that cleanly.
+
+C. UX / information architecture
+
+Propose how the Quote Requests list and detail pane should be redesigned so a rep/admin can quickly answer:
+
+what this is,
+
+who owns it,
+
+what the customer wants,
+
+what we last did,
+
+whether we owe a response,
+
+whether it became a quote,
+
+and what the current disposition is.
+
+D. AI / learning implications
+
+I want this tab to become one of the core learning surfaces for AI.
+Please identify:
+
+what response data is already available,
+
+what structured outcome labels are missing,
+
+what events or metadata need to be captured so AI can learn from how reps respond to quote requests,
+
+and how this should feed analytics and Customer Quotes rather than remain siloed.
+
+Deliverable I want back before implementation
+
+Please return:
+
+a diagnosis of what the Quote Requests tab currently is doing,
+
+the core gaps vs the intended vision,
+
+the exact reason the “Updated 22h ago” vs “email from 4/10” mismatch happens,
+
+a proposed source-of-truth model for freshness / ownership / response state / quote linkage,
+
+a UI redesign proposal for the list and detail pane,
+
+and a phased implementation plan.
+
+Important framing
+
+Do not treat this as a cosmetic-only UI cleanup.
+This is a workflow and systems-design problem:
+
+inbox reliability,
+
+activity freshness,
+
+quote-request classification,
+
+owner attribution,
+
+response tracking,
+
+quote linkage,
+
+outcome tracking,
+
+analytics,
+
+and AI learning.
+
+If the current tab is fundamentally too siloed, say so directly and propose the cleanest architecture to make it match the product vision.
