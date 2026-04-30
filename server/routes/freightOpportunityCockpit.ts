@@ -551,9 +551,14 @@ export function registerFreightCockpitRoutes(app: Express) {
       });
 
       // Optional `?lane=<sig>` deep-link filter — used by LWQ chip → AF.
+      // Phase A3 — track per-stage counts so the empty-state hint can tell
+      // the rep exactly which filter dropped what.
+      const enrichedCount = enriched.length;
       let items = laneFilter
         ? enriched.filter(i => i.laneSignature === laneFilter)
         : enriched;
+      const hiddenByLane = laneFilter ? Math.max(0, enrichedCount - items.length) : 0;
+      const itemsBeforeCarrier = items.length;
 
       // Optional `?carrierId=<id>` deep-link filter — Carrier Hub → AF.
       // Keeps only opportunities the carrier "could cover" (claimed lanes
@@ -576,6 +581,9 @@ export function registerFreightCockpitRoutes(app: Express) {
           console.error("[freight-cockpit] carrier coverable filter error:", err);
         }
       }
+      const hiddenByCarrier = carrierFilter
+        ? Math.max(0, itemsBeforeCarrier - items.length)
+        : 0;
 
       // Re-sort per request (the storage layer already sorts by urgencyScore desc;
       // the cockpit's "urgency" sort uses the just-recomputed score).
@@ -850,6 +858,61 @@ export function registerFreightCockpitRoutes(app: Express) {
         },
       };
 
+      // Phase A3 — hidden-counts aggregate. Single org-scoped round trip
+      // returning how many rows in the same org+company scope were dropped
+      // by each upstream filter dimension. Pairs with the JS-derived
+      // hiddenByLane / hiddenByCarrier deltas above. The empty-state hint
+      // in the cockpit UI uses this to explain "0 rows" instead of leaving
+      // the rep guessing whether the queue is genuinely empty or just
+      // filtered out from view.
+      //
+      // Predicate ordering mirrors the in-memory filter at lines 508-518:
+      // status (DB-level) → snooze → past-pickup. A row that is both
+      // snoozed AND past-pickup attributes to "snooze" so the totals stay
+      // mutually exclusive (no double-counting).
+      const statusFilterSql = statusList.length > 0
+        ? sql`${freightOpportunities.status} IN (${sql.join(statusList.map(s => sql`${s}`), sql`, `)})`
+        : sql`TRUE`;
+      const statusExcludeSql = statusList.length > 0
+        ? sql`${freightOpportunities.status} NOT IN (${sql.join(statusList.map(s => sql`${s}`), sql`, `)})`
+        : sql`FALSE`;
+      const companyScopeSql = companyId
+        ? sql`AND ${freightOpportunities.companyId} = ${companyId}`
+        : sql``;
+      const hiddenRows = await db.execute(sql`
+        SELECT
+          COUNT(*) AS total_in_scope,
+          COUNT(*) FILTER (WHERE ${statusExcludeSql}) AS hidden_by_status,
+          COUNT(*) FILTER (
+            WHERE ${statusFilterSql}
+              AND ${freightOpportunities.snoozedUntil} IS NOT NULL
+              AND ${freightOpportunities.snoozedUntil} > ${now}
+          ) AS hidden_by_snooze,
+          COUNT(*) FILTER (
+            WHERE ${statusFilterSql}
+              AND (
+                ${freightOpportunities.snoozedUntil} IS NULL
+                OR ${freightOpportunities.snoozedUntil} <= ${now}
+              )
+              AND ${freightOpportunities.pickupWindowStart} IS NOT NULL
+              AND substring(${freightOpportunities.pickupWindowStart}, 1, 10) < ${todayIso}
+          ) AS hidden_by_past_pickup
+        FROM ${freightOpportunities}
+        WHERE ${freightOpportunities.orgId} = ${org}
+        ${companyScopeSql}
+      `);
+      const h0: any = (hiddenRows as any).rows?.[0]
+        ?? (Array.isArray(hiddenRows) ? (hiddenRows as any)[0] : null)
+        ?? {};
+      const hiddenCounts = {
+        totalInScope: parseCount(h0.total_in_scope),
+        byStatus: parseCount(h0.hidden_by_status),
+        bySnooze: parseCount(h0.hidden_by_snooze),
+        byPastPickup: parseCount(h0.hidden_by_past_pickup),
+        byLane: hiddenByLane,
+        byCarrier: hiddenByCarrier,
+      };
+
       // Next scheduled import: weekday 6:30 AM CT (matches CRON_EXPR).
       const nextImport = (() => {
         try {
@@ -909,6 +972,7 @@ export function registerFreightCockpitRoutes(app: Express) {
         lastImport,
         nextImport,
         freshness,
+        hiddenCounts,
         roiMetrics,
         sort: sortKey,
         grouping: groupKey,

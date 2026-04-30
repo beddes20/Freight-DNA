@@ -165,6 +165,20 @@ interface CockpitResponse {
   lastImport: { at: string; ageMinutes: number } | null;
   nextImport?: { at: string; inMinutes: number } | null;
   freshness?: FreshnessSignal;
+  // Phase A3 — explained empty state. Counts of rows in the same
+  // org+company scope that were dropped by each filter dimension so the UI
+  // can tell the rep "0 matching · N hidden by status · M past pickup …"
+  // instead of a blank panel. Server-side buckets (byStatus, bySnooze,
+  // byPastPickup) come from a single org-scoped SQL aggregate; byLane and
+  // byCarrier are JS-derived deltas from the deep-link filters.
+  hiddenCounts?: {
+    totalInScope: number;
+    byStatus: number;
+    bySnooze: number;
+    byPastPickup: number;
+    byLane: number;
+    byCarrier: number;
+  };
   roiMetrics?: {
     responseByBucket: Record<string, { sent: number; responded: number }>;
     suppressionBreakdown: Record<string, number>;
@@ -632,6 +646,17 @@ export default function AvailableFreightPage() {
     if (typeof window !== "undefined") {
       const url = new URL(window.location.href);
       url.searchParams.delete("carrierId");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }
+
+  // Phase A3 — shared so the empty-state hint and the deep-link banner
+  // both clear the lane filter the same way.
+  function clearLaneFilter() {
+    setLaneFilter(null);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("lane");
       window.history.replaceState({}, "", url.toString());
     }
   }
