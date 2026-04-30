@@ -1395,12 +1395,7 @@ export default function AvailableFreightPage() {
             variant="ghost"
             size="sm"
             className="h-6 text-[11px]"
-            onClick={() => {
-              setLaneFilter(null);
-              const url = new URL(window.location.href);
-              url.searchParams.delete("lane");
-              window.history.replaceState({}, "", url.toString());
-            }}
+            onClick={clearLaneFilter}
             data-testid="button-clear-lane-filter"
           >
             <X className="h-3 w-3 mr-1" /> Clear lane filter
@@ -1553,15 +1548,184 @@ export default function AvailableFreightPage() {
                 {[0, 1, 2, 3, 4].map(i => <Skeleton key={i} className="h-20 w-full" />)}
               </div>
             ) : filtered.length === 0 ? (
-              <div className="flex flex-col items-center justify-center gap-3 py-16 text-center" data-testid="state-empty">
-                <Inbox className="h-10 w-10 text-muted-foreground" />
-                <div>
-                  <p className="text-sm font-medium">No opportunities match these filters</p>
-                  <p className="text-xs text-muted-foreground">
-                    Upload a workbook or wait for the next scheduled import.
-                  </p>
-                </div>
-              </div>
+              (() => {
+                // Phase A3 — explained empty state. Show every non-zero
+                // hidden bucket so the rep knows whether the queue is
+                // genuinely empty or just filtered down to nothing, and
+                // give them a one-click escape hatch for the filters they
+                // can clear from this page.
+                const h = serverFeed?.hiddenCounts ?? null;
+                const hiddenByClient = Math.max(0, items.length - filtered.length);
+                const hasSearch = search.trim().length > 0;
+                const ownerScopeActive = viewFilters.ownerScope === "mine"
+                  || viewFilters.ownerScope === "team";
+                const hiddenBuckets: Array<{
+                  key: string;
+                  count: number;
+                  label: string;
+                  detail?: string;
+                  action?: { label: string; onClick: () => void; testId: string };
+                  informational?: boolean;
+                }> = [];
+                if (h) {
+                  if (
+                    h.byStatus > 0
+                    && statusFilter !== "all"
+                    && statusFilter !== "active"
+                  ) {
+                    hiddenBuckets.push({
+                      key: "status",
+                      count: h.byStatus,
+                      label: "outside the current status filter",
+                      action: {
+                        label: "Show active queue",
+                        onClick: () => setStatusFilter("active"),
+                        testId: "button-clear-status-filter",
+                      },
+                    });
+                  }
+                  if (h.byPastPickup > 0) {
+                    hiddenBuckets.push({
+                      key: "past-pickup",
+                      count: h.byPastPickup,
+                      label: "past their pickup date",
+                      detail: "Hidden by design — these moves were due before today.",
+                      informational: true,
+                    });
+                  }
+                  if (h.bySnooze > 0) {
+                    hiddenBuckets.push({
+                      key: "snooze",
+                      count: h.bySnooze,
+                      label: "snoozed until later",
+                      detail: "Reachable from the all-opportunities list when the snooze ends.",
+                      informational: true,
+                    });
+                  }
+                  if (h.byLane > 0) {
+                    hiddenBuckets.push({
+                      key: "lane",
+                      count: h.byLane,
+                      label: "outside the lane you deep-linked from",
+                      action: {
+                        label: "Clear lane filter",
+                        onClick: clearLaneFilter,
+                        testId: "button-empty-clear-lane",
+                      },
+                    });
+                  }
+                  if (h.byCarrier > 0) {
+                    hiddenBuckets.push({
+                      key: "carrier",
+                      count: h.byCarrier,
+                      label: "the linked carrier could not cover",
+                      action: {
+                        label: "Clear carrier filter",
+                        onClick: clearCarrierFilter,
+                        testId: "button-empty-clear-carrier",
+                      },
+                    });
+                  }
+                }
+                if (hiddenByClient > 0) {
+                  const reasons: string[] = [];
+                  if (hasSearch) reasons.push("your search");
+                  if (ownerScopeActive) {
+                    reasons.push(viewFilters.ownerScope === "mine" ? "the “Mine only” view" : "the “Team only” view");
+                  }
+                  const reasonText = reasons.length > 0
+                    ? reasons.join(" and ")
+                    : "the saved view filters";
+                  hiddenBuckets.push({
+                    key: "local",
+                    count: hiddenByClient,
+                    label: `hidden by ${reasonText}`,
+                    action: hasSearch
+                      ? {
+                          label: "Clear search",
+                          onClick: () => setSearch(""),
+                          testId: "button-empty-clear-search",
+                        }
+                      : ownerScopeActive
+                        ? {
+                            label: "Switch to default view",
+                            onClick: () => setActiveViewId(null),
+                            testId: "button-empty-clear-view",
+                          }
+                        : undefined,
+                  });
+                }
+                const totalInScope = h?.totalInScope ?? null;
+                const fmtCount = (n: number) => `${n.toLocaleString()} row${n === 1 ? "" : "s"}`;
+                return (
+                  <div
+                    className="flex flex-col items-center justify-center gap-4 py-12 text-center"
+                    data-testid="state-empty"
+                  >
+                    <Inbox className="h-10 w-10 text-muted-foreground" />
+                    <div className="space-y-1 max-w-md">
+                      <p className="text-sm font-medium" data-testid="text-empty-headline">
+                        No freight matches your current filters.
+                      </p>
+                      {totalInScope !== null && (
+                        <p className="text-xs text-muted-foreground" data-testid="text-empty-subtitle">
+                          {totalInScope === 0
+                            ? "There is no freight in your scope right now. New rows will appear here as the autopilot generates them."
+                            : `You have ${fmtCount(totalInScope)} in this scope, but everything is filtered out by the criteria below.`}
+                        </p>
+                      )}
+                    </div>
+                    {hiddenBuckets.length > 0 && (
+                      <div
+                        className="w-full max-w-xl rounded-md border bg-muted/20 px-3 py-2 text-left text-xs"
+                        data-testid="panel-hidden-counts"
+                      >
+                        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          Hidden by your filters
+                        </div>
+                        <ul className="space-y-1.5">
+                          {hiddenBuckets.map(b => (
+                            <li
+                              key={b.key}
+                              className="flex flex-wrap items-center gap-x-2 gap-y-1"
+                              data-testid={`row-hidden-${b.key}`}
+                            >
+                              <Badge
+                                variant="secondary"
+                                className="font-mono"
+                                data-testid={`badge-hidden-${b.key}-count`}
+                              >
+                                {b.count.toLocaleString()}
+                              </Badge>
+                              <span className="text-foreground">{b.label}</span>
+                              {b.detail && (
+                                <span className="text-muted-foreground">— {b.detail}</span>
+                              )}
+                              {b.action && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  className="ml-auto h-6 px-2 text-[11px]"
+                                  onClick={b.action.onClick}
+                                  data-testid={b.action.testId}
+                                >
+                                  <X className="mr-1 h-3 w-3" />
+                                  {b.action.label}
+                                </Button>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {hiddenBuckets.length === 0 && (
+                      <p className="text-xs text-muted-foreground" data-testid="text-empty-fallback">
+                        Upload a workbook or wait for the next scheduled import.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()
             ) : (
               <div>
                 {/* Select-all bar */}

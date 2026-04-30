@@ -1380,6 +1380,86 @@ console.log("\n── 21. Available Freight — ingestion freshness pill (Phase 
   );
 }
 
+// Section 22: Available Freight — explained empty state (Phase A3).
+// When the cockpit list is empty, the rep must see WHY instead of a generic
+// "no rows" panel. The server publishes per-bucket hidden counts and the
+// frontend renders them with one-click "clear filter" chips so the rep
+// understands whether the queue is genuinely empty or just filtered down.
+console.log("\n── 22. Available Freight — empty-state hidden counts (Phase A3) ────\n");
+
+{
+  const cockpitRouteSrc = readFile("server/routes/freightOpportunityCockpit.ts");
+  assert(
+    "server/routes/freightOpportunityCockpit.ts — feed includes `hiddenCounts` block",
+    /const\s+hiddenCounts\s*=\s*\{/.test(cockpitRouteSrc) &&
+      /res\.json\(\{[\s\S]*\bhiddenCounts\b\s*,[\s\S]*\}\)/.test(cockpitRouteSrc),
+    "Cockpit handler must build a `hiddenCounts` object and include it in res.json so the empty-state hint can explain which filter dropped what.",
+  );
+  // All five hidden buckets must be wired or one of them silently shows
+  // as undefined in the UI and the rep loses the explanation.
+  for (const bucket of [
+    "totalInScope",
+    "byStatus",
+    "bySnooze",
+    "byPastPickup",
+    "byLane",
+    "byCarrier",
+  ]) {
+    assert(
+      `server/routes/freightOpportunityCockpit.ts — hiddenCounts.${bucket} present`,
+      new RegExp(`\\b${bucket}\\b`).test(cockpitRouteSrc),
+      `hiddenCounts must populate ${bucket}; missing buckets break the empty-state UI.`,
+    );
+  }
+  assert(
+    "server/routes/freightOpportunityCockpit.ts — uses single org-scoped SQL aggregate (FILTER clauses)",
+    /hidden_by_status[\s\S]*hidden_by_snooze[\s\S]*hidden_by_past_pickup/.test(cockpitRouteSrc) &&
+      /COUNT\(\*\)\s+FILTER/.test(cockpitRouteSrc),
+    "Hidden counts must be derived from a single org-scoped aggregate (COUNT FILTER) — not by paging the full table or trusting page-scoped arrays — or the numbers will lie at scale.",
+  );
+  assert(
+    "server/routes/freightOpportunityCockpit.ts — past-pickup uses todayIsoInOrgTz",
+    /substring\([\s\S]{0,80}pickupWindowStart[\s\S]{0,80}\)\s*<\s*\$\{todayIso\}/.test(cockpitRouteSrc) ||
+      /todayIso[\s\S]{0,200}substring/.test(cockpitRouteSrc),
+    "Past-pickup hidden count must compare against todayIso (org-local), matching the in-memory filter at lines 508-518; UTC comparison would mis-report at the date boundary.",
+  );
+
+  const pageSrc = readFile("client/src/pages/available-freight.tsx");
+  assert(
+    "client/src/pages/available-freight.tsx — declares hiddenCounts on CockpitResponse",
+    /hiddenCounts\?:\s*\{[\s\S]*byStatus[\s\S]*byPastPickup[\s\S]*\}/.test(pageSrc),
+    "Frontend type must declare hiddenCounts so the empty-state hint sees the server payload.",
+  );
+  assert(
+    "client/src/pages/available-freight.tsx — empty state renders the hidden-counts panel",
+    /data-testid="panel-hidden-counts"/.test(pageSrc),
+    "Empty state must mount a panel with data-testid='panel-hidden-counts' so e2e tests can assert the rep sees the explanation.",
+  );
+  assert(
+    "client/src/pages/available-freight.tsx — empty state exposes Clear status chip",
+    /["']button-clear-status-filter["']/.test(pageSrc) &&
+      /setStatusFilter\(\s*["']active["']\s*\)/.test(pageSrc),
+    "Empty state must expose a one-click chip that resets the status filter back to the active queue.",
+  );
+  assert(
+    "client/src/pages/available-freight.tsx — empty state offers Clear lane / Clear carrier chips",
+    /["']button-empty-clear-lane["']/.test(pageSrc) &&
+      /["']button-empty-clear-carrier["']/.test(pageSrc),
+    "When a deep-link filter is responsible for the empty queue, the rep needs a one-click escape hatch for both lane and carrier filters.",
+  );
+  assert(
+    "client/src/pages/available-freight.tsx — uses shared clearLaneFilter helper",
+    /function\s+clearLaneFilter\s*\(/.test(pageSrc) &&
+      /onClick=\{clearLaneFilter\}/.test(pageSrc),
+    "The lane-clear behavior in the deep-link banner and the empty-state chip must share one helper so they cannot drift.",
+  );
+  assert(
+    "client/src/pages/available-freight.tsx — empty state explains plain-language counts",
+    /No freight matches your current filters/.test(pageSrc),
+    "Empty-state headline must use plain language a rep would understand (no jargon like 'predicate' or 'where clause').",
+  );
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {
