@@ -2623,6 +2623,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // Task #701: Integrations Health Console — admin probe snapshot.
   const { registerIntegrationsHealthRoutes } = await import("./routes/integrationsHealth");
   registerIntegrationsHealthRoutes(app);
+  // Phase 2a — quote-request leakage diagnostic (read-only).
+  const { registerConversationsLeakageRoutes } = await import("./routes/conversationsLeakage");
+  registerConversationsLeakageRoutes(app);
   // Task #705: Endpoint performance budgets — admin overview.
   // perfTimingMiddleware was registered at the very top of registerRoutes
   // (Task #705) so it captures every route below; we only need to register

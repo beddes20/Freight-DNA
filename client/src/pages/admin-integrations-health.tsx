@@ -315,6 +315,8 @@ export default function AdminIntegrationsHealthPage() {
 
       <LoadFactPipelineTile />
 
+      <QuoteRequestLeakageTile />
+
       {isLoading && !data ? (
         <Card><CardContent className="p-8 text-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground inline-block" /></CardContent></Card>
       ) : (
@@ -636,6 +638,185 @@ function LoadFactPipelineTile() {
             </div>
           )}
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Phase 2a — Quote-Request Leakage tile ──────────────────────────────
+//
+// Read-only diagnostic that surfaces how many inbound customer
+// pricing_request / quote_request signals failed to materialize a
+// tracked quote_opportunities row (and weren't acknowledged via
+// capture_leak_reviews either).
+//
+// Categorization is mutually exclusive with priority:
+//   1. withOpportunity  — signal links to an opp (direct or via source_reference)
+//   2. inLeakQueue      — capture_leak_reviews row exists for the message
+//   3. leaked           — neither — silent leak
+//
+// This tile drives no automation. It exists so we can watch the leakage
+// rate for a few normal business days before turning on Phase 2b
+// (forward closure).
+
+interface LeakageWindowStats {
+  windowLabel: string;
+  windowStart: string;
+  totalSignals: number;
+  withOpportunity: number;
+  inLeakQueue: number;
+  leaked: number;
+  leakRate: number;
+}
+
+interface LeakageDomainBreakdown {
+  domain: string;
+  totalSignals: number;
+  leakedSignals: number;
+  leakRate: number;
+}
+
+interface LeakageStatsResponse {
+  generatedAt: string;
+  organizationId: string;
+  windows: { last24h: LeakageWindowStats; last7d: LeakageWindowStats };
+  topLeakingDomains: LeakageDomainBreakdown[];
+}
+
+function pct(n: number): string {
+  return `${(n * 100).toFixed(1)}%`;
+}
+
+function leakRateTone(rate: number): string {
+  if (rate >= 0.5) return "text-red-700 dark:text-red-400";
+  if (rate >= 0.2) return "text-amber-700 dark:text-amber-400";
+  return "text-emerald-700 dark:text-emerald-400";
+}
+
+function LeakageWindowCard({ stats }: { stats: LeakageWindowStats }) {
+  const tone = leakRateTone(stats.leakRate);
+  const testIdSlug = stats.windowLabel.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  return (
+    <div className="border border-border rounded-md p-3 space-y-2" data-testid={`leakage-window-${testIdSlug}`}>
+      <div className="flex items-center justify-between">
+        <span className="text-xs uppercase tracking-wider text-muted-foreground">{stats.windowLabel}</span>
+        <span className={`text-lg font-semibold tabular-nums ${tone}`} data-testid={`text-leak-rate-${testIdSlug}`}>
+          {stats.totalSignals === 0 ? "—" : pct(stats.leakRate)}
+        </span>
+      </div>
+      {stats.totalSignals === 0 ? (
+        <p className="text-xs text-muted-foreground italic">No quote-request signals in this window.</p>
+      ) : (
+        <div className="grid grid-cols-4 gap-2 text-xs">
+          <div>
+            <div className="text-muted-foreground">Total</div>
+            <div className="tabular-nums font-medium" data-testid={`text-total-${testIdSlug}`}>{stats.totalSignals}</div>
+          </div>
+          <div>
+            <div className="text-muted-foreground">With opp</div>
+            <div className="tabular-nums font-medium text-emerald-700 dark:text-emerald-400" data-testid={`text-with-opp-${testIdSlug}`}>{stats.withOpportunity}</div>
+          </div>
+          <div>
+            <div className="text-muted-foreground">In queue</div>
+            <div className="tabular-nums font-medium text-slate-700 dark:text-slate-300" data-testid={`text-in-queue-${testIdSlug}`}>{stats.inLeakQueue}</div>
+          </div>
+          <div>
+            <div className="text-muted-foreground">Leaked</div>
+            <div className={`tabular-nums font-medium ${tone}`} data-testid={`text-leaked-${testIdSlug}`}>{stats.leaked}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QuoteRequestLeakageTile() {
+  const { data, isLoading, isError, refetch } = useQuery<LeakageStatsResponse>({
+    queryKey: ["/api/admin/conversations/leakage-stats"],
+    queryFn: async () => {
+      const r = await fetch("/api/admin/conversations/leakage-stats", { credentials: "include" });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    },
+    refetchInterval: 60_000,
+  });
+
+  if (isLoading && !data) {
+    return (
+      <Card data-testid="card-quote-request-leakage">
+        <CardContent className="p-6 text-center">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground inline-block" />
+        </CardContent>
+      </Card>
+    );
+  }
+  if (isError || !data) {
+    return (
+      <Card data-testid="card-quote-request-leakage" className="border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800">
+        <CardContent className="p-4 text-sm">
+          <span className="text-amber-700 dark:text-amber-300">Couldn't read quote-request leakage stats.</span>
+          <Button size="sm" variant="outline" className="ml-3" onClick={() => refetch()} data-testid="button-retry-leakage">Retry</Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const overallTone = leakRateTone(data.windows.last7d.leakRate);
+
+  return (
+    <Card data-testid="card-quote-request-leakage">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Mail className="h-4 w-4 text-muted-foreground" />
+          Quote-request leakage
+          <Badge variant="outline" className={`text-[10px] ${overallTone}`} data-testid="badge-leakage-overall-rate">
+            {data.windows.last7d.totalSignals === 0 ? "no data" : `${pct(data.windows.last7d.leakRate)} 7d`}
+          </Badge>
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">
+          Inbound customer "pricing_request" / "quote_request" signals that never produced a tracked
+          quote_opportunity row and weren't acknowledged in the leak queue. Read-only — no automation
+          changes anything based on these counts. Phase 2b (forward closure) will use these numbers to
+          decide thresholds before turning on auto-create / auto-attach.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <LeakageWindowCard stats={data.windows.last24h} />
+          <LeakageWindowCard stats={data.windows.last7d} />
+        </div>
+
+        {data.topLeakingDomains.length > 0 && (
+          <div className="space-y-1">
+            <div className="text-xs uppercase tracking-wider text-muted-foreground">Top leaking sender domains (last 7d)</div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-muted/40 text-muted-foreground">
+                  <tr>
+                    <th className="text-left p-2 font-medium">Domain</th>
+                    <th className="text-right p-2 font-medium">Total signals</th>
+                    <th className="text-right p-2 font-medium">Leaked</th>
+                    <th className="text-right p-2 font-medium">Leak rate</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.topLeakingDomains.map((d) => (
+                    <tr key={d.domain} className="border-t" data-testid={`row-leaking-domain-${d.domain}`}>
+                      <td className="p-2 font-mono">{d.domain}</td>
+                      <td className="p-2 text-right tabular-nums">{d.totalSignals}</td>
+                      <td className="p-2 text-right tabular-nums">{d.leakedSignals}</td>
+                      <td className={`p-2 text-right tabular-nums font-medium ${leakRateTone(d.leakRate)}`}>{pct(d.leakRate)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        <p className="text-[11px] text-muted-foreground">
+          Generated {fmtAgo(data.generatedAt)} · refreshes every 60s
+        </p>
       </CardContent>
     </Card>
   );
