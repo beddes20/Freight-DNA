@@ -179,4 +179,103 @@ import {
   console.log("✓ canonicalCustomerNames upgrade applied in enrich()");
 }
 
-console.log("\nAll buildCanonicalCustomerNameMap + Tier-1 enrich() tests passed.");
+// ── 10. Owner-display role set widening — sanity guard ──
+// Customer Quotes portlet bug-fix follow-up. The Tier-1 source-email
+// resolver now uses QUOTE_OWNER_DISPLAY_ROLES (AM / NAM / logistics_manager
+// / logistics_coordinator). These three cases pin the contract so a future
+// edit to either set fails fast in CI.
+{
+  const {
+    QUOTE_OWNER_DISPLAY_ROLES,
+    QUOTE_REP_UNIVERSE_ROLES,
+  } = await import("../shared/quoteOpportunitiesRoles");
+
+  // (a) Logistics-manager mailbox MUST be in the owner display set.
+  //     This is the entire reason for the wider gate — operations owners
+  //     route ~60% of email-sourced quotes today.
+  assert.ok(
+    QUOTE_OWNER_DISPLAY_ROLES.has("logistics_manager"),
+    "logistics_manager must be eligible as an owner on the portlet",
+  );
+  assert.ok(
+    QUOTE_OWNER_DISPLAY_ROLES.has("logistics_coordinator"),
+    "logistics_coordinator must be eligible as an owner on the portlet",
+  );
+  console.log("✓ Tier-1 promotes logistics_manager / logistics_coordinator to_email");
+
+  // (b) Existing AM/NAM behavior MUST still work.
+  assert.ok(
+    QUOTE_OWNER_DISPLAY_ROLES.has("account_manager"),
+    "account_manager must remain in the owner display set",
+  );
+  assert.ok(
+    QUOTE_OWNER_DISPLAY_ROLES.has("national_account_manager"),
+    "national_account_manager must remain in the owner display set",
+  );
+  console.log("✓ AM / NAM remain eligible (no regression)");
+
+  // (c) The widened set MUST NOT bleed into the sales-funnel rep gate.
+  //     Funnel attribution stays AM/NAM-only. If a future change adds
+  //     logistics_manager to QUOTE_REP_UNIVERSE_ROLES this fires.
+  assert.ok(
+    !QUOTE_REP_UNIVERSE_ROLES.has("logistics_manager"),
+    "logistics_manager must NOT enter the funnel rep universe",
+  );
+  assert.ok(
+    !QUOTE_REP_UNIVERSE_ROLES.has("logistics_coordinator"),
+    "logistics_coordinator must NOT enter the funnel rep universe",
+  );
+  console.log("✓ Funnel rep universe stays AM/NAM-only (no attribution leakage)");
+
+  // (d) Sales-funnel page-access role gate is unchanged.
+  //     Carrier-facing roles like "sales" stay out of both sets.
+  assert.ok(
+    !QUOTE_OWNER_DISPLAY_ROLES.has("sales" as never),
+    "generic 'sales' role must stay excluded from owner display",
+  );
+  console.log("✓ Carrier-facing 'sales' role remains excluded from owner display");
+}
+
+// ── 11. Tier-1 enrich() + suppression — logistics-manager promoted, suppressed user blocked ──
+// This pins the end-to-end contract: the helper drops suppressed users
+// upstream so enrich() never sees them, and a non-suppressed
+// logistics-manager mailbox flows through Tier-1 just like an AM/NAM.
+{
+  const enrich = customerQuotesTestables.enrich;
+  const baseRow: any = {
+    id: "opp-2",
+    organizationId: "org-1",
+    customerId: "cust-1",
+    repId: "rep-2",
+    laneGroupId: null, carrierId: null, outcomeReasonId: null,
+    requestDate: new Date(), originCity: "A", originState: "AA",
+    destCity: "B", destState: "BB", equipment: "Dry Van",
+    quotedAmount: null, validThrough: null, outcomeStatus: "pending",
+    source: "email", sourceReference: "msg-2",
+    metadata: null, createdAt: new Date(), updatedAt: new Date(),
+  };
+  const customerMap = new Map<string, any>([["cust-1", { id: "cust-1", name: "Acme" }]]);
+  const repMap = new Map<string, any>([["rep-2", { id: "rep-2", name: "Legacy Name" }]]);
+
+  // Logistics manager mailbox → resolveRepsFromSourceEmails would have put
+  // their user.name on the map. enrich() honors it, beating the funnel
+  // veto exactly the same way an AM/NAM Tier-1 hit does.
+  const promoted = enrich([baseRow], customerMap, repMap, new Map(), new Map(), {
+    funnelEligibleRepIds: new Set<string>(), // rep-2 ineligible under Tier-2/3/4
+    repByOpportunityId: new Map([["opp-2", "Kassidy Harwood"]]),
+  });
+  assert.equal(promoted[0].repName, "Kassidy Harwood", "logistics-manager Tier-1 hit must promote");
+  console.log("✓ Logistics-manager Tier-1 hit promoted into the owner column");
+
+  // Suppressed user → resolveRepsFromSourceEmails dropped them upstream,
+  // so enrich() sees an empty map and the legacy fallback runs (and the
+  // funnel veto correctly re-hides the rep).
+  const suppressed = enrich([baseRow], customerMap, repMap, new Map(), new Map(), {
+    funnelEligibleRepIds: new Set<string>(),
+    repByOpportunityId: new Map(), // helper omitted opp-2 because user was suppressed
+  });
+  assert.equal(suppressed[0].repName, "—", "suppressed user must remain hidden via empty Tier-1");
+  console.log("✓ Suppressed user stays hidden (helper drops upstream, enrich sees empty map)");
+}
+
+console.log("\nAll buildCanonicalCustomerNameMap + Tier-1 enrich() + owner-role tests passed.");

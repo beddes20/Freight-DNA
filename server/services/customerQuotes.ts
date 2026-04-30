@@ -15,7 +15,7 @@ import {
 } from "@shared/schema";
 import { UNKNOWN_CUSTOMER_NAME, classifyPartyType, sanitizeCustomerName, isFreeMailProviderName } from "./customerNameResolver";
 import { loadNonCustomerCustomerIds } from "./customerOnlyChokepoint";
-import { isFunnelEligibleRep, QUOTE_REP_UNIVERSE_ROLES } from "@shared/quoteOpportunitiesRoles";
+import { isFunnelEligibleRep, QUOTE_REP_UNIVERSE_ROLES, QUOTE_OWNER_DISPLAY_ROLES } from "@shared/quoteOpportunitiesRoles";
 import { users } from "@shared/schema";
 import { learnFromReassign } from "./quoteSenderMappings";
 import type { QuotePartyType } from "@shared/schema";
@@ -856,10 +856,15 @@ async function resolveRepsFromSourceEmails(
     const email = (u.username ?? "").trim().toLowerCase();
     const name = (u.name ?? "").trim();
     if (!email || !name || !u.id) continue;
-    // Tier-1 resolution must NEVER promote a non-customer-facing user
-    // (logistics_manager, ops, etc.) onto the customer-facing portlet.
-    // Mirrors the funnel-eligibility role gate.
-    if (!QUOTE_REP_UNIVERSE_ROLES.has(u.role as never)) continue;
+    // Tier-1 resolution uses the wider DISPLAY-ONLY owner role set
+    // (AM / NAM / logistics_manager / logistics_coordinator). The Customer
+    // Quotes portlet shows the actual responsible person for each quote,
+    // which in this brokerage includes operations owners (logistics
+    // managers) on a large share of email-sourced rows. This is the ONLY
+    // call site allowed to use `QUOTE_OWNER_DISPLAY_ROLES`; the
+    // funnel-eligibility predicate and rep dropdown stay AM/NAM-only via
+    // `QUOTE_REP_UNIVERSE_ROLES`. Suppression is enforced below.
+    if (!QUOTE_OWNER_DISPLAY_ROLES.has(u.role as never)) continue;
     userByEmail.set(email, { id: u.id, name, role: u.role });
   }
   if (userByEmail.size === 0) return result;

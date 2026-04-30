@@ -901,11 +901,11 @@ function CustomerQuotesPageInner(): JSX.Element {
               </SelectContent>
             </Select>
           </FilterBox>
-          <FilterBox label="Rep">
+          <FilterBox label="Owner">
             <Select value={filters.repId ?? "_all"} onValueChange={v => updateFilter({ repId: v === "_all" ? undefined : v })}>
-              <SelectTrigger className="h-8 w-[140px] bg-card border-border text-xs" data-testid="select-rep"><SelectValue placeholder="All reps" /></SelectTrigger>
+              <SelectTrigger className="h-8 w-[140px] bg-card border-border text-xs" data-testid="select-rep"><SelectValue placeholder="All owners" /></SelectTrigger>
               <SelectContent container={overlayPortal}>
-                <SelectItem value="_all">All reps</SelectItem>
+                <SelectItem value="_all">All owners</SelectItem>
                 {data?.reps.map(r => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
               </SelectContent>
             </Select>
@@ -953,7 +953,7 @@ function CustomerQuotesPageInner(): JSX.Element {
               if (v === undefined || v === "" || v === false) return null;
               let label = `${k}: ${String(v)}`;
               if (k === "customerId") label = `Customer: ${data?.customers.find(c => c.id === v)?.name ?? v}`;
-              if (k === "repId") label = `Rep: ${data?.reps.find(r => r.id === v)?.name ?? v}`;
+              if (k === "repId") label = `Owner: ${data?.reps.find(r => r.id === v)?.name ?? v}`;
               if (k === "outcomeReasonId") label = `Reason: ${data?.reasons.find(r => r.id === v)?.label ?? v}`;
               if (k === "laneGroupId") label = `Lane group: ${data?.laneGroups.find(g => g.id === v)?.name ?? v}`;
               if (k === "outcomeStatus") label = `Outcome: ${STATUS_LABELS[v as string] ?? v}`;
@@ -1612,7 +1612,7 @@ const COLUMNS: ColumnDef[] = [
   { key: "validThrough", label: "Valid" },
   { key: "outcomeStatus", label: "Outcome" },
   { key: "outcomeReasonLabel", label: "Reason" },
-  { key: "repName", label: "Rep" },
+  { key: "repName", label: "Owner" },
   { key: "responseTimeHours", label: "Resp", align: "right" },
   { key: "source", label: "Source" },
   { key: "score", label: "Score", align: "right" },

@@ -54,6 +54,26 @@ export const QUOTE_REP_UNIVERSE_ROLES: ReadonlySet<UserRole> = new Set<UserRole>
   "account_manager",
 ]);
 
+// Customer Quotes portlet bug-fix follow-up — DISPLAY-ONLY widening of the
+// owner column on /customer-quotes. The portlet column shows the actual
+// person responsible for each quote, which in this brokerage includes
+// logistics managers (operations owners) on a large share of email-sourced
+// rows. This set is used SOLELY by the Tier-1 source-email resolution
+// helper in `server/services/customerQuotes.ts`. It must NEVER be used by:
+//   - the funnel-eligibility predicate (`isFunnelEligibleRep`) — that
+//     gate stays AM/NAM-only because it controls sales-funnel attribution.
+//   - the rep dropdown / pickers / ranking (those use
+//     `QUOTE_REP_UNIVERSE_ROLES`).
+//   - the ingestion-side rep-create gate (`isCustomerFacingQuoteRep`).
+// Suppression behavior is preserved upstream by the same helper; widening
+// the role set does not bypass `quote_reps.suppressed`.
+export const QUOTE_OWNER_DISPLAY_ROLES: ReadonlySet<UserRole> = new Set<UserRole>([
+  "national_account_manager",
+  "account_manager",
+  "logistics_manager",
+  "logistics_coordinator",
+]);
+
 export function isQuoteOpportunitiesRole(role: string | null | undefined): boolean {
   if (role == null) return false;
   return QUOTE_OPPORTUNITIES_ROLES.has(role as UserRole);
