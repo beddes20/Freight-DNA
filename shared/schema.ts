@@ -5274,10 +5274,35 @@ export const QUOTE_OUTCOME_STATUSES = [
   "no_response",
   "expired",
   "won_low_margin",
+  // Task #849 §1.3 — `attached` records that the source opp was
+  // re-routed (via attach-to or mark-duplicate) onto a target opp.
+  // Closes the source so it drops out of active queries while the
+  // audit trail (quote_events: opp_attached_out / opp_attached_in)
+  // survives. Distinct from `no_response` because it's a re-classification
+  // not an unforced loss — every analytics query that bands by outcome
+  // must decide explicitly whether to include or exclude it (see
+  // S8 audit + the Section 16 guardrail).
+  "attached",
 ] as const;
 export type QuoteOutcomeStatus = typeof QUOTE_OUTCOME_STATUSES[number];
 
-export const QUOTE_SOURCES = ["email", "tms", "crm", "manual", "import"] as const;
+// Task #849 §1.1 — `email_signal` is autopilot-classified inbound
+// email (Quote Lifecycle Autopilot / Phase 2b forward closure);
+// `email` is human-typed (rep added a row from the list). Both share
+// the same downstream lifecycle but the Confidence card and the source
+// filter need them to be distinguishable. `spot_search` already exists
+// as a logical concept in the codebase (Spot Quote Search → Quote
+// Builder → POST /api/customer-quotes/spot/create) — lifting it into
+// the enum makes per-source filtering honest.
+export const QUOTE_SOURCES = [
+  "email",
+  "email_signal",
+  "tms",
+  "crm",
+  "manual",
+  "import",
+  "spot_search",
+] as const;
 
 // Task #597 — `partyType` distinguishes shipper customers (default) from
 // carrier rows that leak in via email/TMS ingestion (e.g. carriers cold-emailing
@@ -5383,11 +5408,24 @@ export const quoteOpportunities = pgTable("quote_opportunities", {
   // Shape: { senderEmail: string, senderName: string|null, companyId: string|null,
   //          customerName: string, detectedAt: ISO string } | null
   needsNewContactReview: jsonb("needs_new_contact_review"),
+  // Task #849 §2 — operator self-care snooze. Orthogonal to
+  // outcomeStatus: a `pending` opp with `snoozedUntil` set in the
+  // future is hidden from default list views but its lifecycle is
+  // unchanged. The list endpoint surfaces it via `?includeSnoozed=1`
+  // (S4 / S7). The partial index below keeps this column zero-cost
+  // for the ~100% of rows that never get snoozed.
+  snoozedUntil: timestamp("snoozed_until"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
   orgIdx: index("quote_opportunities_org_idx").on(t.organizationId),
   customerIdx: index("quote_opportunities_customer_idx").on(t.customerId),
   reqDateIdx: index("quote_opportunities_request_date_idx").on(t.requestDate),
+  // Partial index — only indexes rows where snoozed_until IS NOT NULL,
+  // keeping write/storage cost ~zero for the unsnoozed default case
+  // while making "list snoozed for org X" a sub-millisecond lookup.
+  snoozedIdx: index("quote_opportunities_snoozed_idx")
+    .on(t.organizationId, t.snoozedUntil)
+    .where(sql`snoozed_until IS NOT NULL`),
 }));
 export const insertQuoteOpportunitySchema = createInsertSchema(quoteOpportunities).omit({ id: true, createdAt: true });
 export type InsertQuoteOpportunity = z.infer<typeof insertQuoteOpportunitySchema>;
@@ -5435,7 +5473,33 @@ export type CaptureLeakType = typeof CAPTURE_LEAK_TYPES[number];
 // the existing not_quote/ignored decisions. The companion
 // quote_events row (actor=manual_leak_attach, eventType=email_attached)
 // is audit/analytics only — this row is the resolution evidence.
-export const CAPTURE_LEAK_REVIEW_DECISIONS = ["not_quote", "ignored", "attached", "deferred"] as const;
+// Task #849 §1.2 — three new decision values for the post-2d Quote
+// Requests tab actions:
+//   • returned_to_queue — rep declared "this opp shouldn't have been
+//     auto-created, put the underlying signal back in the leak queue
+//     for review" (§5.6 Send to leak queue). Distinct from `ignored`
+//     because the signal is intended to be re-surfaced; the
+//     `buildLeakCandidateIds` chokepoint and the leakage-stats CTE
+//     in `server/routes/conversationsLeakage.ts` both treat
+//     returned_to_queue as "don't suppress" — see contract §3.7.
+//   • duplicate — source opp was a real customer request that just
+//     overlapped with a canonical opp (§5.7 Mark duplicate). Analytics
+//     may want to count it differently from auto-attach noise.
+//   • not_a_request — rep is teaching the system that this autopilot
+//     decision was wrong (§5.13 Override autopilot). Distinct from
+//     `not_quote` (which is the admin-on-leak-queue decision for rows
+//     that never made it to an opp).
+// `deferred` (Phase 2b — Task #847) stays for the dry-run / parking
+// path on free-mail unresolvable senders.
+export const CAPTURE_LEAK_REVIEW_DECISIONS = [
+  "not_quote",
+  "ignored",
+  "attached",
+  "deferred",
+  "returned_to_queue",
+  "duplicate",
+  "not_a_request",
+] as const;
 export type CaptureLeakReviewDecision = typeof CAPTURE_LEAK_REVIEW_DECISIONS[number];
 
 export const captureLeakReviews = pgTable(

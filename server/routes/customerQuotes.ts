@@ -51,7 +51,88 @@ import {
 import { getStaleQuoteFollowUps, getStaleQuoteFollowUpCount, clearStaleFollowUpCache } from "../services/staleQuoteFollowup";
 import { publish as publishLiveSync } from "../services/liveSync";
 import { db } from "../storage";
-import { and as andSql, eq as eqSql, sql as sqlExpr } from "drizzle-orm";
+import { quoteOpportunities } from "@shared/schema";
+import { and as andSql, eq as eqSql, inArray as inArraySql, sql as sqlExpr } from "drizzle-orm";
+
+// =============================================================================
+// Task #849 §6.1 — Quote-mutation ownership gate (security fix folded into S1).
+//
+// Before this fix, the mutation routes below either gated only on `requireUser`
+// (PATCH /quote/:id, bulk-reassign-customer, bulk-status) or relied on the
+// service layer to enforce rep scope (mark-outcome). The architect review of
+// docs/quote-requests-tab-post-2d-backend-contract.md flagged both as a
+// broken-access-control vector — any rep in an org could mutate any other
+// rep's opp by guessing or listing the id, and the service-only gate could
+// silently disappear in a future refactor. This helper closes the gap.
+//
+// Contract:
+//   • Elevated roles (admin / director / sales_director) — pass.
+//   • The `national_account_manager` and `sales` roles are also treated as
+//     elevated for this purpose because `resolveFunnelRepScope` already
+//     does — they're org-wide visibility roles that route through the
+//     funnel without a per-rep restriction.
+//   • Scoped roles (account_manager / logistics_manager etc.) — must own
+//     EVERY id in the requested set. "Own" = `quote_opportunities.repId`
+//     resolves to the same `quote_reps.id` the user is linked to via
+//     `quote_reps.userId`. Cross-rep attempts get 403 with the denied ids
+//     so the UI can show a precise message instead of a generic forbidden.
+//   • Scoped role with no rep mapping at all (`__none__`) — 403, can't
+//     own any quote.
+//   • Unknown / hidden / different-org id → 404 (org-isolation, never
+//     leak existence).
+//
+// Returns a discriminated union so callers can early-return cleanly without
+// throwing across the request-handler boundary.
+// =============================================================================
+type MutationGateResult =
+  | { ok: true }
+  | { ok: false; status: 403; reason: "forbidden" | "no_rep_mapping"; deniedIds?: string[] }
+  | { ok: false; status: 404; reason: "not_found"; missingIds?: string[] };
+
+export async function assertCanMutateQuotes(
+  orgId: string,
+  oppIds: string[],
+  user: { id: string; role: string },
+): Promise<MutationGateResult> {
+  if (oppIds.length === 0) return { ok: true };
+  // Org-isolation first: confirm every requested id exists in this org.
+  // This doubles as the 404 check — if any id is missing, the caller
+  // never learns whether it's in a different org or doesn't exist at all.
+  const rows = await db
+    .select({ id: quoteOpportunities.id, repId: quoteOpportunities.repId })
+    .from(quoteOpportunities)
+    .where(andSql(
+      eqSql(quoteOpportunities.organizationId, orgId),
+      inArraySql(quoteOpportunities.id, oppIds),
+    ));
+  if (rows.length !== oppIds.length) {
+    const found = new Set(rows.map(r => r.id));
+    const missingIds = oppIds.filter(id => !found.has(id));
+    return { ok: false, status: 404, reason: "not_found", missingIds };
+  }
+  const scope = await resolveFunnelRepScope(orgId, { id: user.id, role: user.role });
+  if (scope === null) {
+    // Elevated — no per-rep restriction.
+    return { ok: true };
+  }
+  if (scope === "__none__") {
+    return { ok: false, status: 403, reason: "no_rep_mapping" };
+  }
+  const deniedIds = rows.filter(r => r.repId !== scope).map(r => r.id);
+  if (deniedIds.length > 0) {
+    return { ok: false, status: 403, reason: "forbidden", deniedIds };
+  }
+  return { ok: true };
+}
+
+/** Single-id convenience wrapper. */
+export async function assertCanMutateQuote(
+  orgId: string,
+  oppId: string,
+  user: { id: string; role: string },
+): Promise<MutationGateResult> {
+  return assertCanMutateQuotes(orgId, [oppId], user);
+}
 import { gatherDataAnchors, generateDraft } from "./emailDrafting";
 import { getVoiceProfile } from "../voiceProfileService";
 import { listMappings, deleteMapping } from "../services/quoteSenderMappings";
@@ -264,7 +345,19 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     try {
       const user = req.user!;
       const data = updateQuoteSchema.parse(req.body);
-      const opp = await updateQuote(user.organizationId, actorName(user), pStr(req.params.id), data, user.id);
+      const id = pStr(req.params.id);
+      // Task #849 §6.1 — ownership gate. Pre-S1 this route was only
+      // `requireUser`-gated, so any rep in an org could PATCH any other
+      // rep's opp by guessing the id. Closed via the shared helper.
+      const gate = await assertCanMutateQuote(user.organizationId, id, user);
+      if (!gate.ok) {
+        return res.status(gate.status).json({
+          error: gate.reason === "forbidden" ? "Quote belongs to another rep"
+            : gate.reason === "no_rep_mapping" ? "No rep mapping — cannot update quotes"
+            : "Quote not found",
+        });
+      }
+      const opp = await updateQuote(user.organizationId, actorName(user), id, data, user.id);
       const detail = await getQuoteDetail(user.organizationId, opp.id);
       // Cross-tab UX (option A) — quote outcome/status edits affect the
       // snapshot KPIs, the list view, and the action queue. One topic
@@ -549,6 +642,18 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid input", issues: parsed.error.issues });
+      // Task #849 §6.1 — bulk ownership gate. Same pattern as
+      // bulk-reassign-customer above; mirrors the single-id PATCH.
+      const gate = await assertCanMutateQuotes(user.organizationId, parsed.data.quoteIds, user);
+      if (!gate.ok) {
+        return res.status(gate.status).json({
+          error: gate.reason === "forbidden" ? "Some quotes belong to another rep"
+            : gate.reason === "no_rep_mapping" ? "No rep mapping — cannot flip status"
+            : "One or more quotes not found",
+          ...(gate.reason === "forbidden" ? { deniedIds: gate.deniedIds } : {}),
+          ...(gate.reason === "not_found" ? { missingIds: gate.missingIds } : {}),
+        });
+      }
       const result = await bulkSetQuoteStatus(
         user.organizationId,
         parsed.data.quoteIds,
@@ -1192,6 +1297,20 @@ export function registerCustomerQuoteRoutes(app: Express): void {
         return res.status(400).json({ error: "Invalid body", issues: parsed.error.issues });
       }
       const { outcomeStatus, outcomeReasonId } = parsed.data;
+
+      // Task #849 §6.1 — defense-in-depth ownership gate at the
+      // top of the handler. The service-layer enforceRepScope below
+      // is the existing belt; this is the suspenders. Without it,
+      // a future refactor that drops the `enforceRepScope` argument
+      // would silently re-open the cross-rep mutation hole.
+      const gate = await assertCanMutateQuote(user.organizationId, id, user);
+      if (!gate.ok) {
+        return res.status(gate.status).json({
+          error: gate.reason === "forbidden" ? "Quote belongs to another rep"
+            : gate.reason === "no_rep_mapping" ? "No rep mapping — cannot mark quotes"
+            : "Quote not found",
+        });
+      }
 
       // Resolve per-rep scope. Elevated roles get null (no rep restriction);
       // scoped roles get their rep id, which the service uses to bail with

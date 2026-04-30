@@ -5187,4 +5187,75 @@ export async function runMigrations() {
   } finally {
     clientClosure.release();
   }
+
+  // ===================================================================
+  // Task #849 §1.1 — post-2d source backfill (`quote_sources_v2_post2d`).
+  //
+  // Historically every autopilot-classified inbound quote landed with
+  // `source='email'`, indistinguishable from a rep who manually typed
+  // the row into the list. The post-2d Quote Requests tab needs to
+  // separate those two populations: only `email_signal` rows get the
+  // Confidence card and the autopilot-reasoning panel; the source
+  // filter rail surfaces them as distinct chips. The new enum lifts
+  // `email_signal` and `spot_search` into typed values; this backfill
+  // heals legacy rows up-front so the new tab shows the right counts
+  // on first load instead of waiting for incremental ingestion.
+  //
+  // Heuristics (mirrors §1.1 of docs/quote-requests-tab-post-2d-backend-contract.md):
+  //   1. `email` → `email_signal` if the opp is referenced by ANY
+  //      `email_signals.linked_opportunity_id` row, OR if its
+  //      `source_reference` matches the `provider_message_id` of an
+  //      email_messages row in the same org. The OR is conservative:
+  //      either path reliably indicates autopilot-driven creation.
+  //   2. `manual` → `spot_search` if `source_reference LIKE 'spot:%'`.
+  //      The Spot Quote Search → Quote Builder write-path stamps the
+  //      reference with a `spot:<searchId>` prefix, so this regex is
+  //      both necessary and sufficient.
+  //
+  // Idempotent — `WHERE source = 'email' / 'manual' AND ...` keeps
+  // re-runs at zero rows once converged. Logs the row count so the
+  // operator can confirm the backfill ran exactly once.
+  // ===================================================================
+  const clientPost2dSource = await pool.connect();
+  try {
+    const emailSignalResult = await clientPost2dSource.query(`
+      UPDATE quote_opportunities qo
+         SET source = 'email_signal'
+       WHERE qo.source = 'email'
+         AND (
+           EXISTS (
+             SELECT 1
+               FROM email_signals es
+              WHERE es.linked_opportunity_id = qo.id
+           )
+           OR EXISTS (
+             SELECT 1
+               FROM email_messages em
+              WHERE em.provider_message_id = qo.source_reference
+                AND em.org_id = qo.organization_id
+           )
+         )
+    `);
+    const spotSearchResult = await clientPost2dSource.query(`
+      UPDATE quote_opportunities
+         SET source = 'spot_search'
+       WHERE source = 'manual'
+         AND source_reference LIKE 'spot:%'
+    `);
+    const emailSignalCount = emailSignalResult.rowCount ?? 0;
+    const spotSearchCount = spotSearchResult.rowCount ?? 0;
+    if (emailSignalCount > 0 || spotSearchCount > 0) {
+      console.log(
+        `[migrations] post-2d source backfill (quote_sources_v2_post2d) — ` +
+        `email→email_signal: ${emailSignalCount} row(s), ` +
+        `manual→spot_search: ${spotSearchCount} row(s)`,
+      );
+    } else {
+      console.log("[migrations] post-2d source backfill (quote_sources_v2_post2d) — every quote already on the right source");
+    }
+  } catch (err) {
+    console.error("[migrations] post-2d source backfill error:", err);
+  } finally {
+    clientPost2dSource.release();
+  }
 }

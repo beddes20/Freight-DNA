@@ -889,6 +889,89 @@ assert(
   "runMigrations must heal email_conversation_threads.last_incoming_at / last_outgoing_at from MAX(email_messages.provider_sent_at) per direction. Without it, legacy rows render with the wrong timestamps until they next receive a message.",
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 16: Post-2d Quote Requests contract — schema + security invariants
+// (Task #849 — locked contract: docs/quote-requests-tab-post-2d-backend-contract.md)
+//
+// S1 of the post-2d Quote Requests sprint widens three enums, adds a
+// `snoozedUntil` column + partial index to `quote_opportunities`, and
+// folds a §6.1 ownership-check security fix into the four mutation
+// routes. These guardrails fail the build if any of those invariants
+// regresses — they are the cheap fence keeping the contract from
+// silently drifting.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n── 16. Post-2d Quote Requests contract — schema + security invariants ─────\n");
+
+const sharedSchemaSrc = readFile("shared/schema.ts");
+assert(
+  "shared/schema.ts — QUOTE_OUTCOME_STATUSES contains 'attached'",
+  /QUOTE_OUTCOME_STATUSES\s*=\s*\[[\s\S]*?"attached"[\s\S]*?\]\s*as\s+const/.test(sharedSchemaSrc),
+  "QUOTE_OUTCOME_STATUSES is missing 'attached' — required by Task #849 §1.3 for the attach-to / mark-duplicate close-out path.",
+);
+assert(
+  "shared/schema.ts — QUOTE_SOURCES contains 'email_signal' AND 'spot_search'",
+  /QUOTE_SOURCES\s*=\s*\[[\s\S]*?"email_signal"[\s\S]*?"spot_search"[\s\S]*?\]\s*as\s+const/.test(sharedSchemaSrc),
+  "QUOTE_SOURCES must include 'email_signal' and 'spot_search' — required by Task #849 §1.1 so the Confidence card and source filter rail can distinguish autopilot vs human-typed vs spot-search origins.",
+);
+{
+  // CAPTURE_LEAK_REVIEW_DECISIONS must contain the full 7-value set
+  // (4 originals: not_quote, ignored, attached, deferred — added by
+  // #847 — plus 3 new from §1.2: returned_to_queue, duplicate,
+  // not_a_request).
+  const required = [
+    "not_quote", "ignored", "attached", "deferred",
+    "returned_to_queue", "duplicate", "not_a_request",
+  ];
+  const enumMatch = sharedSchemaSrc.match(
+    /CAPTURE_LEAK_REVIEW_DECISIONS\s*=\s*\[([\s\S]*?)\]\s*as\s+const/,
+  );
+  const body = enumMatch?.[1] ?? "";
+  const missing = required.filter(v => !new RegExp(`"${v}"`).test(body));
+  assert(
+    "shared/schema.ts — CAPTURE_LEAK_REVIEW_DECISIONS contains the full 7-value set",
+    missing.length === 0,
+    missing.length > 0
+      ? `Missing ${missing.join(", ")} — Task #849 §1.2 requires the post-2d additions on top of the existing Phase 2b 'deferred' value.`
+      : undefined,
+  );
+}
+assert(
+  "shared/schema.ts — quote_opportunities.snoozed_until column + partial index declared",
+  /snoozedUntil\s*:\s*timestamp\(\s*"snoozed_until"\s*\)/.test(sharedSchemaSrc) &&
+    /quote_opportunities_snoozed_idx/.test(sharedSchemaSrc) &&
+    /snoozed_until\s+IS\s+NOT\s+NULL/.test(sharedSchemaSrc),
+  "quote_opportunities is missing the snoozed_until column or its partial index. Task #849 §2 requires both — the partial index keeps the column zero-cost for the unsnoozed default case while making 'list snoozed for org X' a sub-millisecond lookup.",
+);
+
+const runMigrationsForSourceBackfill = readFile("server/runMigrations.ts");
+assert(
+  "runMigrations.ts — ships the post-2d source backfill (quote_sources_v2_post2d)",
+  /quote_sources_v2_post2d/.test(runMigrationsForSourceBackfill) &&
+    /SET\s+source\s*=\s*'email_signal'/.test(runMigrationsForSourceBackfill) &&
+    /SET\s+source\s*=\s*'spot_search'/.test(runMigrationsForSourceBackfill),
+  "runMigrations must heal legacy quote_opportunities rows from the old 2-source world (email/manual) to the new typed sources (email_signal/spot_search) up-front. Without it, the Confidence card and source filter on the new tab show the wrong counts on first load.",
+);
+
+const customerQuotesRoutesSrc = readFile("server/routes/customerQuotes.ts");
+assert(
+  "customerQuotes.ts — defines and exports the assertCanMutateQuote(s) helper",
+  /export\s+async\s+function\s+assertCanMutateQuotes/.test(customerQuotesRoutesSrc) &&
+    /export\s+async\s+function\s+assertCanMutateQuote\b/.test(customerQuotesRoutesSrc),
+  "Task #849 §6.1 — the ownership gate must live in customerQuotes.ts as an exported helper so the regression test can exercise the same predicate the routes use.",
+);
+{
+  // Every one of the four mutation routes must reach for the helper.
+  // Count the call-sites — the four routes each gate exactly once,
+  // so any non-trivial deletion fails the count assertion.
+  const callSites = (customerQuotesRoutesSrc.match(/\bassertCanMutateQuote[s]?\s*\(/g) ?? []).length;
+  // 2 helper definitions + 4 route call-sites = 6.
+  assert(
+    "customerQuotes.ts — gate is wired into all four mutation routes (definitions + 4 call-sites)",
+    callSites >= 6,
+    `Found ${callSites} reference(s) to assertCanMutateQuote(s) — expected at least 6 (2 definitions + 4 route call-sites). Task #849 §6.1 requires the gate at PATCH /quote/:id, mark-outcome, bulk-reassign-customer, and bulk-status.`,
+  );
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {
