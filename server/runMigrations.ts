@@ -5189,6 +5189,30 @@ export async function runMigrations() {
   }
 
   // ===================================================================
+  // Task #849 §1.3 — snoozed_until column + partial index.
+  //
+  // Production runs idempotent ALTER TABLE statements via
+  // runMigrations rather than `npm run db:push`, so the new column
+  // declared in shared/schema.ts MUST be materialized here or the
+  // schema-drift guard refuses to start. Required by the drift guard
+  // alongside the Drizzle column in shared/schema.ts.
+  // ===================================================================
+  const clientSnoozedUntil = await pool.connect();
+  try {
+    await clientSnoozedUntil.query(`
+      ALTER TABLE quote_opportunities
+        ADD COLUMN IF NOT EXISTS snoozed_until TIMESTAMP
+    `);
+    await clientSnoozedUntil.query(`
+      CREATE INDEX IF NOT EXISTS quote_opportunities_snoozed_idx
+        ON quote_opportunities (organization_id, snoozed_until)
+        WHERE snoozed_until IS NOT NULL
+    `);
+  } finally {
+    clientSnoozedUntil.release();
+  }
+
+  // ===================================================================
   // Task #849 §1.1 — post-2d source backfill (`quote_sources_v2_post2d`).
   //
   // Historically every autopilot-classified inbound quote landed with
@@ -5212,16 +5236,79 @@ export async function runMigrations() {
   //      reference with a `spot:<searchId>` prefix, so this regex is
   //      both necessary and sufficient.
   //
-  // Idempotent — `WHERE source = 'email' / 'manual' AND ...` keeps
-  // re-runs at zero rows once converged. Logs the row count so the
-  // operator can confirm the backfill ran exactly once.
+  // Constraint-safety: `quote_opportunities_email_signal_source_ref_uidx`
+  // (created by the leak-closure block above) forbids two `email_signal`
+  // rows sharing `(organization_id, source_reference)`. Legacy data
+  // contains duplicate `email` rows pointing at the same provider
+  // message id (one per ingestion attempt). Naive UPDATE flips them
+  // all and the second insert into the partial index aborts the whole
+  // statement. We dedupe with `DISTINCT ON (organization_id,
+  // source_reference) … ORDER BY created_at DESC` and skip groups
+  // where an `email_signal` row already exists. NULL source_reference
+  // rows are immune to the partial index (NULLs do not collide) and
+  // pass through unchanged.
+  //
+  // Idempotent — re-running converges to zero affected rows. Logs both
+  // the affected count and the deduped/skipped count so the operator
+  // can confirm the backfill ran exactly once and see the leftovers.
   // ===================================================================
   const clientPost2dSource = await pool.connect();
   try {
     const emailSignalResult = await clientPost2dSource.query(`
+      WITH candidates AS (
+        SELECT qo.id,
+               qo.organization_id,
+               qo.source_reference,
+               qo.created_at
+          FROM quote_opportunities qo
+         WHERE qo.source = 'email'
+           AND (
+             EXISTS (
+               SELECT 1
+                 FROM email_signals es
+                WHERE es.linked_opportunity_id = qo.id
+             )
+             OR (
+               qo.source_reference IS NOT NULL
+               AND EXISTS (
+                 SELECT 1
+                   FROM email_messages em
+                  WHERE em.provider_message_id = qo.source_reference
+                    AND em.org_id = qo.organization_id
+               )
+             )
+           )
+      ),
+      null_ref_winners AS (
+        SELECT id FROM candidates WHERE source_reference IS NULL
+      ),
+      keyed_winners AS (
+        SELECT DISTINCT ON (c.organization_id, c.source_reference) c.id
+          FROM candidates c
+         WHERE c.source_reference IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1
+               FROM quote_opportunities other
+              WHERE other.organization_id = c.organization_id
+                AND other.source_reference = c.source_reference
+                AND other.source = 'email_signal'
+           )
+         ORDER BY c.organization_id, c.source_reference, c.created_at DESC
+      )
       UPDATE quote_opportunities qo
          SET source = 'email_signal'
+        FROM (
+          SELECT id FROM null_ref_winners
+          UNION ALL
+          SELECT id FROM keyed_winners
+        ) winners
+       WHERE qo.id = winners.id
+    `);
+    const skippedResult = await clientPost2dSource.query(`
+      SELECT COUNT(*)::int AS skipped
+        FROM quote_opportunities qo
        WHERE qo.source = 'email'
+         AND qo.source_reference IS NOT NULL
          AND (
            EXISTS (
              SELECT 1
@@ -5244,11 +5331,13 @@ export async function runMigrations() {
     `);
     const emailSignalCount = emailSignalResult.rowCount ?? 0;
     const spotSearchCount = spotSearchResult.rowCount ?? 0;
-    if (emailSignalCount > 0 || spotSearchCount > 0) {
+    const skippedCount = (skippedResult.rows[0]?.skipped as number) ?? 0;
+    if (emailSignalCount > 0 || spotSearchCount > 0 || skippedCount > 0) {
       console.log(
         `[migrations] post-2d source backfill (quote_sources_v2_post2d) — ` +
         `email→email_signal: ${emailSignalCount} row(s), ` +
-        `manual→spot_search: ${spotSearchCount} row(s)`,
+        `manual→spot_search: ${spotSearchCount} row(s), ` +
+        `skipped (dedupe vs unique-index): ${skippedCount} row(s)`,
       );
     } else {
       console.log("[migrations] post-2d source backfill (quote_sources_v2_post2d) — every quote already on the right source");
