@@ -4059,6 +4059,64 @@ export const freightOpportunityRateHistory = pgTable("freight_opportunity_rate_h
 export const insertFreightOpportunityRateHistorySchema = createInsertSchema(freightOpportunityRateHistory).omit({ id: true, changedAt: true });
 export type InsertFreightOpportunityRateHistory = z.infer<typeof insertFreightOpportunityRateHistorySchema>;
 export type FreightOpportunityRateHistory = typeof freightOpportunityRateHistory.$inferSelect;
+
+// Phase A5 — Won-Quote conversion failure audit. Every silent return-null
+// path inside createFreightOpportunityFromWonQuote now writes (or refreshes)
+// a row here so admins can see, retry, and resolve drops instead of
+// archaeologically reconstructing them from logs.
+//
+// Reason taxonomy (kept narrow on purpose so we can render readable labels
+// without an extra lookup):
+//   no_customer            — quote has no customer mapping
+//   fake_customer          — A2 fake-name guard refused the company
+//   company_create_failed  — auto-create company INSERT returned no row
+//   exception              — uncaught throw inside the converter
+//   backfill_orphan        — pre-A5 won quote with no freight_opportunities
+//                            row found; registered by the one-shot backfill
+//
+// Partial unique index on (org_id, quote_id) WHERE resolved_at IS NULL
+// guarantees at most one OPEN failure per quote, so re-firing the converter
+// updates the existing row (retryCount++) rather than spawning duplicates.
+export const FREIGHT_CAPTURE_FAILURE_REASONS = [
+  "no_customer",
+  "fake_customer",
+  "company_create_failed",
+  "exception",
+  "backfill_orphan",
+] as const;
+export type FreightCaptureFailureReason = typeof FREIGHT_CAPTURE_FAILURE_REASONS[number];
+
+export const freightOpportunityCaptureFailures = pgTable("freight_opportunity_capture_failures", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  quoteId: varchar("quote_id").notNull().references(() => quoteOpportunities.id, { onDelete: "cascade" }),
+  reason: text("reason").notNull(),
+  detail: text("detail"),
+  errorMessage: text("error_message"),
+  errorStack: text("error_stack"),
+  attemptedAt: timestamp("attempted_at").defaultNow().notNull(),
+  retryCount: integer("retry_count").notNull().default(0),
+  lastRetryAt: timestamp("last_retry_at"),
+  lastRetryError: text("last_retry_error"),
+  resolvedAt: timestamp("resolved_at"),
+  resolvedById: varchar("resolved_by_id").references(() => users.id, { onDelete: "set null" }),
+  resolutionNote: text("resolution_note"),
+}, (t) => ({
+  orgResolvedIdx: index("freight_opp_capture_failures_org_resolved_idx").on(t.orgId, t.resolvedAt),
+  quoteIdx: index("freight_opp_capture_failures_quote_idx").on(t.quoteId),
+  // Partial unique — at most one OPEN failure per quote per org.
+  openUq: uniqueIndex("freight_opp_capture_failures_open_uq")
+    .on(t.orgId, t.quoteId)
+    .where(sql`resolved_at IS NULL`),
+}));
+export const insertFreightOpportunityCaptureFailureSchema = createInsertSchema(freightOpportunityCaptureFailures)
+  .omit({ id: true, attemptedAt: true, retryCount: true })
+  .extend({
+    reason: z.enum(FREIGHT_CAPTURE_FAILURE_REASONS),
+  });
+export type InsertFreightOpportunityCaptureFailure = z.infer<typeof insertFreightOpportunityCaptureFailureSchema>;
+export type FreightOpportunityCaptureFailure = typeof freightOpportunityCaptureFailures.$inferSelect;
+
 export const insertFreightOpportunitySchema = createInsertSchema(freightOpportunities)
   .omit({ id: true, generatedAt: true })
   .extend({

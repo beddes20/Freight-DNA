@@ -48,6 +48,7 @@ import PrivacyPage from "@/pages/privacy";
 import TermsPage from "@/pages/terms";
 import AdminUsers from "@/pages/admin-users";
 import AdminFreightCaptureRepAuditPage from "@/pages/admin-freight-capture-rep-audit";
+import AdminFreightConversionFailuresPage from "@/pages/admin-freight-conversion-failures";
 import AdminCarriers from "@/pages/admin-carriers";
 import AdminWebexHealth from "@/pages/admin-webex-health";
 import AdminIntegrationsHealthPage from "@/pages/admin-integrations-health";
@@ -207,6 +208,7 @@ function Router() {
       <Route path="/research-tasks" component={ResearchTasks} />
       <Route path="/admin/users" component={AdminUsers} />
       <Route path="/admin/freight-capture-rep-audit" component={AdminFreightCaptureRepAuditPage} />
+      <Route path="/admin/freight-conversion-failures" component={AdminFreightConversionFailuresPage} />
       <Route path="/admin/sidebar-tooltips" component={AdminSidebarTooltipsPage} />
       <Route path="/admin/copilot-analytics" component={AiHubPage} />
       <Route path="/admin/carriers" component={AdminCarriers} />

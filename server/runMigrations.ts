@@ -5543,4 +5543,79 @@ export async function runMigrations() {
   } catch (err) {
     console.error("[migrations] Phase A2 fake-customer strip error:", err);
   }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Phase A5 — Won-Quote conversion failure audit. Creates the failure-log
+  // table (mirrors the Drizzle definition in shared/schema.ts) and registers
+  // one row per pre-A5 won quote that has no matching freight_opportunities
+  // row. Idempotent on every level:
+  //   - CREATE TABLE / INDEX use IF NOT EXISTS.
+  //   - The orphan backfill INSERT relies on the partial unique index
+  //     (org_id, quote_id) WHERE resolved_at IS NULL — re-runs are no-ops.
+  //
+  // This guarantees the admin /admin/freight-conversion-failures page is
+  // populated at boot without requiring a manual triage script.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS freight_opportunity_capture_failures (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        quote_id varchar NOT NULL REFERENCES quote_opportunities(id) ON DELETE CASCADE,
+        reason text NOT NULL,
+        detail text,
+        error_message text,
+        error_stack text,
+        attempted_at timestamp NOT NULL DEFAULT now(),
+        retry_count integer NOT NULL DEFAULT 0,
+        last_retry_at timestamp,
+        last_retry_error text,
+        resolved_at timestamp,
+        resolved_by_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        resolution_note text
+      );
+      CREATE INDEX IF NOT EXISTS freight_opp_capture_failures_org_resolved_idx
+        ON freight_opportunity_capture_failures (org_id, resolved_at);
+      CREATE INDEX IF NOT EXISTS freight_opp_capture_failures_quote_idx
+        ON freight_opportunity_capture_failures (quote_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS freight_opp_capture_failures_open_uq
+        ON freight_opportunity_capture_failures (org_id, quote_id)
+        WHERE resolved_at IS NULL;
+    `);
+    console.log("[migrations] Phase A5 freight_opportunity_capture_failures ensured");
+  } catch (err) {
+    console.error("[migrations] Phase A5 capture-failures table guard error:", err);
+  }
+
+  try {
+    const backfill = await pool.query(`
+      INSERT INTO freight_opportunity_capture_failures
+        (org_id, quote_id, reason, detail, attempted_at, retry_count)
+      SELECT
+        qo.organization_id,
+        qo.id,
+        'backfill_orphan',
+        'Pre-A5 won quote with no matching freight_opportunities row. Click Retry to re-run the converter.',
+        COALESCE(qo.created_at, now()),
+        0
+      FROM quote_opportunities qo
+      WHERE qo.outcome_status IN ('won', 'won_low_margin')
+        AND NOT EXISTS (
+          SELECT 1 FROM freight_opportunities fo
+           WHERE fo.org_id = qo.organization_id
+             AND fo.source_ref->>'type' = 'won_quote'
+             AND fo.source_ref->>'quoteId' = qo.id
+        )
+      ON CONFLICT (org_id, quote_id) WHERE resolved_at IS NULL
+      DO NOTHING
+      RETURNING id
+    `);
+    if (backfill.rowCount && backfill.rowCount > 0) {
+      console.log(
+        `[migrations] Phase A5 backfill: registered ${backfill.rowCount} orphan won quotes ` +
+        `as backfill_orphan failures (admin can Retry from /admin/freight-conversion-failures).`,
+      );
+    }
+  } catch (err) {
+    console.error("[migrations] Phase A5 orphan backfill error:", err);
+  }
 }

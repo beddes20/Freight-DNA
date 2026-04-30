@@ -7,10 +7,12 @@ import {
   quoteOpportunities, quoteEvents, quoteSavedViews, quoteSenderMappings,
   recurringLanes, companies, emailMessages, emailSignals,
   freightOpportunities,
+  freightOpportunityCaptureFailures,
   captureLeakReviews,
   type QuoteOpportunity, type QuoteOutcomeStatus, type QuoteCustomer, type QuoteRep,
   type QuoteCarrier, type QuoteLaneGroup, type QuoteOutcomeReason, type QuoteSavedView,
   type InsertFreightOpportunity,
+  type FreightCaptureFailureReason,
   type CaptureLeakType, type CaptureLeakReviewDecision, type CaptureLeakReview,
 } from "@shared/schema";
 import { UNKNOWN_CUSTOMER_NAME, classifyPartyType, sanitizeCustomerName, isFreeMailProviderName } from "./customerNameResolver";
@@ -2640,6 +2642,77 @@ export async function setAutoWonQuoteAfHandoffEnabled(orgId: string, enabled: bo
  * `null` on any skip-or-fail path. Every outcome is logged with a
  * `[customer-quotes] AF handoff …` prefix so the audit trail is grep-able.
  */
+// Phase A5 — write a row into freight_opportunity_capture_failures every
+// time the converter aborts a won quote without producing a freight opp.
+// Open-failure dedupe: the partial unique index on (org_id, quote_id)
+// WHERE resolved_at IS NULL means a second failure for the same quote
+// updates the existing row (retryCount++) instead of spawning duplicates.
+// Logging itself is best-effort — we never let a bookkeeping failure
+// retract a real domain decision the caller already made.
+export async function recordCaptureFailure(
+  orgId: string,
+  quoteId: string,
+  reason: FreightCaptureFailureReason,
+  detail: string | null,
+  err?: unknown,
+): Promise<void> {
+  try {
+    const errorMessage = err instanceof Error
+      ? err.message
+      : err == null
+        ? null
+        : String(err);
+    const errorStack = err instanceof Error ? err.stack ?? null : null;
+    await db.execute(sql`
+      INSERT INTO freight_opportunity_capture_failures
+        (org_id, quote_id, reason, detail, error_message, error_stack, attempted_at, retry_count)
+      VALUES
+        (${orgId}, ${quoteId}, ${reason}, ${detail}, ${errorMessage}, ${errorStack}, now(), 0)
+      ON CONFLICT (org_id, quote_id) WHERE resolved_at IS NULL
+      DO UPDATE SET
+        reason = EXCLUDED.reason,
+        detail = EXCLUDED.detail,
+        error_message = EXCLUDED.error_message,
+        error_stack = EXCLUDED.error_stack,
+        attempted_at = now(),
+        retry_count = freight_opportunity_capture_failures.retry_count + 1,
+        last_retry_at = now(),
+        last_retry_error = EXCLUDED.error_message
+    `);
+  } catch (logErr) {
+    console.error(
+      `[customer-quotes] recordCaptureFailure logging failed quote=${quoteId} reason=${reason}:`,
+      logErr,
+    );
+  }
+}
+
+// Auto-resolve any open failure for (orgId, quoteId) the moment a freight
+// opportunity is successfully created or refreshed. Keeps the admin queue
+// clean without requiring a manual click.
+export async function resolveOpenCaptureFailure(
+  orgId: string,
+  quoteId: string,
+  freightOpportunityId: string,
+): Promise<void> {
+  try {
+    await db.execute(sql`
+      UPDATE freight_opportunity_capture_failures
+         SET resolved_at = now(),
+             resolution_note = 'Auto-resolved: freight opportunity ' ||
+                               ${freightOpportunityId} || ' created or refreshed'
+       WHERE org_id = ${orgId}
+         AND quote_id = ${quoteId}
+         AND resolved_at IS NULL
+    `);
+  } catch (logErr) {
+    console.error(
+      `[customer-quotes] resolveOpenCaptureFailure failed quote=${quoteId}:`,
+      logErr,
+    );
+  }
+}
+
 export async function createFreightOpportunityFromWonQuote(
   orgId: string,
   opp: QuoteOpportunity,
@@ -2667,6 +2740,12 @@ export async function createFreightOpportunityFromWonQuote(
     const customerName = cust?.name ?? null;
     if (!customerName) {
       console.log(`[customer-quotes] AF handoff skipped (no customer) quote=${opp.id}`);
+      await recordCaptureFailure(
+        orgId,
+        opp.id,
+        "no_customer",
+        "Quote has no customer mapping — cannot resolve a CRM company to attach the freight to.",
+      );
       return null;
     }
     let companyId: string;
@@ -2689,6 +2768,12 @@ export async function createFreightOpportunityFromWonQuote(
           `[customer-quotes] AF handoff blocked — obvious-fake customer name ` +
           `"${customerName}" reason=${fakeCheck.reason} quote=${opp.id}`,
         );
+        await recordCaptureFailure(
+          orgId,
+          opp.id,
+          "fake_customer",
+          `Customer name "${customerName}" was rejected by the obvious-fake guard (${fakeCheck.reason}). Fix the underlying customer mapping or rename the company before retrying.`,
+        );
         return null;
       }
       // No CRM company exists for this customer name yet. freight_opportunities
@@ -2703,6 +2788,12 @@ export async function createFreightOpportunityFromWonQuote(
       }).returning({ id: companies.id });
       if (!created) {
         console.log(`[customer-quotes] AF handoff skipped (failed to auto-create company "${customerName}") quote=${opp.id}`);
+        await recordCaptureFailure(
+          orgId,
+          opp.id,
+          "company_create_failed",
+          `Auto-create of CRM company "${customerName}" returned no row. Check companies table constraints, then retry.`,
+        );
         return null;
       }
       companyId = created.id;
@@ -2813,6 +2904,18 @@ export async function createFreightOpportunityFromWonQuote(
       console.log(`[customer-quotes] AF handoff created opp=${createdRow?.id} quote=${opp.id} pickup=${pickupDay} status=pending_approval`);
       return createdRow ? { id: createdRow.id, created: true } : null;
     }).then(async (result) => {
+      // Phase A5 — the transaction can technically resolve without a created
+      // row (driver returned no row); make that final null path observable
+      // instead of silently dropping the won quote.
+      if (!result) {
+        await recordCaptureFailure(
+          orgId,
+          opp.id,
+          "exception",
+          "Freight insert returned no row from the database driver. Retry to re-run the converter; if it persists, capture the server logs for the matching quote id.",
+        );
+        return result;
+      }
       // Task #803 — fire the autopilot notification AFTER commit so the popup
       // never beats the row into the DB. Best-effort: a notification failure
       // must not retract the freight row.
@@ -2830,10 +2933,23 @@ export async function createFreightOpportunityFromWonQuote(
           console.error(`[customer-quotes] won-load notification failed opp=${result.id}:`, err);
         }
       }
+      // Phase A5 — auto-resolve any open capture-failure for this quote the
+      // moment a freight opp is created OR refreshed. Covers the manual-retry
+      // path (admin clicks Retry → converter succeeds → admin queue clears).
+      if (result?.id) {
+        await resolveOpenCaptureFailure(orgId, opp.id, result.id);
+      }
       return result;
     });
   } catch (err) {
     console.error(`[customer-quotes] AF handoff failed quote=${opp.id}:`, err);
+    await recordCaptureFailure(
+      orgId,
+      opp.id,
+      "exception",
+      "Converter threw an uncaught exception. See errorMessage / errorStack for details, fix the underlying issue, then retry.",
+      err,
+    );
     return null;
   }
 }

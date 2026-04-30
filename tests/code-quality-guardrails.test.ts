@@ -1460,6 +1460,162 @@ console.log("\n── 22. Available Freight — empty-state hidden counts (Phase
   );
 }
 
+// Section 23: Won → Freight conversion failure audit (Phase A5).
+// Stops the converter (createFreightOpportunityFromWonQuote) from silently
+// dropping won quotes by writing every failure path into a dedicated
+// audit table, then surfacing them on /admin/freight-conversion-failures
+// with Retry + Mark-resolved actions and a health pill. The fence below
+// pins the schema, the four logging insertions, the success-path
+// auto-resolve, the runMigrations boot guard + backfill, the admin API
+// registration, and the page route.
+console.log("\n── 23. Won → Freight conversion failure audit (Phase A5) ────\n");
+
+{
+  const schemaSrc = readFile("shared/schema.ts");
+  assert(
+    "shared/schema.ts — declares freight_opportunity_capture_failures table",
+    /export const freightOpportunityCaptureFailures\s*=\s*pgTable\("freight_opportunity_capture_failures"/.test(schemaSrc),
+    "Table must exist or the converter has nowhere to write failures.",
+  );
+  for (const col of [
+    "orgId", "quoteId", "reason", "detail",
+    "errorMessage", "errorStack", "attemptedAt",
+    "retryCount", "lastRetryAt", "lastRetryError",
+    "resolvedAt", "resolvedById", "resolutionNote",
+  ]) {
+    assert(
+      `shared/schema.ts — failure column ${col} present`,
+      new RegExp(`\\b${col}\\b\\s*:`).test(schemaSrc),
+      `Column ${col} powers the admin row + retry / resolve workflow.`,
+    );
+  }
+  assert(
+    "shared/schema.ts — partial unique index dedupes open failures per quote",
+    /freight_opp_capture_failures_open_uq[\s\S]*?\.where\(sql`resolved_at IS NULL`\)/.test(schemaSrc),
+    "Partial unique on (org_id, quote_id) WHERE resolved_at IS NULL keeps the converter from spawning duplicate open rows.",
+  );
+  assert(
+    "shared/schema.ts — exports FREIGHT_CAPTURE_FAILURE_REASONS taxonomy",
+    /FREIGHT_CAPTURE_FAILURE_REASONS\s*=\s*\[[\s\S]*"no_customer"[\s\S]*"fake_customer"[\s\S]*"company_create_failed"[\s\S]*"exception"[\s\S]*"backfill_orphan"[\s\S]*\]/.test(schemaSrc),
+    "Reason taxonomy must list every code the converter writes — drift here corrupts admin filters.",
+  );
+
+  const cqSrc = readFile("server/services/customerQuotes.ts");
+  assert(
+    "server/services/customerQuotes.ts — exports recordCaptureFailure helper",
+    /export async function recordCaptureFailure\(\s*orgId: string,\s*quoteId: string,\s*reason: FreightCaptureFailureReason,/.test(cqSrc),
+    "Helper must exist for the four failure paths to call into.",
+  );
+  assert(
+    "server/services/customerQuotes.ts — recordCaptureFailure upserts on the partial unique index",
+    /ON CONFLICT \(org_id, quote_id\) WHERE resolved_at IS NULL/.test(cqSrc) &&
+      /retry_count = freight_opportunity_capture_failures.retry_count \+ 1/.test(cqSrc),
+    "ON CONFLICT … DO UPDATE bumps retry_count instead of inserting a duplicate open row.",
+  );
+  assert(
+    "server/services/customerQuotes.ts — exports resolveOpenCaptureFailure helper",
+    /export async function resolveOpenCaptureFailure\(/.test(cqSrc) &&
+      /SET resolved_at = now\(\)/.test(cqSrc),
+    "Auto-resolve helper must exist so successful conversions clear their open failures.",
+  );
+  for (const reason of [
+    `"no_customer"`,
+    `"fake_customer"`,
+    `"company_create_failed"`,
+    `"exception"`,
+  ]) {
+    assert(
+      `server/services/customerQuotes.ts — recordCaptureFailure call wired with reason ${reason}`,
+      new RegExp(`recordCaptureFailure\\([\\s\\S]{0,400}?${reason}`).test(cqSrc),
+      `Failure path ${reason} must call recordCaptureFailure or it stays a silent drop.`,
+    );
+  }
+  assert(
+    "server/services/customerQuotes.ts — success path calls resolveOpenCaptureFailure",
+    /if \(result\?\.id\) \{[\s\S]{0,200}resolveOpenCaptureFailure\(orgId, opp\.id, result\.id\)/.test(cqSrc),
+    "Successful conversion must auto-resolve the open failure so the admin queue clears without a manual click.",
+  );
+  assert(
+    "server/services/customerQuotes.ts — converter exception block logs before returning null",
+    /catch \(err\) \{[\s\S]{0,400}AF handoff failed[\s\S]{0,400}recordCaptureFailure\([\s\S]{0,300}"exception"/.test(cqSrc),
+    "Catch block must log an exception failure with stack so admins can diagnose; raw console-only logging is what the audit was built to replace.",
+  );
+
+  const migSrc = readFile("server/runMigrations.ts");
+  assert(
+    "server/runMigrations.ts — Phase A5 CREATE TABLE IF NOT EXISTS guard",
+    /CREATE TABLE IF NOT EXISTS freight_opportunity_capture_failures/.test(migSrc) &&
+      /CREATE UNIQUE INDEX IF NOT EXISTS freight_opp_capture_failures_open_uq[\s\S]{0,200}WHERE resolved_at IS NULL/.test(migSrc),
+    "Boot must idempotently create the table + partial unique index — db:push alone is not the convention here.",
+  );
+  assert(
+    "server/runMigrations.ts — Phase A5 backfills orphan won quotes",
+    /WHERE qo\.outcome_status IN \('won', 'won_low_margin'\)[\s\S]{0,1500}ON CONFLICT \(org_id, quote_id\) WHERE resolved_at IS NULL/.test(migSrc),
+    "Backfill must include both 'won' and 'won_low_margin' (the converter treats both as wins) and dedupe via the partial unique index.",
+  );
+  assert(
+    "server/services/customerQuotes.ts — post-commit null branch logs a capture failure",
+    /\.then\(async \(result\) => \{[\s\S]{0,400}if \(!result\) \{[\s\S]{0,400}recordCaptureFailure\([\s\S]{0,300}"exception"/.test(cqSrc),
+    "Even when the transaction returns no row (driver returned nothing), the won quote must surface as a recoverable failure instead of a silent drop.",
+  );
+
+  const routesSrc = readFile("server/routes.ts");
+  assert(
+    "server/routes.ts — registers freight-conversion-failures routes",
+    /registerFreightConversionFailuresRoutes\(app\)/.test(routesSrc) &&
+      /from "\.\/routes\/freightConversionFailures"/.test(routesSrc),
+    "Admin routes must be wired or the page falls back to 404.",
+  );
+  const apiSrc = readFile("server/routes/freightConversionFailures.ts");
+  for (const route of [
+    `"/api/admin/freight-conversion-failures"`,
+    `"/api/admin/freight-conversion-failures/health"`,
+    `"/api/admin/freight-conversion-failures/:id/retry"`,
+    `"/api/admin/freight-conversion-failures/:id/resolve"`,
+  ]) {
+    assert(
+      `server/routes/freightConversionFailures.ts — exposes ${route}`,
+      apiSrc.includes(route),
+      `Route ${route} powers the admin page; missing it breaks list / health / retry / resolve respectively.`,
+    );
+  }
+  assert(
+    "server/routes/freightConversionFailures.ts — admin gate on every endpoint",
+    (apiSrc.match(/isAdmin\(me\?\.role\)/g) ?? []).length >= 4,
+    "All four admin endpoints must check role === 'admin' before reading or writing.",
+  );
+  assert(
+    "server/routes/freightConversionFailures.ts — retry accepts both won and won_low_margin",
+    /quote\.outcomeStatus === "won" \|\| quote\.outcomeStatus === "won_low_margin"/.test(apiSrc),
+    "Retry must mirror the converter's WON_STATUSES so low-margin wins aren't wrongly 409'd as 'not won'.",
+  );
+
+  const pageSrc = readFile("client/src/pages/admin-freight-conversion-failures.tsx");
+  assert(
+    "client/src/pages/admin-freight-conversion-failures.tsx — page mounted with data-testid",
+    /data-testid="page-freight-conversion-failures"/.test(pageSrc),
+    "Page root must be testable so e2e and the architect can find it.",
+  );
+  assert(
+    "client/src/pages/admin-freight-conversion-failures.tsx — wires Retry + Mark-resolved actions",
+    /button-retry-\$\{r\.id\}/.test(pageSrc) &&
+      /button-resolve-\$\{r\.id\}/.test(pageSrc),
+    "Per-row Retry and Mark-resolved buttons are the whole point of the page.",
+  );
+  assert(
+    "client/src/pages/admin-freight-conversion-failures.tsx — plain-language healthy banner",
+    /Won → Freight is healthy/.test(pageSrc) &&
+      /no failures recorded/.test(pageSrc),
+    "Empty-state and health banner must use the plain-language copy a non-engineer admin can scan in two seconds.",
+  );
+  const appSrc = readFile("client/src/App.tsx");
+  assert(
+    "client/src/App.tsx — registers /admin/freight-conversion-failures route",
+    /path="\/admin\/freight-conversion-failures"\s+component=\{AdminFreightConversionFailuresPage\}/.test(appSrc),
+    "Route must be wired or the admin page is unreachable.",
+  );
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {
