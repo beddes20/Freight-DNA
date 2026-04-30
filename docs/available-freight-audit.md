@@ -7,6 +7,13 @@ counts from the live PostgreSQL database at the time of the audit.
 
 ## TL;DR — what is actually broken
 
+> **Same-day deep-dive (the question the user actually cares about) is in
+> §11 below.** Headline: of 150 freight opportunities with pickup=today,
+> **0 are visible** in the default view, **0 have ever been approved**,
+> **0 SLA escalations have ever fired**, **87% have no pricing**, and
+> **56% are bound to placeholder customers**. Today's same-day surface
+> is structurally non-functional, not just under-filtered.
+
 **The default Available Freight view shows zero of the 428 currently-ingested
 loads because of a string-name mismatch between the producer and the
 consumer.**
@@ -544,6 +551,269 @@ D4. **Same-day demand forecasting** — with proper `pickup_date` typing
 D5. **AI-assisted approval auto-clear** — score each `pending_approval`
     row for risk (new customer, unusual lane, margin outlier) and
     auto-approve the safe majority.
+
+---
+
+## 11. Same-day deep-dive — why today's loads cannot be trusted
+
+The original §4 covered same-day at a high level. This section drills into
+the cohort `WHERE LEFT(pickup_window_start,10) = today_ct` (150 rows on
+April 30, 2026) end-to-end: what's there, what's wrong, and why the rep
+sees what they see.
+
+### 11.1 The same-day funnel — actual numbers
+
+```
+                                         today-pickup rows
+quote_opportunities (won, created today) ─► 86 (100%)  source-of-truth
+freight_opportunities (today pickup)     ─► 150        ← carry-over from prior days included
+  ├─ visible to default UI filter        ─► 0          ← status mismatch
+  ├─ ever approved                       ─► 0          ← approval workflow has never fired
+  ├─ have pricing (quoted_rate set)      ─► 19  (13%)
+  ├─ have a real customer (not stub)     ─► 66  (44%)
+  ├─ have an owner (owner_user_id)       ─► 39  (26%)
+  ├─ unique by (origin, dest, equip)     ─► 91         ← 59 dupes (39%)
+  ├─ pending_approval > 1h               ─► 145 (97%)
+  ├─ pending_approval > 4h               ─► 94  (63%)
+  └─ SLA L1/L2 escalation fired          ─► 0 / 0
+```
+
+Every same-day load is in `pending_approval`. Every same-day load is
+filtered out of the default UI view. No same-day load has ever been
+approved or escalated. **The same-day surface is not under-performing —
+it has never functioned for a single load.**
+
+### 11.2 What "same-day" means in current logic
+
+Three different definitions are in play, and they don't agree.
+
+| Layer | "Today" definition | Source |
+|---|---|---|
+| Cockpit route filter | `todayIsoInOrgTz(now)` → `YYYY-MM-DD` in `America/Chicago` | `server/lib/orgLocalDate.ts` |
+| Won Load Autopilot pickup-clamp | "if pickup<today, clamp to today" — runs *only at insert* | `customerQuotes.ts:createFreightOpportunityFromWonQuote` |
+| `request_date` on quote | UTC timestamp written by quote ingestion | `quote_opportunities.request_date` |
+
+Edge case that bites: a quote ingested at 22:00 CT (3:00 UTC next day)
+with pickup written as today's date. The CT-anchored cockpit considers
+it "today." The quote's `request_date` (timestamp) crosses UTC midnight.
+The Won Load Autopilot writes pickup unchanged. All three agree at
+insert time — but at 06:00 CT the next morning, pickup is now "yesterday"
+and the cockpit's `pickupIso < todayIso` filter drops it permanently.
+A real same-day load just disappeared without changing state.
+
+### 11.3 End-to-end same-day latency (production data)
+
+For the 150 today-pickup rows:
+
+```
+generated_at - source_quote.created_at
+  avg = 19.2 hours
+  min = 0 seconds  (instant — quote created and won in same write)
+  max = 56 hours   (quote sat 2+ days before being marked won)
+```
+
+The Won Load Autopilot itself is fast (sub-second when triggered).
+**Today's latency is dominated by reps sitting on quotes**, not by ingest
+machinery. But the system has no surface that says "12 quotes won today
+have pickup<=today and are still in `pending_approval` — go act."
+
+### 11.4 The approval queue is a black hole
+
+```
+SELECT COUNT(*) FILTER (WHERE approved_at IS NOT NULL) FROM freight_opportunities;
+→ 0 / 428
+```
+
+Not a single freight opportunity has ever been approved. The
+`createFreightOpportunityFromWonQuote` function writes
+`status="pending_approval"` and waits "for the NAM/AM popup to assign an
+LM" (per code comment line 2788). That popup either:
+- doesn't exist in the UI (no surface found in `client/src/pages/`
+  matching this pattern),
+- exists but is wired to a status not present in the DB, or
+- exists but nobody knows it exists.
+
+The SLA sweep (`*/15 * * * *` cron) is supposed to escalate pending
+approvals at L1/L2 thresholds. Result on today's loads:
+
+```
+SELECT COUNT(*) FILTER (WHERE sla_notified_l1_at IS NOT NULL) AS l1,
+       COUNT(*) FILTER (WHERE sla_notified_l2_at IS NOT NULL) AS l2
+FROM freight_opportunities WHERE LEFT(pickup_window_start,10)=today;
+→ l1=0, l2=0
+```
+
+145/150 today rows are >1 hour pending. 94/150 are >4 hours pending. The
+SLA cron has had hundreds of opportunities to escalate and has fired
+zero notifications. Either the cron is failing silently, the thresholds
+are wrong, or the escalation channel (email/notification) is missing.
+
+### 11.5 Pricing is missing on 87% of today's loads
+
+```
+total=150, has_quoted_rate=19, has_target_buy_rate=19,
+has_source_ref.buy=0, has_source_ref.sell=19
+```
+
+The Won Load Autopilot is supposed to populate `quoted_rate`,
+`target_buy_rate`, and `source_ref.{buy, sell}` from the source quote.
+Reality:
+- 0/150 rows have `source_ref.buy` (the buy figure is *never* written).
+- Only 19/150 (13%) have any pricing at all, and those rows have the
+  *same* values in `quoted_rate`, `target_buy_rate`, and
+  `source_ref.sell` — meaning the autopilot copied the sell price
+  three places but never derived a buy.
+
+Root cause: `quote_opportunities` only has one pricing column —
+`quoted_amount`. The autopilot's "85% haircut" assumes it's reading the
+sell price. But for 87% of today's source quotes, `quoted_amount` is
+NULL — the email parser couldn't extract a rate. So the autopilot
+copies NULL into all three fields and the rep sees a load with no
+pricing context whatsoever.
+
+For a same-day decision, "no pricing" + "no recent buy" + "no historical
+load_fact" = the rep cannot price the load at all from this surface.
+
+### 11.6 Customer attribution is wrong on 56% of today's loads
+
+```
+LEFT JOIN companies → 150/150 join
+  but 84/150 (56%) are placeholder companies (name LIKE %unknown%/%pending%/'')
+```
+
+When the email parser can't resolve a sender domain to a known company,
+the autopilot auto-creates a placeholder. 84 of today's 150 rows point
+to such placeholders. Even with the status filter fixed, the rep sees
+"Unknown Customer" or blank in the customer column for the majority of
+today's freight.
+
+### 11.7 Owner attribution is wrong on 74% of today's loads
+
+39 today rows have `owner_user_id`; 111 don't. The "My Loads" saved view
+in the UI filters on the owner column → a rep using "My Loads" sees at
+most 39 loads, mostly random based on which quotes happened to be
+auto-mapped to a rep.
+
+### 11.8 Today-specific dedupe
+
+```
+Dallas → Laredo (Dry Van, 2026-04-30):    12 separate freight_opp rows
+Calhoun → Sacramento (Dry Van, 2026-04-30):  5
+Dalton → Sacramento (Dry Van, 2026-04-30):   5
+Mesquite → Moreno Valley:                    4
+Edison → Avon:                               4
+Dallas → Chicago:                            4
+Grand Rapids → Springfield:                  4
+York → Anniston:                             4
+```
+
+39% of today's rows are duplicates of other today rows on the same
+(origin, destination, equipment) tuple. For the Dallas → Laredo lane,
+12 separate rows clutter the screen; collapsing them into one row with
+`load_count=12` would cut visual noise by an order of magnitude on the
+hottest lane of the day.
+
+### 11.9 Today's silent drops — none, but the recent-history pattern is real
+
+```
+SELECT created_at::date, COUNT(*) AS dropped
+FROM quote_opportunities WHERE outcome_status='won'
+  AND id NOT IN (SELECT source_quote_id FROM freight_opportunities WHERE source_quote_id IS NOT NULL)
+GROUP BY 1 ORDER BY 1 DESC;
+→ 2026-04-28: 14, 2026-04-27: 2
+```
+
+86/86 wins today converted (100%). But 14/X wins on 4/28 and 2/Y on
+4/27 silently dropped. We can't identify what changed between 4/28 and
+4/30 without instrumentation — there's no audit trail telling us
+why those 16 quotes failed to spawn a freight opp. If the same failure
+mode reappears tomorrow, today's same-day rep will simply lose loads
+with no warning.
+
+### 11.10 Ingestion freshness
+
+Hourly bucket of `generated_at` over the last 24h shows steady ingestion
+(11–37 rows/hour, no >2h dead spots during business hours). The producer
+is healthy. Nothing in the rep's experience is caused by a stalled feed.
+
+### 11.11 Same-day ranked root causes (focus list)
+
+Ordered by which fix would most immediately increase a rep's trust in
+"today's freight" specifically.
+
+1. **Status mismatch** — 0 of 150 today loads visible. Fix `pending_approval`
+   in the UI default filter and in the `awaiting_approval` SelectItem
+   value. Estimated effort: <1 hour. Gain: 150 → potentially 150 visible.
+
+2. **Approval queue chokepoint** — 0/150 today rows can ever be acted on
+   from the cockpit until somebody approves them. Either:
+   - eliminate the approval gate (start in `ready_to_send` directly), or
+   - auto-approve when `source_quote.assigned_rep_id` is a trusted user
+     and the lane is recurring, or
+   - ship the missing NAM/AM approval popup and notification.
+   Without one of these, fixing the status filter alone would just
+   surface 150 unactionable rows.
+
+3. **Pricing population** — 87% of today's rows have no rates. Fix the
+   Won Load Autopilot copy: don't haircut a NULL. If `quoted_amount` is
+   NULL, leave `quoted_rate` NULL but compute `target_buy_rate` from
+   live Sonar + `load_fact` history at render time, and surface "no
+   customer rate yet — derive from market" badge.
+
+4. **Customer placeholder cleanup** — 56% of today's rows show a stub
+   customer. Either resolve via ZoomInfo at ingestion time (sender
+   domain lookup), suppress placeholder rows from the cockpit (route to
+   a separate "needs customer" queue), or label them "Unverified
+   sender — confirm before quoting."
+
+5. **Same-day dedupe** — collapse the 39% of dupes into lane-day
+   aggregates with `load_count`. The 12 Dallas→Laredo rows become one.
+
+6. **Owner attribution** — auto-assign at ingestion using the source
+   quote's rep + the customer's existing AM, instead of leaving 74%
+   unowned.
+
+7. **SLA escalation** — the cron has fired zero notifications in
+   production. Either the SLA notifier is broken or the thresholds need
+   review. Today's pending pile is the symptom.
+
+8. **Pickup-date roll-forward / open-state filter** — for same-day,
+   the immediate concern is rows that were ingested yesterday with
+   pickup=yesterday but are still actively open. Cockpit drops them via
+   `pickupIso < todayIso`. Either roll forward at midnight or change
+   the filter to "drop only if pickup<today AND status terminal."
+
+9. **Silent-drop instrumentation** — the 16 missing wins from earlier
+   this week aren't reproducing today, but with no audit trail we
+   wouldn't catch the next regression. Wrap the autopilot in a try/catch
+   that writes failures to `freight_opportunity_audit`.
+
+10. **Same-day data-freshness pill** in the header — show "Last load
+    ingested: 9m ago" so a rep can tell "0 rows" means "filter is wrong"
+    rather than "ingestion is dead."
+
+### 11.12 Suggested same-day acceptance test
+
+To know we've actually solved this, the following should all be true at
+9:00 AM CT on a normal weekday:
+
+1. The default Available Freight view shows >0 rows whose pickup is
+   today (CT).
+2. Every today-pickup row has a non-null customer_name that matches the
+   originating quote's customer (no "Unknown" placeholders).
+3. Every today-pickup row has either a `quoted_rate` from the source
+   quote OR a Sonar-derived buy band visible in the pricing column.
+4. Every today-pickup row has a real owner_user_id (not null).
+5. No two today-pickup rows on the same `(customer, origin, destination,
+   equipment_type)` tuple appear separately — they collapse into one
+   row with `load_count > 1`.
+6. The page header shows "Last load ingested: <Nm ago>" and the SLA
+   counter shows the count of today's pending_approval >L1 threshold
+   (currently would read 145 → should converge toward 0).
+7. Marking a load won at 8:55 AM CT produces a visible same-day freight
+   opportunity by 8:55:30 AM CT.
+
+If any of those fail, the same-day surface is still not trustworthy.
 
 ---
 
