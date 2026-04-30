@@ -7,6 +7,13 @@
 
 ---
 
+> **Implementation contract:** the locked backend surface for Task #849
+> (endpoints, schema migrations, state model, permissions, sprint plan)
+> lives in `docs/quote-requests-tab-post-2d-backend-contract.md`. When
+> the contract and this spec disagree on an API shape, the contract
+> wins; this doc is the UX/IA source of truth, the contract is the
+> backend source of truth.
+
 ## 0. Frame
 
 After Phase 2d:
