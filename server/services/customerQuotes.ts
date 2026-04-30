@@ -1,4 +1,4 @@
-import { and, eq, asc, desc, inArray, sql, type SQL } from "drizzle-orm";
+import { and, eq, asc, desc, inArray, or, sql, type SQL } from "drizzle-orm";
 import { db, storage } from "../storage";
 import { logQuoteTouchpointFromEvent } from "./quoteTouchpoints";
 import { carriers as carriersCatalog } from "@shared/schema";
@@ -15,7 +15,7 @@ import {
 } from "@shared/schema";
 import { UNKNOWN_CUSTOMER_NAME, classifyPartyType, sanitizeCustomerName, isFreeMailProviderName } from "./customerNameResolver";
 import { loadNonCustomerCustomerIds } from "./customerOnlyChokepoint";
-import { isFunnelEligibleRep } from "@shared/quoteOpportunitiesRoles";
+import { isFunnelEligibleRep, QUOTE_REP_UNIVERSE_ROLES } from "@shared/quoteOpportunitiesRoles";
 import { users } from "@shared/schema";
 import { learnFromReassign } from "./quoteSenderMappings";
 import type { QuotePartyType } from "@shared/schema";
@@ -691,6 +691,210 @@ function num(v: string | null | undefined): number {
   const n = Number(v); return isNaN(n) ? 0 : n;
 }
 
+/**
+ * Customer Quotes portlet bug-fix — given the org's `quote_customers` rows
+ * and `companies` rows, build a per-customer-id map of canonical display
+ * names sourced from the canonical CRM `companies` table.
+ *
+ * The legacy `customerNameResolver.nameFromBusinessDomain` produces sluggified
+ * strings like "Mohawkind" (from `mohawkind.com`) or "Armstrong" when the
+ * inbound email's display name is missing — but the org often has a properly
+ * named CRM record like "Mohawk Industries" or "Armstrong World Industries".
+ * This map upgrades the display, conservatively, only when there's a strong
+ * signal:
+ *
+ *   1. **Exact normalized match** — quote_customer's normalized name
+ *      (alphanumeric only, lowercased) equals exactly one company's normalized
+ *      name AND the displayed strings actually differ (case/whitespace).
+ *   2. **Prefix-uniqueness match** — exactly one company's normalized name
+ *      starts with the quote_customer's normalized name and is at least 3
+ *      characters longer. This catches "Mohawkind" → "Mohawk Industries"
+ *      while rejecting near-misses like "Valuetruck" → "Valuetruckaz" (only
+ *      +2 chars) and ambiguous picks like "Masonite" → 3 candidate companies.
+ *
+ * When no rule fires, the customer is omitted from the map so the caller
+ * falls back to the original `quote_customers.name`. Org-scoped by virtue
+ * of the inputs being already org-scoped.
+ */
+export function buildCanonicalCustomerNameMap(
+  customers: { id: string; name: string }[],
+  companies: { name: string }[],
+): Map<string, string> {
+  const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  // Normalized company name → unique list of canonical names.
+  const companyByNorm = new Map<string, Set<string>>();
+  for (const c of companies) {
+    const cleaned = (c.name ?? "").trim();
+    if (!cleaned) continue;
+    const n = norm(cleaned);
+    if (n.length < 3) continue;
+    const set = companyByNorm.get(n) ?? new Set<string>();
+    set.add(cleaned);
+    companyByNorm.set(n, set);
+  }
+  const allNorms = Array.from(companyByNorm.keys());
+  const minExtension = 3;
+  const result = new Map<string, string>();
+  for (const cust of customers) {
+    const cleaned = (cust.name ?? "").trim();
+    if (!cleaned) continue;
+    const cn = norm(cleaned);
+    if (cn.length < 3) continue;
+    // Tier A — exact normalized match. Only adopt when the canonical
+    // string actually reads better than the stored one (different
+    // characters, not just identical). When multiple companies share
+    // the same normalization, skip rather than guess.
+    const exact = companyByNorm.get(cn);
+    if (exact && exact.size === 1) {
+      const canonical = exact.values().next().value as string;
+      if (canonical !== cleaned) {
+        result.set(cust.id, canonical);
+        continue;
+      }
+    }
+    // Tier B — prefix-uniqueness. The canonical name extends the
+    // quote_customer's name (canonical longer by at least 3 chars).
+    const matches: string[] = [];
+    for (const candNorm of allNorms) {
+      if (
+        candNorm.length >= cn.length + minExtension &&
+        candNorm.startsWith(cn)
+      ) {
+        const set = companyByNorm.get(candNorm);
+        if (set) for (const n of set) matches.push(n);
+        if (matches.length > 1) break; // ambiguous — bail early
+      }
+    }
+    if (matches.length === 1) {
+      result.set(cust.id, matches[0]);
+    }
+  }
+  return result;
+}
+
+/**
+ * Customer Quotes portlet bug-fix — Tier-1 rep resolution for email-ingested
+ * quotes. The legacy `quote_reps` table has `user_id = NULL` for the vast
+ * majority of email-extracted reps (the upstream `findOrCreateRep` looked up
+ * the user but never persisted the linkage), so the funnel-eligibility filter
+ * (Task #752) hides every such rep and the portlet renders "Unassigned".
+ *
+ * Stronger signal — the inbound `email_messages.to_email` is the address the
+ * customer wrote to, which on this surface IS the responsible rep. Resolve
+ * that address to the org's `users` table (`username` is the user's email)
+ * and, when the linked user has an AM/NAM role, return their display name
+ * keyed by the originating quote opportunity id. The caller then bypasses
+ * the funnel-eligibility veto for those opportunities.
+ *
+ * Unlinked / non-customer-facing matches return nothing so the existing
+ * tier-2/3/4 fallback chain runs.
+ */
+async function resolveRepsFromSourceEmails(
+  orgId: string,
+  opps: Pick<QuoteOpportunity, "id" | "source" | "sourceReference">[],
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  const refs = Array.from(new Set(
+    opps
+      .filter(o => o.source === "email" && o.sourceReference)
+      .map(o => o.sourceReference as string),
+  ));
+  if (refs.length === 0) return result;
+  // The opportunity's `sourceReference` is one of {email_messages.id,
+  // email_messages.provider_message_id} depending on the ingestion path
+  // — match either. Org-scoped to keep tenant isolation tight. Drizzle's
+  // `inArray` parameterizes the list correctly across pg drivers; the
+  // earlier `ANY($1::text[])` form failed under the current pg adapter
+  // ("cannot cast type record to text[]").
+  const messages = await db
+    .select({
+      id: emailMessages.id,
+      providerMessageId: emailMessages.providerMessageId,
+      toEmail: emailMessages.toEmail,
+    })
+    .from(emailMessages)
+    .where(and(
+      eq(emailMessages.orgId, orgId),
+      or(
+        inArray(emailMessages.id, refs),
+        inArray(emailMessages.providerMessageId, refs),
+      ),
+    ));
+  if (messages.length === 0) return result;
+  const toEmailByRef = new Map<string, string>();
+  for (const m of messages) {
+    const to = (m.toEmail ?? "").trim().toLowerCase();
+    if (!to) continue;
+    // The to_email column may contain a comma-separated list; the first
+    // address is the primary recipient (the rep the customer wrote to).
+    const primary = to.split(/[,;]/)[0]!.trim();
+    if (!primary) continue;
+    if (m.id) toEmailByRef.set(m.id, primary);
+    if (m.providerMessageId) toEmailByRef.set(m.providerMessageId, primary);
+  }
+  const distinctEmails = Array.from(new Set(toEmailByRef.values()));
+  if (distinctEmails.length === 0) return result;
+  // Same parameterization fix — match by lowercased username via
+  // Drizzle's `inArray` over a precomputed lowercased emails list, which
+  // sidesteps the "ANY($1::text[])" record-cast issue. The username
+  // column is already stored lowercased in this schema, but we apply
+  // `lower()` to be defensive against legacy mixed-case rows.
+  const linkedUsers = await db
+    .select({
+      id: users.id,
+      username: users.username,
+      name: users.name,
+      role: users.role,
+    })
+    .from(users)
+    .where(and(
+      eq(users.organizationId, orgId),
+      inArray(sql`lower(${users.username})`, distinctEmails),
+    ));
+  const userByEmail = new Map<string, { id: string; name: string; role: string }>();
+  for (const u of linkedUsers) {
+    const email = (u.username ?? "").trim().toLowerCase();
+    const name = (u.name ?? "").trim();
+    if (!email || !name || !u.id) continue;
+    // Tier-1 resolution must NEVER promote a non-customer-facing user
+    // (logistics_manager, ops, etc.) onto the customer-facing portlet.
+    // Mirrors the funnel-eligibility role gate.
+    if (!QUOTE_REP_UNIVERSE_ROLES.has(u.role as never)) continue;
+    userByEmail.set(email, { id: u.id, name, role: u.role });
+  }
+  if (userByEmail.size === 0) return result;
+  // Respect quote_reps.suppressed: if an admin explicitly suppressed a rep
+  // that maps to one of these users (in this org), drop them from Tier-1
+  // so the existing tier-2/3/4 fallback runs (which honors suppression).
+  const userIds = Array.from(new Set(Array.from(userByEmail.values()).map(u => u.id)));
+  if (userIds.length > 0) {
+    const suppressed = await db
+      .select({ userId: quoteReps.userId })
+      .from(quoteReps)
+      .where(and(
+        eq(quoteReps.organizationId, orgId),
+        eq(quoteReps.suppressed, true),
+        inArray(quoteReps.userId, userIds),
+      ));
+    if (suppressed.length > 0) {
+      const suppressedUserIds = new Set(suppressed.map(s => s.userId).filter(Boolean) as string[]);
+      for (const [email, info] of Array.from(userByEmail.entries())) {
+        if (suppressedUserIds.has(info.id)) userByEmail.delete(email);
+      }
+      if (userByEmail.size === 0) return result;
+    }
+  }
+  for (const o of opps) {
+    if (o.source !== "email" || !o.sourceReference) continue;
+    const to = toEmailByRef.get(o.sourceReference);
+    if (!to) continue;
+    const user = userByEmail.get(to);
+    if (!user) continue;
+    result.set(o.id, user.name);
+  }
+  return result;
+}
+
 function enrich(
   rows: QuoteOpportunity[],
   customerMap: Map<string, QuoteCustomer>,
@@ -710,27 +914,54 @@ function enrich(
      * the frontend falls back to "Unassigned" on.
      */
     repDisplayNames?: Map<string, string>;
+    /**
+     * Customer Quotes portlet bug-fix — primary tier rep names keyed by
+     * opportunity id, sourced from `email_messages.to_email` →
+     * `users.username`. When present, this beats every other tier and
+     * bypasses `funnelEligibleRepIds` hiding (the linked user is already
+     * verified customer-facing inside `resolveRepsFromSourceEmails`).
+     */
+    repByOpportunityId?: Map<string, string>;
+    /**
+     * Customer Quotes portlet bug-fix — canonical customer display name
+     * keyed by `quote_customers.id`, built in `loadContext` from the org's
+     * `companies` table. Beats `quote_customers.name` when present so the
+     * portlet stops showing sluggified strings like "Mohawkind".
+     */
+    canonicalCustomerNames?: Map<string, string>;
   } = {},
 ): EnrichedQuote[] {
   const now = opts.now ?? Date.now();
   const eligible = opts.funnelEligibleRepIds;
   const displayNames = opts.repDisplayNames;
+  const repByOpp = opts.repByOpportunityId;
+  const canonicalCust = opts.canonicalCustomerNames;
   return rows.map(r => {
     const sla = computeQuoteSla(r.requestDate, r.outcomeStatus, { now });
-    // Task #752 — when the caller passes a `funnelEligibleRepIds` set
-    // (loadContext-derived AM/NAM-linked + non-suppressed reps), hide the
-    // rep's display name for any quote attributed to a non-eligible rep.
-    // The repId is preserved on the row so the audit page can still
-    // resolve who the rep was.
-    const repHidden = eligible !== undefined && r.repId !== null && r.repId !== undefined && !eligible.has(r.repId);
+    // Tier-1 source-email rep beats every other signal. Linked user is
+    // already verified customer-facing upstream so no extra eligibility
+    // check needed here.
     let repName = "—";
-    if (!repHidden && r.repId) {
-      const preferred = displayNames?.get(r.repId);
-      repName = preferred ?? repMap.get(r.repId)?.name ?? "—";
+    const tier1 = repByOpp?.get(r.id);
+    if (tier1) {
+      repName = tier1;
+    } else {
+      // Task #752 — when the caller passes a `funnelEligibleRepIds` set
+      // (loadContext-derived AM/NAM-linked + non-suppressed reps), hide the
+      // rep's display name for any quote attributed to a non-eligible rep.
+      // The repId is preserved on the row so the audit page can still
+      // resolve who the rep was.
+      const repHidden = eligible !== undefined && r.repId !== null && r.repId !== undefined && !eligible.has(r.repId);
+      if (!repHidden && r.repId) {
+        const preferred = displayNames?.get(r.repId);
+        repName = preferred ?? repMap.get(r.repId)?.name ?? "—";
+      }
     }
+    const stored = customerMap.get(r.customerId)?.name;
+    const customerName = canonicalCust?.get(r.customerId) ?? stored ?? "—";
     return {
       ...r,
-      customerName: customerMap.get(r.customerId)?.name ?? "—",
+      customerName,
       repName,
       carrierName: r.carrierId ? carrierMap.get(r.carrierId)?.name ?? null : null,
       outcomeReasonLabel: r.outcomeReasonId ? reasonMap.get(r.outcomeReasonId)?.label ?? null : null,
@@ -754,7 +985,7 @@ async function loadContext(orgId: string) {
   // by an admin via the rep-audit page are excluded. The full repMap is
   // still kept so individual quote rows can resolve a display name when
   // needed elsewhere.
-  const [customers, repsJoined, reasons, laneGroups, carriers] = await Promise.all([
+  const [customers, repsJoined, reasons, laneGroups, carriers, orgCompanies] = await Promise.all([
     db.select().from(quoteCustomers).where(eq(quoteCustomers.organizationId, orgId)).orderBy(asc(quoteCustomers.name)),
     db
       .select({
@@ -779,6 +1010,12 @@ async function loadContext(orgId: string) {
     db.select().from(quoteOutcomeReasons).where(eq(quoteOutcomeReasons.organizationId, orgId)),
     db.select().from(quoteLaneGroups).where(eq(quoteLaneGroups.organizationId, orgId)),
     db.select().from(quoteCarriers).where(eq(quoteCarriers.organizationId, orgId)),
+    // Customer Quotes portlet bug-fix — fetch the org's `companies` (just
+    // id+name needed for the canonical map) so `enrich()` can upgrade
+    // sluggified quote_customers display names like "Mohawkind" to the
+    // canonical CRM name "Mohawk Industries". Light query — companies
+    // tables in this app stay in the low hundreds per org.
+    db.select({ id: companies.id, name: companies.name }).from(companies).where(eq(companies.organizationId, orgId)),
   ]);
   // `allReps` powers `repMap` so individual quote rows can still resolve a
   // rep's display name even when that rep is hidden from the dropdowns.
@@ -800,6 +1037,10 @@ async function loadContext(orgId: string) {
     const display = linked || legacy;
     if (display) repDisplayNames.set(r.id, display);
   }
+  // Customer Quotes portlet bug-fix — canonical customer name map. Built
+  // once per loadContext call and shared across all enrich() callers in
+  // the request.
+  const canonicalCustomerNames = buildCanonicalCustomerNameMap(customers, orgCompanies);
   return {
     customers,
     // Public rep list (snapshot.reps consumes this directly).
@@ -816,6 +1057,7 @@ async function loadContext(orgId: string) {
     // attributed to a non-customer-facing rep from the best/worst rep
     // ranking. The underlying quote rows are unaffected.
     customerFacingRepIds,
+    canonicalCustomerNames,
   };
 }
 
@@ -841,9 +1083,15 @@ export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: 
     if (!ctx.customerMap.has(r.customerId)) exclusionIds.add(r.customerId);
   }
   const filtered = applyFilters(all, filters, exclusionIds);
+  // Customer Quotes portlet bug-fix — Tier-1 rep resolution from
+  // `email_messages.to_email`. Built per-request because it depends on the
+  // page's specific opportunities, not the org-level context.
+  const repByOpportunityId = await resolveRepsFromSourceEmails(orgId, filtered);
   const enriched = enrich(filtered, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, {
     funnelEligibleRepIds: ctx.customerFacingRepIds,
     repDisplayNames: ctx.repDisplayNames,
+    repByOpportunityId,
+    canonicalCustomerNames: ctx.canonicalCustomerNames,
   });
 
   const dir = sortDir === "asc" ? 1 : -1;
@@ -970,9 +1218,17 @@ export async function getActionQueue(
     r.outcomeStatus === "pending" && !nonCustomerIds.has(r.customerId)
   );
 
+  // Customer Quotes portlet bug-fix — same Tier-1 rep + canonical-name
+  // wiring as listQuotes so the SLA strip stops showing "Unassigned" for
+  // email-ingested quotes whose to_email maps to a real customer-facing
+  // user.
+  const repByOpportunityId = await resolveRepsFromSourceEmails(orgId, pending);
   const enriched = enrich(pending, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, {
     now,
     funnelEligibleRepIds: ctx.customerFacingRepIds,
+    repDisplayNames: ctx.repDisplayNames,
+    repByOpportunityId,
+    canonicalCustomerNames: ctx.canonicalCustomerNames,
   });
 
   const slaBreaching = enriched
@@ -3010,7 +3266,17 @@ export async function exportCsv(orgId: string, filters: QuoteFilters): Promise<s
   const all = await db.select().from(quoteOpportunities).where(eq(quoteOpportunities.organizationId, orgId));
   const nonCustomerIds = await loadNonCustomerCustomerIds(orgId, ctx.customerMap);
   const filtered = applyFilters(all, filters, nonCustomerIds);
-  const enriched = enrich(filtered, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
+  // Customer Quotes portlet bug-fix — same Tier-1 rep + canonical-name
+  // wiring as listQuotes so the CSV export matches what users see in the
+  // table. Skipping this would let the export silently regress to
+  // "Unassigned" / sluggified strings.
+  const repByOpportunityId = await resolveRepsFromSourceEmails(orgId, filtered);
+  const enriched = enrich(filtered, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, {
+    funnelEligibleRepIds: ctx.customerFacingRepIds,
+    repDisplayNames: ctx.repDisplayNames,
+    repByOpportunityId,
+    canonicalCustomerNames: ctx.canonicalCustomerNames,
+  });
   enriched.sort((a, b) => b.requestDate.getTime() - a.requestDate.getTime());
   return quotesToCsv(enriched);
 }
@@ -3740,8 +4006,18 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
     }
   }
 
-  const exactMatches = enrich(exactScoped.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
-  const similarMatches = enrich(similarScoped.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
+  // Customer Quotes portlet bug-fix — pass the canonical name + display
+  // name maps so spot-search result rows show the same customer/rep names
+  // as the main portlet table. Tier-1 source-email rep is intentionally
+  // skipped here (these are historical context rows, not the live work
+  // queue, and we don't want to pay the extra query per spot search).
+  const enrichOpts = {
+    funnelEligibleRepIds: ctx.customerFacingRepIds,
+    repDisplayNames: ctx.repDisplayNames,
+    canonicalCustomerNames: ctx.canonicalCustomerNames,
+  };
+  const exactMatches = enrich(exactScoped.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, enrichOpts);
+  const similarMatches = enrich(similarScoped.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, enrichOpts);
 
   // Task #515 — External data layering. Run TRAC + load_fact + Carrier Hub
   // outreach + corridor pattern in parallel; each degrades independently.
@@ -3844,7 +4120,7 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
       const lastWonDays = lastWonMs
         ? Math.max(0, Math.round((nowMs - lastWonMs) / 86_400_000))
         : null;
-      const items = enrich(list.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap);
+      const items = enrich(list.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, enrichOpts);
       return {
         tier,
         label: TIER_LABEL[tier],
@@ -6209,3 +6485,6 @@ export async function resolveNewContactReview(
     companyId: resolvedCompanyId!,
   };
 }
+
+// Test-only exports — internal helpers exposed for unit tests, not for runtime use.
+export const __testables = { enrich };

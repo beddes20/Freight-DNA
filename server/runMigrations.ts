@@ -5059,4 +5059,49 @@ export async function runMigrations() {
   } finally {
     clientAudit.release();
   }
+
+  // ===================================================================
+  // Customer-Quotes-portlet bugfix — backfill `quote_reps.user_id`.
+  //
+  // Historically `findOrCreateRep` (server/services/quoteEmailIngestion.ts)
+  // looked up the linked `users` row by `username = email` only to gate
+  // the insert and threw the linkage away. The result was that EVERY
+  // email-ingested rep row had `user_id IS NULL`, which then hid the
+  // rep on the Customer Quotes portlet via the Task #752 funnel-
+  // eligibility filter (rep displayed as "Unassigned" instead of the
+  // real AM/NAM name).
+  //
+  // The ingestion path now persists `userId` on insert and self-heals
+  // existing rows on access. This block force-heals every legacy row
+  // up-front so the portlet shows the correct rep on first load instead
+  // of waiting for incremental ingestion. Org-scoped and role-gated to
+  // preserve cross-tenant safety; only links rows whose linked user is
+  // customer-facing per the shared QUOTE_REP_UNIVERSE_ROLES contract.
+  // Idempotent — only updates rows that are still NULL.
+  // ===================================================================
+  const clientRepBackfill = await pool.connect();
+  try {
+    const repBackfillResult = await clientRepBackfill.query(`
+      UPDATE quote_reps qr
+         SET user_id = u.id
+        FROM users u
+       WHERE qr.user_id IS NULL
+         AND qr.email IS NOT NULL
+         AND qr.organization_id = u.organization_id
+         AND lower(u.username) = lower(qr.email)
+         AND u.role IN ('national_account_manager', 'account_manager')
+    `);
+    if ((repBackfillResult.rowCount ?? 0) > 0) {
+      console.log(
+        `[migrations] quote_reps.user_id backfill — linked ${repBackfillResult.rowCount} rep row(s) ` +
+        `to their matching users.id (Customer Quotes portlet rep resolution)`,
+      );
+    } else {
+      console.log("[migrations] quote_reps.user_id backfill — no orphan rows needed linking");
+    }
+  } catch (err) {
+    console.error("[migrations] quote_reps.user_id backfill error:", err);
+  } finally {
+    clientRepBackfill.release();
+  }
 }

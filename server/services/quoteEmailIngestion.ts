@@ -533,7 +533,29 @@ async function findOrCreateRep(orgId: string, email: string): Promise<string | n
   const existing = await db.select().from(quoteReps)
     .where(and(eq(quoteReps.organizationId, orgId), eq(quoteReps.email, email)))
     .limit(1);
-  if (existing.length > 0) return existing[0].id;
+  if (existing.length > 0) {
+    // Customer-Quotes-portlet bugfix — back-link the rep row to its
+    // matching `users` row whenever we can. Historically `findOrCreateRep`
+    // looked up the user only to gate the insert (see Task #721) and
+    // discarded the linkage; that left every email-ingested rep row
+    // with `userId = NULL`, which then hid the rep on the portlet via
+    // the Task #752 funnel-eligibility filter. We now self-heal an
+    // existing row's `userId` whenever the lookup matches and the row
+    // has no link yet. Idempotent: skips the UPDATE when already linked.
+    const repRow = existing[0];
+    if (!repRow.userId) {
+      const [linkedUser] = await db.select({ id: users.id, role: users.role }).from(users).where(and(
+        eq(users.organizationId, orgId),
+        eq(users.username, email),
+      )).limit(1);
+      if (linkedUser && isCustomerFacingQuoteRep(linkedUser.role)) {
+        await db.update(quoteReps)
+          .set({ userId: linkedUser.id })
+          .where(eq(quoteReps.id, repRow.id));
+      }
+    }
+    return repRow.id;
+  }
 
   // Task #721 — Gate the rep-create path on the sender's user role. If the
   // email resolves to a user in the org whose role is non-customer-facing
@@ -545,14 +567,23 @@ async function findOrCreateRep(orgId: string, email: string): Promise<string | n
   // When the email doesn't match any user we KEEP the existing behavior
   // (create the rep) so legitimate AM/NAM signatures from people who
   // aren't logged in as users yet still seed the rep universe.
-  const [linkedUser] = await db.select({ role: users.role }).from(users).where(and(
+  const [linkedUser] = await db.select({ id: users.id, role: users.role }).from(users).where(and(
     eq(users.organizationId, orgId),
     eq(users.username, email),
   )).limit(1);
   if (linkedUser && !isCustomerFacingQuoteRep(linkedUser.role)) return null;
 
   const name = email.split("@")[0].replace(/[._-]+/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-  const [row] = await db.insert(quoteReps).values({ organizationId: orgId, name, email }).returning();
+  // Customer-Quotes-portlet bugfix — persist the linked user ID on insert
+  // so downstream display paths (loadContext → repDisplayNames, the
+  // funnel-eligibility filter) can resolve the canonical user name and
+  // role without a per-row email-based lookup.
+  const [row] = await db.insert(quoteReps).values({
+    organizationId: orgId,
+    name,
+    email,
+    userId: linkedUser?.id ?? null,
+  }).returning();
   return row.id;
 }
 
