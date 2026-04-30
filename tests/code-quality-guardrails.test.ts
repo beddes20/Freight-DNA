@@ -810,6 +810,85 @@ assert(
   "getDbCached no longer accepts req — cold/warm cache hint coverage is broken.",
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 15: Conversations freshness fence (Phase 1 — "Stop lying about
+// freshness.")
+//
+// The Conversations row UI used to render `Updated {formatAgo(thread.updatedAt)}`
+// and the page-level sort comparators used `b.updatedAt`. But
+// `email_conversation_threads.updated_at` is a row-touched-by-anything clock
+// (bumped by every background worker that touches the row) and is routinely
+// hours-to-days off the actual conversation activity. Phase 1 replaced it
+// with `lastEmailAt` (server-computed as MAX(email_messages.provider_sent_at))
+// plus the existing `lastIncomingAt` / `lastOutgoingAt` denorm columns.
+//
+// These fences fail the build if anyone re-introduces a freshness label
+// backed by `thread.updatedAt`, or removes `lastEmailAt` from the shared
+// type / API enrichment.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n── 15. Conversations freshness fence (Phase 1) ─────────────────────\n");
+
+const threadRowSrc = readFile("client/src/components/conversations/thread-row.tsx");
+assert(
+  "thread-row.tsx — does NOT render Updated <…thread.updatedAt> as a freshness label",
+  !/formatAgo\s*\(\s*thread\.updatedAt\s*\)/.test(threadRowSrc),
+  "Found `formatAgo(thread.updatedAt)` in thread-row.tsx — that label lies about freshness; use lastEmailAt / lastIncomingAt / lastOutgoingAt instead.",
+);
+assert(
+  "thread-row.tsx — renders at least one real email-activity timestamp",
+  /thread\.lastIncomingAt/.test(threadRowSrc) &&
+    /thread\.lastOutgoingAt/.test(threadRowSrc) &&
+    /thread\.lastEmailAt/.test(threadRowSrc),
+  "thread-row.tsx must surface lastIncomingAt / lastOutgoingAt / lastEmailAt — those are the source-of-truth email-activity clocks.",
+);
+
+const conversationsTypesSrc = readFile("client/src/components/conversations/types.ts");
+assert(
+  "conversations/types.ts — declares lastEmailAt on ConversationThread",
+  /\blastEmailAt\b\s*:\s*string\s*\|\s*null/.test(conversationsTypesSrc),
+  "ConversationThread is missing `lastEmailAt: string | null` — the API ships it and the UI consumes it.",
+);
+
+const conversationsRouteSrc = readFile("server/routes/conversations.ts");
+assert(
+  "routes/conversations.ts — exposes computeLastEmailAtMap helper",
+  /computeLastEmailAtMap/.test(conversationsRouteSrc) &&
+    /MAX\s*\(\s*\$\{?\s*emailMessages\.providerSentAt/.test(conversationsRouteSrc),
+  "server/routes/conversations.ts must compute lastEmailAt as MAX(email_messages.provider_sent_at) per page.",
+);
+assert(
+  "routes/conversations.ts — main list and my-waiting both ship lastEmailAt",
+  (conversationsRouteSrc.match(/lastEmailAt:/g) ?? []).length >= 2,
+  "Both /api/internal/conversations and /api/internal/conversations/my-waiting must return lastEmailAt on every thread row.",
+);
+
+const conversationsPageSrc = readFile("client/src/pages/conversations.tsx");
+assert(
+  "pages/conversations.tsx — sort comparators no longer key on raw thread.updatedAt for freshness",
+  !/new Date\(\s*[ab]\.updatedAt\s*\)\.getTime\(\)\s*-\s*new Date\(\s*[ab]\.updatedAt\s*\)\.getTime\(\)/.test(conversationsPageSrc),
+  "pages/conversations.tsx still sorts inbox rows by `b.updatedAt - a.updatedAt`. Sort by lastEmailAt ?? lastIncomingAt ?? lastOutgoingAt instead — see the recencyTs helper.",
+);
+assert(
+  "pages/conversations.tsx — sort comparator uses the real-email-activity fallback chain",
+  /lastEmailAt\s*\?\?\s*[a-zA-Z]+\.lastIncomingAt\s*\?\?\s*[a-zA-Z]+\.lastOutgoingAt/.test(conversationsPageSrc),
+  "Sort must read lastEmailAt ?? lastIncomingAt ?? lastOutgoingAt so the row order matches what the row labels show.",
+);
+
+const waitingStateSrc = readFile("server/services/conversationWaitingStateService.ts");
+assert(
+  "conversationWaitingStateService — applyMessageToThread anchors timestamps to message.providerSentAt",
+  /message\.providerSentAt\s*\?\?\s*now/.test(waitingStateSrc),
+  "applyMessageToThread must prefer message.providerSentAt over wall-clock now() when stamping last_incoming_at / last_outgoing_at — otherwise mailbox backfills produce wall-of-now timestamps with no relationship to actual email activity.",
+);
+
+const runMigrationsSrc = readFile("server/runMigrations.ts");
+assert(
+  "runMigrations.ts — ships idempotent freshness backfill for last_incoming_at / last_outgoing_at",
+  /conversations freshness backfill/.test(runMigrationsSrc) &&
+    /MAX\(provider_sent_at\)\s+FILTER/.test(runMigrationsSrc),
+  "runMigrations must heal email_conversation_threads.last_incoming_at / last_outgoing_at from MAX(email_messages.provider_sent_at) per direction. Without it, legacy rows render with the wrong timestamps until they next receive a message.",
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

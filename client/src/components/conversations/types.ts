@@ -13,6 +13,14 @@ export interface ConversationThread {
   lastMessageId: string | null;
   lastIncomingAt: string | null;
   lastOutgoingAt: string | null;
+  // Phase 1 — "Stop lying about freshness."
+  // Source-of-truth email-activity timestamp. Computed server-side as
+  // MAX(email_messages.provider_sent_at) per thread, with a defensive
+  // fallback to GREATEST(lastIncomingAt, lastOutgoingAt). The Conversations
+  // list MUST read this (or lastIncomingAt / lastOutgoingAt) for every
+  // user-facing freshness label — never `updatedAt`, which is bumped by
+  // background workers and is routinely days off the actual email activity.
+  lastEmailAt: string | null;
   waitingSinceAt: string | null;
   overdueAt: string | null;
   archivedAt: string | null;

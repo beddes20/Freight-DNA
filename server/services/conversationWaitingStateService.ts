@@ -64,11 +64,19 @@ export function applyMessageToThread(
     update.archivedAt = null;
   }
 
-  // Update timestamps
+  // Update timestamps. Phase 1 — "Stop lying about freshness."
+  // Prefer the email's actual provider_sent_at over wall-clock now() so
+  // the denormalized last-incoming / last-outgoing columns stay anchored
+  // to real email events. Without this, mailbox backfills and out-of-order
+  // delivery would stamp every replayed message with the same processing
+  // time, then surface that as "Customer replied 2m ago" in the UI even
+  // when the email itself was sent 18 days ago. Fall back to `now` only
+  // when provider_sent_at is unavailable (rare — mostly drafts).
+  const sentAt = message.providerSentAt ?? now;
   if (message.direction === "inbound") {
-    update.lastIncomingAt = now;
+    update.lastIncomingAt = sentAt;
   } else {
-    update.lastOutgoingAt = now;
+    update.lastOutgoingAt = sentAt;
   }
 
   if (isNowWaitingOnUs) {

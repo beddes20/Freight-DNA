@@ -63,6 +63,60 @@ import {
   renewSingleMailboxSubscription,
 } from "../graphSubscriptionService";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 1 — "Stop lying about freshness."
+// Computes a source-of-truth `lastEmailAt` per thread by reading
+// MAX(email_messages.provider_sent_at) per thread_id in a single batched
+// query. The Conversations UI MUST consume this (or lastIncomingAt /
+// lastOutgoingAt) for every freshness label — never `updatedAt`, which is
+// bumped by background workers (archive sweep, denormalization sweeps,
+// signal rewrites) and lands days off the actual conversation activity.
+//
+// The denormalized `lastIncomingAt` / `lastOutgoingAt` columns on the
+// thread row are a defensive fallback for threads where the message-row
+// query returns nothing (extremely rare; the runMigrations backfill keeps
+// them in sync). Cost is one batched aggregate per page (≤100 threads).
+// ─────────────────────────────────────────────────────────────────────────────
+async function computeLastEmailAtMap(
+  orgId: string,
+  threads: Array<{ threadId: string | null; lastIncomingAt: Date | null; lastOutgoingAt: Date | null }>,
+): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>();
+  const ids = [...new Set(threads.map(t => t.threadId).filter((id): id is string => !!id))];
+  if (ids.length === 0) return out;
+  try {
+    const rows = await db
+      .select({
+        threadId: emailMessages.threadId,
+        maxSent: sql<Date | null>`MAX(${emailMessages.providerSentAt})`,
+      })
+      .from(emailMessages)
+      .where(and(eq(emailMessages.orgId, orgId), inArray(emailMessages.threadId, ids)))
+      .groupBy(emailMessages.threadId);
+    for (const r of rows) {
+      if (r.threadId && r.maxSent) {
+        out.set(r.threadId, new Date(r.maxSent).toISOString());
+      }
+    }
+  } catch (err) {
+    // A failure here must not 500 the inbox — just leave lastEmailAt null
+    // for affected rows and let the UI fall back to lastIncomingAt /
+    // lastOutgoingAt (still real email events, just less complete).
+    console.error("[conversations] computeLastEmailAtMap failed:", err);
+  }
+  // Defensive fallback for threads with no email_messages.provider_sent_at
+  // row — derive from the denormalized columns so the row UI still shows
+  // *something* anchored to a real email event.
+  for (const t of threads) {
+    if (!t.threadId || out.has(t.threadId)) continue;
+    const inc = t.lastIncomingAt ? new Date(t.lastIncomingAt).getTime() : 0;
+    const outgoing = t.lastOutgoingAt ? new Date(t.lastOutgoingAt).getTime() : 0;
+    const max = Math.max(inc, outgoing);
+    out.set(t.threadId, max > 0 ? new Date(max).toISOString() : null);
+  }
+  return out;
+}
+
 export function registerConversationsRoutes(app: Express): void {
 
   // ── GET /api/internal/conversations/my-count ─────────────────────────────────
@@ -129,6 +183,10 @@ export function registerConversationsRoutes(app: Express): void {
         }
       }
 
+      // Phase 1 — surface the source-of-truth email-activity timestamp so
+      // the dashboard portlet stops showing stale "Updated" labels.
+      const lastEmailAtMap = await computeLastEmailAtMap(user.organizationId, threads);
+
       const enriched = threads.map(t => ({
         id: t.id,
         threadId: t.threadId,
@@ -139,10 +197,17 @@ export function registerConversationsRoutes(app: Express): void {
         responsePriority: t.responsePriority,
         waitingSinceAt: t.waitingSinceAt,
         overdueAt: t.overdueAt,
+        lastIncomingAt: t.lastIncomingAt,
+        lastOutgoingAt: t.lastOutgoingAt,
+        lastEmailAt: t.threadId ? (lastEmailAtMap.get(t.threadId) ?? null) : null,
         updatedAt: t.updatedAt,
       }));
 
       const now = new Date();
+      const recencyTs = (x: { lastEmailAt: string | null; lastIncomingAt: Date | null; lastOutgoingAt: Date | null; updatedAt: Date }): number => {
+        const ts = x.lastEmailAt ?? x.lastIncomingAt ?? x.lastOutgoingAt ?? x.updatedAt;
+        return ts ? new Date(ts).getTime() : 0;
+      };
       enriched.sort((a, b) => {
         const aOverdue = !!(a.overdueAt && a.overdueAt <= now);
         const bOverdue = !!(b.overdueAt && b.overdueAt <= now);
@@ -150,7 +215,8 @@ export function registerConversationsRoutes(app: Express): void {
         if (a.waitingSinceAt && b.waitingSinceAt) {
           return new Date(a.waitingSinceAt).getTime() - new Date(b.waitingSinceAt).getTime();
         }
-        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+        // Phase 1 — sort by REAL email activity, not row-touched-at.
+        return recencyTs(b) - recencyTs(a);
       });
 
       res.json({ count: enriched.length, threads: enriched });
@@ -511,6 +577,14 @@ export function registerConversationsRoutes(app: Express): void {
         console.error("[conversations] read-state enrichment failed:", err);
       }
 
+      // Phase 1 — "Stop lying about freshness."
+      // Compute the real email-activity timestamp (MAX provider_sent_at
+      // per thread) once for the whole page so the row UI can show
+      // "Customer replied <time>" / "You replied <time>" anchored to
+      // actual emails instead of `thread.updatedAt` (which is bumped by
+      // background workers and is routinely days off).
+      const lastEmailAtMap = await computeLastEmailAtMap(orgId, threads);
+
       const enriched = threads.map(t => {
         const lastReadAt = t.threadId ? readStates.get(t.threadId) ?? null : null;
         const lastIncoming = t.lastIncomingAt ? new Date(t.lastIncomingAt) : null;
@@ -524,6 +598,8 @@ export function registerConversationsRoutes(app: Express): void {
             ? Array.from(signalsByThread.get(t.threadId)!)
             : [],
           lastReadAt: lastReadAt ? lastReadAt.toISOString() : null,
+          // Source-of-truth freshness — see computeLastEmailAtMap above.
+          lastEmailAt: t.threadId ? (lastEmailAtMap.get(t.threadId) ?? null) : null,
           unread,
         };
       });

@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils";
 import { DraftEmailModal } from "@/components/DraftEmailModal";
 import { WaitingStateBadge, PriorityDot } from "./badges";
 import { SnoozePopover } from "./snooze-popover";
-import { stripHtmlToText, formatAgo } from "./utils";
+import { stripHtmlToText, formatAgo, formatDate, formatShortDateTime } from "./utils";
 import { hasQuoteSignal } from "./types";
 import type { ConversationThread, EmailMessage, ConversationDensity } from "./types";
 
@@ -177,7 +177,30 @@ export function ThreadRow({
               Since {formatAgo(thread.waitingSinceAt)}
             </span>
           )}
-          <span>Updated {formatAgo(thread.updatedAt)}</span>
+          {/* Phase 1 — "Stop lying about freshness."
+              Show two precise email-activity timestamps tied to actual
+              email events (provider_sent_at). We deliberately do NOT
+              read the row-touched-at clock here — it gets bumped by
+              background workers (archive sweep, denormalization sweeps,
+              signal rewrites) and routinely drifts hours/days off the
+              actual conversation activity. A guardrail in
+              tests/code-quality-guardrails.test.ts fails the build if
+              that label is ever re-introduced in this file. */}
+          {thread.lastIncomingAt && (
+            <span title={formatDate(thread.lastIncomingAt)} data-testid={`text-last-inbound-${thread.id}`}>
+              Customer replied {formatShortDateTime(thread.lastIncomingAt)}
+            </span>
+          )}
+          {thread.lastOutgoingAt && (
+            <span title={formatDate(thread.lastOutgoingAt)} data-testid={`text-last-outbound-${thread.id}`}>
+              You replied {formatShortDateTime(thread.lastOutgoingAt)}
+            </span>
+          )}
+          {!thread.lastIncomingAt && !thread.lastOutgoingAt && thread.lastEmailAt && (
+            <span title={formatDate(thread.lastEmailAt)} data-testid={`text-last-email-${thread.id}`}>
+              Last email {formatShortDateTime(thread.lastEmailAt)}
+            </span>
+          )}
           {thread.ownerName ? (
             <span className="font-medium text-foreground" data-testid={`text-owner-${thread.id}`}>{thread.ownerName}</span>
           ) : (

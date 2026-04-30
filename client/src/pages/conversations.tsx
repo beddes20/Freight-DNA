@@ -803,8 +803,18 @@ export default function ConversationsPage() {
         const bDate = b.archivedAt ? new Date(b.archivedAt).getTime() : 0;
         return bDate - aDate;
       }
+      // Phase 1 — "Stop lying about freshness."
+      // Sort by REAL email activity, not thread.updatedAt (which gets
+      // bumped by background workers and routinely lands days off the
+      // actual conversation activity). Falls back through the same
+      // chain the row UI uses so the visible-row order matches the
+      // visible "Customer replied X" / "You replied Y" labels.
+      const recencyTs = (t: typeof a): number => {
+        const ts = t.lastEmailAt ?? t.lastIncomingAt ?? t.lastOutgoingAt ?? t.updatedAt;
+        return ts ? new Date(ts).getTime() : 0;
+      };
       if (bucket === "all") {
-        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+        return recencyTs(b) - recencyTs(a);
       }
       const aOverdue = !!a.overdueAt;
       const bOverdue = !!b.overdueAt;
@@ -812,7 +822,7 @@ export default function ConversationsPage() {
       if (a.waitingSinceAt && b.waitingSinceAt) {
         return new Date(a.waitingSinceAt).getTime() - new Date(b.waitingSinceAt).getTime();
       }
-      return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      return recencyTs(b) - recencyTs(a);
     });
     return arr;
   }, [allThreads, bucket]);

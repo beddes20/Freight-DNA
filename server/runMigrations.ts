@@ -5104,4 +5104,66 @@ export async function runMigrations() {
   } finally {
     clientRepBackfill.release();
   }
+
+  // ===================================================================
+  // Conversations freshness — backfill `last_incoming_at` / `last_outgoing_at`
+  // from MAX(email_messages.provider_sent_at) per direction.
+  //
+  // Phase 1 of "Stop lying about freshness." Historically:
+  //   - applyMessageToThread stamped these columns with wall-clock now()
+  //     instead of the email's actual provider_sent_at, so any mailbox
+  //     backfill produced a wall of identical timestamps that have no
+  //     relationship to when the emails were actually sent.
+  //   - Many threads were created before applyMessageToThread existed at
+  //     all, so 56% of email_conversation_threads still had NULL
+  //     last_incoming_at (per the diagnostic query that triggered this
+  //     phase: avg drift +134h, only 40% of quote-request threads even
+  //     linked to quote_opportunities).
+  //
+  // The route layer now ALWAYS reads MAX(provider_sent_at) per page
+  // (computeLastEmailAtMap in server/routes/conversations.ts), but we
+  // also heal the denormalized columns up-front so per-thread filters
+  // (`?dateFrom=…&dateTo=…`), the dashboard "my-waiting" portlet, and
+  // the offline reports that read straight from the column see the
+  // correct values too. Idempotent — DISTINCT FROM only writes rows
+  // whose column is currently wrong, so re-running this on every boot
+  // is a no-op once converged.
+  // ===================================================================
+  const clientFreshness = await pool.connect();
+  try {
+    const freshnessResult = await clientFreshness.query(`
+      UPDATE email_conversation_threads ect
+         SET last_incoming_at = COALESCE(sub.max_in,  ect.last_incoming_at),
+             last_outgoing_at = COALESCE(sub.max_out, ect.last_outgoing_at)
+        FROM (
+          SELECT thread_id,
+                 org_id,
+                 MAX(provider_sent_at) FILTER (WHERE direction = 'inbound')  AS max_in,
+                 MAX(provider_sent_at) FILTER (WHERE direction = 'outbound') AS max_out
+            FROM email_messages
+           WHERE provider_sent_at IS NOT NULL
+             AND thread_id IS NOT NULL
+           GROUP BY thread_id, org_id
+        ) sub
+       WHERE sub.thread_id = ect.thread_id
+         AND sub.org_id    = ect.org_id
+         AND (
+              (sub.max_in  IS NOT NULL AND ect.last_incoming_at IS DISTINCT FROM sub.max_in)
+           OR (sub.max_out IS NOT NULL AND ect.last_outgoing_at IS DISTINCT FROM sub.max_out)
+         )
+    `);
+    if ((freshnessResult.rowCount ?? 0) > 0) {
+      console.log(
+        `[migrations] conversations freshness backfill — re-anchored ` +
+        `${freshnessResult.rowCount} thread row(s) to MAX(email_messages.provider_sent_at) ` +
+        `per direction (Phase 1: stop lying about freshness)`,
+      );
+    } else {
+      console.log("[migrations] conversations freshness backfill — every thread already in sync");
+    }
+  } catch (err) {
+    console.error("[migrations] conversations freshness backfill error:", err);
+  } finally {
+    clientFreshness.release();
+  }
 }

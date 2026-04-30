@@ -696,6 +696,10 @@ export default function ResponseTimeTab() {
       lastMessageId: null,
       lastIncomingAt: row.inboundAt,
       lastOutgoingAt: row.outboundAt,
+      // Phase 1 — derive freshness from the real email-activity timestamps
+      // we already have on the row instead of leaving null. The drawer this
+      // stub feeds is read-only, so this is just to satisfy the contract.
+      lastEmailAt: row.outboundAt ?? row.inboundAt ?? null,
       waitingSinceAt: row.isWaiting ? row.inboundAt : null,
       overdueAt: null,
       archivedAt: null,

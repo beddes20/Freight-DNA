@@ -36,3 +36,12 @@ export function formatDate(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
+
+// Compact "Apr 10, 9:14 AM" style — used in the Conversations list to show
+// the actual email-activity time inline (Phase 1: stop lying about freshness).
+// Drops the year because the row already shows a relative-time tooltip on
+// hover for the full date+year.
+export function formatShortDateTime(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
