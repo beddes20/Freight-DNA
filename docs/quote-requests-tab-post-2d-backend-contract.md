@@ -1058,24 +1058,27 @@ sprint:
 
 ## 10. Sign-off checklist for Task #849
 
-- [ ] User has ratified the 3 RESOLVED schema decisions (§1.1, §1.2, §1.3).
-- [ ] User has approved the 8-slice sprint plan (§8) and timing.
-- [ ] All 5 new endpoints have agreed-upon URLs and shapes (§3).
-- [ ] The state model in §4 reflects the team's mental model
+- [x] User has ratified the 3 RESOLVED schema decisions (§1.1, §1.2, §1.3).
+- [x] User has approved the 8-slice sprint plan (§8) and timing.
+- [x] All 5 new endpoints have agreed-upon URLs and shapes (§3).
+- [x] The state model in §4 reflects the team's mental model
       (esp. the orthogonal-snooze decision).
-- [ ] The event-writing model in §5 has no missing rows for surfaces
+- [x] The event-writing model in §5 has no missing rows for surfaces
       the UI will touch.
-- [ ] The permission matrix in §6 matches the spec's permission table
+- [x] The permission matrix in §6 matches the spec's permission table
       (§5 of the spec doc).
-- [ ] User has approved the §6.1 security-gap fix in S1 (existing
+- [x] User has approved the §6.1 security-gap fix in S1 (existing
       PATCH/mark-outcome ownership enforcement). This is a real
       security risk in today's codebase, surfaced by the architect
       review of this contract.
-- [ ] User has approved the §3.1 re-attach correction path
+- [x] User has approved the §3.1 re-attach correction path
       (elevated-only) and the §3.5 inline pending→quoted flip.
 
-When all eight are checked, this contract is locked. Task #850 (UI
-build) can execute against it without further interpretation.
+**LOCKED — 2026-04-30.** All eight items ratified by user. This
+contract is the source of truth for Task #850 (UI build) and every
+backend slice in §8. Any deviation from the shapes, state model,
+event-writing rules, or permission matrix above must be re-ratified
+before implementation.
 
 ---
 
@@ -1089,3 +1092,4 @@ build) can execute against it without further interpretation.
 | Initial+1  | §3.5                    | Inline `pending→quoted` flip when `linkedQuoteId` is set, eliminating the up-to-30s autopilot lag the rep would otherwise see. AC1 updated.                  | Architect review     |
 | Initial+1  | §3.7 (NEW)              | Document the required leakage-stats classifier amendment (`AND clr.decision <> 'returned_to_queue'` in both CTEs) plus test extension. Lands in S2.          | Architect review     |
 | Initial+1  | §6, §6.1 (NEW)          | Reconcile §3.5 permission row to "own/manager/admin only" (was "rep other if visible"). Added §6.1 documenting the existing security gap on PATCH/mark-outcome and folding the fix into S1. | Architect review     |
+| 2026-04-30 | §10                     | All 8 sign-off items ratified by user. Contract locked as source of truth for Task #850 and all backend slices in §8.                                                                       | User ratification    |
