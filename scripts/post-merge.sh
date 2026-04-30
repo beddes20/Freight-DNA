@@ -14,7 +14,7 @@ npm install
 #     and a stuck push should never block the rest of post-merge setup.
 #  3. Pipe newlines anyway so confirm prompts that DO read stdin get a default.
 set +e
-printf '\n%.0s' {1..40} | timeout 180 npx drizzle-kit push --force
+printf '\n%.0s' {1..40} | timeout 90 npx drizzle-kit push --force
 DRIZZLE_EXIT=$?
 set -e
 if [ $DRIZZLE_EXIT -ne 0 ]; then
