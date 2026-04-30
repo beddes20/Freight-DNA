@@ -381,6 +381,15 @@ process.on("uncaughtException", (err) => {
 
   await runMigrations();
 
+  // Verify the forward-closure dedup index actually exists before any
+  // request handler can reach the live-write path. The service refuses
+  // to write opps until this flag is set, so a missing index degrades
+  // safely to a no-op rather than letting concurrent ticks dupe rows.
+  const { verifyClosureIdempotencyIndex } = await import(
+    "./services/quoteOpportunityFromSignalService"
+  );
+  await verifyClosureIdempotencyIndex();
+
   // Schema-drift guard: after migrations run, verify the live DB has every
   // table/column that `shared/schema.ts` declares. Catches the failure mode
   // where a feature adds columns to the schema but forgets the matching

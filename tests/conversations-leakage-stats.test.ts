@@ -201,6 +201,45 @@ async function main(): Promise<void> {
         assert(`domain=${d.domain}: leakedSignals (${d.leakedSignals}) <= totalSignals (${d.totalSignals})`,
           d.leakedSignals <= d.totalSignals);
       }
+
+      // ── Phase 2b — Task #847 closure counters ────────────────────────
+      // The same endpoint now also surfaces in-process forward-closure
+      // decision counters (created / attached / skipped_*) plus their
+      // dry-run twins (would_create / would_attach). Mirror the per-
+      // window axis used above so the tile can stack the two rows.
+      section("Phase 2b: closure block is present and well-formed");
+      assert(`response has closure block`, !!body.closure);
+      assert(`closure has last24h`, !!body.closure?.last24h);
+      assert(`closure has last7d`, !!body.closure?.last7d);
+      const closureFields = [
+        "created", "attached", "skippedLowConfidence",
+        "skippedInternal",
+        "wouldCreate", "wouldAttach", "wouldSkippedLowConfidence",
+      ] as const;
+      for (const [label, c] of [
+        ["closure.last24h", body.closure?.last24h],
+        ["closure.last7d", body.closure?.last7d],
+      ] as const) {
+        assert(`${label}.enabled is boolean (got ${typeof c?.enabled})`,
+          typeof c?.enabled === "boolean");
+        for (const k of closureFields) {
+          const v = (c as Record<string, unknown>)[k];
+          assert(`${label}.${k} is a non-negative integer (got ${v})`,
+            typeof v === "number" && v >= 0 && Number.isInteger(v));
+        }
+      }
+      // Window monotonicity — every closure counter at 24h must be <=
+      // its 7d counterpart, since the 24h window is a strict sub-slice.
+      const c24 = body.closure?.last24h ?? {};
+      const c7 = body.closure?.last7d ?? {};
+      for (const k of closureFields) {
+        assert(`closure.${k}: 24h (${c24[k]}) <= 7d (${c7[k]})`,
+          (c24[k] ?? 0) <= (c7[k] ?? 0));
+      }
+      // `enabled` reflects the env flag and must agree across windows
+      // (it's a process-level toggle, not a window-derived counter).
+      assert(`closure.enabled agrees across windows`,
+        c24.enabled === c7.enabled);
     }
 
     console.log(`\n\u2500\u2500 Results: ${passed} passed, ${failed} failed \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500`);

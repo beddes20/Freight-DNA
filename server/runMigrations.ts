@@ -5166,4 +5166,25 @@ export async function runMigrations() {
   } finally {
     clientFreshness.release();
   }
+
+  // Quote leak forward closure (Task #847). Fail-closed: the partial
+  // unique index is the only thing protecting concurrent scheduler
+  // ticks from creating duplicate opps for the same source_reference,
+  // so any failure here aborts boot. The companion `internal_domains`
+  // column on `organizations` powers the per-org admin override.
+  const clientClosure = await pool.connect();
+  try {
+    await clientClosure.query(`
+      ALTER TABLE organizations
+        ADD COLUMN IF NOT EXISTS internal_domains text[]
+        DEFAULT ARRAY[]::text[]
+    `);
+    await clientClosure.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS quote_opportunities_email_signal_source_ref_uidx
+        ON quote_opportunities (organization_id, source_reference)
+        WHERE source = 'email_signal'
+    `);
+  } finally {
+    clientClosure.release();
+  }
 }

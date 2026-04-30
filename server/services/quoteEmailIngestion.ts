@@ -504,7 +504,10 @@ export async function parseQuoteEmailAi(input: {
  * manually-overridden we never touch it; otherwise we leave classification to
  * the cheaper background pass which has access to the carriers table.
  */
-async function findOrCreateCustomer(orgId: string, name: string, fromEmail?: string | null): Promise<string> {
+// Exported so `quoteOpportunityFromSignalService` (Task #847 forward-
+// closure path) can reuse the same dedup + free-mail rebucketing logic
+// rather than racing the table with a parallel implementation.
+export async function findOrCreateCustomer(orgId: string, name: string, fromEmail?: string | null): Promise<string> {
   // Task #753 — final safety net before we touch the table. Anything that
   // resolved to a free-mail provider name (the bug Task #578 was supposed
   // to kill) is silently rebucketed into the shared
@@ -528,7 +531,10 @@ async function findOrCreateCustomer(orgId: string, name: string, fromEmail?: str
   return row.id;
 }
 
-async function findOrCreateRep(orgId: string, email: string): Promise<string | null> {
+// Exported alongside `findOrCreateCustomer` for the Task #847 closure
+// service so newly-created closure opps share the same rep-resolution
+// behaviour (user-link self-heal, role gating) as the canonical path.
+export async function findOrCreateRep(orgId: string, email: string): Promise<string | null> {
   if (!email) return null;
   const existing = await db.select().from(quoteReps)
     .where(and(eq(quoteReps.organizationId, orgId), eq(quoteReps.email, email)))

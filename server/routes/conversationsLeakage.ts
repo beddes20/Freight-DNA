@@ -31,6 +31,10 @@ import { sql } from "drizzle-orm";
 import { db } from "../storage";
 import { requireUser } from "../auth";
 import { getErrorMessage } from "../lib/errors";
+import {
+  getClosureCounters,
+  type ClosureCounters,
+} from "../services/quoteOpportunityFromSignalService";
 
 function isAdmin(role: string | null | undefined): boolean {
   return role === "admin" || role === "director" || role === "sales_director";
@@ -58,6 +62,19 @@ interface LeakageStatsResponse {
   organizationId: string;
   windows: { last24h: WindowStats; last7d: WindowStats };
   topLeakingDomains: DomainBreakdown[];
+  /**
+   * Task #847 — Phase 2b forward-closure decision counters, scoped to
+   * the same per-org / per-window axes as `windows.*` so the tile can
+   * stack the two rows. When `closure.enabled` is false (default), the
+   * `would_*` fields show what *would* happen once the flag flips; the
+   * `created` / `attached` / `skipped_*` fields stay at zero.
+   * In-memory ring buffer per process — multi-pod deployments would
+   * need to aggregate across instances; we run single-pod today.
+   */
+  closure: {
+    last24h: ClosureCounters;
+    last7d: ClosureCounters;
+  };
 }
 
 async function computeWindow(
@@ -220,11 +237,21 @@ export function registerConversationsLeakageRoutes(app: Express) {
           computeWindow(orgId, "Last 7d", 24 * 7),
           computeTopLeakingDomains(orgId, 24 * 7, 10),
         ]);
+        // Closure counters live in-process (in-memory ring buffer in
+        // the closure service), so we read them synchronously without
+        // a DB roundtrip. Window starts mirror the SQL windows above so
+        // the tile's two rows describe the same time slice.
+        const now = Date.now();
+        const closure = {
+          last24h: getClosureCounters(orgId, now - 24 * 60 * 60 * 1000),
+          last7d:  getClosureCounters(orgId, now - 7 * 24 * 60 * 60 * 1000),
+        };
         const payload: LeakageStatsResponse = {
           generatedAt: new Date().toISOString(),
           organizationId: orgId,
           windows: { last24h, last7d },
           topLeakingDomains,
+          closure,
         };
         res.json(payload);
       } catch (err) {

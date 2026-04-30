@@ -13,6 +13,10 @@ export const organizations = pgTable("organizations", {
   billingStatus: text("billing_status").default("pending"),
   planName: text("plan_name"),
   currentPeriodEnd: timestamp("current_period_end"),
+  // Admin-managed list of email domains treated as internal for the
+  // forward-closure skip rule (unioned with monitored mailboxes and
+  // user logins).
+  internalDomains: text("internal_domains").array().default(sql`ARRAY[]::text[]`),
 });
 
 export const insertOrganizationSchema = createInsertSchema(organizations).omit({ id: true, createdAt: true });
@@ -5431,7 +5435,7 @@ export type CaptureLeakType = typeof CAPTURE_LEAK_TYPES[number];
 // the existing not_quote/ignored decisions. The companion
 // quote_events row (actor=manual_leak_attach, eventType=email_attached)
 // is audit/analytics only — this row is the resolution evidence.
-export const CAPTURE_LEAK_REVIEW_DECISIONS = ["not_quote", "ignored", "attached"] as const;
+export const CAPTURE_LEAK_REVIEW_DECISIONS = ["not_quote", "ignored", "attached", "deferred"] as const;
 export type CaptureLeakReviewDecision = typeof CAPTURE_LEAK_REVIEW_DECISIONS[number];
 
 export const captureLeakReviews = pgTable(

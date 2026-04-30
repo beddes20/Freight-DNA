@@ -676,11 +676,26 @@ interface LeakageDomainBreakdown {
   leakRate: number;
 }
 
+interface LeakageClosureCounters {
+  enabled: boolean;
+  created: number;
+  attached: number;
+  skippedLowConfidence: number;
+  skippedInternal: number;
+  wouldCreate: number;
+  wouldAttach: number;
+  wouldSkippedLowConfidence: number;
+}
+
 interface LeakageStatsResponse {
   generatedAt: string;
   organizationId: string;
   windows: { last24h: LeakageWindowStats; last7d: LeakageWindowStats };
   topLeakingDomains: LeakageDomainBreakdown[];
+  closure?: {
+    last24h: LeakageClosureCounters;
+    last7d: LeakageClosureCounters;
+  };
 }
 
 function pct(n: number): string {
@@ -723,6 +738,93 @@ function LeakageWindowCard({ stats }: { stats: LeakageWindowStats }) {
           <div>
             <div className="text-muted-foreground">Leaked</div>
             <div className={`tabular-nums font-medium ${tone}`} data-testid={`text-leaked-${testIdSlug}`}>{stats.leaked}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Forward-closure decision counters paired with the leak-rate row.
+// `enabled: false` switches to dry-run styling and reads would_* fields.
+function ClosureWindowCard({
+  stats,
+  windowLabel,
+}: {
+  stats: LeakageClosureCounters;
+  windowLabel: string;
+}) {
+  const dryRun = !stats.enabled;
+  const testIdSlug = windowLabel.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  const created = dryRun ? stats.wouldCreate : stats.created;
+  const attached = dryRun ? stats.wouldAttach : stats.attached;
+  const lowConf = dryRun ? stats.wouldSkippedLowConfidence : stats.skippedLowConfidence;
+  const total = created + attached + lowConf + stats.skippedInternal;
+  return (
+    <div
+      className={`border rounded-md p-3 space-y-2 ${
+        dryRun
+          ? "border-dashed border-slate-300 bg-slate-50 dark:bg-slate-900/30 dark:border-slate-700"
+          : "border-border"
+      }`}
+      data-testid={`closure-window-${testIdSlug}`}
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-xs uppercase tracking-wider text-muted-foreground">
+          {windowLabel} · forward closure
+        </span>
+        <span
+          className={`text-[10px] px-1.5 py-0.5 rounded ${
+            dryRun
+              ? "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+              : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+          }`}
+          data-testid={`badge-closure-mode-${testIdSlug}`}
+        >
+          {dryRun ? "dry-run" : "live"}
+        </span>
+      </div>
+      {total === 0 ? (
+        <p className="text-xs text-muted-foreground italic">
+          {dryRun ? "No closure decisions in this window yet." : "No closure activity in this window."}
+        </p>
+      ) : (
+        <div className="grid grid-cols-4 gap-2 text-xs">
+          <div>
+            <div className="text-muted-foreground">{dryRun ? "Would create" : "Created"}</div>
+            <div
+              className="tabular-nums font-medium text-emerald-700 dark:text-emerald-400"
+              data-testid={`text-closure-created-${testIdSlug}`}
+            >
+              {created}
+            </div>
+          </div>
+          <div>
+            <div className="text-muted-foreground">{dryRun ? "Would attach" : "Attached"}</div>
+            <div
+              className="tabular-nums font-medium text-sky-700 dark:text-sky-400"
+              data-testid={`text-closure-attached-${testIdSlug}`}
+            >
+              {attached}
+            </div>
+          </div>
+          <div>
+            <div className="text-muted-foreground">{dryRun ? "Would skip (low conf.)" : "Skipped low conf."}</div>
+            <div
+              className="tabular-nums font-medium text-amber-700 dark:text-amber-400"
+              data-testid={`text-closure-skipped-low-confidence-${testIdSlug}`}
+            >
+              {lowConf}
+            </div>
+          </div>
+          <div>
+            <div className="text-muted-foreground">Skipped internal</div>
+            <div
+              className="tabular-nums font-medium text-slate-700 dark:text-slate-300"
+              data-testid={`text-closure-skipped-internal-${testIdSlug}`}
+            >
+              {stats.skippedInternal}
+            </div>
           </div>
         </div>
       )}
@@ -785,6 +887,13 @@ function QuoteRequestLeakageTile() {
           <LeakageWindowCard stats={data.windows.last24h} />
           <LeakageWindowCard stats={data.windows.last7d} />
         </div>
+
+        {data.closure && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="closure-row">
+            <ClosureWindowCard stats={data.closure.last24h} windowLabel="Last 24h" />
+            <ClosureWindowCard stats={data.closure.last7d} windowLabel="Last 7d" />
+          </div>
+        )}
 
         {data.topLeakingDomains.length > 0 && (
           <div className="space-y-1">

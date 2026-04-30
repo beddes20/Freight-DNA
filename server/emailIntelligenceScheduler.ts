@@ -216,6 +216,29 @@ export async function runEmailIntelligenceBatch(
         }
       }
 
+      // Forward-closure runs after ingestQuoteFromEmail so it sees any
+      // opp that path just created and attaches rather than racing a
+      // duplicate. Fault-isolated.
+      if (saved.length > 0 && msg.direction === "inbound") {
+        try {
+          const { processQuoteSignalClosure } = await import(
+            "./services/quoteOpportunityFromSignalService"
+          );
+          await processQuoteSignalClosure(msg, saved);
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.error(
+            `[emailIntelligenceScheduler] quote-closure failed for ${msg.id}:`,
+            err,
+          );
+          recordIntegrationEvent({
+            source: "graph",
+            outcome: "error",
+            errorMessage: `quote_closure:${msg.id}: ${errMsg.slice(0, 200)}`,
+          });
+        }
+      }
+
       // ── Consumer area 5: Account contact capture (Task #201) ───────────────
       // Runs for every account-linked message regardless of signal count.
       if (msg.linkedAccountId) {
