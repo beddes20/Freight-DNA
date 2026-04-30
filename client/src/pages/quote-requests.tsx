@@ -212,6 +212,12 @@ type AutomationCounters = {
 
 type StatusFilter = "all" | "new" | "quoted" | "won" | "lost" | "no_response";
 type AgeFilter = "today" | "24h" | "7d" | "30d";
+type SortKey = "requestDate" | "customerName" | "outcomeStatus" | "repName" | "originCity";
+type AttachDecision = "attached" | "duplicate";
+type LeakReason = "not_a_request" | "unparseable" | "wrong_party" | "duplicate_email" | "other";
+type SendToLeakBody = { reason: LeakReason; note?: string; suppressSender?: boolean };
+type SendToLeakResponse = { senderSuppressionRequested?: boolean; senderSuppressed?: boolean };
+type SnoozeResponse = { status?: string };
 
 // ─── Constants & helpers ──────────────────────────────────────────────────
 
@@ -369,7 +375,7 @@ function QuoteRequestsInner(): JSX.Element {
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [includeSnoozed, setIncludeSnoozed] = useState(false);
-  const [sortKey, setSortKey] = useState<"requestDate" | "customerName" | "outcomeStatus" | "repName" | "originCity">("requestDate");
+  const [sortKey, setSortKey] = useState<SortKey>("requestDate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [offset, setOffset] = useState(0);
   // selectedId controls the drawer (open/closed). focusedId is the
@@ -858,7 +864,7 @@ function KpiTile({
     tone === "success" ? "text-emerald-500" :
     tone === "amber" ? "text-amber-600" :
     "text-muted-foreground";
-  const Wrapper: any = onClick && !disabled ? "button" : "div";
+  const Wrapper = (onClick && !disabled ? "button" : "div") as React.ElementType;
   return (
     <Wrapper
       type={onClick ? "button" : undefined}
@@ -929,7 +935,7 @@ function ListTable({
   onOpen: (id: string) => void;
   sortKey: string;
   sortDir: "asc" | "desc";
-  onSort: (k: any) => void;
+  onSort: (k: SortKey) => void;
   isElevated: boolean;
   myRepId: string | null;
 }): JSX.Element {
@@ -973,13 +979,13 @@ function ListTable({
           <thead className="sticky top-0 z-10 bg-card border-b border-border shadow-sm">
             <tr className="text-muted-foreground uppercase tracking-wider text-[10px] font-semibold">
               <th className="w-6 py-2 px-3"></th>
-              <SortableHeader label="Customer" k="customerName" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
-              <SortableHeader label="Lane" k="originCity" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+              <SortableHeader label="Customer" k="customerName" sortKey={sortKey as SortKey} sortDir={sortDir} onSort={onSort} />
+              <SortableHeader label="Lane" k="originCity" sortKey={sortKey as SortKey} sortDir={sortDir} onSort={onSort} />
               <th className="py-2 px-3">Equipment</th>
-              <SortableHeader label="Requested" k="requestDate" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+              <SortableHeader label="Requested" k="requestDate" sortKey={sortKey as SortKey} sortDir={sortDir} onSort={onSort} />
               <th className="py-2 px-3">Age</th>
-              <SortableHeader label="Status" k="outcomeStatus" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
-              <SortableHeader label="Rep" k="repName" sortKey={sortKey} sortDir={sortDir} onSort={onSort} />
+              <SortableHeader label="Status" k="outcomeStatus" sortKey={sortKey as SortKey} sortDir={sortDir} onSort={onSort} />
+              <SortableHeader label="Rep" k="repName" sortKey={sortKey as SortKey} sortDir={sortDir} onSort={onSort} />
               <th className="py-2 px-3">Last activity</th>
               <th className="py-2 px-3 text-right pr-4">Source</th>
             </tr>
@@ -1035,10 +1041,10 @@ function SortableHeader({
   label, k, sortKey, sortDir, onSort,
 }: {
   label: string;
-  k: string;
-  sortKey: string;
+  k: SortKey;
+  sortKey: SortKey;
   sortDir: "asc" | "desc";
-  onSort: (k: any) => void;
+  onSort: (k: SortKey) => void;
 }): JSX.Element {
   const active = sortKey === k;
   return (
@@ -1885,7 +1891,7 @@ function AttachToDialog({
         <div className="space-y-4">
           <div>
             <Label className="text-xs">Decision</Label>
-            <Select value={decision} onValueChange={(v) => setDecision(v as any)}>
+            <Select value={decision} onValueChange={(v) => setDecision(v as AttachDecision)}>
               <SelectTrigger className="h-8 text-xs mt-1" data-testid="select-attach-decision"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="duplicate">Duplicate request (default)</SelectItem>
@@ -1989,13 +1995,13 @@ function SendToLeakDialog({
 
   const mut = useMutation({
     mutationFn: async () => {
-      const body: any = { reason };
+      const body: SendToLeakBody = { reason };
       if (note) body.note = note;
       if (reason === "not_a_request" && suppressSender) body.suppressSender = true;
       const res = await apiRequest("POST", `/api/customer-quotes/quote/${quote.id}/send-to-leak`, body);
-      return res.json();
+      return (await res.json()) as SendToLeakResponse;
     },
-    onSuccess: (data: any) => {
+    onSuccess: (data) => {
       const msg = data?.senderSuppressionRequested && !data?.senderSuppressed
         ? "Sent to leak queue (sender suppression skipped — admin only)"
         : data?.senderSuppressed
@@ -2033,7 +2039,7 @@ function SendToLeakDialog({
         <div className="space-y-4">
           <div>
             <Label className="text-xs">Reason</Label>
-            <Select value={reason} onValueChange={v => setReason(v as any)}>
+            <Select value={reason} onValueChange={v => setReason(v as LeakReason)}>
               <SelectTrigger className="h-8 text-xs mt-1" data-testid="select-leak-reason"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="not_a_request">Not a request (override autopilot)</SelectItem>
@@ -2108,9 +2114,9 @@ function SnoozeDialog({
   const setMut = useMutation({
     mutationFn: async (snoozedUntil: string | null) => {
       const res = await apiRequest("PATCH", `/api/customer-quotes/quote/${quote.id}/snooze`, { snoozedUntil });
-      return res.json();
+      return (await res.json()) as SnoozeResponse;
     },
-    onSuccess: (data: any) => {
+    onSuccess: (data) => {
       toast({ title: data?.status === "snoozed" ? "Snoozed" : "Unsnoozed" });
       onSuccess();
     },
