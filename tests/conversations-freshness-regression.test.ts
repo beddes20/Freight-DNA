@@ -175,6 +175,62 @@ async function main(): Promise<void> {
       : undefined,
   );
 
+  // ─────────────────────────────────────────────────────────────────────
+  // Task #858 — Date-filter seam from the *display* side.
+  //
+  // For any thread returned by ?dateFrom=today&dateTo=today, the
+  // API-shipped `lastEmailAt` must land inside the rep-local today
+  // window. If it doesn't, either the storage filter regressed (back
+  // to anchoring on `updated_at`) or the route layer's tz resolution
+  // drifted away from the row label. Both are visible-to-the-rep bugs.
+  // ─────────────────────────────────────────────────────────────────────
+  console.log("\n── Phase 1+: ?dateFrom=today&dateTo=today only returns rows whose lastEmailAt is in today (Task #858) ──\n");
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    const todayStr = `${yyyy}-${mm}-${dd}`;
+    const localStart = new Date(yyyy, now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    const localEnd = new Date(yyyy, now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    const qs = new URLSearchParams({
+      dateFrom: todayStr,
+      dateTo: todayStr,
+      tz,
+      limit: "100",
+    });
+    const r = await fetch(`${BASE_URL}/api/internal/conversations?${qs.toString()}`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!r.ok) {
+      console.warn(`  ! /api/internal/conversations returned ${r.status} — skipping date-filter seam check`);
+    } else {
+      const body = (await r.json()) as { threads?: ApiThread[] };
+      const rows = Array.isArray(body.threads) ? body.threads : [];
+      let outsideWindow = 0;
+      let firstOffender: ApiThread | null = null;
+      for (const t of rows) {
+        if (!t.lastEmailAt) continue;
+        const ts = new Date(t.lastEmailAt);
+        if (ts < localStart || ts > localEnd) {
+          outsideWindow++;
+          if (!firstOffender) firstOffender = t;
+        }
+      }
+      assert(
+        `Every today-window row's lastEmailAt is inside the rep-local today window (${rows.length} threads checked)`,
+        outsideWindow === 0,
+        firstOffender
+          ? `Row ${firstOffender.threadId} has lastEmailAt=${firstOffender.lastEmailAt} which is outside ` +
+            `[${localStart.toISOString()}, ${localEnd.toISOString()}] — see Task #858`
+          : undefined,
+      );
+    }
+  } catch (err) {
+    console.warn("  ! date-filter seam check skipped:", err);
+  }
+
   await pool.end();
 
   console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);

@@ -975,14 +975,6 @@ assert(
 // Section 17: Post-2d Quote Requests S2-S6 — operator endpoints, leakage
 // classifier amendment, and quote-sender suppression schema (Task #849
 // §3.1, §3.2, §3.3, §3.4, §3.5, §3.7).
-//
-// The S2-S6 slice ships five new operator endpoints, the §3.7 classifier
-// amendment that lets the leakage diagnostic see opps materialized via
-// `quote_opportunities.source_reference` (not just via
-// `email_signals.linked_opportunity_id`), and the §3.2 suppression
-// schema on `quote_sender_mappings`. These guardrails fail the build if
-// any of those contract surfaces silently regress.
-// ─────────────────────────────────────────────────────────────────────────────
 console.log("\n── 17. Post-2d Quote Requests S2-S6 — endpoints / classifier / schema ────\n");
 
 {
@@ -1021,8 +1013,6 @@ console.log("\n── 17. Post-2d Quote Requests S2-S6 — endpoints / classifie
 
 {
   const customerQuotesSvc = readFile("server/services/customerQuotes.ts");
-  // Service-layer entrypoints + their concurrency mutexes are exported
-  // so the regression tests can drive them directly.
   for (const fn of ["attachQuoteToTarget", "sendQuoteToLeak", "snoozeQuote"] as const) {
     assert(
       `services/customerQuotes.ts — exports ${fn}`,
@@ -1030,18 +1020,12 @@ console.log("\n── 17. Post-2d Quote Requests S2-S6 — endpoints / classifie
       `Task #849 §3.1-3.3 requires services/customerQuotes.ts to export ${fn}.`,
     );
   }
-  // Mutex pattern present for attach + send-to-leak (snooze is idempotent
-  // on its own, so by contract it does NOT take a mutex).
   assert(
     "services/customerQuotes.ts — attach-to and send-to-leak each use an in-process mutex",
     /_attachQuoteInFlight\s*=\s*new Map/.test(customerQuotesSvc) &&
       /_sendToLeakInFlight\s*=\s*new Map/.test(customerQuotesSvc),
     "Task #849 §3.1, §3.2 — duplicate-click protection requires per-key Map<string,Promise> mutexes mirroring the existing _leakAttachInFlight pattern.",
   );
-  // 14d snooze cap is locked. We accept either the literal expression
-  // assigned directly into SNOOZE_QUOTE_LIMITS.MAX_FUTURE_MS, OR the
-  // current factored-out style where the constant is bound to a
-  // module-local 14*24*60*60*1000 named SNOOZE_MAX_FUTURE_MS.
   assert(
     "services/customerQuotes.ts — SNOOZE_QUOTE_LIMITS.MAX_FUTURE_MS = 14d",
     /SNOOZE_QUOTE_LIMITS[\s\S]*?MAX_FUTURE_MS\s*:\s*(?:SNOOZE_MAX_FUTURE_MS|14\s*\*\s*24\s*\*\s*60\s*\*\s*60\s*\*\s*1000)/.test(customerQuotesSvc) &&
@@ -1058,19 +1042,12 @@ console.log("\n── 17. Post-2d Quote Requests S2-S6 — endpoints / classifie
     /\/api\/quote-requests\/automation-counters/.test(conversationsLeakageSrc),
     "Task #849 §3.4 requires GET /api/quote-requests/automation-counters.",
   );
-  // Cache window: either a literal `max-age=30` in the header, OR the
-  // factored-out `AUTOMATION_COUNTERS_TTL_MS = 30_000` constant routed
-  // into the Cache-Control header via Math.floor(.../1000).
   assert(
     "conversationsLeakage.ts — automation-counters honours the 30s freshness cap",
     /max-age=30(?!\d)/.test(conversationsLeakageSrc) ||
       /AUTOMATION_COUNTERS_TTL_MS\s*=\s*30[_\s]*000/.test(conversationsLeakageSrc),
     "Task #849 §3.4 caps the operator strip at 30s freshness so concurrent dashboards don't hammer the read path.",
   );
-  // §3.7 classifier amendment must be present in BOTH window aggregate
-  // and the top-domains aggregate. The amendment is the EXISTS clause
-  // that recognises `quote_opportunities.source_reference = email_messages.provider_message_id`
-  // as evidence of materialization.
   const sourceRefMatches = (conversationsLeakageSrc.match(
     /qo\.source_reference\s*=\s*e\.provider_message_id/g,
   ) ?? []).length;
@@ -1082,9 +1059,7 @@ console.log("\n── 17. Post-2d Quote Requests S2-S6 — endpoints / classifie
 }
 
 {
-  // §3.5 send-thread-reply route. The contract pins the public path
-  // (/api/email-conversations/:threadId/reply), not the internal one,
-  // so the new Quote Requests UI can call it without a router alias.
+  // §3.5 send-thread-reply route.
   const conversationsRoutes = readFile("server/routes/conversations.ts");
   assert(
     "conversations.ts — POST /api/email-conversations/:threadId/reply route exists",
@@ -1099,10 +1074,7 @@ console.log("\n── 17. Post-2d Quote Requests S2-S6 — endpoints / classifie
 }
 
 {
-  // §3.2 quote-sender suppression schema. Surface check on the column,
-  // the customer_id nullable flip, and the lookupMapping suppression
-  // filter — all three are required so suppressed senders can never
-  // re-ingest as quote opportunities.
+  // §3.2 quote-sender suppression schema.
   const senderMappingsSchema = readFile("shared/schema.ts");
   assert(
     "shared/schema.ts — quote_sender_mappings.suppressed boolean exists",
@@ -1120,11 +1092,6 @@ console.log("\n── 17. Post-2d Quote Requests S2-S6 — endpoints / classifie
     /export\s+async\s+function\s+findSuppressionMapping\b/.test(senderMappingsSvc),
     "Task #849 §3.2 requires findSuppressionMapping so the ingestion path can short-circuit on suppression.",
   );
-  // Ingestion-path suppression check. The Phase 2b autopilot path
-  // lives in quoteOpportunityFromSignalService.processOneSignal — that
-  // is where the suppression short-circuit must fire (after the
-  // internal-domain skip and before the would-create / would-attach
-  // branches).
   const oppFromSignalSrc = readFile("server/services/quoteOpportunityFromSignalService.ts");
   assert(
     "services/quoteOpportunityFromSignalService.ts — processOneSignal short-circuits on findSuppressionMapping",
@@ -1132,6 +1099,53 @@ console.log("\n── 17. Post-2d Quote Requests S2-S6 — endpoints / classifie
     "Task #849 §3.2 — quoteOpportunityFromSignalService.processOneSignal must consult findSuppressionMapping after the internal-domain check so suppressed senders never materialize a quote opportunity.",
   );
 }
+
+// Section 18: Task #858 — Conversations date filter must anchor on real
+// email activity (`GREATEST(last_incoming_at, last_outgoing_at)`), not
+// `updated_at`. Archived bucket keeps `archived_at`.
+console.log("\n── 18. Conversations date filter — real-email-activity anchor (Task #858) ─────\n");
+
+const storageSrcForDateFilter = readFile("server/storage.ts");
+{
+  const fnStart = storageSrcForDateFilter.indexOf("async listEmailConversationThreads");
+  const sliceStart = fnStart >= 0 ? fnStart : 0;
+  const body = storageSrcForDateFilter.slice(sliceStart, sliceStart + 25000);
+  const filterBlock = body.match(/if\s*\(\s*filters\.dateFrom\s*\|\|\s*filters\.dateTo\s*\)[\s\S]{0,3000}/);
+  assert(
+    "storage.ts listEmailConversationThreads — has a unified date-filter block",
+    !!filterBlock,
+    "Could not locate the dateFrom/dateTo block in listEmailConversationThreads — Task #858 expects a single guarded block that branches on archivedOnly.",
+  );
+  if (filterBlock) {
+    const block = filterBlock[0];
+    assert(
+      "storage.ts listEmailConversationThreads — non-archived date filter does NOT touch updatedAt",
+      !/emailConversationThreads\.updatedAt/.test(block),
+      "Found `emailConversationThreads.updatedAt` inside the date-filter block. Task #858: the non-archived path must anchor on `GREATEST(last_incoming_at, last_outgoing_at)`.",
+    );
+    assert(
+      "storage.ts listEmailConversationThreads — non-archived date filter anchors on real email-activity columns",
+      /emailConversationThreads\.lastIncomingAt/.test(block) &&
+        /emailConversationThreads\.lastOutgoingAt/.test(block) &&
+        /GREATEST/.test(block),
+      "The non-archived date filter must reference both lastIncomingAt and lastOutgoingAt and combine them with GREATEST.",
+    );
+    assert(
+      "storage.ts listEmailConversationThreads — Archived bucket still anchors on archived_at",
+      /archivedAt/.test(block),
+      "The archived branch of the date filter must keep using `archivedAt` — that bucket is *about* archive time.",
+    );
+  }
+}
+
+const conversationsRouteForTz = readFile("server/routes/conversations.ts");
+assert(
+  "routes/conversations.ts — exposes resolveLocalDayBound + accepts the `tz` query param",
+  /resolveLocalDayBound/.test(conversationsRouteForTz) &&
+    /\btz\b/.test(conversationsRouteForTz) &&
+    /Intl\.DateTimeFormat/.test(conversationsRouteForTz),
+  "Task #858 step 2 (timezone seam): the route layer must resolve `dateFrom`/`dateTo` to the rep's local-day boundary using a `tz` query param so an EDT 7pm 'Today' pick doesn't lop off the evening.",
+);
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);

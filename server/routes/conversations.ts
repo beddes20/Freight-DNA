@@ -77,6 +77,69 @@ import {
 // query returns nothing (extremely rare; the runMigrations backfill keeps
 // them in sync). Cost is one batched aggregate per page (≤100 threads).
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Task #858 — resolve a YYYY-MM-DD date filter to the rep's local-day
+// boundary using a `tz` IANA zone, falling back to UTC if absent.
+// Returns ISO instants so storage just `new Date()`s them.
+function isValidIanaTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function tzOffsetMs(timestamp: number, tz: string): number {
+  // Returns the offset such that adding it to `timestamp` gives the
+  // rep-local wall-clock representation of `timestamp` viewed as a UTC
+  // instant. Positive for east of GMT, negative for west.
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const parts = dtf.formatToParts(new Date(timestamp));
+  const map: Record<string, number> = {};
+  for (const p of parts) {
+    if (p.type !== "literal") map[p.type] = Number(p.value);
+  }
+  // Intl can emit hour=24 at midnight in some locales; normalize to 0.
+  const hour = map.hour === 24 ? 0 : map.hour;
+  const asUtc = Date.UTC(map.year, map.month - 1, map.day, hour, map.minute, map.second);
+  return asUtc - timestamp;
+}
+
+function resolveLocalDayBound(
+  dateStr: string,
+  tz: string | undefined,
+  kind: "start" | "end",
+): string {
+  // Already an ISO instant — pass through untouched.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return dateStr;
+  }
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!tz || !isValidIanaTimeZone(tz)) {
+    // Legacy UTC behavior — UTC midnight or end-of-day.
+    const utc = new Date(Date.UTC(y, m - 1, d, 0, 0, 0));
+    if (kind === "end") utc.setUTCHours(23, 59, 59, 999);
+    return utc.toISOString();
+  }
+  const targetH = kind === "start" ? 0 : 23;
+  const targetMin = kind === "start" ? 0 : 59;
+  const targetS = kind === "start" ? 0 : 59;
+  const targetMs = kind === "start" ? 0 : 999;
+  const wallUtcMs = Date.UTC(y, m - 1, d, targetH, targetMin, targetS, targetMs);
+  const offsetMs = tzOffsetMs(wallUtcMs, tz);
+  return new Date(wallUtcMs - offsetMs).toISOString();
+}
+
 async function computeLastEmailAtMap(
   orgId: string,
   threads: Array<{ threadId: string | null; lastIncomingAt: Date | null; lastOutgoingAt: Date | null }>,
@@ -336,7 +399,7 @@ export function registerConversationsRoutes(app: Express): void {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
       const orgId = user.organizationId;
-      const { accountId, carrierId, ownerUserId, unowned, waitingState, responsePriority, overdue, threadId, archived, snoozed, cursor, limit, search, dateFrom, dateTo, signal, sort, audience } = req.query;
+      const { accountId, carrierId, ownerUserId, unowned, waitingState, responsePriority, overdue, threadId, archived, snoozed, cursor, limit, search, dateFrom, dateTo, tz, signal, sort, audience } = req.query;
 
       const filters: Parameters<typeof storage.listEmailConversationThreads>[1] = {};
 
@@ -370,8 +433,12 @@ export function registerConversationsRoutes(app: Express): void {
       if (cursor) filters.cursor = cursor as string;
       if (limit) filters.limit = Math.min(parseInt(limit as string, 10) || 50, 100);
       if (search) filters.search = search as string;
-      if (dateFrom) filters.dateFrom = dateFrom as string;
-      if (dateTo) filters.dateTo = dateTo as string;
+      // Task #858 — resolve YYYY-MM-DD into the rep's local-day boundaries
+      // before passing to storage. The frontend now ships `tz=<IANA zone>`;
+      // legacy callers without `tz` still get the prior UTC behavior.
+      const tzParam = typeof tz === "string" ? tz : "";
+      if (dateFrom) filters.dateFrom = resolveLocalDayBound(dateFrom as string, tzParam, "start");
+      if (dateTo) filters.dateTo = resolveLocalDayBound(dateTo as string, tzParam, "end");
       if (sort === "recency" || sort === "priority") filters.sort = sort;
 
       // Optional `team=<userId>` filter: returns threads owned by the given

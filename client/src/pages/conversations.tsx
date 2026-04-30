@@ -195,6 +195,8 @@ export default function ConversationsPage() {
     return `${yyyy}-${mm}-${dd}`;
   }
 
+  // Picker state holds plain YYYY-MM-DD; buildParams also sends `tz` so
+  // the backend resolves the day window in the rep's local zone (#858).
   function applyDatePreset(preset: "today" | "last7" | "last30" | "thisMonth") {
     const today = new Date();
     const todayStr = fmtLocalDate(today);
@@ -369,9 +371,19 @@ export default function ConversationsPage() {
     if (audience !== "all") p.set("audience", audience);
     // Date range filter — applied on every bucket (Task #787). Uses the
     // *effective* values so an invalid (From > To) range is treated as
-    // "no date filter" and never reaches the server.
+    // "no date filter" and never reaches the server. Task #858 also
+    // ships the rep's IANA tz so the backend resolves "today" against
+    // their local clock instead of UTC midnight.
     if (effectiveDateFrom) p.set("dateFrom", effectiveDateFrom);
     if (effectiveDateTo) p.set("dateTo", effectiveDateTo);
+    if (effectiveDateFrom || effectiveDateTo) {
+      try {
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if (tz) p.set("tz", tz);
+      } catch {
+        // No-op — backend falls back to UTC for missing tz.
+      }
+    }
     if (cursorParam) p.set("cursor", cursorParam);
     return p.toString();
   }

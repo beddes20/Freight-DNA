@@ -5161,6 +5161,21 @@ export async function runMigrations() {
     } else {
       console.log("[migrations] conversations freshness backfill — every thread already in sync");
     }
+
+    // Task #858 — index support for the date filter that anchors on
+    // GREATEST(last_incoming_at, last_outgoing_at). Without these the
+    // org-scoped date-range scan falls back to a heap walk, which is
+    // fine in dev but degrades the inbox listing on busy orgs once
+    // they accumulate tens of thousands of threads. Idempotent
+    // CREATE INDEX IF NOT EXISTS — safe to re-run on every boot.
+    await clientFreshness.query(`
+      CREATE INDEX IF NOT EXISTS idx_ect_org_last_incoming_at
+        ON email_conversation_threads (org_id, last_incoming_at DESC)
+    `);
+    await clientFreshness.query(`
+      CREATE INDEX IF NOT EXISTS idx_ect_org_last_outgoing_at
+        ON email_conversation_threads (org_id, last_outgoing_at DESC)
+    `);
   } catch (err) {
     console.error("[migrations] conversations freshness backfill error:", err);
   } finally {

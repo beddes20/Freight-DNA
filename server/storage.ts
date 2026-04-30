@@ -7840,15 +7840,34 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    if (filters.dateFrom) {
-      const dateCol = filters.archivedOnly ? emailConversationThreads.archivedAt : emailConversationThreads.updatedAt;
-      conditions.push(gte(dateCol, new Date(filters.dateFrom)));
-    }
-    if (filters.dateTo) {
-      const dateCol = filters.archivedOnly ? emailConversationThreads.archivedAt : emailConversationThreads.updatedAt;
-      const endOfDay = new Date(filters.dateTo);
-      endOfDay.setUTCHours(23, 59, 59, 999);
-      conditions.push(lte(dateCol, endOfDay));
+    // Date filter — Task #858: anchor to real email activity (the same
+    // columns the freshness label reads), not `updated_at`. Archived
+    // bucket keeps anchoring on archived_at.
+    if (filters.dateFrom || filters.dateTo) {
+      const isPlainDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+      if (filters.archivedOnly) {
+        if (filters.dateFrom) {
+          conditions.push(gte(emailConversationThreads.archivedAt, new Date(filters.dateFrom)));
+        }
+        if (filters.dateTo) {
+          const endOfDay = new Date(filters.dateTo);
+          if (isPlainDate(filters.dateTo)) endOfDay.setUTCHours(23, 59, 59, 999);
+          conditions.push(lte(emailConversationThreads.archivedAt, endOfDay));
+        }
+      } else {
+        const activityExpr = sql`GREATEST(
+          COALESCE(${emailConversationThreads.lastIncomingAt}, ${emailConversationThreads.lastOutgoingAt}),
+          COALESCE(${emailConversationThreads.lastOutgoingAt}, ${emailConversationThreads.lastIncomingAt})
+        )`;
+        if (filters.dateFrom) {
+          conditions.push(sql`${activityExpr} >= ${new Date(filters.dateFrom)}`);
+        }
+        if (filters.dateTo) {
+          const endOfDay = new Date(filters.dateTo);
+          if (isPlainDate(filters.dateTo)) endOfDay.setUTCHours(23, 59, 59, 999);
+          conditions.push(sql`${activityExpr} <= ${endOfDay}`);
+        }
+      }
     }
 
     if (filters.search) {
