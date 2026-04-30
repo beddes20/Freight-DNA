@@ -108,7 +108,7 @@ export async function runAutoPilotTick(
       try {
         const opps = await s.listFreightOpportunities(org.id, {
           companyId: policy.companyId,
-          status: ["ready_to_send", "new", "awaiting_approval"],
+          status: ["ready_to_send", "new", "pending_approval"],
           limit: 50,
         });
         // Prefer the most-urgent first (storage already orders by urgencyScore desc).
@@ -120,7 +120,7 @@ export async function runAutoPilotTick(
           // When approvalRequired=false on the policy, the rep has explicitly
           // opted into hands-off sending — including for available_freight_import
           // rows — so we don't second-guess them by hard-coding a source-based
-          // gate. When approvalRequired=true, awaiting_approval rows are skipped
+          // gate. When approvalRequired=true, pending_approval rows are skipped
           // until the rep approves them in the cockpit.
           if (policy.approvalRequired && !opp.approvedAt) continue;
 
@@ -255,7 +255,7 @@ function addOneCtDay(ctDate: string): string {
  *   - listCompanyOutreachPolicies(enabledOnly: true)
  *   - autoSendEnabled gate
  *   - sameCentralDay(autoSendLastRunAt) skip
- *   - listFreightOpportunities (status ready/new/awaiting_approval)
+ *   - listFreightOpportunities (status ready_to_send/new/pending_approval)
  *   - !isSnoozed
  *   - approval gate (when policy.approvalRequired)
  *   - ensureShortlistRanked (so freshly imported opps surface)
@@ -316,7 +316,7 @@ export async function listAutoPilotPendingForOrg(
     const cap = Math.max(1, policy.autoSendMaxPerDay);
     const opps = await s.listFreightOpportunities(orgId, {
       companyId: policy.companyId,
-      status: ["ready_to_send", "new", "awaiting_approval"],
+      status: ["ready_to_send", "new", "pending_approval"],
       limit: 50,
     });
 

@@ -473,7 +473,7 @@ export default function AvailableFreightPage() {
   }, [activeViewId, grouping, sort, layout]);
 
   const statusParam = statusFilter === "active"
-    ? "new,ready_to_send,sent,awaiting_carrier_reply,awaiting_customer_confirm,partially_covered,awaiting_approval"
+    ? "pending_approval,new,ready_to_send,sent,awaiting_carrier_reply,awaiting_customer_confirm,partially_covered"
     : statusFilter === "all"
       ? ""
       : statusFilter;
@@ -1284,7 +1284,7 @@ export default function AvailableFreightPage() {
               <SelectTrigger data-testid="select-filter-status"><SelectValue placeholder="Status" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="active">Active queue</SelectItem>
-                <SelectItem value="awaiting_approval">Awaiting approval</SelectItem>
+                <SelectItem value="pending_approval">Pending approval</SelectItem>
                 <SelectItem value="ready_to_send">Ready</SelectItem>
                 <SelectItem value="sent">Sent</SelectItem>
                 <SelectItem value="awaiting_carrier_reply">Awaiting carrier</SelectItem>

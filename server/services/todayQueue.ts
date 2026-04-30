@@ -234,8 +234,8 @@ async function fetchLwqItems(ctx: SourceContext): Promise<TodayQueueItem[]> {
 async function fetchFreightOppItems(ctx: SourceContext): Promise<TodayQueueItem[]> {
   try {
     const ACTIVE = [
-      "new", "ready_to_send", "sent", "awaiting_carrier_reply",
-      "awaiting_customer_confirm", "partially_covered", "awaiting_approval",
+      "pending_approval", "new", "ready_to_send", "sent", "awaiting_carrier_reply",
+      "awaiting_customer_confirm", "partially_covered",
     ];
     const opps = await db.select().from(freightOpportunities).where(
       and(

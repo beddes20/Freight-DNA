@@ -974,7 +974,7 @@ export function registerFreightCockpitRoutes(app: Express) {
         name: "Team needs approval",
         isShared: true,
         isBuiltIn: true,
-        filters: { statuses: ["awaiting_approval"], ownerScope: "team" },
+        filters: { statuses: ["pending_approval"], ownerScope: "team" },
       },
       {
         id: "builtin:pickup-tomorrow",

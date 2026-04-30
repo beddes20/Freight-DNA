@@ -484,7 +484,7 @@ export const TOOLS: AgentTool[] = [
         }
       }
       conds.push(inArray(freightOpportunities.status, [
-        "new", "ready_to_send", "sent",
+        "pending_approval", "new", "ready_to_send", "sent",
         "awaiting_carrier_reply", "awaiting_customer_confirm", "partially_covered",
       ]));
       const rows = await db.select({

@@ -1150,6 +1150,109 @@ assert(
   "Task #858 step 2 (timezone seam): the route layer must resolve `dateFrom`/`dateTo` to the rep's local-day boundary using a `tz` query param so an EDT 7pm 'Today' pick doesn't lop off the evening.",
 );
 
+// Section 19: Available Freight — pending_approval is the canonical status name
+// (Phase A1). The producer (Won Load Autopilot) writes status="pending_approval";
+// every consumer/filter site must use the same string. The typo
+// `awaiting_approval` previously hid 100% of ingested rows from the default
+// view; this fence prevents the regression. The freight_opportunities status
+// column has no DB-level CHECK constraint, so a single typo silently zeroes
+// the surface — only static analysis catches it.
+console.log("\n── 19. Available Freight — canonical status name (Phase A1) ────────\n");
+
+{
+  const schemaSrc = readFile("shared/schema.ts");
+  const enumMatch = schemaSrc.match(/FREIGHT_OPPORTUNITY_STATUSES\s*=\s*\[([\s\S]*?)\]\s*as\s+const/);
+  assert(
+    "shared/schema.ts — FREIGHT_OPPORTUNITY_STATUSES enum exists",
+    !!enumMatch,
+    "Expected `export const FREIGHT_OPPORTUNITY_STATUSES = [...] as const` in shared/schema.ts.",
+  );
+  const enumMembers: string[] = enumMatch
+    ? Array.from(enumMatch[1].matchAll(/"([a-z_]+)"/g)).map(m => m[1])
+    : [];
+  assert(
+    "shared/schema.ts — enum contains the canonical 'pending_approval' member",
+    enumMembers.includes("pending_approval"),
+    `Found members: ${JSON.stringify(enumMembers)}`,
+  );
+  assert(
+    "shared/schema.ts — enum does NOT contain the deprecated 'awaiting_approval' typo",
+    !enumMembers.includes("awaiting_approval"),
+    "If 'awaiting_approval' is added to the canonical enum, the producer in customerQuotes.ts must also be flipped — they cannot drift again.",
+  );
+
+  // Critical consumer/filter sites that historically held the `awaiting_approval`
+  // typo or its variants. None of these may reference the typo as a status
+  // value. (server/agent/tools.ts is *intentionally* excluded: it uses
+  // `awaiting_approval` as a stable LLM-facing scope-keyword argument name —
+  // not as a DB status string. The DB filter on that path uses the canonical
+  // enum members via the status whitelist below it.)
+  const CONSUMER_FILES = [
+    "client/src/pages/available-freight.tsx",
+    "client/src/lib/__tests__/cockpitFilters.test.ts",
+    "server/freightOpportunityAutoPilot.ts",
+    "server/services/todayQueue.ts",
+    "server/routes/freightOpportunityCockpit.ts",
+    "server/services/customerQuotes.ts",
+  ];
+  for (const rel of CONSUMER_FILES) {
+    const src = readFile(rel);
+    // Match the typo only when it appears as a quoted string literal
+    // (status value), not in identifiers like `awaiting_approval_since`
+    // (which is a legitimate column name) or in code comments. Lookahead
+    // for the closing quote rules out the column-name false positive.
+    const violations = src.match(/["']awaiting_approval["']/g);
+    assert(
+      `${rel} — no quoted "awaiting_approval" status literal`,
+      !violations,
+      violations
+        ? `Found ${violations.length} occurrence(s) of "awaiting_approval" as a status string. The canonical name is "pending_approval" (see shared/schema.ts FREIGHT_OPPORTUNITY_STATUSES). Replace and re-run.`
+        : undefined,
+    );
+  }
+
+  // Producer-side sanity: customerQuotes.ts must continue to write
+  // pending_approval into the freight_opportunities row. If a future
+  // refactor accidentally drops the status field, the consumer-side
+  // negative checks above would still pass (no typo) while the producer
+  // silently writes the table default ("new"), so the SLA timer never
+  // starts and the approval queue page goes empty in a different way.
+  const customerQuotesSrc = readFile("server/services/customerQuotes.ts");
+  assert(
+    "server/services/customerQuotes.ts — Won Load Autopilot writes status: \"pending_approval\"",
+    /status:\s*"pending_approval"/.test(customerQuotesSrc),
+    "createFreightOpportunityFromWonQuote must continue to seed status=\"pending_approval\" so the approval SLA clock starts.",
+  );
+
+  // Consumer-side positive assertion: the Available Freight default
+  // status filter must include pending_approval. This is the single
+  // most-impactful regression fence in the file — a missing
+  // pending_approval here hides every freshly-converted won quote.
+  const cockpitPageSrc = readFile("client/src/pages/available-freight.tsx");
+  const activeFilterMatch = cockpitPageSrc.match(/statusFilter\s*===\s*"active"\s*\?\s*"([^"]+)"/);
+  assert(
+    "client/src/pages/available-freight.tsx — \"active\" status filter exists",
+    !!activeFilterMatch,
+    "Could not locate the `statusFilter === \"active\" ? \"...\"` whitelist string in available-freight.tsx.",
+  );
+  if (activeFilterMatch) {
+    const activeStatuses = activeFilterMatch[1].split(",").map(s => s.trim());
+    assert(
+      "client/src/pages/available-freight.tsx — \"active\" filter includes pending_approval",
+      activeStatuses.includes("pending_approval"),
+      `Active status filter is currently: ${JSON.stringify(activeStatuses)}. Won-quote-derived loads start in pending_approval and are invisible without it.`,
+    );
+    // Every member of the active filter must be a real enum member —
+    // catches future typos at PR time even before they reach prod.
+    const unknown = activeStatuses.filter(s => s.length > 0 && !enumMembers.includes(s));
+    assert(
+      "client/src/pages/available-freight.tsx — every \"active\" filter member is a known status",
+      unknown.length === 0,
+      `Unknown status string(s) in the active filter: ${JSON.stringify(unknown)}. Must be members of FREIGHT_OPPORTUNITY_STATUSES.`,
+    );
+  }
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

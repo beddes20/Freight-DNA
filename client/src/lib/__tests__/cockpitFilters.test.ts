@@ -38,9 +38,9 @@ describe("applyCockpitFilters", () => {
     const items = [
       mk({ id: "a", opportunity: { status: "ready_to_send" } }),
       mk({ id: "b", opportunity: { status: "new" } }),
-      mk({ id: "c", opportunity: { status: "awaiting_approval" } }),
+      mk({ id: "c", opportunity: { status: "pending_approval" } }),
     ];
-    expect(applyCockpitFilters(items, "", { statuses: ["new", "awaiting_approval"] }, null, NOW).map(i => i.id)).toEqual(["b", "c"]);
+    expect(applyCockpitFilters(items, "", { statuses: ["new", "pending_approval"] }, null, NOW).map(i => i.id)).toEqual(["b", "c"]);
   });
 
   it("ownerScope=mine returns only items owned by currentUser; team excludes them", () => {
