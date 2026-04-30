@@ -1253,6 +1253,133 @@ console.log("\n── 19. Available Freight — canonical status name (Phase A1)
   }
 }
 
+// Section 20: Available Freight — obvious-fake customer guard (Phase A2).
+// The Won Load Autopilot will silently auto-create a `companies` row using
+// whatever string lives in `quote_customers.name`. Greeting fragments parsed
+// from inbound emails ("Thanks. BLAS Express Trucking"), the org's own brand
+// ("Valuetruck"), and seed/test fixtures used to sneak through and pollute
+// the cockpit. This fence makes sure the helper exists, the producer consults
+// it before INSERTing into companies, and the one-shot DB strip in
+// runMigrations stays in lockstep with the helper's predicates.
+console.log("\n── 20. Available Freight — obvious-fake customer guard (Phase A2) ──\n");
+
+{
+  const helperSrc = readFile("shared/fakeCustomerName.ts");
+  assert(
+    "shared/fakeCustomerName.ts — helper exists",
+    helperSrc.length > 0,
+    "Expected shared/fakeCustomerName.ts (Phase A2) to exist.",
+  );
+  assert(
+    "shared/fakeCustomerName.ts — exports isObviousFakeCustomerName",
+    /export\s+function\s+isObviousFakeCustomerName\s*\(/.test(helperSrc),
+    "isObviousFakeCustomerName(name, orgBrand?) is the canonical entry point producers must call.",
+  );
+  // The helper covers the four key buckets the audit identified: test/seed
+  // prefixes, self-references against the org brand, greeting fragments
+  // parsed from email signatures, and the placeholder bucket.
+  assert(
+    "shared/fakeCustomerName.ts — covers test/seed/demo prefixes",
+    /test\|seed\|demo\|sample\|fixture\|example\|fake\|placeholder\|foo\|bar\|baz\|qux\|tbd\|tba/.test(helperSrc),
+    "TEST_PREFIX_RX must enumerate the seed-prefix vocabulary.",
+  );
+  assert(
+    "shared/fakeCustomerName.ts — covers greeting fragments (Thanks./Re:/Fwd:/etc)",
+    /thanks\?\|thx\|regards\?\|cheers\|sincerely\|fwd\|re\|hi\|hello\|hey/.test(helperSrc),
+    "GREETING_FRAGMENT_RX must catch the email-signature artefacts seen in production.",
+  );
+  assert(
+    "shared/fakeCustomerName.ts — covers self-reference vs orgBrand",
+    /self-reference/.test(helperSrc) && /normalizeForCompare|regexp_replace.*a-z0-9/i.test(helperSrc),
+    "Helper must normalize the org's own brand name and reject customers that match it.",
+  );
+
+  // Producer-side: customerQuotes must consult the helper *before*
+  // db.insert(companies). If a future refactor inserts the row without
+  // checking, the strip migration cleans the past but new fakes flow in.
+  const cqSrc = readFile("server/services/customerQuotes.ts");
+  assert(
+    "server/services/customerQuotes.ts — imports isObviousFakeCustomerName",
+    /import\s*\{[^}]*isObviousFakeCustomerName[^}]*\}\s*from\s*["']@shared\/fakeCustomerName["']/.test(cqSrc),
+    "Producer must import the helper from shared/fakeCustomerName.",
+  );
+  assert(
+    "server/services/customerQuotes.ts — guard runs before db.insert(companies)",
+    (() => {
+      // The guard call must precede the companies insert in createFreight…WonQuote.
+      const guardIdx = cqSrc.indexOf("isObviousFakeCustomerName(customerName");
+      const insertIdx = cqSrc.indexOf("db.insert(companies)");
+      return guardIdx > 0 && insertIdx > 0 && guardIdx < insertIdx;
+    })(),
+    "isObviousFakeCustomerName(customerName, orgBrand) must be called before db.insert(companies).",
+  );
+
+  // Migration-side: the one-shot strip in runMigrations must exist and
+  // mirror the helper's predicates so the DB scrub stays consistent with
+  // what the producer-side guard rejects going forward.
+  const migSrc = readFile("server/runMigrations.ts");
+  assert(
+    "server/runMigrations.ts — Phase A2 fake-customer strip step is registered",
+    /Phase A2 — one-shot strip of obvious-fake customer companies/.test(migSrc),
+    "The one-shot strip step (cancels fake opps + archives fake companies) must be present in runMigrations.",
+  );
+  assert(
+    "server/runMigrations.ts — strip imports FAKE_NAME_SQL_RULES from the helper (no JS↔SQL drift)",
+    /import\s*\{[^}]*FAKE_NAME_SQL_RULES[^}]*\}\s*from\s*["']@shared\/fakeCustomerName["']/.test(migSrc) &&
+      /FAKE_NAME_SQL_RULES\s*\.\s*map\b/.test(migSrc),
+    "Migration must build the WHERE clause and reason CASE expression from the shared FAKE_NAME_SQL_RULES list. " +
+      "Inline-duplicating regex literals here causes JS↔SQL drift the next time a rule changes (architect-flagged).",
+  );
+}
+
+// Section 21: Available Freight — ingestion freshness pill (Phase A4).
+// The cockpit feed must publish a `freshness` block (overall + per-producer)
+// and the page header must render the pill so reps can spot a stalled feed
+// at a glance instead of seeing a silently-empty cockpit. Three producers
+// are wired: Won Load Autopilot, Available Freight Importer, and Manual.
+console.log("\n── 21. Available Freight — ingestion freshness pill (Phase A4) ─────\n");
+
+{
+  const cockpitRouteSrc = readFile("server/routes/freightOpportunityCockpit.ts");
+  assert(
+    "server/routes/freightOpportunityCockpit.ts — feed includes `freshness` block",
+    /const\s+freshness\s*=\s*\{/.test(cockpitRouteSrc) &&
+      /res\.json\(\{[\s\S]*\bfreshness\b\s*,[\s\S]*\}\)/.test(cockpitRouteSrc),
+    "Cockpit handler must build a `freshness` object and include it in res.json (shorthand `freshness,` is fine) so the header pill has data to render.",
+  );
+  // All three producer buckets must be wired or the pill loses a column
+  // and stalled producers go invisible.
+  for (const producer of ["won_load_autopilot", "available_freight_importer", "manual"]) {
+    assert(
+      `server/routes/freightOpportunityCockpit.ts — producer bucket "${producer}" present`,
+      cockpitRouteSrc.includes(producer),
+      `Freshness bucketing must enumerate all three producers; "${producer}" is missing.`,
+    );
+  }
+  assert(
+    "server/routes/freightOpportunityCockpit.ts — derives producer via source_quote_id / source_file_name",
+    /sourceQuoteId/.test(cockpitRouteSrc) && /sourceFileName/.test(cockpitRouteSrc),
+    "Producer detection must derive from sourceQuoteId (Won Load Autopilot) and sourceFileName (Importer).",
+  );
+
+  const pageSrc = readFile("client/src/pages/available-freight.tsx");
+  assert(
+    "client/src/pages/available-freight.tsx — declares FreshnessSignal type",
+    /interface\s+FreshnessSignal\b/.test(pageSrc),
+    "Frontend must declare a FreshnessSignal type matching the server contract.",
+  );
+  assert(
+    "client/src/pages/available-freight.tsx — renders the FreshnessPill in the header",
+    /<FreshnessPill\s+signal=\{feed\?\.freshness\}\s*\/>/.test(pageSrc),
+    "Header must render <FreshnessPill signal={feed?.freshness} /> so the user sees freshness on every page load.",
+  );
+  assert(
+    "client/src/pages/available-freight.tsx — pill exposes data-testid='pill-freight-freshness'",
+    /data-testid="pill-freight-freshness"/.test(pageSrc),
+    "Stable testid required for end-to-end coverage of the freshness signal.",
+  );
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

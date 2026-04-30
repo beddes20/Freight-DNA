@@ -129,6 +129,28 @@ interface UserOption {
 
 interface SavedViewResponse { view?: SavedView }
 
+interface FreshnessProducer {
+  id: "won_load_autopilot" | "available_freight_importer" | "manual";
+  label: string;
+  lastEventAt: string | null;
+  ageMinutes: number | null;
+  count24h: number;
+  healthState: "green" | "yellow" | "red";
+}
+interface FreshnessSignal {
+  overall: {
+    healthState: "green" | "yellow" | "red";
+    lastEventAt: string | null;
+    ageMinutes: number | null;
+  };
+  producers: FreshnessProducer[];
+  thresholds: {
+    greenMaxMinutes: number;
+    yellowMaxMinutes: number;
+    redMissingMinutes: number;
+  };
+}
+
 interface CockpitResponse {
   items: CockpitItem[];
   kpis: {
@@ -142,6 +164,7 @@ interface CockpitResponse {
   };
   lastImport: { at: string; ageMinutes: number } | null;
   nextImport?: { at: string; inMinutes: number } | null;
+  freshness?: FreshnessSignal;
   roiMetrics?: {
     responseByBucket: Record<string, { sent: number; responded: number }>;
     suppressionBreakdown: Record<string, number>;
@@ -232,6 +255,96 @@ function freshnessPulseColor(min: number | null) {
   if (min < 60) return "bg-emerald-500 animate-pulse";
   if (min < 12 * 60) return "bg-amber-500";
   return "bg-red-500";
+}
+
+// Phase A4 — header freshness pill.
+//
+// Renders a color-coded dot + relative-time label in the page header that
+// always shows whether the Available Freight surface is current. Click opens
+// a popover with the per-producer breakdown (Won Load Autopilot / Importer /
+// Manual) so reps can spot a stalled feed at a glance instead of seeing a
+// silently-empty cockpit and assuming nothing is happening.
+function freshnessHeaderPillTone(state: "green" | "yellow" | "red"): string {
+  switch (state) {
+    case "green":
+      return "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+    case "yellow":
+      return "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+    case "red":
+      return "border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300";
+  }
+}
+function freshnessDotTone(state: "green" | "yellow" | "red"): string {
+  switch (state) {
+    case "green":
+      return "bg-emerald-500 animate-pulse";
+    case "yellow":
+      return "bg-amber-500";
+    case "red":
+      return "bg-red-500";
+  }
+}
+function freshnessLabel(signal: FreshnessSignal | undefined): string {
+  if (!signal) return "Freshness pending";
+  const { ageMinutes, healthState, lastEventAt } = signal.overall;
+  if (lastEventAt == null || ageMinutes == null) return "No ingestion in 24h";
+  const word = healthState === "green" ? "Fresh" : healthState === "yellow" ? "Slowing" : "Stale";
+  return `${word} · ${fmtAge(ageMinutes)} ago`;
+}
+function FreshnessPill({ signal }: { signal: FreshnessSignal | undefined }) {
+  const state = signal?.overall.healthState ?? "red";
+  const label = freshnessLabel(signal);
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium hover:opacity-90 ${freshnessHeaderPillTone(state)}`}
+          data-testid="pill-freight-freshness"
+          data-freshness-state={state}
+        >
+          <span className={`inline-block h-2 w-2 rounded-full ${freshnessDotTone(state)}`} />
+          {label}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 p-3 text-xs" data-testid="popover-freight-freshness">
+        <div className="font-semibold text-sm mb-2">Ingestion freshness</div>
+        {!signal ? (
+          <div className="text-muted-foreground">No signal available yet.</div>
+        ) : (
+          <>
+            <div className="text-muted-foreground mb-2">
+              Most recent event across all producers:{" "}
+              {signal.overall.lastEventAt
+                ? `${fmtAge(signal.overall.ageMinutes)} ago`
+                : "none in 24h"}
+            </div>
+            <div className="divide-y divide-border">
+              {signal.producers.map((p) => (
+                <div
+                  key={p.id}
+                  className="flex items-center justify-between py-1.5"
+                  data-testid={`row-freshness-producer-${p.id}`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className={`inline-block h-2 w-2 rounded-full ${freshnessDotTone(p.healthState)}`} />
+                    <span className="truncate">{p.label}</span>
+                  </div>
+                  <div className="text-muted-foreground tabular-nums whitespace-nowrap">
+                    {p.lastEventAt ? `${fmtAge(p.ageMinutes)} ago` : "dark"}
+                    <span className="ml-2 text-[10px]">({p.count24h}/24h)</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-2 pt-2 border-t border-border text-[10px] text-muted-foreground">
+              Green ≤{signal.thresholds.greenMaxMinutes}m · Yellow ≤{signal.thresholds.yellowMaxMinutes}m · Red beyond
+            </div>
+          </>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 interface CarrierOption {
@@ -1101,9 +1214,12 @@ export default function AvailableFreightPage() {
       {/* Header + upload */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold flex items-center gap-2" data-testid="heading-available-freight">
-            <Truck className="h-6 w-6" /> Available Freight Cockpit
-          </h1>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-2xl font-semibold flex items-center gap-2" data-testid="heading-available-freight">
+              <Truck className="h-6 w-6" /> Available Freight Cockpit
+            </h1>
+            <FreshnessPill signal={feed?.freshness} />
+          </div>
           <p className="text-sm text-muted-foreground">
             Triage open freight in priority order. Shortcuts: j/k move • x select • Enter open • A approve • S send top 3 • R reassign • Esc clear.
           </p>
@@ -1215,7 +1331,15 @@ export default function AvailableFreightPage() {
             </Button>
           </div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className={`inline-block h-2 w-2 rounded-full ${freshnessPulseColor(feed?.lastImport?.ageMinutes ?? null)}`} data-testid="indicator-freshness-pulse" />
+            {/* Phase A4 — anchor the dot to the multi-producer overall signal so
+                this pulse and the header pill never disagree. The text below
+                still reflects the legacy "last import" (Excel batch) for back-
+                compat with the existing nextImport label. */}
+            <span
+              className={`inline-block h-2 w-2 rounded-full ${freshnessDotTone(feed?.freshness?.overall.healthState ?? "red")}`}
+              data-testid="indicator-freshness-pulse"
+              data-freshness-state={feed?.freshness?.overall.healthState ?? "red"}
+            />
             <span data-testid="text-last-import">
               {feed?.lastImport
                 ? `Last import ${fmtAge(feed.lastImport.ageMinutes)} ago`

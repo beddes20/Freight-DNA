@@ -9,6 +9,7 @@ import {
   FREIGHT_COCKPIT_LAYOUTS,
   FREIGHT_COCKPIT_SORTS,
   FREIGHT_OPPORTUNITY_STATUSES,
+  freightOpportunities,
   type FreightOpportunity,
   type FreightOpportunityCarrier,
   type Carrier,
@@ -17,6 +18,7 @@ import {
   type RecurringLane,
   type User,
 } from "@shared/schema";
+import { sql, and, eq, gte, isNotNull, isNull } from "drizzle-orm";
 import { ensureShortlistRanked } from "../proactiveOpportunityService";
 import { sendOpportunityWave } from "../freightOpportunityOutreachService";
 import { getBlendedRateCached } from "../pricingBlendService";
@@ -718,6 +720,136 @@ export function registerFreightCockpitRoutes(app: Express) {
         ageMinutes: Math.round((now.getTime() - latest.getTime()) / 60_000),
       } : null;
 
+      // Phase A4 — per-producer ingestion freshness signal.
+      //
+      // freight_opportunities has no `source` column; we derive the producer
+      // from columns present on each row:
+      //   - source_quote_id IS NOT NULL  → Won Load Autopilot (won quote handoff)
+      //   - source_file_name IS NOT NULL → Available Freight Importer (Excel)
+      //   - else (created_by_id present) → Manual rep creation
+      //
+      // CORRECTNESS NOTE (post-architect-review): we MUST NOT compute this
+      // from the `rows` returned by the page-scoped storage query — those are
+      // already filtered (status, company, mineOnly) and capped (limit ≤ 500,
+      // sorted by urgencyScore desc), so a fresh import of low-urgency rows
+      // outside the active filter would be invisible and the pill would lie.
+      // Instead we run a single org-scoped aggregate over the last 24h of
+      // freight_opportunities, ignoring all UI filters. This is one cheap
+      // query (FILTER clauses + index on org_id, generated_at) and is the
+      // ground truth for "did anything land in the last day".
+      //
+      // PRODUCER ATTRIBUTION INVARIANT: the producer key uses field
+      // precedence (source_quote_id beats source_file_name). The producers
+      // are mutually exclusive at write time today: Won Load Autopilot
+      // (server/services/customerQuotes.ts) sets source_quote_id only;
+      // the Excel Importer (server/services/freightOpportunityImporter.ts)
+      // sets source_file_name only. If a future writer ever sets both, the
+      // row will be classified as autopilot — the SQL CASE below mirrors
+      // the JS precedence used by other consumers.
+      const FRESH_GREEN_MAX_MIN = 60;
+      const FRESH_YELLOW_MAX_MIN = 240;
+      const FRESH_RED_MISSING_MIN = 24 * 60; // no rows in 24h ⇒ red
+      const ageOf = (t: Date | null): number | null =>
+        t ? Math.max(0, Math.round((now.getTime() - t.getTime()) / 60_000)) : null;
+      const stateForAge = (ageMin: number | null): "green" | "yellow" | "red" => {
+        if (ageMin == null) return "red";
+        if (ageMin <= FRESH_GREEN_MAX_MIN) return "green";
+        if (ageMin <= FRESH_YELLOW_MAX_MIN) return "yellow";
+        return "red";
+      };
+      const cutoff24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      type ProducerKey = "won_load_autopilot" | "available_freight_importer" | "manual";
+      const PRODUCER_LABELS: Record<ProducerKey, string> = {
+        won_load_autopilot: "Won Load Autopilot",
+        available_freight_importer: "Excel Importer",
+        manual: "Manual",
+      };
+      // Org-scoped aggregate. Three FILTER buckets in one round trip; the
+      // CASE expressions mirror the JS precedence noted above so backend &
+      // frontend (or any future SQL consumer) cannot disagree on producer.
+      const freshnessRows = await db.execute(sql`
+        SELECT
+          MAX(${freightOpportunities.generatedAt}) FILTER (
+            WHERE ${freightOpportunities.sourceQuoteId} IS NOT NULL
+          ) AS won_last,
+          COUNT(*) FILTER (
+            WHERE ${freightOpportunities.sourceQuoteId} IS NOT NULL
+              AND ${freightOpportunities.generatedAt} >= ${cutoff24h}
+          ) AS won_count,
+          MAX(${freightOpportunities.generatedAt}) FILTER (
+            WHERE ${freightOpportunities.sourceQuoteId} IS NULL
+              AND ${freightOpportunities.sourceFileName} IS NOT NULL
+          ) AS importer_last,
+          COUNT(*) FILTER (
+            WHERE ${freightOpportunities.sourceQuoteId} IS NULL
+              AND ${freightOpportunities.sourceFileName} IS NOT NULL
+              AND ${freightOpportunities.generatedAt} >= ${cutoff24h}
+          ) AS importer_count,
+          MAX(${freightOpportunities.generatedAt}) FILTER (
+            WHERE ${freightOpportunities.sourceQuoteId} IS NULL
+              AND ${freightOpportunities.sourceFileName} IS NULL
+          ) AS manual_last,
+          COUNT(*) FILTER (
+            WHERE ${freightOpportunities.sourceQuoteId} IS NULL
+              AND ${freightOpportunities.sourceFileName} IS NULL
+              AND ${freightOpportunities.generatedAt} >= ${cutoff24h}
+          ) AS manual_count
+        FROM ${freightOpportunities}
+        WHERE ${freightOpportunities.orgId} = ${org}
+      `);
+      const f0: any = (freshnessRows as any).rows?.[0] ?? (Array.isArray(freshnessRows) ? (freshnessRows as any)[0] : null) ?? {};
+      const parseDate = (v: any): Date | null => {
+        if (!v) return null;
+        const d = v instanceof Date ? v : new Date(v);
+        return Number.isFinite(d.getTime()) ? d : null;
+      };
+      const parseCount = (v: any): number => {
+        const n = typeof v === "number" ? v : parseInt(String(v ?? "0"), 10);
+        return Number.isFinite(n) ? n : 0;
+      };
+      const buckets: Record<ProducerKey, { last: Date | null; count24h: number }> = {
+        won_load_autopilot:        { last: parseDate(f0.won_last),      count24h: parseCount(f0.won_count) },
+        available_freight_importer: { last: parseDate(f0.importer_last), count24h: parseCount(f0.importer_count) },
+        manual:                     { last: parseDate(f0.manual_last),   count24h: parseCount(f0.manual_count) },
+      };
+      const producers = (Object.keys(buckets) as ProducerKey[]).map((id) => {
+        const b = buckets[id];
+        const ageMinutes = ageOf(b.last);
+        return {
+          id,
+          label: PRODUCER_LABELS[id],
+          lastEventAt: b.last ? b.last.toISOString() : null,
+          ageMinutes,
+          count24h: b.count24h,
+          healthState: stateForAge(ageMinutes),
+        };
+      });
+      const overallLast = producers.reduce<Date | null>((acc, p) => {
+        if (!p.lastEventAt) return acc;
+        const t = new Date(p.lastEventAt);
+        if (!Number.isFinite(t.getTime())) return acc;
+        if (!acc || t > acc) return t;
+        return acc;
+      }, null);
+      const overallAge = ageOf(overallLast);
+      const overallHealth: "green" | "yellow" | "red" = (() => {
+        if (overallAge == null || overallAge >= FRESH_RED_MISSING_MIN) return "red";
+        return stateForAge(overallAge);
+      })();
+      const freshness = {
+        overall: {
+          healthState: overallHealth,
+          lastEventAt: overallLast ? overallLast.toISOString() : null,
+          ageMinutes: overallAge,
+        },
+        producers,
+        thresholds: {
+          greenMaxMinutes: FRESH_GREEN_MAX_MIN,
+          yellowMaxMinutes: FRESH_YELLOW_MAX_MIN,
+          redMissingMinutes: FRESH_RED_MISSING_MIN,
+        },
+      };
+
       // Next scheduled import: weekday 6:30 AM CT (matches CRON_EXPR).
       const nextImport = (() => {
         try {
@@ -776,6 +908,7 @@ export function registerFreightCockpitRoutes(app: Express) {
         kpis,
         lastImport,
         nextImport,
+        freshness,
         roiMetrics,
         sort: sortKey,
         grouping: groupKey,

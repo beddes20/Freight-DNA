@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import { FIXTURE_MAILBOX_LIKE_PATTERNS, setFixtureContaminationScan } from "./lib/fixtureMailboxes";
+import { FAKE_NAME_SQL_RULES } from "@shared/fakeCustomerName";
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -5454,5 +5455,92 @@ export async function runMigrations() {
     console.log("[migrations] Task #844 truck_postings + truck_load_matches ensured");
   } catch (err) {
     console.error("[migrations] Task #844 capacity-matches table guard error:", err);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Phase A2 — one-shot strip of obvious-fake customer companies and the
+  // freight_opportunities they spawned. Idempotent by design: every pass only
+  // affects rows where (companies.archived_at IS NULL AND name matches a fake
+  // pattern) AND (freight_opportunities.status NOT IN terminal). Once stripped
+  // a company stays archived and its opps stay 'cancelled', so subsequent
+  // boots find nothing to do and return 0 rows.
+  //
+  // The producer-side guard in createFreightOpportunityFromWonQuote refuses to
+  // seed new fake names going forward; this scrub closes the gap on names that
+  // slipped through before the guard existed.
+  //
+  // LOCKSTEP NOTE (post-architect-review): predicate strings are sourced from
+  // `shared/fakeCustomerName.ts` (FAKE_NAME_SQL_RULES) so the JS guard and
+  // this SQL scrub cannot drift. Adding/changing a rule there propagates here
+  // automatically — including the per-row 'reason' attribution recorded in
+  // the freight_opportunities.notes audit trail.
+  try {
+    // Build the WHERE union and the reason CASE expression directly from the
+    // shared rule list. `c.name` is the column we test; `o.name` is the
+    // org brand parameter for the self-reference rule.
+    const reasonWhen = FAKE_NAME_SQL_RULES
+      .map((r) => `WHEN ${r.predicate("fc.name", "fc.org_brand")} THEN '${r.reason}'`)
+      .join("\n                       ");
+    const fakeWhere = FAKE_NAME_SQL_RULES
+      .map((r) => `(${r.predicate("c.name", "o.name")})`)
+      .join("\n            OR ");
+    const placeholderPredicate = FAKE_NAME_SQL_RULES.find(
+      (r) => r.reason === "placeholder",
+    )!.predicate("c.name", "o.name");
+    const result = await pool.query(`
+      WITH fake_companies AS (
+        SELECT c.id, c.name, c.organization_id, o.name AS org_brand
+        FROM companies c
+        LEFT JOIN organizations o ON o.id = c.organization_id
+        WHERE c.archived_at IS NULL
+          AND (
+            ${fakeWhere}
+          )
+      ),
+      cancelled_opps AS (
+        UPDATE freight_opportunities fo
+           SET status = 'cancelled',
+               notes = COALESCE(fo.notes || E'\n', '') ||
+                       '[A2 strip] auto-cancelled — customer "' || fc.name ||
+                       '" flagged as obvious-fake (' ||
+                       CASE
+                         ${reasonWhen}
+                         ELSE 'unspecified'
+                       END || ')'
+          FROM fake_companies fc
+         WHERE fo.company_id = fc.id
+           AND fo.status NOT IN ('cancelled','expired','covered')
+        RETURNING fo.id, fc.name AS fake_name
+      ),
+      archived_companies AS (
+        UPDATE companies c
+           SET archived_at = to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+          FROM fake_companies fc
+         WHERE c.id = fc.id
+           AND c.archived_at IS NULL
+           -- Don't archive the placeholder bucket — it's a sentinel that
+           -- might still be useful as a known holding pen. Just cancel its
+           -- opps so they stop cluttering the cockpit.
+           AND NOT (${placeholderPredicate.replace(/c\.name/g, "c.name").replace(/o\.name/g, "(SELECT name FROM organizations WHERE id = c.organization_id)")})
+        RETURNING c.id
+      )
+      SELECT
+        (SELECT COUNT(*) FROM cancelled_opps)     AS opps_cancelled,
+        (SELECT COUNT(*) FROM archived_companies) AS companies_archived,
+        (SELECT COUNT(*) FROM fake_companies)     AS companies_flagged
+    `);
+    const row = result.rows[0] ?? {};
+    const oppsCancelled = Number(row.opps_cancelled ?? 0);
+    const companiesArchived = Number(row.companies_archived ?? 0);
+    const companiesFlagged = Number(row.companies_flagged ?? 0);
+    if (companiesFlagged > 0 || oppsCancelled > 0) {
+      console.log(
+        `[migrations] Phase A2 fake-customer strip: cancelled ${oppsCancelled} opps, ` +
+        `archived ${companiesArchived} companies (flagged=${companiesFlagged}). ` +
+        `Producer-side guard in createFreightOpportunityFromWonQuote prevents new ones.`,
+      );
+    }
+  } catch (err) {
+    console.error("[migrations] Phase A2 fake-customer strip error:", err);
   }
 }

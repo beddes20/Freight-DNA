@@ -14,6 +14,8 @@ import {
   type CaptureLeakType, type CaptureLeakReviewDecision, type CaptureLeakReview,
 } from "@shared/schema";
 import { UNKNOWN_CUSTOMER_NAME, classifyPartyType, sanitizeCustomerName, isFreeMailProviderName } from "./customerNameResolver";
+import { isObviousFakeCustomerName } from "@shared/fakeCustomerName";
+import { organizations } from "@shared/schema";
 import { loadNonCustomerCustomerIds } from "./customerOnlyChokepoint";
 import { isFunnelEligibleRep, QUOTE_REP_UNIVERSE_ROLES, QUOTE_OWNER_DISPLAY_ROLES } from "@shared/quoteOpportunitiesRoles";
 import { users } from "@shared/schema";
@@ -2674,6 +2676,21 @@ export async function createFreightOpportunityFromWonQuote(
     if (matched) {
       companyId = matched.id;
     } else {
+      // Phase A2 — refuse to seed a fake/self-ref/greeting-fragment customer.
+      // Once a fake company exists, every won quote on it spawns a freight opp
+      // the LM has to triage even though no real party is attached. Match
+      // against the org's brand name so the brokerage's own name can never be
+      // resurrected as a customer here.
+      const [orgRow] = await db.select({ name: organizations.name }).from(organizations)
+        .where(eq(organizations.id, orgId)).limit(1);
+      const fakeCheck = isObviousFakeCustomerName(customerName, orgRow?.name ?? null);
+      if (fakeCheck.isFake) {
+        console.log(
+          `[customer-quotes] AF handoff blocked — obvious-fake customer name ` +
+          `"${customerName}" reason=${fakeCheck.reason} quote=${opp.id}`,
+        );
+        return null;
+      }
       // No CRM company exists for this customer name yet. freight_opportunities
       // requires a non-null companyId, and silently dropping the handoff would
       // mean valid won quotes for new customers never land in the AF cockpit.
