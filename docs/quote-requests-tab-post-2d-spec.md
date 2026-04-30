@@ -526,7 +526,6 @@ Each question gets a **recommended default** the implementer should use if the u
 13. **(BLOCKING) `quote_opportunities.outcomeStatus` — does `'attached'` need to be a new outcome value?**
     §5.4 closes the source opp with `outcomeStatus='attached'` so the row drops from active queries while the audit trail survives. Today's outcome statuses (e.g. `pending`, `quoted`, `won`, `lost`, `no_response`) do not include `attached`. Forcing it into `no_response` with `outcomeReasonId='attached_to_other'` works but pollutes lost-rate metrics.
     *Recommended default:* Add `'attached'` to the outcome enum. Exclude it from win-rate / lost-rate denominators in analytics (it's a re-routing, not a competitive outcome). Implementer audits every query that filters on `outcomeStatus` and adjusts.
-
 ---
 
 ## 10. Mockup index
