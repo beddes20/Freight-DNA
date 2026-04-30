@@ -57,6 +57,10 @@ export type QuoteFilters = {
   // accepted by the route validator; the snapshot/list chokepoint always
   // hides unknown rows now (alongside carriers) so the flag is a no-op.
   needsReviewOnly?: boolean;
+  // Task #850 — when true, snoozed rows (snoozedUntil > now) are kept in
+  // the result set. Default behaviour (undefined / false) hides them so
+  // the operator surface stays focused on the active queue.
+  includeSnoozed?: boolean;
 };
 
 export type EnrichedQuote = QuoteOpportunity & {
@@ -567,6 +571,13 @@ function applyFilters(
       const lane = `${r.originCity},${r.originState} ${r.destCity},${r.destState}`.toLowerCase();
       const tokens = f.laneSearch.toLowerCase().split(/\s+/).filter(Boolean);
       if (!tokens.every(t => lane.includes(t))) return false;
+    }
+    // Task #850 — hide currently-snoozed rows from the default view. The
+    // toggle from the page (Include snoozed) flips this off so admins can
+    // audit deferred work. `snoozedUntil` is nullable; rows without one
+    // are never snoozed.
+    if (!f.includeSnoozed && r.snoozedUntil && r.snoozedUntil.getTime() > Date.now()) {
+      return false;
     }
     return true;
   });

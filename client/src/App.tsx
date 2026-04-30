@@ -1,4 +1,4 @@
-import { Switch, Route, useLocation } from "wouter";
+import { Switch, Route, Redirect, useLocation } from "wouter";
 import { queryClient, apiRequest } from "./lib/queryClient";
 import { QueryClientProvider, useMutation } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -105,7 +105,7 @@ import CarrierIntelligenceAvailableLoadsPage from "@/pages/carrier-intelligence-
 import CarrierIntelligenceLanePricingPage from "@/pages/carrier-intelligence-lane-pricing";
 import CarrierIntelligenceSettingsPage from "@/pages/carrier-intelligence-settings";
 import AdminSidebarTooltipsPage from "@/pages/admin-sidebar-tooltips";
-import CustomerQuotesPage from "@/pages/customer-quotes";
+import QuoteRequestsPage from "@/pages/quote-requests";
 import FreightCapturePage from "@/pages/freight-capture";
 import AiHubPage from "@/pages/ai-hub";
 import EmailIntelligencePage from "@/pages/email-intelligence";
@@ -190,7 +190,10 @@ function Router() {
       <Route path="/today" component={TodayQueuePage} />
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/customers" component={Customers} />
-      <Route path="/customer-quotes" component={CustomerQuotesPage} />
+      <Route path="/quote-requests" component={QuoteRequestsPage} />
+      {/* Task #850 — legacy `/customer-quotes` URL is permanently re-routed
+          to the new `/quote-requests` operator surface. */}
+      <Route path="/customer-quotes">{() => <Redirect to="/quote-requests" replace />}</Route>
       <Route path="/freight-capture" component={FreightCapturePage} />
       {/* Task #742 — AI Hub. The seven legacy AI URLs all resolve to the hub
           with the matching tab pre-selected (see resolveAiHubTab). */}

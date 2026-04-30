@@ -425,17 +425,20 @@ assert(
   "lane-inbox.tsx is missing ErrorBanner or EmptyState"
 );
 
-const customerQuotesContent = readFile("client/src/pages/customer-quotes.tsx");
+// Task #850 — customer-quotes.tsx was retired in favour of the new
+// /quote-requests operator surface. The post-2d page still has to honour
+// the empty/error UI primitive contract on its snapshot + list queries.
+const quoteRequestsContent = readFile("client/src/pages/quote-requests.tsx");
 assert(
-  "customer-quotes page — uses ErrorBanner for query errors",
-  customerQuotesContent.includes("ErrorBanner") && customerQuotesContent.includes("snapshotQuery.isError"),
-  "customer-quotes.tsx is missing ErrorBanner wiring on snapshot/list queries"
+  "quote-requests page — uses ErrorBanner for query errors",
+  quoteRequestsContent.includes("ErrorBanner") && quoteRequestsContent.includes("snapshotQuery.isError"),
+  "quote-requests.tsx is missing ErrorBanner wiring on snapshot/list queries"
 );
 
 assert(
-  "customer-quotes page — uses EmptyState for empty filtered table",
-  customerQuotesContent.includes("EmptyState") && customerQuotesContent.includes("empty-quote-rows"),
-  "customer-quotes.tsx VirtualTable does not use EmptyState for empty results"
+  "quote-requests page — uses EmptyState for empty filtered table",
+  quoteRequestsContent.includes("EmptyState") && quoteRequestsContent.includes("empty-quote-rows"),
+  "quote-requests.tsx is missing EmptyState for empty filtered results"
 );
 
 const callPaceContent = readFile("client/src/components/call-pace-card.tsx");

@@ -177,14 +177,34 @@ const filtersSchema = z.object({
   // rows (and any old client builds during deploy) don't 400 the request;
   // the service layer now hard-filters every non-customer row.
   needsReviewOnly: z.boolean().optional(),
-}).strict();
+  // Task #850 — UI "Mine only" toggle. Resolved server-side to the
+  // requesting user's quote_reps.id; if the user has no rep mapping the
+  // filter degrades to "show nothing" via a sentinel repId so the UI
+  // doesn't accidentally widen scope.
+  mineOnly: z.boolean().optional(),
+  // Task #850 — UI "Include snoozed" toggle. When false/undefined the
+  // service hides rows whose `snoozedUntil` is still in the future.
+  includeSnoozed: z.boolean().optional(),
+});
+// NOTE: not `.strict()`. parseFilters and applyMineOnly run this schema
+// against the full `req.query` of the LIST endpoint, which legitimately
+// includes sort/offset/limit keys defined by listQuerySchema. Strict mode
+// would reject those extras and silently drop EVERY filter (parseFilters
+// returns {} on parse failure). Default object mode strips unknown keys
+// instead, preserving the declared filter fields. listQuerySchema is the
+// authoritative validator for the full list-route payload.
 
-const queryFiltersSchema = filtersSchema.extend({
+// Exported for regression tests in tests/quote-requests-list-filters.test.ts
+// (Task #850 — proves that LIST requests preserve filters even when the
+// query string also carries sort/paging keys).
+export const queryFiltersSchema = filtersSchema.extend({
   wonOnly: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
   activeOnly: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
   lostOnly: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
   expiringOnly: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
   needsReviewOnly: z.preprocess(v => v === "true" || v === true, z.boolean().optional()),
+  mineOnly: z.preprocess(v => v === "true" || v === true || v === "1", z.boolean().optional()),
+  includeSnoozed: z.preprocess(v => v === "true" || v === true || v === "1", z.boolean().optional()),
 });
 
 // Task #816 — `carrierPaid` / `marginDollar` / `marginPct` were retired
@@ -225,7 +245,24 @@ function parseFilters(req: Request): QuoteFilters {
   if (d.lostOnly) f.lostOnly = true;
   if (d.expiringOnly) f.expiringOnly = true;
   if (d.needsReviewOnly) f.needsReviewOnly = true;
+  if (d.includeSnoozed) f.includeSnoozed = true;
   return f;
+}
+
+// Task #850 — resolve `mineOnly=true` to the requesting user's
+// quote_reps.id. If the user has no rep mapping we inject a sentinel
+// that matches no row, so toggling "Mine only" never accidentally
+// widens scope (e.g. an admin viewing org-wide rows).
+const NO_REP_SENTINEL = "__no_rep__";
+async function applyMineOnly(req: Request, f: QuoteFilters): Promise<QuoteFilters> {
+  const parsed = queryFiltersSchema.safeParse(req.query);
+  if (!parsed.success || !parsed.data.mineOnly) return f;
+  const user = req.user;
+  if (!user) return { ...f, repId: NO_REP_SENTINEL };
+  const [rep] = await db.select({ id: quoteReps.id }).from(quoteReps)
+    .where(andSql(eqSql(quoteReps.organizationId, user.organizationId), eqSql(quoteReps.userId, user.id)))
+    .limit(1);
+  return { ...f, repId: rep?.id ?? NO_REP_SENTINEL };
 }
 
 export function registerCustomerQuoteRoutes(app: Express): void {
@@ -236,9 +273,16 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       // rows can never re-seed an org via the dashboard. Demo seeding is
       // now strictly opt-in via the dev-only seed script.
       void ensureEmailBackfill(user.organizationId);
-      const filters = parseFilters(req);
+      const filters = await applyMineOnly(req, parseFilters(req));
       const snap = await getSnapshot(user.organizationId, filters);
-      res.json(snap);
+      // Task #850 — surface the requesting user's quote_reps.id so the UI
+      // can drive ownership checks (isMine / isOwnerOrManager) against
+      // rep identity instead of user identity. Lookup is cheap and is
+      // already cached client-side via React Query.
+      const [meRep] = await db.select({ id: quoteReps.id }).from(quoteReps)
+        .where(andSql(eqSql(quoteReps.organizationId, user.organizationId), eqSql(quoteReps.userId, user.id)))
+        .limit(1);
+      res.json({ ...snap, myRepId: meRep?.id ?? null });
     } catch (err) {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] snapshot error:", err);
@@ -292,7 +336,8 @@ export function registerCustomerQuoteRoutes(app: Express): void {
         ? requestedSort
         : "requestDate") as ListSortKey;
       const sortDir = d.sortDir ?? "desc";
-      const result = await listQuotes(user.organizationId, filters, sortKey, sortDir, d.offset, d.limit);
+      const scopedFilters = await applyMineOnly(req, filters);
+      const result = await listQuotes(user.organizationId, scopedFilters, sortKey, sortDir, d.offset, d.limit);
       res.json(result);
     } catch (err) {
       const msg = getErrorMessage(err);
