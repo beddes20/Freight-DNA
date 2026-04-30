@@ -439,6 +439,26 @@ async function processOneSignal(
     };
   }
 
+  // Task #849 §3.2 — operator-installed suppression. A `quote_sender_mappings`
+  // row with `suppressed=true` flagged this sender (or its domain) as
+  // "do not auto-create opps". This sits before the confidence floor on
+  // purpose: a high-confidence classifier hit from a suppressed sender
+  // is still wrong, and we want the decision to be observable in the
+  // closure counters so admins can see suppression working. We piggy-
+  // back on the existing `skipped_internal` counter rather than minting
+  // a new bucket because the operator-facing tile groups them as
+  // "intentionally not opp'd".
+  const { findSuppressionMapping } = await import("./quoteSenderMappings");
+  const suppression = await findSuppressionMapping(message.orgId, message.fromEmail);
+  if (suppression) {
+    recordDecision(message.orgId, "skipped_internal");
+    return {
+      outcome: "skipped_internal",
+      signalId: signal.id,
+      reason: `suppressed sender (${message.fromEmail ?? "?"} via mapping ${suppression.id})`,
+    };
+  }
+
   // Refuse live writes when the dedup index isn't verified — losing
   // ON CONFLICT DO NOTHING would let concurrent workers create
   // duplicate opps for the same source_reference.

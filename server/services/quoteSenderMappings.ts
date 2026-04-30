@@ -63,6 +63,12 @@ export function extractSenderInfo(fromEmail: string | null | undefined): SenderI
  * Look up a learned mapping for an inbound sender. Email-level matches
  * take precedence over domain-level matches; returns null when nothing
  * is learned.
+ *
+ * Task #849 §3.2 — *Suppression* rows (`suppressed=true`) are excluded
+ * from this query. A suppressed sender must not auto-route to a learned
+ * customer (and the canonical row is `customerId=NULL` anyway). The
+ * autopilot path uses `findSuppressionMapping` below to detect
+ * suppressions explicitly.
  */
 export async function lookupMapping(
   orgId: string,
@@ -75,6 +81,7 @@ export async function lookupMapping(
   const [byEmail] = await db.select().from(quoteSenderMappings).where(and(
     eq(quoteSenderMappings.organizationId, orgId),
     eq(quoteSenderMappings.senderEmail, info.email),
+    eq(quoteSenderMappings.suppressed, false),
   )).limit(1);
   if (byEmail) return byEmail;
 
@@ -85,6 +92,40 @@ export async function lookupMapping(
     const [byDomain] = await db.select().from(quoteSenderMappings).where(and(
       eq(quoteSenderMappings.organizationId, orgId),
       eq(quoteSenderMappings.senderDomain, info.domain),
+      eq(quoteSenderMappings.suppressed, false),
+    )).limit(1);
+    if (byDomain) return byDomain;
+  }
+
+  return null;
+}
+
+/**
+ * Task #849 §3.2 — Look up a suppression mapping for an inbound sender.
+ * Returns the matching row when one exists with `suppressed=true`,
+ * regardless of whether the sender is free-mail (suppression is
+ * intentional per-sender). The autopilot path uses this to skip
+ * opportunity creation entirely.
+ */
+export async function findSuppressionMapping(
+  orgId: string,
+  fromEmail: string | null | undefined,
+): Promise<QuoteSenderMapping | null> {
+  const info = extractSenderInfo(fromEmail);
+  if (!info) return null;
+
+  const [byEmail] = await db.select().from(quoteSenderMappings).where(and(
+    eq(quoteSenderMappings.organizationId, orgId),
+    eq(quoteSenderMappings.senderEmail, info.email),
+    eq(quoteSenderMappings.suppressed, true),
+  )).limit(1);
+  if (byEmail) return byEmail;
+
+  if (!info.isFreeMail) {
+    const [byDomain] = await db.select().from(quoteSenderMappings).where(and(
+      eq(quoteSenderMappings.organizationId, orgId),
+      eq(quoteSenderMappings.senderDomain, info.domain),
+      eq(quoteSenderMappings.suppressed, true),
     )).limit(1);
     if (byDomain) return byDomain;
   }
@@ -206,6 +247,12 @@ export async function listMappings(orgId: string): Promise<MappingWithCustomer[]
       senderDomain: quoteSenderMappings.senderDomain,
       senderEmail: quoteSenderMappings.senderEmail,
       customerId: quoteSenderMappings.customerId,
+      // Task #849 §3.2 — `suppressed` is part of the row shape, but the
+      // existing admin UI only renders rows joined to a customer (the
+      // INNER JOIN below filters suppression rows out anyway since they
+      // have customerId=NULL). We still include the column so the
+      // returned row shape matches `MappingWithCustomer`.
+      suppressed: quoteSenderMappings.suppressed,
       source: quoteSenderMappings.source,
       sampleCount: quoteSenderMappings.sampleCount,
       lastUsedAt: quoteSenderMappings.lastUsedAt,

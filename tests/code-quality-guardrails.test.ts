@@ -972,6 +972,167 @@ assert(
   );
 }
 
+// Section 17: Post-2d Quote Requests S2-S6 — operator endpoints, leakage
+// classifier amendment, and quote-sender suppression schema (Task #849
+// §3.1, §3.2, §3.3, §3.4, §3.5, §3.7).
+//
+// The S2-S6 slice ships five new operator endpoints, the §3.7 classifier
+// amendment that lets the leakage diagnostic see opps materialized via
+// `quote_opportunities.source_reference` (not just via
+// `email_signals.linked_opportunity_id`), and the §3.2 suppression
+// schema on `quote_sender_mappings`. These guardrails fail the build if
+// any of those contract surfaces silently regress.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n── 17. Post-2d Quote Requests S2-S6 — endpoints / classifier / schema ────\n");
+
+{
+  const customerQuotesRoutes = readFile("server/routes/customerQuotes.ts");
+  // §3.1 attach-to
+  assert(
+    "customerQuotes.ts — POST /quote/:id/attach-to route exists",
+    /app\.post\(\s*"\/api\/customer-quotes\/quote\/:id\/attach-to"/.test(customerQuotesRoutes),
+    "Task #849 §3.1 requires POST /api/customer-quotes/quote/:id/attach-to.",
+  );
+  // §3.2 send-to-leak
+  assert(
+    "customerQuotes.ts — POST /quote/:id/send-to-leak route exists",
+    /app\.post\(\s*"\/api\/customer-quotes\/quote\/:id\/send-to-leak"/.test(customerQuotesRoutes),
+    "Task #849 §3.2 requires POST /api/customer-quotes/quote/:id/send-to-leak.",
+  );
+  // §3.3 snooze
+  assert(
+    "customerQuotes.ts — PATCH /quote/:id/snooze route exists",
+    /app\.patch\(\s*"\/api\/customer-quotes\/quote\/:id\/snooze"/.test(customerQuotesRoutes),
+    "Task #849 §3.3 requires PATCH /api/customer-quotes/quote/:id/snooze.",
+  );
+  // All three reach for the ownership gate.
+  const newRouteSegment = customerQuotesRoutes.slice(
+    customerQuotesRoutes.indexOf("§3.1"),
+  );
+  if (newRouteSegment) {
+    const gateCalls = (newRouteSegment.match(/\bassertCanMutateQuote[s]?\s*\(/g) ?? []).length;
+    assert(
+      "customerQuotes.ts — S2/S3/S4 routes all gate via assertCanMutateQuote",
+      gateCalls >= 3,
+      `Found ${gateCalls} ownership-gate call-sites in the post-2d S2-S4 routes — expected ≥3 (one per attach-to / send-to-leak / snooze).`,
+    );
+  }
+}
+
+{
+  const customerQuotesSvc = readFile("server/services/customerQuotes.ts");
+  // Service-layer entrypoints + their concurrency mutexes are exported
+  // so the regression tests can drive them directly.
+  for (const fn of ["attachQuoteToTarget", "sendQuoteToLeak", "snoozeQuote"] as const) {
+    assert(
+      `services/customerQuotes.ts — exports ${fn}`,
+      new RegExp(`export\\s+async\\s+function\\s+${fn}\\b`).test(customerQuotesSvc),
+      `Task #849 §3.1-3.3 requires services/customerQuotes.ts to export ${fn}.`,
+    );
+  }
+  // Mutex pattern present for attach + send-to-leak (snooze is idempotent
+  // on its own, so by contract it does NOT take a mutex).
+  assert(
+    "services/customerQuotes.ts — attach-to and send-to-leak each use an in-process mutex",
+    /_attachQuoteInFlight\s*=\s*new Map/.test(customerQuotesSvc) &&
+      /_sendToLeakInFlight\s*=\s*new Map/.test(customerQuotesSvc),
+    "Task #849 §3.1, §3.2 — duplicate-click protection requires per-key Map<string,Promise> mutexes mirroring the existing _leakAttachInFlight pattern.",
+  );
+  // 14d snooze cap is locked. We accept either the literal expression
+  // assigned directly into SNOOZE_QUOTE_LIMITS.MAX_FUTURE_MS, OR the
+  // current factored-out style where the constant is bound to a
+  // module-local 14*24*60*60*1000 named SNOOZE_MAX_FUTURE_MS.
+  assert(
+    "services/customerQuotes.ts — SNOOZE_QUOTE_LIMITS.MAX_FUTURE_MS = 14d",
+    /SNOOZE_QUOTE_LIMITS[\s\S]*?MAX_FUTURE_MS\s*:\s*(?:SNOOZE_MAX_FUTURE_MS|14\s*\*\s*24\s*\*\s*60\s*\*\s*60\s*\*\s*1000)/.test(customerQuotesSvc) &&
+      /SNOOZE_MAX_FUTURE_MS\s*=\s*14\s*\*\s*24\s*\*\s*60\s*\*\s*60\s*\*\s*1000/.test(customerQuotesSvc),
+    "Task #849 §3.3 caps snoozedUntil at +14 days. Don't loosen this without updating the contract.",
+  );
+}
+
+{
+  // §3.4 automation-counters: route + 30s cache window.
+  const conversationsLeakageSrc = readFile("server/routes/conversationsLeakage.ts");
+  assert(
+    "conversationsLeakage.ts — GET /api/quote-requests/automation-counters route exists",
+    /\/api\/quote-requests\/automation-counters/.test(conversationsLeakageSrc),
+    "Task #849 §3.4 requires GET /api/quote-requests/automation-counters.",
+  );
+  // Cache window: either a literal `max-age=30` in the header, OR the
+  // factored-out `AUTOMATION_COUNTERS_TTL_MS = 30_000` constant routed
+  // into the Cache-Control header via Math.floor(.../1000).
+  assert(
+    "conversationsLeakage.ts — automation-counters honours the 30s freshness cap",
+    /max-age=30(?!\d)/.test(conversationsLeakageSrc) ||
+      /AUTOMATION_COUNTERS_TTL_MS\s*=\s*30[_\s]*000/.test(conversationsLeakageSrc),
+    "Task #849 §3.4 caps the operator strip at 30s freshness so concurrent dashboards don't hammer the read path.",
+  );
+  // §3.7 classifier amendment must be present in BOTH window aggregate
+  // and the top-domains aggregate. The amendment is the EXISTS clause
+  // that recognises `quote_opportunities.source_reference = email_messages.provider_message_id`
+  // as evidence of materialization.
+  const sourceRefMatches = (conversationsLeakageSrc.match(
+    /qo\.source_reference\s*=\s*e\.provider_message_id/g,
+  ) ?? []).length;
+  assert(
+    "conversationsLeakage.ts — §3.7 classifier amendment present in BOTH CTEs (window + top-domains)",
+    sourceRefMatches >= 2,
+    `Found ${sourceRefMatches} occurrence(s) of the source_reference fallback. Task #849 §3.7 requires the EXISTS clause in both computeWindow AND computeTopLeakingDomains so the leakage strip and the per-domain breakdown agree on what counts as "materialized".`,
+  );
+}
+
+{
+  // §3.5 send-thread-reply route. The contract pins the public path
+  // (/api/email-conversations/:threadId/reply), not the internal one,
+  // so the new Quote Requests UI can call it without a router alias.
+  const conversationsRoutes = readFile("server/routes/conversations.ts");
+  assert(
+    "conversations.ts — POST /api/email-conversations/:threadId/reply route exists",
+    /app\.post\(\s*"\/api\/email-conversations\/:threadId\/reply"/.test(conversationsRoutes),
+    "Task #849 §3.5 requires POST /api/email-conversations/:threadId/reply (public path, not the /api/internal/conversations alias).",
+  );
+  assert(
+    "conversations.ts — send-thread-reply gates the from-mailbox to a monitored mailbox",
+    /from_mailbox_not_monitored/.test(conversationsRoutes),
+    "Task #849 §3.5 — without the monitored-mailbox check, a reply could be sent through an unmanaged identity. Fail closed instead.",
+  );
+}
+
+{
+  // §3.2 quote-sender suppression schema. Surface check on the column,
+  // the customer_id nullable flip, and the lookupMapping suppression
+  // filter — all three are required so suppressed senders can never
+  // re-ingest as quote opportunities.
+  const senderMappingsSchema = readFile("shared/schema.ts");
+  assert(
+    "shared/schema.ts — quote_sender_mappings.suppressed boolean exists",
+    /suppressed\s*:\s*boolean\(\s*"suppressed"\s*\)[\s\S]*?notNull\(\s*\)[\s\S]*?default\(\s*false\s*\)/.test(senderMappingsSchema),
+    "Task #849 §3.2 — quote_sender_mappings needs a non-null `suppressed boolean default false` column.",
+  );
+  const senderMappingsSvc = readFile("server/services/quoteSenderMappings.ts");
+  assert(
+    "services/quoteSenderMappings.ts — lookupMapping filters suppressed=false",
+    /lookupMapping[\s\S]*?suppressed/.test(senderMappingsSvc),
+    "Task #849 §3.2 — lookupMapping must filter out suppression rows so they never route inbound mail to a customer.",
+  );
+  assert(
+    "services/quoteSenderMappings.ts — exports findSuppressionMapping",
+    /export\s+async\s+function\s+findSuppressionMapping\b/.test(senderMappingsSvc),
+    "Task #849 §3.2 requires findSuppressionMapping so the ingestion path can short-circuit on suppression.",
+  );
+  // Ingestion-path suppression check. The Phase 2b autopilot path
+  // lives in quoteOpportunityFromSignalService.processOneSignal — that
+  // is where the suppression short-circuit must fire (after the
+  // internal-domain skip and before the would-create / would-attach
+  // branches).
+  const oppFromSignalSrc = readFile("server/services/quoteOpportunityFromSignalService.ts");
+  assert(
+    "services/quoteOpportunityFromSignalService.ts — processOneSignal short-circuits on findSuppressionMapping",
+    /findSuppressionMapping/.test(oppFromSignalSrc),
+    "Task #849 §3.2 — quoteOpportunityFromSignalService.processOneSignal must consult findSuppressionMapping after the internal-domain check so suppressed senders never materialize a quote opportunity.",
+  );
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

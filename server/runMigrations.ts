@@ -5213,6 +5213,34 @@ export async function runMigrations() {
   }
 
   // ===================================================================
+  // Task #849 §3.2 — sender suppression on quote_sender_mappings.
+  //
+  // Adds the `suppressed` boolean column and relaxes `customer_id` to
+  // NULLABLE so a Send-to-leak action with `suppressSender=true` can
+  // record "do not auto-create opps from this sender" without having
+  // to point at a real customer row. Lookup-side honor is in
+  // `lookupMapping` (returns null for suppressed rows) and the
+  // closure path in `processOneSignal` (skips opp creation when a
+  // suppression mapping matches the inbound sender).
+  //
+  // Idempotent — repeated boots converge. The DROP NOT NULL is a
+  // metadata-only change in Postgres so it is safe on hot tables.
+  // ===================================================================
+  const clientSenderSuppression = await pool.connect();
+  try {
+    await clientSenderSuppression.query(`
+      ALTER TABLE quote_sender_mappings
+        ADD COLUMN IF NOT EXISTS suppressed boolean NOT NULL DEFAULT false
+    `);
+    await clientSenderSuppression.query(`
+      ALTER TABLE quote_sender_mappings
+        ALTER COLUMN customer_id DROP NOT NULL
+    `);
+  } finally {
+    clientSenderSuppression.release();
+  }
+
+  // ===================================================================
   // Task #849 §1.1 — post-2d source backfill (`quote_sources_v2_post2d`).
   //
   // Historically every autopilot-classified inbound quote landed with

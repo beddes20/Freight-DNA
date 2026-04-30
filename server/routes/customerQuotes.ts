@@ -136,6 +136,13 @@ export async function assertCanMutateQuote(
 import { gatherDataAnchors, generateDraft } from "./emailDrafting";
 import { getVoiceProfile } from "../voiceProfileService";
 import { listMappings, deleteMapping } from "../services/quoteSenderMappings";
+import {
+  attachQuoteToTarget,
+  sendQuoteToLeak,
+  snoozeQuote,
+  SNOOZE_QUOTE_LIMITS,
+} from "../services/customerQuotes";
+import { isQuoteOpportunitiesRole } from "@shared/quoteOpportunitiesRoles";
 import multer from "multer";
 import {
   parseQuoteIntakeFromText,
@@ -1594,6 +1601,228 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] purge-demo-seed error:", err);
       res.status(500).json({ error: msg });
+    }
+  });
+
+  // ===========================================================================
+  // Task #849 §3.1, §3.2, §3.3 — operator actions on quote opportunities.
+  //
+  // These three routes share an authentication+authorization shape:
+  //   • requireUser   — must be logged in; org-isolation comes from
+  //                     `user.organizationId` on every DB lookup.
+  //   • assertCanMutateQuote — Quote Opportunities role + ownership gate.
+  //                     This is the same gate `PATCH /quote/:id` uses; it
+  //                     covers admin/director/sales_director and treats
+  //                     national_account_manager / sales as elevated for
+  //                     funnel-wide ops, while keeping account_manager
+  //                     scoped to their own opps.
+  //
+  // Re-attach correction (§5.10) is gated separately to admin/director/
+  // sales_director only — `assertCanMutateQuote` would let a sales rep
+  // re-attach an opp they own, but the contract reserves the correction
+  // path for elevated roles. We check `allowReattach` at the top of the
+  // attach-to handler.
+  // ===========================================================================
+
+  // ─── §3.1 POST /api/customer-quotes/quote/:id/attach-to ──────────────────
+  const attachToBodySchema = z.object({
+    targetOppId: z.string().min(1, "targetOppId is required"),
+    decision: z.enum(["attached", "duplicate"]).default("attached"),
+    note: z.string().max(2000).nullish(),
+    allowReattach: z.boolean().optional(),
+  });
+  app.post("/api/customer-quotes/quote/:id/attach-to", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const id = pStr(req.params.id);
+      if (!id) return res.status(400).json({ error: "Missing quote id" });
+
+      const parsed = attachToBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      const { targetOppId, decision, note, allowReattach } = parsed.data;
+
+      // Self-attach is a UX bug. Catch it at the route boundary so we
+      // don't waste a service call (the service guards too — defense in
+      // depth — but we want a precise 400 here).
+      if (id === targetOppId) {
+        return res.status(400).json({ error: "Cannot attach a quote to itself" });
+      }
+
+      // Ownership: the operator must be allowed to mutate the SOURCE opp
+      // (the one being closed). They do NOT need to own the target —
+      // attach-to-someone-else's opp is the supported flow when the rep
+      // hands a duplicate to the canonical owner.
+      const gate = await assertCanMutateQuote(user.organizationId, id, user);
+      if (!gate.ok) {
+        if (gate.status === 404) return res.status(404).json({ error: "Quote not found" });
+        return res.status(403).json({ error: gate.reason, deniedIds: gate.deniedIds });
+      }
+
+      // Re-attach correction is admin/director/sales_director only.
+      // Other roles passing allowReattach=true is rejected up-front so
+      // the UI doesn't need to guess at the role matrix.
+      const wantsReattach = Boolean(allowReattach);
+      const isElevated = ["admin", "director", "sales_director"].includes(user.role);
+      if (wantsReattach && !isElevated) {
+        return res.status(403).json({ error: "Re-attach correction requires elevated role" });
+      }
+
+      const result = await attachQuoteToTarget(
+        user.organizationId,
+        user.id,
+        id,
+        targetOppId,
+        decision,
+        note ?? null,
+        wantsReattach,
+      );
+      switch (result.status) {
+        case "source_not_found":
+        case "target_not_found":
+          return res.status(404).json({ error: result.status });
+        case "self_attach":
+          return res.status(400).json({ error: "self_attach" });
+        case "already_closed":
+          return res.status(409).json({
+            error: "already_closed",
+            currentOutcome: result.currentOutcome,
+          });
+        case "attached":
+        case "reattached":
+          return res.json({
+            ok: true,
+            status: result.status,
+            fromOppId: result.fromOppId,
+            targetOppId: result.targetOppId,
+            previousTargetOppId: result.previousTargetOppId ?? null,
+            capturedReviewIds: result.capturedReviewIds ?? [],
+          });
+      }
+    } catch (err) {
+      console.error("[customer-quotes] attach-to error:", err);
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  // ─── §3.2 POST /api/customer-quotes/quote/:id/send-to-leak ───────────────
+  const sendToLeakBodySchema = z.object({
+    reason: z.enum(["not_a_request", "unparseable", "wrong_party", "duplicate_email", "other"]),
+    note: z.string().max(2000).nullish(),
+    suppressSender: z.boolean().optional(),
+  });
+  app.post("/api/customer-quotes/quote/:id/send-to-leak", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const id = pStr(req.params.id);
+      if (!id) return res.status(400).json({ error: "Missing quote id" });
+      const parsed = sendToLeakBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      const { reason, note, suppressSender } = parsed.data;
+
+      const gate = await assertCanMutateQuote(user.organizationId, id, user);
+      if (!gate.ok) {
+        if (gate.status === 404) return res.status(404).json({ error: "Quote not found" });
+        return res.status(403).json({ error: gate.reason, deniedIds: gate.deniedIds });
+      }
+
+      // Sender suppression is a per-org learning operation; reserve to
+      // elevated roles + national account managers (who run the senders
+      // admin). Other roles can still send to leak — `suppressSender`
+      // is silently downgraded to false instead of 403'ing the whole
+      // call, which would block the primary write for a secondary
+      // permission.
+      const allowSuppress = ["admin", "director", "sales_director", "national_account_manager"]
+        .includes(user.role);
+      const effectiveSuppress = Boolean(suppressSender) && allowSuppress;
+
+      const result = await sendQuoteToLeak(
+        user.organizationId,
+        user.id,
+        id,
+        reason,
+        note ?? null,
+        effectiveSuppress,
+      );
+      switch (result.status) {
+        case "not_found":
+          return res.status(404).json({ error: "not_found" });
+        case "already_closed":
+          return res.status(409).json({
+            error: "already_closed",
+            currentOutcome: result.currentOutcome,
+          });
+        case "sent_to_leak":
+          return res.json({
+            ok: true,
+            oppId: result.oppId,
+            decision: result.decision,
+            capturedReviewIds: result.capturedReviewIds ?? [],
+            senderSuppressed: result.senderSuppressed ?? false,
+            // Surface the downgrade so the UI can show "suppression
+            // skipped — admin only" inline.
+            senderSuppressionRequested: Boolean(suppressSender),
+          });
+      }
+    } catch (err) {
+      console.error("[customer-quotes] send-to-leak error:", err);
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  // ─── §3.3 PATCH /api/customer-quotes/quote/:id/snooze ────────────────────
+  const snoozeBodySchema = z.object({
+    // ISO-8601 string or null. Null clears the snooze ("unsnooze").
+    snoozedUntil: z.string().datetime().nullable(),
+  });
+  app.patch("/api/customer-quotes/quote/:id/snooze", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const id = pStr(req.params.id);
+      if (!id) return res.status(400).json({ error: "Missing quote id" });
+      const parsed = snoozeBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      const { snoozedUntil } = parsed.data;
+
+      // Window guard. Past dates are rejected (use null to clear instead),
+      // and we cap the future window at +14d so reps don't park work for
+      // a quarter and forget it. Elevated roles get the same cap — this
+      // is product policy, not security.
+      if (snoozedUntil) {
+        const ts = Date.parse(snoozedUntil);
+        const now = Date.now();
+        if (!Number.isFinite(ts) || ts <= now) {
+          return res.status(400).json({ error: "snoozedUntil must be a future date" });
+        }
+        if (ts - now > SNOOZE_QUOTE_LIMITS.MAX_FUTURE_MS) {
+          return res.status(400).json({
+            error: "snoozedUntil cannot be more than 14 days in the future",
+          });
+        }
+      }
+
+      const gate = await assertCanMutateQuote(user.organizationId, id, user);
+      if (!gate.ok) {
+        if (gate.status === 404) return res.status(404).json({ error: "Quote not found" });
+        return res.status(403).json({ error: gate.reason, deniedIds: gate.deniedIds });
+      }
+
+      const result = await snoozeQuote(user.organizationId, user.id, id, snoozedUntil);
+      if (result.status === "not_found") return res.status(404).json({ error: "not_found" });
+      return res.json({
+        ok: true,
+        status: result.status,
+        oppId: result.oppId,
+        snoozedUntil: result.snoozedUntil,
+      });
+    } catch (err) {
+      console.error("[customer-quotes] snooze error:", err);
+      res.status(500).json({ error: getErrorMessage(err) });
     }
   });
 }

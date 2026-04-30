@@ -5811,7 +5811,15 @@ export const quoteSenderMappings = pgTable(
     organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
     senderDomain: text("sender_domain"),
     senderEmail: text("sender_email"),
-    customerId: varchar("customer_id").notNull().references(() => quoteCustomers.id, { onDelete: "cascade" }),
+    // Task #849 §3.2 — `customerId` is NULL when the row is a *suppression*
+    // mapping (sender flagged "not a real request" by Send-to-leak). The
+    // ingestion / autopilot path treats a suppressed row as "do not auto-
+    // create an opp from this sender" — see `processOneSignal` in
+    // `server/services/quoteOpportunityFromSignalService.ts`. Real
+    // customer-routing rows (the original Sender-Domain Learning use
+    // case) still set `customerId` and `suppressed=false`.
+    customerId: varchar("customer_id").references(() => quoteCustomers.id, { onDelete: "cascade" }),
+    suppressed: boolean("suppressed").notNull().default(false),
     source: text("source").notNull().default("manual"),
     sampleCount: integer("sample_count").notNull().default(1),
     lastUsedAt: timestamp("last_used_at").defaultNow().notNull(),

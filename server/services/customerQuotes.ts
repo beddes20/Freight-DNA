@@ -6491,5 +6491,607 @@ export async function resolveNewContactReview(
   };
 }
 
+// =============================================================================
+// Task #849 §3.1, §3.2, §3.3 — post-2d operator actions on quote opportunities.
+//
+// Three new operator-facing write paths (attach-to / send-to-leak / snooze)
+// land here together because they share infrastructure: the in-process mutex
+// pattern, the `quote_events` audit shape, the `publishLiveSync` cross-tab
+// fan-out, and the `clearStaleFollowUpCache` invalidation. Keeping them in
+// one block makes the contract surface easy to audit.
+//
+// Concurrency: each write path uses a per-key in-process Map<string,Promise>
+// mutex (same pattern as `_leakAttachInFlight` above). The DB-side guards
+// (unique indexes, conditional UPDATE WHERE clauses) make the operations
+// idempotent on retry, but the mutex collapses concurrent clicks to a
+// single set of audit rows so the timeline doesn't show ghost events.
+//
+// All three publish to `customer_quote` so the cross-tab UX layer wakes up
+// the Quote Requests list immediately.
+// =============================================================================
+
+const QUOTE_TERMINAL_STATUSES = new Set<QuoteOutcomeStatus>([
+  "won", "lost_price", "lost_service", "lost_timing", "lost_incumbent",
+  "no_response", "expired", "won_low_margin",
+]);
+
+const QUOTE_TERMINAL_STATUSES_INCL_ATTACHED = new Set<QuoteOutcomeStatus>([
+  ...Array.from(QUOTE_TERMINAL_STATUSES),
+  "attached",
+] as QuoteOutcomeStatus[]);
+
+// ─── §3.1 attach-to ─────────────────────────────────────────────────────────
+
+export type AttachQuoteStatus =
+  | "attached"
+  | "source_not_found"
+  | "target_not_found"
+  | "self_attach"
+  | "already_closed"
+  | "reattached";
+
+export interface AttachQuoteResult {
+  status: AttachQuoteStatus;
+  fromOppId?: string;
+  targetOppId?: string;
+  capturedReviewIds?: string[];
+  currentOutcome?: QuoteOutcomeStatus;
+  /** Set on `reattached`: the previous target opp the source pointed at. */
+  previousTargetOppId?: string;
+}
+
+const _attachQuoteInFlight = new Map<string, Promise<AttachQuoteResult>>();
+
+/**
+ * Attach a quote opportunity to a target opportunity (`§5.4 Attach` /
+ * `§5.7 Mark duplicate`). Closes the source opp by setting
+ * `outcome_status='attached'`, re-points its `email_signals` rows at the
+ * target, and writes the audit pair `opp_attached_out` / `opp_attached_in`.
+ *
+ * Re-attach correction (elevated roles only): when the source opp is
+ * ALREADY in `outcome_status='attached'` and `allowReattach=true`, the
+ * function reads the source's most recent `opp_attached_out` event to
+ * recover the `previousTargetOppId`, writes
+ * `opp_reattached_out` / `opp_reattached_away` / a fresh `opp_attached_in`
+ * on the new target, and re-points signals to the new target. The
+ * `publishLiveSync` fan-out covers all three opps.
+ *
+ * Mutex key: `attach:${orgId}:${sourceOppId}:${targetOppId}` — concurrent
+ * clicks with identical inputs collapse to a single set of writes.
+ */
+export async function attachQuoteToTarget(
+  orgId: string,
+  userId: string | null,
+  sourceOppId: string,
+  targetOppId: string,
+  decision: "attached" | "duplicate",
+  note: string | null,
+  allowReattach: boolean,
+): Promise<AttachQuoteResult> {
+  const sid = (sourceOppId ?? "").trim();
+  const tid = (targetOppId ?? "").trim();
+  if (!sid) return { status: "source_not_found" };
+  if (!tid) return { status: "target_not_found" };
+  if (sid === tid) return { status: "self_attach" };
+
+  const mutexKey = `attach:${orgId}:${sid}:${tid}`;
+  const inFlight = _attachQuoteInFlight.get(mutexKey);
+  if (inFlight) return inFlight;
+  const work = _runAttachQuote(orgId, userId, sid, tid, decision, note, allowReattach);
+  _attachQuoteInFlight.set(mutexKey, work);
+  try {
+    return await work;
+  } finally {
+    _attachQuoteInFlight.delete(mutexKey);
+  }
+}
+
+export function _isAttachQuoteInFlightForTests(orgId: string, sid: string, tid: string): boolean {
+  return _attachQuoteInFlight.has(`attach:${orgId}:${sid}:${tid}`);
+}
+
+async function _runAttachQuote(
+  orgId: string,
+  userId: string | null,
+  sid: string,
+  tid: string,
+  decision: "attached" | "duplicate",
+  note: string | null,
+  allowReattach: boolean,
+): Promise<AttachQuoteResult> {
+  const [source] = await db.select({
+    id: quoteOpportunities.id,
+    outcomeStatus: quoteOpportunities.outcomeStatus,
+  }).from(quoteOpportunities).where(and(
+    eq(quoteOpportunities.organizationId, orgId),
+    eq(quoteOpportunities.id, sid),
+  )).limit(1);
+  if (!source) return { status: "source_not_found" };
+
+  const [target] = await db.select({ id: quoteOpportunities.id }).from(quoteOpportunities).where(and(
+    eq(quoteOpportunities.organizationId, orgId),
+    eq(quoteOpportunities.id, tid),
+  )).limit(1);
+  if (!target) return { status: "target_not_found" };
+
+  const isReattach = source.outcomeStatus === "attached";
+  // Terminal-state guard. `attached` is the only terminal state that
+  // re-routes (correction path) — every other terminal is a hard stop.
+  if (QUOTE_TERMINAL_STATUSES.has(source.outcomeStatus as QuoteOutcomeStatus)) {
+    return { status: "already_closed", currentOutcome: source.outcomeStatus as QuoteOutcomeStatus };
+  }
+  if (isReattach && !allowReattach) {
+    return { status: "already_closed", currentOutcome: source.outcomeStatus as QuoteOutcomeStatus };
+  }
+
+  // Recover previous target for the re-attach correction path. The
+  // payload of the most recent `opp_attached_out` event on the source
+  // carries the targetOppId of the prior attach.
+  let previousTargetOppId: string | undefined;
+  if (isReattach) {
+    const [prevEv] = await db.select({ payload: quoteEvents.payload })
+      .from(quoteEvents)
+      .where(and(
+        eq(quoteEvents.quoteId, sid),
+        eq(quoteEvents.eventType, "opp_attached_out"),
+      ))
+      .orderBy(desc(quoteEvents.occurredAt))
+      .limit(1);
+    const prevPayload = (prevEv?.payload ?? null) as { targetOppId?: string } | null;
+    previousTargetOppId = prevPayload?.targetOppId ?? undefined;
+    // Re-attach to the SAME prior target is a no-op — surface
+    // already_closed so the UI re-renders without a duplicate audit row.
+    if (previousTargetOppId === tid) {
+      return { status: "already_closed", currentOutcome: "attached", previousTargetOppId };
+    }
+  }
+
+  const now = new Date();
+
+  // 1) Re-point signals from source → target.
+  await db.update(emailSignals)
+    .set({ linkedOpportunityId: tid })
+    .where(eq(emailSignals.linkedOpportunityId, sid));
+
+  // 2) Update the source opp's outcome (only if not already 'attached').
+  if (!isReattach) {
+    await db.update(quoteOpportunities)
+      .set({ outcomeStatus: "attached", outcomeReasonId: null })
+      .where(and(
+        eq(quoteOpportunities.organizationId, orgId),
+        eq(quoteOpportunities.id, sid),
+      ));
+  }
+
+  // 3) Write the audit-event pair (or trio for re-attach).
+  const eventType_out = isReattach ? "opp_reattached_out" : "opp_attached_out";
+  const eventType_in = "opp_attached_in";
+  const payload_out = {
+    targetOppId: tid,
+    decision,
+    note,
+    byUserId: userId,
+    ...(isReattach ? { previousTargetOppId } : {}),
+  };
+  const payload_in = { fromOppId: sid, decision, note, byUserId: userId };
+
+  await db.insert(quoteEvents).values({
+    quoteId: sid,
+    eventType: eventType_out,
+    occurredAt: now,
+    actor: "manual_leak_attach",
+    payload: payload_out,
+  });
+  await db.insert(quoteEvents).values({
+    quoteId: tid,
+    eventType: eventType_in,
+    occurredAt: now,
+    actor: "manual_leak_attach",
+    payload: payload_in,
+  });
+  if (isReattach && previousTargetOppId) {
+    await db.insert(quoteEvents).values({
+      quoteId: previousTargetOppId,
+      eventType: "opp_reattached_away",
+      occurredAt: now,
+      actor: "manual_leak_attach",
+      payload: { fromOppId: sid, newTargetOppId: tid, byUserId: userId },
+    });
+  }
+
+  // 4) Upsert capture_leak_reviews for every inbound message that the
+  // source opp's signals reference. We collect these BEFORE the signal
+  // update above already re-pointed them — so we walk the SOURCE-side
+  // history through the audit chain instead. Practically: re-find any
+  // inbound `email_messages.id` whose `email_signals` row was just
+  // re-pointed (by reading provider_message_id off the source opp's
+  // sourceReference is unreliable for multi-message threads).
+  // Since we already re-pointed, query the now-target signals for
+  // anything that was just moved.
+  const movedMsgIds = await db
+    .select({
+      messageId: emailSignals.messageId,
+    })
+    .from(emailSignals)
+    .where(eq(emailSignals.linkedOpportunityId, tid));
+
+  const seen = new Set<string>();
+  const reviewIds: string[] = [];
+  for (const r of movedMsgIds) {
+    const mid = r.messageId;
+    if (!mid || seen.has(mid)) continue;
+    seen.add(mid);
+    try {
+      const [inserted] = await db.insert(captureLeakReviews).values({
+        organizationId: orgId,
+        messageId: mid,
+        leakType: "missed_inbound",
+        decision,
+        decidedByUserId: userId,
+        note: note ?? `attached:${tid}`,
+      }).onConflictDoUpdate({
+        target: [
+          captureLeakReviews.organizationId,
+          captureLeakReviews.messageId,
+          captureLeakReviews.leakType,
+        ],
+        set: {
+          decision,
+          decidedByUserId: userId,
+          note: note ?? `attached:${tid}`,
+        },
+      }).returning({ id: captureLeakReviews.id });
+      if (inserted?.id) reviewIds.push(inserted.id);
+    } catch (err) {
+      console.error("[attach-to] capture_leak_reviews upsert failed:", err);
+    }
+  }
+
+  // 5) Cross-tab fan-out + cache invalidation.
+  publishLiveSyncFromService(orgId, "customer_quote", sid);
+  publishLiveSyncFromService(orgId, "customer_quote", tid);
+  if (isReattach && previousTargetOppId) {
+    publishLiveSyncFromService(orgId, "customer_quote", previousTargetOppId);
+  }
+  try {
+    const { clearStaleFollowUpCache } = await import("./staleQuoteFollowup");
+    clearStaleFollowUpCache(orgId);
+  } catch { /* cache invalidation must not fail the write */ }
+
+  return {
+    status: isReattach ? "reattached" : "attached",
+    fromOppId: sid,
+    targetOppId: tid,
+    capturedReviewIds: reviewIds,
+    previousTargetOppId,
+  };
+}
+
+// ─── §3.2 send-to-leak ──────────────────────────────────────────────────────
+
+export type SendToLeakReason =
+  | "not_a_request"
+  | "unparseable"
+  | "wrong_party"
+  | "duplicate_email"
+  | "other";
+
+export type SendToLeakStatus =
+  | "sent_to_leak"
+  | "not_found"
+  | "already_closed";
+
+export interface SendToLeakResult {
+  status: SendToLeakStatus;
+  oppId?: string;
+  decision?: "not_a_request" | "returned_to_queue";
+  capturedReviewIds?: string[];
+  senderSuppressed?: boolean;
+  currentOutcome?: QuoteOutcomeStatus;
+}
+
+const _sendToLeakInFlight = new Map<string, Promise<SendToLeakResult>>();
+
+const SENT_TO_LEAK_REASON_CODE = "sent_to_leak_queue";
+const SENT_TO_LEAK_REASON_LABEL = "Sent to leak queue";
+
+async function findOrCreateSentToLeakReason(orgId: string): Promise<string> {
+  const [existing] = await db.select({ id: quoteOutcomeReasons.id })
+    .from(quoteOutcomeReasons)
+    .where(and(
+      eq(quoteOutcomeReasons.organizationId, orgId),
+      eq(quoteOutcomeReasons.code, SENT_TO_LEAK_REASON_CODE),
+    )).limit(1);
+  if (existing) return existing.id;
+  const [row] = await db.insert(quoteOutcomeReasons).values({
+    organizationId: orgId,
+    code: SENT_TO_LEAK_REASON_CODE,
+    label: SENT_TO_LEAK_REASON_LABEL,
+    category: "no_response",
+  }).returning({ id: quoteOutcomeReasons.id });
+  return row.id;
+}
+
+/**
+ * Send a quote opportunity to the leak queue (§5.6 / §5.13). Closes the
+ * opp with `outcome_status='no_response'` + a `sent_to_leak_queue`
+ * outcome reason, upserts `capture_leak_reviews` rows for each linked
+ * inbound email, and either restores the signal to "leaked"
+ * (`returned_to_queue`) or leaves the opp linkage intact
+ * (`not_a_request`).
+ */
+export async function sendQuoteToLeak(
+  orgId: string,
+  userId: string | null,
+  oppId: string,
+  reason: SendToLeakReason,
+  note: string | null,
+  suppressSender: boolean,
+): Promise<SendToLeakResult> {
+  const id = (oppId ?? "").trim();
+  if (!id) return { status: "not_found" };
+  const mutexKey = `send-to-leak:${orgId}:${id}`;
+  const inFlight = _sendToLeakInFlight.get(mutexKey);
+  if (inFlight) return inFlight;
+  const work = _runSendQuoteToLeak(orgId, userId, id, reason, note, suppressSender);
+  _sendToLeakInFlight.set(mutexKey, work);
+  try {
+    return await work;
+  } finally {
+    _sendToLeakInFlight.delete(mutexKey);
+  }
+}
+
+export function _isSendToLeakInFlightForTests(orgId: string, oppId: string): boolean {
+  return _sendToLeakInFlight.has(`send-to-leak:${orgId}:${oppId}`);
+}
+
+async function _runSendQuoteToLeak(
+  orgId: string,
+  userId: string | null,
+  id: string,
+  reason: SendToLeakReason,
+  note: string | null,
+  suppressSender: boolean,
+): Promise<SendToLeakResult> {
+  const [opp] = await db.select({
+    id: quoteOpportunities.id,
+    outcomeStatus: quoteOpportunities.outcomeStatus,
+    sourceReference: quoteOpportunities.sourceReference,
+  }).from(quoteOpportunities).where(and(
+    eq(quoteOpportunities.organizationId, orgId),
+    eq(quoteOpportunities.id, id),
+  )).limit(1);
+  if (!opp) return { status: "not_found" };
+  if (QUOTE_TERMINAL_STATUSES_INCL_ATTACHED.has(opp.outcomeStatus as QuoteOutcomeStatus)) {
+    return { status: "already_closed", currentOutcome: opp.outcomeStatus as QuoteOutcomeStatus };
+  }
+
+  const decision: "not_a_request" | "returned_to_queue" =
+    reason === "not_a_request" ? "not_a_request" : "returned_to_queue";
+  const reasonId = await findOrCreateSentToLeakReason(orgId);
+  const now = new Date();
+
+  // 1) Close the opp.
+  await db.update(quoteOpportunities)
+    .set({ outcomeStatus: "no_response", outcomeReasonId: reasonId })
+    .where(and(
+      eq(quoteOpportunities.organizationId, orgId),
+      eq(quoteOpportunities.id, id),
+    ));
+
+  // 2) Audit event.
+  await db.insert(quoteEvents).values({
+    quoteId: id,
+    eventType: "sent_to_leak",
+    occurredAt: now,
+    actor: "rep_send_to_leak",
+    payload: { reason, note, byUserId: userId, decision },
+  });
+
+  // 3) Capture reviews for every linked inbound message.
+  const linkedSignals = await db.select({ messageId: emailSignals.messageId })
+    .from(emailSignals)
+    .where(eq(emailSignals.linkedOpportunityId, id));
+  const seen = new Set<string>();
+  const reviewIds: string[] = [];
+  for (const r of linkedSignals) {
+    const mid = r.messageId;
+    if (!mid || seen.has(mid)) continue;
+    seen.add(mid);
+    try {
+      const [inserted] = await db.insert(captureLeakReviews).values({
+        organizationId: orgId,
+        messageId: mid,
+        leakType: "missed_inbound",
+        decision,
+        decidedByUserId: userId,
+        note: note ?? null,
+      }).onConflictDoUpdate({
+        target: [
+          captureLeakReviews.organizationId,
+          captureLeakReviews.messageId,
+          captureLeakReviews.leakType,
+        ],
+        set: { decision, decidedByUserId: userId, note: note ?? null },
+      }).returning({ id: captureLeakReviews.id });
+      if (inserted?.id) reviewIds.push(inserted.id);
+    } catch (err) {
+      console.error("[send-to-leak] capture_leak_reviews upsert failed:", err);
+    }
+  }
+
+  // 4) returned_to_queue → restore the signal to "leaked" by clearing
+  // BOTH `email_signals.linked_opportunity_id` AND
+  // `quote_opportunities.source_reference` (per §3.2 step 5 of the
+  // contract — leakage-stats classifier reads both).
+  if (decision === "returned_to_queue") {
+    await db.update(emailSignals)
+      .set({ linkedOpportunityId: null })
+      .where(eq(emailSignals.linkedOpportunityId, id));
+    await db.update(quoteOpportunities)
+      .set({ sourceReference: null })
+      .where(and(
+        eq(quoteOpportunities.organizationId, orgId),
+        eq(quoteOpportunities.id, id),
+      ));
+  }
+
+  // 5) Sender suppression (best effort — failure must not block the
+  // send-to-leak success). Only meaningful when the rep declared the
+  // sender was sending non-quote content (`not_a_request`).
+  let senderSuppressed = false;
+  if (reason === "not_a_request" && suppressSender) {
+    try {
+      // Resolve the inbound sender. The opp's `sourceReference` carries
+      // the provider_message_id; we walk it back to email_messages to
+      // find from_email.
+      let fromEmail: string | null = null;
+      if (opp.sourceReference) {
+        const [msg] = await db.select({ fromEmail: emailMessages.fromEmail })
+          .from(emailMessages)
+          .where(and(
+            eq(emailMessages.orgId, orgId),
+            eq(emailMessages.providerMessageId, opp.sourceReference),
+          ))
+          .limit(1);
+        fromEmail = msg?.fromEmail ?? null;
+      }
+      if (!fromEmail) {
+        // Fall back to the most recent inbound on the opp's signal set.
+        const [linked] = await db.select({ fromEmail: emailMessages.fromEmail })
+          .from(emailSignals)
+          .innerJoin(emailMessages, eq(emailMessages.id, emailSignals.messageId))
+          .where(eq(emailSignals.linkedOpportunityId, id))
+          .orderBy(desc(emailMessages.providerSentAt))
+          .limit(1);
+        fromEmail = linked?.fromEmail ?? null;
+      }
+      const { extractSenderInfo } = await import("./quoteSenderMappings");
+      const info = extractSenderInfo(fromEmail);
+      if (info) {
+        // Insert the suppression mapping. Reuse the org-scoped semantics
+        // of the existing table; we deliberately do NOT use the
+        // customer-routing helpers (`upsertManualMapping`) because those
+        // require a customerId. Suppression rows are customerId=NULL.
+        await db.insert(quoteSenderMappings).values({
+          organizationId: orgId,
+          senderDomain: info.isFreeMail ? null : info.domain,
+          senderEmail: info.email,
+          customerId: null,
+          suppressed: true,
+          source: "manual",
+        });
+        senderSuppressed = true;
+      }
+    } catch (err) {
+      // Don't fail the whole call — just log so the operator sees the
+      // suppression didn't take. They can retry via the senders admin.
+      console.error("[send-to-leak] sender suppression failed:", err);
+    }
+  }
+
+  publishLiveSyncFromService(orgId, "customer_quote", id);
+  try {
+    const { clearStaleFollowUpCache } = await import("./staleQuoteFollowup");
+    clearStaleFollowUpCache(orgId);
+  } catch { /* fire-and-forget */ }
+
+  return {
+    status: "sent_to_leak",
+    oppId: id,
+    decision,
+    capturedReviewIds: reviewIds,
+    senderSuppressed,
+  };
+}
+
+// ─── §3.3 snooze ────────────────────────────────────────────────────────────
+
+export type SnoozeQuoteStatus =
+  | "snoozed"
+  | "unsnoozed"
+  | "not_found";
+
+export interface SnoozeQuoteResult {
+  status: SnoozeQuoteStatus;
+  oppId?: string;
+  snoozedUntil?: string | null;
+}
+
+const SNOOZE_MAX_FUTURE_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * Snooze (or unsnooze) a quote opportunity (§5.8 / §5.9). Hides the
+ * row from the default Quote Requests list until `snoozedUntil`. Pass
+ * `null` to clear. Idempotent — last write wins, no mutex needed.
+ *
+ * Caller must have ALREADY validated the date window (>now, ≤+14d) at
+ * the route level and returned `400 invalid_body` for misuse — this
+ * service expects a clean ISO string or null.
+ */
+export async function snoozeQuote(
+  orgId: string,
+  userId: string | null,
+  oppId: string,
+  snoozedUntilIso: string | null,
+): Promise<SnoozeQuoteResult> {
+  const id = (oppId ?? "").trim();
+  if (!id) return { status: "not_found" };
+  const [opp] = await db.select({ id: quoteOpportunities.id })
+    .from(quoteOpportunities)
+    .where(and(
+      eq(quoteOpportunities.organizationId, orgId),
+      eq(quoteOpportunities.id, id),
+    )).limit(1);
+  if (!opp) return { status: "not_found" };
+
+  const snoozedUntil = snoozedUntilIso ? new Date(snoozedUntilIso) : null;
+  await db.update(quoteOpportunities)
+    .set({ snoozedUntil })
+    .where(and(
+      eq(quoteOpportunities.organizationId, orgId),
+      eq(quoteOpportunities.id, id),
+    ));
+
+  const eventType = snoozedUntilIso ? "snoozed" : "unsnoozed";
+  await db.insert(quoteEvents).values({
+    quoteId: id,
+    eventType,
+    occurredAt: new Date(),
+    actor: "rep_snooze",
+    payload: { snoozedUntil: snoozedUntilIso, byUserId: userId },
+  });
+
+  publishLiveSyncFromService(orgId, "customer_quote", id);
+
+  return {
+    status: snoozedUntilIso ? "snoozed" : "unsnoozed",
+    oppId: id,
+    snoozedUntil: snoozedUntilIso,
+  };
+}
+
+export const SNOOZE_QUOTE_LIMITS = {
+  MAX_FUTURE_MS: SNOOZE_MAX_FUTURE_MS,
+} as const;
+
+// Cross-tab fan-out helper — a thin wrapper that swallows the dynamic
+// import boilerplate (the live-sync module is the same one routes call
+// directly via `publish as publishLiveSync`). Inlined here to keep the
+// service file self-contained without forcing the import at top-of-file
+// (which would create a circular dep risk in a few entrypoints).
+function publishLiveSyncFromService(orgId: string, topic: string, key?: string): void {
+  try {
+    // Lazy require so the service stays importable from worker entrypoints
+    // that don't pull in the live-sync emitter eagerly.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const liveSync = require("./liveSync");
+    liveSync.publish(orgId, topic, key);
+  } catch {
+    // Live-sync is advisory; never fail a write because of it.
+  }
+}
+
 // Test-only exports — internal helpers exposed for unit tests, not for runtime use.
 export const __testables = { enrich };

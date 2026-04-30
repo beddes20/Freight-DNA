@@ -678,7 +678,13 @@ export async function ingestQuoteFromEmail(
     customerId = await findOrCreateCustomer(message.orgId, customerName, message.fromEmail ?? null);
   } else {
     const learned = await lookupMapping(message.orgId, message.fromEmail ?? null);
-    if (learned) {
+    // Task #849 §3.2 — `lookupMapping` already filters out suppression
+    // rows (suppressed=true / customerId=null). The defensive
+    // `learned.customerId` null-guard below is purely a TypeScript
+    // narrowing requirement: the column is `varchar (nullable)` to
+    // allow suppression rows to exist; for *learned* mappings returned
+    // here it is always populated.
+    if (learned && learned.customerId) {
       customerId = learned.customerId;
       learnedMappingId = learned.id;
       // Pull the customer name for the audit event below — using the

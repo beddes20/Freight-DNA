@@ -31,10 +31,16 @@ import { sql } from "drizzle-orm";
 import { db } from "../storage";
 import { requireUser } from "../auth";
 import { getErrorMessage } from "../lib/errors";
+import { qOptStr } from "../lib/req";
 import {
   getClosureCounters,
   type ClosureCounters,
 } from "../services/quoteOpportunityFromSignalService";
+import {
+  computeClosureCounters,
+  CLOSURE_WINDOW_LABELS,
+  type ClosureWindowLabel,
+} from "../services/quoteLeakageClosureCounters";
 
 function isAdmin(role: string | null | undefined): boolean {
   return role === "admin" || role === "director" || role === "sales_director";
@@ -112,6 +118,7 @@ async function computeWindow(
             SELECT 1 FROM capture_leak_reviews clr
             WHERE clr.organization_id = ${orgId}
               AND clr.message_id = e.message_id
+              AND clr.decision <> 'returned_to_queue'
           ) THEN 'in_leak_queue'
           ELSE 'leaked'
         END AS bucket
@@ -218,7 +225,91 @@ async function computeTopLeakingDomains(
   return out;
 }
 
+// Task #849 §3.4 — operator-strip cache. Closure counters live in-process
+// (in-memory ring buffer); the contract caps the operator surface at a
+// 30s freshness window so concurrent dashboards don't hammer the read
+// path. Keyed by (orgId, windowLabel) so the three windows the strip
+// shows can refresh independently.
+const _automationCountersCache = new Map<string, { ts: number; payload: unknown }>();
+const AUTOMATION_COUNTERS_TTL_MS = 30_000;
+
+function automationCountersAllowed(role: string | null | undefined): boolean {
+  // Wider than the leakage tile (which is admin-only): every role that
+  // can SEE the post-2d Quote Requests tab is allowed to read its own
+  // counters strip. RBAC for the *actions* that mutate these counters
+  // (attach-to / send-to-leak / snooze) is enforced separately on those
+  // endpoints — this is a read-only roll-up.
+  if (!role) return false;
+  return [
+    "admin",
+    "director",
+    "sales_director",
+    "national_account_manager",
+    "sales",
+    "account_manager",
+    "logistics_manager",
+    "logistics_coordinator",
+  ].includes(role);
+}
+
 export function registerConversationsLeakageRoutes(app: Express) {
+  // Task #849 §3.4 — GET /api/quote-requests/automation-counters
+  // Operator strip on the post-2d Quote Requests tab. Reads the same
+  // in-process closure-decision buffer as `/leakage-stats` (via the
+  // shared `computeClosureCounters` service) but exposes it on a
+  // user-facing surface with a 30s cache + Cache-Control header so the
+  // strip can refresh on a 60s timer without hitting the buffer math
+  // every request. Window selectable: today (default) | last_24h |
+  // last_7d.
+  app.get(
+    "/api/quote-requests/automation-counters",
+    requireUser,
+    async (req: Request, res: Response) => {
+      try {
+        const me = req.user!;
+        if (!automationCountersAllowed(me.role)) {
+          return res.status(403).json({ error: "Forbidden" });
+        }
+        const orgId = me.organizationId;
+        if (!orgId) {
+          return res.status(400).json({ error: "Missing organization" });
+        }
+        const rawWindow = (qOptStr(req.query.window) ?? "today").trim();
+        if (!CLOSURE_WINDOW_LABELS.includes(rawWindow as ClosureWindowLabel)) {
+          return res.status(400).json({
+            error: "Invalid window",
+            allowed: CLOSURE_WINDOW_LABELS,
+          });
+        }
+        const windowLabel = rawWindow as ClosureWindowLabel;
+        const cacheKey = `${orgId}:${windowLabel}`;
+        const cached = _automationCountersCache.get(cacheKey);
+        const now = Date.now();
+        if (cached && now - cached.ts < AUTOMATION_COUNTERS_TTL_MS) {
+          res.setHeader("Cache-Control", `private, max-age=${Math.floor(AUTOMATION_COUNTERS_TTL_MS / 1000)}`);
+          res.setHeader("X-Automation-Counters-Cache", "hit");
+          return res.json(cached.payload);
+        }
+        const computed = computeClosureCounters(orgId, windowLabel);
+        const payload = {
+          generatedAt: new Date().toISOString(),
+          organizationId: orgId,
+          window: computed.window,
+          counters: computed.counters,
+          closureFlagEnabled: computed.closureFlagEnabled,
+          leakQueueDeepLink: "/admin/integrations-health#leak-tile",
+        };
+        _automationCountersCache.set(cacheKey, { ts: now, payload });
+        res.setHeader("Cache-Control", `private, max-age=${Math.floor(AUTOMATION_COUNTERS_TTL_MS / 1000)}`);
+        res.setHeader("X-Automation-Counters-Cache", "miss");
+        return res.json(payload);
+      } catch (err) {
+        console.error("[automation-counters] error:", err);
+        res.status(500).json({ error: getErrorMessage(err) });
+      }
+    },
+  );
+
   app.get(
     "/api/admin/conversations/leakage-stats",
     requireUser,

@@ -2072,4 +2072,215 @@ export function registerConversationsRoutes(app: Express): void {
       res.status(500).json({ error: "Failed to load events" });
     }
   });
+
+  // ===========================================================================
+  // Task #849 §3.5 — POST /api/email-conversations/:threadId/reply
+  //
+  // Send an outbound reply on an existing email conversation thread. The
+  // route ID space is the public one specified by the contract (not the
+  // /api/internal/conversations/* prefix the rest of this file uses) so
+  // the new Quote Requests UI can call it directly without a router-level
+  // alias.
+  //
+  // Resolution model:
+  //   • :threadId may be a UUID conversation row id, a `thread:<provider>`
+  //     orphan id, or a raw provider thread_id. We resolve to the
+  //     materialized thread row via `resolveSmartPaneTarget` so the auth
+  //     gate (org-isolation) is the same one used by the messages route.
+  //   • from_email = the to_email of the most recent INBOUND message —
+  //     i.e. the monitored mailbox that received the customer's last
+  //     email. Reusing the inbound mailbox keeps the reply Reply-To'd
+  //     to the same monitored address Outlook is already syncing.
+  //   • to_email = the from_email of the most recent INBOUND message.
+  //
+  // We send via `sendOutlookEmail` (live mode honours the org's email
+  // policy). On success we optimistically write an `email_messages` row
+  // so the freshness label updates immediately rather than waiting for
+  // the Graph webhook to backfill the sent item; the webhook is
+  // idempotent on `provider_message_id` so the eventual replay is a
+  // no-op.
+  // ===========================================================================
+  const sendThreadReplyBodySchema = z.object({
+    body: z.string().min(1, "body is required").max(50_000),
+    subject: z.string().max(998).optional(),
+    isHtml: z.boolean().optional(),
+    ccEmails: z.array(z.string().email()).max(20).optional(),
+  });
+
+  app.post("/api/email-conversations/:threadId/reply", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+
+      const parsed = sendThreadReplyBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+      }
+      const { body, subject, isHtml, ccEmails } = parsed.data;
+
+      // Resolve and authorize the thread (org-scoped via resolveSmartPaneTarget).
+      const resolved = await resolveSmartPaneTarget(user, pStr(req.params.threadId));
+      if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+      const providerThreadId = resolved.threadId;
+
+      // Pull the most recent inbound message — that gives us:
+      //   to_email   <- inbound.from_email
+      //   from_email <- inbound.to_email   (the monitored mailbox)
+      // If the thread has no inbound at all (rep-initiated outbound-only
+      // thread), fall back to the most recent outbound's TO address as
+      // the destination and reuse its FROM as the mailbox.
+      const [latestInbound] = await db.select({
+        id: emailMessages.id,
+        fromEmail: emailMessages.fromEmail,
+        toEmail: emailMessages.toEmail,
+        subject: emailMessages.subject,
+        providerMessageId: emailMessages.providerMessageId,
+      }).from(emailMessages)
+        .where(and(
+          eq(emailMessages.orgId, user.organizationId),
+          eq(emailMessages.threadId, providerThreadId),
+          eq(emailMessages.direction, "inbound"),
+        ))
+        .orderBy(desc(emailMessages.providerSentAt))
+        .limit(1);
+
+      let toEmail: string | null = latestInbound?.fromEmail ?? null;
+      let fromMailbox: string | null = latestInbound?.toEmail ?? null;
+      let baseSubject: string | null = latestInbound?.subject ?? null;
+
+      if (!toEmail || !fromMailbox) {
+        const [latestOut] = await db.select({
+          fromEmail: emailMessages.fromEmail,
+          toEmail: emailMessages.toEmail,
+          subject: emailMessages.subject,
+        }).from(emailMessages)
+          .where(and(
+            eq(emailMessages.orgId, user.organizationId),
+            eq(emailMessages.threadId, providerThreadId),
+            eq(emailMessages.direction, "outbound"),
+          ))
+          .orderBy(desc(emailMessages.providerSentAt))
+          .limit(1);
+        toEmail = toEmail ?? latestOut?.toEmail ?? null;
+        fromMailbox = fromMailbox ?? latestOut?.fromEmail ?? null;
+        baseSubject = baseSubject ?? latestOut?.subject ?? null;
+      }
+
+      if (!toEmail || !fromMailbox) {
+        return res.status(400).json({ error: "Cannot resolve reply addresses for this thread" });
+      }
+
+      // Verify the from-mailbox is a monitored mailbox in this org. If
+      // it isn't, sending could leak through an unmanaged identity. Fail
+      // closed instead of guessing.
+      const [mb] = await db.select({ id: monitoredMailboxes.id, enabled: monitoredMailboxes.enabled })
+        .from(monitoredMailboxes)
+        .where(and(
+          eq(monitoredMailboxes.orgId, user.organizationId),
+          eq(sql`LOWER(${monitoredMailboxes.email})`, fromMailbox.toLowerCase()),
+        ))
+        .limit(1);
+      if (!mb) {
+        return res.status(409).json({
+          error: "from_mailbox_not_monitored",
+          fromEmail: fromMailbox,
+        });
+      }
+
+      // Subject — preserve the inbound subject and add a single Re: prefix
+      // if the caller didn't pass one explicitly. Existing Re:/RE: chains
+      // are kept as-is so we don't pile up "Re: Re: Re:" prefixes.
+      const cleanSubject = (subject?.trim()) || (() => {
+        const s = (baseSubject ?? "(no subject)").trim();
+        return /^re:\s/i.test(s) ? s : `Re: ${s}`;
+      })();
+
+      // Lazy-import the Outlook client so the conversations route file
+      // doesn't pull the Graph SDK for non-send code paths.
+      const { sendOutlookEmail } = await import("../outlookService");
+      const result = await sendOutlookEmail({
+        fromEmail: fromMailbox,
+        toEmail,
+        subject: cleanSubject,
+        body,
+        isHtml: isHtml !== false,
+        ccEmails,
+      });
+
+      if (!result.ok) {
+        return res.status(502).json({
+          error: "send_failed",
+          details: result.error ?? "Outlook send returned failure",
+        });
+      }
+
+      // Live mode is OFF — sendOutlookEmail returns ok:true with no
+      // providerMessageId. We don't write an email_messages row in that
+      // case (there's no real send to track) and we surface the
+      // suppressed status to the caller.
+      const providerMessageId = result.providerMessageId
+        ?? (result.internetMessageId ? result.internetMessageId.replace(/[<>]/g, "") : null);
+
+      let optimisticMessageId: string | null = null;
+      if (providerMessageId) {
+        try {
+          const [inserted] = await db.insert(emailMessages).values({
+            orgId: user.organizationId,
+            providerMessageId,
+            threadId: providerThreadId,
+            direction: "outbound",
+            fromEmail: fromMailbox,
+            toEmail,
+            ccEmail: ccEmails?.length ? ccEmails.join(",") : null,
+            subject: cleanSubject,
+            body,
+            providerSentAt: new Date(),
+            ingestedVia: "delta",
+          }).onConflictDoNothing({ target: [emailMessages.orgId, emailMessages.providerMessageId] })
+            .returning({ id: emailMessages.id });
+          optimisticMessageId = inserted?.id ?? null;
+        } catch (err) {
+          // Optimistic write is advisory — the Graph webhook will backfill.
+          console.error("[email-conversations] optimistic send write failed:", err);
+        }
+
+        // Apply the new message to the thread so the freshness label and
+        // waiting-state flip immediately. We re-read the thread + message
+        // rows so applyMessageToThread sees the row IDs it expects.
+        if (optimisticMessageId) {
+          try {
+            const [threadRow] = await db.select().from(emailConversationThreads).where(and(
+              eq(emailConversationThreads.orgId, user.organizationId),
+              eq(emailConversationThreads.threadId, providerThreadId),
+            )).limit(1);
+            const [msgRow] = await db.select().from(emailMessages).where(
+              eq(emailMessages.id, optimisticMessageId),
+            ).limit(1);
+            if (threadRow && msgRow) {
+              const { applyMessageToThread } = await import("../services/conversationWaitingStateService");
+              const update = applyMessageToThread(threadRow, msgRow);
+              await db.update(emailConversationThreads)
+                .set(update)
+                .where(eq(emailConversationThreads.id, threadRow.id));
+            }
+          } catch (err) {
+            console.error("[email-conversations] applyMessageToThread failed:", err);
+          }
+        }
+      }
+
+      res.json({
+        ok: true,
+        suppressed: !providerMessageId,
+        providerMessageId,
+        messageId: optimisticMessageId,
+        toEmail,
+        fromEmail: fromMailbox,
+        subject: cleanSubject,
+      });
+    } catch (err) {
+      console.error("[email-conversations] POST /:threadId/reply error:", err);
+      res.status(500).json({ error: "Failed to send reply" });
+    }
+  });
 }
