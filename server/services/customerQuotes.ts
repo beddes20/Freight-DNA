@@ -2502,7 +2502,13 @@ export async function listSavedViews(orgId: string): Promise<QuoteSavedView[]> {
     .orderBy(desc(quoteSavedViews.createdAt));
 }
 
-export async function createSavedView(orgId: string, userId: string, name: string, filters: QuoteFilters): Promise<QuoteSavedView> {
+// Task #863 polish — `filters` is stored as an opaque jsonb blob and
+// only consumed by the /quote-requests UI, which uses a wider key set
+// (status / age / freeEmailOnly / domainFilter / search / pastSlaOnly)
+// than the LIST query's QuoteFilters. Accepting Record<string, unknown>
+// keeps save → reload lossless without forcing the route layer to map
+// every UI key into QuoteFilters.
+export async function createSavedView(orgId: string, userId: string, name: string, filters: Record<string, unknown>): Promise<QuoteSavedView> {
   const [row] = await db.insert(quoteSavedViews)
     .values({ organizationId: orgId, userId, name, filters })
     .returning();
@@ -2516,6 +2522,36 @@ export async function deleteSavedView(orgId: string, userId: string, id: string)
     eq(quoteSavedViews.id, id),
     eq(quoteSavedViews.userId, userId),
   ));
+}
+
+// Task #863 — Manage Views: rename and/or update filter shape on a
+// user-saved view. Creator-scoped (a rep can only edit their own
+// views; org-scoped views are still admin-managed elsewhere). Returns
+// null when the row doesn't exist or belongs to another user so the
+// route can answer 404.
+export async function updateSavedView(
+  orgId: string, userId: string, id: string,
+  patch: { name?: string; filters?: Record<string, unknown> },
+): Promise<QuoteSavedView | null> {
+  const next: Partial<typeof quoteSavedViews.$inferInsert> = {};
+  if (patch.name !== undefined) next.name = patch.name;
+  if (patch.filters !== undefined) next.filters = patch.filters;
+  if (Object.keys(next).length === 0) {
+    const [existing] = await db.select().from(quoteSavedViews).where(and(
+      eq(quoteSavedViews.organizationId, orgId),
+      eq(quoteSavedViews.id, id),
+      eq(quoteSavedViews.userId, userId),
+    )).limit(1);
+    return existing ?? null;
+  }
+  const [row] = await db.update(quoteSavedViews).set(next)
+    .where(and(
+      eq(quoteSavedViews.organizationId, orgId),
+      eq(quoteSavedViews.id, id),
+      eq(quoteSavedViews.userId, userId),
+    ))
+    .returning();
+  return row ?? null;
 }
 
 export function quotesToCsv(quotes: EnrichedQuote[]): string {
@@ -2902,7 +2938,10 @@ export async function createFreightOpportunityFromWonQuote(
       const [createdRow] = await tx.insert(freightOpportunities).values(insert)
         .returning({ id: freightOpportunities.id });
       console.log(`[customer-quotes] AF handoff created opp=${createdRow?.id} quote=${opp.id} pickup=${pickupDay} status=pending_approval`);
-      return createdRow ? { id: createdRow.id, created: true } : null;
+      if (createdRow) {
+        return { id: createdRow.id, created: true };
+      }
+      return null;
     }).then(async (result) => {
       // Phase A5 — the transaction can technically resolve without a created
       // row (driver returned no row); make that final null path observable

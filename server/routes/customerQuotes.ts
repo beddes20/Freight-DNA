@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getCurrentUser, requireAuth, requireUser } from "../auth";
 import {
   getSnapshot, getQuoteDetail,
-  listQuotes, listSavedViews, createSavedView, deleteSavedView, exportCsv,
+  listQuotes, listSavedViews, createSavedView, deleteSavedView, updateSavedView, exportCsv,
   createQuote, updateQuote,
   getPricingIntelligence,
   searchSpotQuote, laneAutocomplete,
@@ -193,6 +193,28 @@ const filtersSchema = z.object({
 // returns {} on parse failure). Default object mode strips unknown keys
 // instead, preserving the declared filter fields. listQuerySchema is the
 // authoritative validator for the full list-route payload.
+
+// Task #863 polish — Saved Views persistence schema.
+//
+// The /quote-requests page tracks filters in a UI-friendly shape
+// (status: "new"|"won"|…, age: "today"|"7d"|…, plus client-only knobs
+// like freeEmailOnly, domainFilter, pastSlaOnly, search). When the rep
+// hits "Save current view…" we POST that exact shape; reload time we
+// read it back and feed it straight into the page state setters.
+//
+// `filtersSchema` above is shaped for the LIST query (outcomeStatus,
+// startDate, etc.) and would silently strip every UI-only key. To make
+// save → reload round-trip lossless we accept BOTH shapes here, plus
+// passthrough so a future client-side filter automatically persists
+// without requiring a server change.
+export const savedViewFiltersSchema = filtersSchema.extend({
+  status: z.string().min(1).max(40).optional(),
+  age: z.string().min(1).max(40).optional(),
+  freeEmailOnly: z.boolean().optional(),
+  pastSlaOnly: z.boolean().optional(),
+  domainFilter: z.string().min(1).max(120).nullable().optional(),
+  search: z.string().min(0).max(120).optional(),
+}).passthrough();
 
 // Exported for regression tests in tests/quote-requests-list-filters.test.ts
 // (Task #850 — proves that LIST requests preserve filters even when the
@@ -857,7 +879,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const user = req.user!;
       const schema = z.object({
         name: z.string().min(1).max(80),
-        filters: filtersSchema.default({}),
+        filters: savedViewFiltersSchema.default({}),
       });
       const data = schema.parse(req.body);
       const view = await createSavedView(user.organizationId, user.id, data.name, data.filters);
@@ -872,6 +894,27 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     const user = req.user!;
     await deleteSavedView(user.organizationId, user.id, pStr(req.params.id));
     res.json({ ok: true });
+  });
+
+  // Task #863 — Manage Views: rename and/or update filter shape on a
+  // user-saved view.
+  app.patch("/api/customer-quotes/saved-views/:id", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const schema = z.object({
+        name: z.string().min(1).max(80).optional(),
+        filters: savedViewFiltersSchema.optional(),
+      });
+      const data = schema.parse(req.body);
+      const view = await updateSavedView(
+        user.organizationId, user.id, pStr(req.params.id), data,
+      );
+      if (!view) return res.status(404).json({ error: "Saved view not found" });
+      res.json(view);
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      res.status(400).json({ error: msg });
+    }
   });
 
   // Task #516 — Spot Quote Search Deal Sheet: create + email-draft endpoints.
@@ -1870,4 +1913,5 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       res.status(500).json({ error: getErrorMessage(err) });
     }
   });
+
 }

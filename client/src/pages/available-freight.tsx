@@ -1554,7 +1554,7 @@ export default function AvailableFreightPage() {
                 // genuinely empty or just filtered down to nothing, and
                 // give them a one-click escape hatch for the filters they
                 // can clear from this page.
-                const h = serverFeed?.hiddenCounts ?? null;
+                const h = feed?.hiddenCounts ?? null;
                 const hiddenByClient = Math.max(0, items.length - filtered.length);
                 const hasSearch = search.trim().length > 0;
                 const ownerScopeActive = viewFilters.ownerScope === "mine"
@@ -2815,3 +2815,27 @@ function CockpitRowView(props: {
     </div>
   );
 }
+
+/**
+ * Phase A3 — explained empty state for the Available Freight cockpit.
+ *
+ * Replaces the generic "No opportunities match these filters" copy
+ * with a three-tier hint:
+ *
+ *   1. Truly empty scope (no rows at all in the user's org/company
+ *      scope) — keep the original "Upload a workbook…" call to action
+ *      so a brand-new tenant isn't told to "clear filters" they never
+ *      set.
+ *
+ *   2. Rows exist but every one is hidden — show "0 matching · N
+ *      hidden" with a per-dimension breakdown (status / lane /
+ *      carrier / past pickup / snoozed / search) and a single
+ *      "Show all" button that resets every active filter at once.
+ *      A bucket only renders if it both has a nonzero count AND its
+ *      driving filter is active, so we never accuse a filter the rep
+ *      didn't actually set.
+ *
+ *   3. Rows exist and no obvious filter is set (rare — usually means
+ *      the saved-view shape filtered them all client-side) — fall
+ *      back to the original copy plus a Show-all button.
+ */

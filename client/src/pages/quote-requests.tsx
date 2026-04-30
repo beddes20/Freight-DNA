@@ -10,6 +10,12 @@ import { formatCustomerName } from "@shared/laneFormatters";
 import { computeQuoteSla, formatSlaBadge } from "@shared/quoteSla";
 import { EmailThreadViewerModal } from "@/components/conversations/email-thread-viewer-modal";
 import { PricingRecommendationCard } from "@/components/PricingRecommendationCard";
+import { NewContactReviewStrip } from "@/components/customer-quotes/NewContactReviewStrip";
+import { NewQuoteDialog, type NewQuoteInitialValues } from "@/components/quote-requests/NewQuoteDialog";
+import { SavedViewsDropdown, type QuoteViewFilters } from "@/components/quote-requests/SavedViewsDropdown";
+import { SpotQuoteSearchPanel } from "@/components/quote-requests/SpotQuoteSearchPanel";
+import { QuoteDetailsCard } from "@/components/quote-requests/QuoteDetailsCard";
+import { PricingIntelGate } from "@/components/quote-requests/PricingIntelGate";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -84,6 +90,7 @@ import {
   ChevronDown,
   Plus,
   ChevronUp,
+  Loader2,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────
@@ -388,6 +395,17 @@ function QuoteRequestsInner(): JSX.Element {
     return sp.get("quote");
   });
   const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [newQuoteOpen, setNewQuoteOpen] = useState(false);
+  // Spot Search → New Quote handoff prefill, cleared each time the
+  // composer closes so a fresh "+ New Quote" click starts blank.
+  const [newQuotePrefill, setNewQuotePrefill] = useState<NewQuoteInitialValues | undefined>(undefined);
+  // "Past SLA" client-side post-filter: applied via the saved view, but
+  // exposed as a top-level toggle so it survives filter chip changes
+  // until cleared.
+  const [pastSlaOnly, setPastSlaOnly] = useState(false);
+  // Tracks which Saved View (built-in key or saved id) is currently
+  // applied. Cleared whenever the user changes any underlying filter.
+  const [activeViewKey, setActiveViewKey] = useState<string | null>(null);
 
   // Mirror selectedId into ?quote=<id> via history.replaceState so the
   // drawer is deep-linkable and survives reload/share, without
@@ -410,6 +428,49 @@ function QuoteRequestsInner(): JSX.Element {
 
   // Reset offset when filters change.
   useEffect(() => { setOffset(0); }, [status, age, mineOnly, freeEmailOnly, domainFilter, search, sortKey, sortDir]);
+
+  const currentFilters: QuoteViewFilters = useMemo(() => ({
+    status, age, mineOnly, freeEmailOnly, includeSnoozed, search, domainFilter, pastSlaOnly,
+  }), [status, age, mineOnly, freeEmailOnly, includeSnoozed, search, domainFilter, pastSlaOnly]);
+
+  // Clear the "active saved view" indicator whenever the user toggles a
+  // filter chip after applying a view. We snapshot the filter signature
+  // at apply time and clear once the live signature drifts away — this
+  // keeps the dropdown badge honest without trapping the user behind
+  // any single view.
+  const appliedSignatureRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeViewKey) return;
+    const sig = JSON.stringify(currentFilters);
+    if (appliedSignatureRef.current !== null && appliedSignatureRef.current !== sig) {
+      setActiveViewKey(null);
+      appliedSignatureRef.current = null;
+    }
+  }, [activeViewKey, currentFilters]);
+
+  const applySavedView = useCallback((filters: QuoteViewFilters, key: string) => {
+    setStatus((filters.status as StatusFilter) ?? "all");
+    setAge((filters.age as AgeFilter) ?? "today");
+    setMineOnly(!!filters.mineOnly);
+    setFreeEmailOnly(!!filters.freeEmailOnly);
+    setIncludeSnoozed(!!filters.includeSnoozed);
+    setDomainFilter(filters.domainFilter ?? null);
+    setSearchInput(filters.search ?? "");
+    setSearch(filters.search ?? "");
+    setPastSlaOnly(!!filters.pastSlaOnly);
+    setActiveViewKey(key);
+    // Snapshot what currentFilters _will_ be after the state updates flush.
+    appliedSignatureRef.current = JSON.stringify({
+      status: (filters.status as StatusFilter) ?? "all",
+      age: (filters.age as AgeFilter) ?? "today",
+      mineOnly: !!filters.mineOnly,
+      freeEmailOnly: !!filters.freeEmailOnly,
+      includeSnoozed: !!filters.includeSnoozed,
+      search: filters.search ?? "",
+      domainFilter: filters.domainFilter ?? null,
+      pastSlaOnly: !!filters.pastSlaOnly,
+    });
+  }, []);
 
   // ─── Build query strings ──────────────────────────────────────────────
   const ageDates = useMemo(() => {
@@ -527,8 +588,11 @@ function QuoteRequestsInner(): JSX.Element {
       const dom = domainFilter.toLowerCase();
       rows = rows.filter(r => (r.customerName ?? "").toLowerCase().includes(dom));
     }
+    if (pastSlaOnly) {
+      rows = rows.filter(r => r.slaState === "breached");
+    }
     return rows;
-  }, [listQuery.data, includeSnoozed, freeEmailOnly, domainFilter]);
+  }, [listQuery.data, includeSnoozed, freeEmailOnly, domainFilter, pastSlaOnly]);
 
   // ─── Domain options for the dropdown ─────────────────────────────────
   const domainOptions = useMemo(() => {
@@ -602,6 +666,41 @@ function QuoteRequestsInner(): JSX.Element {
     [selectedId, visibleRows],
   );
 
+  // Drawer prev/next nav: compute neighbors in the current visible list so
+  // a rep working through the day can step through quotes without
+  // closing the drawer between rows.
+  const { prevId, nextId, posLabel } = useMemo(() => {
+    if (!selectedId || visibleRows.length === 0) {
+      return { prevId: null as string | null, nextId: null as string | null, posLabel: "" };
+    }
+    const idx = visibleRows.findIndex(r => r.id === selectedId);
+    if (idx < 0) return { prevId: null, nextId: null, posLabel: "" };
+    return {
+      prevId: idx > 0 ? visibleRows[idx - 1]!.id : null,
+      nextId: idx < visibleRows.length - 1 ? visibleRows[idx + 1]!.id : null,
+      posLabel: `${idx + 1} of ${visibleRows.length}`,
+    };
+  }, [selectedId, visibleRows]);
+
+  // Post-create reset: when the rep creates a new quote, clear filters
+  // that could hide it (search, domain, terminal-only status) and jump
+  // back to page 1, then open the drawer. Without this, a quote created
+  // while the rep was looking at "Won today" or filtered by an old
+  // search would create successfully but never appear in the drawer.
+  const handleQuoteCreated = useCallback((id: string) => {
+    setOffset(0);
+    setSearchInput("");
+    setSearch("");
+    setDomainFilter(null);
+    // If the rep was on a terminal-only view (Won/Lost), widen to "new"
+    // so the freshly created quote (status = "new") is visible.
+    if (status === "won" || status === "lost") setStatus("new");
+    setActiveViewKey(null);
+    appliedSignatureRef.current = null;
+    setSelectedId(id);
+    setFocusedId(id);
+  }, [status]);
+
   const handleRefresh = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/list"] });
     queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/snapshot"] });
@@ -643,9 +742,10 @@ function QuoteRequestsInner(): JSX.Element {
             <Button
               size="sm"
               className="h-8 bg-amber-500 hover:bg-amber-600 text-black font-medium"
-              onClick={() => navigate("/customers")}
+              onClick={() => setNewQuoteOpen(true)}
               data-testid="button-new-quote"
             >
+              <Plus className="h-3.5 w-3.5 mr-1" />
               New quote
             </Button>
           </div>
@@ -709,6 +809,12 @@ function QuoteRequestsInner(): JSX.Element {
         {/* Filter row */}
         <div className="px-6 py-3 border-b border-border flex items-center justify-between bg-card/30 shrink-0 flex-wrap gap-2">
           <div className="flex items-center gap-3 flex-wrap">
+            <SavedViewsDropdown
+              currentFilters={currentFilters}
+              activeKey={activeViewKey}
+              onApply={applySavedView}
+            />
+            <Separator orientation="vertical" className="h-5" />
             <ChipGroup
               testIdPrefix="status"
               value={status}
@@ -791,6 +897,36 @@ function QuoteRequestsInner(): JSX.Element {
             instead of being hidden in a footer. */}
         <AutomationStripFooter data={automationQuery.data} isLoading={automationQuery.isLoading} />
 
+        {/* New-contact review prompts — strip above the table when the
+            autopilot needs us to confirm new sender → contact mappings. */}
+        {snapshotQuery.data && (
+          <div className="px-6 pt-3">
+            <NewContactReviewStrip />
+          </div>
+        )}
+
+        {/* Spot Quote Search — collapsible panel between filters and the
+            table. Reps use it to search lane history, build a deal sheet
+            from search results, or paste an inbound RFQ for parsing. */}
+        <SpotQuoteSearchPanel
+          customers={snapshotQuery.data?.customers ?? []}
+          onApplyLaneFilter={(laneSearch) => {
+            setSearch(laneSearch);
+            setSearchInput(laneSearch);
+          }}
+          onPickQuote={(id) => setSelectedId(id)}
+          onPickCustomer={(id) => {
+            const c = (snapshotQuery.data?.customers ?? []).find(c => c.id === id);
+            if (c) setDomainFilter(c.name.split(" ")[0]?.toLowerCase() ?? null);
+          }}
+          onStartNewQuote={(prefill) => {
+            // Spot Search → New Quote handoff: seed the composer with the
+            // lane (and resolved customer if any) the rep was looking at.
+            setNewQuotePrefill(prefill);
+            setNewQuoteOpen(true);
+          }}
+        />
+
         {/* Body: table + drawer */}
         <div className="flex flex-1 overflow-hidden relative">
           <div className={`flex-1 overflow-hidden transition-all ${selectedId ? "pr-[520px]" : ""}`}>
@@ -828,9 +964,25 @@ function QuoteRequestsInner(): JSX.Element {
               isElevated={isElevated}
               onClose={() => setSelectedId(null)}
               onRefresh={handleRefresh}
+              onPrev={prevId ? () => { setSelectedId(prevId); setFocusedId(prevId); } : null}
+              onNext={nextId ? () => { setSelectedId(nextId); setFocusedId(nextId); } : null}
+              positionLabel={posLabel}
             />
           )}
         </div>
+
+        <NewQuoteDialog
+          open={newQuoteOpen}
+          onOpenChange={(o) => {
+            setNewQuoteOpen(o);
+            // Drop the prefill on close so the next "+ New Quote" click
+            // starts blank.
+            if (!o) setNewQuotePrefill(undefined);
+          }}
+          customers={snapshotQuery.data?.customers ?? []}
+          onCreated={handleQuoteCreated}
+          initialValues={newQuotePrefill}
+        />
       </div>
     </TooltipProvider>
   );
@@ -1264,6 +1416,7 @@ function AutomationStripFooter({
 
 function DetailDrawer({
   quote, role, myRepId, isElevated, onClose, onRefresh,
+  onPrev, onNext, positionLabel,
 }: {
   quote: Quote;
   role: string;
@@ -1271,6 +1424,9 @@ function DetailDrawer({
   isElevated: boolean;
   onClose: () => void;
   onRefresh: () => void;
+  onPrev: (() => void) | null;
+  onNext: (() => void) | null;
+  positionLabel: string;
 }): JSX.Element {
   const { toast } = useToast();
   const detailQuery = useQuery<QuoteDetail>({
@@ -1300,10 +1456,13 @@ function DetailDrawer({
   // would never match because repId is rep identity, not user identity.
   const isOwnerOrManager = isElevated || (!!myRepId && opp.repId === myRepId);
 
-  // Mutations on the existing PATCH endpoint for outcome flips.
+  // Mutations on the existing PATCH endpoint for outcome flips. The
+  // body shape is open so the Mark Won guard can ship quotedAmount +
+  // validThrough alongside outcomeStatus in a single request (the
+  // server's PATCH route accepts all three at once).
   const markOutcomeMut = useMutation({
-    mutationFn: async (status: string) => {
-      const res = await apiRequest("PATCH", `/api/customer-quotes/quote/${opp.id}`, { outcomeStatus: status });
+    mutationFn: async (body: Record<string, unknown>) => {
+      const res = await apiRequest("PATCH", `/api/customer-quotes/quote/${opp.id}`, body);
       return res.json();
     },
     onSuccess: () => {
@@ -1315,6 +1474,11 @@ function DetailDrawer({
       toast({ title: "Update failed", description: (err as Error).message, variant: "destructive" });
     },
   });
+
+  // Mark Won guard: if a rep clicks Won before any quotedAmount is
+  // saved, we open a small dialog to capture amount + valid-through so
+  // the won record carries a real number for downstream reporting.
+  const [markWonOpen, setMarkWonOpen] = useState(false);
 
   const sla = computeQuoteSla(opp.requestDate, opp.outcomeStatus);
   const slaText = formatSlaBadge(sla);
@@ -1361,6 +1525,35 @@ function DetailDrawer({
                   <Pause className="h-2.5 w-2.5 mr-1" /> Snoozed
                 </Badge>
               )}
+              <div className="flex items-center gap-0.5 mr-1" data-testid="drawer-pager">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 rounded"
+                  onClick={() => onPrev?.()}
+                  disabled={!onPrev}
+                  title="Previous quote"
+                  data-testid="button-drawer-prev"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                {positionLabel && (
+                  <span className="text-[10px] text-muted-foreground tabular-nums px-1" data-testid="text-drawer-position">
+                    {positionLabel}
+                  </span>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 rounded"
+                  onClick={() => onNext?.()}
+                  disabled={!onNext}
+                  title="Next quote"
+                  data-testid="button-drawer-next"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
               <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={onClose} data-testid="button-close-drawer">
                 <X className="h-4 w-4 text-muted-foreground" />
               </Button>
@@ -1392,7 +1585,19 @@ function DetailDrawer({
                   size="sm"
                   className="h-8 rounded-r-none border-r-0 px-3 hover:bg-emerald-500/10 hover:text-emerald-500 hover:border-emerald-500/30"
                   disabled={isClosed || markOutcomeMut.isPending || !isOwnerOrManager}
-                  onClick={() => markOutcomeMut.mutate("won")}
+                  onClick={() => {
+                    // Guard: if the quote has no quoted amount yet, open
+                    // the Mark Won composer so we capture price + valid
+                    // through alongside the win in a single PATCH. The
+                    // server's PATCH route accepts all three fields at
+                    // once, so this avoids a half-state.
+                    const amt = (opp.quotedAmount ?? "").toString().trim();
+                    if (!amt) {
+                      setMarkWonOpen(true);
+                    } else {
+                      markOutcomeMut.mutate({ outcomeStatus: "won" });
+                    }
+                  }}
                   data-testid="button-mark-won"
                 >
                   <Check className="h-3.5 w-3.5 mr-1" /> Won
@@ -1402,7 +1607,7 @@ function DetailDrawer({
                   size="sm"
                   className="h-8 rounded-l-none px-3 hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/30"
                   disabled={isClosed || markOutcomeMut.isPending || !isOwnerOrManager}
-                  onClick={() => markOutcomeMut.mutate("lost_price")}
+                  onClick={() => markOutcomeMut.mutate({ outcomeStatus: "lost_price" })}
                   data-testid="button-mark-lost"
                 >
                   <X className="h-3.5 w-3.5 mr-1" /> Lost
@@ -1474,8 +1679,26 @@ function DetailDrawer({
 
           {detail && (
             <>
+              {/* Per-quote new-contact review prompt — only renders when
+                  this quote's needsNewContactReview is non-null
+                  (the strip's own query gates on that). */}
+              <NewContactReviewStrip quoteIdFilter={opp.id} />
+
               {/* Lane card */}
               <LaneCard opp={opp} />
+
+              {/* Editable quoted amount / valid-through / notes */}
+              <QuoteDetailsCard
+                quote={{
+                  id: opp.id,
+                  quotedAmount: opp.quotedAmount ?? null,
+                  validThrough: opp.validThrough ?? null,
+                  notes: opp.notes ?? null,
+                }}
+                canEdit={isOwnerOrManager && !isClosed}
+                onSaved={onRefresh}
+                events={events}
+              />
 
               {/* Confidence card — only for autopilot-captured */}
               {opp.source === "email_signal" && <ConfidenceCard opp={opp} />}
@@ -1489,8 +1712,23 @@ function DetailDrawer({
                 />
               )}
 
-              {/* Pricing intel */}
+              {/* Pricing recommendation (existing tier card) */}
               <PricingIntelCard opp={opp} />
+
+              {/* Deeper pricing intelligence — lazy, gated to pending */}
+              <PricingIntelGate
+                opp={{
+                  id: opp.id,
+                  customerId: opp.customerId,
+                  originCity: opp.originCity,
+                  originState: opp.originState,
+                  destCity: opp.destCity,
+                  destState: opp.destState,
+                  equipment: opp.equipment,
+                  laneGroupId: opp.laneGroupId ?? null,
+                  outcomeStatus: opp.outcomeStatus,
+                }}
+              />
 
               {/* Activity timeline */}
               <ActivityTimeline events={events} customer={customer} />
@@ -1605,7 +1843,96 @@ function DetailDrawer({
           }}
         />
       )}
+      {markWonOpen && (
+        <MarkWonDialog
+          submitting={markOutcomeMut.isPending}
+          onClose={() => setMarkWonOpen(false)}
+          onConfirm={(amount, validThrough) => {
+            markOutcomeMut.mutate(
+              {
+                outcomeStatus: "won",
+                quotedAmount: amount,
+                validThrough: validThrough
+                  ? new Date(`${validThrough}T12:00:00Z`).toISOString()
+                  : null,
+              },
+              { onSuccess: () => setMarkWonOpen(false) },
+            );
+          }}
+        />
+      )}
     </>
+  );
+}
+
+// ─── MarkWonDialog ───────────────────────────────────────────────────────
+//
+// Captures the quoted amount + valid-through date when a rep clicks Won
+// on a quote that was never priced. We require an amount so won records
+// always carry a real number for downstream reporting.
+function MarkWonDialog({
+  submitting, onClose, onConfirm,
+}: {
+  submitting: boolean;
+  onClose: () => void;
+  onConfirm: (amount: string, validThrough: string) => void;
+}): JSX.Element {
+  const [amount, setAmount] = useState("");
+  const [validThrough, setValidThrough] = useState("");
+  const valid = amount.trim() !== "" && Number.isFinite(Number(amount.trim()));
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-sm" data-testid="dialog-mark-won">
+        <DialogHeader>
+          <DialogTitle>Mark Won — capture price</DialogTitle>
+          <DialogDescription>
+            This quote doesn't have a quoted amount yet. Enter the price (and
+            optional expiry) before we mark it won.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Quoted amount
+            </Label>
+            <Input
+              autoFocus
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              inputMode="decimal"
+              placeholder="$"
+              className="h-8 text-sm mt-1"
+              data-testid="input-mark-won-amount"
+            />
+          </div>
+          <div>
+            <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Valid through
+            </Label>
+            <Input
+              type="date"
+              value={validThrough}
+              onChange={(e) => setValidThrough(e.target.value)}
+              className="h-8 text-sm mt-1"
+              data-testid="input-mark-won-valid-through"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} data-testid="button-cancel-mark-won">
+            Cancel
+          </Button>
+          <Button
+            disabled={!valid || submitting}
+            onClick={() => onConfirm(amount.trim(), validThrough)}
+            data-testid="button-confirm-mark-won"
+          >
+            {submitting && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
+            Mark Won
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

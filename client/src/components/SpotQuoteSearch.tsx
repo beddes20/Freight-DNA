@@ -671,11 +671,22 @@ function ConfidenceDot({ confidence }: { confidence: string }): JSX.Element {
   return <span className={`inline-block w-1.5 h-1.5 rounded-full ${map[confidence] ?? "bg-muted-foreground"}`} />;
 }
 
-export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onPickCustomer }: {
+export interface SpotQuoteNewQuotePrefill {
+  customerId?: string;
+  originCity?: string;
+  originState?: string;
+  destCity?: string;
+  destState?: string;
+  equipment?: string;
+}
+
+export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onPickCustomer, onStartNewQuote }: {
   customers: Customer[];
   onApplyLaneFilter: (laneSearch: string) => void;
   onPickQuote: (id: string) => void;
   onPickCustomer: (id: string) => void;
+  /** Task #863 — kick the New Quote composer open with lane/customer prefilled. */
+  onStartNewQuote?: (prefill: SpotQuoteNewQuotePrefill) => void;
 }): JSX.Element {
   const overlayPortal = useCqOverlayPortal();
   const [pickup, setPickup] = useState({ city: "", state: "" });
@@ -1602,7 +1613,25 @@ export function SpotQuoteSearch({ customers, onApplyLaneFilter, onPickQuote, onP
                 <AlertTriangle className="h-3 w-3" /> Market data unavailable
               </span>
             )}
-            <div className="ml-auto">
+            <div className="ml-auto flex items-center gap-1.5">
+              {onStartNewQuote && (
+                <Button
+                  size="sm"
+                  variant="default"
+                  onClick={() => onStartNewQuote({
+                    customerId: data.resolvedCustomer?.id,
+                    originCity: data.query.pickupCity,
+                    originState: data.query.pickupState,
+                    destCity: data.query.deliveryCity,
+                    destState: data.query.deliveryState,
+                    equipment: data.query.equipment && data.query.equipment !== "Any" ? data.query.equipment : undefined,
+                  })}
+                  className="h-7 text-[11px] px-2.5"
+                  data-testid="button-spot-start-new-quote"
+                >
+                  + New quote with this lane
+                </Button>
+              )}
               <Button size="sm" variant="outline" onClick={() => onApplyLaneFilter(`${data.query.pickupCity} ${data.query.deliveryCity}`)}
                 className="h-7 border-border hover:bg-muted text-[11px] px-2.5" data-testid="button-spot-apply-filter">
                 Filter table by this lane

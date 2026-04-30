@@ -48,9 +48,16 @@ interface StripProps {
    * can suppress the per-page round-trip.
    */
   enabled?: boolean;
+  /**
+   * Task #863 — when set, the strip only renders the row matching this
+   * quoteId. Used to mount the strip inside the per-quote drawer so a
+   * rep can resolve the "new contact at {Customer}" prompt without
+   * leaving the open quote.
+   */
+  quoteIdFilter?: string;
 }
 
-export function NewContactReviewStrip({ enabled = true }: StripProps = {}): JSX.Element | null {
+export function NewContactReviewStrip({ enabled = true, quoteIdFilter }: StripProps = {}): JSX.Element | null {
   const { toast } = useToast();
   const { data, isLoading } = useQuery<ListResponse>({
     queryKey: QK,
@@ -98,7 +105,10 @@ export function NewContactReviewStrip({ enabled = true }: StripProps = {}): JSX.
   });
 
   if (isLoading) return null;
-  const items = data?.items ?? [];
+  const allItems = data?.items ?? [];
+  const items = quoteIdFilter
+    ? allItems.filter(i => i.quoteId === quoteIdFilter)
+    : allItems;
   if (items.length === 0) return null;
 
   return (
