@@ -97,6 +97,7 @@ import ProfilePage from "@/pages/profile";
 import AiAgentPortal from "@/pages/ai-agent";
 import AvailableFreightPage from "@/pages/available-freight";
 import AvailableFreightDetailPage from "@/pages/available-freight-detail";
+import CapacityMatchesPage from "@/pages/capacity-matches";
 import AdminAvailableFreightImports from "@/pages/admin-available-freight-imports";
 import PhoneUsagePage from "@/pages/phone-usage";
 import CarrierIntelligenceScorecardPage from "@/pages/carrier-intelligence-scorecard";
@@ -254,6 +255,7 @@ function Router() {
       <Route path="/lane-inbox" component={LaneInboxPage} />
       <Route path="/calls" component={CallsPage} />
       <Route path="/available-freight" component={AvailableFreightPage} />
+      <Route path="/available-freight/capacity-matches" component={CapacityMatchesPage} />
       <Route path="/available-freight/:id" component={AvailableFreightDetailPage} />
       <Route path="/admin/available-freight/imports" component={AdminAvailableFreightImports} />
       <Route path="/my-procurement" component={MyProcurementPage} />

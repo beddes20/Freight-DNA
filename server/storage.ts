@@ -276,6 +276,13 @@ import {
   companyCollaborators,
   type CompanyCollaborator,
   type InsertCompanyCollaborator,
+  truckPostings,
+  type TruckPosting,
+  type InsertTruckPosting,
+  truckLoadMatches,
+  type TruckLoadMatch,
+  type InsertTruckLoadMatch,
+  type TruckLoadMatchState,
 } from "@shared/schema";
 import { getStuckRunningThresholdMs } from "./lib/cronHeartbeat";
 
@@ -1427,6 +1434,40 @@ getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined>;
   deleteFreightOpportunitySavedView(id: string, userId: string, orgId?: string): Promise<boolean>;
   getUserFreightCockpitPrefs(userId: string): Promise<UserFreightCockpitPrefs | undefined>;
   upsertUserFreightCockpitPrefs(data: InsertUserFreightCockpitPrefs): Promise<UserFreightCockpitPrefs>;
+
+  // ── Capacity Matches (Task #844) ───────────────────────────────────────────
+  insertTruckPostings(rows: InsertTruckPosting[]): Promise<TruckPosting[]>;
+  getTruckPosting(id: string): Promise<TruckPosting | undefined>;
+  listTruckPostingsByOrg(orgId: string, opts?: { status?: string; limit?: number }): Promise<TruckPosting[]>;
+  listActiveTruckPostingsByOrg(orgId: string): Promise<TruckPosting[]>;
+  expireTruckPostings(now: Date): Promise<number>;
+  updateTruckPostingStatus(id: string, status: string): Promise<void>;
+
+  upsertTruckLoadMatch(data: InsertTruckLoadMatch): Promise<TruckLoadMatch>;
+  getTruckLoadMatch(id: string): Promise<TruckLoadMatch | undefined>;
+  listTruckLoadMatchesByOrg(orgId: string, opts?: {
+    states?: TruckLoadMatchState[];
+    assignedRepIds?: string[];
+    minScore?: number;
+    limit?: number;
+  }): Promise<TruckLoadMatch[]>;
+  listTruckLoadMatchesByPosting(postingId: string): Promise<TruckLoadMatch[]>;
+  listTruckLoadMatchesByOpportunity(opportunityId: string): Promise<TruckLoadMatch[]>;
+  updateTruckLoadMatchState(id: string, fields: {
+    state: TruckLoadMatchState;
+    actorUserId?: string | null;
+    dismissedReason?: string | null;
+  }): Promise<TruckLoadMatch | undefined>;
+  markTruckLoadMatchNotified(id: string): Promise<void>;
+  countTruckLoadMatchesByRep(orgId: string, opts?: { states?: TruckLoadMatchState[] }): Promise<Array<{ assignedRepId: string | null; count: number }>>;
+  getTruckLoadMatchStats(orgId: string): Promise<{
+    postingsActive: number;
+    matchesActive: number;
+    matchesStrong: number;
+    bookedToday: number;
+    contactedToday: number;
+    parsedToday: number;
+  }>;
 }
 
 const pool = new Pool({
@@ -9860,6 +9901,237 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return row;
+  }
+
+  // ── Capacity Matches (Task #844) ─────────────────────────────────────────
+  async insertTruckPostings(rows: InsertTruckPosting[]): Promise<TruckPosting[]> {
+    if (rows.length === 0) return [];
+    return db.insert(truckPostings).values(rows).returning();
+  }
+
+  async getTruckPosting(id: string): Promise<TruckPosting | undefined> {
+    const [row] = await db.select().from(truckPostings).where(eq(truckPostings.id, id)).limit(1);
+    return row;
+  }
+
+  async listTruckPostingsByOrg(
+    orgId: string,
+    opts: { status?: string; limit?: number } = {},
+  ): Promise<TruckPosting[]> {
+    const conds = [eq(truckPostings.orgId, orgId)];
+    if (opts.status) conds.push(eq(truckPostings.status, opts.status));
+    return db
+      .select()
+      .from(truckPostings)
+      .where(and(...conds))
+      .orderBy(desc(truckPostings.createdAt))
+      .limit(opts.limit ?? 200);
+  }
+
+  async listActiveTruckPostingsByOrg(orgId: string): Promise<TruckPosting[]> {
+    return db
+      .select()
+      .from(truckPostings)
+      .where(and(eq(truckPostings.orgId, orgId), eq(truckPostings.status, "active")))
+      .orderBy(desc(truckPostings.createdAt));
+  }
+
+  async expireTruckPostings(now: Date): Promise<number> {
+    const today = now.toISOString().slice(0, 10);
+    const result = await db
+      .update(truckPostings)
+      .set({ status: "expired", updatedAt: new Date() })
+      .where(
+        and(
+          eq(truckPostings.status, "active"),
+          or(
+            and(isNotNull(truckPostings.expiresAt), lt(truckPostings.expiresAt, now)),
+            and(
+              isNotNull(truckPostings.availableThrough),
+              lt(truckPostings.availableThrough, today),
+            ),
+            and(
+              isNull(truckPostings.availableThrough),
+              isNotNull(truckPostings.availableDate),
+              lt(truckPostings.availableDate, today),
+            ),
+          ),
+        ),
+      )
+      .returning({ id: truckPostings.id });
+    return result.length;
+  }
+
+  async updateTruckPostingStatus(id: string, status: string): Promise<void> {
+    await db
+      .update(truckPostings)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(truckPostings.id, id));
+  }
+
+  async upsertTruckLoadMatch(data: InsertTruckLoadMatch): Promise<TruckLoadMatch> {
+    const [row] = await db
+      .insert(truckLoadMatches)
+      .values(data)
+      .onConflictDoUpdate({
+        target: [truckLoadMatches.truckPostingId, truckLoadMatches.freightOpportunityId],
+        set: {
+          fitScore: data.fitScore ?? 0,
+          reasons: data.reasons ?? [],
+          assignedRepId: data.assignedRepId ?? null,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return row;
+  }
+
+  async getTruckLoadMatch(id: string): Promise<TruckLoadMatch | undefined> {
+    const [row] = await db.select().from(truckLoadMatches).where(eq(truckLoadMatches.id, id)).limit(1);
+    return row;
+  }
+
+  async listTruckLoadMatchesByOrg(
+    orgId: string,
+    opts: {
+      states?: TruckLoadMatchState[];
+      assignedRepIds?: string[];
+      minScore?: number;
+      limit?: number;
+    } = {},
+  ): Promise<TruckLoadMatch[]> {
+    const conds: SQL[] = [eq(truckLoadMatches.orgId, orgId)];
+    if (opts.states && opts.states.length > 0) conds.push(inArray(truckLoadMatches.state, opts.states));
+    if (opts.assignedRepIds && opts.assignedRepIds.length > 0) {
+      conds.push(inArray(truckLoadMatches.assignedRepId, opts.assignedRepIds));
+    }
+    if (typeof opts.minScore === "number") conds.push(gte(truckLoadMatches.fitScore, opts.minScore));
+    return db
+      .select()
+      .from(truckLoadMatches)
+      .where(and(...conds))
+      .orderBy(desc(truckLoadMatches.fitScore), desc(truckLoadMatches.createdAt))
+      .limit(opts.limit ?? 500);
+  }
+
+  async listTruckLoadMatchesByPosting(postingId: string): Promise<TruckLoadMatch[]> {
+    return db
+      .select()
+      .from(truckLoadMatches)
+      .where(eq(truckLoadMatches.truckPostingId, postingId))
+      .orderBy(desc(truckLoadMatches.fitScore));
+  }
+
+  async listTruckLoadMatchesByOpportunity(opportunityId: string): Promise<TruckLoadMatch[]> {
+    return db
+      .select()
+      .from(truckLoadMatches)
+      .where(eq(truckLoadMatches.freightOpportunityId, opportunityId))
+      .orderBy(desc(truckLoadMatches.fitScore));
+  }
+
+  async updateTruckLoadMatchState(
+    id: string,
+    fields: { state: TruckLoadMatchState; actorUserId?: string | null; dismissedReason?: string | null },
+  ): Promise<TruckLoadMatch | undefined> {
+    const now = new Date();
+    const updates: Record<string, unknown> = {
+      state: fields.state,
+      actorUserId: fields.actorUserId ?? null,
+      updatedAt: now,
+    };
+    if (fields.state === "contacted") updates.contactedAt = now;
+    if (fields.state === "booked") updates.bookedAt = now;
+    if (fields.state === "dismissed") {
+      updates.dismissedAt = now;
+      updates.dismissedReason = fields.dismissedReason ?? null;
+    }
+    const [row] = await db
+      .update(truckLoadMatches)
+      .set(updates)
+      .where(eq(truckLoadMatches.id, id))
+      .returning();
+    return row;
+  }
+
+  async markTruckLoadMatchNotified(id: string): Promise<void> {
+    await db
+      .update(truckLoadMatches)
+      .set({ notifiedAt: new Date(), updatedAt: new Date() })
+      .where(eq(truckLoadMatches.id, id));
+  }
+
+  async countTruckLoadMatchesByRep(
+    orgId: string,
+    opts: { states?: TruckLoadMatchState[] } = {},
+  ): Promise<Array<{ assignedRepId: string | null; count: number }>> {
+    const conds: SQL[] = [eq(truckLoadMatches.orgId, orgId)];
+    if (opts.states && opts.states.length > 0) conds.push(inArray(truckLoadMatches.state, opts.states));
+    const rows = await db
+      .select({
+        assignedRepId: truckLoadMatches.assignedRepId,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(truckLoadMatches)
+      .where(and(...conds))
+      .groupBy(truckLoadMatches.assignedRepId);
+    return rows.map(r => ({ assignedRepId: r.assignedRepId, count: Number(r.count) }));
+  }
+
+  async getTruckLoadMatchStats(orgId: string): Promise<{
+    postingsActive: number;
+    matchesActive: number;
+    matchesStrong: number;
+    bookedToday: number;
+    contactedToday: number;
+    parsedToday: number;
+  }> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const [pa] = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(truckPostings)
+      .where(and(eq(truckPostings.orgId, orgId), eq(truckPostings.status, "active")));
+    const [ma] = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(truckLoadMatches)
+      .where(and(eq(truckLoadMatches.orgId, orgId), inArray(truckLoadMatches.state, ["new", "contacted"])));
+    const [ms] = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(truckLoadMatches)
+      .where(and(
+        eq(truckLoadMatches.orgId, orgId),
+        inArray(truckLoadMatches.state, ["new", "contacted"]),
+        gte(truckLoadMatches.fitScore, 75),
+      ));
+    const [bt] = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(truckLoadMatches)
+      .where(and(
+        eq(truckLoadMatches.orgId, orgId),
+        eq(truckLoadMatches.state, "booked"),
+        gte(truckLoadMatches.bookedAt, today),
+      ));
+    const [ct] = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(truckLoadMatches)
+      .where(and(
+        eq(truckLoadMatches.orgId, orgId),
+        eq(truckLoadMatches.state, "contacted"),
+        gte(truckLoadMatches.contactedAt, today),
+      ));
+    const [pt] = await db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(truckPostings)
+      .where(and(eq(truckPostings.orgId, orgId), gte(truckPostings.createdAt, today)));
+    return {
+      postingsActive: Number(pa?.c ?? 0),
+      matchesActive: Number(ma?.c ?? 0),
+      matchesStrong: Number(ms?.c ?? 0),
+      bookedToday: Number(bt?.c ?? 0),
+      contactedToday: Number(ct?.c ?? 0),
+      parsedToday: Number(pt?.c ?? 0),
+    };
   }
 }
 

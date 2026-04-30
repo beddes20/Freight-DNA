@@ -5390,4 +5390,69 @@ export async function runMigrations() {
   } finally {
     clientPost2dSource.release();
   }
+
+  // ── Task #844: Capacity Matches — truck_postings + truck_load_matches ──
+  // Idempotent runtime guard (mirrors `shared/schema.ts` definitions). Lets
+  // freshly-deployed environments come up without requiring an out-of-band
+  // `npm run db:push` first; existing environments where db push already
+  // ran are no-ops thanks to IF NOT EXISTS.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS truck_postings (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        carrier_id varchar REFERENCES carriers(id) ON DELETE SET NULL,
+        carrier_name_raw text,
+        source text NOT NULL,
+        email_message_id varchar REFERENCES email_messages(id) ON DELETE SET NULL,
+        attachment_name text,
+        row_index integer,
+        origin_city text,
+        origin_state text,
+        dest_city text,
+        dest_state text,
+        dest_preference text,
+        available_date date,
+        available_through date,
+        equipment text,
+        rate_ask numeric(12,2),
+        notes text,
+        raw_text text,
+        status text NOT NULL DEFAULT 'active',
+        expires_at timestamp,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS truck_postings_org_status_idx ON truck_postings (org_id, status);
+      CREATE INDEX IF NOT EXISTS truck_postings_carrier_idx ON truck_postings (carrier_id);
+      CREATE INDEX IF NOT EXISTS truck_postings_available_date_idx ON truck_postings (available_date);
+
+      CREATE TABLE IF NOT EXISTS truck_load_matches (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        truck_posting_id varchar NOT NULL REFERENCES truck_postings(id) ON DELETE CASCADE,
+        freight_opportunity_id varchar NOT NULL REFERENCES freight_opportunities(id) ON DELETE CASCADE,
+        fit_score integer NOT NULL DEFAULT 0,
+        reasons text[] DEFAULT '{}'::text[],
+        state text NOT NULL DEFAULT 'new',
+        assigned_rep_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        notified_at timestamp,
+        contacted_at timestamp,
+        booked_at timestamp,
+        dismissed_at timestamp,
+        dismissed_reason text,
+        actor_user_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS truck_load_matches_org_state_idx ON truck_load_matches (org_id, state);
+      CREATE INDEX IF NOT EXISTS truck_load_matches_posting_idx ON truck_load_matches (truck_posting_id);
+      CREATE INDEX IF NOT EXISTS truck_load_matches_opp_idx ON truck_load_matches (freight_opportunity_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS truck_load_matches_pair_uq ON truck_load_matches (truck_posting_id, freight_opportunity_id);
+      CREATE INDEX IF NOT EXISTS truck_load_matches_rep_idx ON truck_load_matches (assigned_rep_id);
+    `);
+    console.log("[migrations] Task #844 truck_postings + truck_load_matches ensured");
+  } catch (err) {
+    console.error("[migrations] Task #844 capacity-matches table guard error:", err);
+  }
 }

@@ -324,6 +324,100 @@ export async function deduplicateSignals(
   return newSignals.filter(s => !existingIntents.has(s.intentType));
 }
 
+// ─── Task #844 — Capacity Matches: shared truck-list ingestion ──────────
+// Handles BOTH email body and xlsx/csv attachments. PDF/OCR is intentionally
+// out of scope per task spec. Best-effort attachment fetch (no-op if Graph
+// is unreachable or providerMessageId is missing).
+
+export async function ingestTruckListFromEmail(msg: EmailMessage): Promise<void> {
+  const { looksLikeTruckList, parseEmailBody, parseAttachment } = await import("./truckListParser");
+
+  const allRows: Array<{
+    src: "email_body" | "email_attachment_xlsx" | "email_attachment_csv";
+    attachmentName: string | null;
+    rowIndex: number | null;
+    row: ReturnType<typeof parseEmailBody>[number];
+  }> = [];
+
+  // 1) Always try attachments first when we have a Graph addressable
+  //    message. xlsx/csv truck lists with a neutral subject/body (e.g.
+  //    bare forward of a sheet) must NOT be silently dropped by the
+  //    subject/body heuristic.
+  let hadEligibleAttachment = false;
+  const mailbox = (msg.toEmail || "").trim().toLowerCase();
+  if (mailbox && msg.providerMessageId) {
+    try {
+      const { downloadGraphAttachments } = await import("./services/podIntakeService");
+      const atts = await downloadGraphAttachments(mailbox, msg.providerMessageId);
+      for (const att of atts) {
+        const lower = (att.name || "").toLowerCase();
+        const isXlsx = lower.endsWith(".xlsx") || lower.endsWith(".xls");
+        const isCsv = lower.endsWith(".csv");
+        if (!isXlsx && !isCsv) continue;
+        hadEligibleAttachment = true;
+        if (!att.contentBase64) continue; // too large, skip silently
+        const buf = Buffer.from(att.contentBase64, "base64");
+        const rows = parseAttachment(buf, att.name);
+        rows.forEach((r, i) => {
+          allRows.push({
+            src: isXlsx ? "email_attachment_xlsx" : "email_attachment_csv",
+            attachmentName: att.name,
+            rowIndex: i,
+            row: r,
+          });
+        });
+      }
+    } catch (err) {
+      console.error(`[capacityMatches] graph attachment fetch failed for ${msg.id}:`, err);
+    }
+  }
+
+  // 2) Body parsing only when the subject/body looks like a truck list,
+  //    OR when an eligible attachment was already detected (don't waste
+  //    cycles on every random carrier email).
+  const bodyEligible = looksLikeTruckList({ subject: msg.subject, body: msg.body }) || hadEligibleAttachment;
+  if (bodyEligible && msg.body) {
+    parseEmailBody(msg.body).forEach((r, i) => {
+      allRows.push({ src: "email_body", attachmentName: null, rowIndex: i, row: r });
+    });
+  }
+
+  if (allRows.length === 0) return;
+
+  const persisted = await defaultStorage.insertTruckPostings(allRows.map(item => ({
+    orgId: msg.orgId,
+    carrierId: msg.linkedCarrierId ?? null,
+    carrierNameRaw: msg.fromEmail ?? null,
+    emailMessageId: msg.id,
+    source: item.src,
+    attachmentName: item.attachmentName,
+    rowIndex: item.rowIndex,
+    originCity: item.row.originCity,
+    originState: item.row.originState,
+    destCity: item.row.destCity,
+    destState: item.row.destState,
+    destPreference: item.row.destPreference,
+    availableDate: item.row.availableDate,
+    availableThrough: item.row.availableThrough,
+    equipment: item.row.equipment,
+    rateAsk: item.row.rateAsk,
+    notes: item.row.notes,
+    rawText: item.row.rawText,
+    status: "active" as const,
+  })));
+
+  const { matchPostingsBatch } = await import("./truckLoadMatchingService");
+  await matchPostingsBatch(persisted, { notify: true, source: "email" }).catch(err =>
+    console.error(`[capacityMatches] batch match failed for email ${msg.id}:`, err),
+  );
+  console.log(
+    `[capacityMatches] parsed ${persisted.length} truck postings from email ${msg.id} ` +
+    `(body=${allRows.filter(r => r.src === "email_body").length}, ` +
+    `xlsx=${allRows.filter(r => r.src === "email_attachment_xlsx").length}, ` +
+    `csv=${allRows.filter(r => r.src === "email_attachment_csv").length})`,
+  );
+}
+
 // ─── High-level process function ─────────────────────────────────────────────
 
 export async function processEmailMessage(messageId: string): Promise<{
@@ -424,6 +518,15 @@ export async function processEmailMessage(messageId: string): Promise<{
         console.error(`[emailIntelligence] closed-lost handling failed for ${msg.id}:`, err);
       }
     }
+  }
+
+  // Task #844 — Capacity Matches: parse inbound carrier truck/capacity list
+  // emails (body + xlsx/csv attachments) into truck_postings and
+  // reverse-match against open freight.
+  if (msg.direction === "inbound" && result.actorType === "carrier") {
+    await ingestTruckListFromEmail(msg).catch(err =>
+      console.error(`[capacityMatches] truck-list ingestion failed for ${msg.id}:`, err),
+    );
   }
 
   return { message: msg, signals: saved, skipped: result.signals.length === 0 };

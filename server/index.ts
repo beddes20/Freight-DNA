@@ -27,6 +27,7 @@ import { initMissedInboundRecapScheduler } from "./missedInboundRecapScheduler";
 import { initLmCheckinScheduler } from "./lmCheckinScheduler";
 import { initCarrierIntelExpirationScheduler } from "./carrierIntelExpirationScheduler";
 import { initCarrierIntelNudgeScheduler } from "./carrierIntelNudgeScheduler";
+import { initTruckPostingScheduler } from "./truckPostingScheduler";
 import { initNbaPhase1Scheduler } from "./nbaPhase1Scheduler";
 import { initSonarDailyRefreshScheduler } from "./sonarDailyRefreshScheduler";
 import { initMarketSignalScheduler } from "./marketSignalScheduler";
@@ -504,6 +505,9 @@ process.on("uncaughtException", (err) => {
       // from app_settings so admins can tune behavior live.
       initCarrierIntelExpirationScheduler();
       initCarrierIntelNudgeScheduler();
+      // Task #844 — Capacity Matches: hourly expiration of stale truck postings
+      // and the matches that pointed at them.
+      initTruckPostingScheduler();
 
       setTimeout(() => {
         initNbaPhase1Scheduler();

@@ -152,6 +152,14 @@ export const carrierFacingItems: NavItem[] = [
     roles: ["admin", "director", "national_account_manager", "sales_director", "logistics_manager", "account_manager", "sales"],
   },
   {
+    title: "Capacity Matches",
+    url: "/available-freight/capacity-matches",
+    icon: Sparkles,
+    description: "Inbound carrier truck lists matched to your open freight.",
+    roles: ["admin", "director", "national_account_manager", "logistics_manager", "logistics_coordinator"],
+    status: "admin_preview",
+  },
+  {
     title: "Carrier Hub",
     url: "/carrier-hub",
     icon: Building2,

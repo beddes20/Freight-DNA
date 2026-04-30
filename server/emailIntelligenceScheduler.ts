@@ -418,6 +418,21 @@ export async function runEmailIntelligenceBatch(
         });
       }
 
+      // ── Task #844 — Capacity Matches ────────────────────────────────────
+      // Cron parity with processEmailMessage: parse inbound carrier
+      // truck-list emails (body + xlsx/csv attachments) into truck_postings
+      // and reverse-match against open freight.
+      if (msg.direction === "inbound" && result.actorType === "carrier") {
+        (async () => {
+          try {
+            const { ingestTruckListFromEmail } = await import("./emailIntelligenceService");
+            await ingestTruckListFromEmail(msg);
+          } catch (err) {
+            console.error(`[emailIntelligenceScheduler] capacity-match ingest error for ${msg.id}:`, err);
+          }
+        })();
+      }
+
     } catch (err) {
       console.error(`[emailIntelligenceScheduler] fatal error for message ${msg.id}:`, err);
       // Mark processed so the same message doesn't stall the queue

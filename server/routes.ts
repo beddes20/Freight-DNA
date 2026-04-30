@@ -19,6 +19,7 @@ import { registerTodayQueueRoutes } from "./routes/todayQueue";
 import { registerCarrierHubRoutes } from "./routes/carrierHub";
 import { registerMyProcurementRoutes } from "./routes/myProcurement";
 import { registerWonLoadAutopilotRoutes } from "./routes/wonLoadAutopilot";
+import { registerCapacityMatchesRoutes } from "./routes/capacityMatches";
 import { registerCompanyCollaboratorRoutes } from "./routes/companyCollaborators";
 import { registerProcurementOutreachRoutes } from "./routes/procurementOutreach";
 import { registerProactiveOpportunityRoutes } from "./routes/proactiveOpportunities";
@@ -2575,6 +2576,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerCarrierHubRoutes(app);
   registerMyProcurementRoutes(app);
   registerWonLoadAutopilotRoutes(app);
+  registerCapacityMatchesRoutes(app);
   registerCompanyCollaboratorRoutes(app);
   registerProcurementOutreachRoutes(app);
   // Cockpit routes MUST register first so /cockpit, /cockpit-prefs, /bulk-action,

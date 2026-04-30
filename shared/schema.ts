@@ -4150,6 +4150,92 @@ export const insertFreightOpportunityAuditSchema = createInsertSchema(freightOpp
 export type InsertFreightOpportunityAudit = z.infer<typeof insertFreightOpportunityAuditSchema>;
 export type FreightOpportunityAudit = typeof freightOpportunityAudit.$inferSelect;
 
+// ─── Capacity Matches (Task #844) ────────────────────────────────────────────
+// Truck postings parsed from inbound carrier "trucks available" emails (body
+// + xlsx/csv attachments) and the reverse-matched freight_opportunities they
+// fit. Drives the Capacity Matches view inside Available Freight.
+
+export const TRUCK_POSTING_SOURCES = ["email_body", "email_attachment_xlsx", "email_attachment_csv", "manual"] as const;
+export type TruckPostingSource = typeof TRUCK_POSTING_SOURCES[number];
+
+export const TRUCK_POSTING_STATUSES = ["active", "expired", "dismissed"] as const;
+export type TruckPostingStatus = typeof TRUCK_POSTING_STATUSES[number];
+
+export const truckPostings = pgTable("truck_postings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  carrierId: varchar("carrier_id").references(() => carriers.id, { onDelete: "set null" }),
+  carrierNameRaw: text("carrier_name_raw"),
+  source: text("source").notNull(),
+  emailMessageId: varchar("email_message_id").references(() => emailMessages.id, { onDelete: "set null" }),
+  attachmentName: text("attachment_name"),
+  rowIndex: integer("row_index"),
+  originCity: text("origin_city"),
+  originState: text("origin_state"),
+  destCity: text("dest_city"),
+  destState: text("dest_state"),
+  destPreference: text("dest_preference"),
+  availableDate: date("available_date"),
+  availableThrough: date("available_through"),
+  equipment: text("equipment"),
+  rateAsk: decimal("rate_ask", { precision: 12, scale: 2 }),
+  notes: text("notes"),
+  rawText: text("raw_text"),
+  status: text("status").notNull().default("active"),
+  expiresAt: timestamp("expires_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  orgStatusIdx: index("truck_postings_org_status_idx").on(t.orgId, t.status),
+  carrierIdx: index("truck_postings_carrier_idx").on(t.carrierId),
+  availableDateIdx: index("truck_postings_available_date_idx").on(t.availableDate),
+}));
+
+export const insertTruckPostingSchema = createInsertSchema(truckPostings)
+  .omit({ id: true, createdAt: true, updatedAt: true })
+  .extend({
+    source: z.enum(TRUCK_POSTING_SOURCES),
+    status: z.enum(TRUCK_POSTING_STATUSES).optional(),
+  });
+export type InsertTruckPosting = z.infer<typeof insertTruckPostingSchema>;
+export type TruckPosting = typeof truckPostings.$inferSelect;
+
+export const TRUCK_LOAD_MATCH_STATES = ["new", "contacted", "booked", "dismissed", "stale"] as const;
+export type TruckLoadMatchState = typeof TRUCK_LOAD_MATCH_STATES[number];
+
+export const truckLoadMatches = pgTable("truck_load_matches", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  truckPostingId: varchar("truck_posting_id").notNull().references(() => truckPostings.id, { onDelete: "cascade" }),
+  freightOpportunityId: varchar("freight_opportunity_id").notNull().references(() => freightOpportunities.id, { onDelete: "cascade" }),
+  fitScore: integer("fit_score").notNull().default(0),
+  reasons: text("reasons").array().default(sql`'{}'::text[]`),
+  state: text("state").notNull().default("new"),
+  assignedRepId: varchar("assigned_rep_id").references(() => users.id, { onDelete: "set null" }),
+  notifiedAt: timestamp("notified_at"),
+  contactedAt: timestamp("contacted_at"),
+  bookedAt: timestamp("booked_at"),
+  dismissedAt: timestamp("dismissed_at"),
+  dismissedReason: text("dismissed_reason"),
+  actorUserId: varchar("actor_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  orgStateIdx: index("truck_load_matches_org_state_idx").on(t.orgId, t.state),
+  postingIdx: index("truck_load_matches_posting_idx").on(t.truckPostingId),
+  oppIdx: index("truck_load_matches_opp_idx").on(t.freightOpportunityId),
+  pairUq: uniqueIndex("truck_load_matches_pair_uq").on(t.truckPostingId, t.freightOpportunityId),
+  repIdx: index("truck_load_matches_rep_idx").on(t.assignedRepId),
+}));
+
+export const insertTruckLoadMatchSchema = createInsertSchema(truckLoadMatches)
+  .omit({ id: true, createdAt: true, updatedAt: true })
+  .extend({
+    state: z.enum(TRUCK_LOAD_MATCH_STATES).optional(),
+  });
+export type InsertTruckLoadMatch = z.infer<typeof insertTruckLoadMatchSchema>;
+export type TruckLoadMatch = typeof truckLoadMatches.$inferSelect;
+
 /**
  * freight_outreach_templates — admin-editable email templates per org for the
  * Phase 4 outreach engine. Two `kind`s are supported (one row each per org):

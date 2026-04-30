@@ -636,6 +636,13 @@ export async function generateOpportunitiesForCompany(
 
   for (const record of records) {
     const opportunity = await storage.createFreightOpportunity(record);
+    // Task #844 — incremental capacity rematch on opportunity creation.
+    try {
+      const { matchOpportunity } = await import("./truckLoadMatchingService");
+      await matchOpportunity(opportunity, { notify: true });
+    } catch (err) {
+      console.error(`[capacityMatches] rematch on create failed for ${opportunity.id}:`, err);
+    }
     await storage.appendFreightOpportunityAudit({
       opportunityId: opportunity.id,
       eventType: "generated",

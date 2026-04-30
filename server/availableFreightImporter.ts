@@ -1069,6 +1069,15 @@ export async function runImportFromWorkbook(
     };
     const created = await storage.createFreightOpportunity(insert);
     indexUpsert(created);
+    // Task #844 — incrementally rematch active carrier capacity against the
+    // newly imported load so reps see matches without waiting on the hourly
+    // sweep. Best-effort; never fail import on a match error.
+    try {
+      const { matchOpportunity } = await import("./truckLoadMatchingService");
+      await matchOpportunity(created, { notify: true });
+    } catch (err) {
+      console.error(`[capacityMatches] rematch on import failed for ${created.id}:`, err);
+    }
     await storage.appendFreightOpportunityAudit({
       opportunityId: created.id,
       eventType: "generated",
