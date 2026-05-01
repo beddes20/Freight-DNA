@@ -1,0 +1,91 @@
+Revamp the Available Freight tab and the Send Outreach / Add Top 20 to Wave workflow so it is complete, scalable, and user-friendly for carrier selection and load outreach. The current issue is that after I click Add top 20 to wave and then click into the load/send flow, the popup shows selected carriers but gives me no way to select all, deselect all, edit the selected list in bulk, or clearly manage who is included before sending. The current experience feels incomplete and should be redesigned as a production-grade workflow.
+image.jpg
+
+Build this as a multi-part product improvement with these requirements:
+
+Fix carrier bulk actions
+
+Add Select all visible, Select all shortlisted, Deselect all, and Restore recommended 20 actions.
+
+Show an explicit selected count such as “20 of 50 selected.”
+
+Let users remove individual carriers directly from the selected list.
+
+Let users add more carriers from the available list without losing current selections.
+
+Preserve selection state when filtering, sorting, or switching views.
+image.jpg
+
+Redesign the modal for clarity
+
+Split the popup into two clear panels: Available carriers on the left and Selected for outreach on the right.
+
+Add checkboxes for every carrier row and a master checkbox at the header level.
+
+Make the selected panel searchable and removable with one click.
+
+Keep the email subject/body editor visible, but visually secondary to carrier management.
+
+Make it obvious which carriers will receive the message before clicking Send.
+image.jpg
+
+Improve Available Freight tab behavior
+
+Ensure the Available Freight tab supports true multi-select behavior across the whole workflow, not just a static top-20 insert.
+
+Support bulk actions from the table itself: select row, select page, select all filtered results, clear selection.
+
+Add saved filters for region, fit score, recency, last rate, response likelihood, and tags.
+
+Make ranked carriers, rep-added carriers, and suggested carriers easier to compare and merge into one outreach set.
+image.jpg
+
+Improve wave creation workflow
+
+After clicking Add top 20 to wave, open a review step where the user can confirm, adjust, expand, or reduce recipients before sending.
+
+Add quick actions like Top 10, Top 20, Top 50, Select all matching, and Use prior responders first.
+
+Add guardrails for duplicates, recent contacts, opted-out carriers, and invalid email addresses.
+
+Warn users if some selected carriers are missing contact info or are likely poor-fit matches.
+image.jpg
+
+Add UX and state improvements
+
+Show sticky selection summary and bulk-action toolbar when one or more carriers are selected.
+
+Support keyboard navigation and fast triage for power users.
+
+Prevent accidental loss of selections when the modal closes or the user navigates back.
+
+Add empty states, loading states, and error states for carrier search and outreach prep.
+
+Make the workflow fast enough for brokers who are moving quickly on live loads.
+image.jpg
+
+Define acceptance criteria
+
+A user can select all carriers in the current filtered set with one click.
+
+A user can deselect all carriers with one click.
+
+A user can edit the selected carrier set inside the send modal without restarting the workflow.
+
+Selection persists through filtering, searching, and sorting.
+
+The send modal clearly shows exactly who will receive outreach.
+
+The workflow reduces clicks and confusion compared with the current design.
+image.jpg
+
+Deliverables
+
+Provide updated UX copy for buttons, labels, helper text, and warnings.
+
+Provide a recommended interaction design for desktop first.
+
+Provide component/state logic for engineers, including selection model, modal behavior, and edge cases.
+
+Include a phased rollout plan: quick fix, UX improvement, and full workflow redesign.
+image.jpg
