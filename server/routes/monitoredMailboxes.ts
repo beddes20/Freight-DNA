@@ -23,9 +23,14 @@ import {
   getMailReadConsentStatusAsync,
   refreshMailReadConsentStatus,
   webhookSecretConfigured,
+  renewSingleMailboxSubscription,
 } from "../graphSubscriptionService";
 import { azureCredentialsConfigured } from "../graphService";
 import { syncMailboxDelta, retryMailboxSyncFailure } from "../services/mailboxDeltaSyncService";
+import {
+  classifyMailboxHealth,
+  runWatchdogOnce,
+} from "../services/mailboxWatchdogService";
 import {
   runBackfillForMailbox,
   runBackfillForAllEnabledMailboxes,
@@ -1097,6 +1102,116 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       } catch (err) {
         console.error("[monitoredMailboxes] GET /readiness error:", err);
         res.status(500).json({ error: "Failed to load readiness checklist" });
+      }
+    },
+  );
+
+  // ── Task #867 — Self-healing email ingestion: admin health + actions ─────
+
+  // GET /api/admin/mailbox-health
+  // Returns the watchdog's classification snapshot for every monitored
+  // mailbox in the admin's org plus any unresolved alerts. Powers the
+  // admin health UI section. Cheap (no Graph calls), so safe to poll.
+  app.get(
+    "/api/admin/mailbox-health",
+    requireAuth,
+    requireAdmin,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const mailboxes = await storage.getMonitoredMailboxes(user.organizationId);
+        const alerts = await storage.getOpenMailboxHealthAlerts(user.organizationId);
+        const alertsByMailbox = new Map<string, typeof alerts>();
+        for (const a of alerts) {
+          const arr = alertsByMailbox.get(a.mailboxId) ?? [];
+          arr.push(a);
+          alertsByMailbox.set(a.mailboxId, arr);
+        }
+        const now = new Date();
+        const items = mailboxes.map(mb => {
+          // Re-classify on the fly for an always-fresh view (the persisted
+          // `healthStatus` is at most ~1 min stale but the classification
+          // is pure, so there's no harm in re-running it here).
+          const cls = classifyMailboxHealth(mb, now);
+          return {
+            mailboxId: mb.id,
+            email: mb.email,
+            enabled: mb.enabled,
+            status: cls.status,
+            reason: cls.reason,
+            persistedStatus: mb.healthStatus,
+            persistedReason: mb.healthReason,
+            pollCadenceSeconds: mb.pollCadenceSeconds,
+            needsResubscribe: cls.needsResubscribe,
+            resubscribeReasons: cls.resubscribeReasons,
+            subscriptionId: mb.subscriptionId,
+            sentItemsSubscriptionId: mb.sentItemsSubscriptionId,
+            subscriptionExpiresAt: mb.subscriptionExpiresAt,
+            lastSyncAt: mb.lastSyncAt,
+            lastInboxNotificationAt: mb.lastInboxNotificationAt,
+            lastSentItemsNotificationAt: mb.lastSentItemsNotificationAt,
+            lastSubscriptionRenewalAt: mb.lastSubscriptionRenewalAt,
+            lastSubscriptionRenewalError: mb.lastSubscriptionRenewalError,
+            lastWebhookErrorAt: mb.lastWebhookErrorAt,
+            lastWebhookErrorReason: mb.lastWebhookErrorReason,
+            lastWatchdogActionAt: mb.lastWatchdogActionAt,
+            lastWatchdogAction: mb.lastWatchdogAction,
+            openAlerts: (alertsByMailbox.get(mb.id) ?? []).map(a => ({
+              alertKey: a.alertKey,
+              severity: a.severity,
+              reason: a.reason,
+              firstFiredAt: a.firstFiredAt,
+              lastFiredAt: a.lastFiredAt,
+            })),
+          };
+        });
+        const summary = {
+          total: items.length,
+          healthy: items.filter(i => i.status === "healthy").length,
+          degraded: items.filter(i => i.status === "degraded").length,
+          unhealthy: items.filter(i => i.status === "unhealthy").length,
+          openAlerts: alerts.length,
+        };
+        res.json({ summary, mailboxes: items });
+      } catch (err) {
+        console.error("[monitoredMailboxes] GET /mailbox-health error:", err);
+        res.status(500).json({ error: "Failed to load mailbox health" });
+      }
+    },
+  );
+
+  // POST /api/admin/monitored-mailboxes/:id/resubscribe
+  // Manual self-heal trigger. Re-registers (or renews) both the Inbox and
+  // SentItems subscriptions for the given mailbox via the same code path
+  // the watchdog uses, then re-runs the watchdog so the new health state
+  // is reflected immediately.
+  app.post(
+    "/api/admin/monitored-mailboxes/:id/resubscribe",
+    requireAuth,
+    requireAdmin,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const mailboxId = pStr(req.params.id);
+        const mb = await storage.getMonitoredMailbox(mailboxId);
+        if (!mb || mb.orgId !== user.organizationId) {
+          return res.status(404).json({ error: "Mailbox not found" });
+        }
+        const renewResult = await renewSingleMailboxSubscription(mailboxId);
+        // Always re-run the watchdog so persisted state reflects the
+        // post-renewal classification, even if the renewal was skipped
+        // (e.g., another renewal was in flight).
+        const watchdog = await runWatchdogOnce(mailboxId);
+        res.json({
+          ok: true,
+          renew: renewResult,
+          watchdog,
+        });
+      } catch (err) {
+        console.error("[monitoredMailboxes] POST /resubscribe error:", err);
+        res.status(500).json({ error: getErrorMessage(err) });
       }
     },
   );

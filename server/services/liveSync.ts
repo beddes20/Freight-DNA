@@ -29,7 +29,14 @@ export type LiveSyncTopic =
   | "customer_quote"
   | "customer_quote_followup"
   | "carrier"
-  | "daily_workspace";
+  | "daily_workspace"
+  // Task #867 — Self-healing email ingestion. Fired by every successful
+  // mailbox ingest path (Graph webhook + delta-sync poll + self-heal sweep)
+  // so the Conversations page updates in real time instead of waiting on
+  // its 30s background refetch. `mailbox_inbound` covers inbound rep mail
+  // (Inbox folder), `mailbox_outbound` covers SentItems captures.
+  | "mailbox_inbound"
+  | "mailbox_outbound";
 
 export interface LiveSyncEvent {
   topic: LiveSyncTopic;

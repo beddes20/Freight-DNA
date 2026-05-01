@@ -201,6 +201,9 @@ import {
   mailboxSyncFailures,
   type MailboxSyncFailure,
   type InsertMailboxSyncFailure,
+  mailboxHealthAlerts,
+  type MailboxHealthAlert,
+  type InsertMailboxHealthAlert,
   mailboxHistoricalBackfills,
   type MailboxHistoricalBackfill,
   type InsertMailboxHistoricalBackfill,
@@ -1276,6 +1279,20 @@ getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined>;
   countUnresolvedMailboxSyncFailures(mailboxId: string): Promise<number>;
   getDueMailboxSyncFailures(now: Date): Promise<MailboxSyncFailure[]>;
   getDueMailboxSyncFailuresForMailbox(mailboxId: string, now: Date): Promise<MailboxSyncFailure[]>;
+
+  // Mailbox health alerts (Task #867 — self-healing email ingestion).
+  // Open/close alert rows keyed by (mailboxId, alertKey) so the watchdog can
+  // dedupe a recurring condition into a single notification per incident.
+  fireMailboxHealthAlert(input: {
+    orgId: string;
+    mailboxId: string;
+    alertKey: string;
+    severity?: "info" | "warning" | "critical";
+    reason: string;
+  }): Promise<{ alert: MailboxHealthAlert; isNew: boolean }>;
+  resolveMailboxHealthAlert(mailboxId: string, alertKey: string): Promise<MailboxHealthAlert | undefined>;
+  getOpenMailboxHealthAlerts(orgId: string): Promise<MailboxHealthAlert[]>;
+  getOpenMailboxHealthAlertsForMailbox(mailboxId: string): Promise<MailboxHealthAlert[]>;
 
   // Cron heartbeats (never-fail-again pass) — every recurring background
   // job writes here so we can detect when one silently dies. See
@@ -8810,6 +8827,83 @@ export class DatabaseStorage implements IStorage {
         eq(mailboxSyncFailures.status, "pending"),
         lte(mailboxSyncFailures.nextAttemptAt, now),
       ));
+  }
+
+  // ── Mailbox health alerts (Task #867) ───────────────────────────────────────
+
+  async fireMailboxHealthAlert(input: {
+    orgId: string;
+    mailboxId: string;
+    alertKey: string;
+    severity?: "info" | "warning" | "critical";
+    reason: string;
+  }): Promise<{ alert: MailboxHealthAlert; isNew: boolean }> {
+    const now = new Date();
+    // Look for an existing OPEN row for this (mailbox, alertKey). The
+    // partial unique index is "open rows only" so we can do this safely
+    // without a composite key on resolvedAt.
+    const [existing] = await db
+      .select()
+      .from(mailboxHealthAlerts)
+      .where(and(
+        eq(mailboxHealthAlerts.mailboxId, input.mailboxId),
+        eq(mailboxHealthAlerts.alertKey, input.alertKey),
+        sql`${mailboxHealthAlerts.resolvedAt} IS NULL`,
+      ))
+      .limit(1);
+    if (existing) {
+      const [updated] = await db.update(mailboxHealthAlerts)
+        .set({
+          lastFiredAt: now,
+          reason: input.reason.slice(0, 1000),
+          severity: input.severity ?? existing.severity,
+          updatedAt: now,
+        })
+        .where(eq(mailboxHealthAlerts.id, existing.id))
+        .returning();
+      return { alert: updated, isNew: false };
+    }
+    const [inserted] = await db.insert(mailboxHealthAlerts).values({
+      orgId: input.orgId,
+      mailboxId: input.mailboxId,
+      alertKey: input.alertKey,
+      severity: input.severity ?? "warning",
+      reason: input.reason.slice(0, 1000),
+      firstFiredAt: now,
+      lastFiredAt: now,
+    }).returning();
+    return { alert: inserted, isNew: true };
+  }
+
+  async resolveMailboxHealthAlert(mailboxId: string, alertKey: string): Promise<MailboxHealthAlert | undefined> {
+    const now = new Date();
+    const [row] = await db.update(mailboxHealthAlerts)
+      .set({ resolvedAt: now, updatedAt: now })
+      .where(and(
+        eq(mailboxHealthAlerts.mailboxId, mailboxId),
+        eq(mailboxHealthAlerts.alertKey, alertKey),
+        sql`${mailboxHealthAlerts.resolvedAt} IS NULL`,
+      ))
+      .returning();
+    return row;
+  }
+
+  async getOpenMailboxHealthAlerts(orgId: string): Promise<MailboxHealthAlert[]> {
+    return db.select().from(mailboxHealthAlerts)
+      .where(and(
+        eq(mailboxHealthAlerts.orgId, orgId),
+        sql`${mailboxHealthAlerts.resolvedAt} IS NULL`,
+      ))
+      .orderBy(desc(mailboxHealthAlerts.lastFiredAt));
+  }
+
+  async getOpenMailboxHealthAlertsForMailbox(mailboxId: string): Promise<MailboxHealthAlert[]> {
+    return db.select().from(mailboxHealthAlerts)
+      .where(and(
+        eq(mailboxHealthAlerts.mailboxId, mailboxId),
+        sql`${mailboxHealthAlerts.resolvedAt} IS NULL`,
+      ))
+      .orderBy(desc(mailboxHealthAlerts.lastFiredAt));
   }
 
   // ── Mailbox historical backfills (Task #508) ────────────────────────────────

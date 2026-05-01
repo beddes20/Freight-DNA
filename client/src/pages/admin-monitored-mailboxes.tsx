@@ -39,6 +39,89 @@ interface MonitoredMailbox {
   // server-side. Surfaces silently-broken webhook delivery so admins
   // can act before reps complain about missing replies.
   sentItemsHealth?: SentItemsHealthSnapshot;
+  // Task #867 — Self-healing email ingestion. Watchdog classification +
+  // adaptive cadence persisted on the mailbox row.
+  healthStatus?: "healthy" | "degraded" | "unhealthy" | "unknown";
+  healthReason?: string | null;
+  pollCadenceSeconds?: number;
+  lastWatchdogActionAt?: string | null;
+  lastWatchdogAction?: string | null;
+}
+
+// ─── Mailbox watchdog health badge (Task #867) ──────────────────────────────
+function MailboxHealthBadge({ status, reason, mailboxId }: { status?: string; reason?: string | null; mailboxId: string }) {
+  if (!status || status === "unknown") return null;
+  const map: Record<string, { label: string; className: string; Icon: typeof CheckCircle2 }> = {
+    healthy: {
+      label: "Healthy",
+      className: "text-emerald-700 border-emerald-300 dark:text-emerald-300 dark:border-emerald-800",
+      Icon: ShieldCheck,
+    },
+    degraded: {
+      label: "Degraded",
+      className: "bg-amber-50 text-amber-700 border-amber-300 dark:bg-amber-950/40 dark:text-amber-300",
+      Icon: AlertCircle,
+    },
+    unhealthy: {
+      label: "Unhealthy",
+      className: "bg-red-50 text-red-700 border-red-300 dark:bg-red-950/40 dark:text-red-300",
+      Icon: ShieldAlert,
+    },
+  };
+  const cfg = map[status];
+  if (!cfg) return null;
+  const Icon = cfg.Icon;
+  return (
+    <Badge variant="outline" className={cfg.className} title={reason ?? undefined} data-testid={`badge-mailbox-health-${mailboxId}`}>
+      <Icon className="h-3 w-3 mr-1" />Mailbox {cfg.label}
+    </Badge>
+  );
+}
+
+// ─── Per-mailbox resubscribe action (Task #867) ─────────────────────────────
+function ResubscribeButton({ mailboxId, enabled }: { mailboxId: string; enabled: boolean }) {
+  const { toast } = useToast();
+  const m = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/admin/monitored-mailboxes/${mailboxId}/resubscribe`);
+      return res.json() as Promise<{
+        ok: boolean;
+        renew?: { outcome?: string; skipped?: boolean; reason?: string; syncError?: string | null };
+        watchdog?: { after?: string; action?: string };
+      }>;
+    },
+    onSuccess: (r) => {
+      const outcome = r.renew && "outcome" in r.renew ? r.renew.outcome : undefined;
+      const skippedReason = r.renew && "skipped" in r.renew && r.renew.skipped ? r.renew.reason : undefined;
+      const after = r.watchdog?.after ?? "unknown";
+      toast({
+        title: outcome === "renewed" || outcome === "reregistered"
+          ? "Subscription rescued"
+          : skippedReason
+            ? "Resubscribe skipped"
+            : "Resubscribe attempted",
+        description: outcome === "renewed" ? `Renewed both subscriptions. New status: ${after}.`
+          : outcome === "reregistered" ? `Re-registered both subscriptions. New status: ${after}.`
+          : skippedReason ?? r.renew?.syncError ?? `New status: ${after}.`,
+        variant: outcome === "renewed" || outcome === "reregistered" ? "default" : "destructive",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/admin/monitored-mailboxes"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/mailbox-health"] });
+    },
+    onError: (err: Error) => toast({ title: "Resubscribe failed", description: err.message, variant: "destructive" }),
+  });
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={!enabled || m.isPending}
+      onClick={() => m.mutate()}
+      title="Re-register Inbox + SentItems subscriptions for this mailbox"
+      data-testid={`button-resubscribe-${mailboxId}`}
+    >
+      {m.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+    </Button>
+  );
 }
 
 interface OrgUser {
@@ -746,6 +829,7 @@ export default function AdminMonitoredMailboxesPage() {
                       </div>
                       <SyncStatusBadge status={mb.syncStatus} error={mb.syncError} />
                       {mb.sentItemsHealth && <SentItemsHealthBadge health={mb.sentItemsHealth} mailboxId={mb.id} />}
+                      <MailboxHealthBadge status={mb.healthStatus} reason={mb.healthReason} mailboxId={mb.id} />
                       {/* Task #517 — Mail.Read consent is tenant-global
                           (Azure app-only), so each row mirrors the same
                           shared status. Surfacing it per-row makes the
@@ -798,6 +882,12 @@ export default function AdminMonitoredMailboxesPage() {
                         <RefreshCw className="h-4 w-4" />
                       )}
                     </Button>
+
+                    {/* Task #867 — manual self-heal: re-register both
+                        Inbox + SentItems subscriptions and re-classify
+                        watchdog state. Mirrors what the watchdog cron
+                        does automatically every minute. */}
+                    <ResubscribeButton mailboxId={mb.id} enabled={mb.enabled} />
 
                     <Button
                       variant="outline"

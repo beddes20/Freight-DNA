@@ -2804,6 +2804,35 @@ export const monitoredMailboxes = pgTable(
     //   from this mailbox via ANY path (webhook, delta, self-heal).
     lastSentItemsNotificationAt: timestamp("last_sent_items_notification_at"),
     lastOutboundCapturedAt: timestamp("last_outbound_captured_at"),
+    // Task #867 — Self-healing email ingestion.
+    //   lastInboxNotificationAt — last accepted Inbox webhook for this mailbox.
+    //     Mirror of lastSentItemsNotificationAt for the Inbox subscription so
+    //     the watchdog can classify Inbox health independently of SentItems.
+    //   lastWebhookErrorAt / lastWebhookErrorReason — last time we *tried* to
+    //     re-register or renew the subscription and Graph rejected it. Surfaces
+    //     "subscription is dead but we can't even resubscribe" silent failures.
+    //   lastSubscriptionRenewalAt / lastSubscriptionRenewalError — last
+    //     successful (and last failed) renewal/re-register attempt across both
+    //     the Inbox and SentItems subs.
+    //   healthStatus / healthReason — watchdog classification snapshot.
+    //     "healthy" | "degraded" | "unhealthy" with a human-readable reason.
+    //   pollCadenceSeconds — adaptive delta-sync cadence. Default 300s
+    //     (healthy). Watchdog drops to 60s for degraded/unhealthy mailboxes
+    //     so a silently-broken webhook is masked by ~1-min polling instead
+    //     of ~5-min polling until the sub is rescued.
+    //   lastWatchdogActionAt / lastWatchdogAction — what the watchdog did
+    //     last cycle (resubscribed_inbox | resubscribed_sentitems |
+    //     resubscribed_both | bumped_cadence | reset_cadence | none).
+    lastInboxNotificationAt: timestamp("last_inbox_notification_at"),
+    lastWebhookErrorAt: timestamp("last_webhook_error_at"),
+    lastWebhookErrorReason: text("last_webhook_error_reason"),
+    lastSubscriptionRenewalAt: timestamp("last_subscription_renewal_at"),
+    lastSubscriptionRenewalError: text("last_subscription_renewal_error"),
+    healthStatus: text("health_status").notNull().default("unknown"),
+    healthReason: text("health_reason"),
+    pollCadenceSeconds: integer("poll_cadence_seconds").notNull().default(300),
+    lastWatchdogActionAt: timestamp("last_watchdog_action_at"),
+    lastWatchdogAction: text("last_watchdog_action"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -2812,6 +2841,49 @@ export const monitoredMailboxes = pgTable(
     index("monitored_mailboxes_org_enabled_idx").on(table.orgId, table.enabled),
   ],
 );
+
+// ── Mailbox Health Alerts (Task #867) ───────────────────────────────────────
+// Per-(mailbox, alertKey) dedupe ledger for the watchdog. The watchdog runs
+// every minute; without a ledger an "Inbox webhook silent for 30m" condition
+// would re-fire an admin notification every minute until the rep noticed.
+// Each row tracks the first/last firing of a given alert key for a mailbox
+// and a `resolvedAt` so we can re-fire if the same condition recurs after
+// the mailbox was healthy again.
+export const mailboxHealthAlerts = pgTable(
+  "mailbox_health_alerts",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    mailboxId: varchar("mailbox_id").notNull().references(() => monitoredMailboxes.id, { onDelete: "cascade" }),
+    // Stable key for the alert condition, e.g. "inbox_webhook_silent",
+    // "sentitems_webhook_silent", "subscription_renewal_failed",
+    // "mailbox_unhealthy". One open (unresolved) row per (mailboxId, alertKey).
+    alertKey: text("alert_key").notNull(),
+    severity: text("severity").notNull().default("warning"), // info | warning | critical
+    reason: text("reason").notNull(),
+    firstFiredAt: timestamp("first_fired_at").defaultNow().notNull(),
+    lastFiredAt: timestamp("last_fired_at").defaultNow().notNull(),
+    resolvedAt: timestamp("resolved_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // One open row per (mailbox, alertKey). A resolved row + a new firing
+    // becomes a fresh row, which is what we want for "fired again later" UX.
+    uniqueIndex("mailbox_health_alerts_open_idx")
+      .on(table.mailboxId, table.alertKey)
+      .where(sql`${table.resolvedAt} IS NULL`),
+    index("mailbox_health_alerts_org_idx").on(table.orgId, table.resolvedAt),
+  ],
+);
+
+export const insertMailboxHealthAlertSchema = createInsertSchema(mailboxHealthAlerts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertMailboxHealthAlert = z.infer<typeof insertMailboxHealthAlertSchema>;
+export type MailboxHealthAlert = typeof mailboxHealthAlerts.$inferSelect;
 
 export const insertMonitoredMailboxSchema = createInsertSchema(monitoredMailboxes).omit({
   id: true,

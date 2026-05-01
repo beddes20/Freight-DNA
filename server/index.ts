@@ -42,6 +42,7 @@ import { startEmailIntelligenceScheduler } from "./emailIntelligenceScheduler";
 import { startQuoteRequestSlaScheduler } from "./quoteRequestSlaService";
 import { initGraphSubscriptionService } from "./graphSubscriptionService";
 import { initDeltaSyncScheduler } from "./services/mailboxDeltaSyncService";
+import { initMailboxWatchdogScheduler } from "./services/mailboxWatchdogService";
 import { initWebexSyncScheduler } from "./routes/webex";
 import { runMigrations } from "./runMigrations";
 import { assertNoSchemaDrift } from "./checkSchemaDrift";
@@ -532,6 +533,10 @@ process.on("uncaughtException", (err) => {
           console.error("[graph-sub] Startup error:", err instanceof Error ? err.message : String(err));
         });
         initDeltaSyncScheduler();
+        // Task #867 — health watchdog runs alongside the delta poller.
+        // Self-heals dead subscriptions, adapts per-mailbox cadence, and
+        // fires deduped admin alerts when a mailbox stays unhealthy.
+        initMailboxWatchdogScheduler();
         initWebexSyncScheduler();
         // Task #435: periodic self-heal sweep that pulls missing rep
         // replies from Microsoft Graph SentItems for any conversation

@@ -432,11 +432,50 @@ async function runDeltaSyncCycle(trigger: "boot" | "cron"): Promise<void> {
     if (mailboxes.length === 0) return;
 
     const startedAt = Date.now();
-    log(`Running delta sync cycle (${trigger}) for ${mailboxes.length} mailbox(es)`);
+    // Task #867 — adaptive polling. The cron now fires every minute, but
+    // each mailbox only actually polls when its `pollCadenceSeconds`
+    // window has elapsed since its last sync. Healthy mailboxes still
+    // only run every 5 minutes (cadence=300); the watchdog drops
+    // degraded/unhealthy mailboxes to 60s so we mask a silently-broken
+    // webhook within ~1 minute instead of ~5.
+    //
+    // Boot-trigger bypasses the gate so a fresh restart still pulls
+    // immediately for everyone.
+    const due: typeof mailboxes = [];
+    const skipped: { email: string; cadenceS: number; ageS: number }[] = [];
+    const now = Date.now();
+    for (const mb of mailboxes) {
+      if (trigger === "boot") {
+        due.push(mb);
+        continue;
+      }
+      const cadenceS = mb.pollCadenceSeconds ?? 300;
+      if (!mb.lastSyncAt) {
+        due.push(mb);
+        continue;
+      }
+      const ageMs = now - mb.lastSyncAt.getTime();
+      // Allow a small jitter floor (5s) so a sync that finished a few
+      // milliseconds ago doesn't immediately re-fire on the next-second
+      // cron tick. Otherwise this is exactly `age >= cadence`.
+      if (ageMs >= cadenceS * 1000 - 5_000) {
+        due.push(mb);
+      } else {
+        skipped.push({ email: mb.email, cadenceS, ageS: Math.round(ageMs / 1000) });
+      }
+    }
+
+    if (due.length === 0) {
+      // Nothing to do this minute — common case for orgs where every
+      // mailbox is healthy and on the 5-min cadence.
+      return;
+    }
+
+    log(`Running delta sync cycle (${trigger}) for ${due.length}/${mailboxes.length} mailbox(es)`);
 
     let totalProcessed = 0;
     let totalErrors = 0;
-    for (const mb of mailboxes) {
+    for (const mb of due) {
       const result = await syncMailboxDelta(mb.id);
       totalProcessed += result.processed;
       totalErrors += result.errors;
@@ -446,7 +485,7 @@ async function runDeltaSyncCycle(trigger: "boot" | "cron"): Promise<void> {
     }
 
     const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
-    log(`Cycle done (${trigger}): ${mailboxes.length} mailbox(es), ${totalProcessed} processed, ${totalErrors} errors, ${elapsedSec}s`);
+    log(`Cycle done (${trigger}): ${due.length}/${mailboxes.length} mailbox(es) polled, ${totalProcessed} processed, ${totalErrors} errors, ${elapsedSec}s`);
   } catch (err) {
     log(`Delta sync cycle error: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
@@ -481,14 +520,17 @@ export function initDeltaSyncScheduler(): void {
   // workflow doesn't have to wait up to 5 minutes for the first tick.
   setTimeout(() => { void runDeltaSyncCycle("boot"); }, 30_000);
 
-  // Every 5 minutes, on the wall clock. node-cron survives drift and is the
-  // same primitive used by the subscription renewer.
-  const FIVE_MIN_MS = 5 * 60 * 1000;
-  _deltaSyncCron = cron.schedule("*/5 * * * *", () => {
-    void withHeartbeat(JOB_NAMES.mailboxDeltaSyncPoll, FIVE_MIN_MS, () => runDeltaSyncCycle("cron"));
+  // Task #867 — every minute, but per-mailbox `pollCadenceSeconds` gates
+  // which mailboxes actually run. Healthy mailboxes still poll every 5
+  // minutes; the watchdog drops degraded/unhealthy ones to 60s for fast
+  // recovery. The heartbeat interval stays at 1 min so the capture-audit
+  // pill correctly flags a stuck cron at the new cadence.
+  const ONE_MIN_MS = 60 * 1000;
+  _deltaSyncCron = cron.schedule("* * * * *", () => {
+    void withHeartbeat(JOB_NAMES.mailboxDeltaSyncPoll, ONE_MIN_MS, () => runDeltaSyncCycle("cron"));
   });
 
-  log("Delta sync scheduler started (every 5 minutes, clock-anchored)");
+  log("Delta sync scheduler started (every 1 minute, adaptive per-mailbox cadence)");
 }
 
 export function stopDeltaSyncScheduler(): void {

@@ -822,6 +822,13 @@ async function backfillAfterRenew(mailbox: MonitoredMailbox): Promise<MailboxRen
 }
 
 async function renewOneMailbox(mb: MonitoredMailbox): Promise<MailboxRenewResult> {
+  // Task #867 — every code path through the renewer (success OR failure)
+  // must update `lastSubscriptionRenewal*` on the mailbox so the watchdog
+  // and admin UI can see *when* we last tried and *why* it failed. Without
+  // this, "subscription is expired AND we can't even resubscribe" looks
+  // identical to "we just haven't tried yet" in the diagnostics.
+  const now = new Date();
+
   // Either subscription missing → re-register both. The previous `&&`
   // skipped re-registration when one was missing, which left the
   // capture-audit pill stuck red because missing SentItems alone is
@@ -829,12 +836,23 @@ async function renewOneMailbox(mb: MonitoredMailbox): Promise<MailboxRenewResult
   if (!mb.subscriptionId || !mb.sentItemsSubscriptionId) {
     const id = await registerMailboxSubscription(mb.email, mb.id);
     if (id) {
+      await storage.updateMonitoredMailbox(mb.id, {
+        lastSubscriptionRenewalAt: now,
+        lastSubscriptionRenewalError: null,
+      }).catch(() => {});
       const fresh = (await storage.getMonitoredMailbox(mb.id)) ?? mb;
       const backfill = await backfillAfterRenew(fresh);
       return { mailboxId: mb.id, email: mb.email, outcome: "reregistered", syncError: null, backfill };
     }
     const fresh = await storage.getMonitoredMailbox(mb.id);
-    return { mailboxId: mb.id, email: mb.email, outcome: "failed", syncError: fresh?.syncError ?? "Re-registration failed", backfill: null };
+    const reason = fresh?.syncError ?? "Re-registration failed";
+    await storage.updateMonitoredMailbox(mb.id, {
+      lastSubscriptionRenewalAt: now,
+      lastSubscriptionRenewalError: reason,
+      lastWebhookErrorAt: now,
+      lastWebhookErrorReason: reason,
+    }).catch(() => {});
+    return { mailboxId: mb.id, email: mb.email, outcome: "failed", syncError: reason, backfill: null };
   }
 
   let allRenewed = true;
@@ -851,6 +869,8 @@ async function renewOneMailbox(mb: MonitoredMailbox): Promise<MailboxRenewResult
       subscriptionExpiresAt: new Date(Date.now() + SUB_TTL_MS),
       syncStatus: "active",
       syncError: null,
+      lastSubscriptionRenewalAt: now,
+      lastSubscriptionRenewalError: null,
     });
     const fresh = (await storage.getMonitoredMailbox(mb.id)) ?? mb;
     const backfill = await backfillAfterRenew(fresh);
@@ -860,12 +880,23 @@ async function renewOneMailbox(mb: MonitoredMailbox): Promise<MailboxRenewResult
   log(`[user-mailbox] Renewal failed for ${mb.email} — re-registering`);
   const id = await registerMailboxSubscription(mb.email, mb.id);
   if (id) {
+    await storage.updateMonitoredMailbox(mb.id, {
+      lastSubscriptionRenewalAt: now,
+      lastSubscriptionRenewalError: null,
+    }).catch(() => {});
     const fresh = (await storage.getMonitoredMailbox(mb.id)) ?? mb;
     const backfill = await backfillAfterRenew(fresh);
     return { mailboxId: mb.id, email: mb.email, outcome: "reregistered", syncError: null, backfill };
   }
   const fresh = await storage.getMonitoredMailbox(mb.id);
-  return { mailboxId: mb.id, email: mb.email, outcome: "failed", syncError: fresh?.syncError ?? "Renewal failed", backfill: null };
+  const reason = fresh?.syncError ?? "Renewal failed";
+  await storage.updateMonitoredMailbox(mb.id, {
+    lastSubscriptionRenewalAt: now,
+    lastSubscriptionRenewalError: reason,
+    lastWebhookErrorAt: now,
+    lastWebhookErrorReason: reason,
+  }).catch(() => {});
+  return { mailboxId: mb.id, email: mb.email, outcome: "failed", syncError: reason, backfill: null };
 }
 
 export async function renewUserMailboxSubscriptions(orgId?: string): Promise<RenewSummary> {

@@ -24,6 +24,7 @@ import {
   normalizeEmailAddress,
 } from "../services/carrierContactMatchService";
 import { recordIntegrationEvent } from "../integrations/probeRegistry";
+import { publish as publishLiveSync } from "../services/liveSync";
 
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -609,6 +610,12 @@ async function processUserMailboxEmail(params: {
 
   log(`[user-mailbox] ${direction} email recorded: from=${fromEmail} to=${toEmail} account=${accountMatch?.companyId ?? "(none)"} msgId=${providerMessageId}`);
 
+  // Task #867 — fan out a live-sync hint so any open Conversations tab in
+  // this org invalidates its inbox feed within ~50ms instead of waiting on
+  // the page's background refetch interval. Best-effort: publish never
+  // throws and is safe to call on every accepted message.
+  publishLiveSync(orgId, direction === "outbound" ? "mailbox_outbound" : "mailbox_inbound", conversationId ?? undefined);
+
   // Task #534 — record a thread-events row for outbound emails sent from
   // the rep's monitored mailbox (typically composed in Outlook). This is
   // the "human_sent" audit signal in the Smarter Conversations detail
@@ -885,9 +892,17 @@ export async function processGraphNotifications(body: unknown): Promise<void> {
         // the monitored-mailboxes screen whether the SentItems sub is
         // actually firing for each rep — the most common silent failure
         // mode for "rep replied but it didn't show up".
+        // Task #867: also track Inbox webhook delivery so the watchdog can
+        // classify each subscription independently (Inbox can be silent
+        // while SentItems is healthy, and vice versa).
+        const now = new Date();
         if (monitoredMb.sentItemsSubscriptionId === notification.subscriptionId) {
           await storage.updateMonitoredMailbox(monitoredMb.id, {
-            lastSentItemsNotificationAt: new Date(),
+            lastSentItemsNotificationAt: now,
+          }).catch(() => {});
+        } else if (monitoredMb.subscriptionId === notification.subscriptionId) {
+          await storage.updateMonitoredMailbox(monitoredMb.id, {
+            lastInboxNotificationAt: now,
           }).catch(() => {});
         }
       }

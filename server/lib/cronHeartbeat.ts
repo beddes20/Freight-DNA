@@ -35,8 +35,13 @@ export const JOB_NAMES = {
   graphSharedMailboxRenewal: "graph_shared_mailbox_renewal",
   /** Shared mailbox activation retry, fires while Mail.Read is not yet granted. Every 1h. */
   graphSharedMailboxActivationRetry: "graph_shared_mailbox_activation_retry",
-  /** Polling delta sync across every enabled monitored mailbox. Every 5min. */
+  /** Polling delta sync across every enabled monitored mailbox. Every 1min;
+   *  per-mailbox `pollCadenceSeconds` gates which mailboxes actually run. */
   mailboxDeltaSyncPoll: "mailbox_delta_sync_poll",
+  /** Task #867 — Mailbox health watchdog. Every 1min. Classifies each
+   *  monitored mailbox (healthy/degraded/unhealthy), self-heals dead
+   *  subscriptions, adapts poll cadence, and dedupes admin alerts. */
+  mailboxHealthWatchdog: "mailbox_health_watchdog",
   /** Self-heal sweep for stuck threads. Every 5min. */
   replyCaptureSelfHealSweep: "reply_capture_self_heal_sweep",
   /** SONAR breaker long-open monitor. Every 5min. */
@@ -105,6 +110,7 @@ export const EMAIL_PIPELINE_JOBS: ReadonlySet<JobName> = new Set([
   JOB_NAMES.graphSharedMailboxRenewal,
   JOB_NAMES.graphSharedMailboxActivationRetry,
   JOB_NAMES.mailboxDeltaSyncPoll,
+  JOB_NAMES.mailboxHealthWatchdog,
   JOB_NAMES.replyCaptureSelfHealSweep,
   JOB_NAMES.emailIntelligenceBatch,
 ]);

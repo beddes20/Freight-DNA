@@ -78,6 +78,18 @@ const TOPIC_TO_QUERY_KEYS: Record<string, ReadonlyArray<ReadonlyArray<string>>> 
   daily_workspace: [
     DAILY_WORKSPACE_KEY,
   ],
+  // Task #867 — fired by every successful mailbox ingestion so the
+  // Conversations page (and its sidebar bucket counts) updates instantly
+  // instead of waiting on its background refetch interval. Both topics
+  // bust the same key set because the inbox feed mixes inbound + outbound
+  // messages on the same row (a thread surfaces a new outbound rep reply
+  // exactly the same way as a new inbound customer email).
+  mailbox_inbound: [
+    ["/api/internal/conversations"],
+  ],
+  mailbox_outbound: [
+    ["/api/internal/conversations"],
+  ],
 };
 
 // Topics that ship a per-company `key` and need per-company caches

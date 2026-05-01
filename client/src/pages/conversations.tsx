@@ -406,11 +406,14 @@ export default function ConversationsPage() {
       if (!res.ok) throw new Error("Failed to fetch conversations");
       return res.json();
     },
-    // Always-fresh: pull every 30s while the page is open, and force a refetch
-    // the moment the user comes back to the tab. The backend webhook + 5-min
-    // poll keep messages flowing into the DB; without this the page would
-    // happily display 30-minute-stale rows after any window blur.
-    refetchInterval: 30_000,
+    // Task #867 — live-sync (mailbox_inbound/outbound topics) now invalidates
+    // this query within ~50ms of any accepted Graph webhook or delta-sync
+    // ingest, so this background poll is a fall-back for environments where
+    // the SSE stream is blocked by an intermediary (corporate proxy, etc.).
+    // Two-minute cadence is loose enough to avoid herd-effect refetches in
+    // rooms with many tabs open and tight enough that a long SSE outage
+    // still self-corrects within the typical attention span.
+    refetchInterval: 120_000,
     refetchOnWindowFocus: true,
   });
 
