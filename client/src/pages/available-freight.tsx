@@ -106,6 +106,9 @@ interface CockpitItem {
   /** Task #635 — joined from server in the same payload (no per-row N+1). */
   lwqContext?: LwqContextChipData | null;
   laneSignature?: string;
+  /** Phase B1 — server-derived freshness label so reps can tell stale-by-date
+   *  rows apart from the genuinely actionable ones at a glance. */
+  pickupFreshness?: "no_pickup" | "upcoming" | "past_recent" | "past_stale";
 }
 
 interface BulkActionResult {
@@ -176,9 +179,22 @@ interface CockpitResponse {
     byStatus: number;
     bySnooze: number;
     byPastPickup: number;
+    /** Phase B1 — strictly-stale past pickups (>graceDays). Stable across
+     *  scopes so the empty state can always show "M stale" without
+     *  flickering when the user flips Recent / Upcoming / All. */
+    byPastStale?: number;
+    /** Phase B1 — past-pickup rows that are visible under the current
+     *  scope (because they're inside the grace window AND status is
+     *  still open). Powers the explainer "N past-pickup loads stay
+     *  visible because they're still actionable." */
+    visiblePastPickupRecent?: number;
     byLane: number;
     byCarrier: number;
   };
+  /** Phase B1 — server-confirmed pickup scope ('upcoming'|'recent'|'all'). */
+  pickupScope?: "upcoming" | "recent" | "all";
+  /** Phase B1 — grace window applied (days). Defaults to 14. */
+  pickupGraceDays?: number;
   roiMetrics?: {
     responseByBucket: Record<string, { sent: number; responded: number }>;
     suppressionBreakdown: Record<string, number>;

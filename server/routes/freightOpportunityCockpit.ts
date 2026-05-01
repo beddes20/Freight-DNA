@@ -38,6 +38,15 @@ import { publish as publishLiveSync } from "../services/liveSync";
 import { getErrorMessage } from "../lib/errors";
 import { pStr } from "../lib/req";
 import { todayIsoInOrgTz } from "../lib/orgLocalDate";
+import {
+  computePickupFreshness,
+  shouldHideForPickup,
+  isPickupScope,
+  DEFAULT_PICKUP_SCOPE,
+  PICKUP_GRACE_DAYS_DEFAULT,
+  type PickupScope,
+  type PickupFreshness,
+} from "@shared/pickupFreshness";
 
 function orgId(req: Express.Request): string {
   return (req as any).session?.organizationId as string;
@@ -472,7 +481,14 @@ export function registerFreightCockpitRoutes(app: Express) {
       if (!org) return res.status(400).json({ error: "No organization" });
 
       const user = await getCurrentUser(req);
-      const { companyId, status, limit = "100", grouping = "none", sort = "pickup_soonest", lane: laneFilter, carrierId: carrierFilter } = req.query as Record<string, string>;
+      const { companyId, status, limit = "100", grouping = "none", sort = "pickup_soonest", lane: laneFilter, carrierId: carrierFilter, pickupScope: pickupScopeRaw } = req.query as Record<string, string>;
+      // Phase B1 — pickup-date scope. Default 'recent' keeps past-pickup
+      // rows visible while their status is still open, so reps stop losing
+      // actionable freight to a date heuristic. 'upcoming' restores the
+      // strict pre-B1 behavior; 'all' is the empty-state escape hatch.
+      const pickupScope: PickupScope = isPickupScope(pickupScopeRaw)
+        ? pickupScopeRaw
+        : DEFAULT_PICKUP_SCOPE;
       const statusList = (status ?? "")
         .split(",")
         .map(s => s.trim())
@@ -490,32 +506,37 @@ export function registerFreightCockpitRoutes(app: Express) {
       const now = new Date();
       // Hide snoozed rows whose snooze hasn't expired so the cockpit stays
       // focused. Snoozed rows are still reachable via /api/freight-opportunities.
-      // Also drop rows whose pickup window start is before today (Task #750).
-      // Reps can't act on freight that was supposed to move days ago, and
-      // these rows would otherwise bury today's real work. Rows with no
-      // pickup date set are kept (they're not "past"). The underlying rows
-      // remain reachable via /api/freight-opportunities and the audit log.
+      //
+      // Phase B1 — past-pickup is no longer a blanket exclude. Status drives
+      // "still open"; pickup date drives only the freshness label. The
+      // pickupScope param controls how aggressive the date filter is:
+      //   'recent' (default) — show 'upcoming' + 'past_recent', hide stale
+      //   'upcoming'         — strict, hide everything past pickup (legacy)
+      //   'all'              — never hide for date (empty-state escape hatch)
       // pickupWindowStart is a text column storing ISO date strings
-      // (YYYY-MM-DD or full ISO) so we slice the first 10 chars and compare
-      // lexicographically against today's date in the org's local
-      // timezone (CT — see server/lib/orgLocalDate.ts). UTC midnight lands
-      // at 6 PM the prior CT day, so deriving "today" from UTC would hide
-      // loads that are still "today" for the rep.
+      // (YYYY-MM-DD or full ISO). Today is computed in the org's local
+      // timezone (CT — see server/lib/orgLocalDate.ts) so loads that are
+      // "today" for the rep don't get hidden by UTC drift.
       const todayIso = todayIsoInOrgTz(now);
       const startOfToday = new Date(now);
       startOfToday.setHours(0, 0, 0, 0);
       const startOfTodayMs = startOfToday.getTime();
-      const visibleRows = rows.filter(r => {
-        if (r.snoozedUntil) {
-          const t = new Date(r.snoozedUntil).getTime();
-          if (Number.isFinite(t) && t > now.getTime()) return false;
-        }
-        if (r.pickupWindowStart) {
-          const pickupIso = String(r.pickupWindowStart).slice(0, 10);
-          if (pickupIso && pickupIso < todayIso) return false;
-        }
-        return true;
-      });
+      const rowsWithFreshness = rows.map(r => ({
+        row: r,
+        freshness: computePickupFreshness(r.pickupWindowStart, todayIso),
+      }));
+      const visibleRows = rowsWithFreshness
+        .filter(({ row: r, freshness }) => {
+          if (r.snoozedUntil) {
+            const t = new Date(r.snoozedUntil).getTime();
+            if (Number.isFinite(t) && t > now.getTime()) return false;
+          }
+          if (shouldHideForPickup(freshness, pickupScope)) return false;
+          return true;
+        });
+      const freshnessByOppId = new Map<string, PickupFreshness>(
+        rowsWithFreshness.map(({ row, freshness }) => [row.id, freshness]),
+      );
       const caches: CockpitLookupCaches = {
         carriers: new Map<string, Carrier | null>(),
         companies: new Map<string, Company | null>(),
@@ -523,7 +544,9 @@ export function registerFreightCockpitRoutes(app: Express) {
         lanes: new Map<string, RecurringLane | null>(),
         users: new Map<string, User | null>(),
       };
-      const baseItems = await Promise.all(visibleRows.map(opp => buildCockpitRow(org, opp, { now, caches })));
+      const baseItems = await Promise.all(
+        visibleRows.map(({ row }) => buildCockpitRow(org, row, { now, caches })),
+      );
 
       // Task #635 — Cross-link map: which AF rows match a lane in the rep's
       // LWQ. Computed in a single pass per request (no per-row N+1).
@@ -547,7 +570,11 @@ export function registerFreightCockpitRoutes(app: Express) {
           i.opportunity.equipmentType,
         );
         const lwqContext = lwqByLaneSig.get(sig) ?? null;
-        return { ...i, lwqContext, laneSignature: sig };
+        // Phase B1 — every row carries its pickup freshness so the UI can
+        // label "Pickup was Xd ago" without re-doing the date math.
+        const pickupFreshness: PickupFreshness =
+          freshnessByOppId.get(i.opportunity.id) ?? "no_pickup";
+        return { ...i, lwqContext, laneSignature: sig, pickupFreshness };
       });
 
       // Optional `?lane=<sig>` deep-link filter — used by LWQ chip → AF.
@@ -866,10 +893,19 @@ export function registerFreightCockpitRoutes(app: Express) {
       // the rep guessing whether the queue is genuinely empty or just
       // filtered out from view.
       //
-      // Predicate ordering mirrors the in-memory filter at lines 508-518:
-      // status (DB-level) → snooze → past-pickup. A row that is both
-      // snoozed AND past-pickup attributes to "snooze" so the totals stay
-      // mutually exclusive (no double-counting).
+      // Predicate ordering mirrors the in-memory filter:
+      // status (DB-level) → snooze → past-pickup (scope-aware in B1).
+      // A row that is both snoozed AND past-pickup attributes to "snooze"
+      // so the totals stay mutually exclusive (no double-counting).
+      //
+      // Phase B1 — byPastPickup now means "rows the current pickupScope is
+      // hiding for date reasons". Under 'recent' (default) that's only the
+      // stale tail; under 'upcoming' it's the legacy strict count; under
+      // 'all' it's always 0. byPastStale is a stable companion that always
+      // counts strictly-stale (>graceDays) past pickups so the UI can show
+      // a consistent "stale" number regardless of scope. visiblePastRecent
+      // counts past-pickup-but-still-visible rows so the UI can hint
+      // "N past-pickup loads are visible because they're still actionable."
       const statusFilterSql = statusList.length > 0
         ? sql`${freightOpportunities.status} IN (${sql.join(statusList.map(s => sql`${s}`), sql`, `)})`
         : sql`TRUE`;
@@ -879,6 +915,24 @@ export function registerFreightCockpitRoutes(app: Express) {
       const companyScopeSql = companyId
         ? sql`AND ${freightOpportunities.companyId} = ${companyId}`
         : sql``;
+      const notSnoozedSql = sql`(
+        ${freightOpportunities.snoozedUntil} IS NULL
+        OR ${freightOpportunities.snoozedUntil} <= ${now}
+      )`;
+      const pickupKeySql = sql`substring(${freightOpportunities.pickupWindowStart}, 1, 10)`;
+      // Precompute the stale-boundary ISO so the comparison stays a plain
+      // text inequality (no Postgres date arithmetic mixed with bind params).
+      const staleBoundaryIso = new Date(
+        Date.parse(`${todayIso}T00:00:00Z`) - PICKUP_GRACE_DAYS_DEFAULT * 86_400_000,
+      ).toISOString().slice(0, 10);
+      const isPastSql = sql`${freightOpportunities.pickupWindowStart} IS NOT NULL AND ${pickupKeySql} < ${todayIso}`;
+      const isStaleSql = sql`${freightOpportunities.pickupWindowStart} IS NOT NULL AND ${pickupKeySql} < ${staleBoundaryIso}`;
+      // Per-scope "hidden by date" predicate, mirrors shouldHideForPickup().
+      const hiddenByPickupForScopeSql = pickupScope === "all"
+        ? sql`FALSE`
+        : pickupScope === "upcoming"
+          ? isPastSql
+          : isStaleSql;
       const hiddenRows = await db.execute(sql`
         SELECT
           COUNT(*) AS total_in_scope,
@@ -890,13 +944,20 @@ export function registerFreightCockpitRoutes(app: Express) {
           ) AS hidden_by_snooze,
           COUNT(*) FILTER (
             WHERE ${statusFilterSql}
-              AND (
-                ${freightOpportunities.snoozedUntil} IS NULL
-                OR ${freightOpportunities.snoozedUntil} <= ${now}
-              )
-              AND ${freightOpportunities.pickupWindowStart} IS NOT NULL
-              AND substring(${freightOpportunities.pickupWindowStart}, 1, 10) < ${todayIso}
-          ) AS hidden_by_past_pickup
+              AND ${notSnoozedSql}
+              AND (${hiddenByPickupForScopeSql})
+          ) AS hidden_by_past_pickup,
+          COUNT(*) FILTER (
+            WHERE ${statusFilterSql}
+              AND ${notSnoozedSql}
+              AND ${isStaleSql}
+          ) AS hidden_by_past_stale,
+          COUNT(*) FILTER (
+            WHERE ${statusFilterSql}
+              AND ${notSnoozedSql}
+              AND ${isPastSql}
+              AND NOT (${hiddenByPickupForScopeSql})
+          ) AS visible_past_pickup_recent
         FROM ${freightOpportunities}
         WHERE ${freightOpportunities.orgId} = ${org}
         ${companyScopeSql}
@@ -909,6 +970,8 @@ export function registerFreightCockpitRoutes(app: Express) {
         byStatus: parseCount(h0.hidden_by_status),
         bySnooze: parseCount(h0.hidden_by_snooze),
         byPastPickup: parseCount(h0.hidden_by_past_pickup),
+        byPastStale: parseCount(h0.hidden_by_past_stale),
+        visiblePastPickupRecent: parseCount(h0.visible_past_pickup_recent),
         byLane: hiddenByLane,
         byCarrier: hiddenByCarrier,
       };
@@ -976,6 +1039,8 @@ export function registerFreightCockpitRoutes(app: Express) {
         roiMetrics,
         sort: sortKey,
         grouping: groupKey,
+        pickupScope,
+        pickupGraceDays: PICKUP_GRACE_DAYS_DEFAULT,
       });
     } catch (err) {
       console.error("[freight-cockpit] feed error:", err);
