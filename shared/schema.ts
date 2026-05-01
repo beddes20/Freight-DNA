@@ -4469,6 +4469,20 @@ export const insertUserFreightCockpitPrefsSchema = createInsertSchema(userFreigh
 export type InsertUserFreightCockpitPrefs = z.infer<typeof insertUserFreightCockpitPrefsSchema>;
 export type UserFreightCockpitPrefs = typeof userFreightCockpitPrefs.$inferSelect;
 
+// ─── Lane Inbox per-user prefs (Task #873) ──────────────────────────────────
+// Persists the "Group by Lane" toggle on the Lane Inbox page so the rep's
+// preferred view sticks across sessions and devices. Kept as a tiny
+// dedicated table (rather than tacked onto userFreightCockpitPrefs) so the
+// inbox concern stays separable from the AF cockpit prefs.
+export const userLaneInboxPrefs = pgTable("user_lane_inbox_prefs", {
+  userId: varchar("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  groupByLane: boolean("group_by_lane").notNull().default(false),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const insertUserLaneInboxPrefsSchema = createInsertSchema(userLaneInboxPrefs).omit({ updatedAt: true });
+export type InsertUserLaneInboxPrefs = z.infer<typeof insertUserLaneInboxPrefsSchema>;
+export type UserLaneInboxPrefs = typeof userLaneInboxPrefs.$inferSelect;
+
 // ─── Manager Coaching Mode (Task #301) ──────────────────────────────────────
 // Manager-authored coaching notes tied to a specific Coaching Card item
 // (account at risk / play-not-run / flagged call / response-time outlier /

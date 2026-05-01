@@ -41,6 +41,9 @@ interface TodayQueueItem {
   deepLink: string;
   customerName: string | null;
   ageMinutes: number | null;
+  // Task #873 — populated for LWQ rows so the row can deep-link into
+  // Lane Story without recomputing the signature client-side.
+  laneSignature?: string | null;
 }
 interface TodayQueueResponse {
   items: TodayQueueItem[];
@@ -343,6 +346,20 @@ function TodayRow(props: {
       </div>
 
       <div className="flex items-center gap-2 shrink-0">
+        {/* Task #873 — Lane Story deep-link. Only LWQ items carry a
+            recurring lane signature; spot/freight/quote sources do not. */}
+        {item.source === "lwq" && item.laneSignature && (
+          <Button
+            size="sm"
+            variant="ghost"
+            asChild
+            data-testid={`button-lane-story-${item.id}`}
+          >
+            <a href={`/lanes/story/${encodeURIComponent(item.laneSignature)}`}>
+              Lane Story
+            </a>
+          </Button>
+        )}
         <Button size="sm" onClick={onActivate} data-testid={`button-action-${item.id}`}>
           {item.primaryActionLabel}
           <ChevronRight className="h-4 w-4 ml-1" />

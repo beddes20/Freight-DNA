@@ -28,8 +28,11 @@ import {
   quoteOpportunities,
   quoteCustomers,
   quoteReps,
+  users,
 } from "@shared/schema";
 import { and, desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
+import { laneSig } from "../laneCrossLinkService";
+import { groupLaneInboxBySig, type FlatInboxRowLike } from "../services/laneStory";
 
 /** Surface tag — drives both the deep-link target and the filter chips. */
 type Surface = "available_freight" | "lane_work_queue" | "customer_quotes" | "carrier_hub";
@@ -49,6 +52,15 @@ export interface LaneInboxRow {
   lane: string | null;
   /** Optional row id used by the client to dedupe / track keys. */
   refId: string | null;
+  // Task #873 — raw geography lets the client (and the group-by-lane mode)
+  // compute the canonical lane signature without re-querying.
+  origin: string | null;
+  originState: string | null;
+  destination: string | null;
+  destinationState: string | null;
+  equipmentType: string | null;
+  /** Canonical lane signature (origin|state|dest|state|equip lowercased). */
+  laneSignature: string | null;
 }
 
 const PER_SURFACE_LIMIT = 50;
@@ -117,6 +129,7 @@ export function registerLaneInboxRoutes(app: Express): void {
             originState: freightOpportunities.originState,
             destination: freightOpportunities.destination,
             destinationState: freightOpportunities.destinationState,
+            equipmentType: freightOpportunities.equipmentType,
             status: freightOpportunities.status,
             payload: freightOpportunityAudit.payload,
           })
@@ -150,6 +163,12 @@ export function registerLaneInboxRoutes(app: Express): void {
             deepLink: "/available-freight",
             lane,
             refId: r.opportunityId,
+            origin: r.origin ?? null,
+            originState: r.originState ?? null,
+            destination: r.destination ?? null,
+            destinationState: r.destinationState ?? null,
+            equipmentType: r.equipmentType ?? null,
+            laneSignature: laneSig(r.origin, r.originState, r.destination, r.destinationState, r.equipmentType),
           });
         }
       }
@@ -184,6 +203,7 @@ export function registerLaneInboxRoutes(app: Express): void {
             originState: recurringLanes.originState,
             destination: recurringLanes.destination,
             destinationState: recurringLanes.destinationState,
+            equipmentType: recurringLanes.equipmentType,
           })
           .from(carrierOutreachLogs)
           .leftJoin(recurringLanes, eq(carrierOutreachLogs.laneId, recurringLanes.id))
@@ -241,6 +261,12 @@ export function registerLaneInboxRoutes(app: Express): void {
               : "/lanes/work-queue",
             lane,
             refId: r.laneId,
+            origin: r.origin ?? null,
+            originState: r.originState ?? null,
+            destination: r.destination ?? null,
+            destinationState: r.destinationState ?? null,
+            equipmentType: r.equipmentType ?? null,
+            laneSignature: laneSig(r.origin, r.originState, r.destination, r.destinationState, r.equipmentType),
           });
         }
       }
@@ -276,6 +302,7 @@ export function registerLaneInboxRoutes(app: Express): void {
             originState: quoteOpportunities.originState,
             destCity: quoteOpportunities.destCity,
             destState: quoteOpportunities.destState,
+            equipment: quoteOpportunities.equipment,
             outcomeStatus: quoteOpportunities.outcomeStatus,
             customerName: quoteCustomers.name,
           })
@@ -304,6 +331,12 @@ export function registerLaneInboxRoutes(app: Express): void {
             deepLink: "/customer-quotes",
             lane,
             refId: r.quoteId,
+            origin: r.originCity ?? null,
+            originState: r.originState ?? null,
+            destination: r.destCity ?? null,
+            destinationState: r.destState ?? null,
+            equipmentType: r.equipment ?? null,
+            laneSignature: laneSig(r.originCity, r.originState, r.destCity, r.destState, r.equipment),
           });
         }
       }
@@ -311,6 +344,67 @@ export function registerLaneInboxRoutes(app: Express): void {
       // Final merge: newest-first across surfaces, capped at RESPONSE_LIMIT.
       rows.sort((a, b) => (a.occurredAt < b.occurredAt ? 1 : -1));
       const trimmed = rows.slice(0, RESPONSE_LIMIT);
+
+      // Task #873 — `?group=lane` mode collapses the flat feed into one row
+      // per canonical lane signature, keeping only the last 3 events per
+      // lane. Rows that lack lane parts are dropped (no story home).
+      const groupMode = qStr(req.query.group);
+      if (groupMode === "lane") {
+        // Hydrate per-signature lane meta (companyName, ownerName) from
+        // recurring_lanes for the lanes that show up in this batch.
+        const sigSet = new Set<string>();
+        for (const r of trimmed) {
+          if (r.laneSignature) sigSet.add(r.laneSignature);
+        }
+        const laneMeta = new Map<string, { laneId: string | null; companyName: string | null; ownerName: string | null }>();
+        if (sigSet.size > 0) {
+          const laneRows = await db
+            .select({
+              id: recurringLanes.id,
+              origin: recurringLanes.origin,
+              originState: recurringLanes.originState,
+              destination: recurringLanes.destination,
+              destinationState: recurringLanes.destinationState,
+              equipmentType: recurringLanes.equipmentType,
+              companyName: recurringLanes.companyName,
+              ownerUserId: recurringLanes.ownerUserId,
+              ownerName: users.name,
+            })
+            .from(recurringLanes)
+            .leftJoin(users, eq(recurringLanes.ownerUserId, users.id))
+            .where(eq(recurringLanes.orgId, orgId));
+          for (const l of laneRows as any[]) {
+            const sig = laneSig(l.origin, l.originState, l.destination, l.destinationState, l.equipmentType);
+            if (!sigSet.has(sig)) continue;
+            // First match wins — duplicate signatures are rare.
+            if (!laneMeta.has(sig)) {
+              laneMeta.set(sig, {
+                laneId: l.id,
+                companyName: l.companyName ?? null,
+                ownerName: l.ownerName ?? null,
+              });
+            }
+          }
+        }
+        const flat: FlatInboxRowLike[] = trimmed.map((r) => ({
+          id: r.id,
+          surface: r.surface,
+          kind: r.kind,
+          title: r.title,
+          subtitle: r.subtitle,
+          occurredAt: r.occurredAt,
+          deepLink: r.deepLink,
+          lane: r.lane,
+          refId: r.refId,
+          origin: r.origin,
+          originState: r.originState,
+          destination: r.destination,
+          destinationState: r.destinationState,
+          equipmentType: r.equipmentType,
+        }));
+        const groups = groupLaneInboxBySig(flat, laneMeta, 3);
+        return res.json({ groups, scope, surface: surfaceWanted ?? null, group: "lane" });
+      }
 
       res.json({ rows: trimmed, scope, surface: surfaceWanted ?? null });
     } catch (err) {

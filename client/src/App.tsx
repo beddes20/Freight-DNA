@@ -80,6 +80,7 @@ import { PortletErrorBoundary } from "@/components/portlet-error-boundary";
 import LaneWorkQueuePage from "@/pages/lane-work-queue";
 import LaneInboxPage from "@/pages/lane-inbox";
 import LeakConsolePage from "@/pages/leak-console";
+import LaneStoryPage from "@/pages/lane-story";
 import CallsPage from "@/pages/calls";
 import TodayQueuePage from "@/pages/today";
 import MyProcurementPage from "@/pages/my-procurement";
@@ -258,6 +259,7 @@ function Router() {
         </PortletErrorBoundary>
       </Route>
       <Route path="/lanes/work-queue" component={LaneWorkQueuePage} />
+      <Route path="/lanes/story/:laneSignature" component={LaneStoryPage} />
       <Route path="/lane-inbox" component={LaneInboxPage} />
       <Route path="/leak-console" component={LeakConsolePage} />
       <Route path="/calls" component={CallsPage} />

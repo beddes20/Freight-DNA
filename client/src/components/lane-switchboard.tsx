@@ -280,26 +280,50 @@ export function LaneSwitchboard({ open, onOpenChange }: LaneSwitchboardProps) {
             empty={null}
             testId="column-switchboard-recurring"
           >
-            {data?.recurring.map((r) => (
-              <Row
-                key={r.laneId}
-                onClick={() => goLwq(r.laneId)}
-                testId={`row-switchboard-lwq-${r.laneId}`}
-                primary={`${formatCity(r.origin)}${r.originState ? `, ${r.originState}` : ""} → ${formatCity(r.destination)}${r.destinationState ? `, ${r.destinationState}` : ""}`}
-                secondary={r.companyName ?? "Unassigned company"}
-                tertiary={[
-                  r.equipmentType ?? null,
-                  r.ownerName ? `Owner: ${r.ownerName}` : "Unowned",
-                  r.carriersContactedCount != null ? `${r.carriersContactedCount} carriers contacted` : null,
-                  // Last touch — null until a carrier outreach has been sent;
-                  // "No outreach yet" reads better than a missing slot when
-                  // the lane is brand new.
-                  r.lastTouchAt
-                    ? `Last touch ${new Date(r.lastTouchAt).toLocaleDateString()}`
-                    : "No outreach yet",
-                ].filter(Boolean).join(" · ")}
-              />
-            ))}
+            {data?.recurring.map((r) => {
+              // Task #873 — recurring rows in Switchboard get a "Lane Story"
+              // sideAction. The signature mirrors server-side laneSig.
+              const sig = [
+                (r.origin ?? "").trim().toLowerCase(),
+                (r.originState ?? "").trim().toLowerCase(),
+                (r.destination ?? "").trim().toLowerCase(),
+                (r.destinationState ?? "").trim().toLowerCase(),
+                (r.equipmentType ?? "").trim().toLowerCase(),
+              ].join("|");
+              return (
+                <Row
+                  key={r.laneId}
+                  onClick={() => goLwq(r.laneId)}
+                  testId={`row-switchboard-lwq-${r.laneId}`}
+                  primary={`${formatCity(r.origin)}${r.originState ? `, ${r.originState}` : ""} → ${formatCity(r.destination)}${r.destinationState ? `, ${r.destinationState}` : ""}`}
+                  secondary={r.companyName ?? "Unassigned company"}
+                  tertiary={[
+                    r.equipmentType ?? null,
+                    r.ownerName ? `Owner: ${r.ownerName}` : "Unowned",
+                    r.carriersContactedCount != null ? `${r.carriersContactedCount} carriers contacted` : null,
+                    // Last touch — null until a carrier outreach has been sent;
+                    // "No outreach yet" reads better than a missing slot when
+                    // the lane is brand new.
+                    r.lastTouchAt
+                      ? `Last touch ${new Date(r.lastTouchAt).toLocaleDateString()}`
+                      : "No outreach yet",
+                  ].filter(Boolean).join(" · ")}
+                  sideAction={
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onOpenChange(false);
+                        navigate(`/lanes/story/${encodeURIComponent(sig)}`);
+                      }}
+                      className="text-[11px] text-primary hover:underline px-2 py-1 rounded hover-elevate"
+                      data-testid={`link-switchboard-lane-story-${r.laneId}`}
+                    >
+                      Lane Story →
+                    </button>
+                  }
+                />
+              );
+            })}
           </Column>
 
           <Column
@@ -398,25 +422,39 @@ function Column({
 }
 
 function Row({
-  primary, secondary, tertiary, onClick, testId,
+  primary, secondary, tertiary, onClick, testId, sideAction,
 }: {
   primary: string;
   secondary: string;
   tertiary: string;
   onClick: () => void;
   testId: string;
+  // Task #873 — optional inline action rendered on the right side
+  // (e.g., "Open Lane Story" link). Wrapped in a stopPropagation div so
+  // clicking it doesn't also fire the row's primary onClick.
+  sideAction?: React.ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      data-testid={testId}
-      className="w-full text-left px-3 py-2 hover:bg-accent focus:bg-accent focus:outline-none transition-colors"
-    >
-      <div className="text-sm font-medium text-foreground truncate">{primary}</div>
-      <div className="text-xs text-muted-foreground truncate">{secondary}</div>
-      {tertiary && <div className="text-[11px] text-muted-foreground/80 truncate mt-0.5">{tertiary}</div>}
-    </button>
+    <div className="relative group">
+      <button
+        type="button"
+        onClick={onClick}
+        data-testid={testId}
+        className="w-full text-left px-3 py-2 pr-24 hover:bg-accent focus:bg-accent focus:outline-none transition-colors"
+      >
+        <div className="text-sm font-medium text-foreground truncate">{primary}</div>
+        <div className="text-xs text-muted-foreground truncate">{secondary}</div>
+        {tertiary && <div className="text-[11px] text-muted-foreground/80 truncate mt-0.5">{tertiary}</div>}
+      </button>
+      {sideAction && (
+        <div
+          className="absolute right-2 top-1/2 -translate-y-1/2"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {sideAction}
+        </div>
+      )}
+    </div>
   );
 }
 

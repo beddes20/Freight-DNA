@@ -270,6 +270,9 @@ import {
   userFreightCockpitPrefs,
   type UserFreightCockpitPrefs,
   type InsertUserFreightCockpitPrefs,
+  userLaneInboxPrefs,
+  type UserLaneInboxPrefs,
+  type InsertUserLaneInboxPrefs,
   nbaCardEvents,
   type NbaCardEvent,
   type InsertNbaCardEvent,
@@ -1451,6 +1454,8 @@ getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined>;
   deleteFreightOpportunitySavedView(id: string, userId: string, orgId?: string): Promise<boolean>;
   getUserFreightCockpitPrefs(userId: string): Promise<UserFreightCockpitPrefs | undefined>;
   upsertUserFreightCockpitPrefs(data: InsertUserFreightCockpitPrefs): Promise<UserFreightCockpitPrefs>;
+  getUserLaneInboxPrefs(userId: string): Promise<UserLaneInboxPrefs | undefined>;
+  upsertUserLaneInboxPrefs(data: InsertUserLaneInboxPrefs): Promise<UserLaneInboxPrefs>;
 
   // ── Capacity Matches (Task #844) ───────────────────────────────────────────
   insertTruckPostings(rows: InsertTruckPosting[]): Promise<TruckPosting[]>;
@@ -9786,6 +9791,31 @@ export class DatabaseStorage implements IStorage {
           grouping: data.grouping ?? "none",
           sort: data.sort ?? "urgency",
           autopilotMutedUntil: data.autopilotMutedUntil ?? null,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return row;
+  }
+
+  // Lane Inbox per-user prefs (Task #873) — backs the "Group by Lane" toggle.
+  async getUserLaneInboxPrefs(userId: string): Promise<UserLaneInboxPrefs | undefined> {
+    const [row] = await db
+      .select()
+      .from(userLaneInboxPrefs)
+      .where(eq(userLaneInboxPrefs.userId, userId))
+      .limit(1);
+    return row;
+  }
+
+  async upsertUserLaneInboxPrefs(data: InsertUserLaneInboxPrefs): Promise<UserLaneInboxPrefs> {
+    const [row] = await db
+      .insert(userLaneInboxPrefs)
+      .values(data)
+      .onConflictDoUpdate({
+        target: userLaneInboxPrefs.userId,
+        set: {
+          groupByLane: data.groupByLane ?? false,
           updatedAt: new Date(),
         },
       })

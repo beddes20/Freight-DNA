@@ -86,6 +86,7 @@ import {
   useSharedLaneKeyboard,
   useLaneCheatSheetRows,
 } from "@/hooks/useSharedLaneKeyboard";
+import { laneStoryHref } from "@/lib/laneSignature";
 import { AccountSharingDialog } from "@/components/lane-work-queue/AccountSharingDialog";
 import { SendReplyAuditPanel } from "@/components/lane-work-queue/SendReplyAuditPanel";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -754,7 +755,15 @@ function LaneRow({
           )}
           {/* Lane label + badges */}
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-semibold text-foreground">{laneLabel(item)}</span>
+            <Link href={laneStoryHref(item.origin, item.originState, item.destination, item.destinationState, item.equipmentType)}>
+              <span
+                className="text-sm font-semibold text-foreground hover-elevate cursor-pointer rounded px-1 -mx-1"
+                title="Open Lane Story"
+                data-testid={`link-lane-story-${item.laneId}`}
+              >
+                {laneLabel(item)}
+              </span>
+            </Link>
             {/* Task #635 — Live AF opportunities chip; deep-links into the
                 Available Freight cockpit filtered to this lane signature. */}
             {item.liveOpps && item.liveOpps.count > 0 && (

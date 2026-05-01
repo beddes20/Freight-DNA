@@ -6,17 +6,20 @@
 // option A — when the global `useLiveSync` invalidates a topic key, this
 // page also invalidates its own list so new events appear without refresh.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { EmptyState } from "@/components/ui/empty-state";
 import { CrossTabBreadcrumb, appendCrossTabFromParam } from "@/components/freight/cross-tab-breadcrumb";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
   Inbox,
   Truck,
@@ -24,6 +27,7 @@ import {
   FileBarChart2,
   Package,
   ExternalLink,
+  Route as RouteIcon,
 } from "lucide-react";
 
 type Surface =
@@ -42,12 +46,36 @@ interface LaneInboxRow {
   deepLink: string;
   lane: string | null;
   refId: string | null;
+  laneSignature: string | null;
+}
+
+interface LaneInboxGroup {
+  laneSignature: string;
+  lane: string;
+  laneId: string | null;
+  companyName: string | null;
+  ownerName: string | null;
+  events: Array<{
+    id: string;
+    surface: Surface;
+    kind: string;
+    title: string;
+    subtitle: string;
+    occurredAt: string;
+    deepLink: string;
+    refId: string | null;
+  }>;
+  mostRecentAt: string;
+  totalEvents: number;
+  storyHref: string;
 }
 
 interface LaneInboxResponse {
-  rows: LaneInboxRow[];
+  rows?: LaneInboxRow[];
+  groups?: LaneInboxGroup[];
   scope: string;
   surface: Surface | null;
+  group?: "lane";
 }
 
 const SURFACE_META: Record<Surface, { label: string; icon: React.ComponentType<{ className?: string }>; tone: string }> = {
@@ -87,13 +115,43 @@ const formatRelative = (iso: string): string => {
 export default function LaneInboxPage() {
   const [scope, setScope] = useState<"all" | "mine">("all");
   const [surface, setSurface] = useState<Surface | "all">("all");
+  const [groupByLane, setGroupByLane] = useState<boolean>(false);
+
+  // Hydrate the toggle from per-user prefs on mount so the choice survives
+  // page reloads and follows the rep across devices. We deliberately don't
+  // wait for the prefs query before rendering the feed — the toggle just
+  // flips once the prefs land.
+  const { data: prefs } = useQuery<{ groupByLane: boolean }>({
+    queryKey: ["/api/users/me/lane-inbox-prefs"],
+    queryFn: async () => {
+      const res = await fetch("/api/users/me/lane-inbox-prefs", { credentials: "include" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    if (prefs && typeof prefs.groupByLane === "boolean") setGroupByLane(prefs.groupByLane);
+  }, [prefs?.groupByLane]);
+
+  const savePrefs = useMutation({
+    mutationFn: async (next: boolean) => {
+      const res = await apiRequest("PATCH", "/api/users/me/lane-inbox-prefs", { groupByLane: next });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users/me/lane-inbox-prefs"] });
+    },
+  });
 
   const queryString = useMemo(() => {
     const params = new URLSearchParams();
     if (scope === "mine") params.set("scope", "mine");
     if (surface !== "all") params.set("surface", surface);
+    if (groupByLane) params.set("group", "lane");
     return params.toString();
-  }, [scope, surface]);
+  }, [scope, surface, groupByLane]);
 
   const { data, isLoading, isError, refetch } = useQuery<LaneInboxResponse>({
     // The query key is split so the global useLiveSync hook can invalidate
@@ -112,6 +170,7 @@ export default function LaneInboxPage() {
   });
 
   const rows = data?.rows ?? [];
+  const groups = data?.groups ?? [];
 
   return (
     <div className="p-4 sm:p-6 max-w-5xl mx-auto space-y-4" data-testid="page-lane-inbox">
@@ -143,6 +202,21 @@ export default function LaneInboxPage() {
               {opt.label}
             </Button>
           ))}
+          <div className="flex items-center gap-2 ml-auto">
+            <Switch
+              id="group-by-lane"
+              checked={groupByLane}
+              onCheckedChange={(next) => {
+                setGroupByLane(next);
+                savePrefs.mutate(next);
+              }}
+              data-testid="switch-group-by-lane"
+            />
+            <Label htmlFor="group-by-lane" className="text-xs cursor-pointer flex items-center gap-1">
+              <RouteIcon className="h-3.5 w-3.5" />
+              Group by Lane
+            </Label>
+          </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs uppercase tracking-wider text-muted-foreground mr-1">Surface</span>
@@ -182,7 +256,7 @@ export default function LaneInboxPage() {
             onRetry={() => refetch()}
           />
         )}
-        {!isLoading && !isError && rows.length === 0 && (
+        {!isLoading && !isError && !groupByLane && rows.length === 0 && (
           <Card>
             <CardContent className="p-0">
               <EmptyState
@@ -194,7 +268,65 @@ export default function LaneInboxPage() {
             </CardContent>
           </Card>
         )}
-        {rows.map((row) => {
+        {!isLoading && !isError && groupByLane && groups.length === 0 && (
+          <Card>
+            <CardContent className="p-0">
+              <EmptyState
+                icon={RouteIcon}
+                title="No lane groups yet"
+                description="Once events fire on recurring lanes, they'll roll up here grouped by lane."
+                testId="empty-lane-inbox-groups"
+              />
+            </CardContent>
+          </Card>
+        )}
+        {groupByLane && groups.map((g) => (
+          <Card key={g.laneSignature} data-testid={`row-group-${g.laneSignature}`}>
+            <CardContent className="p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <Link href={g.storyHref}>
+                    <span
+                      className="font-medium text-sm hover-elevate cursor-pointer rounded px-1 -mx-1 inline-flex items-center gap-1"
+                      data-testid={`link-story-${g.laneSignature}`}
+                    >
+                      <RouteIcon className="h-3.5 w-3.5" />
+                      {g.lane}
+                    </span>
+                  </Link>
+                  <div className="text-xs text-muted-foreground truncate">
+                    {[g.companyName, g.ownerName].filter(Boolean).join(" • ") || "—"}
+                  </div>
+                </div>
+                <Badge variant="outline" className="text-[10px] uppercase tracking-wider shrink-0">
+                  {g.totalEvents} event{g.totalEvents === 1 ? "" : "s"}
+                </Badge>
+              </div>
+              <div className="space-y-1">
+                {g.events.map((evt) => {
+                  const meta = SURFACE_META[evt.surface];
+                  const Icon = meta.icon;
+                  return (
+                    <Link
+                      key={evt.id}
+                      href={appendCrossTabFromParam(evt.deepLink, "lane-inbox", typeof window !== "undefined" ? window.location.search : "")}
+                    >
+                      <div
+                        className="flex items-center gap-2 text-xs hover-elevate cursor-pointer rounded px-2 py-1"
+                        data-testid={`row-group-event-${evt.id}`}
+                      >
+                        <Icon className="h-3 w-3 shrink-0" />
+                        <span className="truncate flex-1">{evt.title}</span>
+                        <span className="text-muted-foreground shrink-0">{formatRelative(evt.occurredAt)}</span>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+        {!groupByLane && rows.map((row) => {
           const meta = SURFACE_META[row.surface];
           const Icon = meta.icon;
           return (

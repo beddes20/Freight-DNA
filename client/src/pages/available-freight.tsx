@@ -42,6 +42,7 @@ import type { FreightOpportunity } from "@shared/schema";
 import { applyCockpitFilters, type CockpitFilterDiagnostics } from "@/lib/cockpitFilters";
 import { resolveUserIdentity, isRowOwnedByUser } from "@shared/cockpitOwnership";
 import { todayIsoInOrgTz, ORG_LOCAL_TIMEZONE } from "@shared/orgLocalDate";
+import { laneStoryHref } from "@/lib/laneSignature";
 import { CarrierReasonsPopover } from "@/components/CarrierReasonsPopover";
 import { AutoPilotPreviewDrawer } from "@/components/freight/auto-pilot-preview-drawer";
 import { LwqContextChip, type LwqContextChipData } from "@/components/freight/lane-cross-link-chip";
@@ -2930,6 +2931,16 @@ function CockpitRowView(props: {
                 data-testid={`menu-make-recurring-${opp.id}`}
               >
                 Make this recurring
+              </DropdownMenuItem>
+              {/* Task #873 — Open Lane Story for this AF row. Mirrors the
+                  signature contract used server-side (laneSig). */}
+              <DropdownMenuItem
+                onClick={() => rowNavigate(
+                  laneStoryHref(opp.origin, opp.originState, opp.destination, opp.destinationState, opp.equipmentType),
+                )}
+                data-testid={`menu-open-lane-story-${opp.id}`}
+              >
+                Open Lane Story
               </DropdownMenuItem>
               {item.customer && onToggleAutoPilot && (
                 <DropdownMenuItem onClick={() => onToggleAutoPilot()} data-testid={`menu-toggle-autopilot-${opp.id}`}>

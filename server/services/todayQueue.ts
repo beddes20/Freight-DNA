@@ -23,6 +23,7 @@ import {
 } from "@shared/schema";
 import { computeCockpitUrgency } from "../routes/freightOpportunityCockpit";
 import { getActionQueue } from "./customerQuotes";
+import { laneSig } from "../laneCrossLinkService";
 
 export type TodayQueueAction =
   | "send_wave"
@@ -55,6 +56,12 @@ export interface TodayQueueItem {
    * receive the floor and rank on the same scale as the other sources.
    */
   isHotReply?: boolean;
+  /**
+   * Task #873 — canonical lane signature when this row maps to a
+   * recurring lane (today only set on `lwq` rows). Powers the
+   * "Open Lane Story" deep link in the Today queue.
+   */
+  laneSignature?: string;
 }
 
 export interface TodayQueueResponse {
@@ -220,6 +227,9 @@ async function fetchLwqItems(ctx: SourceContext): Promise<TodayQueueItem[]> {
         deepLink: `/lanes/work-queue?laneId=${encodeURIComponent(lane.laneId)}`,
         customerName: lane.companyName,
         ageMinutes: ageMin,
+        laneSignature: laneSig(
+          lane.origin, lane.originState, lane.destination, lane.destinationState, lane.equipmentType,
+        ),
       };
     });
   } catch (err) {
