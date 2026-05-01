@@ -595,7 +595,17 @@ export default function ConversationsPage() {
   const { data: quoteData } = useQuery<ThreadsResponse>({
     queryKey: ["/api/internal/conversations", "quote-request-count", audience, dateRangeKey],
     queryFn: async () => {
-      const p = new URLSearchParams({ signal: "quote_request", waitingState: "waiting_on_us", limit: "1" });
+      // Task #862 (QA polish) — count query MUST mirror the visible-list
+      // filter set. The list (buildParams, bucket === "quote_requests")
+      // sets only `signal=quote_request` and intentionally does NOT add
+      // `waitingState=waiting_on_us` — Quote requests is "every thread
+      // where the customer is asking for pricing", not "open quote
+      // requests waiting on us." The QA pass surfaced a 6× drift between
+      // the badge (waiting_on_us only: ~292) and the visible list (all
+      // signal=quote_request: ~1,831). Drop the waiting-state filter so
+      // the badge matches what the rep can actually see when they open
+      // the bucket.
+      const p = new URLSearchParams({ signal: "quote_request", limit: "1" });
       if (audience !== "all") p.set("audience", audience);
       applyDateRange(p);
       const res = await fetch(`/api/internal/conversations?${p.toString()}`);

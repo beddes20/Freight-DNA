@@ -880,6 +880,30 @@ assert(
   "Sort must read lastEmailAt ?? lastIncomingAt ?? lastOutgoingAt so the row order matches what the row labels show.",
 );
 
+// Task #862 (QA polish) — the Quote requests sidebar count query MUST mirror
+// the visible-list filter set. The list (buildParams, bucket === "quote_requests")
+// sets only `signal=quote_request` and intentionally does NOT add
+// `waitingState=waiting_on_us`, so the count query must do the same. The QA
+// pass surfaced a 6× drift between the badge (waiting_on_us only) and the
+// visible list (all signal=quote_request). This fence stops the
+// `waiting_on_us` filter from creeping back into the count call.
+{
+  // Match only the literal URLSearchParams({...}) argument inside the
+  // quote-request-count query — don't pull in surrounding comments
+  // (which legitimately mention waitingState as documentation).
+  const quoteCountQueryBlock = conversationsPageSrc.match(
+    /quote-request-count[\s\S]*?new URLSearchParams\(\s*(\{[^}]*\})\s*\)/,
+  );
+  const quoteCountArgs = quoteCountQueryBlock?.[1] ?? "";
+  assert(
+    "pages/conversations.tsx — quote-request-count query mirrors the list filter (signal only, no waitingState)",
+    !!quoteCountQueryBlock && !/waitingState/.test(quoteCountArgs),
+    quoteCountQueryBlock
+      ? "quote-request-count query has a `waitingState` filter that the visible list does NOT apply — the badge will diverge from what the rep sees in the bucket. Drop the waitingState param so the count matches the list (Task #862 polish)."
+      : "Could not locate quote-request-count query block in conversations.tsx — guardrail layout drifted.",
+  );
+}
+
 const waitingStateSrc = readFile("server/services/conversationWaitingStateService.ts");
 assert(
   "conversationWaitingStateService — applyMessageToThread anchors timestamps to message.providerSentAt",
