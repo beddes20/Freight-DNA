@@ -38,7 +38,9 @@ import {
   ChevronsUpDown, Check,
 } from "lucide-react";
 import type { FreightOpportunity } from "@shared/schema";
-import { applyCockpitFilters } from "@/lib/cockpitFilters";
+import { applyCockpitFilters, type CockpitFilterDiagnostics } from "@/lib/cockpitFilters";
+import { resolveUserIdentity, isRowOwnedByUser } from "@shared/cockpitOwnership";
+import { todayIsoInOrgTz, ORG_LOCAL_TIMEZONE } from "@shared/orgLocalDate";
 import { CarrierReasonsPopover } from "@/components/CarrierReasonsPopover";
 import { AutoPilotPreviewDrawer } from "@/components/freight/auto-pilot-preview-drawer";
 import { LwqContextChip, type LwqContextChipData } from "@/components/freight/lane-cross-link-chip";
@@ -101,6 +103,12 @@ interface CockpitItem {
     autoPilotEnabled: boolean;
   } | null;
   owner: { id: string; name: string } | null;
+  /** Task #875 — server-resolved owner attribution envelope. Includes
+   *  every owner-shape id (owner / delegated / created / approved) and
+   *  their lowercased emails so the client `isMine` predicate matches
+   *  the same set of rows the server KPIs counted. May be absent on
+   *  legacy/cached payloads — callers must tolerate `null`. */
+  ownership?: { ids: string[]; emails: string[] } | null;
   sla: { level: "green" | "yellow" | "red" | null; ageMinutes: number | null };
   laneScore: number | null;
   /** Task #635 — joined from server in the same payload (no per-row N+1). */
@@ -610,7 +618,12 @@ export default function AvailableFreightPage() {
     if (typeof f.status === "string") setStatusFilter(f.status);
   }, [activeViewId, savedViews]);
 
-  const { data: currentUser } = useQuery<{ id: string } | null>({
+  // Task #875 — also pull `username` (which is the user's email in this
+  // app — see server/auth.ts where Clerk emails are written to
+  // users.username). The shared `isRowOwnedByUser` predicate matches by
+  // id OR email, so an opp whose ownership was last stamped with a username
+  // (e.g. legacy/imported rows) still maps back to the current user.
+  const { data: currentUser } = useQuery<{ id: string; username?: string | null; email?: string | null } | null>({
     queryKey: ["/api/auth/me"],
   });
 
@@ -816,11 +829,18 @@ export default function AvailableFreightPage() {
   // displayedFeed) so reps still hear about new carrier replies the instant
   // the refetch lands, even if the visible list is paused mid-interaction.
   const replyTotalRef = useRef<number | null>(null);
+  // Task #875 — resolve identity once per render so the "mine" predicate
+  // here and the one inside `applyCockpitFilters` agree on every owner-
+  // shape attribution (id, delegated id, creator, approver, email/username).
+  const currentIdentity = useMemo(
+    () => resolveUserIdentity(currentUser ?? null),
+    [currentUser?.id, currentUser?.username, currentUser?.email],
+  );
   useEffect(() => {
     if (!serverFeed) return;
     const sItems = serverFeed.items;
-    const myItems = currentUser?.id
-      ? sItems.filter(it => it.owner?.id === currentUser.id)
+    const myItems = currentIdentity
+      ? sItems.filter(it => isRowOwnedByUser(it.ownership ?? null, currentIdentity, it.owner?.id ?? null))
       : [];
     const total = myItems.reduce((a, it) => a + (it.coverage?.responded ?? 0), 0);
     if (replyTotalRef.current !== null && total > replyTotalRef.current) {
@@ -831,7 +851,7 @@ export default function AvailableFreightPage() {
       });
     }
     replyTotalRef.current = total;
-  }, [serverFeed, currentUser?.id, toast]);
+  }, [serverFeed, currentIdentity, toast]);
 
   const activeView = activeViewId ? savedViews.find(v => v.id === activeViewId) : null;
   const viewFilters = (activeView?.filters ?? {}) as {
@@ -843,10 +863,87 @@ export default function AvailableFreightPage() {
     statuses?: string[];
   };
 
-  const filtered = useMemo(
-    () => applyCockpitFilters(items, search, viewFilters, currentUser?.id ?? null, Date.now()),
-    [items, search, viewFilters, currentUser?.id],
-  );
+  // Task #875 — full reset for the saved-view chip. Just toggling
+  // `activeViewId` off leaves the state mutated by the view-activation
+  // effect (search / companyFilter / statusFilter) sticky, so reps who
+  // hit "Switch to default view" from the empty-state chip would still
+  // see the same constrained queue. Also revert pickupScope to its
+  // default so a "My freight today" view that nudged scope can't lock
+  // the queue down after dismissal.
+  const clearActiveView = useCallback(() => {
+    setActiveViewId(null);
+    setSearch("");
+    setCompanyFilter("all");
+    setStatusFilter("active");
+    setPickupScope("recent");
+  }, []);
+
+  // Task #875 — `?debug=cockpit` opens a non-production diagnostic pane
+  // that prints the per-stage drop counts, the resolved current-user
+  // identity, the org-local "today" anchor, and (further below) the side-
+  // by-side counts of "KPI strip 'mine' total" vs "table 'mine' total".
+  const cockpitDebugEnabled = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return new URL(window.location.href).searchParams.get("debug") === "cockpit";
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const filtered = useMemo(() => {
+    const diagnostics: CockpitFilterDiagnostics | undefined = cockpitDebugEnabled
+      ? { enabled: true, stages: [] }
+      : undefined;
+    const result = applyCockpitFilters(
+      items,
+      search,
+      viewFilters,
+      currentIdentity,
+      Date.now(),
+      diagnostics,
+    );
+    if (cockpitDebugEnabled && diagnostics) {
+      const todayIso = todayIsoInOrgTz();
+      const mineCountServer = currentIdentity
+        ? items.filter((it) =>
+            isRowOwnedByUser(it.ownership ?? null, currentIdentity, it.owner?.id ?? null),
+          ).length
+        : 0;
+      // eslint-disable-next-line no-console
+      console.groupCollapsed(
+        `[cockpit] filter pipeline — ${items.length} → ${result.length}`,
+      );
+      // eslint-disable-next-line no-console
+      console.log("identity", currentIdentity);
+      // eslint-disable-next-line no-console
+      console.log("timezone", ORG_LOCAL_TIMEZONE, "today", todayIso);
+      // eslint-disable-next-line no-console
+      console.log("activeViewFilters", viewFilters);
+      // eslint-disable-next-line no-console
+      console.log("activeViewId", activeViewId);
+      // eslint-disable-next-line no-console
+      console.table(diagnostics.stages.map(s => ({
+        stage: s.stage,
+        kept: s.kept,
+        dropped: s.droppedIds.length,
+      })));
+      for (const s of diagnostics.stages) {
+        if (s.droppedIds.length === 0) continue;
+        // eslint-disable-next-line no-console
+        console.log(`  dropped @ ${s.stage}:`, s.droppedIds);
+      }
+      // eslint-disable-next-line no-console
+      console.log("KPI 'mine' (server-stamped ownership over raw feed):", mineCountServer);
+      // eslint-disable-next-line no-console
+      console.log("Table 'mine' (after all client filters):", result.length);
+      // eslint-disable-next-line no-console
+      console.log("KPI strip payload:", kpis);
+      // eslint-disable-next-line no-console
+      console.groupEnd();
+    }
+    return result;
+  }, [items, search, viewFilters, currentIdentity, cockpitDebugEnabled, activeViewId, kpis]);
 
   // Task #651 — warm the shared lane-signal cache for every visible
   // opportunity. Per-lane react-query keys mean LWQ and Customer Quotes
@@ -1743,7 +1840,7 @@ export default function AvailableFreightPage() {
                       : ownerScopeActive
                         ? {
                             label: "Switch to default view",
-                            onClick: () => setActiveViewId(null),
+                            onClick: clearActiveView,
                             testId: "button-empty-clear-view",
                           }
                         : undefined,

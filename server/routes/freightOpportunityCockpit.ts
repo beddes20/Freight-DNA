@@ -43,11 +43,13 @@ import {
   daysSincePickup,
   shouldHideForPickup,
   isPickupScope,
+  isPickupWithinHours,
   DEFAULT_PICKUP_SCOPE,
   PICKUP_GRACE_DAYS_DEFAULT,
   type PickupScope,
   type PickupFreshness,
 } from "@shared/pickupFreshness";
+import { buildRowOwnership, type CockpitRowOwnership } from "@shared/cockpitOwnership";
 
 function orgId(req: Express.Request): string {
   return (req as any).session?.organizationId as string;
@@ -356,16 +358,43 @@ export async function buildCockpitRow(
     }
   }
 
-  let owner: User | null = null;
-  const ownerId = opp.delegatedToUserId ?? opp.ownerUserId ?? null;
-  if (ownerId) {
-    if (caches.users?.has(ownerId)) {
-      owner = caches.users.get(ownerId)!;
-    } else {
-      owner = (await storage.getUser(ownerId)) ?? null;
-      caches.users?.set(ownerId, owner);
+  // Task #875 — resolve every owner-shaped user id (owner, delegated,
+  // creator, approver) so the cockpit row's `ownership` envelope can
+  // express "this row belongs to any of these people". The KPI strip,
+  // server-side "mine" filters, and the client-side filter all share
+  // the same predicate, so a row delegated from Jared to a load-mover
+  // still counts as Jared's "My freight today".
+  const ownerCandidateIds = Array.from(new Set([
+    opp.ownerUserId,
+    opp.delegatedToUserId,
+    opp.createdById,
+    opp.approvedById,
+  ].filter((v): v is string => typeof v === "string" && v.length > 0)));
+  for (const id of ownerCandidateIds) {
+    if (!caches.users?.has(id)) {
+      const u = (await storage.getUser(id)) ?? null;
+      caches.users?.set(id, u);
     }
   }
+  const resolveCachedUser = (id: string): User | null =>
+    (caches.users?.get(id) ?? null);
+
+  // Avatar/name still come from the "primary" owner — delegated takes
+  // precedence so the LM sees their face on a delegated row, but the
+  // ownership envelope below carries every contributor.
+  let owner: User | null = null;
+  const primaryOwnerId = opp.delegatedToUserId ?? opp.ownerUserId ?? null;
+  if (primaryOwnerId) owner = resolveCachedUser(primaryOwnerId);
+
+  const ownership: CockpitRowOwnership = buildRowOwnership(
+    {
+      ownerUserId: opp.ownerUserId,
+      delegatedToUserId: opp.delegatedToUserId,
+      createdById: opp.createdById,
+      approvedById: opp.approvedById,
+    },
+    (id) => resolveCachedUser(id)?.username ?? null,
+  );
 
   // Suggested buy — best-effort. Pricing service errors must never break the
   // cockpit response so we swallow them and surface a null rate.
@@ -467,6 +496,10 @@ export async function buildCockpitRow(
       id: owner.id,
       name: owner.name?.trim() || owner.username,
     } : null,
+    // Task #875 — every owner-shaped attribution + their lowercased emails,
+    // used by the shared `isRowOwnedByUser` predicate on both server and
+    // client. The legacy `owner.id` above stays for backwards compat.
+    ownership,
     sla,
     laneScore: lane?.laneScore ?? null,
   };
@@ -695,10 +728,11 @@ export function registerFreightCockpitRoutes(app: Express) {
         sentAwaitingCarrier: items.filter(i => i.coverage.sent > 0 && i.coverage.responded === 0).length,
         atRiskPickup24h: items.filter(i => {
           if (closedStatuses.has(i.opportunity.status)) return false;
-          const t = i.opportunity.pickupWindowStart ? new Date(i.opportunity.pickupWindowStart).getTime() : NaN;
-          if (!Number.isFinite(t)) return false;
-          const hoursAway = (t - now.getTime()) / 3_600_000;
-          return hoursAway <= 24 && !i.coverage.covered;
+          if (i.coverage.covered) return false;
+          // Task #875 — anchor on org-local "today" so the KPI matches the
+          // client `pickupWithinHours: 24` predicate. Same-day pickups are
+          // always at-risk; past pickups never are.
+          return isPickupWithinHours(i.opportunity.pickupWindowStart, 24, todayIso);
         }).length,
         coveredToday: coveredTodayCount,
         avgFreshnessMinutes: (() => {

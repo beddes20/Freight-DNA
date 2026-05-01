@@ -1,3 +1,15 @@
+import {
+  isRowOwnedByUser,
+  resolveUserIdentity,
+  type CockpitRowOwnership,
+  type ResolvedUserIdentity,
+} from "@shared/cockpitOwnership";
+import {
+  isPickupWithinHours,
+  isPickupAfterHours,
+} from "@shared/pickupFreshness";
+import { todayIsoInOrgTz } from "@shared/orgLocalDate";
+
 export interface CockpitFilterItem {
   opportunity: {
     origin?: string | null;
@@ -11,6 +23,9 @@ export interface CockpitFilterItem {
   suggestedBuy: { confidence?: string | null } | null;
   freshnessMinutes: number | null;
   owner: { id: string; name?: string | null } | null;
+  // Task #875 — server stamps every owner-shaped attribution + their
+  // emails so the client predicate matches the KPI strip.
+  ownership?: CockpitRowOwnership | null;
 }
 
 export interface CockpitViewFilters {
@@ -22,17 +37,69 @@ export interface CockpitViewFilters {
   statuses?: string[];
 }
 
+// Task #875 — current-user identity used by the cockpit "mine" predicate.
+// Either pass a `ResolvedUserIdentity` (preferred) or a bare user id string
+// (legacy callers; will only match by id).
+export type CockpitCurrentUser =
+  | ResolvedUserIdentity
+  | string
+  | null
+  | undefined;
+
+function asIdentity(user: CockpitCurrentUser): ResolvedUserIdentity | null {
+  if (!user) return null;
+  if (typeof user === "string") {
+    return { id: user, emailLower: null, usernameLower: null };
+  }
+  return user;
+}
+
+export interface CockpitFilterDiagnostics {
+  // True when caller wants per-stage drop counts. Off by default — only
+  // the `?debug=cockpit` debug pane on Available Freight enables it.
+  enabled: boolean;
+  // Mutated in-place by `applyCockpitFilters`. Each entry is `{stage, kept,
+  // droppedIds}` so the debug pane can render the funnel and the ids that
+  // each stage rejected.
+  stages: Array<{ stage: string; kept: number; droppedIds: string[] }>;
+}
+
 export function applyCockpitFilters<T extends CockpitFilterItem>(
   items: T[],
   search: string,
   viewFilters: CockpitViewFilters,
-  currentUserId: string | null,
+  currentUser: CockpitCurrentUser,
   now: number,
+  diagnostics?: CockpitFilterDiagnostics,
 ): T[] {
   const q = search.trim().toLowerCase();
-  return items.filter((it) => {
-    const opp = it.opportunity;
-    if (q) {
+  const identity = asIdentity(currentUser);
+  // Anchor "today" in the org's local timezone so the client predicate
+  // and the server KPI use the same day boundary (#875). `now` is still
+  // accepted for backwards compat but no longer participates in the
+  // pickup-window math — same-day pickups must always pass regardless of
+  // the time of day.
+  void now;
+  const todayIso = todayIsoInOrgTz();
+
+  const recordStage = (stage: string, kept: T[], dropped: T[]) => {
+    if (!diagnostics?.enabled) return;
+    diagnostics.stages.push({
+      stage,
+      kept: kept.length,
+      droppedIds: dropped.map((it) => idOf(it)),
+    });
+  };
+
+  // We split the filter into stages so the debug pane can attribute drops.
+  // The runtime is identical to the previous one-pass `.filter(...)` call.
+  let current: T[] = items;
+
+  if (q) {
+    const next: T[] = [];
+    const dropped: T[] = [];
+    for (const it of current) {
+      const opp = it.opportunity;
       const hay = [
         opp.origin ?? "",
         opp.destination ?? "",
@@ -41,34 +108,120 @@ export function applyCockpitFilters<T extends CockpitFilterItem>(
       ]
         .join(" ")
         .toLowerCase();
-      if (!hay.includes(q)) return false;
+      if (hay.includes(q)) next.push(it);
+      else dropped.push(it);
     }
-    if (viewFilters.statuses && viewFilters.statuses.length > 0) {
-      if (!viewFilters.statuses.includes(opp.status)) return false;
+    recordStage("search", next, dropped);
+    current = next;
+  }
+
+  if (viewFilters.statuses && viewFilters.statuses.length > 0) {
+    const allowed = new Set(viewFilters.statuses);
+    const next: T[] = [];
+    const dropped: T[] = [];
+    for (const it of current) {
+      if (allowed.has(it.opportunity.status)) next.push(it);
+      else dropped.push(it);
     }
-    if (viewFilters.ownerScope === "mine") {
-      if (!currentUserId || it.owner?.id !== currentUserId) return false;
-    } else if (viewFilters.ownerScope === "team") {
-      if (currentUserId && it.owner?.id === currentUserId) return false;
+    recordStage("status", next, dropped);
+    current = next;
+  }
+
+  if (viewFilters.ownerScope === "mine") {
+    const next: T[] = [];
+    const dropped: T[] = [];
+    for (const it of current) {
+      if (isRowOwnedByUser(it.ownership ?? null, identity, it.owner?.id ?? null)) {
+        next.push(it);
+      } else {
+        dropped.push(it);
+      }
     }
-    if (typeof viewFilters.pickupWithinHours === "number") {
-      if (!opp.pickupWindowStart) return false;
-      const dt = new Date(opp.pickupWindowStart).getTime();
-      if (dt - now > viewFilters.pickupWithinHours * 3600_000) return false;
-      if (dt < now) return false;
+    recordStage("ownerScope:mine", next, dropped);
+    current = next;
+  } else if (viewFilters.ownerScope === "team") {
+    const next: T[] = [];
+    const dropped: T[] = [];
+    for (const it of current) {
+      if (!isRowOwnedByUser(it.ownership ?? null, identity, it.owner?.id ?? null)) {
+        next.push(it);
+      } else {
+        dropped.push(it);
+      }
     }
-    if (typeof viewFilters.pickupAfterHours === "number") {
-      if (!opp.pickupWindowStart) return false;
-      const dt = new Date(opp.pickupWindowStart).getTime();
-      if (dt - now < viewFilters.pickupAfterHours * 3600_000) return false;
+    recordStage("ownerScope:team", next, dropped);
+    current = next;
+  }
+
+  if (typeof viewFilters.pickupWithinHours === "number") {
+    const next: T[] = [];
+    const dropped: T[] = [];
+    for (const it of current) {
+      if (isPickupWithinHours(it.opportunity.pickupWindowStart, viewFilters.pickupWithinHours, todayIso)) {
+        next.push(it);
+      } else {
+        dropped.push(it);
+      }
     }
-    if (viewFilters.confidenceFlag) {
-      if (it.suggestedBuy?.confidence !== viewFilters.confidenceFlag) return false;
+    recordStage("pickupWithinHours", next, dropped);
+    current = next;
+  }
+
+  if (typeof viewFilters.pickupAfterHours === "number") {
+    const next: T[] = [];
+    const dropped: T[] = [];
+    for (const it of current) {
+      if (isPickupAfterHours(it.opportunity.pickupWindowStart, viewFilters.pickupAfterHours, todayIso)) {
+        next.push(it);
+      } else {
+        dropped.push(it);
+      }
     }
-    if (typeof viewFilters.sentNoReplyMinAgeMin === "number") {
-      if (it.coverage.sent === 0 || it.coverage.responded > 0) return false;
-      if ((it.freshnessMinutes ?? 0) < viewFilters.sentNoReplyMinAgeMin) return false;
+    recordStage("pickupAfterHours", next, dropped);
+    current = next;
+  }
+
+  if (viewFilters.confidenceFlag) {
+    const next: T[] = [];
+    const dropped: T[] = [];
+    for (const it of current) {
+      if (it.suggestedBuy?.confidence === viewFilters.confidenceFlag) next.push(it);
+      else dropped.push(it);
     }
-    return true;
-  });
+    recordStage("confidenceFlag", next, dropped);
+    current = next;
+  }
+
+  if (typeof viewFilters.sentNoReplyMinAgeMin === "number") {
+    const minAge = viewFilters.sentNoReplyMinAgeMin;
+    const next: T[] = [];
+    const dropped: T[] = [];
+    for (const it of current) {
+      if (it.coverage.sent === 0 || it.coverage.responded > 0) {
+        dropped.push(it);
+        continue;
+      }
+      if ((it.freshnessMinutes ?? 0) < minAge) {
+        dropped.push(it);
+        continue;
+      }
+      next.push(it);
+    }
+    recordStage("sentNoReply", next, dropped);
+    current = next;
+  }
+
+  return current;
 }
+
+function idOf(it: CockpitFilterItem): string {
+  // Cockpit rows carry their primary key on `opportunity.id`. Top-level
+  // `id` is also accepted so test fixtures and synthetic rows resolve too.
+  const top = (it as unknown as { id?: string }).id;
+  if (typeof top === "string" && top.length > 0) return top;
+  const opp = it.opportunity as unknown as { id?: string };
+  return opp?.id ?? "(unknown)";
+}
+
+export { resolveUserIdentity };
+export type { ResolvedUserIdentity, CockpitRowOwnership } from "@shared/cockpitOwnership";

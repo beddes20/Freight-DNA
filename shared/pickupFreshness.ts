@@ -79,3 +79,74 @@ export function shouldHideForPickup(
   // 'recent' (default): only hide rows older than the grace window.
   return freshness === "past_stale";
 }
+
+// Task #875 — Centralized "today / pickup window" comparisons.
+//
+// Before #875 the client compared `new Date(pickupWindowStart).getTime()`
+// against `Date.now()` (UTC), and `pickupWindowStart` is stored as a bare
+// `YYYY-MM-DD` string. Parsing that as UTC midnight meant a "today" pickup
+// was already 6+ hours in the past for a CT rep at 6 AM local. The "pickup
+// within 24h" predicate then rejected every same-day row even though the
+// KPI strip — which compares against `todayIso` in the org's local
+// timezone — happily counted them.
+//
+// All cockpit time-window comparisons MUST go through these helpers and
+// pass `todayIso` from `todayIsoInOrgTz()` (or the equivalent client
+// helper) so the server SQL aggregates and the client filter cannot drift.
+
+function addDaysIso(todayIso: string, days: number): string {
+  const t = Date.parse(`${todayIso}T00:00:00Z`);
+  if (!Number.isFinite(t)) return todayIso;
+  return new Date(t + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+export function isPickupToday(
+  pickupIso: string | null | undefined,
+  todayIso: string,
+): boolean {
+  return pickupDayKey(pickupIso) === todayIso;
+}
+
+export function isPastPickup(
+  pickupIso: string | null | undefined,
+  todayIso: string,
+): boolean {
+  const dayKey = pickupDayKey(pickupIso);
+  if (!dayKey) return false;
+  return dayKey < todayIso;
+}
+
+// True when the pickup day is in the inclusive horizon
+// `[today, today + ceil(hours / 24)]` in the org's local timezone.
+// Same-day pickups always pass (a 5pm-local pickup is "within today",
+// not past-due) regardless of the precise time-of-day.
+export function isPickupWithinHours(
+  pickupIso: string | null | undefined,
+  hours: number,
+  todayIso: string,
+): boolean {
+  const dayKey = pickupDayKey(pickupIso);
+  if (!dayKey) return false;
+  if (dayKey < todayIso) return false;
+  if (hours <= 0) return dayKey === todayIso;
+  const daysAhead = Math.ceil(hours / 24);
+  const horizonDay = addDaysIso(todayIso, daysAhead);
+  return dayKey <= horizonDay;
+}
+
+// True when the pickup day is at least `floor(hours / 24)` days ahead
+// of today (org-local). Mirrors the pre-#875 `pickupAfterHours` chip used
+// by the "Pickup tomorrow" built-in view (within 48h AND after 24h ⇒
+// dayKey ≥ today+1, dayKey ≤ today+2).
+export function isPickupAfterHours(
+  pickupIso: string | null | undefined,
+  hours: number,
+  todayIso: string,
+): boolean {
+  const dayKey = pickupDayKey(pickupIso);
+  if (!dayKey) return false;
+  if (hours <= 0) return dayKey >= todayIso;
+  const daysAhead = Math.floor(hours / 24);
+  const minDay = addDaysIso(todayIso, daysAhead);
+  return dayKey >= minDay;
+}
