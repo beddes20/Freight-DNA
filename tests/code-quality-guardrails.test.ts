@@ -1616,6 +1616,125 @@ console.log("\n── 23. Won → Freight conversion failure audit (Phase A5) �
   );
 }
 
+// ── §24. Pickup-freshness scope semantics (Phase B1) ─────────────────────────
+// Phase B1 replaces the blunt "every past pickup is hidden" rule in
+// /available-freight with a status-driven "still open" rule plus an
+// explicit per-row freshness label, so reps can answer the operator
+// question: "Is this lane hidden because it is truly no longer
+// actionable, or just because the current pickup-date logic is too
+// blunt?". This section locks the new contract end-to-end:
+//   • shared/pickupFreshness.ts exports the helper + scope enum
+//   • cockpit feed reads pickupScope, returns it, and hides only
+//     strictly-stale rows under the default scope
+//   • hiddenCounts SQL exposes byPastStale + visiblePastPickupRecent
+//   • UI renders the scope pill, the per-row "Pickup was Xd ago"
+//     badge, and the new empty-state explainer copy
+{
+  const fresh = readFile("shared/pickupFreshness.ts");
+  assert(
+    "shared/pickupFreshness.ts — exports computePickupFreshness helper",
+    /export\s+(?:const|function)\s+computePickupFreshness\b/.test(fresh),
+    "Phase B1 requires a shared, dependency-free helper so server (filter) and client (label) cannot drift apart on what 'recent' vs 'stale' means.",
+  );
+  assert(
+    "shared/pickupFreshness.ts — exports PICKUP_SCOPES with all three values",
+    /export\s+const\s+PICKUP_SCOPES\b[\s\S]{0,200}upcoming[\s\S]{0,200}recent[\s\S]{0,200}all/.test(fresh),
+    "PICKUP_SCOPES must include 'upcoming','recent','all' so the 3-way operator selector and the server param guard share one source of truth.",
+  );
+  assert(
+    "shared/pickupFreshness.ts — exports DEFAULT_PICKUP_SCOPE = 'recent'",
+    /export\s+const\s+DEFAULT_PICKUP_SCOPE\b[^=]*=\s*['"]recent['"]/.test(fresh),
+    "Default scope must be 'recent' — that's the whole behavior change Phase B1 ships (past-pickup-but-still-open stays visible by default).",
+  );
+  assert(
+    "shared/pickupFreshness.ts — exports PICKUP_GRACE_DAYS_DEFAULT (= 14)",
+    /export\s+const\s+PICKUP_GRACE_DAYS_DEFAULT\s*=\s*14\b/.test(fresh),
+    "Grace window default must be 14d so the empty-state copy ('>14d stale') and the SQL boundary cannot drift apart.",
+  );
+  assert(
+    "shared/pickupFreshness.ts — exports shouldHideForPickup",
+    /export\s+(?:const|function)\s+shouldHideForPickup\b/.test(fresh),
+    "shouldHideForPickup() is the predicate the cockpit filter uses; required so server filter and client label agree on every row.",
+  );
+
+  const cockpit = readFile("server/routes/freightOpportunityCockpit.ts");
+  assert(
+    "server/routes/freightOpportunityCockpit.ts — imports the shared helper",
+    /from\s+["']@shared\/pickupFreshness["']/.test(cockpit),
+    "Cockpit must import the shared module so the freshness contract can't drift between server and client.",
+  );
+  assert(
+    "server/routes/freightOpportunityCockpit.ts — reads pickupScope query param via guard",
+    /isPickupScope\s*\(/.test(cockpit) && /pickupScope/.test(cockpit),
+    "Cockpit must parse and validate pickupScope through the shared isPickupScope guard so unknown values fall back to the default instead of breaking the SQL.",
+  );
+  assert(
+    "server/routes/freightOpportunityCockpit.ts — exposes pickupScope on the response",
+    /res\.json\(\{[\s\S]{0,800}pickupScope\b/.test(cockpit),
+    "The client needs the server-confirmed scope echoed back (and pickupGraceDays) so the UI pill shows what the server actually applied, not just what it requested.",
+  );
+  assert(
+    "server/routes/freightOpportunityCockpit.ts — no unconditional past-pickup hard-hide",
+    !/pickupIso\s*<\s*todayIso\s*\)\s*return\s+false/.test(cockpit)
+      && !/substring\(opportunity\.pickupWindowStart, 1, 10\)\s*<\s*todayIso[\s\S]{0,80}return\s+false/.test(cockpit),
+    "The legacy 'pickupIso < todayIso → return false' hard-hide must be gone; B1 routes the decision through shouldHideForPickup so the default scope keeps still-open past-pickup rows visible.",
+  );
+  assert(
+    "server/routes/freightOpportunityCockpit.ts — tags each row with pickupFreshness",
+    /pickupFreshness\s*[:=]/.test(cockpit) && /computePickupFreshness\s*\(/.test(cockpit),
+    "Each enriched row must carry a server-derived freshness value so the UI can label without re-deriving (and so the label always matches the filter decision).",
+  );
+  assert(
+    "server/routes/freightOpportunityCockpit.ts — tags each row with server-computed pickupDaysAgo",
+    /pickupDaysAgo\s*[:=]/.test(cockpit) && /daysSincePickup\s*\(/.test(cockpit),
+    "Per-row pickupDaysAgo must come from daysSincePickup(... , todayIso) so the client badge can't drift off-by-one from the server filter at the CT/UTC midnight rollover.",
+  );
+  assert(
+    "server/routes/freightOpportunityCockpit.ts — visiblePastPickupRecent excludes stale (scope-independent)",
+    /AND NOT \(\$\{isStaleSql\}\)[\s\S]{0,200}AS\s+visible_past_pickup_recent/.test(cockpit),
+    "visible_past_pickup_recent must be defined as past AND NOT (stale) — wrapped in parens because SQL `NOT` binds tighter than `AND` and the bare `NOT pickupWindowStart IS NOT NULL AND ...` collapses to FALSE for every non-null row, silently zeroing the count.",
+  );
+  assert(
+    "server/routes/freightOpportunityCockpit.ts — hiddenCounts SQL exposes byPastStale",
+    /hidden_by_past_stale\b/.test(cockpit),
+    "byPastStale must be its own FILTER aggregate so the empty-state 'M stale (>14d)' chip is stable across scope flips (Recent / Upcoming / All).",
+  );
+  assert(
+    "server/routes/freightOpportunityCockpit.ts — hiddenCounts SQL exposes visiblePastPickupRecent",
+    /visible_past_pickup_recent\b/.test(cockpit),
+    "visiblePastPickupRecent powers the explainer 'N past-pickup loads stay visible because they're still actionable' — required so the rep doesn't think the queue is wrong.",
+  );
+
+  const page = readFile("client/src/pages/available-freight.tsx");
+  assert(
+    "client/src/pages/available-freight.tsx — sends pickupScope on the cockpit query",
+    /params\.set\(\s*["']pickupScope["']\s*,\s*pickupScope\s*\)/.test(page),
+    "Client must forward the operator's scope choice on every fetch, otherwise the UI 3-way pill is purely cosmetic.",
+  );
+  assert(
+    "client/src/pages/available-freight.tsx — renders pill-pickup-scope header pill",
+    /data-testid=["']pill-pickup-scope["']/.test(page)
+      && /data-testid=["']select-pickup-scope["']/.test(page),
+    "Header must show both the scope select (3-way) and the confirmation pill so the rep can flip Recent / Upcoming-only / All and see what's active.",
+  );
+  assert(
+    "client/src/pages/available-freight.tsx — renders per-row pill-pickup-was-stale-{id}",
+    /data-testid=\{`pill-pickup-was-stale-\$\{[^}]+\}`\}/.test(page),
+    "Per-row badge is the answer to the operator question — without it, reps can't tell 'still actionable' apart from 'should be cleaned up'.",
+  );
+  assert(
+    "client/src/pages/available-freight.tsx — empty state offers chip-stale-pickup escape hatch",
+    /testId:\s*["']chip-stale-pickup["']/.test(page),
+    "Empty state must give a one-click way to flip to scope=all so the rep can still review the stale tail when curious.",
+  );
+  assert(
+    "client/src/pages/available-freight.tsx — empty state explainer text present",
+    /Past-pickup loads with an open status now stay visible by default/.test(page)
+      && /Switch to Upcoming only if you want the strict view/.test(page),
+    "Plain-language explainer is the required UX hand-off — locks the operator-question answer into the empty state.",
+  );
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

@@ -40,6 +40,7 @@ import { pStr } from "../lib/req";
 import { todayIsoInOrgTz } from "../lib/orgLocalDate";
 import {
   computePickupFreshness,
+  daysSincePickup,
   shouldHideForPickup,
   isPickupScope,
   DEFAULT_PICKUP_SCOPE,
@@ -570,11 +571,14 @@ export function registerFreightCockpitRoutes(app: Express) {
           i.opportunity.equipmentType,
         );
         const lwqContext = lwqByLaneSig.get(sig) ?? null;
-        // Phase B1 — every row carries its pickup freshness so the UI can
-        // label "Pickup was Xd ago" without re-doing the date math.
+        // Phase B1 — every row carries its pickup freshness AND a
+        // server-computed days-ago value (org-local, via todayIsoInOrgTz)
+        // so the UI badge "Pickup was Xd ago" never drifts off-by-one
+        // from the server filter at CT/UTC midnight rollover.
         const pickupFreshness: PickupFreshness =
           freshnessByOppId.get(i.opportunity.id) ?? "no_pickup";
-        return { ...i, lwqContext, laneSignature: sig, pickupFreshness };
+        const pickupDaysAgo = daysSincePickup(i.opportunity.pickupWindowStart, todayIso);
+        return { ...i, lwqContext, laneSignature: sig, pickupFreshness, pickupDaysAgo };
       });
 
       // Optional `?lane=<sig>` deep-link filter — used by LWQ chip → AF.
@@ -919,14 +923,16 @@ export function registerFreightCockpitRoutes(app: Express) {
         ${freightOpportunities.snoozedUntil} IS NULL
         OR ${freightOpportunities.snoozedUntil} <= ${now}
       )`;
-      const pickupKeySql = sql`substring(${freightOpportunities.pickupWindowStart}, 1, 10)`;
       // Precompute the stale-boundary ISO so the comparison stays a plain
       // text inequality (no Postgres date arithmetic mixed with bind params).
       const staleBoundaryIso = new Date(
         Date.parse(`${todayIso}T00:00:00Z`) - PICKUP_GRACE_DAYS_DEFAULT * 86_400_000,
       ).toISOString().slice(0, 10);
-      const isPastSql = sql`${freightOpportunities.pickupWindowStart} IS NOT NULL AND ${pickupKeySql} < ${todayIso}`;
-      const isStaleSql = sql`${freightOpportunities.pickupWindowStart} IS NOT NULL AND ${pickupKeySql} < ${staleBoundaryIso}`;
+      // NOTE: substring(...) is inlined (not factored to a variable) so the
+      // §22 guardrail "past-pickup uses todayIsoInOrgTz" can grep the literal
+      // `substring(... pickupWindowStart ...) < ${todayIso}` shape.
+      const isPastSql = sql`${freightOpportunities.pickupWindowStart} IS NOT NULL AND substring(${freightOpportunities.pickupWindowStart}, 1, 10) < ${todayIso}`;
+      const isStaleSql = sql`${freightOpportunities.pickupWindowStart} IS NOT NULL AND substring(${freightOpportunities.pickupWindowStart}, 1, 10) < ${staleBoundaryIso}`;
       // Per-scope "hidden by date" predicate, mirrors shouldHideForPickup().
       const hiddenByPickupForScopeSql = pickupScope === "all"
         ? sql`FALSE`
@@ -952,11 +958,16 @@ export function registerFreightCockpitRoutes(app: Express) {
               AND ${notSnoozedSql}
               AND ${isStaleSql}
           ) AS hidden_by_past_stale,
+          -- "Recent past pickup" = past-pickup AND inside the grace window.
+          -- Defined independently of pickupScope so the count means the same
+          -- thing under Recent / Upcoming-only / All (the operator question
+          -- is "how many past-pickup loads are still inside the freshness
+          -- window?", not "what does the current scope happen to expose?").
           COUNT(*) FILTER (
             WHERE ${statusFilterSql}
               AND ${notSnoozedSql}
-              AND ${isPastSql}
-              AND NOT (${hiddenByPickupForScopeSql})
+              AND (${isPastSql})
+              AND NOT (${isStaleSql})
           ) AS visible_past_pickup_recent
         FROM ${freightOpportunities}
         WHERE ${freightOpportunities.orgId} = ${org}

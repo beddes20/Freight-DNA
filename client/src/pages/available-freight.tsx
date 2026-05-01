@@ -109,6 +109,12 @@ interface CockpitItem {
   /** Phase B1 — server-derived freshness label so reps can tell stale-by-date
    *  rows apart from the genuinely actionable ones at a glance. */
   pickupFreshness?: "no_pickup" | "upcoming" | "past_recent" | "past_stale";
+  /** Phase B1 — server-computed (org-local) days since pickup. Negative for
+   *  upcoming, zero for today, positive for past. The UI must use this value
+   *  rather than re-deriving from `new Date()` so the badge label can never
+   *  drift off-by-one from the server's freshness/filter decision at the
+   *  CT/UTC midnight rollover. */
+  pickupDaysAgo?: number | null;
 }
 
 interface BulkActionResult {
@@ -508,6 +514,13 @@ export default function AvailableFreightPage() {
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [grouping, setGrouping] = useState<CockpitPrefs["grouping"]>("none");
   const [sort, setSort] = useState<CockpitPrefs["sort"]>("pickup_soonest");
+  // Phase B1 — pickupScope answers the operator question "is this lane
+  // hidden because it's truly no longer actionable, or just because the
+  // current pickup-date logic is too blunt?". 'recent' (default) keeps
+  // past-pickup loads visible while their status is still open, hiding
+  // only the strictly-stale (>14d) tail. 'upcoming' restores the legacy
+  // strict view; 'all' never hides on pickup.
+  const [pickupScope, setPickupScope] = useState<"upcoming" | "recent" | "all">("recent");
   const [layout, setLayout] = useState<CockpitPrefs["layout"]>("table");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [focusIndex, setFocusIndex] = useState<number>(-1);
@@ -621,7 +634,7 @@ export default function AvailableFreightPage() {
       ? ""
       : statusFilter;
 
-  const feedKey = ["/api/freight-opportunities/cockpit", { status: statusParam, sort, grouping, companyId: companyFilter, lane: laneFilter, carrierId: carrierIdFilter }];
+  const feedKey = ["/api/freight-opportunities/cockpit", { status: statusParam, sort, grouping, companyId: companyFilter, lane: laneFilter, carrierId: carrierIdFilter, pickupScope }];
   const { data: serverFeed, isLoading, isError, refetch, isFetching } = useQuery<CockpitResponse>({
     queryKey: feedKey,
     queryFn: async () => {
@@ -632,6 +645,7 @@ export default function AvailableFreightPage() {
       if (companyFilter !== "all") params.set("companyId", companyFilter);
       if (laneFilter) params.set("lane", laneFilter);
       if (carrierIdFilter) params.set("carrierId", carrierIdFilter);
+      params.set("pickupScope", pickupScope);
       params.set("limit", "200");
       const res = await fetch(`/api/freight-opportunities/cockpit?${params.toString()}`, { credentials: "include" });
       if (!res.ok) throw new Error(`${res.status}`);
@@ -1482,6 +1496,40 @@ export default function AvailableFreightPage() {
                 <SelectItem value="calendar">Layout: pickup-day swimlane</SelectItem>
               </SelectContent>
             </Select>
+            {/* Phase B1 — pickup scope. 'recent' (default) keeps past-pickup
+                loads visible while their status is still open and only hides
+                strictly stale (>graceDays). */}
+            <Select
+              value={pickupScope}
+              onValueChange={(v) => setPickupScope(v as "upcoming" | "recent" | "all")}
+            >
+              <SelectTrigger data-testid="select-pickup-scope">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="recent">Pickup: recent + upcoming</SelectItem>
+                <SelectItem value="upcoming">Pickup: upcoming only</SelectItem>
+                <SelectItem value="all">Pickup: all dates</SelectItem>
+              </SelectContent>
+            </Select>
+            <Badge
+              variant="outline"
+              className="h-7 px-2 text-[11px] font-normal"
+              data-testid="pill-pickup-scope"
+              title={
+                pickupScope === "recent"
+                  ? `Showing upcoming loads plus past-pickup loads still open in their status (within ${feed?.pickupGraceDays ?? 14} days).`
+                  : pickupScope === "upcoming"
+                    ? "Strict view — only loads with a future pickup date are shown."
+                    : "Showing every pickup date, including stale ones."
+              }
+            >
+              {pickupScope === "recent"
+                ? `Recent + upcoming (${feed?.pickupGraceDays ?? 14}d grace)`
+                : pickupScope === "upcoming"
+                  ? "Upcoming only"
+                  : "All pickup dates"}
+            </Badge>
           </div>
         </CardContent>
       </Card>
@@ -1600,13 +1648,43 @@ export default function AvailableFreightPage() {
                       },
                     });
                   }
-                  if (h.byPastPickup > 0) {
+                  // Phase B1 — split the old byPastPickup chip:
+                  //  • byPastStale → "stale (>graceDays)" with one-click
+                  //    "switch to scope=all" so the rep can still review.
+                  //  • byPastPickup (post-B1 = strict-only count when scope
+                  //    is 'upcoming') → keeps the legacy informational chip.
+                  const stale = h.byPastStale ?? 0;
+                  const grace = feed?.pickupGraceDays ?? 14;
+                  if (stale > 0) {
+                    hiddenBuckets.push({
+                      key: "stale-pickup",
+                      count: stale,
+                      label: `stale pickup (>${grace}d)`,
+                      detail: "Past their pickup date by more than the freshness window. Status is still open — consider closing if no longer actionable.",
+                      action: pickupScope === "all"
+                        ? undefined
+                        : {
+                            label: "Show all pickup dates",
+                            onClick: () => setPickupScope("all"),
+                            testId: "chip-stale-pickup",
+                          },
+                    });
+                  }
+                  if (
+                    pickupScope === "upcoming"
+                    && h.byPastPickup > 0
+                    && h.byPastPickup !== stale
+                  ) {
                     hiddenBuckets.push({
                       key: "past-pickup",
-                      count: h.byPastPickup,
-                      label: "past their pickup date",
-                      detail: "Hidden by design — these moves were due before today.",
-                      informational: true,
+                      count: h.byPastPickup - stale,
+                      label: "past their pickup date but still open",
+                      detail: "Switch to Recent + upcoming to bring these back into the queue.",
+                      action: {
+                        label: "Switch to Recent + upcoming",
+                        onClick: () => setPickupScope("recent"),
+                        testId: "chip-past-pickup-recent",
+                      },
                     });
                   }
                   if (h.bySnooze > 0) {
@@ -1739,6 +1817,14 @@ export default function AvailableFreightPage() {
                         Upload a workbook or wait for the next scheduled import.
                       </p>
                     )}
+                    {/* Phase B1 — explainer for the new pickup-scope rule. */}
+                    <p
+                      className="text-[11px] text-muted-foreground max-w-md"
+                      data-testid="text-empty-pickup-scope-help"
+                    >
+                      Past-pickup loads with an open status now stay visible by default.
+                      Switch to Upcoming only if you want the strict view.
+                    </p>
                   </div>
                 );
               })()
@@ -2638,6 +2724,35 @@ function CockpitRowView(props: {
         <span className="text-xs text-muted-foreground flex items-center gap-1">
           <Clock className="h-3 w-3" /> pickup {fmtPickup(opp.pickupWindowStart)}
         </span>
+        {/* Phase B1 — pickup freshness label. Surfaces when a row is past
+            its pickup date but still visible because its status is open;
+            distinguishes "recent" (within graceDays, amber) from "stale"
+            (>graceDays, red). Uses the server-computed `pickupDaysAgo`
+            (org-local) so the label cannot drift off-by-one from the
+            server's filter at the CT/UTC midnight rollover. */}
+        {(item.pickupFreshness === "past_recent" || item.pickupFreshness === "past_stale")
+          && typeof item.pickupDaysAgo === "number"
+          && item.pickupDaysAgo > 0
+          && (() => {
+            const daysAgo = item.pickupDaysAgo as number;
+            const stale = item.pickupFreshness === "past_stale";
+            return (
+              <Badge
+                variant="outline"
+                className={
+                  stale
+                    ? "bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30"
+                    : "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30"
+                }
+                title={`Pickup was ${daysAgo}d ago — still open in ${opp.status.replace(/_/g, " ")}.${
+                  stale ? " Past the freshness window; consider closing if no longer actionable." : ""
+                }`}
+                data-testid={`pill-pickup-was-stale-${opp.id}`}
+              >
+                Pickup was {daysAgo}d ago
+              </Badge>
+            );
+          })()}
         {item.coverage.covered && (
           <Badge variant="outline" className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30">
             <CheckCircle2 className="h-3 w-3 mr-1" /> covered
