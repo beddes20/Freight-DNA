@@ -1766,9 +1766,9 @@ console.log("\n── 23. Won → Freight conversion failure audit (Phase A5) �
     "PICKUP_SCOPES must include 'upcoming','recent','all' so the 3-way operator selector and the server param guard share one source of truth.",
   );
   assert(
-    "shared/pickupFreshness.ts — exports DEFAULT_PICKUP_SCOPE = 'recent'",
-    /export\s+const\s+DEFAULT_PICKUP_SCOPE\b[^=]*=\s*['"]recent['"]/.test(fresh),
-    "Default scope must be 'recent' — that's the whole behavior change Phase B1 ships (past-pickup-but-still-open stays visible by default).",
+    "shared/pickupFreshness.ts — exports DEFAULT_PICKUP_SCOPE = 'actionable'",
+    /export\s+const\s+DEFAULT_PICKUP_SCOPE\b[^=]*=\s*['"]actionable['"]/.test(fresh),
+    "Task #900 tightened the default scope from 'recent' to 'actionable' — the cockpit only surfaces today + future + past 24h still-open by default. Phase B1's older 'recent' default has been retired in favor of the actionable rule.",
   );
   assert(
     "shared/pickupFreshness.ts — exports PICKUP_GRACE_DAYS_DEFAULT (= 14)",

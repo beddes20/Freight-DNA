@@ -18,14 +18,38 @@ export const PICKUP_FRESHNESS_VALUES = [
 ] as const;
 export type PickupFreshness = typeof PICKUP_FRESHNESS_VALUES[number];
 
-export const PICKUP_SCOPES = ["upcoming", "recent", "all"] as const;
+export const PICKUP_SCOPES = ["actionable", "upcoming", "recent", "all"] as const;
 export type PickupScope = typeof PICKUP_SCOPES[number];
 
-// 'recent' is the new default: status-driven scope that keeps past-pickup
-// rows visible until they cross the grace window. 'upcoming' preserves the
-// pre-B1 strict behavior for callers (or operators) that want it back. 'all'
-// is the explicit escape hatch for the empty-state recovery chip.
-export const DEFAULT_PICKUP_SCOPE: PickupScope = "recent";
+// Task #900 — 'actionable' is the new default. It tightens recent-pickup
+// recency to "today + future + past 24h still-open statuses" so the cockpit
+// stops dragging multi-day-old open loads into the rep's morning queue. The
+// older scopes are preserved for back-compat:
+//   'recent'   — keep past-pickup rows visible until graceDays (Phase B1)
+//   'upcoming' — strict: future-only (legacy)
+//   'all'      — never hide on pickup (escape hatch + reveal-stale chip)
+export const DEFAULT_PICKUP_SCOPE: PickupScope = "actionable";
+
+// Task #900 — soft-overdue window for 'actionable'. Past-pickup rows whose
+// status is still actionable can stay visible for up to this many hours
+// past their pickup date. Anything older drops out (and is counted as
+// `kpis.hiddenStale`, surfaced via the "Stale: N" chip).
+export const SOFT_OVERDUE_HOURS = 24;
+
+// Task #900 — statuses considered "still open and worth chasing" by the
+// actionable scope. Anything outside this set is treated as effectively
+// closed once pickup is past, even within the soft-overdue window.
+export const ACTIONABLE_OPEN_STATUSES: ReadonlySet<string> = new Set([
+  "pending_approval",
+  "ready_to_send",
+  "sent",
+  "awaiting_carrier_reply",
+  "partially_covered",
+]);
+
+export function isActionableOpenStatus(status: string | null | undefined): boolean {
+  return !!status && ACTIONABLE_OPEN_STATUSES.has(status);
+}
 
 export function isPickupScope(value: unknown): value is PickupScope {
   return typeof value === "string" && (PICKUP_SCOPES as readonly string[]).includes(value);
@@ -67,16 +91,43 @@ export function computePickupFreshness(
   return "past_stale";
 }
 
+// Task #900 — extra context the 'actionable' scope needs to decide whether
+// a past-pickup row is still worth keeping in the rep's queue. Optional —
+// callers using legacy scopes ('upcoming' / 'recent' / 'all') can omit and
+// the result is identical to the pre-#900 signature.
+export interface PickupHideContext {
+  status?: string | null;
+  /** Whole days since pickup (positive = past, 0 = today, negative = future). */
+  daysSincePickup?: number | null;
+}
+
 // Should this row be hidden from the cockpit purely because of pickup date?
-// Status filtering is handled separately — this function only answers the
-// pickup-date question.
+// Under the legacy scopes ('upcoming' / 'recent' / 'all') this function only
+// answers the pickup-date question. Under the 'actionable' scope (Task #900)
+// it ALSO consults `ctx.status` and `ctx.daysSincePickup` so we can keep a
+// past-pickup row visible when it's still ≤ SOFT_OVERDUE_HOURS overdue AND
+// its status is in ACTIONABLE_OPEN_STATUSES.
 export function shouldHideForPickup(
   freshness: PickupFreshness,
   scope: PickupScope,
+  ctx: PickupHideContext = {},
 ): boolean {
   if (scope === "all") return false;
   if (scope === "upcoming") return freshness === "past_recent" || freshness === "past_stale";
-  // 'recent' (default): only hide rows older than the grace window.
+  if (scope === "actionable") {
+    // Future + today + no-pickup never get hidden by date alone.
+    if (freshness === "upcoming" || freshness === "no_pickup") return false;
+    // Strictly stale (past graceDays) is always hidden.
+    if (freshness === "past_stale") return true;
+    // past_recent: keep visible only when within the soft-overdue window
+    // AND the status is still actionable.
+    const days = ctx.daysSincePickup ?? null;
+    const status = ctx.status ?? null;
+    const softWindowDays = Math.ceil(SOFT_OVERDUE_HOURS / 24); // 1
+    const withinSoftWindow = days !== null && days <= softWindowDays;
+    return !(withinSoftWindow && isActionableOpenStatus(status));
+  }
+  // 'recent': only hide rows older than the grace window.
   return freshness === "past_stale";
 }
 

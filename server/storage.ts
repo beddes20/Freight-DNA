@@ -9864,6 +9864,9 @@ export class DatabaseStorage implements IStorage {
           grouping: data.grouping ?? "none",
           sort: data.sort ?? "urgency",
           autopilotMutedUntil: data.autopilotMutedUntil ?? null,
+          // Task #900 — round-trip the sticky owner filter + pickup scope.
+          ownerFilter: data.ownerFilter ?? null,
+          pickupScope: data.pickupScope ?? null,
           updatedAt: new Date(),
         },
       })

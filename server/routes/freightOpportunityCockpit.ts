@@ -49,7 +49,12 @@ import {
   type PickupScope,
   type PickupFreshness,
 } from "@shared/pickupFreshness";
-import { buildRowOwnership, type CockpitRowOwnership } from "@shared/cockpitOwnership";
+import {
+  buildRowOwnership,
+  isRowOwnedByUser,
+  resolveUserIdentity,
+  type CockpitRowOwnership,
+} from "@shared/cockpitOwnership";
 
 function orgId(req: Express.Request): string {
   return (req as any).session?.organizationId as string;
@@ -216,12 +221,44 @@ const savedViewPatchSchema = z.object({
   isShared: z.boolean().optional(),
 });
 
+// Task #900 — owner filter aliases. Specific-user filters pass through as
+// arbitrary userId strings; the route refuses anything that's neither an
+// alias nor a syntactically plausible id.
+const OWNER_FILTER_ALIASES = ["all", "me", "unassigned"] as const;
+type OwnerFilterAlias = typeof OWNER_FILTER_ALIASES[number];
+function isOwnerFilterAlias(v: unknown): v is OwnerFilterAlias {
+  return typeof v === "string" && (OWNER_FILTER_ALIASES as readonly string[]).includes(v);
+}
+function isPlausibleUserId(v: unknown): boolean {
+  return typeof v === "string" && /^[A-Za-z0-9_-]{4,64}$/.test(v);
+}
+function isOwnerFilterValue(v: unknown): v is string {
+  return isOwnerFilterAlias(v) || isPlausibleUserId(v);
+}
+
 const prefsPatchSchema = z.object({
   activeViewId: z.string().nullable().optional(),
   layout: z.enum(FREIGHT_COCKPIT_LAYOUTS).optional(),
   grouping: z.enum(FREIGHT_COCKPIT_GROUPINGS).optional(),
   sort: z.enum(FREIGHT_COCKPIT_SORTS).optional(),
   autopilotMutedUntil: z.string().nullable().optional(),
+  // Task #900 — sticky filters. Either side may be cleared by sending null.
+  ownerFilter: z
+    .string()
+    .nullable()
+    .optional()
+    .refine(
+      (v) => v === null || v === undefined || isOwnerFilterValue(v),
+      { message: "ownerFilter must be 'all' | 'me' | 'unassigned' | <userId>" },
+    ),
+  pickupScope: z
+    .string()
+    .nullable()
+    .optional()
+    .refine(
+      (v) => v === null || v === undefined || isPickupScope(v),
+      { message: "pickupScope must be 'actionable' | 'upcoming' | 'recent' | 'all'" },
+    ),
 });
 
 
@@ -515,14 +552,31 @@ export function registerFreightCockpitRoutes(app: Express) {
       if (!org) return res.status(400).json({ error: "No organization" });
 
       const user = await getCurrentUser(req);
-      const { companyId, status, limit = "100", grouping = "none", sort = "pickup_soonest", lane: laneFilter, carrierId: carrierFilter, pickupScope: pickupScopeRaw } = req.query as Record<string, string>;
-      // Phase B1 — pickup-date scope. Default 'recent' keeps past-pickup
-      // rows visible while their status is still open, so reps stop losing
-      // actionable freight to a date heuristic. 'upcoming' restores the
-      // strict pre-B1 behavior; 'all' is the empty-state escape hatch.
+      const {
+        companyId,
+        status,
+        limit = "100",
+        grouping = "none",
+        sort = "pickup_soonest",
+        lane: laneFilter,
+        carrierId: carrierFilter,
+        pickupScope: pickupScopeRaw,
+        ownerFilter: ownerFilterRaw,
+      } = req.query as Record<string, string>;
+      // Phase B1 / Task #900 — pickup-date scope. Default 'actionable' keeps
+      // upcoming + today + ≤24h-overdue still-open rows visible and drops
+      // older lingering past-pickup rows from the rep's morning queue (the
+      // count is surfaced via kpis.hiddenStale + the "Stale: N" chip so
+      // recovery is one click away). Legacy scopes are preserved.
       const pickupScope: PickupScope = isPickupScope(pickupScopeRaw)
         ? pickupScopeRaw
         : DEFAULT_PICKUP_SCOPE;
+      // Task #900 — owner filter. "all" (default), "me", "unassigned", or
+      // a specific user id. Anything malformed silently degrades to "all"
+      // so a stale URL never produces a hard 400 for the rep.
+      const ownerFilter: string = isOwnerFilterValue(ownerFilterRaw)
+        ? ownerFilterRaw
+        : "all";
       const statusList = (status ?? "")
         .split(",")
         .map(s => s.trim())
@@ -565,7 +619,13 @@ export function registerFreightCockpitRoutes(app: Express) {
             const t = new Date(r.snoozedUntil).getTime();
             if (Number.isFinite(t) && t > now.getTime()) return false;
           }
-          if (shouldHideForPickup(freshness, pickupScope)) return false;
+          // Task #900 — actionable scope needs status + daysSincePickup so
+          // it can keep ≤24h-overdue still-open rows visible without
+          // dragging multi-day lingerers into the queue.
+          if (shouldHideForPickup(freshness, pickupScope, {
+            status: r.status,
+            daysSincePickup: daysSincePickup(r.pickupWindowStart, todayIso),
+          })) return false;
           return true;
         });
       const freshnessByOppId = new Map<string, PickupFreshness>(
@@ -622,6 +682,43 @@ export function registerFreightCockpitRoutes(app: Express) {
         ? enriched.filter(i => i.laneSignature === laneFilter)
         : enriched;
       const hiddenByLane = laneFilter ? Math.max(0, enrichedCount - items.length) : 0;
+
+      // Task #900 — server-side owner filter. Reuses the shared
+      // `isRowOwnedByUser` predicate so the filter agrees row-for-row with
+      // the client "Mine" toggle and the cockpit KPI counters. We apply it
+      // BEFORE the carrier-coverable filter so `hiddenByCarrier` keeps its
+      // existing meaning (rows the carrier-coverable filter dropped on top
+      // of every other constraint).
+      const itemsBeforeOwner = items.length;
+      if (ownerFilter !== "all") {
+        const meIdentity = ownerFilter === "me" && user
+          ? resolveUserIdentity({
+              id: user.id,
+              email: (user as any).email ?? null,
+              username: (user as any).username ?? null,
+            })
+          : null;
+        // For specific-userId filters we synthesize a minimal identity from
+        // the request param; we deliberately don't look the target user up
+        // here (we'd just match on id, which is what the client sees too).
+        const targetIdentity = ownerFilter !== "me" && ownerFilter !== "unassigned"
+          ? { id: ownerFilter, emailLower: null, usernameLower: null }
+          : null;
+        items = items.filter(i => {
+          if (ownerFilter === "unassigned") {
+            const ids = i.ownership?.ids ?? (i.owner?.id ? [i.owner.id] : []);
+            return ids.length === 0;
+          }
+          if (ownerFilter === "me") {
+            return isRowOwnedByUser(i.ownership ?? null, meIdentity, i.owner?.id ?? null);
+          }
+          // Specific userId
+          return isRowOwnedByUser(i.ownership ?? null, targetIdentity, i.owner?.id ?? null);
+        });
+      }
+      const hiddenByOwner = ownerFilter !== "all"
+        ? Math.max(0, itemsBeforeOwner - items.length)
+        : 0;
       const itemsBeforeCarrier = items.length;
 
       // Optional `?carrierId=<id>` deep-link filter — Carrier Hub → AF.
@@ -740,6 +837,13 @@ export function registerFreightCockpitRoutes(app: Express) {
           if (fresh.length === 0) return null;
           return Math.round(fresh.reduce((a, b) => a + b, 0) / fresh.length);
         })(),
+        // Task #900 — count of past-pickup rows the 'actionable' rule would
+        // hide right now (regardless of the rep's currently-selected scope).
+        // Powers the "Stale: N" chip + the reveal-stale recovery affordance.
+        // Initialized to 0 here; the actual value comes from the
+        // hiddenCounts SQL aggregate further down (`hiddenStaleByActionable`)
+        // and is patched onto this object before we serialize the response.
+        hiddenStale: 0,
       };
 
       // ROI metrics — response by carrier bucket, suppression breakdown, and
@@ -968,11 +1072,34 @@ export function registerFreightCockpitRoutes(app: Express) {
       const isPastSql = sql`${freightOpportunities.pickupWindowStart} IS NOT NULL AND substring(${freightOpportunities.pickupWindowStart}, 1, 10) < ${todayIso}`;
       const isStaleSql = sql`${freightOpportunities.pickupWindowStart} IS NOT NULL AND substring(${freightOpportunities.pickupWindowStart}, 1, 10) < ${staleBoundaryIso}`;
       // Per-scope "hidden by date" predicate, mirrors shouldHideForPickup().
+      // Task #900 — `actionable` keeps past-pickup rows visible only when
+      // pickup is ≤ 1 day past AND status is in ACTIONABLE_OPEN_STATUSES.
+      // The SQL form mirrors that 1:1 so the per-scope hidden count never
+      // diverges from the in-memory filter.
+      const oneDayBeforeTodayIso = new Date(
+        Date.parse(`${todayIso}T00:00:00Z`) - 1 * 86_400_000,
+      ).toISOString().slice(0, 10);
+      const actionableOpenStatusList = sql.join(
+        ["pending_approval", "ready_to_send", "sent", "awaiting_carrier_reply", "partially_covered"]
+          .map(s => sql`${s}`),
+        sql`, `,
+      );
+      // Past-pickup AND NOT (within 24h overdue AND status still actionable).
+      const hiddenByActionableSql = sql`
+        ${freightOpportunities.pickupWindowStart} IS NOT NULL
+        AND substring(${freightOpportunities.pickupWindowStart}, 1, 10) < ${todayIso}
+        AND NOT (
+          substring(${freightOpportunities.pickupWindowStart}, 1, 10) >= ${oneDayBeforeTodayIso}
+          AND ${freightOpportunities.status} IN (${actionableOpenStatusList})
+        )
+      `;
       const hiddenByPickupForScopeSql = pickupScope === "all"
         ? sql`FALSE`
         : pickupScope === "upcoming"
           ? isPastSql
-          : isStaleSql;
+          : pickupScope === "actionable"
+            ? hiddenByActionableSql
+            : isStaleSql;
       const hiddenRows = await db.execute(sql`
         SELECT
           COUNT(*) AS total_in_scope,
@@ -992,6 +1119,15 @@ export function registerFreightCockpitRoutes(app: Express) {
               AND ${notSnoozedSql}
               AND ${isStaleSql}
           ) AS hidden_by_past_stale,
+          -- Task #900 — stable count of rows the actionable rule would hide
+          -- regardless of the currently-selected scope, so the "Stale: N"
+          -- chip / reveal-stale recovery affordance always reflects the
+          -- same number whether the rep is on actionable / recent / all.
+          COUNT(*) FILTER (
+            WHERE ${statusFilterSql}
+              AND ${notSnoozedSql}
+              AND (${hiddenByActionableSql})
+          ) AS hidden_by_actionable,
           -- "Recent past pickup" = past-pickup AND inside the grace window.
           -- Defined independently of pickupScope so the count means the same
           -- thing under Recent / Upcoming-only / All (the operator question
@@ -1016,10 +1152,20 @@ export function registerFreightCockpitRoutes(app: Express) {
         bySnooze: parseCount(h0.hidden_by_snooze),
         byPastPickup: parseCount(h0.hidden_by_past_pickup),
         byPastStale: parseCount(h0.hidden_by_past_stale),
+        byActionable: parseCount(h0.hidden_by_actionable),
         visiblePastPickupRecent: parseCount(h0.visible_past_pickup_recent),
         byLane: hiddenByLane,
+        byOwner: hiddenByOwner,
         byCarrier: hiddenByCarrier,
       };
+      // Task #900 — surface the actionable-rule hidden count on the kpis
+      // envelope so the "Stale: N" chip in the cockpit header has it
+      // alongside the other top-line counters. Patched onto `kpis` rather
+      // than rebuilt because the kpis object was assembled earlier (above
+      // the hiddenCounts SQL aggregate) so the per-row scans had a stable
+      // reference point for the at-risk / generated-today counters.
+      const hiddenStaleByActionable = parseCount(h0.hidden_by_actionable);
+      kpis.hiddenStale = hiddenStaleByActionable;
 
       // Next scheduled import: weekday 6:30 AM CT (matches CRON_EXPR).
       const nextImport = (() => {
@@ -1086,6 +1232,10 @@ export function registerFreightCockpitRoutes(app: Express) {
         grouping: groupKey,
         pickupScope,
         pickupGraceDays: PICKUP_GRACE_DAYS_DEFAULT,
+        // Task #900 — echo so the client can confirm what the server applied
+        // (URL persistence + saved-view restoration both rely on a confirmed
+        // server value rather than the raw query string).
+        ownerFilter,
       });
     } catch (err) {
       console.error("[freight-cockpit] feed error:", err);
@@ -1274,14 +1424,31 @@ export function registerFreightCockpitRoutes(app: Express) {
         name: "My freight today",
         isShared: false,
         isBuiltIn: true,
-        filters: { ownerScope: "mine", pickupWithinHours: 24 },
+        // Task #900 — wires the new server-side ownerFilter + actionable
+        // pickup scope so this default tab really does mean "freight that
+        // is mine AND needs my attention today" (today + future + ≤24h
+        // overdue still-open). The legacy `ownerScope` / `pickupWithinHours`
+        // hints stay so existing client code that consumes them keeps
+        // working until everything is migrated to the new envelope.
+        filters: {
+          ownerScope: "mine",
+          ownerFilter: "me",
+          pickupScope: "actionable",
+          pickupWithinHours: 24,
+        },
       },
       {
         id: "builtin:team-needs-approval",
         name: "Team needs approval",
         isShared: true,
         isBuiltIn: true,
-        filters: { statuses: ["pending_approval"], ownerScope: "team" },
+        filters: {
+          statuses: ["pending_approval"],
+          ownerScope: "team",
+          // Task #900 — keep the team queue scoped to genuinely actionable
+          // approvals so old past-pickup rows don't dilute the manager view.
+          pickupScope: "actionable",
+        },
       },
       {
         id: "builtin:pickup-tomorrow",
@@ -1377,6 +1544,14 @@ export function registerFreightCockpitRoutes(app: Express) {
       autopilotMutedUntil: parsed.data.autopilotMutedUntil !== undefined
         ? (parsed.data.autopilotMutedUntil ? new Date(parsed.data.autopilotMutedUntil) : null)
         : existing?.autopilotMutedUntil ?? null,
+      // Task #900 — sticky owner filter + pickup scope round-trip.
+      // `=== undefined` lets the client clear them by sending `null`.
+      ownerFilter: parsed.data.ownerFilter !== undefined
+        ? parsed.data.ownerFilter
+        : existing?.ownerFilter ?? null,
+      pickupScope: parsed.data.pickupScope !== undefined
+        ? parsed.data.pickupScope
+        : existing?.pickupScope ?? null,
     });
     res.json({ prefs });
   });

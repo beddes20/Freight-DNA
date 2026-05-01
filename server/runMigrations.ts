@@ -4489,7 +4489,18 @@ export async function runMigrations() {
       CREATE INDEX IF NOT EXISTS user_freight_cockpit_prefs_org_idx
         ON user_freight_cockpit_prefs (org_id)
     `);
-    console.log("[migrations] Task #601 cockpit schema ensured (snooze, auto-pilot, saved views, prefs)");
+    // Task #900 — sticky owner filter + pickup scope on the cockpit prefs.
+    // Idempotent ADD COLUMN IF NOT EXISTS so it's safe on every boot and
+    // satisfies the schema-drift guardrail.
+    await clientCockpit.query(`
+      ALTER TABLE user_freight_cockpit_prefs
+        ADD COLUMN IF NOT EXISTS owner_filter text
+    `);
+    await clientCockpit.query(`
+      ALTER TABLE user_freight_cockpit_prefs
+        ADD COLUMN IF NOT EXISTS pickup_scope text
+    `);
+    console.log("[migrations] Task #601 cockpit schema ensured (snooze, auto-pilot, saved views, prefs, #900 owner+pickup_scope)");
   } catch (err) {
     console.error("[migrations] Task #601 cockpit migration error:", err);
   } finally {

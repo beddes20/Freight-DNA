@@ -4481,6 +4481,12 @@ export const insertFreightOpportunitySavedViewSchema = createInsertSchema(freigh
 export type InsertFreightOpportunitySavedView = z.infer<typeof insertFreightOpportunitySavedViewSchema>;
 export type FreightOpportunitySavedView = typeof freightOpportunitySavedViews.$inferSelect;
 
+// Task #900 — owner filter envelope persisted with the cockpit prefs.
+// Free-form text so we can hold either a literal alias ("me", "unassigned",
+// "all") or a specific user UUID without bloating the schema with a check
+// constraint that would have to be migrated every time we add an alias.
+// The route validator in `server/routes/freightOpportunityCockpit.ts`
+// is the source of truth for legal values.
 export const userFreightCockpitPrefs = pgTable("user_freight_cockpit_prefs", {
   userId: varchar("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
@@ -4489,6 +4495,10 @@ export const userFreightCockpitPrefs = pgTable("user_freight_cockpit_prefs", {
   grouping: text("grouping").notNull().default("none"),
   sort: text("sort").notNull().default("pickup_soonest"),
   autopilotMutedUntil: timestamp("autopilot_muted_until"),
+  // Task #900 — sticky owner filter ("all" | "me" | "unassigned" | <userId>).
+  ownerFilter: text("owner_filter"),
+  // Task #900 — sticky pickup scope ("actionable" | "upcoming" | "recent" | "all").
+  pickupScope: text("pickup_scope"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => ({
   orgIdx: index("user_freight_cockpit_prefs_org_idx").on(t.orgId),
@@ -4499,6 +4509,8 @@ export const insertUserFreightCockpitPrefsSchema = createInsertSchema(userFreigh
     layout: z.enum(FREIGHT_COCKPIT_LAYOUTS).optional(),
     grouping: z.enum(FREIGHT_COCKPIT_GROUPINGS).optional(),
     sort: z.enum(FREIGHT_COCKPIT_SORTS).optional(),
+    ownerFilter: z.string().nullable().optional(),
+    pickupScope: z.string().nullable().optional(),
   });
 export type InsertUserFreightCockpitPrefs = z.infer<typeof insertUserFreightCockpitPrefsSchema>;
 export type UserFreightCockpitPrefs = typeof userFreightCockpitPrefs.$inferSelect;

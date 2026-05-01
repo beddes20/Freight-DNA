@@ -171,6 +171,9 @@ interface CockpitResponse {
     sentAwaitingCarrier: number;
     atRiskPickup24h: number;
     coveredToday: number;
+    // Task #900 — past-pickup rows the 'actionable' rule has hidden;
+    // powers the "Stale: N" chip + reveal-stale recovery affordance.
+    hiddenStale?: number;
     avgFreshnessMinutes: number | null;
   };
   lastImport: { at: string; ageMinutes: number } | null;
@@ -199,8 +202,10 @@ interface CockpitResponse {
     byLane: number;
     byCarrier: number;
   };
-  /** Phase B1 — server-confirmed pickup scope ('upcoming'|'recent'|'all'). */
-  pickupScope?: "upcoming" | "recent" | "all";
+  /** Phase B1 / Task #900 — server-confirmed pickup scope. */
+  pickupScope?: "upcoming" | "recent" | "all" | "actionable";
+  /** Task #900 — server-confirmed owner filter ('all'|'me'|'unassigned'|<userId>). */
+  ownerFilter?: string;
   /** Phase B1 — grace window applied (days). Defaults to 14. */
   pickupGraceDays?: number;
   roiMetrics?: {
@@ -228,6 +233,10 @@ interface CockpitPrefs {
   grouping: "none" | "customer" | "pickup_day" | "lane";
   sort: "urgency" | "pickup_soonest" | "freshness" | "customer" | "lane";
   autopilotMutedUntil: string | null;
+  // Task #900 — sticky owner filter + pickup scope. Either may be `null`
+  // to mean "use defaults"; the server treats undefined as "no change".
+  ownerFilter?: string | null;
+  pickupScope?: "upcoming" | "recent" | "all" | "actionable" | null;
 }
 
 
@@ -423,6 +432,15 @@ export default function AvailableFreightPage() {
     const v = new URLSearchParams(window.location.search).get("carrierId");
     return v && v.length > 0 ? v : null;
   });
+  // Task #900 — sticky owner filter. Mirrors lane/carrier deep-link pattern:
+  // hydrate from `?owner=`, sync via popstate, and write back to the URL on
+  // change so the rep can share / bookmark a filtered cockpit URL. Anything
+  // unrecognised silently degrades to "all" (matches the server's behavior).
+  const [ownerFilter, setOwnerFilterState] = useState<string>(() => {
+    if (typeof window === "undefined") return "all";
+    const v = new URLSearchParams(window.location.search).get("owner");
+    return v && v.length > 0 ? v : "all";
+  });
   // Re-sync deep-link filters whenever the URL changes (so navigating in-place
   // from a chip or back/forward updates the filtered cockpit view).
   useEffect(() => {
@@ -431,12 +449,24 @@ export default function AvailableFreightPage() {
       const params = new URLSearchParams(window.location.search);
       const lane = params.get("lane");
       const cid = params.get("carrierId");
+      const owner = params.get("owner");
       setLaneFilter(lane && lane.length > 0 ? lane : null);
       setCarrierIdFilter(cid && cid.length > 0 ? cid : null);
+      setOwnerFilterState(owner && owner.length > 0 ? owner : "all");
     };
     window.addEventListener("popstate", sync);
     return () => window.removeEventListener("popstate", sync);
   }, []);
+  // Wrapper so every owner-filter change writes back to the URL (replaceState
+  // so we don't pollute back-button history with every click).
+  const setOwnerFilter = (next: string) => {
+    setOwnerFilterState(next);
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (next === "all") url.searchParams.delete("owner");
+    else url.searchParams.set("owner", next);
+    window.history.replaceState({}, "", url.toString());
+  };
   const [statusFilter, setStatusFilter] = useState<string>("active");
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [grouping, setGrouping] = useState<CockpitPrefs["grouping"]>("none");
@@ -447,7 +477,13 @@ export default function AvailableFreightPage() {
   // past-pickup loads visible while their status is still open, hiding
   // only the strictly-stale (>14d) tail. 'upcoming' restores the legacy
   // strict view; 'all' never hides on pickup.
-  const [pickupScope, setPickupScope] = useState<"upcoming" | "recent" | "all">("recent");
+  // Task #900 — default to 'actionable' so the morning queue shows
+  // upcoming + today + ≤24h overdue still-open rows. Older lingering past-
+  // pickup rows are surfaced via the kpis.hiddenStale "Stale: N" chip and
+  // the reveal-stale recovery affordance.
+  const [pickupScope, setPickupScope] = useState<
+    "upcoming" | "recent" | "all" | "actionable"
+  >("actionable");
   const [layout, setLayout] = useState<CockpitPrefs["layout"]>("table");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [focusIndex, setFocusIndex] = useState<number>(-1);
@@ -529,6 +565,18 @@ export default function AvailableFreightPage() {
       setGrouping(p.grouping);
       setSort(p.sort);
       if (p.layout) setLayout(p.layout);
+      // Task #900 — hydrate sticky owner filter + pickup scope. The URL
+      // wins if the user landed via a deep-link (`?owner=` already set on
+      // mount); otherwise fall back to the persisted pref.
+      if (p.pickupScope === "upcoming" || p.pickupScope === "recent" || p.pickupScope === "all" || p.pickupScope === "actionable") {
+        setPickupScope(p.pickupScope);
+      }
+      if (typeof window !== "undefined") {
+        const urlOwner = new URLSearchParams(window.location.search).get("owner");
+        if (!urlOwner && typeof p.ownerFilter === "string" && p.ownerFilter.length > 0) {
+          setOwnerFilterState(p.ownerFilter);
+        }
+      }
     }
   }, [prefsResp]);
 
@@ -536,10 +584,31 @@ export default function AvailableFreightPage() {
     if (!activeViewId) return;
     const v = savedViews.find(v => v.id === activeViewId);
     if (!v) return;
-    const f = v.filters as { search?: string; companyId?: string; status?: string };
+    // Task #900 — saved views (including the built-in "My freight today"
+    // and "Team needs approval") may carry ownerFilter / pickupScope; load
+    // both alongside the legacy fields. Unknown values are ignored so a
+    // stale view never wedges the cockpit into an invalid filter combo.
+    const f = v.filters as {
+      search?: string;
+      companyId?: string;
+      status?: string;
+      ownerFilter?: string;
+      pickupScope?: string;
+    };
     if (typeof f.search === "string") setSearch(f.search);
     if (typeof f.companyId === "string") setCompanyFilter(f.companyId);
     if (typeof f.status === "string") setStatusFilter(f.status);
+    if (typeof f.ownerFilter === "string" && f.ownerFilter.length > 0) {
+      setOwnerFilter(f.ownerFilter);
+    }
+    if (
+      f.pickupScope === "upcoming" ||
+      f.pickupScope === "recent" ||
+      f.pickupScope === "all" ||
+      f.pickupScope === "actionable"
+    ) {
+      setPickupScope(f.pickupScope);
+    }
   }, [activeViewId, savedViews]);
 
   // Task #875 — also pull `username` (which is the user's email in this
@@ -559,11 +628,21 @@ export default function AvailableFreightPage() {
   });
 
   // Persist grouping/sort/active view changes to prefs (debounced via simple effect dep).
+  // Task #900 — also persist ownerFilter + pickupScope. `=== "all"` for owner
+  // and the canonical default for pickupScope are stored as `null` so a
+  // future default change can pick them up without a stuck pref.
   useEffect(() => {
     if (!hydratedRef.current) return;
-    upsertPrefs.mutate({ activeViewId, grouping, sort, layout });
+    upsertPrefs.mutate({
+      activeViewId,
+      grouping,
+      sort,
+      layout,
+      ownerFilter: ownerFilter === "all" ? null : ownerFilter,
+      pickupScope: pickupScope === "actionable" ? null : pickupScope,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeViewId, grouping, sort, layout]);
+  }, [activeViewId, grouping, sort, layout, ownerFilter, pickupScope]);
 
   const statusParam = statusFilter === "active"
     ? "pending_approval,new,ready_to_send,sent,awaiting_carrier_reply,awaiting_customer_confirm,partially_covered"
@@ -571,7 +650,7 @@ export default function AvailableFreightPage() {
       ? ""
       : statusFilter;
 
-  const feedKey = ["/api/freight-opportunities/cockpit", { status: statusParam, sort, grouping, companyId: companyFilter, lane: laneFilter, carrierId: carrierIdFilter, pickupScope }];
+  const feedKey = ["/api/freight-opportunities/cockpit", { status: statusParam, sort, grouping, companyId: companyFilter, lane: laneFilter, carrierId: carrierIdFilter, pickupScope, ownerFilter }];
   const { data: serverFeed, isLoading, isError, refetch, isFetching } = useQuery<CockpitResponse>({
     queryKey: feedKey,
     queryFn: async () => {
@@ -583,6 +662,10 @@ export default function AvailableFreightPage() {
       if (laneFilter) params.set("lane", laneFilter);
       if (carrierIdFilter) params.set("carrierId", carrierIdFilter);
       params.set("pickupScope", pickupScope);
+      // Task #900 — only send `?owner=` when the rep narrowed past "all";
+      // keeps the URL clean and lets the server fast-path the unfiltered
+      // case without re-running the ownership predicate per row.
+      if (ownerFilter !== "all") params.set("ownerFilter", ownerFilter);
       params.set("limit", "200");
       const res = await fetch(`/api/freight-opportunities/cockpit?${params.toString()}`, { credentials: "include" });
       if (!res.ok) throw new Error(`${res.status}`);
@@ -1426,14 +1509,48 @@ export default function AvailableFreightPage() {
         </div>
       )}
 
-      {/* KPI strip — Task #601 contract semantics */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+      {/* KPI strip — Task #601 contract semantics + Task #900 stale chip */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2">
         <KpiTile label="Generated today" value={kpis?.generatedToday ?? 0} testId="kpi-generated-today" />
         <KpiTile label="Ready to send" value={kpis?.readyToSend ?? 0} tone="ready" testId="kpi-ready" />
         <KpiTile label="Sent / awaiting carrier" value={kpis?.sentAwaitingCarrier ?? 0} tone="info" testId="kpi-sent-awaiting" />
         <KpiTile label="At-risk pickup ≤24h" value={kpis?.atRiskPickup24h ?? 0} tone="critical" testId="kpi-at-risk-24h" />
         <KpiTile label="Covered today" value={kpis?.coveredToday ?? 0} tone="ok" testId="kpi-covered-today" />
         <KpiTile label="Total in queue" value={kpis?.total ?? 0} testId="kpi-total" />
+        {/* Task #900 — Stale chip + reveal-stale recovery affordance.
+            Click → switches scope to 'all' so the rep can immediately see
+            the past-pickup rows the actionable rule had hidden. We render
+            the tile even when the count is zero (greyed out) so the chip's
+            position never shifts and screen readers always have the same
+            structure. */}
+        <button
+          type="button"
+          onClick={() => {
+            if ((kpis?.hiddenStale ?? 0) > 0) setPickupScope("all");
+          }}
+          className={`text-left rounded-md border px-3 py-2 transition-colors ${
+            (kpis?.hiddenStale ?? 0) > 0
+              ? "border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/15 cursor-pointer"
+              : "border-border bg-background opacity-60 cursor-default"
+          }`}
+          data-testid="button-reveal-stale"
+          aria-label={
+            (kpis?.hiddenStale ?? 0) > 0
+              ? `Reveal ${kpis?.hiddenStale} stale past-pickup rows`
+              : "No stale past-pickup rows"
+          }
+          title={
+            (kpis?.hiddenStale ?? 0) > 0
+              ? "Past-pickup rows the 'actionable' rule has hidden. Click to switch scope to 'All' and review them."
+              : "No past-pickup rows are currently hidden by the actionable rule."
+          }
+          disabled={(kpis?.hiddenStale ?? 0) === 0}
+        >
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Stale</div>
+          <div className="text-lg font-semibold" data-testid="chip-stale-count">
+            {kpis?.hiddenStale ?? 0}
+          </div>
+        </button>
       </div>
 
       {/* Saved-view tab strip + freshness pulse */}
@@ -1525,7 +1642,7 @@ export default function AvailableFreightPage() {
       {/* Filters & view controls */}
       <Card>
         <CardContent className="p-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2">
             <div className="lg:col-span-2 relative">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
@@ -1540,6 +1657,24 @@ export default function AvailableFreightPage() {
                 <SelectItem value="all">All customers</SelectItem>
                 {customersForFilter.map(c => (
                   <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {/* Task #900 — Owner filter. Reuses the same `users` query the
+                reassign modal uses so specific-user options always agree
+                with the rest of the cockpit. */}
+            <Select value={ownerFilter} onValueChange={setOwnerFilter}>
+              <SelectTrigger data-testid="select-filter-owner">
+                <SelectValue placeholder="Owner" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Owner: all</SelectItem>
+                <SelectItem value="me">Owner: mine</SelectItem>
+                <SelectItem value="unassigned">Owner: unassigned</SelectItem>
+                {users.map(u => (
+                  <SelectItem key={u.id} value={u.id} data-testid={`select-owner-option-${u.id}`}>
+                    {ownerLabel(u)}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -1585,17 +1720,19 @@ export default function AvailableFreightPage() {
                 <SelectItem value="calendar">Layout: pickup-day swimlane</SelectItem>
               </SelectContent>
             </Select>
-            {/* Phase B1 — pickup scope. 'recent' (default) keeps past-pickup
-                loads visible while their status is still open and only hides
-                strictly stale (>graceDays). */}
+            {/* Phase B1 / Task #900 — pickup scope. 'actionable' (default)
+                shows upcoming + today + past-pickup ≤24h-overdue still-open
+                rows. 'recent' restores the legacy 14-day grace view;
+                'upcoming' is strict; 'all' never hides on pickup date. */}
             <Select
               value={pickupScope}
-              onValueChange={(v) => setPickupScope(v as "upcoming" | "recent" | "all")}
+              onValueChange={(v) => setPickupScope(v as "upcoming" | "recent" | "all" | "actionable")}
             >
               <SelectTrigger data-testid="select-pickup-scope">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
+                <SelectItem value="actionable">Pickup: actionable (default)</SelectItem>
                 <SelectItem value="recent">Pickup: recent + upcoming</SelectItem>
                 <SelectItem value="upcoming">Pickup: upcoming only</SelectItem>
                 <SelectItem value="all">Pickup: all dates</SelectItem>
@@ -1606,18 +1743,22 @@ export default function AvailableFreightPage() {
               className="h-7 px-2 text-[11px] font-normal"
               data-testid="pill-pickup-scope"
               title={
-                pickupScope === "recent"
-                  ? `Showing upcoming loads plus past-pickup loads still open in their status (within ${feed?.pickupGraceDays ?? 14} days).`
-                  : pickupScope === "upcoming"
-                    ? "Strict view — only loads with a future pickup date are shown."
-                    : "Showing every pickup date, including stale ones."
+                pickupScope === "actionable"
+                  ? "Showing upcoming + today + past-pickup loads ≤24h overdue while still in an actionable status."
+                  : pickupScope === "recent"
+                    ? `Showing upcoming loads plus past-pickup loads still open in their status (within ${feed?.pickupGraceDays ?? 14} days).`
+                    : pickupScope === "upcoming"
+                      ? "Strict view — only loads with a future pickup date are shown."
+                      : "Showing every pickup date, including stale ones."
               }
             >
-              {pickupScope === "recent"
-                ? `Recent + upcoming (${feed?.pickupGraceDays ?? 14}d grace)`
-                : pickupScope === "upcoming"
-                  ? "Upcoming only"
-                  : "All pickup dates"}
+              {pickupScope === "actionable"
+                ? "Actionable (≤24h overdue)"
+                : pickupScope === "recent"
+                  ? `Recent + upcoming (${feed?.pickupGraceDays ?? 14}d grace)`
+                  : pickupScope === "upcoming"
+                    ? "Upcoming only"
+                    : "All pickup dates"}
             </Badge>
           </div>
         </CardContent>
