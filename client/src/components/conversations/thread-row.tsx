@@ -28,7 +28,13 @@ import { cn } from "@/lib/utils";
 import { DraftEmailModal } from "@/components/DraftEmailModal";
 import { WaitingStateBadge, PriorityDot } from "./badges";
 import { SnoozePopover } from "./snooze-popover";
-import { stripHtmlToText, formatAgo, formatDate, formatShortDateTime } from "./utils";
+import {
+  formatAgo,
+  formatDate,
+  formatShortDateTime,
+  resolvePreviewSnippet,
+  resolveThreadSubject,
+} from "./utils";
 import { hasQuoteSignal } from "./types";
 import type { ConversationThread, EmailMessage, ConversationDensity } from "./types";
 
@@ -76,11 +82,15 @@ export function ThreadRow({
     staleTime: 60_000,
   });
 
-  const firstMsg = msgData?.messages?.[0];
   const msgCount = msgData?.messages?.length ?? 0;
-  const displaySubject = firstMsg?.subject ?? thread.threadId.slice(0, 24) + "…";
   const lastMsg = msgData?.messages?.[msgData.messages.length - 1];
-  const previewBody = stripHtmlToText(lastMsg?.body ?? "").slice(0, 120);
+  // Task #940 — single source of truth for the row's title + preview.
+  // The helper rejects provider-id-shaped fallbacks (Outlook AAQkAD…
+  // tokens), collapses Re:/Fw: chains, and never returns a `threadId`.
+  // We pass NO threadHint here because `thread.threadId` is exactly the
+  // id-shaped string we're guarding against.
+  const displaySubject = resolveThreadSubject({ messages: msgData?.messages ?? [] });
+  const previewBody = resolvePreviewSnippet(lastMsg?.body ?? "");
 
   const canResolve = thread.waitingState !== "resolved" && thread.waitingState !== "archived";
   const canReopen = thread.waitingState === "resolved";
@@ -212,7 +222,7 @@ export function ThreadRow({
             "text-xs mt-1 truncate max-w-xl",
             isUnread ? "text-foreground" : "text-muted-foreground italic"
           )}>
-            {previewBody}{previewBody.length >= 120 ? "…" : ""}
+            {previewBody}
           </p>
         )}
       </div>

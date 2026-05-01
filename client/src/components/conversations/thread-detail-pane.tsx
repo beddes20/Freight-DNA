@@ -23,6 +23,7 @@ import { MessageHeader } from "./message-header";
 import { ReplyCaptureAuditButton } from "./capture-audit-popover";
 import { CorrectionDialog } from "./correction-dialog";
 import { ThreadSummaryCard, ThreadSuggestionCard, ThreadEventsTimeline } from "./smart-pane-blocks";
+import { resolveThreadSubject } from "./utils";
 import type { ConversationThread, EmailMessage } from "./types";
 
 interface ThreadDetailPaneProps {
@@ -182,7 +183,10 @@ export function ThreadDetailPane({
 
   const messages = data?.messages ?? [];
   const isOverdue = !!thread.overdueAt && thread.waitingState === "waiting_on_us";
-  const subject = messages[0]?.subject ?? thread.threadId;
+  // Task #940 — share the same display contract as the list rows. Never falls
+  // back to thread.threadId (the Outlook AAQkAD… provider id) — a missing
+  // subject renders as `(no subject)`.
+  const subject = resolveThreadSubject({ messages });
 
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-background" data-testid="thread-detail-panel">
