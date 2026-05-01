@@ -622,6 +622,12 @@ export async function sendOpportunityWave(
     // Persist linkage in email_conversation_threads so inbound replies
     // correlate back to this carrier (and through it, to the opportunity).
     if (threadKey) {
+      // Task #859 — share a single timestamp between `lastOutgoingAt` and
+      // the denormalized `lastEmailAt` so the two columns can never drift
+      // by a millisecond. Using two separate `new Date()` calls would let
+      // the row-level recency sort and the per-direction predicate
+      // disagree about which direction "won" the freshness tie-break.
+      const sentAt = new Date();
       try {
         await storage.upsertEmailConversationThread({
           orgId,
@@ -632,7 +638,10 @@ export async function sendOpportunityWave(
             linkedAccountId: opportunity.companyId ?? null,
             linkedCarrierId: row.carrierId,
             ownerUserId: rep.id,
-            lastOutgoingAt: new Date(),
+            lastOutgoingAt: sentAt,
+            // Single denormalized "real email activity" column must stay
+            // in sync with the per-direction column we just bumped.
+            lastEmailAt: sentAt,
             waitingState: "waiting_on_them",
           },
         });

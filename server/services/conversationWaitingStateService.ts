@@ -42,6 +42,7 @@ export function computeWaitingState(direction: string): "waiting_on_us" | "waiti
  *  - waitingSinceAt  (set when transitioning INTO waiting_on_us)
  *  - overdueAt       (set when SLA is breached while in waiting_on_us)
  *  - lastIncomingAt / lastOutgoingAt
+ *  - lastEmailAt     (denormalized "real email activity" timestamp; Task #859)
  *
  * Returns a partial update object to merge into the thread record.
  */
@@ -77,6 +78,22 @@ export function applyMessageToThread(
     update.lastIncomingAt = sentAt;
   } else {
     update.lastOutgoingAt = sentAt;
+  }
+
+  // Task #859 — keep the denormalized `last_email_at` column in sync.
+  // It must equal MAX(lastIncomingAt, lastOutgoingAt) AFTER this update
+  // is applied so the date filter and the row-label UI both read a
+  // single source of truth instead of recomputing GREATEST(...) per
+  // query. We monotonically advance the column — out-of-order replays
+  // with an older sentAt must not regress freshness.
+  const newIncomingMs =
+    (update.lastIncomingAt ?? thread.lastIncomingAt)?.getTime() ?? 0;
+  const newOutgoingMs =
+    (update.lastOutgoingAt ?? thread.lastOutgoingAt)?.getTime() ?? 0;
+  const existingEmailMs = thread.lastEmailAt?.getTime() ?? 0;
+  const maxMs = Math.max(newIncomingMs, newOutgoingMs, existingEmailMs);
+  if (maxMs > 0) {
+    update.lastEmailAt = new Date(maxMs);
   }
 
   if (isNowWaitingOnUs) {

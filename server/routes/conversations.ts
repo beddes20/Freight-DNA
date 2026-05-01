@@ -65,17 +65,20 @@ import {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Phase 1 — "Stop lying about freshness."
-// Computes a source-of-truth `lastEmailAt` per thread by reading
-// MAX(email_messages.provider_sent_at) per thread_id in a single batched
-// query. The Conversations UI MUST consume this (or lastIncomingAt /
-// lastOutgoingAt) for every freshness label — never `updatedAt`, which is
-// bumped by background workers (archive sweep, denormalization sweeps,
-// signal rewrites) and lands days off the actual conversation activity.
+// Surfaces a source-of-truth `lastEmailAt` per thread to the UI. The
+// Conversations UI MUST consume this (or lastIncomingAt / lastOutgoingAt)
+// for every freshness label — never `updatedAt`, which is bumped by
+// background workers (archive sweep, denormalization sweeps, signal
+// rewrites) and lands days off the actual conversation activity.
 //
-// The denormalized `lastIncomingAt` / `lastOutgoingAt` columns on the
-// thread row are a defensive fallback for threads where the message-row
-// query returns nothing (extremely rare; the runMigrations backfill keeps
-// them in sync). Cost is one batched aggregate per page (≤100 threads).
+// Task #859 — `lastEmailAt` is now a permanent denormalized column on
+// `email_conversation_threads`, populated by `applyMessageToThread` and
+// the freshness backfill in `runMigrations.ts` (single source of truth).
+// The route layer's `computeLastEmailAtMap` is a passthrough over that
+// column — no per-page aggregate query, and the date filter (in
+// `storage.ts`) reads the same column so they cannot disagree. The
+// `lastIncomingAt` / `lastOutgoingAt` fallback below covers only legacy
+// rows that haven't yet been re-anchored by the boot-time backfill.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Task #858 — resolve a YYYY-MM-DD date filter to the rep's local-day
@@ -140,38 +143,24 @@ function resolveLocalDayBound(
   return new Date(wallUtcMs - offsetMs).toISOString();
 }
 
+// Task #859 — passthrough over the denormalized `email_conversation_threads.last_email_at`
+// column. Replaces the legacy MAX(provider_sent_at) GROUP BY scan plus
+// fallback logic — a single permanent column is now the source of truth
+// for both the date filter (in storage.ts) and this row-label timestamp,
+// so they can never disagree. Falls back to GREATEST(lastIncomingAt,
+// lastOutgoingAt) for the rare row that hasn't been re-anchored yet
+// (defensive only — runMigrations.ts backfills the column on every boot).
 async function computeLastEmailAtMap(
-  orgId: string,
-  threads: Array<{ threadId: string | null; lastIncomingAt: Date | null; lastOutgoingAt: Date | null }>,
+  _orgId: string,
+  threads: Array<{ threadId: string | null; lastEmailAt: Date | null; lastIncomingAt: Date | null; lastOutgoingAt: Date | null }>,
 ): Promise<Map<string, string | null>> {
   const out = new Map<string, string | null>();
-  const ids = [...new Set(threads.map(t => t.threadId).filter((id): id is string => !!id))];
-  if (ids.length === 0) return out;
-  try {
-    const rows = await db
-      .select({
-        threadId: emailMessages.threadId,
-        maxSent: sql<Date | null>`MAX(${emailMessages.providerSentAt})`,
-      })
-      .from(emailMessages)
-      .where(and(eq(emailMessages.orgId, orgId), inArray(emailMessages.threadId, ids)))
-      .groupBy(emailMessages.threadId);
-    for (const r of rows) {
-      if (r.threadId && r.maxSent) {
-        out.set(r.threadId, new Date(r.maxSent).toISOString());
-      }
-    }
-  } catch (err) {
-    // A failure here must not 500 the inbox — just leave lastEmailAt null
-    // for affected rows and let the UI fall back to lastIncomingAt /
-    // lastOutgoingAt (still real email events, just less complete).
-    console.error("[conversations] computeLastEmailAtMap failed:", err);
-  }
-  // Defensive fallback for threads with no email_messages.provider_sent_at
-  // row — derive from the denormalized columns so the row UI still shows
-  // *something* anchored to a real email event.
   for (const t of threads) {
-    if (!t.threadId || out.has(t.threadId)) continue;
+    if (!t.threadId) continue;
+    if (t.lastEmailAt) {
+      out.set(t.threadId, new Date(t.lastEmailAt).toISOString());
+      continue;
+    }
     const inc = t.lastIncomingAt ? new Date(t.lastIncomingAt).getTime() : 0;
     const outgoing = t.lastOutgoingAt ? new Date(t.lastOutgoingAt).getTime() : 0;
     const max = Math.max(inc, outgoing);

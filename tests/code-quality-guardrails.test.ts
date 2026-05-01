@@ -822,8 +822,11 @@ assert(
 // `email_conversation_threads.updated_at` is a row-touched-by-anything clock
 // (bumped by every background worker that touches the row) and is routinely
 // hours-to-days off the actual conversation activity. Phase 1 replaced it
-// with `lastEmailAt` (server-computed as MAX(email_messages.provider_sent_at))
-// plus the existing `lastIncomingAt` / `lastOutgoingAt` denorm columns.
+// with `lastEmailAt`, originally computed as MAX(email_messages.provider_sent_at)
+// per page. Task #859 then promoted `lastEmailAt` to a permanent denormalized
+// column on `email_conversation_threads` (kept in sync by `applyMessageToThread`
+// + the freshness backfill), so the route-layer helper is now a passthrough —
+// see Section 18 for the column / index / migration fences.
 //
 // These fences fail the build if anyone re-introduces a freshness label
 // backed by `thread.updatedAt`, or removes `lastEmailAt` from the shared
@@ -854,10 +857,10 @@ assert(
 
 const conversationsRouteSrc = readFile("server/routes/conversations.ts");
 assert(
-  "routes/conversations.ts — exposes computeLastEmailAtMap helper",
+  "routes/conversations.ts — exposes computeLastEmailAtMap helper (Task #859 passthrough)",
   /computeLastEmailAtMap/.test(conversationsRouteSrc) &&
-    /MAX\s*\(\s*\$\{?\s*emailMessages\.providerSentAt/.test(conversationsRouteSrc),
-  "server/routes/conversations.ts must compute lastEmailAt as MAX(email_messages.provider_sent_at) per page.",
+    /t\.lastEmailAt/.test(conversationsRouteSrc),
+  "server/routes/conversations.ts must surface lastEmailAt via the computeLastEmailAtMap passthrough that reads the denormalized `lastEmailAt` column on email_conversation_threads (Task #859) — no per-page MAX() aggregate, no GREATEST() reconciliation.",
 );
 assert(
   "routes/conversations.ts — main list and my-waiting both ship lastEmailAt",
@@ -1103,10 +1106,53 @@ console.log("\n── 17. Post-2d Quote Requests S2-S6 — endpoints / classifie
   );
 }
 
-// Section 18: Task #858 — Conversations date filter must anchor on real
-// email activity (`GREATEST(last_incoming_at, last_outgoing_at)`), not
-// `updated_at`. Archived bucket keeps `archived_at`.
-console.log("\n── 18. Conversations date filter — real-email-activity anchor (Task #858) ─────\n");
+// Section 18: Task #859 — Conversations date filter must anchor on the
+// denormalized `last_email_at` column (single source of truth, kept in
+// sync by applyMessageToThread + the freshness backfill), not the
+// per-direction columns or a `GREATEST(...)` recomputation. Archived
+// bucket keeps `archived_at`. Replaces Task #858's GREATEST predicate
+// with a column read so the date filter and the row-label UI both look
+// at the same value.
+console.log("\n── 18. Conversations date filter — denormalized last_email_at column (Task #859) ─────\n");
+
+{
+  const schemaSrc = readFile("shared/schema.ts");
+  assert(
+    "shared/schema.ts — emailConversationThreads.lastEmailAt column exists",
+    /lastEmailAt:\s*timestamp\(\s*"last_email_at"\s*\)/.test(schemaSrc),
+    "Task #859 — shared/schema.ts must declare `lastEmailAt: timestamp(\"last_email_at\")` on emailConversationThreads.",
+  );
+  assert(
+    "shared/schema.ts — (org_id, last_email_at DESC) index declared",
+    /idx_ect_org_last_email_at/.test(schemaSrc),
+    "Task #859 — the `idx_ect_org_last_email_at` index on (orgId, lastEmailAt DESC) must be declared in the table builder so the date filter / sort has an index to read.",
+  );
+}
+
+{
+  const migrationsSrc = readFile("server/runMigrations.ts");
+  assert(
+    "runMigrations.ts — adds last_email_at column with ADD COLUMN IF NOT EXISTS",
+    /ADD COLUMN IF NOT EXISTS\s+last_email_at\s+timestamp/i.test(migrationsSrc),
+    "Task #859 — runMigrations.ts must materialize `email_conversation_threads.last_email_at timestamp` so the live DB matches shared/schema.ts.",
+  );
+  assert(
+    "runMigrations.ts — backfills last_email_at from MAX(provider_sent_at)",
+    /last_email_at[\s\S]{0,800}MAX\(provider_sent_at\)/.test(migrationsSrc),
+    "Task #859 — runMigrations.ts must heal `last_email_at` from MAX(email_messages.provider_sent_at) per thread.",
+  );
+  assert(
+    "runMigrations.ts — drops the per-direction indexes Task #858 added",
+    /DROP INDEX IF EXISTS\s+idx_ect_org_last_incoming_at/.test(migrationsSrc) &&
+      /DROP INDEX IF EXISTS\s+idx_ect_org_last_outgoing_at/.test(migrationsSrc),
+    "Task #859 — the `(org_id, last_incoming_at DESC)` / `(org_id, last_outgoing_at DESC)` indexes are no longer used and must be dropped.",
+  );
+  assert(
+    "runMigrations.ts — creates the new (org_id, last_email_at DESC) index",
+    /CREATE INDEX IF NOT EXISTS\s+idx_ect_org_last_email_at[\s\S]{0,200}org_id,\s*last_email_at\s+DESC/i.test(migrationsSrc),
+    "Task #859 — the new `idx_ect_org_last_email_at` index must back the date filter / sort.",
+  );
+}
 
 const storageSrcForDateFilter = readFile("server/storage.ts");
 {
@@ -1117,21 +1163,24 @@ const storageSrcForDateFilter = readFile("server/storage.ts");
   assert(
     "storage.ts listEmailConversationThreads — has a unified date-filter block",
     !!filterBlock,
-    "Could not locate the dateFrom/dateTo block in listEmailConversationThreads — Task #858 expects a single guarded block that branches on archivedOnly.",
+    "Could not locate the dateFrom/dateTo block in listEmailConversationThreads — Task #859 expects a single guarded block that branches on archivedOnly.",
   );
   if (filterBlock) {
     const block = filterBlock[0];
     assert(
       "storage.ts listEmailConversationThreads — non-archived date filter does NOT touch updatedAt",
       !/emailConversationThreads\.updatedAt/.test(block),
-      "Found `emailConversationThreads.updatedAt` inside the date-filter block. Task #858: the non-archived path must anchor on `GREATEST(last_incoming_at, last_outgoing_at)`.",
+      "Found `emailConversationThreads.updatedAt` inside the date-filter block. Task #859: the non-archived path must anchor on `last_email_at`.",
     );
     assert(
-      "storage.ts listEmailConversationThreads — non-archived date filter anchors on real email-activity columns",
-      /emailConversationThreads\.lastIncomingAt/.test(block) &&
-        /emailConversationThreads\.lastOutgoingAt/.test(block) &&
-        /GREATEST/.test(block),
-      "The non-archived date filter must reference both lastIncomingAt and lastOutgoingAt and combine them with GREATEST.",
+      "storage.ts listEmailConversationThreads — non-archived date filter anchors on the denormalized last_email_at column",
+      /emailConversationThreads\.lastEmailAt/.test(block),
+      "The non-archived date filter must reference `emailConversationThreads.lastEmailAt` — Task #859's single source of truth.",
+    );
+    assert(
+      "storage.ts listEmailConversationThreads — non-archived date filter does NOT recompute GREATEST(last_incoming_at, last_outgoing_at)",
+      !/GREATEST/.test(block),
+      "Task #859: the date filter must read the denormalized `last_email_at` column directly, not recompute `GREATEST(...)` on every query.",
     );
     assert(
       "storage.ts listEmailConversationThreads — Archived bucket still anchors on archived_at",
@@ -1139,6 +1188,45 @@ const storageSrcForDateFilter = readFile("server/storage.ts");
       "The archived branch of the date filter must keep using `archivedAt` — that bucket is *about* archive time.",
     );
   }
+}
+
+{
+  // Task #859 — applyMessageToThread is the write-side guarantee that
+  // `last_email_at` stays in sync with the per-direction columns. If
+  // the function stops writing it, every new inbound/outbound stops
+  // updating freshness and the date filter silently regresses.
+  const waitingStateSrc = readFile("server/services/conversationWaitingStateService.ts");
+  const fnMatch = waitingStateSrc.match(/export\s+function\s+applyMessageToThread[\s\S]{0,3000}/);
+  assert(
+    "conversationWaitingStateService.applyMessageToThread — assigns lastEmailAt",
+    !!fnMatch && /update\.lastEmailAt\s*=/.test(fnMatch[0]),
+    "Task #859 — applyMessageToThread must write `update.lastEmailAt` alongside the direction-specific column so the denormalized column stays in sync.",
+  );
+}
+
+{
+  // Task #859 — `conversationThreadBackfillService` materializes new
+  // thread rows from the email_messages aggregate. Bare
+  // `GREATEST(last_incoming_at, last_outgoing_at)` returns NULL in
+  // Postgres if either side is NULL, so single-direction threads (only
+  // inbound OR only outbound) would land with `last_email_at = NULL`
+  // and silently disappear from the storage date filter. Both insert
+  // sites must use the NULL-safe `GREATEST(COALESCE(a, b), COALESCE(b, a))`
+  // shape; bare GREATEST(...) on the two raw direction columns is
+  // forbidden.
+  const backfillSrc = readFile("server/services/conversationThreadBackfillService.ts");
+  assert(
+    "conversationThreadBackfillService — does NOT use bare GREATEST(last_incoming_at, last_outgoing_at) for last_email_at",
+    !/GREATEST\(\s*[a-zA-Z_.]*last_incoming_at\s*,\s*[a-zA-Z_.]*last_outgoing_at\s*\)/.test(backfillSrc),
+    "Task #859 — bare `GREATEST(last_incoming_at, last_outgoing_at)` returns NULL when either side is NULL, leaving single-direction threads invisible to the date filter. Wrap each arm in COALESCE: `GREATEST(COALESCE(a, b), COALESCE(b, a))`.",
+  );
+  assert(
+    "conversationThreadBackfillService — uses NULL-safe GREATEST(COALESCE(...)) for last_email_at",
+    /GREATEST\(\s*COALESCE\([^)]*last_incoming_at[^)]*last_outgoing_at[^)]*\)\s*,\s*COALESCE\([^)]*last_outgoing_at[^)]*last_incoming_at[^)]*\)\s*\)/.test(
+      backfillSrc.replace(/\s+/g, " "),
+    ),
+    "Task #859 — the new-thread insert SQL must seed `last_email_at` via `GREATEST(COALESCE(last_incoming_at, last_outgoing_at), COALESCE(last_outgoing_at, last_incoming_at))` so single-direction threads still land with a non-NULL value.",
+  );
 }
 
 const conversationsRouteForTz = readFile("server/routes/conversations.ts");

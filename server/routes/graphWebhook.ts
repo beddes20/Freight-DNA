@@ -685,7 +685,7 @@ async function processUserMailboxEmail(params: {
         ownerUserId: monitoredMailbox.userId,
         waitingState: "waiting_on_us",
         responsePriority: "normal", lastMessageId: null,
-        lastIncomingAt: null, lastOutgoingAt: null,
+        lastIncomingAt: null, lastOutgoingAt: null, lastEmailAt: null,
         waitingSinceAt: null, overdueAt: null,
         archivedAt: null,
         snoozedUntil: null, snoozedFromState: null, snoozedByUserId: null,

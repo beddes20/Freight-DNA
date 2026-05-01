@@ -3446,6 +3446,7 @@ async function processSingleOutlookReply(
           lastMessageId: null,
           lastIncomingAt: null,
           lastOutgoingAt: null,
+          lastEmailAt: null,
           waitingSinceAt: null,
           overdueAt: null,
           createdAt: now,

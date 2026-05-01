@@ -1,11 +1,16 @@
 /**
- * Task #858 — Quote Requests date filter anchors on real email activity.
+ * Task #858 / #859 — Quote Requests date filter anchors on real email activity.
  *
  * Seeds two pricing-request threads into the live session org:
- *   A: last_incoming_at = today,        updated_at = now
- *   B: last_incoming_at = today - 10d,  updated_at = now (sweep bump)
+ *   A: last_incoming_at = today,        last_email_at = today,        updated_at = now
+ *   B: last_incoming_at = today - 10d,  last_email_at = today - 10d,  updated_at = now (sweep bump)
  * Asserts that today-window queries return A and exclude B against both
  * the storage SQL (direct DB predicate) and the live route layer.
+ *
+ * Task #859 collapsed the storage GREATEST(last_incoming_at,
+ * last_outgoing_at) predicate to a direct read of the denormalized
+ * `last_email_at` column, so this test now both seeds that column and
+ * checks the same column from the API response.
  *
  * Run with: npx tsx tests/quote-requests-date-filter.test.ts
  */
@@ -90,11 +95,13 @@ async function seedThread(
   updatedAt: Date,
 ): Promise<{ id: string; threadId: string }> {
   const threadId = `task858-${threadIdSuffix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  // Task #859 — also seed `last_email_at` so the new denormalized
+  // column matches the per-direction column for the assertions below.
   const r = await pool.query<{ id: string }>(
     `INSERT INTO email_conversation_threads
        (org_id, thread_id, waiting_state, response_priority,
-        last_incoming_at, updated_at, created_at)
-     VALUES ($1, $2, 'waiting_on_us', 'normal', $3, $4, NOW())
+        last_incoming_at, last_email_at, updated_at, created_at)
+     VALUES ($1, $2, 'waiting_on_us', 'normal', $3, $3, $4, NOW())
      RETURNING id`,
     [orgId, threadId, lastIncomingAt.toISOString(), updatedAt.toISOString()],
   );
@@ -213,23 +220,19 @@ async function main(): Promise<void> {
       `Got ${sanity.rows.length} thread rows`,
     );
 
-    // ── DB-level invariant — the production predicate (Task #858) excludes B.
-    // Scope to our seeded thread_ids so other live rows in the session org
-    // don't pollute the assertion.
+    // ── DB-level invariant — the production predicate (Task #859) excludes B.
+    // Reads the denormalized `last_email_at` column directly (the storage
+    // layer no longer recomputes GREATEST(...) per query). Scope to our
+    // seeded thread_ids so other live rows in the session org don't
+    // pollute the assertion.
     const dbCheck = await pool.query<{ thread_id: string }>(
       `SELECT thread_id
          FROM email_conversation_threads
         WHERE org_id = $1
           AND thread_id = ANY($4::text[])
           AND archived_at IS NULL
-          AND GREATEST(
-                COALESCE(last_incoming_at, last_outgoing_at),
-                COALESCE(last_outgoing_at, last_incoming_at)
-              ) >= $2
-          AND GREATEST(
-                COALESCE(last_incoming_at, last_outgoing_at),
-                COALESCE(last_outgoing_at, last_incoming_at)
-              ) <= $3`,
+          AND last_email_at >= $2
+          AND last_email_at <= $3`,
       [
         orgId,
         // Match the route layer's "today @ rep-local midnight" boundary
@@ -241,9 +244,55 @@ async function main(): Promise<void> {
     );
     const dbReturned = dbCheck.rows.map(r => r.thread_id).sort();
     assert(
-      "DB predicate: GREATEST(last_incoming_at, last_outgoing_at) BETWEEN today bounds returns only Thread A",
+      "DB predicate: last_email_at BETWEEN today bounds returns only Thread A",
       dbReturned.length === 1 && dbReturned[0] === a.threadId,
       `Expected [${a.threadId}], got [${dbReturned.join(", ")}]`,
+    );
+
+    // ── Task #859 NULL-safe seed expression — fences the
+    // `conversationThreadBackfillService` insert SQL. Bare
+    // `GREATEST(a, b)` returns NULL in Postgres if either side is NULL;
+    // a single-direction thread (only inbound OR only outbound history)
+    // would then land with `last_email_at = NULL` and silently disappear
+    // from the storage date filter. Assert the production
+    // `GREATEST(COALESCE(...), COALESCE(...))` shape returns the live
+    // direction column for both single-direction cases and matches
+    // GREATEST() when both directions are present.
+    const inOnly = await pool.query<{ v: Date | null }>(
+      `SELECT GREATEST(
+                COALESCE($1::timestamp, $2::timestamp),
+                COALESCE($2::timestamp, $1::timestamp)
+              ) AS v`,
+      [new Date("2026-01-15T10:00:00Z").toISOString(), null],
+    );
+    assert(
+      "NULL-safe GREATEST(COALESCE...) — inbound-only thread yields the inbound timestamp",
+      inOnly.rows[0].v !== null && new Date(inOnly.rows[0].v as Date).toISOString() === "2026-01-15T10:00:00.000Z",
+      `Expected 2026-01-15T10:00:00.000Z, got ${inOnly.rows[0].v}`,
+    );
+    const outOnly = await pool.query<{ v: Date | null }>(
+      `SELECT GREATEST(
+                COALESCE($1::timestamp, $2::timestamp),
+                COALESCE($2::timestamp, $1::timestamp)
+              ) AS v`,
+      [null, new Date("2026-02-20T14:30:00Z").toISOString()],
+    );
+    assert(
+      "NULL-safe GREATEST(COALESCE...) — outbound-only thread yields the outbound timestamp",
+      outOnly.rows[0].v !== null && new Date(outOnly.rows[0].v as Date).toISOString() === "2026-02-20T14:30:00.000Z",
+      `Expected 2026-02-20T14:30:00.000Z, got ${outOnly.rows[0].v}`,
+    );
+    const both = await pool.query<{ v: Date | null }>(
+      `SELECT GREATEST(
+                COALESCE($1::timestamp, $2::timestamp),
+                COALESCE($2::timestamp, $1::timestamp)
+              ) AS v`,
+      [new Date("2026-03-01T08:00:00Z").toISOString(), new Date("2026-03-05T12:00:00Z").toISOString()],
+    );
+    assert(
+      "NULL-safe GREATEST(COALESCE...) — both directions present yields the larger timestamp",
+      both.rows[0].v !== null && new Date(both.rows[0].v as Date).toISOString() === "2026-03-05T12:00:00.000Z",
+      `Expected 2026-03-05T12:00:00.000Z, got ${both.rows[0].v}`,
     );
 
     // ── Live endpoint — exercises route-layer tz resolution + storage SQL.

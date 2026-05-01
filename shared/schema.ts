@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, desc } from "drizzle-orm";
 import { pgTable, text, varchar, integer, serial, decimal, jsonb, boolean, timestamp, date, uniqueIndex, index, customType, primaryKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -1972,6 +1972,13 @@ export const emailConversationThreads = pgTable("email_conversation_threads", {
   lastMessageId: varchar("last_message_id").references(() => emailMessages.id, { onDelete: "set null" }),
   lastIncomingAt: timestamp("last_incoming_at"),
   lastOutgoingAt: timestamp("last_outgoing_at"),
+  // Task #859 — single denormalized "real email activity" timestamp.
+  // Equals MAX(email_messages.provider_sent_at) for the thread; kept in
+  // sync by `applyMessageToThread` and the freshness backfill in
+  // runMigrations.ts. Exists so the date-filter SQL, the row-label UI,
+  // and any offline reports all read from one source of truth instead
+  // of recomputing GREATEST(last_incoming_at, last_outgoing_at) per query.
+  lastEmailAt: timestamp("last_email_at"),
   waitingSinceAt: timestamp("waiting_since_at"),
   overdueAt: timestamp("overdue_at"),
   archivedAt: timestamp("archived_at"),
@@ -1990,6 +1997,10 @@ export const emailConversationThreads = pgTable("email_conversation_threads", {
   orgWaitingIdx: index("ect_org_waiting_idx").on(t.orgId, t.waitingState),
   orgOwnerIdx: index("ect_org_owner_idx").on(t.orgId, t.ownerUserId),
   orgArchivedIdx: index("ect_org_archived_idx").on(t.orgId, t.archivedAt),
+  // Task #859 — backs the date filter and "newest email first" sort that
+  // both anchor on the denormalized `lastEmailAt` column. Replaces the
+  // per-direction indexes Task #858 added for the GREATEST(...) predicate.
+  orgLastEmailIdx: index("idx_ect_org_last_email_at").on(t.orgId, desc(t.lastEmailAt)),
 }));
 
 export const insertEmailConversationThreadSchema = createInsertSchema(emailConversationThreads).omit({

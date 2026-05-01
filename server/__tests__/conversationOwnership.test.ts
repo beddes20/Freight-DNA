@@ -50,6 +50,7 @@ function makeThread(overrides: Partial<EmailConversationThread> = {}): EmailConv
     lastMessageId: null,
     lastIncomingAt: null,
     lastOutgoingAt: null,
+    lastEmailAt: null,
     waitingSinceAt: null,
     overdueAt: null,
     createdAt: new Date("2026-04-01T00:00:00Z"),

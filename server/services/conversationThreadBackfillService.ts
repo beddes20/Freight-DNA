@@ -181,7 +181,8 @@ export async function backfillMissingConversationThreads(opts: {
       INSERT INTO email_conversation_threads (
         org_id, thread_id, linked_account_id, linked_carrier_id,
         owner_user_id, waiting_state, response_priority, last_message_id,
-        last_incoming_at, last_outgoing_at, waiting_since_at, overdue_at,
+        last_incoming_at, last_outgoing_at, last_email_at,
+        waiting_since_at, overdue_at,
         created_at, updated_at
       )
       SELECT
@@ -205,6 +206,16 @@ export async function backfillMissingConversationThreads(opts: {
         m.last_message_id,
         m.last_incoming_at,
         m.last_outgoing_at,
+        -- Task #859 — denormalized "real email activity" timestamp seeded on
+        -- insert so the date filter / sort sees freshness without a separate
+        -- backfill pass when the row is first materialized. NULL-safe: bare
+        -- GREATEST(a, b) returns NULL if either side is NULL in Postgres,
+        -- so we COALESCE each arm so single-direction threads still get a
+        -- non-NULL last_email_at and stay visible to the storage date filter.
+        GREATEST(
+          COALESCE(m.last_incoming_at, m.last_outgoing_at),
+          COALESCE(m.last_outgoing_at, m.last_incoming_at)
+        ) AS last_email_at,
         CASE WHEN m.last_direction = 'inbound' THEN m.last_incoming_at ELSE NULL END AS waiting_since_at,
         CASE
           WHEN m.last_direction = 'inbound'
@@ -286,7 +297,8 @@ export async function materializeConversationThreadIfMissing(
     INSERT INTO email_conversation_threads (
       org_id, thread_id, linked_account_id, linked_carrier_id,
       owner_user_id, waiting_state, response_priority, last_message_id,
-      last_incoming_at, last_outgoing_at, waiting_since_at, overdue_at,
+      last_incoming_at, last_outgoing_at, last_email_at,
+      waiting_since_at, overdue_at,
       created_at, updated_at
     )
     SELECT
@@ -309,6 +321,15 @@ export async function materializeConversationThreadIfMissing(
       agg.last_message_id,
       agg.last_incoming_at,
       agg.last_outgoing_at,
+      -- Task #859 — denormalized "real email activity" timestamp seeded on
+      -- insert (single source of truth for the date filter / row label).
+      -- NULL-safe — bare GREATEST(a, b) returns NULL if either side is NULL
+      -- in Postgres, so single-direction threads must use COALESCE'd arms
+      -- to land a non-NULL value the storage filter can see.
+      GREATEST(
+        COALESCE(agg.last_incoming_at, agg.last_outgoing_at),
+        COALESCE(agg.last_outgoing_at, agg.last_incoming_at)
+      ),
       CASE WHEN agg.last_direction = 'inbound' THEN agg.last_incoming_at ELSE NULL END,
       CASE
         WHEN agg.last_direction = 'inbound'

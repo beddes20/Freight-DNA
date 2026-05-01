@@ -5108,7 +5108,7 @@ export async function runMigrations() {
 
   // ===================================================================
   // Conversations freshness — backfill `last_incoming_at` / `last_outgoing_at`
-  // from MAX(email_messages.provider_sent_at) per direction.
+  // / `last_email_at` from MAX(email_messages.provider_sent_at).
   //
   // Phase 1 of "Stop lying about freshness." Historically:
   //   - applyMessageToThread stamped these columns with wall-clock now()
@@ -5121,26 +5121,39 @@ export async function runMigrations() {
   //     phase: avg drift +134h, only 40% of quote-request threads even
   //     linked to quote_opportunities).
   //
-  // The route layer now ALWAYS reads MAX(provider_sent_at) per page
-  // (computeLastEmailAtMap in server/routes/conversations.ts), but we
-  // also heal the denormalized columns up-front so per-thread filters
-  // (`?dateFrom=…&dateTo=…`), the dashboard "my-waiting" portlet, and
-  // the offline reports that read straight from the column see the
-  // correct values too. Idempotent — DISTINCT FROM only writes rows
-  // whose column is currently wrong, so re-running this on every boot
-  // is a no-op once converged.
+  // Task #859 collapses the three sources of truth (storage GREATEST
+  // expression, route layer's MAX(provider_sent_at) GROUP BY, and the
+  // denormalized direction columns) into a single permanent
+  // `last_email_at` column. Both the date filter (storage.ts) and the
+  // row-label timestamp (computeLastEmailAtMap) now read this column,
+  // so they cannot disagree. We materialize the column here, backfill
+  // it from MAX(provider_sent_at) per thread, and replace the
+  // per-direction indexes Task #858 added with a single
+  // (org_id, last_email_at DESC) index that backs both the filter and
+  // the recency sort. Idempotent — every statement is IF NOT EXISTS or
+  // DISTINCT FROM, safe to re-run on every boot.
   // ===================================================================
   const clientFreshness = await pool.connect();
   try {
+    // Task #859 — materialize the column so the schema-drift guard
+    // doesn't refuse to start. shared/schema.ts owns the Drizzle
+    // declaration; this ALTER mirrors it in the live DB.
+    await clientFreshness.query(`
+      ALTER TABLE email_conversation_threads
+        ADD COLUMN IF NOT EXISTS last_email_at timestamp
+    `);
+
     const freshnessResult = await clientFreshness.query(`
       UPDATE email_conversation_threads ect
          SET last_incoming_at = COALESCE(sub.max_in,  ect.last_incoming_at),
-             last_outgoing_at = COALESCE(sub.max_out, ect.last_outgoing_at)
+             last_outgoing_at = COALESCE(sub.max_out, ect.last_outgoing_at),
+             last_email_at    = COALESCE(sub.max_any, ect.last_email_at)
         FROM (
           SELECT thread_id,
                  org_id,
                  MAX(provider_sent_at) FILTER (WHERE direction = 'inbound')  AS max_in,
-                 MAX(provider_sent_at) FILTER (WHERE direction = 'outbound') AS max_out
+                 MAX(provider_sent_at) FILTER (WHERE direction = 'outbound') AS max_out,
+                 MAX(provider_sent_at)                                       AS max_any
             FROM email_messages
            WHERE provider_sent_at IS NOT NULL
              AND thread_id IS NOT NULL
@@ -5151,32 +5164,54 @@ export async function runMigrations() {
          AND (
               (sub.max_in  IS NOT NULL AND ect.last_incoming_at IS DISTINCT FROM sub.max_in)
            OR (sub.max_out IS NOT NULL AND ect.last_outgoing_at IS DISTINCT FROM sub.max_out)
+           OR (sub.max_any IS NOT NULL AND ect.last_email_at    IS DISTINCT FROM sub.max_any)
          )
     `);
     if ((freshnessResult.rowCount ?? 0) > 0) {
       console.log(
         `[migrations] conversations freshness backfill — re-anchored ` +
         `${freshnessResult.rowCount} thread row(s) to MAX(email_messages.provider_sent_at) ` +
-        `per direction (Phase 1: stop lying about freshness)`,
+        `(Task #859: single denormalized last_email_at column)`,
       );
     } else {
       console.log("[migrations] conversations freshness backfill — every thread already in sync");
     }
 
-    // Task #858 — index support for the date filter that anchors on
-    // GREATEST(last_incoming_at, last_outgoing_at). Without these the
-    // org-scoped date-range scan falls back to a heap walk, which is
-    // fine in dev but degrades the inbox listing on busy orgs once
-    // they accumulate tens of thousands of threads. Idempotent
-    // CREATE INDEX IF NOT EXISTS — safe to re-run on every boot.
-    await clientFreshness.query(`
-      CREATE INDEX IF NOT EXISTS idx_ect_org_last_incoming_at
-        ON email_conversation_threads (org_id, last_incoming_at DESC)
+    // Task #859 — Backstop for threads with NO email_messages rows
+    // (e.g. carrier outreach threads that wrote last_outgoing_at via
+    // upsert without persisting a message row, or legacy rows). Without
+    // this, last_email_at stays NULL and the date filter excludes them
+    // even though the per-direction columns still carry a real
+    // timestamp. Mirror the GREATEST(...) the storage layer USED to
+    // compute on the fly so the backfill matches the previous query
+    // semantics for every row that was reachable before.
+    const backstopResult = await clientFreshness.query(`
+      UPDATE email_conversation_threads
+         SET last_email_at = GREATEST(
+                COALESCE(last_incoming_at, last_outgoing_at),
+                COALESCE(last_outgoing_at, last_incoming_at)
+             )
+       WHERE last_email_at IS NULL
+         AND (last_incoming_at IS NOT NULL OR last_outgoing_at IS NOT NULL)
     `);
+    if ((backstopResult.rowCount ?? 0) > 0) {
+      console.log(
+        `[migrations] conversations freshness backfill — seeded last_email_at ` +
+        `from existing direction columns for ${backstopResult.rowCount} row(s) ` +
+        `with no email_messages backing`,
+      );
+    }
+
+    // Task #859 — single index that backs both the date filter and
+    // the recency sort. Replaces the per-direction indexes Task #858
+    // added for the GREATEST(...) predicate (which can't use either of
+    // them anyway — they were a holding pattern, not a real fix).
     await clientFreshness.query(`
-      CREATE INDEX IF NOT EXISTS idx_ect_org_last_outgoing_at
-        ON email_conversation_threads (org_id, last_outgoing_at DESC)
+      CREATE INDEX IF NOT EXISTS idx_ect_org_last_email_at
+        ON email_conversation_threads (org_id, last_email_at DESC)
     `);
+    await clientFreshness.query(`DROP INDEX IF EXISTS idx_ect_org_last_incoming_at`);
+    await clientFreshness.query(`DROP INDEX IF EXISTS idx_ect_org_last_outgoing_at`);
   } catch (err) {
     console.error("[migrations] conversations freshness backfill error:", err);
   } finally {

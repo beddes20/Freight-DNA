@@ -588,7 +588,7 @@ export async function logOutboundCarrierEmail(params: {
         linkedAccountId: null, linkedCarrierId: params.linkedCarrierId,
         ownerUserId: null, waitingState: "waiting_on_them" as const,
         responsePriority: "normal" as const, lastMessageId: null,
-        lastIncomingAt: null, lastOutgoingAt: null,
+        lastIncomingAt: null, lastOutgoingAt: null, lastEmailAt: null,
         waitingSinceAt: null, overdueAt: null, createdAt: now, updatedAt: now,
       };
       const update = applyMessageToThread(threadBase, message, now);

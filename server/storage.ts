@@ -7903,8 +7903,12 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    // Date filter — Task #858: anchor to real email activity (the same
-    // columns the freshness label reads), not `updated_at`. Archived
+    // Date filter — Task #859: anchor to the denormalized
+    // `last_email_at` column (single source of truth for "real email
+    // activity", kept in sync by applyMessageToThread + the freshness
+    // backfill in runMigrations). Replaces the GREATEST(...) predicate
+    // Task #858 introduced — the row label, the date filter, and any
+    // offline reports now all read from the same column. Archived
     // bucket keeps anchoring on archived_at.
     if (filters.dateFrom || filters.dateTo) {
       const isPlainDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
@@ -7918,17 +7922,13 @@ export class DatabaseStorage implements IStorage {
           conditions.push(lte(emailConversationThreads.archivedAt, endOfDay));
         }
       } else {
-        const activityExpr = sql`GREATEST(
-          COALESCE(${emailConversationThreads.lastIncomingAt}, ${emailConversationThreads.lastOutgoingAt}),
-          COALESCE(${emailConversationThreads.lastOutgoingAt}, ${emailConversationThreads.lastIncomingAt})
-        )`;
         if (filters.dateFrom) {
-          conditions.push(sql`${activityExpr} >= ${new Date(filters.dateFrom)}`);
+          conditions.push(gte(emailConversationThreads.lastEmailAt, new Date(filters.dateFrom)));
         }
         if (filters.dateTo) {
           const endOfDay = new Date(filters.dateTo);
           if (isPlainDate(filters.dateTo)) endOfDay.setUTCHours(23, 59, 59, 999);
-          conditions.push(sql`${activityExpr} <= ${endOfDay}`);
+          conditions.push(lte(emailConversationThreads.lastEmailAt, endOfDay));
         }
       }
     }
