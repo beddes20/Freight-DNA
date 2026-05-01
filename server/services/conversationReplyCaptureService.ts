@@ -316,7 +316,7 @@ export async function selfHealConversationThread(opts: {
                 const bodyFull = msg.body?.content ?? bodyPreview;
                 const sentAt = msg.sentDateTime ? new Date(msg.sentDateTime) : new Date();
 
-                await processUserMailboxEmailForDelta({
+                const ingestResult = await processUserMailboxEmailForDelta({
                   orgId,
                   monitoredMailbox: { id: mailbox.id, userId: mailbox.userId, email: mailbox.email },
                   fromEmail,
@@ -331,6 +331,25 @@ export async function selfHealConversationThread(opts: {
                   receivedAt: sentAt,
                   mailboxEmail: mailbox.email,
                 });
+
+                // Task #874 — self-heal sweep is one of the three real-time
+                // ingest paths advertised in `server/services/liveSync.ts`.
+                // Mirror the webhook + delta-sync emit so a recovered sent
+                // message shows up in the Conversations page within seconds.
+                // Gated on `created` so a sweep that re-finds an already
+                // ingested row does not re-emit. Best-effort.
+                if (ingestResult.created) {
+                  try {
+                    const { publish: publishLiveSync } = await import("./liveSync");
+                    publishLiveSync(
+                      orgId,
+                      ingestResult.direction === "outbound" ? "mailbox_outbound" : "mailbox_inbound",
+                      threadId ?? undefined,
+                    );
+                  } catch (pubErr) {
+                    log(`[self-heal] live-sync publish failed for msgId=${msg.id}: ${pubErr instanceof Error ? pubErr.message : String(pubErr)}`);
+                  }
+                }
 
                 if (wasMissing) {
                   // Confirm it actually persisted (account-match drop guard).

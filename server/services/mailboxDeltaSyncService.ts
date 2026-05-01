@@ -19,6 +19,12 @@ import { storage } from "../storage";
 import { azureCredentialsConfigured, getGraphAccessToken } from "../graphService";
 import { resilientFetch } from "../lib/httpRetry";
 import { JOB_NAMES, withHeartbeat } from "../lib/cronHeartbeat";
+// Task #874 — publish live-sync hints from the polling-fallback path so the
+// Conversations page refreshes within seconds even when Graph webhooks are
+// degraded or missing. Mirror the topic strings + payload shape used by the
+// webhook path in `server/routes/graphWebhook.ts` so downstream subscribers
+// (`client/src/hooks/useLiveSync.ts`) cannot distinguish the two emit sources.
+import { publish as publishLiveSync } from "../services/liveSync";
 import type { MailboxSyncFailure, MonitoredMailbox } from "@shared/schema";
 
 function log(msg: string) {
@@ -219,7 +225,7 @@ async function ingestMessage(
       ? new Date(msg.receivedDateTime)
       : new Date();
 
-  await processUserMailboxEmailForDelta({
+  const result = await processUserMailboxEmailForDelta({
     orgId: mailbox.orgId,
     monitoredMailbox: { id: mailbox.id, userId: mailbox.userId, email: mailbox.email },
     fromEmail,
@@ -234,6 +240,27 @@ async function ingestMessage(
     receivedAt,
     mailboxEmail: mailbox.email,
   });
+
+  // Task #874 — fan out a live-sync hint when (and only when) the polling
+  // path actually persisted a new row. The shared ingest helper already
+  // dedupes against `providerMessageId`, so a Graph message that arrives via
+  // both webhook and a near-simultaneous poll only emits once: whichever
+  // path inserts the row wins, and the loser sees `created: false` here.
+  //
+  // Best-effort: `publishLiveSync` never throws, but we still wrap in
+  // try/catch so a future change to the publish surface can't break the
+  // ingest correctness contract — live-sync is purely advisory.
+  if (result.created) {
+    try {
+      publishLiveSync(
+        mailbox.orgId,
+        result.direction === "outbound" ? "mailbox_outbound" : "mailbox_inbound",
+        conversationId ?? undefined,
+      );
+    } catch (err) {
+      log(`live-sync publish failed for ${mailbox.email}/${folder} ${providerMessageId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 }
 
 /**

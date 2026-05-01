@@ -1735,6 +1735,62 @@ console.log("\n── 23. Won → Freight conversion failure audit (Phase A5) �
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Section: Live-sync from polling fallback (Task #874)
+// The Conversations page (`client/src/pages/conversations.tsx`) is "instant"
+// only while `mailbox_inbound` / `mailbox_outbound` events keep flowing. Task
+// #867 wired those events from the webhook path; Task #874 closed the gap on
+// the polling-fallback path so a webhook outage doesn't degrade the page back
+// to its 2-minute background-refetch cadence. Lock both halves of the contract:
+//   1. mailboxDeltaSyncService.ts imports `publish` from `../services/liveSync`
+//      and emits both topic strings.
+//   2. processUserMailboxEmail returns a `{ created, direction }` shape so
+//      callers can gate their emit on whether ingestion actually wrote a row
+//      (idempotency — webhook + poll racing the same Graph id only emits once).
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n── Live-sync from polling fallback (Task #874) ──────────────────────\n");
+
+const deltaSyncSrc = readFile("server/services/mailboxDeltaSyncService.ts");
+assert(
+  "mailboxDeltaSyncService — imports publish from ../services/liveSync",
+  /import\s*\{\s*publish[^}]*\}\s*from\s*["']\.\.\/services\/liveSync["']/.test(deltaSyncSrc),
+  "The polling path must import the live-sync publisher directly so a future refactor of the shared ingest helper cannot silently regress freshness.",
+);
+assert(
+  "mailboxDeltaSyncService — emits the literal 'mailbox_inbound' topic",
+  deltaSyncSrc.includes(`"mailbox_inbound"`),
+  "Without this string the Conversations page only refreshes on its 2-minute background poll when webhooks are degraded.",
+);
+assert(
+  "mailboxDeltaSyncService — emits the literal 'mailbox_outbound' topic",
+  deltaSyncSrc.includes(`"mailbox_outbound"`),
+  "SentItems-folder ingests must publish the outbound topic so threads update for the rep's own replies during a webhook outage.",
+);
+assert(
+  "mailboxDeltaSyncService — gates publish on the helper's `created` flag",
+  /if\s*\(\s*result\.created\s*\)/.test(deltaSyncSrc),
+  "Idempotency: emit only when the persistence path actually wrote a new row, otherwise webhook + poll racing the same Graph id would double-emit.",
+);
+assert(
+  "mailboxDeltaSyncService — wraps publish in try/catch (best-effort, never blocks ingest)",
+  /try\s*\{\s*\n[^}]*publishLiveSync\(/.test(deltaSyncSrc) || /publishLiveSync\([\s\S]*?\)\s*;[\s\S]*?\}\s*catch\s*\(/m.test(deltaSyncSrc),
+  "Live-sync is purely advisory — a publish failure must never throw and break the underlying ingest write.",
+);
+
+const graphWebhookSrc = readFile("server/routes/graphWebhook.ts");
+assert(
+  "graphWebhook — processUserMailboxEmail returns the UserMailboxIngestResult shape",
+  /UserMailboxIngestResult/.test(graphWebhookSrc) &&
+    /Promise<UserMailboxIngestResult>/.test(graphWebhookSrc),
+  "Callers (webhook, delta-sync, self-heal) need a `created` signal to gate their live-sync publish on actual row insertion.",
+);
+assert(
+  "graphWebhook — webhook caller publishes only when ingestResult.created is true",
+  /ingestResult\.created/.test(graphWebhookSrc) &&
+    /publishLiveSync\(/.test(graphWebhookSrc),
+  "The webhook path also has to publish off the `created` flag now that the shared helper no longer auto-publishes.",
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

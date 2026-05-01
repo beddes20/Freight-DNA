@@ -142,10 +142,16 @@ async function ingestHistoricalMessage(
     .map(r => r.emailAddress?.address)
     .filter((a): a is string => !!a);
 
-  // We don't get a created/dup signal back from `processUserMailboxEmailForDelta`,
-  // so detect dedup by checking the email_messages row immediately before the
-  // call. `processUserMailboxEmailForDelta` is itself idempotent, so a duplicate
-  // is still safe — we only need this to maintain accurate counts.
+  // `processUserMailboxEmailForDelta` does return a `{ created }` signal
+  // (Task #874), but we still pre-check existence here for accurate dedup
+  // counts in scenarios where the helper drops the row (e.g., no account
+  // match) — those still count as "not new" for backfill telemetry.
+  // Task #874 (out-of-scope note): we deliberately do NOT publish a
+  // `mailbox_inbound` / `mailbox_outbound` live-sync hint from this path.
+  // Backfilling 30 days of history would otherwise emit thousands of
+  // cache-invalidation events to every open Conversations tab. The "no
+  // manual refresh" promise is for live ingest paths only (webhook,
+  // delta-sync poll, self-heal sweep).
   const existing = await storage.getEmailMessageByProviderId(mailbox.orgId, msg.id).catch(() => null);
 
   await processUserMailboxEmailForDelta({

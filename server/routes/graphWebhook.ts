@@ -264,7 +264,7 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
     const allToRecipients = (messageDetails?.toRecipients ?? [])
       .map(r => r.emailAddress?.address)
       .filter((a): a is string => !!a);
-    await processUserMailboxEmail({
+    const ingestResult = await processUserMailboxEmail({
       orgId,
       monitoredMailbox,
       fromEmail,
@@ -279,6 +279,18 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
       receivedAt,
       mailboxEmail,
     });
+    // Task #867 / #874 — fan out a live-sync hint so any open Conversations
+    // tab in this org invalidates its inbox feed within ~50ms instead of
+    // waiting on the page's background refetch interval. Gated on `created`
+    // so re-deliveries (Graph occasionally repeats notifications) do not
+    // cause cache thrash. Best-effort: publish never throws.
+    if (ingestResult.created) {
+      publishLiveSync(
+        orgId,
+        ingestResult.direction === "outbound" ? "mailbox_outbound" : "mailbox_inbound",
+        conversationId ?? undefined,
+      );
+    }
     return;
   }
 
@@ -447,6 +459,21 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
 // LWQ/procurement carrier-outreach lane flow (shared reply mailbox path).
 // The LWQ Send & Reply Audit panel (Task #344) reads `carrier_outreach_logs`
 // and surfaces per-rep mailbox health from `monitored_mailboxes` separately.
+/**
+ * Task #874 — return shape for the shared user-mailbox ingest helper. Callers
+ * use `created` to decide whether to publish a `mailbox_inbound` /
+ * `mailbox_outbound` live-sync hint (we only want to fire once per row, not
+ * once per call — re-syncs of an existing row should stay quiet so the
+ * Conversations page doesn't refetch on every webhook + poll race).
+ *
+ * `direction` is always populated, even on early drops, so callers can pick
+ * the right topic without re-running the from-address comparison.
+ */
+export interface UserMailboxIngestResult {
+  created: boolean;
+  direction: "inbound" | "outbound";
+}
+
 async function processUserMailboxEmail(params: {
   orgId: string;
   monitoredMailbox: { id: string; userId: string; email: string };
@@ -466,7 +493,7 @@ async function processUserMailboxEmail(params: {
   // actually firing through this same code path. Defaults to "delta"
   // (live webhook / delta sync) so existing callers don't change.
   ingestedVia?: "delta" | "backfill" | "self_heal";
-}): Promise<void> {
+}): Promise<UserMailboxIngestResult> {
   const {
     orgId, monitoredMailbox, fromEmail, fromName, toEmail, allToRecipients, subject,
     bodyPreview, bodyFull, conversationId, providerMessageId, receivedAt, mailboxEmail,
@@ -567,7 +594,7 @@ async function processUserMailboxEmail(params: {
   // bypass, a class of rep-sent Outlook emails would never enter the
   // outcome loop.
   if (!accountMatch && !effectiveCarrierId && !existingThreadExists && direction !== "outbound") {
-    return;
+    return { created: false, direction };
   }
 
   // NOTE: we used to drop the message here when the matched account was
@@ -605,16 +632,17 @@ async function processUserMailboxEmail(params: {
 
   if (!created) {
     log(`[user-mailbox] Duplicate email skipped: msgId=${providerMessageId}`);
-    return;
+    return { created: false, direction };
   }
 
   log(`[user-mailbox] ${direction} email recorded: from=${fromEmail} to=${toEmail} account=${accountMatch?.companyId ?? "(none)"} msgId=${providerMessageId}`);
 
-  // Task #867 — fan out a live-sync hint so any open Conversations tab in
-  // this org invalidates its inbox feed within ~50ms instead of waiting on
-  // the page's background refetch interval. Best-effort: publish never
-  // throws and is safe to call on every accepted message.
-  publishLiveSync(orgId, direction === "outbound" ? "mailbox_outbound" : "mailbox_inbound", conversationId ?? undefined);
+  // Task #867 / #874 — live-sync hint is now emitted by each caller (webhook,
+  // delta-sync poll, reply-capture self-heal) using the `created` signal in
+  // the returned result. Centralising it here would have made the polling-
+  // fallback path silently inherit the publish, but a future refactor of this
+  // helper could just as silently take it away — the per-caller emit makes the
+  // contract auditable in `tests/code-quality-guardrails.test.ts`.
 
   // Task #534 — record a thread-events row for outbound emails sent from
   // the rep's monitored mailbox (typically composed in Outlook). This is
@@ -844,6 +872,12 @@ async function processUserMailboxEmail(params: {
     lastSyncAt: new Date(),
     ...(direction === "outbound" && created ? { lastOutboundCapturedAt: new Date() } : {}),
   });
+
+  // Task #874 — `created` is true here (we returned early above otherwise).
+  // Callers gate their `mailbox_inbound` / `mailbox_outbound` publish on
+  // this exact `created` flag so the polling-fallback path emits live-sync
+  // hints with the same idempotency guarantees as the webhook path.
+  return { created: true, direction };
 }
 
 export { processUserMailboxEmail as processUserMailboxEmailForDelta };
