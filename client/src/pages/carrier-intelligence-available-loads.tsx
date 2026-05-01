@@ -5,11 +5,11 @@
 // Read it before changing the filter bar, selection grammar, bulk action
 // bar, or guardrail copy.
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { queryClient } from "@/lib/queryClient";
-import { Truck, Search, Download, BookmarkPlus, RefreshCw, ChevronRight, MapPin, Clock, Upload } from "lucide-react";
+import { Truck, Search, Download, BookmarkPlus, RefreshCw, ChevronRight, MapPin, Clock, Upload, Sparkles } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,7 +25,29 @@ import {
 } from "@/lib/carrier-intelligence";
 import { formatLaneLocation } from "@shared/laneFormatters";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/use-auth";
 import { UnconfiguredPipelineEmptyState } from "@/components/empty-states/UnconfiguredPipelineEmptyState";
+// Workflow OS — Task #918. Canonical filter primitives + URL serializer
+// shared with AF and LWQ. See docs/workflow-os-spec.md sections A, B, G.
+import { OwnerFilterSelect } from "@/components/workflow-os/OwnerFilterSelect";
+import { PickupScopeSelect } from "@/components/workflow-os/PickupScopeSelect";
+import { StaleCountChip } from "@/components/workflow-os/StaleCountChip";
+import {
+  serializeFiltersToUrl,
+  deserializeFiltersFromUrl,
+  myWorkTodayView,
+} from "@/lib/workflow-os/savedViews";
+import {
+  DEFAULT_PICKUP_SCOPE,
+  type PickupScopeValue,
+} from "@shared/workflowOs/actionability";
+import { type OwnerFilterValue } from "@shared/workflowOs/ownership";
+
+interface TeamMember {
+  id: string;
+  name: string;
+  role: string;
+}
 
 interface RecRow {
   id: string; rank: number; carrierName: string; totalScore: number;
@@ -52,9 +74,25 @@ interface LoadRow {
 
 export default function CarrierIntelligenceAvailableLoadsPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const prefsQ = useCarrierIntelPrefs();
   const savePrefs = useSaveCarrierIntelPrefs();
   const userPrefs = prefsQ.data?.user;
+
+  // Workflow OS — Task #918. The owner + pickupScope filters are mirrored
+  // from LWQ. Initial values come from the URL so a saved-view link or
+  // back-button restores the same slice the rep was last on. Defaults
+  // ("all" / "actionable") are stripped from the URL on serialization.
+  const readUrlFilters = (): { owner: OwnerFilterValue; pickupScope: PickupScopeValue } => {
+    if (typeof window === "undefined") {
+      return { owner: "all", pickupScope: DEFAULT_PICKUP_SCOPE };
+    }
+    const shared = deserializeFiltersFromUrl(window.location.search);
+    return {
+      owner: shared.owner ?? "all",
+      pickupScope: shared.pickupScope ?? DEFAULT_PICKUP_SCOPE,
+    };
+  };
 
   const [moveStatus, setMoveStatus] = useState<MoveStatus[]>(["available"]);
   const [equipment, setEquipment] = useState<string>("");
@@ -63,8 +101,51 @@ export default function CarrierIntelligenceAvailableLoadsPage() {
   const [search, setSearch] = useState("");
   const [savedViewName, setSavedViewName] = useState("");
   const [initialized, setInitialized] = useState(false);
+  const [ownerFilter, setOwnerFilter] = useState<OwnerFilterValue>(() => readUrlFilters().owner);
+  const [pickupScope, setPickupScope] = useState<PickupScopeValue>(() => readUrlFilters().pickupScope);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+
+  // Org user roster powers OwnerFilterSelect (specific-user mode + role-aware
+  // grouping inside the dropdown). Keyed cache so it's shared across surfaces.
+  const { data: teamMembers = [] } = useQuery<TeamMember[]>({
+    queryKey: ["/api/team-members"],
+    queryFn: () => fetch("/api/team-members").then((r) => r.json()),
+  });
+
+  // Workflow OS — keep the URL in sync as filters change. We use
+  // `serializeFiltersToUrl` for the OS-shared keys (owner, pickupScope)
+  // and carry forward any other private params untouched. Default values
+  // are stripped so the URL stays clean.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = serializeFiltersToUrl({
+      owner: ownerFilter,
+      pickupScope,
+    });
+    // Carry forward unrelated params so deep-links (e.g. ?filter=...) keep
+    // working when the rep changes Owner/Pickup-scope.
+    const incoming = new URLSearchParams(window.location.search);
+    incoming.forEach((value, key) => {
+      if (key === "owner" || key === "pickupScope") return;
+      if (!params.has(key)) params.set(key, value);
+    });
+    if (ownerFilter === "all") params.delete("owner");
+    if (pickupScope === DEFAULT_PICKUP_SCOPE) params.delete("pickupScope");
+    const qs = params.toString();
+    const next = `${window.location.pathname}${qs ? `?${qs}` : ""}`;
+    if (next !== `${window.location.pathname}${window.location.search}`) {
+      window.history.replaceState({}, "", next);
+    }
+  }, [ownerFilter, pickupScope]);
+
+  // One-click "My lanes today" — owner=me, pickupScope=actionable. Mirrors
+  // LWQ's chip so the rep gets identical muscle memory across surfaces.
+  function applyMyLanesTodayView() {
+    const view = myWorkTodayView();
+    if (view.owner !== undefined) setOwnerFilter(view.owner);
+    if (view.pickupScope !== undefined) setPickupScope(view.pickupScope);
+  }
 
   async function handleUploadFile(file: File) {
     setIsUploading(true);
@@ -121,8 +202,29 @@ export default function CarrierIntelligenceAvailableLoadsPage() {
     setInitialized(true);
   }
 
-  const { data, isLoading, refetch, isFetching } = useQuery<{ loads: LoadRow[] }>({
-    queryKey: ["/api/carrier-intelligence/available-loads"],
+  // Workflow OS — Task #918. Cache key threads owner + pickupScope so React
+  // Query splits per-filter; otherwise switching filters would read a stale
+  // payload until the refetch fired. The queryFn appends the same pair as
+  // URL params so the server applies them pre-pagination.
+  const { data, isLoading, refetch, isFetching } = useQuery<{
+    loads: LoadRow[];
+    hiddenStale?: number;
+    pickupScope?: PickupScopeValue;
+    customers?: string[];
+  }>({
+    queryKey: ["/api/carrier-intelligence/available-loads", { owner: ownerFilter, pickupScope }],
+    queryFn: () => {
+      const sp = new URLSearchParams();
+      if (ownerFilter !== "all") {
+        sp.set(
+          "owner",
+          typeof ownerFilter === "string" ? ownerFilter : `specific:${ownerFilter.specificUserId}`,
+        );
+      }
+      if (pickupScope !== DEFAULT_PICKUP_SCOPE) sp.set("pickupScope", pickupScope);
+      const qs = sp.toString();
+      return fetch(`/api/carrier-intelligence/available-loads${qs ? `?${qs}` : ""}`).then((r) => r.json());
+    },
   });
 
   const equipmentOpts = useMemo(() => {
@@ -262,6 +364,44 @@ export default function CarrierIntelligenceAvailableLoadsPage() {
             onChange={setMoveStatus}
             lockedOn={["available"]}
           />
+          {/*
+            Workflow OS — Task #918. Canonical left-to-right filter row
+            (mirror of LWQ): [ Owner ] [ Pickup scope ] [ Stale-N chip ]
+            [ My lanes today ]. See docs/workflow-os-spec.md sections A, B, G.
+            BulkActionBar adoption is deferred to Task #902 (outreach
+            workspace rollout) — no selection UI on this surface yet.
+          */}
+          <div className="flex flex-wrap items-center gap-2">
+            <OwnerFilterSelect
+              value={ownerFilter}
+              onChange={setOwnerFilter}
+              orgUsers={teamMembers}
+              currentUser={user ? { id: user.id, name: user.name, role: user.role } : null}
+              surface="available_loads"
+              className="h-8 text-xs w-40 gap-1"
+            />
+            <PickupScopeSelect
+              value={pickupScope}
+              onChange={setPickupScope}
+              className="h-8 text-xs w-44 gap-1"
+            />
+            <StaleCountChip
+              hiddenStale={data?.hiddenStale ?? 0}
+              currentScope={pickupScope}
+              onShowAll={() => setPickupScope("all")}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs gap-1.5"
+              onClick={applyMyLanesTodayView}
+              data-testid="btn-saved-view-my-lanes-today"
+              title="Owner = me, Pickup scope = actionable"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              My lanes today
+            </Button>
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
             <div className="relative">
               <Search className="h-4 w-4 absolute left-2 top-2.5 text-muted-foreground" />

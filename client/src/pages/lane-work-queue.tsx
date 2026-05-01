@@ -123,6 +123,28 @@ import {
   laneSigKey,
   type LaneSignalResult,
 } from "@/hooks/useLaneSignals";
+// Workflow OS — shared primitives. See docs/workflow-os-spec.md sections A–G.
+// Owner filter, pickup scope, stale-count chip, bulk action bar, row
+// selection, and the URL ↔ filters round-trip helpers all live behind these
+// re-exports so AF, LWQ, and Available Loads share one contract.
+import { OwnerFilterSelect } from "@/components/workflow-os/OwnerFilterSelect";
+import { PickupScopeSelect } from "@/components/workflow-os/PickupScopeSelect";
+import { StaleCountChip } from "@/components/workflow-os/StaleCountChip";
+import { BulkActionBar, type BulkAction } from "@/components/workflow-os/BulkActionBar";
+import { useRowSelection } from "@/hooks/workflow-os/useRowSelection";
+import {
+  serializeFiltersToUrl,
+  deserializeFiltersFromUrl,
+  myWorkTodayView,
+  type SharedFilters,
+} from "@/lib/workflow-os/savedViews";
+import {
+  type PickupScopeValue,
+  DEFAULT_PICKUP_SCOPE,
+  type PickupFreshness,
+} from "@shared/workflowOs/actionability";
+import { type OwnerFilterValue } from "@shared/workflowOs/ownership";
+import { Sparkles } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -183,6 +205,13 @@ interface LaneItem {
     nextPickupAt: string | null;
     sampleOppId: string | null;
   } | null;
+  // Workflow OS — server-stamped Task #917. The lane itself has no pickup
+  // column; freshness is derived from `liveOpps.nextPickupAt` on the server
+  // so the actionable scope answer matches the canonical predicate.
+  pickupFreshness?: PickupFreshness;
+  pickupDaysAgo?: number | null;
+  status?: "unassigned" | "noContactable" | "assignedUntouched" | "inProgress";
+  pickupWindowStart?: string | null;
 }
 
 interface WorkQueue {
@@ -192,6 +221,13 @@ interface WorkQueue {
   inProgress: LaneItem[];
   scopeLabel?: string;
   customers?: string[];  // distinct customer names from all visible lanes (for filter dropdown)
+  // Workflow OS — Task #917. `hiddenStale` is the count of rows the
+  // actionable scope dropped (post-owner filter, pre-pickup-scope) so the
+  // shared StaleCountChip can offer the "Show all" recovery affordance.
+  // `pickupScope` is echoed back from the request so the URL/saved-view
+  // round-trip stays a single source of truth.
+  hiddenStale?: number;
+  pickupScope?: PickupScopeValue;
   meta?: {
     // "cache" = served from lane_summary_cache (fast).
     // "full"  = cold-start fallback to live aggregation (slow). Show banner.
@@ -1975,15 +2011,34 @@ function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, i
 // Read filter state from URL query string on first render so direct links
 // and rep-to-rep handoffs preserve the filter context. Default to today's
 // "no filters" behavior on a bare /lane-work-queue load.
-function readUrlFilters(): { highFreqOnly: boolean; manualOnly: boolean; customerFilter: string } {
+//
+// Workflow OS — `owner` and `pickupScope` are read via the canonical
+// `deserializeFiltersFromUrl` helper (same code path AF + Available Loads
+// use). `customer`, `highFreq`, and `manual` stay LWQ-private query keys.
+function readUrlFilters(): {
+  highFreqOnly: boolean;
+  manualOnly: boolean;
+  customerFilter: string;
+  owner: OwnerFilterValue;
+  pickupScope: PickupScopeValue;
+} {
   if (typeof window === "undefined") {
-    return { highFreqOnly: false, manualOnly: false, customerFilter: "__all__" };
+    return {
+      highFreqOnly: false,
+      manualOnly: false,
+      customerFilter: "__all__",
+      owner: "all",
+      pickupScope: DEFAULT_PICKUP_SCOPE,
+    };
   }
   const params = new URLSearchParams(window.location.search);
+  const shared = deserializeFiltersFromUrl(params);
   return {
     highFreqOnly: params.get("highFreq") === "1",
     manualOnly: params.get("manual") === "1",
     customerFilter: params.get("customer") || "__all__",
+    owner: shared.owner ?? "all",
+    pickupScope: shared.pickupScope ?? DEFAULT_PICKUP_SCOPE,
   };
 }
 
@@ -2010,32 +2065,71 @@ export default function LaneWorkQueuePage() {
   const [highFreqOnly, setHighFreqOnly] = useState(() => readUrlFilters().highFreqOnly);
   const [manualOnly, setManualOnly] = useState(() => readUrlFilters().manualOnly);
   const [customerFilter, setCustomerFilter] = useState<string>(() => readUrlFilters().customerFilter);
+  // Workflow OS — Task #917. Owner + pickup-scope are the two canonical
+  // filters threaded through the request and round-tripped via the shared
+  // savedViews helpers so a "My lanes today" view authored anywhere in the
+  // OS replays correctly here.
+  const [ownerFilter, setOwnerFilter] = useState<OwnerFilterValue>(() => readUrlFilters().owner);
+  const [pickupScope, setPickupScope] = useState<PickupScopeValue>(() => readUrlFilters().pickupScope);
 
   // Sync filter state → URL (replaceState so we don't spam history with
   // every toggle). Strips empty params so /lane-work-queue stays clean
-  // when no filters are active.
+  // when no filters are active. We start from the canonical
+  // `serializeFiltersToUrl` for the OS-shared keys (owner, pickupScope),
+  // then layer the LWQ-private keys on top so the round-trip is lossless
+  // from a saved view's perspective.
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
+    const sharedFilters: SharedFilters = {
+      owner: ownerFilter,
+      pickupScope,
+    };
+    const params = serializeFiltersToUrl(sharedFilters);
+    // Carry forward unrelated query params already on the URL (deep-link
+    // markers like `laneId`, `createLane`, `noMatch`, `from`).
+    const incoming = new URLSearchParams(window.location.search);
+    incoming.forEach((v, k) => {
+      if (k === "owner" || k === "pickupScope") return;
+      if (k === "highFreq" || k === "manual" || k === "customer") return;
+      if (!params.has(k)) params.set(k, v);
+    });
     if (highFreqOnly) params.set("highFreq", "1"); else params.delete("highFreq");
     if (manualOnly) params.set("manual", "1"); else params.delete("manual");
     if (customerFilter && customerFilter !== "__all__") params.set("customer", customerFilter);
     else params.delete("customer");
+    // Drop the canonical defaults so the URL stays clean on the home view.
+    if (ownerFilter === "all") params.delete("owner");
+    if (pickupScope === DEFAULT_PICKUP_SCOPE) params.delete("pickupScope");
     const qs = params.toString();
     const newUrl = `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`;
     if (newUrl !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
       window.history.replaceState(null, "", newUrl);
     }
-  }, [highFreqOnly, manualOnly, customerFilter]);
+  }, [highFreqOnly, manualOnly, customerFilter, ownerFilter, pickupScope]);
 
   // Active filter count drives whether the "Clear all" affordance shows.
+  // Owner + pickupScope only count as "active" when set away from their
+  // canonical defaults.
   const activeFilterCount =
-    (highFreqOnly ? 1 : 0) + (manualOnly ? 1 : 0) + (customerFilter !== "__all__" ? 1 : 0);
+    (highFreqOnly ? 1 : 0) +
+    (manualOnly ? 1 : 0) +
+    (customerFilter !== "__all__" ? 1 : 0) +
+    (ownerFilter !== "all" ? 1 : 0) +
+    (pickupScope !== DEFAULT_PICKUP_SCOPE ? 1 : 0);
 
   const clearAllFilters = () => {
     setHighFreqOnly(false);
     setManualOnly(false);
     setCustomerFilter("__all__");
+    setOwnerFilter("all");
+    setPickupScope(DEFAULT_PICKUP_SCOPE);
+  };
+
+  // Workflow OS — apply the built-in "My lanes today" view (spec section G).
+  const applyMyLanesTodayView = () => {
+    const v = myWorkTodayView();
+    if (v.owner !== undefined) setOwnerFilter(v.owner);
+    if (v.pickupScope !== undefined) setPickupScope(v.pickupScope);
   };
 
   const [buildLaneOpen, setBuildLaneOpen] = useState(false);
@@ -2045,17 +2139,16 @@ export default function LaneWorkQueuePage() {
   const [buildLanePrefill, setBuildLanePrefill] = useState<BuildLanePrefill | null>(null);
   const [, navigate] = useLocation();
   const [sharingOpen, setSharingOpen] = useState(false);
-  const [selectedLaneIds, setSelectedLaneIds] = useState<Set<string>>(new Set());
-  const [bulkAssignUserId, setBulkAssignUserId] = useState<string>("");
 
-  const handleToggleSelect = (laneId: string) => {
-    setSelectedLaneIds(prev => {
-      const next = new Set(prev);
-      if (next.has(laneId)) next.delete(laneId);
-      else next.add(laneId);
-      return next;
-    });
-  };
+  // Workflow OS — Task #917. Selection is the shared `useRowSelection`
+  // hook so the state-transition contract (toggle / setAll / clear /
+  // replace) matches AF and Available Loads. Some downstream child
+  // components still take a `Set<string>` prop, so we project the array
+  // back to a Set for backwards compatibility.
+  const selection = useRowSelection();
+  const selectedLaneIds = useMemo(() => new Set(selection.selectedIds), [selection.selectedIds]);
+  const handleToggleSelect = selection.toggle;
+  const [bulkAssignUserId, setBulkAssignUserId] = useState<string>("");
 
   const bulkAssignMutation = useMutation({
     mutationFn: async ({ laneIds, ownerUserId }: { laneIds: string[]; ownerUserId: string }) => {
@@ -2066,10 +2159,11 @@ export default function LaneWorkQueuePage() {
       );
     },
     onSuccess: () => {
+      const count = selection.selectedCount;
       queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
-      setSelectedLaneIds(new Set());
+      selection.clear();
       setBulkAssignUserId("");
-      toast({ title: `${selectedLaneIds.size} lane${selectedLaneIds.size !== 1 ? "s" : ""} assigned` });
+      toast({ title: `${count} lane${count !== 1 ? "s" : ""} assigned` });
     },
     onError: () => {
       toast({ title: "Failed to assign lanes", variant: "destructive" });
@@ -2152,9 +2246,27 @@ export default function LaneWorkQueuePage() {
     onError: () => toast({ title: "Engine run failed", variant: "destructive" }),
   });
 
+  // Workflow OS — Task #917. Thread owner + pickupScope into the queryKey
+  // so the cache splits per-filter, and append them as querystring params
+  // so the server-side `applyOwnerFilter` + `applyPickupScope` see the same
+  // values the URL serializer round-trips.
+  const workQueueQueryParams = useMemo(() => {
+    const sp = new URLSearchParams();
+    if (ownerFilter && ownerFilter !== "all") {
+      sp.set(
+        "owner",
+        typeof ownerFilter === "string" ? ownerFilter : `specific:${ownerFilter.specificUserId}`,
+      );
+    }
+    if (pickupScope && pickupScope !== DEFAULT_PICKUP_SCOPE) {
+      sp.set("pickupScope", pickupScope);
+    }
+    return sp.toString();
+  }, [ownerFilter, pickupScope]);
   const { data: queue, isLoading, isError, refetch } = useQuery<WorkQueue>({
-    queryKey: ["/api/recurring-lanes/work-queue"],
-    queryFn: () => fetch("/api/recurring-lanes/work-queue").then(r => r.json()),
+    queryKey: ["/api/recurring-lanes/work-queue", { owner: ownerFilter, pickupScope }],
+    queryFn: () =>
+      fetch(`/api/recurring-lanes/work-queue${workQueueQueryParams ? `?${workQueueQueryParams}` : ""}`).then(r => r.json()),
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
   });
@@ -2524,6 +2636,20 @@ export default function LaneWorkQueuePage() {
             <User className="w-3.5 h-3.5" />
             Manage Sharing
           </Button>
+          {/*
+            Workflow OS — Task #917. Canonical left-to-right filter row:
+              [ Owner ] [ Customer ] [ Pickup scope ] [ Stale-N chip ] [ My lanes today ]
+            See docs/workflow-os-spec.md sections A & G. The bucket sections
+            below remain LWQ's status grammar — they're not duplicated here.
+          */}
+          <OwnerFilterSelect
+            value={ownerFilter}
+            onChange={setOwnerFilter}
+            orgUsers={teamMembers}
+            currentUser={user ? { id: user.id, name: user.name, role: user.role } : null}
+            surface="lwq"
+            className="h-8 text-xs w-40 gap-1"
+          />
           {/* Customer filter dropdown */}
           {(queue?.customers?.length ?? 0) > 0 && (
             <Select
@@ -2547,6 +2673,32 @@ export default function LaneWorkQueuePage() {
               </SelectContent>
             </Select>
           )}
+          <PickupScopeSelect
+            value={pickupScope}
+            onChange={setPickupScope}
+            className="h-8 text-xs w-44 gap-1"
+          />
+          <StaleCountChip
+            hiddenStale={queue?.hiddenStale ?? 0}
+            currentScope={pickupScope}
+            onShowAll={() => setPickupScope("all")}
+          />
+          {/*
+            Workflow OS — built-in "My lanes today" saved view (spec
+            section G). One-click chip so reps can land on their actionable
+            slice without learning the filter combinatorics.
+          */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs gap-1.5"
+            onClick={applyMyLanesTodayView}
+            data-testid="btn-saved-view-my-lanes-today"
+            title="Owner = me, Pickup scope = actionable"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            My lanes today
+          </Button>
           {/* 2+/week filter toggle */}
           <Button
             variant={highFreqOnly ? "default" : "outline"}
@@ -2962,43 +3114,61 @@ export default function LaneWorkQueuePage() {
         )}
       </div>
 
-      {/* Bulk assign panel — floats at bottom when lanes are selected */}
-      {selectedLaneIds.size > 0 && (
-        <div
-          className="fixed bottom-[4.5rem] md:bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 md:gap-3 bg-card border border-blue-500/40 rounded-xl shadow-xl px-3 md:px-4 py-3 min-w-0 w-[calc(100%-2rem)] md:w-auto md:min-w-[340px]"
-          data-testid="panel-bulk-assign"
-        >
-          <span className="text-sm font-medium text-blue-400 shrink-0">
-            {selectedLaneIds.size} lane{selectedLaneIds.size !== 1 ? "s" : ""} selected
-          </span>
-          <select
-            className="flex-1 rounded-md border border-border bg-background text-sm px-2 py-1.5 text-foreground"
-            value={bulkAssignUserId}
-            onChange={e => setBulkAssignUserId(e.target.value)}
-            data-testid="select-bulk-assign-user"
-          >
-            <option value="">Assign to…</option>
-            {teamMembers.map(m => (
-              <option key={m.id} value={m.id}>{m.name}</option>
-            ))}
-          </select>
-          <button
-            onClick={() => bulkAssignMutation.mutate({ laneIds: Array.from(selectedLaneIds), ownerUserId: bulkAssignUserId })}
-            disabled={!bulkAssignUserId || bulkAssignMutation.isPending}
-            className="shrink-0 rounded-md px-3 py-1.5 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            data-testid="button-bulk-assign-confirm"
-          >
-            {bulkAssignMutation.isPending ? "Assigning…" : "Assign"}
-          </button>
-          <button
-            onClick={() => setSelectedLaneIds(new Set())}
-            className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-            data-testid="button-bulk-assign-clear"
-          >
-            <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none"><path d="M3 3l10 10M13 3L3 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-          </button>
-        </div>
-      )}
+      {/*
+        Workflow OS — Task #917. Replaces the legacy floating panel with the
+        canonical `BulkActionBar`. LWQ exposes only "Reassign" today; per
+        spec section D, surfaces simply omit canonical actions they don't
+        own (Snooze / Outreach / Tag-Status are not LWQ concepts), and any
+        truly surface-specific extras would go in the `…` overflow menu —
+        never in front of the canonical four.
+      */}
+      <BulkActionBar
+        count={selection.selectedCount}
+        busy={bulkAssignMutation.isPending}
+        onClear={() => selection.clear()}
+        primary={{
+          id: "reassign",
+          label: bulkAssignMutation.isPending ? "Assigning…" : "Reassign",
+          testId: "button-bulk-assign-confirm",
+          // No-op default onSelect — the inline picker (`render`) owns the
+          // actual mutation trigger. The shared `BulkAction` contract still
+          // requires this field so that headless callers (e.g. the cheat
+          // sheet, kbd shortcuts) have something to invoke.
+          onSelect: () => undefined,
+          // Custom render so the action can own its inline owner picker.
+          render: ({ disabled }) => (
+            <div className="flex items-center gap-2" data-testid="bulk-reassign-control">
+              <select
+                className="rounded-md border border-border bg-background text-sm px-2 py-1.5 text-foreground"
+                value={bulkAssignUserId}
+                onChange={e => setBulkAssignUserId(e.target.value)}
+                disabled={disabled}
+                data-testid="select-bulk-assign-user"
+              >
+                <option value="">Assign to…</option>
+                {teamMembers.map(m => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+              <Button
+                size="sm"
+                variant="default"
+                className="h-8 text-xs gap-1"
+                onClick={() =>
+                  bulkAssignMutation.mutate({
+                    laneIds: selection.selectedIds.slice(),
+                    ownerUserId: bulkAssignUserId,
+                  })
+                }
+                disabled={disabled || !bulkAssignUserId}
+                data-testid="button-bulk-assign-confirm"
+              >
+                {bulkAssignMutation.isPending ? "Assigning…" : "Reassign"}
+              </Button>
+            </div>
+          ),
+        }}
+      />
 
       {/* Build Lane dialog */}
       <BuildLaneDialog

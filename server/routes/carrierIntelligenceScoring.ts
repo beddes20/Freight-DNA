@@ -17,7 +17,7 @@ import type { Express } from "express";
 import { z } from "zod";
 import { eq, and, desc, inArray, sql, or } from "drizzle-orm";
 import { requireUser } from "../auth";
-import { db } from "../storage";
+import { db, storage } from "../storage";
 import {
   carrierScorecardFact,
   carrierRecommendation,
@@ -36,6 +36,39 @@ import { recommendCarriersForLoad } from "../carrierRecommendationEngine";
 import { recomputeCarrierIntelligence } from "../carrierIntelligenceRecompute";
 import { getErrorMessage } from "../lib/errors";
 import { pStr, qStr, qOptStr } from "../lib/req";
+import { todayIsoInOrgTz } from "../lib/orgLocalDate";
+import {
+  computePickupFreshness,
+  daysSincePickup,
+  type PickupFreshness,
+} from "@shared/pickupFreshness";
+import {
+  applyPickupScope,
+  countHiddenStale,
+  DEFAULT_PICKUP_SCOPE,
+  isPickupScopeValue,
+  type PickupScopeValue,
+} from "@shared/workflowOs/actionability";
+import {
+  applyOwnerFilter,
+  type OwnerFilterValue,
+  type WorkflowOsRow,
+  type WorkflowOsUser,
+} from "@shared/workflowOs/ownership";
+
+// Workflow OS — Task #918. Mirror of the LWQ helper. Owner filter is sent
+// as a single `owner` URL param via `serializeFiltersToUrl`; anything else
+// silently degrades to "all" so the cockpit never breaks on a malformed
+// saved view.
+function parseOwnerFilterParam(raw: unknown): OwnerFilterValue {
+  if (typeof raw !== "string" || raw.length === 0) return "all";
+  if (raw === "all" || raw === "me" || raw === "am_book" || raw === "unassigned") return raw;
+  if (raw.startsWith("specific:")) {
+    const id = raw.slice("specific:".length);
+    if (id) return { specificUserId: id };
+  }
+  return "all";
+}
 
 function orgOf(req: any): string | null {
   return (req?.session?.organizationId as string) ?? null;
@@ -277,6 +310,17 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
       }
 
       const limit = Math.min(500, Math.max(1, Number(qStr(req.query.limit)) || 100));
+
+      // Workflow OS — Task #918. Owner-filter + pickup-scope params, mirrored
+      // from the LWQ contract (see docs/workflow-os-spec.md sections A & B).
+      // Both round-trip via `serializeFiltersToUrl` and are normalized through
+      // the shared `qOptStr` helper so dup/array param attempts collapse cleanly.
+      const ownerFilterValue = parseOwnerFilterParam(qOptStr(req.query.owner));
+      const pickupScopeRaw = qOptStr(req.query.pickupScope);
+      const pickupScope: PickupScopeValue = isPickupScopeValue(pickupScopeRaw)
+        ? pickupScopeRaw
+        : DEFAULT_PICKUP_SCOPE;
+
       const loads = await db.select().from(loadFact)
         .where(and(eq(loadFact.orgId, orgId), sql`${loadFact.bucket} IN ('available','unknown')`))
         .orderBy(desc(loadFact.pickupDate))
@@ -306,12 +350,95 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
         }
         return null;
       };
-      return res.json({
-        loads: loads.map(l => ({
+
+      // ── Workflow OS — stamp pickup context + ownership envelope ─────────
+      // Loads have a real `pickupDate` column, so pickup-freshness is
+      // computed directly (no cross-link to freight_opportunity needed).
+      // Owner mapping is by name: load_fact.accountManager is text, so we
+      // resolve it through the org user roster. Loads whose accountManager
+      // doesn't match any org user fall through with `legacyOwnerId = null`
+      // — they remain visible under "all"/"unassigned" but not under "me".
+      const todayIso = todayIsoInOrgTz(new Date());
+      const orgUsers = await storage.getUsers(orgId);
+      const sessionUser = req.user as WorkflowOsUser | undefined;
+      const userByName = new Map<string, string>();
+      for (const u of orgUsers) {
+        const key = (u.name ?? "").toLowerCase().trim();
+        if (key) userByName.set(key, u.id);
+      }
+      // Workflow OS contract — every row carries pickupWindowStart +
+      // pickupFreshness + pickupDaysAgo + status so the shared
+      // applyPickupScope / countHiddenStale predicates work uniformly.
+      // `bucket` ("available" | "unknown") maps to the AL surface's
+      // ACTIONABLE_OPEN_STATUSES (`["available", "pending"]`); we collapse
+      // "unknown" to "available" so it isn't dropped by the actionable scope.
+      type StampedLoad = (typeof loads)[number] & WorkflowOsRow & {
+        freightOpportunityId: string | null;
+        topRecommendations: (typeof recs);
+        pickupWindowStart: string | null;
+        pickupFreshness: PickupFreshness;
+        pickupDaysAgo: number | null;
+        status: string;
+      };
+      const stamped: StampedLoad[] = loads.map((l) => {
+        const acctMgrKey = (l.accountManager ?? "").toLowerCase().trim();
+        const legacyOwnerId = acctMgrKey ? userByName.get(acctMgrKey) ?? null : null;
+        const status = l.bucket === "unknown" ? "available" : l.bucket;
+        return {
           ...l,
           freightOpportunityId: extractFreightOppId(l),
           topRecommendations: recsByLoad.get(l.id) ?? [],
-        })),
+          pickupWindowStart: l.pickupDate,
+          pickupFreshness: computePickupFreshness(l.pickupDate, todayIso),
+          pickupDaysAgo: daysSincePickup(l.pickupDate, todayIso),
+          status,
+          ownership: null,
+          legacyOwnerId,
+          delegatedToUserId: null,
+        };
+      });
+
+      // Customer dropdown is computed pre-filter so it doesn't shrink as the
+      // rep changes owner/scope (mirrors the LWQ behaviour).
+      const customers = [...new Set(
+        stamped.map((l) => l.customerName).filter((n): n is string => !!n && n.trim() !== "")
+      )].sort((a, b) => a.localeCompare(b));
+
+      // ── Workflow OS — Owner filter (pre-pickup-scope) ───────────────────
+      // load_fact stores customer as text (no FK to companies), so the
+      // canonical "am_book" mode can't resolve company.assignedTo on this
+      // surface yet. We pass an empty map; am_book returns zero matches —
+      // a follow-up task will add a customerName → company resolver.
+      // Reps still get full coverage via me / all / unassigned / specific.
+      const companyAssignedToByCompanyId: Map<string, string | null> = new Map();
+      const ownerCtx = {
+        user: (sessionUser ?? { id: "", organizationId: orgId, role: "rep", name: "" }) as WorkflowOsUser,
+        orgUsers: orgUsers as WorkflowOsUser[],
+        companyAssignedToByCompanyId,
+      };
+      const owned = applyOwnerFilter(stamped, ownerFilterValue, ownerCtx);
+
+      // ── Workflow OS — pickup scope (post-owner, pre-response) ───────────
+      // hiddenStale is counted on the owned set BEFORE the scope filter so
+      // the Stale-N chip answers "how many of MY loads is actionable
+      // currently hiding?". It's independent of the chosen scope value.
+      const actionabilityCtx = { surface: "available_loads" as const, todayIso };
+      const hiddenStale = countHiddenStale(owned, actionabilityCtx);
+      const scoped = applyPickupScope(owned, pickupScope, actionabilityCtx);
+
+      return res.json({
+        loads: scoped.map((l) => {
+          // Strip the WorkflowOsRow envelope from the response to keep the
+          // wire shape lean — the client only needs the row + pickup +
+          // status fields it renders. Owner state is inferred from the
+          // chosen filter, not echoed back per row.
+          const { ownership, legacyOwnerId, delegatedToUserId, ...rest } = l;
+          void ownership; void legacyOwnerId; void delegatedToUserId;
+          return rest;
+        }),
+        hiddenStale,
+        pickupScope,
+        customers,
       });
     } catch (err) {
       console.error("[carrier-intel/available-loads]", err);

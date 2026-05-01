@@ -54,8 +54,35 @@ import { getGraphAccessToken } from "../graphService";
 import { getReplyTrackingStatus } from "../graphSubscriptionService";
 import { logOutboundCarrierEmail, logInboundCarrierEmail } from "../emailIntelligenceService";
 import { findCarrierContactLocks, formatLockReason } from "../carrierContactLocks";
+// Task #917 — Workflow OS adoption (LWQ). Same shared primitives AF uses
+// so the Owner-filter + pickup-scope semantics cannot drift across surfaces.
+import {
+  applyOwnerFilter,
+  type OwnerFilterValue,
+  type WorkflowOsRow,
+  type WorkflowOsUser,
+} from "@shared/workflowOs/ownership";
+import {
+  applyPickupScope,
+  countHiddenStale,
+  isPickupScopeValue,
+  DEFAULT_PICKUP_SCOPE,
+  type PickupScopeValue,
+} from "@shared/workflowOs/actionability";
+import { computePickupFreshness, daysSincePickup, type PickupFreshness } from "@shared/pickupFreshness";
+import { todayIsoInOrgTz } from "../lib/orgLocalDate";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+
+// Task #917 — Parse the canonical Owner-filter URL param into the OwnerFilterValue
+// shape `applyOwnerFilter` consumes. Anything malformed silently degrades to
+// "all" so a stale URL never produces a hard 400 for the rep (mirrors AF).
+function parseOwnerFilterParam(raw: unknown): OwnerFilterValue {
+  if (typeof raw !== "string" || !raw) return "all";
+  if (raw === "all" || raw === "me" || raw === "unassigned" || raw === "am_book") return raw;
+  // Anything else is interpreted as a specific user id.
+  return { specificUserId: raw };
+}
 
 /**
  * Module-level cache for the HF index. Keyed by "orgId:uploadFingerprint".
@@ -712,15 +739,31 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       const limit = Math.min(200, Math.max(1, parseInt(qStr(req.query.limit) || "50", 10) || 50));
       const cursor = qOptStr(req.query.cursor); // format: "score:laneId"
 
+      // Task #917 — Workflow OS Owner-filter + pickup-scope params. The
+      // server applies these before pagination so the cursor and per-bucket
+      // counts stay consistent with what the rep actually sees.
+      // Workflow OS — Task #917. Both filters round-trip via the
+      // serializeFiltersToUrl contract; we intentionally normalize through
+      // the shared `qOptStr` helper so the guardrails sweep stays clean
+      // and array/dup-param attempts collapse to a single string.
+      const ownerFilterValue = parseOwnerFilterParam(qOptStr(req.query.owner));
+      const pickupScopeRaw = qOptStr(req.query.pickupScope);
+      const pickupScope: PickupScopeValue = isPickupScopeValue(pickupScopeRaw)
+        ? pickupScopeRaw
+        : DEFAULT_PICKUP_SCOPE;
+
       const { visibleUserIds, canSeeUnassigned, scopeLabel } = await storage.resolveVisibleUserIds(
         user.id, user.organizationId, user.role
       );
 
       // ── Try lean cache path first (O(1) per lane, no per-lane enrichment) ──
       // Falls back to full getLaneWorkQueue only when the scoring job has never run.
-      const [leanQueue, orgUploads] = await Promise.all([
+      // We also load the org users list so the canonical Owner-filter sub-modes
+      // ("am_book", "specificUserId") can resolve direct-report relationships.
+      const [leanQueue, orgUploads, orgUsers] = await Promise.all([
         storage.getLaneWorkQueueFromCache(user.organizationId, visibleUserIds, canSeeUnassigned),
         storage.getFinancialUploadsForOrg(user.organizationId),
+        storage.getUsers(user.organizationId),
       ]);
 
       // Build HF index once (O(rows)) and look up per-lane in O(1).
@@ -729,6 +772,11 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       // ── Normalize into a common lean shape ─────────────────────────────────
       // When the cache is populated: items come from lane_summary_cache (lean — no replySummary).
       // When cache is empty (first run): fall back to getLaneWorkQueue and adapt to lean shape.
+      // Task #917 — the lean shape now also carries the bucket-derived `status`,
+      // a `pickupWindowStart` derived from the lane's next live opp, and the
+      // computed `pickupFreshness` / `pickupDaysAgo` so every consumer (the
+      // shared `applyOwnerFilter` / `applyPickupScope` helpers + the LWQ
+      // client) sees the same contract AF emits.
       type LeanItem = {
         laneId: string;
         laneScore: number | null;
@@ -749,6 +797,11 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         missingContactCount: number;
         isHighFrequency: boolean;
         isManual: boolean;
+        // Workflow OS contract — added by Task #917.
+        status: "unassigned" | "noContactable" | "assignedUntouched" | "inProgress";
+        pickupWindowStart: string | null;
+        pickupFreshness: PickupFreshness;
+        pickupDaysAgo: number | null;
       };
 
       type LeanBuckets = {
@@ -758,57 +811,160 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         inProgress: LeanItem[];
       };
 
+      // Task #635 / Task #917 — Build the cross-link map FIRST so we can stamp
+      // each lane with the next-expected pickup of any open freight opportunity
+      // sharing its signature. That date is what feeds the Workflow OS pickup
+      // freshness model on LWQ (the lane itself has no pickup column).
+      let openOppByLaneSig: Map<string, OpenOppLaneContext> = new Map();
+      try {
+        openOppByLaneSig = await buildOpenOppContextByLaneSig(db, user.organizationId);
+      } catch (err) {
+        console.error("[work-queue] open-opp context build error:", err);
+      }
+
+      const todayIso = todayIsoInOrgTz(new Date());
+      const stampPickupContext = <
+        T extends Pick<LeanItem, "origin" | "originState" | "destination" | "destinationState" | "equipmentType">,
+      >(
+        item: T,
+      ): { pickupWindowStart: string | null; pickupFreshness: PickupFreshness; pickupDaysAgo: number | null } => {
+        const sig = laneSig(item.origin, item.originState, item.destination, item.destinationState, item.equipmentType);
+        const ctx = openOppByLaneSig.get(sig);
+        const pickupWindowStart = ctx?.nextPickupAt ?? null;
+        return {
+          pickupWindowStart,
+          pickupFreshness: computePickupFreshness(pickupWindowStart, todayIso),
+          pickupDaysAgo: daysSincePickup(pickupWindowStart, todayIso),
+        };
+      };
+
       let buckets: LeanBuckets;
 
       if (leanQueue) {
-        // Cache hit — stamp HF flag and reshape
-        const mapItems = (items: typeof leanQueue.unassigned): LeanItem[] =>
+        // Cache hit — stamp HF flag, status, and pickup context onto each item.
+        const mapItems = (items: typeof leanQueue.unassigned, status: LeanItem["status"]): LeanItem[] =>
           items.map(item => ({
             ...item,
             isHighFrequency: isHighFrequencyLaneFromIndex(
               { origin: item.origin, destination: item.destination, avgLoadsPerWeek: null },
               hfIndex
             ),
+            status,
+            ...stampPickupContext(item),
           }));
         buckets = {
-          unassigned: mapItems(leanQueue.unassigned),
-          noContactable: mapItems(leanQueue.noContactable),
-          assignedUntouched: mapItems(leanQueue.assignedUntouched),
-          inProgress: mapItems(leanQueue.inProgress),
+          unassigned: mapItems(leanQueue.unassigned, "unassigned"),
+          noContactable: mapItems(leanQueue.noContactable, "noContactable"),
+          assignedUntouched: mapItems(leanQueue.assignedUntouched, "assignedUntouched"),
+          inProgress: mapItems(leanQueue.inProgress, "inProgress"),
         };
       } else {
         // Cache miss — fall back to full query and project to lean shape (no replySummary)
         const fullQueue = await storage.getLaneWorkQueue(
           user.organizationId, LANE_CONFIG.completionCarriersContacted, visibleUserIds, canSeeUnassigned
         );
-        const adaptItem = (item: (typeof fullQueue.unassigned)[number]): LeanItem => ({
-          laneId: item.lane.id,
-          laneScore: item.lane.laneScore ?? null,
-          origin: item.lane.origin,
-          originState: item.lane.originState ?? null,
-          destination: item.lane.destination,
-          destinationState: item.lane.destinationState ?? null,
-          equipmentType: item.lane.equipmentType ?? null,
-          avgLoadsPerWeek: item.lane.avgLoadsPerWeek ?? null,
-          companyId: item.lane.companyId ?? null,
-          companyName: item.lane.companyName ?? null,
-          ownerUserId: item.lane.ownerUserId ?? null,
-          ownerName: (item.lane as typeof item.lane & { ownerName?: string | null }).ownerName ?? null,
-          carriersContactedCount: item.lane.carriersContactedCount ?? 0,
-          contactableCount: item.contactableCount,
-          totalBenchCount: item.totalBenchCount,
-          historicalCount: item.historicalCount,
-          missingContactCount: item.missingContactCount,
-          isHighFrequency: isHighFrequencyLaneFromIndex(item.lane, hfIndex),
-          isManual: item.lane.isManual ?? false,
-        });
+        const adaptItem = (item: (typeof fullQueue.unassigned)[number], status: LeanItem["status"]): LeanItem => {
+          const base = {
+            origin: item.lane.origin,
+            originState: item.lane.originState ?? null,
+            destination: item.lane.destination,
+            destinationState: item.lane.destinationState ?? null,
+            equipmentType: item.lane.equipmentType ?? null,
+          };
+          return {
+            laneId: item.lane.id,
+            laneScore: item.lane.laneScore ?? null,
+            ...base,
+            avgLoadsPerWeek: item.lane.avgLoadsPerWeek ?? null,
+            companyId: item.lane.companyId ?? null,
+            companyName: item.lane.companyName ?? null,
+            ownerUserId: item.lane.ownerUserId ?? null,
+            ownerName: (item.lane as typeof item.lane & { ownerName?: string | null }).ownerName ?? null,
+            carriersContactedCount: item.lane.carriersContactedCount ?? 0,
+            contactableCount: item.contactableCount,
+            totalBenchCount: item.totalBenchCount,
+            historicalCount: item.historicalCount,
+            missingContactCount: item.missingContactCount,
+            isHighFrequency: isHighFrequencyLaneFromIndex(item.lane, hfIndex),
+            isManual: item.lane.isManual ?? false,
+            status,
+            ...stampPickupContext(base),
+          };
+        };
         buckets = {
-          unassigned: fullQueue.unassigned.map(adaptItem),
-          noContactable: fullQueue.noContactable.map(adaptItem),
-          assignedUntouched: fullQueue.assignedUntouched.map(adaptItem),
-          inProgress: fullQueue.inProgress.map(adaptItem),
+          unassigned: fullQueue.unassigned.map(i => adaptItem(i, "unassigned")),
+          noContactable: fullQueue.noContactable.map(i => adaptItem(i, "noContactable")),
+          assignedUntouched: fullQueue.assignedUntouched.map(i => adaptItem(i, "assignedUntouched")),
+          inProgress: fullQueue.inProgress.map(i => adaptItem(i, "inProgress")),
         };
       }
+
+      // Customer dropdown reflects the org's full visible universe so the rep
+      // can switch to any customer — not just their own filtered slice.
+      const allVisible = [...buckets.unassigned, ...buckets.noContactable, ...buckets.assignedUntouched, ...buckets.inProgress];
+      const customers = [...new Set(
+        allVisible.map(i => i.companyName).filter((n): n is string => !!n && n.trim() !== "")
+      )].sort((a, b) => a.localeCompare(b));
+
+      // ── Workflow OS — Owner filter (pre-pagination) ───────────────────────
+      // For "am_book" we need to know each company's assignedTo so the canonical
+      // `isRowInUsersAmBook` predicate can decide. We only fetch the companies
+      // that actually appear in the visible buckets, and only when the mode
+      // requires it, so the cache fast-path stays cheap.
+      let companyAssignedToByCompanyId: Map<string, string | null> = new Map();
+      if (ownerFilterValue === "am_book") {
+        const companyIds = [...new Set(allVisible.map(i => i.companyId).filter((id): id is string => !!id))];
+        if (companyIds.length > 0) {
+          try {
+            const companies = await storage.getCompaniesByIds(companyIds, user.organizationId);
+            companyAssignedToByCompanyId = new Map(companies.map(c => [c.id, c.assignedTo ?? null]));
+          } catch (err) {
+            console.error("[work-queue] companies-by-ids fetch error:", err);
+          }
+        }
+      }
+      const ownerCtx = {
+        user: user as WorkflowOsUser,
+        orgUsers: orgUsers as WorkflowOsUser[],
+        companyAssignedToByCompanyId,
+      };
+      // Project LeanItem into the WorkflowOsRow shape the predicate consumes.
+      // `legacyOwnerId` mirrors the lane's single owner column (pre-Workflow-OS
+      // payloads), so the "me" predicate matches whether or not an `ownership`
+      // envelope is present.
+      const projectForOwner = (r: LeanItem): LeanItem & WorkflowOsRow => ({
+        ...r,
+        ownership: null,
+        legacyOwnerId: r.ownerUserId,
+        delegatedToUserId: null,
+      });
+      const ownedBuckets: LeanBuckets = {
+        unassigned: applyOwnerFilter(buckets.unassigned.map(projectForOwner), ownerFilterValue, ownerCtx),
+        noContactable: applyOwnerFilter(buckets.noContactable.map(projectForOwner), ownerFilterValue, ownerCtx),
+        assignedUntouched: applyOwnerFilter(buckets.assignedUntouched.map(projectForOwner), ownerFilterValue, ownerCtx),
+        inProgress: applyOwnerFilter(buckets.inProgress.map(projectForOwner), ownerFilterValue, ownerCtx),
+      };
+
+      // ── Workflow OS — pickup-scope (pre-pagination) ───────────────────────
+      // We compute hiddenStale BEFORE pickup-scope filtering so the Stale-N
+      // chip shows the rep how many of their own rows the actionable scope is
+      // currently hiding. countHiddenStale is independent of `scope`; it
+      // always answers "how many would actionable hide?".
+      const actionabilityCtx = { surface: "lwq" as const, todayIso };
+      const allOwned = [
+        ...ownedBuckets.unassigned,
+        ...ownedBuckets.noContactable,
+        ...ownedBuckets.assignedUntouched,
+        ...ownedBuckets.inProgress,
+      ];
+      const hiddenStale = countHiddenStale(allOwned, actionabilityCtx);
+
+      const scopedBuckets: LeanBuckets = {
+        unassigned: applyPickupScope(ownedBuckets.unassigned, pickupScope, actionabilityCtx),
+        noContactable: applyPickupScope(ownedBuckets.noContactable, pickupScope, actionabilityCtx),
+        assignedUntouched: applyPickupScope(ownedBuckets.assignedUntouched, pickupScope, actionabilityCtx),
+        inProgress: applyPickupScope(ownedBuckets.inProgress, pickupScope, actionabilityCtx),
+      };
 
       // Keyset pagination within each bucket (already sorted laneScore DESC, laneId by DB)
       function applyPagination(items: LeanItem[]): { items: LeanItem[]; nextCursor: string | null } {
@@ -832,32 +988,22 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       }
 
       const totals = {
-        unassigned: buckets.unassigned.length,
-        noContactable: buckets.noContactable.length,
-        assignedUntouched: buckets.assignedUntouched.length,
-        inProgress: buckets.inProgress.length,
-        total: buckets.unassigned.length + buckets.noContactable.length + buckets.assignedUntouched.length + buckets.inProgress.length,
+        unassigned: scopedBuckets.unassigned.length,
+        noContactable: scopedBuckets.noContactable.length,
+        assignedUntouched: scopedBuckets.assignedUntouched.length,
+        inProgress: scopedBuckets.inProgress.length,
+        total:
+          scopedBuckets.unassigned.length +
+          scopedBuckets.noContactable.length +
+          scopedBuckets.assignedUntouched.length +
+          scopedBuckets.inProgress.length,
       };
 
-      const allVisible = [...buckets.unassigned, ...buckets.noContactable, ...buckets.assignedUntouched, ...buckets.inProgress];
-      const customers = [...new Set(
-        allVisible.map(i => i.companyName).filter((n): n is string => !!n && n.trim() !== "")
-      )].sort((a, b) => a.localeCompare(b));
+      const uPaged = applyPagination(scopedBuckets.unassigned);
+      const ncPaged = applyPagination(scopedBuckets.noContactable);
+      const auPaged = applyPagination(scopedBuckets.assignedUntouched);
+      const ipPaged = applyPagination(scopedBuckets.inProgress);
 
-      const uPaged = applyPagination(buckets.unassigned);
-      const ncPaged = applyPagination(buckets.noContactable);
-      const auPaged = applyPagination(buckets.assignedUntouched);
-      const ipPaged = applyPagination(buckets.inProgress);
-
-      // Task #635 — Cross-link map: how many OPEN freight opportunities exist
-      // today for each lane signature, joined onto the rendered LWQ rows.
-      // Computed once per request and merged in O(rows).
-      let openOppByLaneSig: Map<string, OpenOppLaneContext> = new Map();
-      try {
-        openOppByLaneSig = await buildOpenOppContextByLaneSig(db, user.organizationId);
-      } catch (err) {
-        console.error("[work-queue] open-opp context build error:", err);
-      }
       const stampLiveOpps = (rows: LeanItem[]): Array<LeanItem & { liveOpps: (OpenOppLaneContext & { laneSignature: string }) | null }> =>
         rows.map(r => {
           const sig = laneSig(r.origin, r.originState, r.destination, r.destinationState, r.equipmentType);
@@ -869,7 +1015,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         });
 
       const source = leanQueue ? "cache" : "full";
-      console.log(`[work-queue] org=${user.organizationId} source=${source} scope=${scopeLabel} buckets=${JSON.stringify(totals)} limit=${limit} cursor=${cursor ?? "none"} requestedBy=${user.id}(${user.role})`);
+      console.log(`[work-queue] org=${user.organizationId} source=${source} scope=${scopeLabel} buckets=${JSON.stringify(totals)} hiddenStale=${hiddenStale} owner=${typeof ownerFilterValue === "string" ? ownerFilterValue : `specific:${ownerFilterValue.specificUserId}`} pickupScope=${pickupScope} limit=${limit} cursor=${cursor ?? "none"} requestedBy=${user.id}(${user.role})`);
       res.json({
         unassigned: stampLiveOpps(uPaged.items),
         noContactable: stampLiveOpps(ncPaged.items),
@@ -877,6 +1023,10 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         inProgress: stampLiveOpps(ipPaged.items),
         scopeLabel,
         customers,
+        // Task #917 — Workflow OS envelope. Surfaced so the LWQ client can
+        // render the canonical Stale-N chip + echo back the active scope.
+        hiddenStale,
+        pickupScope,
         meta: {
           // "cache" = served from lane_summary_cache (fast path)
           // "full"  = cold-start fallback to live aggregation; client should

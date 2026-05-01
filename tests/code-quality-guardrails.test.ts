@@ -2205,6 +2205,147 @@ assert(
   "A dedicated gateAdmin helper backed by isAdmin() must exist so cross-tenant operations have a single, auditable enforcement point. Inlining the role check at each call site invites drift.",
 );
 
+// ── Section 26: Lane Work Queue — Workflow OS conformance (Task #917) ───────
+//
+// LWQ adopted the canonical Workflow OS primitives in Task #917 (see
+// docs/workflow-os-spec.md). These guardrails pin the page to the shared
+// pieces so a future regression — someone re-introducing a local Owner
+// Select, hand-rolling a pickup-scope union, or writing yet another
+// `useState<Set<string>>` selection store — fails CI loudly instead of
+// silently bit-rotting the cross-surface contract.
+//
+// What we assert:
+//   1. The four shared primitives are imported (defence-in-depth alongside
+//      the AST-level conformance suite in
+//      client/src/lib/workflow-os/__tests__/conformance.test.ts).
+//   2. Selection state goes through useRowSelection — no inline
+//      useState<Set<string>>.
+//   3. No local pickup-scope literal union (must reuse PickupScopeValue /
+//      DEFAULT_PICKUP_SCOPE from shared/pickupFreshness).
+//   4. URL filter round-trip uses serializeFiltersToUrl /
+//      deserializeFiltersFromUrl from the shared savedViews module.
+//   5. The work-queue query threads owner + pickupScope through the
+//      queryKey so the cache splits per-filter (otherwise the cached
+//      response would mask filter changes).
+
+const lwqSrc917 = readFile("client/src/pages/lane-work-queue.tsx");
+
+assert(
+  "lane-work-queue.tsx — imports OwnerFilterSelect from the shared workflow-os module",
+  /from\s+["'](?:@|[./]+)\/components\/workflow-os\/OwnerFilterSelect["']/.test(lwqSrc917),
+  "LWQ must use the shared OwnerFilterSelect — local Selects would diverge from the cross-surface owner-filter contract (me / my_book / am_book / unassigned / specific user).",
+);
+assert(
+  "lane-work-queue.tsx — imports PickupScopeSelect from the shared workflow-os module",
+  /from\s+["'](?:@|[./]+)\/components\/workflow-os\/PickupScopeSelect["']/.test(lwqSrc917),
+  "LWQ must use the shared PickupScopeSelect so the actionable / 14-days / all scope vocabulary stays identical across AF, LWQ, and Available Loads.",
+);
+assert(
+  "lane-work-queue.tsx — imports StaleCountChip from the shared workflow-os module",
+  /from\s+["'](?:@|[./]+)\/components\/workflow-os\/StaleCountChip["']/.test(lwqSrc917),
+  "Hidden-stale escape hatch must come from the shared chip — it carries the contracted onShowAll behaviour and copy.",
+);
+assert(
+  "lane-work-queue.tsx — imports BulkActionBar from the shared workflow-os module",
+  /from\s+["'](?:@|[./]+)\/components\/workflow-os\/BulkActionBar["']/.test(lwqSrc917),
+  "Bulk actions must render via the shared BulkActionBar so the canonical Reassign / Snooze / Outreach / Tag-Status grammar is preserved across surfaces.",
+);
+assert(
+  "lane-work-queue.tsx — imports useRowSelection from the shared hooks module",
+  /from\s+["'](?:@|[./]+)\/hooks\/workflow-os\/useRowSelection["']/.test(lwqSrc917),
+  "Row selection must go through the shared useRowSelection hook so behaviours like Shift+click range, Ctrl+A, and clear-on-filter-change stay identical across surfaces.",
+);
+assert(
+  "lane-work-queue.tsx — does not declare a local useState<Set<string>> selection store",
+  !/useState<Set<string>>/.test(lwqSrc917),
+  "Selection state must come from useRowSelection. A local `useState<Set<string>>` re-introduces the legacy selection model and bypasses the shared keyboard / clear / parity behaviours.",
+);
+assert(
+  "lane-work-queue.tsx — does not hard-code a local pickup-scope literal union",
+  !/["']actionable["']\s*\|\s*["']14_days["']/.test(lwqSrc917) &&
+    !/["']actionable["']\s*\|\s*["']all["']/.test(lwqSrc917),
+  "The pickup-scope vocabulary lives in shared/pickupFreshness as PickupScopeValue / PICKUP_SCOPES / DEFAULT_PICKUP_SCOPE. Re-declaring the union locally guarantees a future drift between server and client.",
+);
+assert(
+  "lane-work-queue.tsx — uses serializeFiltersToUrl + deserializeFiltersFromUrl from savedViews",
+  /serializeFiltersToUrl/.test(lwqSrc917) &&
+    /deserializeFiltersFromUrl/.test(lwqSrc917) &&
+    /from\s+["'](?:@|[./]+)\/lib\/workflow-os\/savedViews["']/.test(lwqSrc917),
+  "URL <-> filter round-trip must reuse the shared serializer so saved-view URLs work uniformly across AF, LWQ, and Available Loads.",
+);
+{
+  // The work-queue cache key MUST partition on owner + pickupScope.
+  // Otherwise switching filters would return the previous cached payload
+  // (bucket counts, cursor) until the 60s refetch fired — a nasty subtle
+  // bug. We grep for the literal queryKey shape; the regex is permissive
+  // about whitespace but pins the three canonical pieces.
+  const m = lwqSrc917.match(
+    /queryKey\s*:\s*\[\s*["']\/api\/recurring-lanes\/work-queue["']\s*,\s*\{[^}]*owner[^}]*pickupScope[^}]*\}\s*\]/,
+  );
+  assert(
+    "lane-work-queue.tsx — work-queue queryKey threads owner + pickupScope",
+    !!m,
+    "The /api/recurring-lanes/work-queue useQuery must include { owner, pickupScope } in its queryKey so React Query splits the cache per filter combination. Without this, switching filters reads stale cached payloads.",
+  );
+}
+
+// ── Section 27: Available Loads — Workflow OS conformance (Task #918) ──────
+//
+// Available Loads adopted the canonical Workflow OS owner + pickup-scope
+// primitives in Task #918 (see docs/workflow-os-spec.md). These guardrails
+// pin the page to the shared pieces so a future regression — someone re-
+// introducing a local Owner Select, hand-rolling a pickup-scope union, or
+// dropping the URL round-trip — fails CI loudly.
+//
+// Note: BulkActionBar + useRowSelection are NOT yet asserted here because
+// Available Loads has no selection UI; that adoption is tracked under
+// Task #902 (outreach workspace rollout). When #902 lands, mirror the
+// LWQ assertions from Section 26.
+
+const alSrc918 = readFile("client/src/pages/carrier-intelligence-available-loads.tsx");
+
+assert(
+  "carrier-intelligence-available-loads.tsx — imports OwnerFilterSelect from the shared workflow-os module",
+  /from\s+["'](?:@|[./]+)\/components\/workflow-os\/OwnerFilterSelect["']/.test(alSrc918),
+  "Available Loads must use the shared OwnerFilterSelect — local Selects would diverge from the cross-surface owner-filter contract (me / my_book / am_book / unassigned / specific user).",
+);
+assert(
+  "carrier-intelligence-available-loads.tsx — imports PickupScopeSelect from the shared workflow-os module",
+  /from\s+["'](?:@|[./]+)\/components\/workflow-os\/PickupScopeSelect["']/.test(alSrc918),
+  "Available Loads must use the shared PickupScopeSelect so the actionable / 14-days / all scope vocabulary stays identical across AF, LWQ, and Available Loads.",
+);
+assert(
+  "carrier-intelligence-available-loads.tsx — imports StaleCountChip from the shared workflow-os module",
+  /from\s+["'](?:@|[./]+)\/components\/workflow-os\/StaleCountChip["']/.test(alSrc918),
+  "Hidden-stale escape hatch must come from the shared chip — it carries the contracted onShowAll behaviour and copy.",
+);
+assert(
+  "carrier-intelligence-available-loads.tsx — does not hard-code a local pickup-scope literal union",
+  !/["']actionable["']\s*\|\s*["']14_days["']/.test(alSrc918) &&
+    !/["']actionable["']\s*\|\s*["']all["']/.test(alSrc918),
+  "The pickup-scope vocabulary lives in shared/workflowOs/actionability as PickupScopeValue / DEFAULT_PICKUP_SCOPE. Re-declaring the union locally guarantees a future drift between server and client.",
+);
+assert(
+  "carrier-intelligence-available-loads.tsx — uses serializeFiltersToUrl + deserializeFiltersFromUrl from savedViews",
+  /serializeFiltersToUrl/.test(alSrc918) &&
+    /deserializeFiltersFromUrl/.test(alSrc918) &&
+    /from\s+["'](?:@|[./]+)\/lib\/workflow-os\/savedViews["']/.test(alSrc918),
+  "URL <-> filter round-trip must reuse the shared serializer so saved-view URLs work uniformly across AF, LWQ, and Available Loads.",
+);
+{
+  // The available-loads cache key MUST partition on owner + pickupScope.
+  // Without this, switching filters reads the prior cached payload until
+  // the next refetch — a subtle leakage between filter slices.
+  const m = alSrc918.match(
+    /queryKey\s*:\s*\[\s*["']\/api\/carrier-intelligence\/available-loads["']\s*,\s*\{[^}]*owner[^}]*pickupScope[^}]*\}\s*\]/,
+  );
+  assert(
+    "carrier-intelligence-available-loads.tsx — available-loads queryKey threads owner + pickupScope",
+    !!m,
+    "The /api/carrier-intelligence/available-loads useQuery must include { owner, pickupScope } in its queryKey so React Query splits the cache per filter combination. Without this, switching filters reads stale cached payloads.",
+  );
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

@@ -48,20 +48,19 @@ const SURFACES: SurfaceSpec[] = [
   {
     name: "LWQ",
     file: "client/src/pages/lane-work-queue.tsx",
-    exemptions: {
-      OwnerFilterSelect: "Future Task B — LWQ owner+actionable rollout",
-      PickupScopeSelect: "Future Task B — LWQ owner+actionable rollout",
-      StaleCountChip: "Future Task B — LWQ owner+actionable rollout",
-      BulkActionBar: "Future Task #902 — LWQ outreach workspace rollout",
-    },
+    // Workflow OS — Task #917 has landed. LWQ now imports the four
+    // canonical primitives directly; no exemptions remain. Future Available
+    // Loads adoption (#918) follows the same template.
   },
   {
     name: "Available Loads",
     file: "client/src/pages/carrier-intelligence-available-loads.tsx",
+    // Workflow OS — Task #918 has landed. Available Loads now imports the
+    // shared OwnerFilterSelect / PickupScopeSelect / StaleCountChip
+    // primitives and threads owner + pickupScope through the work-queue
+    // request. BulkActionBar adoption stays deferred to Task #902 (outreach
+    // workspace rollout) — this surface has no selection UI yet.
     exemptions: {
-      OwnerFilterSelect: "Future Task C — Available Loads owner+actionable rollout",
-      PickupScopeSelect: "Future Task C — Available Loads owner+actionable rollout",
-      StaleCountChip: "Future Task C — Available Loads owner+actionable rollout",
       BulkActionBar: "Future Task #902 — Available Loads outreach workspace rollout",
     },
   },
