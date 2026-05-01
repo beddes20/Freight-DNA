@@ -271,6 +271,196 @@ describe("agent tool: find_documents storage scope", () => {
   });
 });
 
+// ─── Task #911 — get_document_extraction strict access control ───────────
+//
+// `get_document_extraction` (and its sibling REST routes) deliberately do
+// NOT use the same uploader-bypass union that `find_documents` uses. The
+// task spec calls for refusing access to docs tied to accounts the rep
+// cannot currently see, even if they were the original uploader before the
+// account was reassigned away. This simulator mirrors the predicate in
+// `server/agent/tools.ts` and `server/routes/documents.ts` so a refactor
+// that re-introduces the uploader bypass for company-anchored docs trips
+// here, not in production.
+
+type ExtractionDoc = {
+  id: string;
+  organizationId: string;
+  uploaderId: string;
+  uploadContext: { companyId?: string | null } | null;
+};
+
+function canReadExtraction(args: {
+  doc: ExtractionDoc;
+  caller: { id: string; organizationId: string; role: UserRole };
+  visibleCompanyIds: string[] | "all"; // "all" === admin/director/SD scope
+}): boolean {
+  if (args.doc.organizationId !== args.caller.organizationId) return false;
+  const linkedCompanyId = args.doc.uploadContext?.companyId ?? null;
+  const isAdminish =
+    args.caller.role === "admin" ||
+    args.caller.role === "director" ||
+    args.caller.role === "sales_director";
+  const hasAccountAccess =
+    isAdminish ||
+    args.visibleCompanyIds === "all" ||
+    (!!linkedCompanyId && args.visibleCompanyIds.includes(linkedCompanyId));
+  // For company-anchored docs, ONLY current account visibility counts —
+  // uploader bypass is removed. Unanchored scratch docs fall back to the
+  // uploader so reps can still read their own off-account uploads.
+  return hasAccountAccess || (!linkedCompanyId && args.doc.uploaderId === args.caller.id);
+}
+
+describe("agent tool: get_document_extraction strict access control (Task #911)", () => {
+  const docOnC1: ExtractionDoc = { id: "d-rc1", organizationId: "org-A", uploaderId: "rep-1", uploadContext: { companyId: "c1" } };
+  const docOnC2: ExtractionDoc = { id: "d-rc2", organizationId: "org-A", uploaderId: "rep-2", uploadContext: { companyId: "c2" } };
+  const docOrphan: ExtractionDoc = { id: "d-rc3", organizationId: "org-A", uploaderId: "rep-1", uploadContext: null };
+  const docOtherOrg: ExtractionDoc = { id: "d-rc9", organizationId: "org-B", uploaderId: "rep-1", uploadContext: { companyId: "c1" } };
+  const rep1: { id: string; organizationId: string; role: UserRole } = { id: "rep-1", organizationId: "org-A", role: "sales" };
+  const admin: { id: string; organizationId: string; role: UserRole } = { id: "admin-1", organizationId: "org-A", role: "admin" };
+
+  it("rep with current visibility on the linked company can read", () => {
+    expect(canReadExtraction({ doc: docOnC1, caller: rep1, visibleCompanyIds: ["c1"] })).toBe(true);
+  });
+
+  it("REASSIGNMENT: original uploader who lost account visibility CANNOT read the rate con anymore", () => {
+    // rep-1 uploaded docOnC1 but the c1 account has since been reassigned
+    // to another rep — rep-1's visibleCompanyIds no longer includes "c1".
+    // The extraction read MUST refuse despite uploaderId === rep-1.
+    expect(canReadExtraction({ doc: docOnC1, caller: rep1, visibleCompanyIds: ["c2"] })).toBe(false);
+  });
+
+  it("REASSIGNMENT: empty visibility set blocks access even for the uploader of a company-anchored doc", () => {
+    expect(canReadExtraction({ doc: docOnC1, caller: rep1, visibleCompanyIds: [] })).toBe(false);
+  });
+
+  it("rep cannot read another rep's rate con anchored to a company the rep doesn't own", () => {
+    expect(canReadExtraction({ doc: docOnC2, caller: rep1, visibleCompanyIds: ["c1"] })).toBe(false);
+  });
+
+  it("orphan (non-anchored) docs remain readable by their uploader", () => {
+    expect(canReadExtraction({ doc: docOrphan, caller: rep1, visibleCompanyIds: [] })).toBe(true);
+  });
+
+  it("orphan docs are NOT readable by other reps in the same org (uploader-only fallback)", () => {
+    const otherRep: { id: string; organizationId: string; role: UserRole } = { id: "rep-7", organizationId: "org-A", role: "sales" };
+    expect(canReadExtraction({ doc: docOrphan, caller: otherRep, visibleCompanyIds: ["c1", "c2"] })).toBe(false);
+  });
+
+  it("admin in the same org can read any doc (visibility=all)", () => {
+    expect(canReadExtraction({ doc: docOnC1, caller: admin, visibleCompanyIds: "all" })).toBe(true);
+    expect(canReadExtraction({ doc: docOnC2, caller: admin, visibleCompanyIds: "all" })).toBe(true);
+    expect(canReadExtraction({ doc: docOrphan, caller: admin, visibleCompanyIds: "all" })).toBe(true);
+  });
+
+  it("admin in org-A still cannot read an org-B doc — org filter wins", () => {
+    expect(canReadExtraction({ doc: docOtherOrg, caller: admin, visibleCompanyIds: "all" })).toBe(false);
+  });
+
+  it("rep-1 in org-A cannot read an org-B doc even if the linked company id collides", () => {
+    expect(canReadExtraction({ doc: docOtherOrg, caller: rep1, visibleCompanyIds: ["c1"] })).toBe(false);
+  });
+});
+
+// ─── Task #911 — entity resolver strict ambiguity policy ─────────────────
+//
+// resolveRateConEntities never silently picks a primary when more than
+// one candidate clears the per-kind floor. This simulator mirrors the
+// per-kind loop in `server/services/documentEntityResolver.ts`. A
+// regression that re-introduces the previous "tie within 0.05 only"
+// auto-pick fails this test before it reaches production.
+
+interface ScoredCandidateLite { score: number; targetId: string }
+
+function decideAmbiguityForKind(args: { candidates: ScoredCandidateLite[]; floor: number; maxKept: number }) {
+  const surviving = [...args.candidates]
+    .sort((a, b) => b.score - a.score)
+    .filter((c) => c.score >= args.floor)
+    .slice(0, args.maxKept);
+  const ambiguous = surviving.length > 1;
+  return {
+    surviving,
+    ambiguous,
+    primary: ambiguous || surviving.length === 0 ? null : surviving[0],
+  };
+}
+
+describe("entity resolver strict ambiguity policy (Task #911)", () => {
+  it("zero candidates above the floor → no primary, not ambiguous", () => {
+    const r = decideAmbiguityForKind({
+      candidates: [{ score: 0.4, targetId: "x" }, { score: 0.5, targetId: "y" }],
+      floor: 0.6,
+      maxKept: 3,
+    });
+    expect(r.primary).toBeNull();
+    expect(r.ambiguous).toBe(false);
+    expect(r.surviving).toHaveLength(0);
+  });
+
+  it("exactly one candidate above the floor → that one is primary, not ambiguous", () => {
+    const r = decideAmbiguityForKind({
+      candidates: [{ score: 0.92, targetId: "a" }, { score: 0.4, targetId: "b" }],
+      floor: 0.6,
+      maxKept: 3,
+    });
+    expect(r.primary?.targetId).toBe("a");
+    expect(r.ambiguous).toBe(false);
+  });
+
+  it("CRITICAL: two candidates above the floor with a wide score gap → still ambiguous, no primary", () => {
+    // Old policy would have auto-picked because gap > 0.05. New policy
+    // requires a rep decision whenever >1 candidate is plausible.
+    const r = decideAmbiguityForKind({
+      candidates: [{ score: 0.95, targetId: "a" }, { score: 0.7, targetId: "b" }],
+      floor: 0.6,
+      maxKept: 3,
+    });
+    expect(r.ambiguous).toBe(true);
+    expect(r.primary).toBeNull();
+    expect(r.surviving.map((c) => c.targetId)).toEqual(["a", "b"]);
+  });
+
+  it("two candidates clustered tightly above the floor → ambiguous, no primary", () => {
+    const r = decideAmbiguityForKind({
+      candidates: [{ score: 0.83, targetId: "a" }, { score: 0.81, targetId: "b" }],
+      floor: 0.6,
+      maxKept: 3,
+    });
+    expect(r.ambiguous).toBe(true);
+    expect(r.primary).toBeNull();
+  });
+
+  it("trims to maxKept survivors before deciding, but ambiguity flag is still true", () => {
+    const r = decideAmbiguityForKind({
+      candidates: [
+        { score: 0.95, targetId: "a" },
+        { score: 0.9, targetId: "b" },
+        { score: 0.85, targetId: "c" },
+        { score: 0.8, targetId: "d" },
+      ],
+      floor: 0.6,
+      maxKept: 3,
+    });
+    expect(r.surviving).toHaveLength(3);
+    expect(r.ambiguous).toBe(true);
+  });
+
+  it("sub-floor candidates are dropped before the ambiguity check (single survivor → primary)", () => {
+    // This is the "strong winner" case: one truly confident match plus a
+    // bunch of below-floor noise. Should auto-pick.
+    const r = decideAmbiguityForKind({
+      candidates: [
+        { score: 0.95, targetId: "a" },
+        { score: 0.55, targetId: "b" }, // below the 0.6 floor
+        { score: 0.5, targetId: "c" },
+      ],
+      floor: 0.6,
+      maxKept: 3,
+    });
+    expect(r.primary?.targetId).toBe("a");
+    expect(r.ambiguous).toBe(false);
+  });
+});
+
 // Analytics route invariants — we model the row writers and confirm that
 // they always stamp the org/user from the authenticated session, never the
 // raw client body, so a malicious client can't spoof another org.
@@ -390,6 +580,8 @@ const TOOL_CAPABILITIES: Record<string, Capability> = {
   recurring_freight_pattern:      "read.lane",
   // Phase 2 slice 1 — Copilot Doc Ingestion (Task #910)
   find_documents:                 "read.document",
+  // Phase 2 slice 2 — Copilot Rate Con Extraction (Task #911)
+  get_document_extraction:        "read.document",
 };
 
 const ALL_ROLES: UserRole[] = [
@@ -450,6 +642,10 @@ const EXPECTED_MATRIX: Record<string, Record<UserRole, Eff>> = {
   // Documents are scoped at runtime by visible companies / uploader; capability
   // itself is allow for everyone — the storage layer enforces row-level scope.
   find_documents:                everyone("allow"),
+  // get_document_extraction shares the same capability as find_documents
+  // (read.document); per-document visibility is enforced inside the tool
+  // handler and mirrors the find_documents predicate.
+  get_document_extraction:       everyone("allow"),
   recommend_carriers_for_order:  everyone("allow"),
   suggest_buy_rate_for_lane:     everyone("allow"),
   top_carriers_by_realized_margin: everyone("allow"),

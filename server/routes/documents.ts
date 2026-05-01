@@ -15,8 +15,12 @@ import { requireAuth, getCurrentUser, getVisibleCompanyIds } from "../auth";
 import { storage } from "../storage";
 import { ingestDocument, retryDocument } from "../services/documentIngestion";
 import { getDocumentBytes } from "../services/documentStorage";
+import { runRateConPipeline } from "../services/rateConPipeline";
+import { calibrateRateConConfidence } from "../services/rateConConfidenceCalibrator";
 import { pStr, qOptStr, qInt, qBool } from "../lib/req";
 import { getErrorMessage } from "../lib/errors";
+import { z } from "zod";
+import { RATE_CON_FIELD_PATHS, rateConExtractionSchema } from "@shared/schema";
 
 const COPILOT_DOC_UPLOAD_LIMIT = 25 * 1024 * 1024; // 25 MB per file
 const COPILOT_DOC_FIELD = "files";
@@ -174,6 +178,243 @@ export function registerDocumentRoutes(app: Express): void {
     } catch (err) {
       console.error("[admin/copilot/documents/queue GET]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to load processing queue" });
+    }
+  });
+
+  // ── Task #911 — typed extraction surfaces ───────────────────────────
+  // GET the typed extraction + entity links + findings + corrections.
+  app.get("/api/copilot/documents/:id/extraction", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const docId = pStr(req.params.id);
+      const doc = await storage.getDocumentInOrg(docId, currentUser.organizationId);
+      if (!doc) return res.status(404).json({ error: "Document not found" });
+      const visible = await getVisibleCompanyIds(currentUser);
+      const linkedCompanyId = (doc.uploadContext as { companyId?: string } | null)?.companyId ?? null;
+      // Strict policy (Task #911): for docs anchored to a company, the
+      // current account-visibility check is the ONLY source of truth.
+      // Uploader bypass is removed so a rep loses access to a rate con
+      // after the linked account is reassigned away. For docs that are
+      // not anchored to any company (rare scratch uploads) the uploader
+      // can still read their own.
+      const hasAccountAccess =
+        isAdminish(currentUser.role) ||
+        visible === null ||
+        (linkedCompanyId && visible.includes(linkedCompanyId));
+      const allowed = hasAccountAccess || (!linkedCompanyId && doc.uploaderId === currentUser.id);
+      if (!allowed) return res.status(403).json({ error: "Forbidden" });
+
+      const [extraction, links, findings, corrections] = await Promise.all([
+        storage.getDocumentExtraction(doc.id),
+        storage.getDocumentEntityLinks(doc.id),
+        storage.getDocumentExtractionFindings(doc.id),
+        storage.getDocumentExtractionCorrections(doc.id),
+      ]);
+      res.json({
+        document: doc,
+        extraction: extraction ?? null,
+        links,
+        findings,
+        corrections,
+      });
+    } catch (err) {
+      console.error("[copilot/documents/:id/extraction GET]", getErrorMessage(err));
+      res.status(500).json({ error: "Failed to load extraction" });
+    }
+  });
+
+  // POST a single-field correction. The card re-renders with the corrected
+  // value and the "edited by rep" chip; the corrections feed the nightly
+  // confidence calibrator.
+  //
+  // Per-field value validation: each rate-con leaf is typed (string, number,
+  // or the accessorials object). We reject a correction whose value doesn't
+  // match the field's inner type BEFORE persisting, AND we re-parse the
+  // patched payload against `rateConExtractionSchema` after merging — so a
+  // valid field write that happens to break a structural invariant (e.g.
+  // wrong shape under accessorials) still fails closed instead of poisoning
+  // the typed envelope downstream tools rely on.
+  const NUMERIC_RATE_CON_FIELDS = new Set<string>([
+    "weightLbs", "allInRate", "lineHaulRate", "fuelSurcharge",
+  ]);
+  const accessorialsCorrectionSchema = z.object({
+    items: z.array(z.object({
+      description: z.string().min(1),
+      amount: z.number().nullable().optional(),
+      confidence: z.number().min(0).max(1),
+      source: z.unknown().nullable().optional(),
+    })),
+    confidence: z.number().min(0).max(1),
+  });
+  function validateCorrectionValue(
+    fieldPath: typeof RATE_CON_FIELD_PATHS[number],
+    value: unknown,
+  ): { ok: true } | { ok: false; reason: string } {
+    if (fieldPath === "accessorials") {
+      const r = accessorialsCorrectionSchema.safeParse(value);
+      return r.success
+        ? { ok: true }
+        : { ok: false, reason: `accessorials shape invalid: ${r.error.issues.slice(0,2).map(i => i.message).join("; ")}` };
+    }
+    // Rep clearing a field is allowed.
+    if (value === null || value === undefined) return { ok: true };
+    if (NUMERIC_RATE_CON_FIELDS.has(fieldPath)) {
+      return typeof value === "number" && Number.isFinite(value)
+        ? { ok: true }
+        : { ok: false, reason: `${fieldPath} must be a finite number or null` };
+    }
+    return typeof value === "string"
+      ? { ok: true }
+      : { ok: false, reason: `${fieldPath} must be a string or null` };
+  }
+  const correctionBodySchema = z.object({
+    fieldPath: z.enum(RATE_CON_FIELD_PATHS),
+    originalValue: z.unknown().optional(),
+    correctedValue: z.unknown(),
+  });
+  app.post("/api/copilot/documents/:id/corrections", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const docId = pStr(req.params.id);
+      const doc = await storage.getDocumentInOrg(docId, currentUser.organizationId);
+      if (!doc) return res.status(404).json({ error: "Document not found" });
+      const visible = await getVisibleCompanyIds(currentUser);
+      const linkedCompanyId = (doc.uploadContext as { companyId?: string } | null)?.companyId ?? null;
+      // Same strict policy as the GET — uploader bypass is removed for
+      // company-anchored docs so reassignment revokes correction access.
+      const hasAccountAccess =
+        isAdminish(currentUser.role) ||
+        visible === null ||
+        (linkedCompanyId && visible.includes(linkedCompanyId));
+      const allowed = hasAccountAccess || (!linkedCompanyId && doc.uploaderId === currentUser.id);
+      if (!allowed) return res.status(403).json({ error: "Forbidden" });
+
+      const parsed = correctionBodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid correction payload", issues: parsed.error.issues });
+      }
+
+      // Per-field type check on `correctedValue`. Without this the rep (or
+      // a malicious caller) could drop a non-string into `carrierName`, an
+      // arbitrary object into `weightLbs`, or a malformed accessorials
+      // array — which would silently break the typed `RateConExtraction`
+      // contract that the agent tool, the rep card, and the calibrator
+      // all read from.
+      const fieldCheck = validateCorrectionValue(parsed.data.fieldPath, parsed.data.correctedValue);
+      if (!fieldCheck.ok) {
+        return res.status(400).json({ error: "Invalid corrected value", reason: fieldCheck.reason });
+      }
+
+      // Build the patched payload up-front so we can re-validate against
+      // the full Zod schema BEFORE writing — catches structural breakage
+      // even if the per-field type check passes.
+      const existing = await storage.getDocumentExtraction(doc.id);
+      let patched: Record<string, unknown> | null = null;
+      if (existing && typeof existing.payload === "object" && existing.payload) {
+        const base = { ...(existing.payload as Record<string, unknown>) };
+        const prior = base[parsed.data.fieldPath] as Record<string, unknown> | undefined;
+        const sourceRef = prior?.source ?? null;
+        base[parsed.data.fieldPath] = parsed.data.fieldPath === "accessorials"
+          ? parsed.data.correctedValue
+          : { value: parsed.data.correctedValue, confidence: 1, source: sourceRef, repCorrected: true };
+        const reparse = rateConExtractionSchema.safeParse(base);
+        if (!reparse.success) {
+          return res.status(400).json({
+            error: "Patched payload failed schema validation",
+            issues: reparse.error.issues.slice(0, 3),
+          });
+        }
+        patched = base;
+      }
+
+      const correction = await storage.addDocumentExtractionCorrection({
+        documentId: doc.id,
+        organizationId: currentUser.organizationId,
+        fieldPath: parsed.data.fieldPath,
+        classLabel: doc.classLabel,
+        originalValue: (parsed.data.originalValue ?? null) as Record<string, unknown> | null,
+        correctedValue: (parsed.data.correctedValue ?? null) as Record<string, unknown> | null,
+        correctedById: currentUser.id,
+      });
+
+      // Patch the in-place payload so the next read returns the corrected
+      // value with confidence pinned to 1.0 (rep is the authority). We
+      // deliberately do NOT bump payloadVersion — the extractor row stays
+      // at its original version; only the field was overridden.
+      if (existing && patched) {
+        await storage.upsertDocumentExtraction({
+          documentId: doc.id,
+          organizationId: currentUser.organizationId,
+          classLabel: existing.classLabel,
+          payloadVersion: existing.payloadVersion,
+          payload: patched,
+          extractionStatus: existing.extractionStatus,
+          needsReviewReason: existing.needsReviewReason,
+          extractorModel: existing.extractorModel,
+        });
+      }
+      res.json({ correction });
+    } catch (err) {
+      console.error("[copilot/documents/:id/corrections POST]", getErrorMessage(err));
+      res.status(500).json({ error: "Failed to record correction" });
+    }
+  });
+
+  // Admin force-extract — re-run the rate-con pipeline (or run it for the
+  // first time on a doc that was misclassified into rate_con manually).
+  app.post("/api/admin/copilot/documents/:id/extract", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!isAdminish(currentUser.role)) return res.status(403).json({ error: "Admin access required" });
+      const docId = pStr(req.params.id);
+      const doc = await storage.getDocumentInOrg(docId, currentUser.organizationId);
+      if (!doc) return res.status(404).json({ error: "Document not found" });
+      const result = await runRateConPipeline({
+        documentId: doc.id,
+        organizationId: currentUser.organizationId,
+        force: true,
+      });
+      res.json({
+        documentId: doc.id,
+        status: result.status,
+        reason: result.reason,
+        linkCount: result.links.length,
+        findingCount: result.findings.length,
+      });
+    } catch (err) {
+      console.error("[admin/copilot/documents/:id/extract POST]", getErrorMessage(err));
+      res.status(500).json({ error: "Force-extract failed" });
+    }
+  });
+
+  // Admin — list current confidence overrides.
+  app.get("/api/admin/copilot/extraction-overrides", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!isAdminish(currentUser.role)) return res.status(403).json({ error: "Admin access required" });
+      const overrides = await storage.listFieldConfidenceOverrides(currentUser.organizationId);
+      res.json({ overrides });
+    } catch (err) {
+      console.error("[admin/copilot/extraction-overrides GET]", getErrorMessage(err));
+      res.status(500).json({ error: "Failed to load overrides" });
+    }
+  });
+
+  // Admin — recompute confidence overrides on demand.
+  app.post("/api/admin/copilot/extraction-overrides/recompute", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!isAdminish(currentUser.role)) return res.status(403).json({ error: "Admin access required" });
+      const result = await calibrateRateConConfidence({ organizationId: currentUser.organizationId });
+      res.json(result);
+    } catch (err) {
+      console.error("[admin/copilot/extraction-overrides/recompute POST]", getErrorMessage(err));
+      res.status(500).json({ error: "Recompute failed" });
     }
   });
 

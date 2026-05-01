@@ -6449,6 +6449,248 @@ export const insertDocumentPageSchema = createInsertSchema(documentPages).omit({
 export type InsertDocumentPage = z.infer<typeof insertDocumentPageSchema>;
 export type DocumentPage = typeof documentPages.$inferSelect;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Task #911 — Copilot Rate Con Extraction & Entity Resolution (slice 2)
+//
+// Slice 1 turned a forwarded/dragged document into raw page text + a class
+// label. Slice 2 turns a `class='rate_con'` document into typed structured
+// data with confidence scores, attaches it to internal records (customer /
+// carrier / lane / quote / load / opportunity), and surfaces inconsistency
+// findings. Reps can correct any field inline; corrections feed a nightly
+// confidence-calibration job that downgrades fields with high correction
+// rates.
+//
+// Tables:
+//   document_extractions_typed       — one row per (document, payload_version)
+//   document_entity_links            — doc → CRM entity, scored
+//   document_extraction_corrections  — per-field rep edits, audit trail
+//   document_extraction_findings     — inconsistency rule output (info/warn/block)
+//   field_confidence_overrides       — calibration downgrades per field path
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const EXTRACTION_STATUSES = ["pending", "extracted", "needs_review", "failed"] as const;
+export type ExtractionStatus = (typeof EXTRACTION_STATUSES)[number];
+
+export const documentExtractionsTyped = pgTable(
+  "document_extractions_typed",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    documentId: varchar("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    classLabel: text("class_label").notNull(),
+    payloadVersion: integer("payload_version").notNull().default(1),
+    payload: jsonb("payload").notNull(),
+    extractionStatus: text("extraction_status").notNull().default("pending"),
+    needsReviewReason: text("needs_review_reason"),
+    extractorModel: text("extractor_model"),
+    extractedAt: timestamp("extracted_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("doc_extractions_typed_doc_uq").on(t.documentId),
+    index("doc_extractions_typed_org_status_idx").on(t.organizationId, t.extractionStatus),
+  ],
+);
+export const insertDocumentExtractionTypedSchema = createInsertSchema(documentExtractionsTyped).omit({
+  id: true,
+  extractedAt: true,
+  updatedAt: true,
+});
+export type InsertDocumentExtractionTyped = z.infer<typeof insertDocumentExtractionTypedSchema>;
+export type DocumentExtractionTyped = typeof documentExtractionsTyped.$inferSelect;
+
+export const ENTITY_LINK_KINDS = ["customer", "carrier", "lane", "quote", "load", "opportunity"] as const;
+export type EntityLinkKind = (typeof ENTITY_LINK_KINDS)[number];
+
+export const documentEntityLinks = pgTable(
+  "document_entity_links",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    documentId: varchar("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    targetTable: text("target_table").notNull(),
+    targetId: text("target_id").notNull(),
+    targetLabel: text("target_label"),
+    matchScore: decimal("match_score", { precision: 4, scale: 3 }).notNull(),
+    matchSignal: text("match_signal").notNull(),
+    isPrimary: boolean("is_primary").notNull().default(false),
+    candidateRank: integer("candidate_rank").notNull().default(1),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("doc_entity_links_doc_idx").on(t.documentId, t.kind, t.candidateRank),
+    index("doc_entity_links_target_idx").on(t.organizationId, t.kind, t.targetId),
+  ],
+);
+export const insertDocumentEntityLinkSchema = createInsertSchema(documentEntityLinks).omit({ id: true, createdAt: true });
+export type InsertDocumentEntityLink = z.infer<typeof insertDocumentEntityLinkSchema>;
+export type DocumentEntityLink = typeof documentEntityLinks.$inferSelect;
+
+export const documentExtractionCorrections = pgTable(
+  "document_extraction_corrections",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    documentId: varchar("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    fieldPath: text("field_path").notNull(),
+    classLabel: text("class_label").notNull(),
+    originalValue: jsonb("original_value"),
+    correctedValue: jsonb("corrected_value"),
+    correctedById: varchar("corrected_by_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    correctedAt: timestamp("corrected_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("doc_extraction_corrections_doc_idx").on(t.documentId, t.correctedAt),
+    index("doc_extraction_corrections_field_idx").on(t.organizationId, t.classLabel, t.fieldPath),
+  ],
+);
+export const insertDocumentExtractionCorrectionSchema = createInsertSchema(documentExtractionCorrections).omit({
+  id: true,
+  correctedAt: true,
+});
+export type InsertDocumentExtractionCorrection = z.infer<typeof insertDocumentExtractionCorrectionSchema>;
+export type DocumentExtractionCorrection = typeof documentExtractionCorrections.$inferSelect;
+
+export const FINDING_SEVERITIES = ["info", "warn", "block"] as const;
+export type FindingSeverity = (typeof FINDING_SEVERITIES)[number];
+
+export const documentExtractionFindings = pgTable(
+  "document_extraction_findings",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    documentId: varchar("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    ruleCode: text("rule_code").notNull(),
+    severity: text("severity").notNull(),
+    message: text("message").notNull(),
+    context: jsonb("context"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("doc_extraction_findings_doc_idx").on(t.documentId, t.severity),
+    index("doc_extraction_findings_org_rule_idx").on(t.organizationId, t.ruleCode, t.createdAt),
+  ],
+);
+export const insertDocumentExtractionFindingSchema = createInsertSchema(documentExtractionFindings).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertDocumentExtractionFinding = z.infer<typeof insertDocumentExtractionFindingSchema>;
+export type DocumentExtractionFinding = typeof documentExtractionFindings.$inferSelect;
+
+export const fieldConfidenceOverrides = pgTable(
+  "field_confidence_overrides",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    classLabel: text("class_label").notNull(),
+    fieldPath: text("field_path").notNull(),
+    confidenceMultiplier: decimal("confidence_multiplier", { precision: 4, scale: 3 }).notNull(),
+    correctionRate: decimal("correction_rate", { precision: 4, scale: 3 }).notNull(),
+    sampleSize: integer("sample_size").notNull(),
+    computedAt: timestamp("computed_at").defaultNow().notNull(),
+    note: text("note"),
+  },
+  (t) => [
+    uniqueIndex("field_conf_overrides_org_class_field_uq").on(t.organizationId, t.classLabel, t.fieldPath),
+  ],
+);
+export const insertFieldConfidenceOverrideSchema = createInsertSchema(fieldConfidenceOverrides).omit({
+  id: true,
+  computedAt: true,
+});
+export type InsertFieldConfidenceOverride = z.infer<typeof insertFieldConfidenceOverrideSchema>;
+export type FieldConfidenceOverride = typeof fieldConfidenceOverrides.$inferSelect;
+
+// ── RateConExtraction — typed payload stored in document_extractions_typed.payload
+//
+// Every leaf field is wrapped as `{ value, confidence (0..1), source: { page, bbox? } }`
+// so the frontend can render confidence chips + deep-link to the source page,
+// and so calibration can downgrade per-field confidence over time.
+
+const bboxSchema = z
+  .object({
+    x: z.number(),
+    y: z.number(),
+    w: z.number(),
+    h: z.number(),
+  })
+  .partial()
+  .nullable()
+  .optional();
+
+const sourceRefSchema = z.object({
+  page: z.number().int().min(1),
+  bbox: bboxSchema,
+});
+
+function fieldOf<T extends z.ZodTypeAny>(inner: T) {
+  return z.object({
+    value: inner.nullable(),
+    confidence: z.number().min(0).max(1),
+    source: sourceRefSchema.nullable().optional(),
+  });
+}
+
+const accessorialItemSchema = z.object({
+  description: z.string(),
+  amount: z.number().nullable().optional(),
+  confidence: z.number().min(0).max(1),
+  source: sourceRefSchema.nullable().optional(),
+});
+
+export const rateConExtractionSchema = z.object({
+  brokerName: fieldOf(z.string()),
+  brokerReference: fieldOf(z.string()),
+  carrierName: fieldOf(z.string()),
+  carrierMcNumber: fieldOf(z.string()),
+  carrierDotNumber: fieldOf(z.string()),
+  loadReference: fieldOf(z.string()),
+  proNumber: fieldOf(z.string()),
+  orderNumber: fieldOf(z.string()),
+  originCity: fieldOf(z.string()),
+  originState: fieldOf(z.string()),
+  originZip: fieldOf(z.string()),
+  destinationCity: fieldOf(z.string()),
+  destinationState: fieldOf(z.string()),
+  destinationZip: fieldOf(z.string()),
+  equipmentType: fieldOf(z.string()),
+  weightLbs: fieldOf(z.number()),
+  commodity: fieldOf(z.string()),
+  // ISO-8601 strings — model is instructed to normalise. We don't z.coerce
+  // because we want a hard failure on non-ISO output (extraction is rejected).
+  pickupWindowStart: fieldOf(z.string()),
+  pickupWindowEnd: fieldOf(z.string()),
+  deliveryWindowStart: fieldOf(z.string()),
+  deliveryWindowEnd: fieldOf(z.string()),
+  allInRate: fieldOf(z.number()),
+  lineHaulRate: fieldOf(z.number()),
+  fuelSurcharge: fieldOf(z.number()),
+  accessorials: z.object({
+    items: z.array(accessorialItemSchema),
+    confidence: z.number().min(0).max(1),
+  }),
+  payTerms: fieldOf(z.string()),
+  specialInstructions: fieldOf(z.string()),
+});
+export type RateConExtraction = z.infer<typeof rateConExtractionSchema>;
+
+/** Field paths recognised by the calibrator + correction UI. */
+export const RATE_CON_FIELD_PATHS = [
+  "brokerName", "brokerReference",
+  "carrierName", "carrierMcNumber", "carrierDotNumber",
+  "loadReference", "proNumber", "orderNumber",
+  "originCity", "originState", "originZip",
+  "destinationCity", "destinationState", "destinationZip",
+  "equipmentType", "weightLbs", "commodity",
+  "pickupWindowStart", "pickupWindowEnd",
+  "deliveryWindowStart", "deliveryWindowEnd",
+  "allInRate", "lineHaulRate", "fuelSurcharge",
+  "accessorials", "payTerms", "specialInstructions",
+] as const;
+export type RateConFieldPath = (typeof RATE_CON_FIELD_PATHS)[number];
+
 export const leakConsoleDailySnapshot = pgTable("leak_console_daily_snapshot", {
   orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   snapshotDate: text("snapshot_date").notNull(), // YYYY-MM-DD (org-local day)

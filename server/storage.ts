@@ -291,10 +291,25 @@ import {
   type TruckLoadMatchState,
   documents,
   documentPages,
+  documentExtractionsTyped,
+  documentEntityLinks,
+  documentExtractionCorrections,
+  documentExtractionFindings,
+  fieldConfidenceOverrides,
   type Document,
   type InsertDocument,
   type DocumentPage,
   type InsertDocumentPage,
+  type DocumentExtractionTyped,
+  type InsertDocumentExtractionTyped,
+  type DocumentEntityLink,
+  type InsertDocumentEntityLink,
+  type DocumentExtractionCorrection,
+  type InsertDocumentExtractionCorrection,
+  type DocumentExtractionFinding,
+  type InsertDocumentExtractionFinding,
+  type FieldConfidenceOverride,
+  type InsertFieldConfidenceOverride,
 } from "@shared/schema";
 import { getStuckRunningThresholdMs } from "./lib/cronHeartbeat";
 
@@ -714,6 +729,53 @@ getContactsByIds(ids: string[]): Promise<Contact[]>;
   /** Recent docs the rep uploaded OR that touched their visible accounts —
    *  feeds the `recent_documents` context section. */
   getRecentDocumentsForUser(organizationId: string, uploaderId: string, visibleCompanyIds: string[], limit: number): Promise<Document[]>;
+
+  // ── Task #911 — Copilot Rate Con Extraction & Entity Resolution ──────
+  /** Returns the latest typed extraction for a document (any class). */
+  getDocumentExtraction(documentId: string): Promise<DocumentExtractionTyped | undefined>;
+  /** Idempotent upsert. If the existing row's payloadVersion ≥ input's, the
+   *  caller should not have called this — we still overwrite to keep one
+   *  row per doc, but the version must be monotonically increasing. */
+  upsertDocumentExtraction(input: InsertDocumentExtractionTyped): Promise<DocumentExtractionTyped>;
+  /** Update extractionStatus + needsReviewReason without touching payload. */
+  setDocumentExtractionStatus(
+    documentId: string,
+    organizationId: string,
+    status: "pending" | "extracted" | "needs_review" | "failed",
+    needsReviewReason: string | null,
+  ): Promise<void>;
+  /** Replace ALL entity link candidates for a document. Wipes prior links;
+   *  callers pass the full new candidate set per kind. */
+  replaceDocumentEntityLinks(
+    documentId: string,
+    organizationId: string,
+    links: InsertDocumentEntityLink[],
+  ): Promise<void>;
+  getDocumentEntityLinks(documentId: string): Promise<DocumentEntityLink[]>;
+  /** Replace ALL inconsistency findings for a document. */
+  replaceDocumentExtractionFindings(
+    documentId: string,
+    organizationId: string,
+    findings: InsertDocumentExtractionFinding[],
+  ): Promise<void>;
+  getDocumentExtractionFindings(documentId: string): Promise<DocumentExtractionFinding[]>;
+  addDocumentExtractionCorrection(input: InsertDocumentExtractionCorrection): Promise<DocumentExtractionCorrection>;
+  getDocumentExtractionCorrections(documentId: string): Promise<DocumentExtractionCorrection[]>;
+  /** Calibration: aggregate correction rate per (org, class, fieldPath). */
+  getCorrectionRatesForClass(
+    organizationId: string,
+    classLabel: string,
+    sinceIso: string,
+  ): Promise<Array<{ fieldPath: string; correctionCount: number; sampleSize: number }>>;
+  upsertFieldConfidenceOverride(input: InsertFieldConfidenceOverride): Promise<FieldConfidenceOverride>;
+  listFieldConfidenceOverrides(organizationId: string, classLabel?: string): Promise<FieldConfidenceOverride[]>;
+  /** Worker queue — documents classified as the given class but without a
+   *  successful typed extraction yet. */
+  listDocumentsAwaitingExtraction(
+    organizationId: string | null,
+    classLabel: string,
+    limit: number,
+  ): Promise<Document[]>;
 
   getGoals(filter: { namId?: string; amId?: string }): Promise<Goal[]>;
   getGoal(id: string): Promise<Goal | undefined>;
@@ -3757,6 +3819,194 @@ export class DatabaseStorage implements IStorage {
         sql`(${documents.uploaderId} = ${uploaderId} OR (${documents.uploadContext}->>'companyId') = ANY (${visibleCompanyIds}::text[]))`,
       )
     ).orderBy(desc(documents.createdAt)).limit(lim);
+  }
+
+  // ── Task #911 — extraction / entity links / corrections / findings ───
+  async getDocumentExtraction(documentId: string): Promise<DocumentExtractionTyped | undefined> {
+    const [row] = await db.select().from(documentExtractionsTyped)
+      .where(eq(documentExtractionsTyped.documentId, documentId)).limit(1);
+    return row;
+  }
+
+  async upsertDocumentExtraction(input: InsertDocumentExtractionTyped): Promise<DocumentExtractionTyped> {
+    // One row per document. We onConflict on documentId and bump updatedAt.
+    const [row] = await db.insert(documentExtractionsTyped)
+      .values(input)
+      .onConflictDoUpdate({
+        target: documentExtractionsTyped.documentId,
+        set: {
+          classLabel: input.classLabel,
+          payloadVersion: input.payloadVersion,
+          payload: input.payload,
+          extractionStatus: input.extractionStatus,
+          needsReviewReason: input.needsReviewReason ?? null,
+          extractorModel: input.extractorModel ?? null,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return row;
+  }
+
+  async setDocumentExtractionStatus(
+    documentId: string,
+    organizationId: string,
+    status: "pending" | "extracted" | "needs_review" | "failed",
+    needsReviewReason: string | null,
+  ): Promise<void> {
+    await db.update(documentExtractionsTyped).set({
+      extractionStatus: status,
+      needsReviewReason,
+      updatedAt: new Date(),
+    }).where(and(
+      eq(documentExtractionsTyped.documentId, documentId),
+      eq(documentExtractionsTyped.organizationId, organizationId),
+    ));
+  }
+
+  async replaceDocumentEntityLinks(
+    documentId: string,
+    organizationId: string,
+    links: InsertDocumentEntityLink[],
+  ): Promise<void> {
+    await db.transaction(async (tx) => {
+      await tx.delete(documentEntityLinks).where(and(
+        eq(documentEntityLinks.documentId, documentId),
+        eq(documentEntityLinks.organizationId, organizationId),
+      ));
+      if (links.length > 0) {
+        await tx.insert(documentEntityLinks).values(links);
+      }
+    });
+  }
+
+  async getDocumentEntityLinks(documentId: string): Promise<DocumentEntityLink[]> {
+    return db.select().from(documentEntityLinks)
+      .where(eq(documentEntityLinks.documentId, documentId))
+      .orderBy(asc(documentEntityLinks.kind), asc(documentEntityLinks.candidateRank));
+  }
+
+  async replaceDocumentExtractionFindings(
+    documentId: string,
+    organizationId: string,
+    findings: InsertDocumentExtractionFinding[],
+  ): Promise<void> {
+    await db.transaction(async (tx) => {
+      await tx.delete(documentExtractionFindings).where(and(
+        eq(documentExtractionFindings.documentId, documentId),
+        eq(documentExtractionFindings.organizationId, organizationId),
+      ));
+      if (findings.length > 0) {
+        await tx.insert(documentExtractionFindings).values(findings);
+      }
+    });
+  }
+
+  async getDocumentExtractionFindings(documentId: string): Promise<DocumentExtractionFinding[]> {
+    return db.select().from(documentExtractionFindings)
+      .where(eq(documentExtractionFindings.documentId, documentId))
+      .orderBy(asc(documentExtractionFindings.severity), asc(documentExtractionFindings.ruleCode));
+  }
+
+  async addDocumentExtractionCorrection(
+    input: InsertDocumentExtractionCorrection,
+  ): Promise<DocumentExtractionCorrection> {
+    const [row] = await db.insert(documentExtractionCorrections).values(input).returning();
+    return row;
+  }
+
+  async getDocumentExtractionCorrections(documentId: string): Promise<DocumentExtractionCorrection[]> {
+    return db.select().from(documentExtractionCorrections)
+      .where(eq(documentExtractionCorrections.documentId, documentId))
+      .orderBy(desc(documentExtractionCorrections.correctedAt));
+  }
+
+  async getCorrectionRatesForClass(
+    organizationId: string,
+    classLabel: string,
+    sinceIso: string,
+  ): Promise<Array<{ fieldPath: string; correctionCount: number; sampleSize: number }>> {
+    // Sample size = number of documents in this org/class with at least one
+    // typed extraction since `sinceIso`. Correction count = distinct
+    // (documentId, fieldPath) corrections.
+    const sampleRow = await db.execute<{ sample_size: string }>(sql`
+      SELECT COUNT(*)::text AS sample_size
+      FROM ${documentExtractionsTyped}
+      WHERE organization_id = ${organizationId}
+        AND class_label = ${classLabel}
+        AND extracted_at >= ${sinceIso}::timestamp
+    `).catch(() => ({ rows: [] as Array<{ sample_size: string }> }));
+    const sampleSize = Number(sampleRow.rows[0]?.sample_size ?? 0);
+    if (sampleSize === 0) return [];
+    const corrRows = await db.execute<{ field_path: string; correction_count: string }>(sql`
+      SELECT field_path, COUNT(DISTINCT document_id)::text AS correction_count
+      FROM ${documentExtractionCorrections}
+      WHERE organization_id = ${organizationId}
+        AND class_label = ${classLabel}
+        AND corrected_at >= ${sinceIso}::timestamp
+      GROUP BY field_path
+    `).catch(() => ({ rows: [] as Array<{ field_path: string; correction_count: string }> }));
+    return corrRows.rows.map((r) => ({
+      fieldPath: r.field_path,
+      correctionCount: Number(r.correction_count),
+      sampleSize,
+    }));
+  }
+
+  async upsertFieldConfidenceOverride(
+    input: InsertFieldConfidenceOverride,
+  ): Promise<FieldConfidenceOverride> {
+    const [row] = await db.insert(fieldConfidenceOverrides)
+      .values(input)
+      .onConflictDoUpdate({
+        target: [fieldConfidenceOverrides.organizationId, fieldConfidenceOverrides.classLabel, fieldConfidenceOverrides.fieldPath],
+        set: {
+          confidenceMultiplier: input.confidenceMultiplier,
+          correctionRate: input.correctionRate,
+          sampleSize: input.sampleSize,
+          note: input.note ?? null,
+          computedAt: new Date(),
+        },
+      })
+      .returning();
+    return row;
+  }
+
+  async listFieldConfidenceOverrides(
+    organizationId: string,
+    classLabel?: string,
+  ): Promise<FieldConfidenceOverride[]> {
+    const conds = [eq(fieldConfidenceOverrides.organizationId, organizationId)];
+    if (classLabel) conds.push(eq(fieldConfidenceOverrides.classLabel, classLabel));
+    return db.select().from(fieldConfidenceOverrides).where(and(...conds))
+      .orderBy(asc(fieldConfidenceOverrides.classLabel), asc(fieldConfidenceOverrides.fieldPath));
+  }
+
+  async listDocumentsAwaitingExtraction(
+    organizationId: string | null,
+    classLabel: string,
+    limit: number,
+  ): Promise<Document[]> {
+    // LEFT JOIN — pick docs that are parsed and classified `classLabel`
+    // but have no row in document_extractions_typed yet (or are still
+    // 'pending'/'failed').
+    const lim = Math.min(Math.max(limit, 1), 200);
+    const orgClause = organizationId
+      ? sql`d.organization_id = ${organizationId} AND `
+      : sql``;
+    const rows = await db.execute<{ id: string }>(sql`
+      SELECT d.id
+      FROM ${documents} d
+      LEFT JOIN ${documentExtractionsTyped} e ON e.document_id = d.id
+      WHERE ${orgClause} d.status = 'parsed'
+        AND d.class_label = ${classLabel}
+        AND (e.id IS NULL OR e.extraction_status IN ('pending','failed'))
+      ORDER BY d.created_at ASC
+      LIMIT ${lim}
+    `).catch(() => ({ rows: [] as Array<{ id: string }> }));
+    if (rows.rows.length === 0) return [];
+    const ids = rows.rows.map((r) => r.id);
+    return db.select().from(documents).where(inArray(documents.id, ids));
   }
 
   async getPersonalAlerts(userId: string): Promise<PersonalAlert[]> {

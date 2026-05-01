@@ -395,10 +395,50 @@ async function buildPhase2Sections(
       const recentDocs = await storage.getRecentDocumentsForUser(orgId, selfUserId, companyIds, 8);
       if (recentDocs.length) {
         out += `\n=== RECENT DOCUMENTS (${recentDocs.length}) ===\n`;
-        recentDocs.forEach((d) => {
+        // Task #911 — enrich rate-con entries with the resolved customer /
+        // lane / carrier headline so the model can answer "tell me about
+        // that rate con I dropped this morning" without an extra tool call.
+        const enriched = await Promise.all(recentDocs.map(async (d) => {
+          if (d.classLabel !== "rate_con") return { doc: d, headline: null as string | null };
+          try {
+            const [extraction, links] = await Promise.all([
+              storage.getDocumentExtraction(d.id),
+              storage.getDocumentEntityLinks(d.id),
+            ]);
+            if (!extraction || extraction.extractionStatus === "failed") return { doc: d, headline: null };
+            const payload = (extraction.payload ?? {}) as Record<string, { value?: unknown }>;
+            const oCity = (payload.originCity?.value as string | null) ?? null;
+            const oState = (payload.originState?.value as string | null) ?? null;
+            const dCity = (payload.destinationCity?.value as string | null) ?? null;
+            const dState = (payload.destinationState?.value as string | null) ?? null;
+            const rate = payload.allInRate?.value as number | null;
+            const customerLink = links.find((l) => l.kind === "customer" && l.isPrimary);
+            // Resolved carrier — falls back to the typed payload's carrier
+            // name when entity resolution couldn't pin a CRM carrier (e.g.
+            // an off-bench MC#) so the headline still surfaces "who is
+            // hauling this" for the rep.
+            const carrierLink = links.find((l) => l.kind === "carrier" && l.isPrimary);
+            const carrierLabel = carrierLink?.targetLabel
+              ?? (payload.carrierName?.value as string | null)
+              ?? null;
+            const lane = oCity && dCity ? `${oCity}${oState ? ", " + oState : ""} → ${dCity}${dState ? ", " + dState : ""}` : null;
+            const parts = [
+              lane,
+              customerLink?.targetLabel,
+              carrierLabel,
+              rate != null ? `$${Number(rate).toLocaleString()} all-in` : null,
+              extraction.extractionStatus === "needs_review" ? "needs review" : null,
+            ].filter(Boolean);
+            return { doc: d, headline: parts.length ? parts.join(" · ") : null };
+          } catch {
+            return { doc: d, headline: null };
+          }
+        }));
+        enriched.forEach(({ doc: d, headline }) => {
           const when = d.createdAt ? new Date(d.createdAt).toISOString().slice(0, 10) : "?";
           const status = d.status === "parsed" ? "" : ` [${d.status}]`;
-          out += `- [${when}] (${d.classLabel}) ${d.filename} via ${d.sourceChannel}${status}\n`;
+          const tail = headline ? ` — ${headline}` : "";
+          out += `- [${when}] (${d.classLabel}) ${d.filename} via ${d.sourceChannel}${status}${tail}\n`;
         });
       }
     } catch (err) {

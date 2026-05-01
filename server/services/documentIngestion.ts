@@ -37,6 +37,7 @@ import {
   getDocumentBytes,
 } from "./documentStorage";
 import { classifyDocument, type ClassificationResult } from "./documentClassifier";
+import { enqueueRateConAfterIngest } from "./rateConAutoExtractWorker";
 import {
   type Document,
   type InsertDocumentPage,
@@ -584,6 +585,14 @@ export async function ingestDocument(args: IngestDocumentArgs): Promise<IngestDo
     pageRows.length || null,
     ocrUsed,
   );
+
+  // 7b. Task #911 — auto-queue typed extraction for rate-cons. Fire-and-
+  //     forget: this kicks off an LLM round-trip and the user-facing
+  //     ingest response should not block on it. Failure here never
+  //     escalates — the typed extraction row records its own status.
+  if (!failed && classification?.label === "rate_con") {
+    enqueueRateConAfterIngest(created.id, uploader.organizationId);
+  }
 
   // 8. Recurse into EML children — best-effort, don't fail the parent.
   for (const child of children) {

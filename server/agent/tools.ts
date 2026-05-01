@@ -1444,6 +1444,152 @@ export const TOOLS: AgentTool[] = [
       return { kind: "data", text: lines.join("\n") };
     },
   },
+  // ─── Phase 2 slice 2 — Copilot Rate Con Extraction (Task #911) ─────────
+  {
+    name: "get_document_extraction",
+    capability: "read.document",
+    description: "Return the typed structured extraction (carrier, MC#, lane, rate, accessorials, pickup/delivery windows, pay terms, …) for a previously ingested rate-con document, plus resolved CRM links (customer/carrier/lane/quote/load/opportunity), inconsistency findings, and any rep corrections. Use this AFTER find_documents to drill into a specific document. Returns the same source-cited shape #97 expects.",
+    parameters: {
+      type: "object",
+      properties: {
+        document_id: { type: "string", description: "The document id from find_documents." },
+      },
+      required: ["document_id"],
+    },
+    async execute(ctx, args) {
+      const documentId = String(args.document_id || "").trim();
+      if (!documentId) return { kind: "data", text: "get_document_extraction called without document_id." };
+      const doc = await storage.getDocumentInOrg(documentId, ctx.organizationId);
+      if (!doc) return { kind: "data", text: "Document not found in this org." };
+
+      // Strict visibility (Task #911): for company-anchored docs, the
+      // current account-visibility check is the ONLY source of truth.
+      // Uploader bypass is removed — a rep loses access to a rate con
+      // when its linked account is reassigned away from them, even if
+      // they were the original uploader. Unanchored scratch docs stay
+      // readable by their uploader.
+      const visible = await getVisibleCompanyIds(ctx.rep);
+      const linkedCompanyId = (doc.uploadContext as { companyId?: string } | null)?.companyId ?? null;
+      const isAdminish = ctx.rep.role === "admin" || ctx.rep.role === "director" || ctx.rep.role === "sales_director";
+      const hasAccountAccess = isAdminish || visible === null || (linkedCompanyId && visible.includes(linkedCompanyId));
+      const allowed = hasAccountAccess || (!linkedCompanyId && doc.uploaderId === ctx.rep.id);
+      if (!allowed) {
+        return { kind: "data", text: "You don't have access to this document's extraction." };
+      }
+
+      const [extraction, links, findings, corrections] = await Promise.all([
+        storage.getDocumentExtraction(documentId),
+        storage.getDocumentEntityLinks(documentId),
+        storage.getDocumentExtractionFindings(documentId),
+        storage.getDocumentExtractionCorrections(documentId),
+      ]);
+      if (!extraction) {
+        return { kind: "data", text: `No typed extraction yet for "${doc.filename}" (status: ${doc.status}, class: ${doc.classLabel}).` };
+      }
+      if (extraction.extractionStatus === "failed") {
+        return { kind: "data", text: `Extraction failed for "${doc.filename}": ${extraction.needsReviewReason ?? "unknown reason"}.` };
+      }
+
+      // Build a structured, machine-consumable envelope (Task #911 spec).
+      // The model receives the typed payload + resolved links + findings +
+      // corrections in one shape; it can quote any value/confidence/source
+      // verbatim instead of paraphrasing a prose summary.
+      const payload = (extraction.payload ?? {}) as Record<string, unknown>;
+      type FieldEntry = { value: unknown; confidence: number | null; source: { page: number | null; bbox: unknown } | null; repCorrected: boolean };
+      const fieldsEnvelope: Record<string, FieldEntry> = {};
+      const RATE_CON_LEAF_FIELDS = [
+        "brokerName", "brokerReference",
+        "carrierName", "carrierMcNumber", "carrierDotNumber",
+        "loadReference", "proNumber", "orderNumber",
+        "originCity", "originState", "originZip",
+        "destinationCity", "destinationState", "destinationZip",
+        "equipmentType", "weightLbs", "commodity",
+        "pickupWindowStart", "pickupWindowEnd",
+        "deliveryWindowStart", "deliveryWindowEnd",
+        "allInRate", "lineHaulRate", "fuelSurcharge",
+        "payTerms", "specialInstructions",
+      ] as const;
+      for (const key of RATE_CON_LEAF_FIELDS) {
+        const f = payload[key] as { value?: unknown; confidence?: number; source?: { page?: number; bbox?: unknown }; repCorrected?: boolean } | undefined;
+        if (!f) continue;
+        fieldsEnvelope[key] = {
+          value: f.value ?? null,
+          confidence: typeof f.confidence === "number" ? f.confidence : null,
+          source: f.source ? { page: typeof f.source.page === "number" ? f.source.page : null, bbox: f.source.bbox ?? null } : null,
+          repCorrected: f.repCorrected === true,
+        };
+      }
+      const accObj = payload["accessorials"] as { items?: Array<{ description: string; amount: number | null }> } | undefined;
+      const accessorials = accObj?.items ?? [];
+
+      const linksEnvelope = links.map((l) => ({
+        kind: l.kind,
+        targetTable: l.targetTable,
+        targetId: l.targetId,
+        targetLabel: l.targetLabel,
+        matchScore: Number(l.matchScore),
+        matchSignal: l.matchSignal,
+        candidateRank: l.candidateRank,
+        isPrimary: l.isPrimary,
+      }));
+      const primaryLinks = linksEnvelope.filter((l) => l.isPrimary);
+      const ambiguousLinks = linksEnvelope.filter((l) => !l.isPrimary);
+      const ambiguousKinds = Array.from(new Set(
+        linksEnvelope
+          .filter((l) => !l.isPrimary)
+          .map((l) => l.kind)
+          .filter((k) => !primaryLinks.some((p) => p.kind === k))
+      ));
+
+      const findingsEnvelope = findings.map((f) => ({
+        ruleCode: f.ruleCode,
+        severity: f.severity,
+        message: f.message,
+        context: f.context ?? null,
+      }));
+      const correctionsEnvelope = corrections.map((c) => ({
+        fieldPath: c.fieldPath,
+        correctedAt: c.correctedAt,
+        correctedById: c.correctedById,
+        originalValue: c.originalValue ?? null,
+        correctedValue: c.correctedValue ?? null,
+      }));
+
+      const envelope = {
+        document: {
+          id: doc.id,
+          filename: doc.filename,
+          classLabel: doc.classLabel,
+          status: doc.status,
+          sourceChannel: doc.sourceChannel,
+          uploadedAt: doc.createdAt,
+        },
+        extraction: {
+          status: extraction.extractionStatus,
+          payloadVersion: extraction.payloadVersion,
+          extractorModel: extraction.extractorModel,
+          needsReviewReason: extraction.needsReviewReason ?? null,
+          fields: fieldsEnvelope,
+          accessorials,
+        },
+        links: {
+          primary: primaryLinks,
+          ambiguous: ambiguousLinks,
+          ambiguousKinds,
+        },
+        findings: findingsEnvelope,
+        corrections: correctionsEnvelope,
+      };
+
+      const related: RelatedEntityHint[] = [];
+      const carrierLink = primaryLinks.find((l) => l.kind === "carrier" && l.targetTable === "carriers");
+      if (carrierLink) related.push({ type: "carrier", id: carrierLink.targetId, name: carrierLink.targetLabel ?? carrierLink.targetId });
+      const customerLink = primaryLinks.find((l) => l.kind === "customer" && l.targetTable === "companies");
+      if (customerLink) related.push({ type: "company", id: customerLink.targetId, name: customerLink.targetLabel ?? customerLink.targetId });
+
+      return { kind: "data", text: JSON.stringify(envelope), related };
+    },
+  },
 ];
 
 export const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));

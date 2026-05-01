@@ -5713,4 +5713,97 @@ export async function runMigrations() {
   } catch (err) {
     console.error("[migrations] Phase A5 orphan backfill error:", err);
   }
+
+  // ── Task #911 — Copilot rate-con extraction & entity resolution ─────
+  // Five new tables that back the typed extraction pipeline. Idempotent
+  // CREATE TABLE IF NOT EXISTS guards so a re-run on a fresh DB and on
+  // an existing DB both converge to the same schema.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS document_extractions_typed (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        document_id varchar NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        class_label text NOT NULL,
+        payload_version integer NOT NULL DEFAULT 1,
+        payload jsonb NOT NULL,
+        extraction_status text NOT NULL DEFAULT 'pending',
+        needs_review_reason text,
+        extractor_model text,
+        extracted_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS doc_extractions_typed_doc_uq
+        ON document_extractions_typed (document_id);
+      CREATE INDEX IF NOT EXISTS doc_extractions_typed_org_status_idx
+        ON document_extractions_typed (organization_id, extraction_status);
+
+      CREATE TABLE IF NOT EXISTS document_entity_links (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        document_id varchar NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        kind text NOT NULL,
+        target_table text NOT NULL,
+        target_id text NOT NULL,
+        target_label text,
+        match_score numeric(4,3) NOT NULL,
+        match_signal text NOT NULL,
+        is_primary boolean NOT NULL DEFAULT false,
+        candidate_rank integer NOT NULL DEFAULT 1,
+        created_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS doc_entity_links_doc_idx
+        ON document_entity_links (document_id, kind, candidate_rank);
+      CREATE INDEX IF NOT EXISTS doc_entity_links_target_idx
+        ON document_entity_links (organization_id, kind, target_id);
+
+      CREATE TABLE IF NOT EXISTS document_extraction_corrections (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        document_id varchar NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        field_path text NOT NULL,
+        class_label text NOT NULL,
+        original_value jsonb,
+        corrected_value jsonb,
+        corrected_by_id varchar NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        corrected_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS doc_extraction_corrections_doc_idx
+        ON document_extraction_corrections (document_id, corrected_at);
+      CREATE INDEX IF NOT EXISTS doc_extraction_corrections_field_idx
+        ON document_extraction_corrections (organization_id, class_label, field_path);
+
+      CREATE TABLE IF NOT EXISTS document_extraction_findings (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        document_id varchar NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        rule_code text NOT NULL,
+        severity text NOT NULL,
+        message text NOT NULL,
+        context jsonb,
+        created_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS doc_extraction_findings_doc_idx
+        ON document_extraction_findings (document_id, severity);
+      CREATE INDEX IF NOT EXISTS doc_extraction_findings_org_rule_idx
+        ON document_extraction_findings (organization_id, rule_code, created_at);
+
+      CREATE TABLE IF NOT EXISTS field_confidence_overrides (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        class_label text NOT NULL,
+        field_path text NOT NULL,
+        confidence_multiplier numeric(4,3) NOT NULL,
+        correction_rate numeric(4,3) NOT NULL,
+        sample_size integer NOT NULL,
+        computed_at timestamp NOT NULL DEFAULT now(),
+        note text
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS field_conf_overrides_org_class_field_uq
+        ON field_confidence_overrides (organization_id, class_label, field_path);
+    `);
+    console.log("[migrations] Task #911 copilot extraction tables ensured");
+  } catch (err) {
+    console.error("[migrations] Task #911 copilot extraction tables error:", err);
+  }
 }
