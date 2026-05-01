@@ -157,13 +157,17 @@ async function cleanupTestRows(pool: Pool, orgId: string, threadIds: string[]): 
 
 // ── API call helpers ─────────────────────────────────────────────────────────
 
-async function callList(qs: string): Promise<{ status: number; threads: ApiThread[] }> {
+async function callList(qs: string): Promise<{ status: number; threads: ApiThread[]; count: number | undefined }> {
   const r = await fetch(`${BASE_URL}/api/internal/conversations?${qs}`, {
     headers: { Accept: "application/json" },
   });
-  if (!r.ok) return { status: r.status, threads: [] };
-  const body = (await r.json()) as { threads?: ApiThread[] };
-  return { status: r.status, threads: Array.isArray(body.threads) ? body.threads : [] };
+  if (!r.ok) return { status: r.status, threads: [], count: undefined };
+  const body = (await r.json()) as { threads?: ApiThread[]; count?: number };
+  return {
+    status: r.status,
+    threads: Array.isArray(body.threads) ? body.threads : [],
+    count: typeof body.count === "number" ? body.count : undefined,
+  };
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -391,6 +395,121 @@ async function main(): Promise<void> {
       allIds.includes(a.threadId) && !allIds.includes(b.threadId),
       `Got [${allIds.join(", ")}] after walking ${pages} page(s)`,
     );
+
+    // ── Task #861 — All conversations bucket sends sort=recency, and the
+    // recency sort must anchor on `last_email_at` so today's freshest
+    // real email lands on page 1 instead of being buried behind older
+    // threads whose `updated_at` was bumped today by a sweep. We seed
+    // two fixtures here:
+    //   D — a "freshest real email" thread with last_email_at = now
+    //       (and updated_at deliberately *older* than the dev org's
+    //       sweep-bumped rows). Under the old updated_at-anchored sort
+    //       D would never reach page 1 of a 990-row org. Under the
+    //       Task #861 fix it must land on page 1 (and at the top).
+    //   C — a distractor with last_email_at = 2d ago but updated_at =
+    //       now+1s (the "background sweep just touched the row"
+    //       scenario). The Today date filter must keep C out, even
+    //       though its updated_at is the freshest in the org.
+    const dLastEmail = new Date();
+    // updated_at deliberately stale (an hour ago) to prove the sort
+    // is no longer keyed on it.
+    const dUpdated = new Date(Date.now() - 60 * 60 * 1000);
+    const d = await seedThread(pool, orgId, "freshest-email", dLastEmail, dUpdated);
+    seededThreadIds.push(d.threadId);
+    await seedMessageWithQuoteSignal(pool, orgId, d.threadId, dLastEmail);
+
+    const cLastIncoming = localNoonDaysAgo(2);
+    const cUpdated = new Date(Date.now() + 1000);
+    const c = await seedThread(pool, orgId, "fresh-update-stale-email", cLastIncoming, cUpdated);
+    seededThreadIds.push(c.threadId);
+    await seedMessageWithQuoteSignal(pool, orgId, c.threadId, cLastIncoming);
+
+    const recencyTodayQs = new URLSearchParams(qsBase);
+    recencyTodayQs.set("sort", "recency");
+    recencyTodayQs.set("limit", "100");
+    const recencyTodayPage1 = await callList(recencyTodayQs.toString());
+    assert(
+      "All conversations + Today (sort=recency): page 1 returns a well-formed response (threads array + numeric count)",
+      Array.isArray(recencyTodayPage1.threads) && typeof recencyTodayPage1.count === "number",
+      `response shape: threads=${typeof recencyTodayPage1.threads}, count=${typeof recencyTodayPage1.count}`,
+    );
+    const recencyTodayIds = recencyTodayPage1.threads.map(t => t.threadId).filter((x): x is string => !!x);
+    assert(
+      "All conversations + Today (sort=recency): page 1 contains today's freshest seeded thread D",
+      recencyTodayIds.includes(d.threadId),
+      `Thread D (lastEmailAt=now) missing from page 1 — sort is still anchored on updated_at, today's real activity got buried. Page-1 size=${recencyTodayPage1.threads.length}`,
+    );
+    // Thread D was seeded with last_email_at = now, which is the
+    // freshest in the org. Under the new sort it must rank #1.
+    assert(
+      "All conversations + Today (sort=recency): freshest-real-email thread D sits at position 1",
+      recencyTodayPage1.threads[0]?.threadId === d.threadId,
+      `Page-1 head = ${recencyTodayPage1.threads[0]?.threadId} (lastEmailAt=${recencyTodayPage1.threads[0]?.lastEmailAt}); expected D=${d.threadId}`,
+    );
+    assert(
+      "All conversations + Today (sort=recency): page 1 excludes Thread C (lastEmailAt 2d ago, updated_at fresh)",
+      !recencyTodayIds.includes(c.threadId),
+      `Thread C leaked into Today — date filter should be cutting it. Page 1 ids include C=${recencyTodayIds.includes(c.threadId)}`,
+    );
+
+    // Sort-direction invariant — within page 1, every neighbor pair
+    // must be ordered (lastEmailAt DESC NULLS LAST, id DESC). If a row
+    // with a stale lastEmailAt sits above a row with a fresher one, the
+    // sort regressed back to updated_at.
+    let sortOk = true;
+    let sortDetail = "";
+    for (let i = 1; i < recencyTodayPage1.threads.length; i++) {
+      const prev = recencyTodayPage1.threads[i - 1];
+      const cur = recencyTodayPage1.threads[i];
+      const prevLea = prev.lastEmailAt ? new Date(prev.lastEmailAt).getTime() : -Infinity;
+      const curLea = cur.lastEmailAt ? new Date(cur.lastEmailAt).getTime() : -Infinity;
+      if (prevLea < curLea) {
+        sortOk = false;
+        sortDetail = `position ${i - 1} lastEmailAt=${prev.lastEmailAt} ranks above position ${i} lastEmailAt=${cur.lastEmailAt}`;
+        break;
+      }
+      if (prevLea === curLea && prev.id < cur.id) {
+        sortOk = false;
+        sortDetail = `position ${i - 1} id=${prev.id} ranks above position ${i} id=${cur.id} at the same lastEmailAt`;
+        break;
+      }
+    }
+    assert(
+      "All conversations + Today (sort=recency): page 1 is monotonic by (lastEmailAt DESC NULLS LAST, id DESC)",
+      sortOk,
+      sortDetail,
+    );
+
+    // Cursor walk under the new key — paging through Today must keep the
+    // same descending lastEmailAt invariant across the page boundary.
+    const recencyTodayPage1Raw = await fetch(
+      `${BASE_URL}/api/internal/conversations?${recencyTodayQs.toString()}`,
+      { headers: { Accept: "application/json" } },
+    ).then(r => r.json()).catch(() => ({} as { nextCursor?: string | null }));
+    const nextCursor = (recencyTodayPage1Raw as { nextCursor?: string | null }).nextCursor ?? null;
+    if (nextCursor) {
+      assert(
+        "Cursor format: nextCursor uses the new 'recency2|...' key",
+        nextCursor.startsWith("recency2|"),
+        `Got cursor=${nextCursor}`,
+      );
+      const recencyTodayPage2Qs = new URLSearchParams(recencyTodayQs);
+      recencyTodayPage2Qs.set("cursor", nextCursor);
+      const page2 = await callList(recencyTodayPage2Qs.toString());
+      const lastOfPage1 = recencyTodayPage1.threads[recencyTodayPage1.threads.length - 1];
+      const firstOfPage2 = page2.threads[0];
+      if (lastOfPage1 && firstOfPage2) {
+        const lastLea = lastOfPage1.lastEmailAt ? new Date(lastOfPage1.lastEmailAt).getTime() : -Infinity;
+        const firstLea = firstOfPage2.lastEmailAt ? new Date(firstOfPage2.lastEmailAt).getTime() : -Infinity;
+        const monotonic = lastLea > firstLea
+          || (lastLea === firstLea && lastOfPage1.id > firstOfPage2.id);
+        assert(
+          "Cursor walk: page 2 starts strictly after page 1 by (lastEmailAt DESC, id DESC)",
+          monotonic,
+          `page1 last lastEmailAt=${lastOfPage1.lastEmailAt} id=${lastOfPage1.id}; page2 first lastEmailAt=${firstOfPage2.lastEmailAt} id=${firstOfPage2.id}`,
+        );
+      }
+    }
   } finally {
     if (orgId) {
       try {

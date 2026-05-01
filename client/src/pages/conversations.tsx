@@ -527,19 +527,37 @@ export default function ConversationsPage() {
   // ── Per-bucket counts (lightweight 1-row queries) ─────────────────────────
   // All bucket counts respect the audience filter so the sidebar numbers
   // match the visible thread count for the rep's chosen slice.
-  const audienceParam = audience !== "all" ? `&audience=${audience}` : "";
   // Bucket counts are sidebar badges, not the primary feed — they refresh at
   // 60s (vs 30s for the main list) so a busy org with many concurrent reps
   // doesn't fan out 5 polling queries every 30s per user. Window-focus refetch
   // still snaps them current the moment a rep returns to the tab.
   const COUNT_REFRESH_OPTS = { refetchInterval: 60_000, refetchOnWindowFocus: true } as const;
 
+  // Task #862 (QA polish) — thread the active date-range filter into every
+  // sidebar count query. Without this the badges show the *unfiltered* total
+  // (e.g. "Quote requests 613") while the visible list shows the today-window
+  // subset (e.g. 87). The list endpoint already honours dateFrom/dateTo/tz
+  // and anchors on `last_email_at` (Task #858/#859), so threading the same
+  // params here makes the count match what the rep can actually see. The
+  // browser's resolved zone is sent so the day window is computed in the
+  // rep's local time, not UTC.
+  const browserTz = typeof Intl !== "undefined"
+    ? Intl.DateTimeFormat().resolvedOptions().timeZone
+    : "UTC";
+  function applyDateRange(p: URLSearchParams) {
+    if (effectiveDateFrom) p.set("dateFrom", effectiveDateFrom);
+    if (effectiveDateTo) p.set("dateTo", effectiveDateTo);
+    if (effectiveDateFrom || effectiveDateTo) p.set("tz", browserTz);
+  }
+  const dateRangeKey = `${effectiveDateFrom}|${effectiveDateTo}`;
+
   const { data: mineData } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", "mine-count", user?.id, audience],
+    queryKey: ["/api/internal/conversations", "mine-count", user?.id, audience, dateRangeKey],
     queryFn: async () => {
       const p = new URLSearchParams({ waitingState: "waiting_on_us", limit: "1" });
       if (user?.id) p.set("ownerUserId", user.id);
       if (audience !== "all") p.set("audience", audience);
+      applyDateRange(p);
       const res = await fetch(`/api/internal/conversations?${p.toString()}`);
       if (!res.ok) throw new Error("");
       return res.json();
@@ -549,9 +567,12 @@ export default function ConversationsPage() {
   });
 
   const { data: unownedData } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", "unowned-count", audience],
+    queryKey: ["/api/internal/conversations", "unowned-count", audience, dateRangeKey],
     queryFn: async () => {
-      const res = await fetch(`/api/internal/conversations?unowned=true&waitingState=waiting_on_us&limit=1${audienceParam}`);
+      const p = new URLSearchParams({ unowned: "true", waitingState: "waiting_on_us", limit: "1" });
+      if (audience !== "all") p.set("audience", audience);
+      applyDateRange(p);
+      const res = await fetch(`/api/internal/conversations?${p.toString()}`);
       if (!res.ok) throw new Error("");
       return res.json();
     },
@@ -559,9 +580,12 @@ export default function ConversationsPage() {
   });
 
   const { data: highPriData } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", "high-priority-count", audience],
+    queryKey: ["/api/internal/conversations", "high-priority-count", audience, dateRangeKey],
     queryFn: async () => {
-      const res = await fetch(`/api/internal/conversations?responsePriority=high&waitingState=waiting_on_us&limit=1${audienceParam}`);
+      const p = new URLSearchParams({ responsePriority: "high", waitingState: "waiting_on_us", limit: "1" });
+      if (audience !== "all") p.set("audience", audience);
+      applyDateRange(p);
+      const res = await fetch(`/api/internal/conversations?${p.toString()}`);
       if (!res.ok) throw new Error("");
       return res.json();
     },
@@ -569,9 +593,12 @@ export default function ConversationsPage() {
   });
 
   const { data: quoteData } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", "quote-request-count", audience],
+    queryKey: ["/api/internal/conversations", "quote-request-count", audience, dateRangeKey],
     queryFn: async () => {
-      const res = await fetch(`/api/internal/conversations?signal=quote_request&waitingState=waiting_on_us&limit=1${audienceParam}`);
+      const p = new URLSearchParams({ signal: "quote_request", waitingState: "waiting_on_us", limit: "1" });
+      if (audience !== "all") p.set("audience", audience);
+      applyDateRange(p);
+      const res = await fetch(`/api/internal/conversations?${p.toString()}`);
       if (!res.ok) throw new Error("");
       return res.json();
     },

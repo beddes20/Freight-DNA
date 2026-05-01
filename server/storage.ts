@@ -8015,30 +8015,53 @@ export class DatabaseStorage implements IStorage {
       return { threads, nextCursor, totalCount };
     }
 
-    // Recency sort: simple "newest first" ordering by updated_at. Used by the
-    // "All" tab where users expect a chronological firehose, not a triage
-    // queue. Cursor format is "recency|<updatedAt>|<id>".
+    // Recency sort: chronological "newest real email activity first"
+    // ordering used by the "All" tab. Task #861 — anchor on the same
+    // denormalized `last_email_at` column the date filter reads from
+    // (Task #859) so picking Today actually surfaces today's inbound /
+    // outbound mail at the top instead of stale rows whose `updated_at`
+    // got bumped by a background sweep. NULLS LAST keeps message-less
+    // threads off the top, with a stable id tiebreaker. Cursor format
+    // is "recency2|<lastEmailAt ISO or 'null'>|<id>"; the legacy
+    // "recency|..." encoding (which keyed on updated_at) is ignored so
+    // an in-flight URL just falls back to the first page rather than
+    // 500ing.
     if (filters.sort === "recency") {
       if (filters.cursor) {
         const parts = filters.cursor.split('|');
-        if (parts.length === 3 && parts[0] === "recency") {
-          const cursorUpd = new Date(parts[1]);
+        if (parts.length === 3 && parts[0] === "recency2") {
           const cursorId = parts[2];
-          conditions.push(
-            or(
-              sql`${emailConversationThreads.updatedAt} < ${cursorUpd}`,
+          if (parts[1] === "null") {
+            // Cursor sits in the NULLS-LAST tail — only smaller-id NULL
+            // rows still come after it.
+            conditions.push(
               and(
-                sql`${emailConversationThreads.updatedAt} = ${cursorUpd}`,
+                isNull(emailConversationThreads.lastEmailAt),
                 sql`${emailConversationThreads.id} < ${cursorId}`,
-              ),
-            )!,
-          );
+              )!,
+            );
+          } else {
+            const cursorLea = new Date(parts[1]);
+            conditions.push(
+              or(
+                sql`${emailConversationThreads.lastEmailAt} < ${cursorLea}`,
+                and(
+                  sql`${emailConversationThreads.lastEmailAt} = ${cursorLea}`,
+                  sql`${emailConversationThreads.id} < ${cursorId}`,
+                ),
+                isNull(emailConversationThreads.lastEmailAt),
+              )!,
+            );
+          }
         }
       }
 
       const rows = await db.select().from(emailConversationThreads)
         .where(and(...conditions))
-        .orderBy(desc(emailConversationThreads.updatedAt), desc(emailConversationThreads.id))
+        .orderBy(
+          sql`${emailConversationThreads.lastEmailAt} DESC NULLS LAST`,
+          desc(emailConversationThreads.id),
+        )
         .limit(pageLimit + 1);
 
       const hasMore = rows.length > pageLimit;
@@ -8046,7 +8069,8 @@ export class DatabaseStorage implements IStorage {
       let nextCursor: string | null = null;
       if (hasMore && threads.length > 0) {
         const last = threads[threads.length - 1];
-        nextCursor = `recency|${last.updatedAt.toISOString()}|${last.id}`;
+        const lea = last.lastEmailAt ? last.lastEmailAt.toISOString() : "null";
+        nextCursor = `recency2|${lea}|${last.id}`;
       }
 
       return { threads, nextCursor, totalCount };
