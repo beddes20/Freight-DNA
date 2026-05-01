@@ -28,6 +28,14 @@ export interface BackfillResult {
   durationMs: number;
 }
 
+export interface ReconcileDirectionResult {
+  /** Number of (org_id, thread_id) pairs the aggregate considered. */
+  scanned: number;
+  /** Number of thread rows whose per-direction columns were re-anchored. */
+  reconciled: number;
+  durationMs: number;
+}
+
 export interface ReclassifyResult {
   /** Threads where linked_carrier_id was NULLed because the row already had a customer account. */
   threadsRepaired: number;
@@ -127,6 +135,92 @@ export async function reclassifyThreadsCustomerWins(opts: {
     threadsRepaired: tCount,
     threadsPromoted: pCount,
     messagesRepaired: mCount,
+    durationMs: Date.now() - startedAt,
+  };
+}
+
+/**
+ * Task #898 — Reconcile per-direction freshness columns to MAX(provider_sent_at).
+ *
+ * For every (org_id, thread_id) with at least one inbound message that
+ * carries a real `provider_sent_at`, force
+ *   `last_incoming_at = MAX(provider_sent_at WHERE direction = 'inbound')`
+ * and the symmetric statement for outbound. Phase 1 of "Stop lying about
+ * freshness." (Task #859) introduced a monotonic write for the
+ * denormalized `last_email_at` column inside `applyMessageToThread`, but
+ * the per-direction columns are still stamped *unconditionally* with the
+ * incoming message's `providerSentAt`. An out-of-order delivery (mailbox
+ * historical backfill, late webhook, replay) can therefore regress one of
+ * those columns to an older timestamp than the true MAX — which is what
+ * the conversations freshness regression suite
+ * (`tests/conversations-freshness-regression.test.ts`) flagged on the
+ * live app during the Task #862 QA pass (25 thread rows drifting by
+ * seconds-to-minutes).
+ *
+ * The runMigrations.ts freshness backfill block (Task #859) already runs
+ * the same statement once per boot, but only inside the schema-migration
+ * lifecycle. Hosting it here as a named service entry point lets the boot
+ * path (`server/index.ts`) invoke it alongside the orphan-thread
+ * backfill, makes it reachable from admin tooling, and keeps the live
+ * read-write reconciliation in the same module as the rest of the
+ * thread-row maintenance sweeps.
+ *
+ * Idempotent — re-runs converge to zero rows touched. Per the Task #860
+ * freshness contract this is a denormalization sweep (not a real
+ * conversation event), so it bumps `row_version_at` only — `updated_at`
+ * is intentionally left alone so the user-visible freshness signal keeps
+ * reflecting actual conversation activity. The companion guardrail in
+ * `tests/code-quality-guardrails.test.ts` pins both halves: the function
+ * shape (MAX/FILTER per direction, row_version_at bump) and the boot
+ * call site.
+ */
+export async function reconcileThreadDirectionTimestamps(opts: {
+  orgId?: string;
+} = {}): Promise<ReconcileDirectionResult> {
+  const startedAt = Date.now();
+  const orgId = opts.orgId ?? null;
+
+  const result = await storage.pool.query(
+    `
+    WITH msg_max AS (
+      SELECT em.org_id,
+             em.thread_id,
+             MAX(em.provider_sent_at) FILTER (WHERE em.direction = 'inbound')  AS max_in,
+             MAX(em.provider_sent_at) FILTER (WHERE em.direction = 'outbound') AS max_out
+        FROM email_messages em
+       WHERE em.provider_sent_at IS NOT NULL
+         AND em.thread_id IS NOT NULL
+         AND ($1::text IS NULL OR em.org_id = $1)
+       GROUP BY em.org_id, em.thread_id
+    ),
+    updated AS (
+      UPDATE email_conversation_threads ect
+         SET last_incoming_at = COALESCE(msg_max.max_in,  ect.last_incoming_at),
+             last_outgoing_at = COALESCE(msg_max.max_out, ect.last_outgoing_at),
+             -- Task #860 — denormalization sweep: bump the audit clock
+             -- but leave updated_at alone. The user-visible freshness
+             -- signal must keep reflecting real conversation activity.
+             row_version_at   = NOW()
+        FROM msg_max
+       WHERE msg_max.org_id    = ect.org_id
+         AND msg_max.thread_id = ect.thread_id
+         AND (
+              (msg_max.max_in  IS NOT NULL AND ect.last_incoming_at IS DISTINCT FROM msg_max.max_in)
+           OR (msg_max.max_out IS NOT NULL AND ect.last_outgoing_at IS DISTINCT FROM msg_max.max_out)
+         )
+       RETURNING 1
+    )
+    SELECT
+      (SELECT COUNT(*)::int FROM msg_max) AS scanned,
+      (SELECT COUNT(*)::int FROM updated) AS reconciled
+    `,
+    [orgId],
+  );
+
+  const row = result.rows[0] ?? { scanned: 0, reconciled: 0 };
+  return {
+    scanned: Number(row.scanned ?? 0),
+    reconciled: Number(row.reconciled ?? 0),
     durationMs: Date.now() - startedAt,
   };
 }

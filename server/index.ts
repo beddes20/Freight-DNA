@@ -571,7 +571,7 @@ process.on("uncaughtException", (err) => {
       // its orphans rescued within one cadence interval.
       setTimeout(async () => {
         try {
-          const { backfillMissingConversationThreads } = await import(
+          const { backfillMissingConversationThreads, reconcileThreadDirectionTimestamps } = await import(
             "./services/conversationThreadBackfillService"
           );
           const result = await backfillMissingConversationThreads();
@@ -579,6 +579,28 @@ process.on("uncaughtException", (err) => {
             console.log(
               `[conv-thread-backfill] startup pass: scanned=${result.scanned} inserted=${result.inserted} (${result.durationMs}ms)`,
             );
+          }
+
+          // Task #898 — boot-time reconciliation of per-direction freshness
+          // columns. Idempotent — auto-corrects any drift introduced since
+          // the last boot by out-of-order ingestion (mailbox historical
+          // backfills, late webhooks) that overwrites last_incoming_at /
+          // last_outgoing_at unconditionally inside applyMessageToThread.
+          try {
+            const reconcile = await reconcileThreadDirectionTimestamps();
+            if (reconcile.reconciled > 0) {
+              console.log(
+                `[conv-thread-direction-reconcile] startup pass: scanned=${reconcile.scanned} ` +
+                `reconciled=${reconcile.reconciled} (${reconcile.durationMs}ms) — ` +
+                `re-anchored last_incoming_at / last_outgoing_at to MAX(provider_sent_at) per direction (Task #898)`,
+              );
+            } else if (reconcile.scanned > 0) {
+              console.log(
+                `[conv-thread-direction-reconcile] startup pass: scanned=${reconcile.scanned} reconciled=0 (${reconcile.durationMs}ms)`,
+              );
+            }
+          } catch (err) {
+            console.error("[conv-thread-direction-reconcile] startup error:", err);
           }
         } catch (err) {
           console.error("[conv-thread-backfill] startup error:", err);

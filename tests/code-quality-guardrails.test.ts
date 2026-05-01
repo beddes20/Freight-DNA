@@ -919,6 +919,69 @@ assert(
   "runMigrations must heal email_conversation_threads.last_incoming_at / last_outgoing_at from MAX(email_messages.provider_sent_at) per direction. Without it, legacy rows render with the wrong timestamps until they next receive a message.",
 );
 
+// Task #898 — per-direction reconciliation lives in the thread backfill
+// service AND runs on every boot. The runMigrations block (above) is the
+// schema-migration backstop; this is the live read-write path that
+// auto-corrects drift accumulated since the last boot from out-of-order
+// ingestion (mailbox historical backfills, late webhooks) overwriting
+// last_incoming_at / last_outgoing_at unconditionally inside
+// applyMessageToThread. Both fences must hold.
+const backfillSrc898 = readFile("server/services/conversationThreadBackfillService.ts");
+assert(
+  "conversationThreadBackfillService — exports reconcileThreadDirectionTimestamps (Task #898)",
+  /export\s+async\s+function\s+reconcileThreadDirectionTimestamps\s*\(/.test(backfillSrc898),
+  "Task #898 — conversationThreadBackfillService.ts must export `reconcileThreadDirectionTimestamps()` so the per-direction reconciliation pass is reachable from the boot path and admin tooling, not only from inside the runMigrations lifecycle.",
+);
+assert(
+  "conversationThreadBackfillService — reconcile pass aggregates MAX(provider_sent_at) FILTER per direction",
+  /MAX\([^)]*provider_sent_at[^)]*\)\s+FILTER\s*\(\s*WHERE\s+[a-z._]*direction\s*=\s*'inbound'\s*\)/i.test(backfillSrc898) &&
+    /MAX\([^)]*provider_sent_at[^)]*\)\s+FILTER\s*\(\s*WHERE\s+[a-z._]*direction\s*=\s*'outbound'\s*\)/i.test(backfillSrc898),
+  "Task #898 — reconcileThreadDirectionTimestamps must compute `MAX(provider_sent_at) FILTER (WHERE direction = 'inbound')` and the symmetric outbound aggregate, then write them into last_incoming_at / last_outgoing_at. That's the invariant the conversations-freshness regression suite asserts.",
+);
+{
+  // Scope the row_version_at / updated_at check to the reconcile function
+  // body so the assertion isn't satisfied by other writers in the same
+  // file (e.g. reclassifyThreadsCustomerWins).
+  const fnMatch = backfillSrc898.match(
+    /export\s+async\s+function\s+reconcileThreadDirectionTimestamps[\s\S]*?\n\}\n/,
+  );
+  const fnBody = fnMatch?.[0] ?? "";
+  assert(
+    "conversationThreadBackfillService — reconcile pass bumps row_version_at (Task #860 contract)",
+    /row_version_at\s*=\s*NOW\(\)/i.test(fnBody),
+    "Task #898 — the reconcile pass is a denormalization sweep, not a real conversation event. It must bump `row_version_at = NOW()` so the audit clock advances on every touch.",
+  );
+  assert(
+    "conversationThreadBackfillService — reconcile pass does NOT bump updated_at (Task #860 contract)",
+    !/\bupdated_at\s*=\s*NOW\(\)/i.test(fnBody),
+    "Task #898 — the reconcile pass must NOT write `updated_at = NOW()`. Per the Task #860 freshness contract, sweeps that aren't real conversation events keep `updated_at` untouched so the user-visible freshness signal stays honest.",
+  );
+}
+const indexBootSrc898 = readFile("server/index.ts");
+assert(
+  "server/index.ts — invokes reconcileThreadDirectionTimestamps on boot (Task #898)",
+  /reconcileThreadDirectionTimestamps\s*\(/.test(indexBootSrc898),
+  "Task #898 — server/index.ts must call `reconcileThreadDirectionTimestamps()` during startup so any per-direction drift accumulated since the last boot is auto-corrected (idempotent). Without the boot wiring, the conversations-freshness regression suite's Phase 1 invariant degrades over time as out-of-order ingestion regresses the columns.",
+);
+const schedulerSrc898 = readFile("server/conversationThreadBackfillScheduler.ts");
+assert(
+  "conversationThreadBackfillScheduler — runs reconcileThreadDirectionTimestamps on every cadence (Task #898)",
+  /reconcileThreadDirectionTimestamps\s*\(/.test(schedulerSrc898),
+  "Task #898 — the periodic backfill scheduler must invoke `reconcileThreadDirectionTimestamps()` alongside the orphan-thread sweep so any per-direction drift introduced by ingestion paths that bypass `applyMessageToThread` (or by races between concurrent inserts on the same thread) is auto-corrected within at most one cadence interval. The boot pass alone leaves drift in place between restarts.",
+);
+const waitingStateSrc898 = readFile("server/services/conversationWaitingStateService.ts");
+{
+  const fnMatch = waitingStateSrc898.match(/export\s+function\s+applyMessageToThread[\s\S]*?\n\}\n/);
+  const fnBody = fnMatch?.[0] ?? "";
+  assert(
+    "conversationWaitingStateService.applyMessageToThread — per-direction columns advance monotonically (Task #897 / #898)",
+    /thread\.lastIncomingAt\?\.getTime\(\)/.test(fnBody) &&
+      /thread\.lastOutgoingAt\?\.getTime\(\)/.test(fnBody) &&
+      /sentAt?Ms\s*>=?\s*existing\w*Ms/.test(fnBody),
+    "Task #897 / #898 — applyMessageToThread must guard the per-direction column writes with a monotonic comparison (`sentAtMs > existingIncomingMs` / `existingOutgoingMs`). Without the monotonic guard, an out-of-order replayed message (older provider_sent_at arriving AFTER a newer one for the same thread+direction) regresses last_incoming_at / last_outgoing_at below MAX(provider_sent_at), failing the conversations-freshness Phase 1 invariant.",
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Section 16: Post-2d Quote Requests contract — schema + security invariants
 // (Task #849 — locked contract: docs/quote-requests-tab-post-2d-backend-contract.md)

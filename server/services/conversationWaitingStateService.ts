@@ -71,15 +71,18 @@ export function applyMessageToThread(
   // to real email events; fall back to `now` only when provider_sent_at
   // is unavailable (rare — mostly drafts).
   //
-  // Task #897 — also monotonic-guard the per-direction columns (the
-  // `lastEmailAt` block below is already monotonic). Real-world ingest
-  // is NOT chronological: webhook lands msg-B (sentAt=14:01), then the
-  // delta-sync / self-heal sweep re-processes msg-A (sentAt=13:35)
-  // minutes later. Without this guard, the older replay overwrites
-  // `lastIncomingAt` from 14:01 back to 13:35 while `lastEmailAt` holds
-  // 14:01 — the exact drift fingerprint QA caught 2026-05-01. The row
-  // label "Customer replied …" reads the per-direction column, so reps
-  // saw timestamps 5–30 min behind reality.
+  // Task #897 / #898 — also monotonic-guard the per-direction columns
+  // (the `lastEmailAt` block below is already monotonic). Real-world
+  // ingest is NOT chronological: webhook lands msg-B (sentAt=14:01),
+  // then the delta-sync / self-heal sweep re-processes msg-A
+  // (sentAt=13:35) minutes later. Without this guard, the older replay
+  // overwrites `lastIncomingAt` from 14:01 back to 13:35 while
+  // `lastEmailAt` holds 14:01 — the exact drift fingerprint QA caught
+  // 2026-05-01. The row label "Customer replied …" reads the
+  // per-direction column, so reps saw timestamps 5–30 min behind
+  // reality. Task #898 adds a boot + 6h cron reconciliation pass that
+  // backfills any drift this guard misses (e.g. concurrent inserts
+  // racing on the same thread baseline).
   const sentAt = message.providerSentAt ?? now;
   const sentAtMs = sentAt.getTime();
   if (message.direction === "inbound") {

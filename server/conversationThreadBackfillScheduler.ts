@@ -23,7 +23,10 @@
  */
 
 import cron from "node-cron";
-import { backfillMissingConversationThreads } from "./services/conversationThreadBackfillService";
+import {
+  backfillMissingConversationThreads,
+  reconcileThreadDirectionTimestamps,
+} from "./services/conversationThreadBackfillService";
 
 const CRON_EXPRESSION = process.env.CONV_THREAD_BACKFILL_CRON ?? "0 */6 * * *";
 
@@ -46,6 +49,30 @@ async function runSweep(): Promise<void> {
     }
   } catch (err) {
     console.error("[conv-thread-backfill-cron] sweep error:", err);
+  }
+
+  // Task #898 — direction-stamped freshness reconciliation. Re-anchor
+  // last_incoming_at / last_outgoing_at to MAX(provider_sent_at) per
+  // direction every cadence, so any drift introduced by ingestion paths
+  // that bypass `applyMessageToThread` (or arrive before the boot pass
+  // ran) gets auto-corrected within at most one cadence interval. This
+  // is the steady-state safety net behind the conversations-freshness
+  // regression test's Phase 1 invariant.
+  try {
+    const reconcile = await reconcileThreadDirectionTimestamps();
+    if (reconcile.reconciled > 0) {
+      console.warn(
+        `[conv-thread-direction-reconcile] sweep reconciled=${reconcile.reconciled} ` +
+          `scanned=${reconcile.scanned} (${reconcile.durationMs}ms) — ` +
+          `direction-stamped timestamps drifted from MAX(provider_sent_at), investigate ingestion path.`,
+      );
+    } else if (reconcile.scanned > 0) {
+      console.log(
+        `[conv-thread-direction-reconcile] sweep scanned=${reconcile.scanned} reconciled=0 (${reconcile.durationMs}ms)`,
+      );
+    }
+  } catch (err) {
+    console.error("[conv-thread-direction-reconcile] sweep error:", err);
   }
 }
 
