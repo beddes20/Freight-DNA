@@ -40,6 +40,7 @@ import { registerSonarRoutes } from "./routes/sonar";
 import { registerCallIntelligenceRoutes } from "./routes/callIntelligence";
 import { registerAIIntelligenceRoutes } from "./routes/aiIntelligence";
 import { registerDocumentRoutes } from "./routes/documents";
+import { registerCopilotCardRoutes } from "./routes/copilotCards";
 import { getPlayForRuleType } from "./playsRegistry";
 import { ruleTypeToBucket, BUCKET_ORDER, BUCKET_PRIORITY, type WorkspaceBucket } from "./lib/dailyWorkspaceBuckets";
 import { registerEmailDraftingRoutes } from "./routes/emailDrafting";
@@ -10272,6 +10273,7 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
   registerContactGeographySuggestionRoutes(app);
   registerAIIntelligenceRoutes(app);
   registerDocumentRoutes(app);
+  registerCopilotCardRoutes(app);
 
   // ── Sidebar tooltip overrides (Task #385) ──────────────────────────────
   app.get("/api/sidebar-tooltips", requireAuth, async (req, res) => {

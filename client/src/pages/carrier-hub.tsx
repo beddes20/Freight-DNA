@@ -36,6 +36,7 @@ import { Link } from "wouter";
 import { LaneLocationFeedback, EMPTY_NORM_STATE, type FieldNormState } from "@/components/lane-location-feedback";
 import { CityAutocompleteInput } from "@/components/city-autocomplete-input";
 import { MoveStatusFilter, sumByMoveStatus, type MoveStatus } from "@/components/move-status-filter";
+import { IntelligenceCardsList } from "@/components/dna-copilot/intelligence-cards-list";
 
 // ── Source channel helpers ─────────────────────────────────────────────────────
 
@@ -1627,6 +1628,9 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
 
           {/* ── Intelligence Tab ── */}
           <TabsContent value="intelligence" className="mt-0 space-y-5" data-testid="tab-content-intelligence">
+            {/* Task #912 — Copilot Fit & Intelligence Cards anchored to this carrier. */}
+            <IntelligenceCardsList anchor={{ kind: "carrier", carrierId }} />
+
             {intelLoading && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground py-4">
                 <Loader2 className="w-4 h-4 animate-spin" /> Loading carrier intelligence…

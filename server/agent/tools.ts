@@ -1700,6 +1700,74 @@ export const TOOLS: AgentTool[] = [
       return { kind: "data", text: `Plays for ${laneKey}:\n${lines.join("\n")}` };
     },
   },
+  // ─── Phase 2 slice 3 — Copilot Fit & Intelligence Card (Task #912) ────
+  {
+    name: "get_intelligence_card",
+    capability: "read.copilot_card",
+    description: "Return the latest Copilot Fit & Intelligence Card for a previously ingested document — includes fit score (0-100), top reasons + risks (each source-cited), inconsistency findings, suggested plays, and aggregate confidence. Use AFTER find_documents when the rep asks 'what should I do with this rate-con' or 'how does this fit our network'. Returns the same persisted shape the UI card renders.",
+    parameters: {
+      type: "object",
+      properties: {
+        document_id: { type: "string", description: "The document id from find_documents." },
+      },
+      required: ["document_id"],
+    },
+    async execute(ctx, args) {
+      const documentId = String(args.document_id || "").trim();
+      if (!documentId) return { kind: "data", text: "get_intelligence_card called without document_id." };
+      const doc = await storage.getDocumentInOrg(documentId, ctx.organizationId);
+      if (!doc) return { kind: "data", text: "Document not found in this org." };
+      // Visibility — same shape as get_document_extraction.
+      const visible = await getVisibleCompanyIds(ctx.rep);
+      const linkedCompanyId = (doc.uploadContext as { companyId?: string } | null)?.companyId ?? null;
+      const isAdminish = ctx.rep.role === "admin" || ctx.rep.role === "director" || ctx.rep.role === "sales_director";
+      const hasAccountAccess = isAdminish || visible === null || (linkedCompanyId && visible.includes(linkedCompanyId));
+      const allowed = hasAccountAccess || (!linkedCompanyId && doc.uploaderId === ctx.rep.id);
+      if (!allowed) return { kind: "data", text: "You don't have access to this document's intelligence card." };
+      const card = await storage.getLatestRecommendationForDocument(documentId, ctx.organizationId);
+      if (!card) return { kind: "data", text: `No intelligence card yet for "${doc.filename}" (status: ${doc.status}). The card is generated automatically once extraction succeeds.` };
+      return { kind: "data", text: JSON.stringify({
+        recommendationId: card.id,
+        document: { id: doc.id, filename: doc.filename, classLabel: doc.classLabel },
+        fitScore: card.fitScore,
+        aggregateConfidence: card.aggregateConfidence,
+        reaction: card.reaction,
+        cardPayload: card.cardPayload,
+        suggestedPlays: card.suggestedPlays,
+        generatedAt: card.generatedAt,
+      })};
+    },
+  },
+  {
+    name: "react_to_intelligence_card",
+    capability: "write.copilot_reaction",
+    description: "Record the rep's HITL reaction to a Fit & Intelligence Card so Phase 5 learning sees the signal. Reactions: 'confirmed' (rep accepts the card as-is), 'edited' (rep tweaked one or more fields — pass `edits` payload), or 'dismissed' (rep rejects the card). Always run AFTER get_intelligence_card so you know which recommendationId to react to.",
+    parameters: {
+      type: "object",
+      properties: {
+        recommendation_id: { type: "string", description: "The id from get_intelligence_card." },
+        reaction: { type: "string", enum: ["confirmed", "edited", "dismissed"] },
+        reason: { type: "string", description: "Optional free-text reason (esp. for dismissed)." },
+      },
+      required: ["recommendation_id", "reaction"],
+    },
+    async execute(ctx, args) {
+      const id = String(args.recommendation_id || "").trim();
+      const reaction = String(args.reaction || "").trim();
+      if (!id) return { kind: "data", text: "react_to_intelligence_card called without recommendation_id." };
+      if (!["confirmed", "edited", "dismissed"].includes(reaction)) {
+        return { kind: "data", text: `Invalid reaction "${reaction}". Use confirmed | edited | dismissed.` };
+      }
+      const existing = await storage.getCopilotRecommendationInOrg(id, ctx.organizationId);
+      if (!existing) return { kind: "data", text: "Recommendation not found in this org." };
+      const updated = await storage.reactToRecommendation(id, ctx.organizationId, {
+        reaction: reaction as "confirmed" | "edited" | "dismissed",
+        reason: typeof args.reason === "string" ? args.reason : null,
+        reactedByUserId: ctx.rep.id,
+      });
+      return { kind: "data", text: `Reaction "${reaction}" recorded for card ${id} at ${updated?.reactedAt ?? "now"}.` };
+    },
+  },
 ];
 
 export const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));

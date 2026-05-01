@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { IntelligenceCardsList } from "@/components/dna-copilot/intelligence-cards-list";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   ArrowLeft, AlertTriangle, ShieldAlert, Truck, Calendar,
@@ -1410,6 +1411,11 @@ export default function AvailableFreightDetailPage() {
 
   return (
     <div className="min-h-screen bg-background pb-20">
+      {/* Task #912 — Copilot Fit & Intelligence Cards (top-of-page). */}
+      <div className="px-6 pt-3">
+        <IntelligenceCardsList anchor={{ kind: "opportunity", opportunityId: id }} />
+      </div>
+
       {/* ── STICKY HEADER ──────────────────────────────────────────────────── */}
       <div className="sticky top-0 z-30 bg-card border-b border-border shadow-sm">
         <div className="px-6 py-2.5 flex items-center gap-3">

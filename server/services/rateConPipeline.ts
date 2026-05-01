@@ -105,6 +105,22 @@ export async function runRateConPipeline(args: RunRateConPipelineArgs): Promise<
     await storage.setDocumentExtractionStatus(args.documentId, args.organizationId, finalStatus, reason);
   }
 
+  // Task #912 — Slice 3 auto-trigger. Fire-and-forget the Fit & Intelligence
+  // Card generator so the rep sees a card the moment the rate-con finishes
+  // extracting (or finishes flagging needs_review). Errors stay inside the
+  // generator — we never want a card failure to fail the pipeline.
+  void (async () => {
+    try {
+      const { generateAndPersistIntelligenceCard } = await import("./copilotIntelligenceCard");
+      await generateAndPersistIntelligenceCard({
+        documentId: args.documentId,
+        organizationId: args.organizationId,
+      });
+    } catch (err) {
+      console.warn("[rateConPipeline] intelligence card generation failed:", err);
+    }
+  })();
+
   return {
     status: finalStatus,
     reason,

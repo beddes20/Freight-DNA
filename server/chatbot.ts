@@ -445,6 +445,32 @@ async function buildPhase2Sections(
       console.warn("buildPhase2Sections: recent_documents failed:", err);
     }
 
+    // — Recent intelligence cards (Task #912 slice 3) — Copilot Fit &
+    //   Intelligence Cards generated for the rep's accounts. We keep the
+    //   most-recent few in the prompt so the model can quote a fit score
+    //   or risk without an extra tool round-trip; the structured tool
+    //   `get_intelligence_card` is still the right call for full payload.
+    try {
+      const recentCards = await storage.listRecentRecommendationsForOrg(orgId, 8);
+      const filteredCards = scope === "everyone"
+        ? recentCards
+        : recentCards.filter((c) => !c.customerCompanyId || companyIds.includes(c.customerCompanyId));
+      if (filteredCards.length) {
+        out += `\n=== RECENT INTELLIGENCE CARDS (${filteredCards.length}) ===\n`;
+        filteredCards.slice(0, 6).forEach((c) => {
+          const payload = (c.cardPayload ?? {}) as { header?: { title?: string; laneLabel?: string | null; customerLabel?: string | null; carrierLabel?: string | null } };
+          const head = payload.header ?? {};
+          const lane = head.laneLabel ?? "—";
+          const cust = head.customerLabel ?? "—";
+          const carr = head.carrierLabel ?? "—";
+          const when = c.generatedAt ? new Date(c.generatedAt).toISOString().slice(0, 10) : "?";
+          out += `- [${when}] fit ${c.fitScore} (${c.aggregateConfidence}) | ${lane} | cust: ${cust} | carrier: ${carr} | reaction: ${c.reaction}\n`;
+        });
+      }
+    } catch (err) {
+      console.warn("buildPhase2Sections: recent_intelligence_cards failed:", err);
+    }
+
     // — Scorecards (latest snapshot per teammate) —
     if (safeIds.length) {
       const snaps = await db.select().from(reportCardSnapshots)

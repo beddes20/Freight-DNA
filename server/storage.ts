@@ -310,6 +310,9 @@ import {
   type InsertDocumentExtractionFinding,
   type FieldConfidenceOverride,
   type InsertFieldConfidenceOverride,
+  copilotRecommendations,
+  type CopilotRecommendation,
+  type InsertCopilotRecommendation,
 } from "@shared/schema";
 import { getStuckRunningThresholdMs } from "./lib/cronHeartbeat";
 
@@ -776,6 +779,76 @@ getContactsByIds(ids: string[]): Promise<Contact[]>;
     classLabel: string,
     limit: number,
   ): Promise<Document[]>;
+
+  // ── Task #912 — Copilot Fit & Intelligence Card ─────────────────────
+  /** Persist a freshly generated card. Inserts a new row; we keep history
+   *  rather than upsert so Phase 5 can replay how a card evolved across
+   *  rep corrections. */
+  createCopilotRecommendation(input: InsertCopilotRecommendation): Promise<CopilotRecommendation>;
+  /** Auth-only PK lookup (FK chains, outcome resolver). Caller must enforce
+   *  org scoping before exposing to a user. */
+  getCopilotRecommendation(id: string): Promise<CopilotRecommendation | undefined>;
+  /** Org-scoped: returns undefined for cross-org IDs. */
+  getCopilotRecommendationInOrg(id: string, organizationId: string): Promise<CopilotRecommendation | undefined>;
+  /** Most recent card for a document (any sourceKind). */
+  getLatestRecommendationForDocument(
+    documentId: string,
+    organizationId: string,
+  ): Promise<CopilotRecommendation | undefined>;
+  /** All cards anchored to a customer, newest first. `limit` defaults to 10. */
+  listRecommendationsForCustomer(
+    companyId: string,
+    organizationId: string,
+    limit?: number,
+  ): Promise<CopilotRecommendation[]>;
+  listRecommendationsForCarrier(
+    carrierId: string,
+    organizationId: string,
+    limit?: number,
+  ): Promise<CopilotRecommendation[]>;
+  listRecommendationsForOpportunity(
+    opportunityId: string,
+    organizationId: string,
+    limit?: number,
+  ): Promise<CopilotRecommendation[]>;
+  listRecommendationsForLane(
+    laneSignature: string,
+    organizationId: string,
+    limit?: number,
+  ): Promise<CopilotRecommendation[]>;
+  /** Org-wide recent cards for the chatbot context surface. */
+  listRecentRecommendationsForOrg(
+    organizationId: string,
+    limit: number,
+  ): Promise<CopilotRecommendation[]>;
+  /** HITL reaction write — sets reaction/reactedAt/reactedByUserId atomically
+   *  and stores any structured edits inside `cardPayload.edits`. Returns the
+   *  updated row, or undefined when the card doesn't exist in this org. */
+  reactToRecommendation(
+    id: string,
+    organizationId: string,
+    input: {
+      reaction: "confirmed" | "edited" | "dismissed";
+      reason?: string | null;
+      edits?: Record<string, unknown> | null;
+      reactedByUserId: string;
+    },
+  ): Promise<CopilotRecommendation | undefined>;
+  /** Outcome resolver write — fires when the downstream entity (opportunity,
+   *  leak, capture failure) reaches a terminal state. Idempotent: if
+   *  outcomeResolvedAt is already set we keep the original timestamp and
+   *  merge new fields into downstreamOutcome. */
+  recordRecommendationOutcome(
+    id: string,
+    organizationId: string,
+    outcome: Record<string, unknown>,
+  ): Promise<CopilotRecommendation | undefined>;
+  /** Sweeper: mark cards >24h old with reaction="pending" as ignored so
+   *  Phase 5 distinguishes "rep didn't see" from "rep dismissed". */
+  sweepStaleRecommendations(
+    organizationId: string,
+    olderThanIso: string,
+  ): Promise<number>;
 
   getGoals(filter: { namId?: string; amId?: string }): Promise<Goal[]>;
   getGoal(id: string): Promise<Goal | undefined>;
@@ -4007,6 +4080,192 @@ export class DatabaseStorage implements IStorage {
     if (rows.rows.length === 0) return [];
     const ids = rows.rows.map((r) => r.id);
     return db.select().from(documents).where(inArray(documents.id, ids));
+  }
+
+  // ── Task #912 — Copilot Fit & Intelligence Card ──────────────────────
+  async createCopilotRecommendation(
+    input: InsertCopilotRecommendation,
+  ): Promise<CopilotRecommendation> {
+    const [row] = await db.insert(copilotRecommendations).values(input).returning();
+    return row;
+  }
+
+  async getCopilotRecommendation(id: string): Promise<CopilotRecommendation | undefined> {
+    const [row] = await db.select().from(copilotRecommendations)
+      .where(eq(copilotRecommendations.id, id)).limit(1);
+    return row;
+  }
+
+  async getCopilotRecommendationInOrg(
+    id: string,
+    organizationId: string,
+  ): Promise<CopilotRecommendation | undefined> {
+    const [row] = await db.select().from(copilotRecommendations)
+      .where(and(
+        eq(copilotRecommendations.id, id),
+        eq(copilotRecommendations.orgId, organizationId),
+      )).limit(1);
+    return row;
+  }
+
+  async getLatestRecommendationForDocument(
+    documentId: string,
+    organizationId: string,
+  ): Promise<CopilotRecommendation | undefined> {
+    const [row] = await db.select().from(copilotRecommendations)
+      .where(and(
+        eq(copilotRecommendations.sourceDocumentId, documentId),
+        eq(copilotRecommendations.orgId, organizationId),
+      ))
+      .orderBy(desc(copilotRecommendations.generatedAt))
+      .limit(1);
+    return row;
+  }
+
+  async listRecommendationsForCustomer(
+    companyId: string,
+    organizationId: string,
+    limit = 10,
+  ): Promise<CopilotRecommendation[]> {
+    return db.select().from(copilotRecommendations)
+      .where(and(
+        eq(copilotRecommendations.customerCompanyId, companyId),
+        eq(copilotRecommendations.orgId, organizationId),
+      ))
+      .orderBy(desc(copilotRecommendations.generatedAt))
+      .limit(Math.min(Math.max(limit, 1), 100));
+  }
+
+  async listRecommendationsForCarrier(
+    carrierId: string,
+    organizationId: string,
+    limit = 10,
+  ): Promise<CopilotRecommendation[]> {
+    return db.select().from(copilotRecommendations)
+      .where(and(
+        eq(copilotRecommendations.carrierId, carrierId),
+        eq(copilotRecommendations.orgId, organizationId),
+      ))
+      .orderBy(desc(copilotRecommendations.generatedAt))
+      .limit(Math.min(Math.max(limit, 1), 100));
+  }
+
+  async listRecommendationsForOpportunity(
+    opportunityId: string,
+    organizationId: string,
+    limit = 10,
+  ): Promise<CopilotRecommendation[]> {
+    return db.select().from(copilotRecommendations)
+      .where(and(
+        eq(copilotRecommendations.opportunityId, opportunityId),
+        eq(copilotRecommendations.orgId, organizationId),
+      ))
+      .orderBy(desc(copilotRecommendations.generatedAt))
+      .limit(Math.min(Math.max(limit, 1), 100));
+  }
+
+  async listRecommendationsForLane(
+    laneSignature: string,
+    organizationId: string,
+    limit = 10,
+  ): Promise<CopilotRecommendation[]> {
+    return db.select().from(copilotRecommendations)
+      .where(and(
+        eq(copilotRecommendations.laneSignature, laneSignature),
+        eq(copilotRecommendations.orgId, organizationId),
+      ))
+      .orderBy(desc(copilotRecommendations.generatedAt))
+      .limit(Math.min(Math.max(limit, 1), 100));
+  }
+
+  async listRecentRecommendationsForOrg(
+    organizationId: string,
+    limit: number,
+  ): Promise<CopilotRecommendation[]> {
+    return db.select().from(copilotRecommendations)
+      .where(eq(copilotRecommendations.orgId, organizationId))
+      .orderBy(desc(copilotRecommendations.generatedAt))
+      .limit(Math.min(Math.max(limit, 1), 50));
+  }
+
+  async reactToRecommendation(
+    id: string,
+    organizationId: string,
+    input: {
+      reaction: "confirmed" | "edited" | "dismissed";
+      reason?: string | null;
+      edits?: Record<string, unknown> | null;
+      reactedByUserId: string;
+    },
+  ): Promise<CopilotRecommendation | undefined> {
+    // Merge edits into cardPayload.edits without replacing the whole payload
+    // — cardPayload is a versioned envelope owned by the reasoner. Done in
+    // a transaction so reaction + payload edit move together.
+    return db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(copilotRecommendations)
+        .where(and(
+          eq(copilotRecommendations.id, id),
+          eq(copilotRecommendations.orgId, organizationId),
+        )).limit(1);
+      if (!existing) return undefined;
+      const payload = (existing.cardPayload as Record<string, unknown>) ?? {};
+      const nextPayload = input.edits
+        ? { ...payload, edits: input.edits }
+        : payload;
+      const [updated] = await tx.update(copilotRecommendations).set({
+        reaction: input.reaction,
+        reactionReason: input.reason ?? null,
+        reactedAt: new Date(),
+        reactedByUserId: input.reactedByUserId,
+        cardPayload: nextPayload,
+      }).where(and(
+        eq(copilotRecommendations.id, id),
+        eq(copilotRecommendations.orgId, organizationId),
+      )).returning();
+      return updated;
+    });
+  }
+
+  async recordRecommendationOutcome(
+    id: string,
+    organizationId: string,
+    outcome: Record<string, unknown>,
+  ): Promise<CopilotRecommendation | undefined> {
+    return db.transaction(async (tx) => {
+      const [existing] = await tx.select().from(copilotRecommendations)
+        .where(and(
+          eq(copilotRecommendations.id, id),
+          eq(copilotRecommendations.orgId, organizationId),
+        )).limit(1);
+      if (!existing) return undefined;
+      const prior = (existing.downstreamOutcome as Record<string, unknown> | null) ?? {};
+      const merged = { ...prior, ...outcome };
+      const [updated] = await tx.update(copilotRecommendations).set({
+        downstreamOutcome: merged,
+        // Preserve the original resolvedAt — we only want first-resolution
+        // timestamps for Phase 5 retraining windows.
+        outcomeResolvedAt: existing.outcomeResolvedAt ?? new Date(),
+      }).where(and(
+        eq(copilotRecommendations.id, id),
+        eq(copilotRecommendations.orgId, organizationId),
+      )).returning();
+      return updated;
+    });
+  }
+
+  async sweepStaleRecommendations(
+    organizationId: string,
+    olderThanIso: string,
+  ): Promise<number> {
+    const result = await db.update(copilotRecommendations).set({
+      reaction: "ignored",
+      reactedAt: new Date(),
+    }).where(and(
+      eq(copilotRecommendations.orgId, organizationId),
+      eq(copilotRecommendations.reaction, "pending"),
+      lt(copilotRecommendations.generatedAt, new Date(olderThanIso)),
+    )).returning({ id: copilotRecommendations.id });
+    return result.length;
   }
 
   async getPersonalAlerts(userId: string): Promise<PersonalAlert[]> {

@@ -7007,6 +7007,187 @@ export const insertCopilotAdjustmentSchema = createInsertSchema(copilotAdjustmen
 export type InsertCopilotAdjustment = z.infer<typeof insertCopilotAdjustmentSchema>;
 export type CopilotAdjustment = typeof copilotAdjustments.$inferSelect;
 
+// ─── Phase 2 slice 3 — Copilot Fit & Intelligence Card (Task #912) ──────
+//
+// Persists every Fit & Intelligence Card the reasoner produces from a typed
+// extraction (slice 1/2 output) plus the rep's reaction. Phase 5 learning
+// reads (cardPayload, reaction, downstreamOutcome) tuples to score how well
+// the reasoner is matching reps' real choices — and to retrain the play
+// matcher and the reasoner's confidence calibration.
+//
+// One row per (sourceDocumentId, generatedAt). The same document may be
+// re-scored after rep corrections; we keep the history rather than upsert
+// so we can replay how the card evolved.
+export const COPILOT_RECOMMENDATION_REACTIONS = [
+  "pending",      // card was rendered but no rep input yet
+  "confirmed",    // rep accepted as-is
+  "edited",       // rep tweaked one or more fields (edits captured in cardPayload.edits)
+  "dismissed",    // rep explicitly dismissed
+  "ignored",      // surfaced for >24h with no interaction (set by sweeper)
+] as const;
+export type CopilotRecommendationReaction = (typeof COPILOT_RECOMMENDATION_REACTIONS)[number];
+
+export const COPILOT_RECOMMENDATION_SOURCE_KINDS = [
+  "rate_con",
+  "bol",
+  "rfp_bid_sheet",
+  "routing_guide",
+  "scorecard",
+  "tariff",
+  "accessorial_schedule",
+  "contract",
+  "spreadsheet_lanes",
+  "email_thread",
+  "manual",
+] as const;
+export type CopilotRecommendationSourceKind =
+  (typeof COPILOT_RECOMMENDATION_SOURCE_KINDS)[number];
+
+export const COPILOT_AGGREGATE_CONFIDENCE = ["high", "medium", "low"] as const;
+export type CopilotAggregateConfidence = (typeof COPILOT_AGGREGATE_CONFIDENCE)[number];
+
+export const copilotRecommendations = pgTable("copilot_recommendations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  // What we generated the card from. Always a copilot document for slice 3,
+  // but the column is generic so we can swap in `manual` when reps build
+  // ad-hoc cards in later phases.
+  sourceDocumentId: varchar("source_document_id").references(() => documents.id, { onDelete: "set null" }),
+  sourceKind: text("source_kind").notNull().default("rate_con"),
+  // Anchor records the card is *about* — any combination may be set.
+  customerCompanyId: varchar("customer_company_id").references(() => companies.id, { onDelete: "set null" }),
+  carrierId: varchar("carrier_id").references(() => carriers.id, { onDelete: "set null" }),
+  opportunityId: varchar("opportunity_id").references(() => freightOpportunities.id, { onDelete: "set null" }),
+  // Canonical 5-part lane signature (see services/laneStory.parseLaneSignature)
+  // so we can list "all cards for this lane" on the lane-story page.
+  laneSignature: text("lane_signature"),
+  // Full IntelligenceCardPayload (zod-validated on insert).
+  cardPayload: jsonb("card_payload").notNull(),
+  // Suggested plays the matcher returned, ordered. Stored separately from
+  // cardPayload because Phase 5 retraining wants the play scoring trail.
+  suggestedPlays: jsonb("suggested_plays").notNull().default(sql`'[]'::jsonb`),
+  // Materialized list of source records used during reasoning — extraction
+  // fields, recurring lanes, leak rows, etc — so we can audit the card
+  // without re-fetching whatever state existed at generation time.
+  sourceRecords: jsonb("source_records").notNull().default(sql`'[]'::jsonb`),
+  aggregateConfidence: text("aggregate_confidence").notNull().default("medium"),
+  fitScore: integer("fit_score").notNull().default(0),
+  generatedByUserId: varchar("generated_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  generatedAt: timestamp("generated_at").defaultNow().notNull(),
+  reaction: text("reaction").notNull().default("pending"),
+  reactionReason: text("reaction_reason"),
+  reactedAt: timestamp("reacted_at"),
+  reactedByUserId: varchar("reacted_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  // Phase 5 learning loop — outcome resolver writes here when the
+  // downstream entity (opportunity / leak / capture failure) closes.
+  downstreamOutcome: jsonb("downstream_outcome"),
+  outcomeResolvedAt: timestamp("outcome_resolved_at"),
+}, (t) => ({
+  orgGeneratedIdx: index("copilot_recs_org_generated_idx").on(t.orgId, t.generatedAt),
+  docIdx: index("copilot_recs_doc_idx").on(t.sourceDocumentId, t.generatedAt),
+  customerIdx: index("copilot_recs_customer_idx").on(t.customerCompanyId, t.generatedAt),
+  carrierIdx: index("copilot_recs_carrier_idx").on(t.carrierId, t.generatedAt),
+  opportunityIdx: index("copilot_recs_opp_idx").on(t.opportunityId, t.generatedAt),
+  laneIdx: index("copilot_recs_lane_idx").on(t.orgId, t.laneSignature),
+  reactionIdx: index("copilot_recs_reaction_idx").on(t.orgId, t.reaction),
+}));
+
+// ── IntelligenceCardPayload — ALL claims must trace back to a source ────
+// `sources[]` references either a typed extraction field path
+// ("extraction.allInRate"), a CRM record ("recurring_lane:abc"), or a
+// finding ("finding:lane_outside_carrier_states"). The reasoner is
+// REQUIRED to populate `sources` on every reason / risk / play; the API
+// layer rejects payloads that violate this.
+export const intelligenceCardSourceSchema = z.object({
+  kind: z.enum([
+    "extraction_field",     // typed extraction leaf (e.g. extraction.allInRate)
+    "entity_link",          // resolved CRM link (carrier:abc, customer:xyz)
+    "finding",              // inconsistency rule (finding:rule_code)
+    "recurring_lane",       // recurringLanes row
+    "lane_health",          // lane volatility / leak signal
+    "carrier_history",      // carrier scorecard / proven lane
+    "freshness",            // freight freshness signal
+    "capture_failure",      // freight_opportunity_capture_failures row
+    "opportunity",          // freight_opportunities row
+    "agent_play",           // agentPlays row
+  ]),
+  ref: z.string().min(1),         // unambiguous ID/path within `kind`
+  label: z.string().min(1),       // human label for chip ("Origin city")
+  href: z.string().nullable().optional(),
+  updatedAt: z.string().nullable().optional(),
+});
+export type IntelligenceCardSource = z.infer<typeof intelligenceCardSourceSchema>;
+
+export const intelligenceCardClaimSchema = z.object({
+  text: z.string().min(1),
+  sources: z.array(intelligenceCardSourceSchema).min(1, "every claim must cite at least one source"),
+  confidence: z.enum(["high", "medium", "low"]),
+});
+export type IntelligenceCardClaim = z.infer<typeof intelligenceCardClaimSchema>;
+
+export const intelligenceCardPlaySchema = z.object({
+  playId: z.string().nullable(),  // null if deterministic / no DB row
+  name: z.string().min(1),
+  why: z.string().min(1),
+  action: z.string().min(1),
+  matchScore: z.number().min(0).max(1),
+  matchKind: z.enum(["deterministic", "scored", "model"]),
+  sources: z.array(intelligenceCardSourceSchema).min(1),
+});
+export type IntelligenceCardPlay = z.infer<typeof intelligenceCardPlaySchema>;
+
+export const intelligenceCardPayloadSchema = z.object({
+  schemaVersion: z.literal("1.0.0"),
+  header: z.object({
+    title: z.string().min(1),
+    subtitle: z.string().nullable(),
+    laneLabel: z.string().nullable(),
+    customerLabel: z.string().nullable(),
+    carrierLabel: z.string().nullable(),
+  }),
+  fitScore: z.number().int().min(0).max(100),
+  fitBand: z.enum(["strong", "watch", "weak", "blocked"]),
+  aggregateConfidence: z.enum(["high", "medium", "low"]),
+  // Top reasons / risks (UI shows top 3 of each)
+  reasons: z.array(intelligenceCardClaimSchema).max(8),
+  risks: z.array(intelligenceCardClaimSchema).max(8),
+  inconsistencyFindings: z.array(z.object({
+    ruleCode: z.string(),
+    severity: z.enum(["info", "warn", "block"]),
+    message: z.string(),
+  })),
+  suggestedPlays: z.array(intelligenceCardPlaySchema).max(5),
+  // Audit metadata
+  generatedAt: z.string(),
+  reasonerVersion: z.string(),
+  // When the reasoner refused to make a confident claim
+  needsReview: z.boolean(),
+  needsReviewReason: z.string().nullable(),
+  // Captured rep edits — populated only when reaction="edited"
+  edits: z.record(z.unknown()).nullable().optional(),
+});
+export type IntelligenceCardPayload = z.infer<typeof intelligenceCardPayloadSchema>;
+
+export const insertCopilotRecommendationSchema = createInsertSchema(copilotRecommendations)
+  .omit({ id: true, generatedAt: true, reactedAt: true, outcomeResolvedAt: true })
+  .extend({
+    sourceKind: z.enum(COPILOT_RECOMMENDATION_SOURCE_KINDS),
+    aggregateConfidence: z.enum(COPILOT_AGGREGATE_CONFIDENCE),
+    reaction: z.enum(COPILOT_RECOMMENDATION_REACTIONS).optional(),
+    cardPayload: intelligenceCardPayloadSchema,
+    suggestedPlays: z.array(intelligenceCardPlaySchema).optional(),
+    sourceRecords: z.array(intelligenceCardSourceSchema).optional(),
+  });
+export type InsertCopilotRecommendation = z.infer<typeof insertCopilotRecommendationSchema>;
+export type CopilotRecommendation = typeof copilotRecommendations.$inferSelect;
+
+export const reactToCopilotRecommendationSchema = z.object({
+  reaction: z.enum(["confirmed", "edited", "dismissed"]),
+  reason: z.string().max(2000).nullable().optional(),
+  edits: z.record(z.unknown()).nullable().optional(),
+});
+export type ReactToCopilotRecommendation = z.infer<typeof reactToCopilotRecommendationSchema>;
+
 export const leakConsoleDailySnapshot = pgTable("leak_console_daily_snapshot", {
   orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   snapshotDate: text("snapshot_date").notNull(), // YYYY-MM-DD (org-local day)

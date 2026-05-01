@@ -19,6 +19,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Company, Touchpoint, User, Rfp } from "@shared/schema";
 import type { AccountPerf, SharedRepEntry, TouchLogEntry } from "../types";
 import { CustomerEmailSignalsSection } from "./CustomerEmailSignalsSection";
+import { IntelligenceCardsList } from "@/components/dna-copilot/intelligence-cards-list";
 
 const ONBOARDING_MILESTONES = [
   { id: "kickoff_call", label: "Kickoff call completed" },
@@ -268,6 +269,9 @@ export function IntelTab({
 
   return (
     <>
+      {/* Task #912 — Copilot Fit & Intelligence Cards (most-recent few). */}
+      <IntelligenceCardsList anchor={{ kind: "customer", companyId }} />
+
       {/* Account Information */}
       <Card data-testid="card-portal-info">
         <CardHeader className="pb-3">

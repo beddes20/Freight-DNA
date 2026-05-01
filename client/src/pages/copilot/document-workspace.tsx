@@ -13,7 +13,7 @@ import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { DocumentViewer, type DocumentForViewer } from "@/components/dna-copilot/document-viewer";
-import { IntelligenceCard, type IntelligenceRow } from "@/components/dna-copilot/intelligence-card";
+import { IntelligenceRowCard, type IntelligenceRow } from "@/components/dna-copilot/intelligence-card";
 import { PlayRecommendationCard, type PlayRecommendation } from "@/components/dna-copilot/play-recommendation-card";
 
 interface ExtractionsResp {
@@ -146,7 +146,7 @@ export default function DocumentWorkspacePage() {
             </CardContent>
           </Card>
         )}
-        {intel.map((row) => <IntelligenceCard key={row.id} row={row} />)}
+        {intel.map((row) => <IntelligenceRowCard key={row.id} row={row} />)}
 
         {plays.length > 0 && (
           <div className="space-y-2">

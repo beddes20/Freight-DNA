@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { EmptyState } from "@/components/ui/empty-state";
+import { IntelligenceCardsList } from "@/components/dna-copilot/intelligence-cards-list";
 import {
   ArrowLeft,
   Truck,
@@ -279,6 +280,11 @@ export default function LaneStoryPage() {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* Task #912 — Copilot Fit & Intelligence Cards anchored to this lane. */}
+      {data && (
+        <IntelligenceCardsList anchor={{ kind: "lane", laneSignature: data.header.laneSignature }} />
       )}
 
       {/* Outcomes 30d */}
