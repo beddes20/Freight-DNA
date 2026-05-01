@@ -26,6 +26,7 @@ import { initCoachingDigestScheduler } from "./coachingDigestScheduler";
 import { initMissedInboundRecapScheduler } from "./missedInboundRecapScheduler";
 import { initLmCheckinScheduler } from "./lmCheckinScheduler";
 import { initCarrierIntelExpirationScheduler } from "./carrierIntelExpirationScheduler";
+import { initLeakConsoleSnapshotScheduler } from "./leakConsoleSnapshotScheduler";
 import { initCarrierIntelNudgeScheduler } from "./carrierIntelNudgeScheduler";
 import { initTruckPostingScheduler } from "./truckPostingScheduler";
 import { initNbaPhase1Scheduler } from "./nbaPhase1Scheduler";
@@ -506,6 +507,11 @@ process.on("uncaughtException", (err) => {
       // from app_settings so admins can tune behavior live.
       initCarrierIntelExpirationScheduler();
       initCarrierIntelNudgeScheduler();
+      // Task #880 — daily end-of-day snapshot of every org's Leak Console
+      // KPI counts so manager sparklines have continuous trend data even
+      // when no manager visits the page on a given day. The on-read upsert
+      // in routes/leakConsole.ts stays as defense in depth.
+      initLeakConsoleSnapshotScheduler();
       // Task #844 — Capacity Matches: hourly expiration of stale truck postings
       // and the matches that pointed at them.
       initTruckPostingScheduler();

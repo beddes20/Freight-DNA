@@ -57,3 +57,41 @@ pool.query(\`
   .then(() => { console.log('[post-merge] session table ensured'); pool.end(); })
   .catch(e => { console.error('[post-merge] session table error:', e.message); pool.end(); });
 "
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Restart-required banner (Task #880 follow-up)
+#
+# This script does NOT (and cannot) restart the Express dev server itself.
+# Replit workflows are managed by the platform's workflow runner, which can
+# only be restarted via the agent's `restart_workflow` tool — not from a
+# shell. If we send SIGTERM to the tsx process here, the workflow goes to
+# FAILED state instead of auto-respawning, which is strictly worse than
+# the current behavior.
+#
+# What this banner DOES guarantee:
+#  - Every post-merge run prints a loud, unambiguous instruction in stdout.
+#  - Any agent (or human) reading post-merge output sees the same message
+#    in the same place, so the restart step never gets quietly skipped.
+#  - Tasks #861 and #862 both had stale-server bugs that wasted an hour
+#    each because the restart-required signal was implicit. Making it
+#    explicit and impossible-to-miss is the cheapest fix that always works.
+#
+# Why this matters: `runMigrations.ts`, schedulers, and any other in-process
+# state from server boot is only re-evaluated on a fresh boot. Code merged
+# in by post-merge.sh will sit dormant until Express restarts, and tests
+# run in that window will report stale failures.
+# ─────────────────────────────────────────────────────────────────────────────
+echo ""
+echo "════════════════════════════════════════════════════════════════════════"
+echo "[post-merge] ⚠  ACTION REQUIRED: restart 'Start application' workflow"
+echo "[post-merge]"
+echo "[post-merge] Express keeps boot-time migrations, backfills, and"
+echo "[post-merge] scheduler registrations in memory. Any change to"
+echo "[post-merge] server/runMigrations.ts, schedulers, route handlers, or"
+echo "[post-merge] any other server-side code WILL NOT take effect until"
+echo "[post-merge] you restart the 'Start application' workflow."
+echo "[post-merge]"
+echo "[post-merge] Tests run in this window may report stale failures."
+echo "[post-merge] (This banner exists because Tasks #861 and #862 each"
+echo "[post-merge]  burned an hour of debugging on stale-server symptoms.)"
+echo "════════════════════════════════════════════════════════════════════════"

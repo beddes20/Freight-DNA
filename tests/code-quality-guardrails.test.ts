@@ -2044,6 +2044,104 @@ assert(
   "wakeExpiredSnoozes runs every minute as a background cron — it must call wakeSnoozedThreadInternal, NEVER wakeSnoozedThread, otherwise every snooze-expiry would keep bumping updated_at and re-introduce the misleading-freshness bug.",
 );
 
+// ── Section 25: Leak Console daily snapshot scheduler (Task #880) ───────────
+//
+// The Manager Leak Console renders 14-day KPI sparklines. The on-read upsert
+// in routes/leakConsole.ts only writes today's row when a manager visits, so
+// any day with no manager visit, and any org with no manager activity, ends
+// up missing from the trend table. Task #880 added a background scheduler
+// that snapshots every org once at 23:55 UTC.
+//
+// This section pins:
+//   1. The scheduler file exists and exports the public API.
+//   2. snapshotAllOrgs iterates the organizations table (not just one org).
+//   3. snapshotAllOrgs calls computeKpiCounts and upserts on (orgId, snapshotDate).
+//   4. server/index.ts imports + invokes initLeakConsoleSnapshotScheduler.
+//   5. routes/leakConsole.ts exposes the manual admin trigger.
+//
+// If any of these break, manager sparklines silently revert to flat lines and
+// the regression won't surface in product until a manager opens the console
+// and notices a missing day.
+
+const snapshotSchedulerSrc = readFile("server/leakConsoleSnapshotScheduler.ts");
+assert(
+  "leakConsoleSnapshotScheduler.ts — exports initLeakConsoleSnapshotScheduler + snapshotAllOrgs",
+  /export\s+function\s+initLeakConsoleSnapshotScheduler\s*\(/.test(snapshotSchedulerSrc) &&
+    /export\s+async\s+function\s+snapshotAllOrgs\s*\(/.test(snapshotSchedulerSrc),
+  "Both initLeakConsoleSnapshotScheduler (cron wiring) and snapshotAllOrgs (the work fn) must be exported. snapshotAllOrgs is reused by the admin manual-trigger endpoint and any future one-off backfill scripts.",
+);
+assert(
+  "leakConsoleSnapshotScheduler.ts — iterates the organizations table (multi-org)",
+  /from\(organizations\)/.test(snapshotSchedulerSrc),
+  "snapshotAllOrgs must select from the organizations table to cover EVERY org, not just the requesting user's. The whole point of the scheduler is to fix the gap where the on-read upsert only covers the org of whoever visited.",
+);
+assert(
+  "leakConsoleSnapshotScheduler.ts — calls computeKpiCounts per org",
+  /computeKpiCounts\(/.test(snapshotSchedulerSrc),
+  "Snapshot rows must come from the same KPI compute function the live KPI endpoint uses. Otherwise the scheduler can drift from what the page renders.",
+);
+assert(
+  "leakConsoleSnapshotScheduler.ts — upserts on (orgId, snapshotDate) primary key",
+  /onConflictDoUpdate/.test(snapshotSchedulerSrc) &&
+    /leakConsoleDailySnapshot\.orgId/.test(snapshotSchedulerSrc) &&
+    /leakConsoleDailySnapshot\.snapshotDate/.test(snapshotSchedulerSrc),
+  "The scheduler must use onConflictDoUpdate against (orgId, snapshotDate) so multiple runs in the same UTC day collapse to one row, identical to the on-read upsert in routes/leakConsole.ts.",
+);
+assert(
+  "leakConsoleSnapshotScheduler.ts — runs daily at 23:55 UTC",
+  /cron\.schedule\(\s*["']55 23 \* \* \*["']/.test(snapshotSchedulerSrc),
+  "Schedule must be 23:55 UTC daily — late enough to capture end-of-day, early enough that a slow run finishes before midnight rolls.",
+);
+assert(
+  "leakConsoleSnapshotScheduler.ts — pins cron timezone to Etc/UTC",
+  /timezone\s*:\s*["']Etc\/UTC["']/.test(snapshotSchedulerSrc),
+  "node-cron defaults to host local timezone, which is not guaranteed to be UTC. The schedule string ('55 23 * * *') is interpreted in that local TZ — without an explicit `timezone: 'Etc/UTC'` option, snapshots can fire at the wrong wall-clock minute AND write a snapshotDate (always UTC via toISOString) that doesn't match the data they captured.",
+);
+assert(
+  "leakConsoleSnapshotScheduler.ts — error handling per org (single bad org never aborts the run)",
+  /try\s*\{[\s\S]*?computeKpiCounts[\s\S]*?\}\s*catch/.test(snapshotSchedulerSrc),
+  "Each org must be wrapped in try/catch so one malformed org's data can't poison every other org's snapshot.",
+);
+
+const indexSrc880 = readFile("server/index.ts");
+assert(
+  "server/index.ts — imports + invokes initLeakConsoleSnapshotScheduler",
+  /import\s*\{\s*initLeakConsoleSnapshotScheduler\s*\}\s*from\s*["']\.\/leakConsoleSnapshotScheduler["']/.test(indexSrc880) &&
+    /initLeakConsoleSnapshotScheduler\(\)/.test(indexSrc880),
+  "The scheduler is dead code unless it's wired into the boot sequence. Both the import and the call site must be present.",
+);
+
+const leakRoutesSrc880 = readFile("server/routes/leakConsole.ts");
+assert(
+  "routes/leakConsole.ts — exposes admin manual-trigger endpoint POST /api/admin/leak-console/snapshot-now",
+  /["']\/api\/admin\/leak-console\/snapshot-now["']/.test(leakRoutesSrc880) &&
+    /snapshotAllOrgs\(\)/.test(leakRoutesSrc880),
+  "Admins must be able to force-write today's snapshot without waiting for the cron — needed for post-deploy verification and for backfilling today after a data fix.",
+);
+{
+  // The snapshot-now endpoint runs across every org and surfaces per-org
+  // error metadata. It MUST be gated by a strict platform-admin check,
+  // not the broader managerial gate. Tenant-scoped managers (director,
+  // sales_director, NAM, account_manager) cannot trigger cross-tenant
+  // operations. Walk the route handler and verify it calls gateAdmin
+  // (or some isAdmin(...) guard) before snapshotAllOrgs.
+  const handlerMatch = leakRoutesSrc880.match(
+    /app\.post\(\s*["']\/api\/admin\/leak-console\/snapshot-now["'][\s\S]*?\}\s*\);/,
+  );
+  assert(
+    "routes/leakConsole.ts — snapshot-now endpoint gated by gateAdmin (NOT gateManager)",
+    !!handlerMatch &&
+      /gateAdmin\s*\(/.test(handlerMatch[0]) &&
+      !/gateManager\s*\(/.test(handlerMatch[0]),
+    "snapshotAllOrgs is cross-tenant — it writes to every org's snapshot table and returns org IDs in the response. Gating with the broader gateManager (which permits director / sales_director / NAM / account_manager) is broken access control. Use gateAdmin so only role === 'admin' can trigger it.",
+  );
+}
+assert(
+  "routes/leakConsole.ts — defines a gateAdmin helper distinct from gateManager",
+  /function\s+gateAdmin\s*\([\s\S]*?isAdmin\s*\(/.test(leakRoutesSrc880),
+  "A dedicated gateAdmin helper backed by isAdmin() must exist so cross-tenant operations have a single, auditable enforcement point. Inlining the role check at each call site invites drift.",
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

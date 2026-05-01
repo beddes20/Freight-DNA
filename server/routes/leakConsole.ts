@@ -10,7 +10,7 @@ import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { z } from "zod";
 import { requireUser } from "../auth";
 import { db, storage } from "../storage";
-import { isManagerial } from "../lib/roles";
+import { isAdmin, isManagerial } from "../lib/roles";
 import { pStr, qInt } from "../lib/req";
 import {
   carrierOutreachLogs,
@@ -32,7 +32,9 @@ import {
   type LeakFilters,
   type LeakPanelResult,
 } from "../leakConsoleService";
+import { snapshotAllOrgs } from "../leakConsoleSnapshotScheduler";
 import { laneSig } from "../laneCrossLinkService";
+import { getErrorMessage } from "../lib/errors";
 import { publish as publishLiveSync } from "../services/liveSync";
 
 const PANEL_SET = new Set<LeakConsolePanel>(LEAK_CONSOLE_PANELS);
@@ -58,6 +60,24 @@ function gateManager(req: Parameters<Parameters<Express["get"]>[1]>[0], res: Res
   }
   if (!isManagerial(user)) {
     res.status(403).json({ error: "Manager Leak Console requires a managerial role" });
+    return false;
+  }
+  return true;
+}
+
+// Stricter gate for endpoints that operate cross-tenant. snapshotAllOrgs
+// writes to every org's snapshot table and surfaces org IDs + per-org
+// errors in the response — that is platform-admin operational capability,
+// not a per-tenant manager action. Tenant-scoped managers (director,
+// sales_director, NAM, account_manager) must NOT be able to trigger this.
+function gateAdmin(req: Parameters<Parameters<Express["get"]>[1]>[0], res: Response): boolean {
+  const user = req.user;
+  if (!user) {
+    res.status(401).json({ error: "Authentication required" });
+    return false;
+  }
+  if (!isAdmin(user)) {
+    res.status(403).json({ error: "Cross-tenant snapshot trigger requires platform admin role" });
     return false;
   }
   return true;
@@ -307,6 +327,22 @@ export function registerLeakConsoleRoutes(app: Express) {
       touchpointTaskId,
       sideEffect,
     });
+  });
+
+  // ── Manual end-of-day snapshot trigger (Task #880) ──────────────────────
+  // Cross-tenant operation: writes today's snapshot for EVERY org and
+  // returns per-org error metadata. Restricted to platform admin only —
+  // tenant-scoped managerial roles must not be able to trigger this.
+  // Useful right after a deploy, after a data backfill, or when verifying
+  // that the trend pipeline is healthy.
+  app.post("/api/admin/leak-console/snapshot-now", requireUser, async (req, res) => {
+    if (!gateAdmin(req, res)) return;
+    try {
+      const result = await snapshotAllOrgs();
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: "Snapshot run failed", message: getErrorMessage(err) });
+    }
   });
 
   // ── Audit log read (for the existing admin audit view) ───────────────────
