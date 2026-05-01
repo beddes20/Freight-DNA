@@ -9,6 +9,7 @@ import {
   freightOpportunities,
   freightOpportunityCaptureFailures,
   captureLeakReviews,
+  cronHeartbeats,
   type QuoteOpportunity, type QuoteOutcomeStatus, type QuoteCustomer, type QuoteRep,
   type QuoteCarrier, type QuoteLaneGroup, type QuoteOutcomeReason, type QuoteSavedView,
   type InsertFreightOpportunity,
@@ -24,6 +25,7 @@ import { users } from "@shared/schema";
 import { learnFromReassign } from "./quoteSenderMappings";
 import type { QuotePartyType } from "@shared/schema";
 import { getStaleQuoteFollowUps } from "./staleQuoteFollowup";
+import { JOB_NAMES } from "../lib/cronHeartbeat";
 import {
   LOST_INCUMBENT, LOST_PRICE, LOST_SERVICE, LOST_TIMING,
   findOrCreateLostReasonExported,
@@ -7286,6 +7288,89 @@ function publishLiveSyncFromService(orgId: string, topic: string, key?: string):
   } catch {
     // Live-sync is advisory; never fail a write because of it.
   }
+}
+
+// =============================================================================
+// Quote Requests freshness — trust-visibility strip on /quote-requests.
+//
+// Surfaces three honest facts so the page can never silently show "0/0" again
+// without explaining why:
+//   1. lastRunAt          — wall-clock of the most recent email_intelligence
+//                           batch tick (success preferred; falls back to last
+//                           started so we don't go dark while a batch is in
+//                           flight).
+//   2. inboundToday       — count of inbound emails received today (UTC).
+//                           Uses provider_sent_at so messages back-dated by
+//                           a self-heal sweep aren't counted as "today".
+//   3. oppsToday          — count of quote_opportunities with request_date
+//                           today (UTC). Matches the dayStart computation
+//                           getSnapshot uses for its autoCapturedToday KPI.
+//
+// processingHint.show fires only when the gap between inbound and opps is
+// material (≥ HINT_MIN_GAP). Steady-state is gap≈0; the morning back-load
+// regression that triggered this work shows gap=hundreds.
+// =============================================================================
+const FRESHNESS_HINT_MIN_GAP = 20;
+
+export type QuoteFreshness = {
+  lastRunAt: string | null;
+  lastRunStatus: string | null;
+  lagSeconds: number | null;
+  inboundToday: number;
+  oppsToday: number;
+  processingHint: { show: boolean; pendingCount: number };
+};
+
+export async function getQuoteFreshness(orgId: string): Promise<QuoteFreshness> {
+  const now = new Date();
+  const dayStart = new Date(now);
+  dayStart.setUTCHours(0, 0, 0, 0);
+
+  // Email-intelligence scheduler heartbeat. Sourced from JOB_NAMES so a
+  // future rename of the job stays in lockstep with this read path.
+  const [hb] = await db
+    .select()
+    .from(cronHeartbeats)
+    .where(eq(cronHeartbeats.jobName, JOB_NAMES.emailIntelligenceBatch))
+    .limit(1);
+
+  // Prefer last finished tick; fall back to last started so a long-running
+  // batch doesn't make the strip read "no recent run".
+  const lastRunDate = hb?.lastFinishedAt ?? hb?.lastStartedAt ?? null;
+  const lagSeconds = lastRunDate
+    ? Math.max(0, Math.floor((now.getTime() - lastRunDate.getTime()) / 1000))
+    : null;
+
+  const [inboundRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(emailMessages)
+    .where(and(
+      eq(emailMessages.orgId, orgId),
+      eq(emailMessages.direction, "inbound"),
+      sql`coalesce(${emailMessages.providerSentAt}, ${emailMessages.createdAt}) >= ${dayStart}`,
+    ));
+
+  const [oppsRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(quoteOpportunities)
+    .where(and(
+      eq(quoteOpportunities.organizationId, orgId),
+      sql`${quoteOpportunities.requestDate} >= ${dayStart}`,
+    ));
+
+  const inboundToday = inboundRow?.count ?? 0;
+  const oppsToday = oppsRow?.count ?? 0;
+  const gap = inboundToday - oppsToday;
+  const show = gap >= FRESHNESS_HINT_MIN_GAP;
+
+  return {
+    lastRunAt: lastRunDate ? lastRunDate.toISOString() : null,
+    lastRunStatus: hb?.lastStatus ?? null,
+    lagSeconds,
+    inboundToday,
+    oppsToday,
+    processingHint: { show, pendingCount: show ? gap : 0 },
+  };
 }
 
 // Test-only exports — internal helpers exposed for unit tests, not for runtime use.

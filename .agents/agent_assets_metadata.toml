@@ -36,3 +36,15 @@ id = "-E8dV0fV4PR0i3MgGIlc0"
 uri = "file://docs/available-freight-audit.md"
 type = "text"
 title = "Available Freight — Discovery & Audit (with same-day deep-dive)"
+
+[[outputs]]
+id = "JSWcEz43H8jmuUUnKlCqc"
+uri = "file://screenshots/freshness-strip-lagging.jpg"
+type = "image"
+title = "Freshness strip — LAGGING state (live production data)"
+
+[[outputs]]
+id = "qWL5PJaXioifHvUtbT63Y"
+uri = "file://screenshots/freshness-strip-normal.jpg"
+type = "image"
+title = "Freshness strip — STEADY state (gap < 20, hint hidden)"

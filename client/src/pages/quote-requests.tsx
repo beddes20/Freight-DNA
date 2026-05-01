@@ -11,6 +11,7 @@ import { computeQuoteSla, formatSlaBadge } from "@shared/quoteSla";
 import { EmailThreadViewerModal } from "@/components/conversations/email-thread-viewer-modal";
 import { PricingRecommendationCard } from "@/components/PricingRecommendationCard";
 import { NewContactReviewStrip } from "@/components/customer-quotes/NewContactReviewStrip";
+import { QuoteFreshnessStrip } from "@/components/QuoteFreshnessStrip";
 import { NewQuoteDialog, type NewQuoteInitialValues } from "@/components/quote-requests/NewQuoteDialog";
 import { SavedViewsDropdown, type QuoteViewFilters } from "@/components/quote-requests/SavedViewsDropdown";
 import { SpotQuoteSearchPanel } from "@/components/quote-requests/SpotQuoteSearchPanel";
@@ -764,6 +765,13 @@ function QuoteRequestsInner(): JSX.Element {
             />
           </div>
         ) : null}
+
+        {/* Task #923 — Trust-visibility freshness strip. Always-visible
+            "Last capture run …" timestamp + conditional "X emails still
+            being processed" hint when inbound-today materially exceeds
+            captured opps. Decouples user trust from operational
+            back-load latency without touching the KPI math. */}
+        <QuoteFreshnessStrip />
 
         {/* KPI strip */}
         <div className="flex items-stretch px-6 py-4 gap-4 border-b border-border bg-muted/20 shrink-0">

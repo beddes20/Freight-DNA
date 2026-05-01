@@ -2,7 +2,7 @@ import type { Express, Request } from "express";
 import { z } from "zod";
 import { getCurrentUser, requireAuth, requireUser } from "../auth";
 import {
-  getSnapshot, getQuoteDetail,
+  getSnapshot, getQuoteDetail, getQuoteFreshness,
   listQuotes, listSavedViews, createSavedView, deleteSavedView, updateSavedView, exportCsv,
   createQuote, updateQuote,
   getPricingIntelligence,
@@ -288,6 +288,25 @@ async function applyMineOnly(req: Request, f: QuoteFilters): Promise<QuoteFilter
 }
 
 export function registerCustomerQuoteRoutes(app: Express): void {
+  // Task #923 — Quote Requests freshness strip.
+  // Always-honest answer to "how stale is this page?" Read-only, no filters,
+  // no auth elevation. The freshness strip on /quote-requests polls this
+  // endpoint and renders the last_run timestamp + (when the inbound→opp gap
+  // is material) a "X emails still being processed" hint. Lives in this
+  // file rather than its own route module so the existing requireUser /
+  // org-scoping pattern is reused.
+  app.get("/api/customer-quotes/freshness", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const freshness = await getQuoteFreshness(user.organizationId);
+      res.json(freshness);
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      console.error("[customer-quotes] freshness error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
   app.get("/api/customer-quotes/snapshot", requireUser, async (req, res) => {
     try {
       const user = req.user!;
