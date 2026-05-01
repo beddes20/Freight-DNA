@@ -24,6 +24,7 @@ import {
   type FreightOpportunity,
 } from "@shared/schema";
 import { getErrorMessage } from "../lib/errors";
+import { deriveCustomerTier } from "../lib/customerTier";
 import { classifyStability, type LaneStability } from "../laneCrossLinkService";
 import { computeFreightFreshnessSignal, type FreightFreshnessSignal } from "../services/freightFreshness";
 
@@ -177,7 +178,15 @@ export function registerLaneCockpitRoutes(app: Express) {
       if (lane) {
         const [companyRow, ownerRow, touchRow, replyRows] = await Promise.all([
           lane.companyId
-            ? db.select().from(companies).where(eq(companies.id, lane.companyId)).limit(1)
+            ? db
+                .select({
+                  id: companies.id,
+                  name: companies.name,
+                  estimatedFreightSpend: companies.estimatedFreightSpend,
+                })
+                .from(companies)
+                .where(eq(companies.id, lane.companyId))
+                .limit(1)
             : Promise.resolve([]),
           lane.ownerUserId
             ? db.select({ id: users.id, name: users.name }).from(users).where(eq(users.id, lane.ownerUserId)).limit(1)
@@ -195,7 +204,7 @@ export function registerLaneCockpitRoutes(app: Express) {
             .groupBy(laneCarrierInterest.interestStatus),
         ]);
 
-        const company = (companyRow as Array<{ id: string; name: string }>)[0] ?? null;
+        const company = (companyRow as Array<{ id: string; name: string; estimatedFreightSpend: string | null }>)[0] ?? null;
         const ownerName = (ownerRow as Array<{ id: string; name: string }>)[0]?.name ?? null;
         const lastTouchRaw = (touchRow as Array<{ lastTouchAt: Date | null }>)[0]?.lastTouchAt ?? null;
         let replyCount = 0;
@@ -218,7 +227,7 @@ export function registerLaneCockpitRoutes(app: Express) {
         const cv = factors && typeof factors.weeklyLoadCV === "number" ? factors.weeklyLoadCV : null;
         const weeklyLoadHistory = synthSparkline(avg, cv);
 
-        customerTier = null;
+        customerTier = deriveCustomerTier(company?.estimatedFreightSpend ?? null);
         recurring = {
           laneId: lane.id,
           origin: lane.origin,
@@ -274,13 +283,19 @@ export function registerLaneCockpitRoutes(app: Express) {
       // ── Live face: enriched open opps for this signature ────────────────
       const liveRows = liveOpps as FreightOpportunity[];
       const companyIds = Array.from(new Set(liveRows.map(r => r.companyId).filter((x): x is string => !!x)));
-      const companyById = new Map<string, { name: string }>();
+      const companyById = new Map<string, { name: string; estimatedFreightSpend: string | null }>();
       if (companyIds.length > 0) {
         const rows = await db
-          .select({ id: companies.id, name: companies.name })
+          .select({
+            id: companies.id,
+            name: companies.name,
+            estimatedFreightSpend: companies.estimatedFreightSpend,
+          })
           .from(companies)
           .where(inArray(companies.id, companyIds));
-        for (const c of rows) companyById.set(c.id, { name: c.name });
+        for (const c of rows) {
+          companyById.set(c.id, { name: c.name, estimatedFreightSpend: c.estimatedFreightSpend ?? null });
+        }
       }
       const live: LaneCockpitLiveRow[] = liveRows.map(r => {
         const c = r.companyId ? companyById.get(r.companyId) ?? null : null;
@@ -300,7 +315,7 @@ export function registerLaneCockpitRoutes(app: Express) {
           generatedAt: generated ? generated.toISOString() : null,
           ageMinutes: generated ? Math.round((now.getTime() - generated.getTime()) / 60_000) : null,
           customerName: c?.name ?? null,
-          customerTier: null,
+          customerTier: deriveCustomerTier(c?.estimatedFreightSpend ?? null),
         };
       });
       // Earliest pickup wins so the cockpit reflects the soonest actionable
