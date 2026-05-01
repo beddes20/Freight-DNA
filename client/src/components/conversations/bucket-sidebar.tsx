@@ -20,6 +20,11 @@ interface BucketSidebarProps {
   bucket: ConversationBucket;
   onChange: (bucket: ConversationBucket) => void;
   counts: Partial<Record<ConversationBucket, number>>;
+  // Optional companion counts so a bucket can render a split badge
+  // ("X waiting · Y total"). Currently used by the Quote requests bucket
+  // (Task #899) where reps want to see both the actionable subset and
+  // the total at a glance without having to apply a manual filter.
+  secondaryCounts?: Partial<Record<ConversationBucket, number>>;
   savedViews?: SavedView[];
   activeSavedViewId?: string | null;
   onSelectSavedView?: (view: SavedView) => void;
@@ -42,6 +47,7 @@ export function BucketSidebar({
   bucket,
   onChange,
   counts,
+  secondaryCounts,
   savedViews = [],
   activeSavedViewId = null,
   onSelectSavedView,
@@ -55,6 +61,18 @@ export function BucketSidebar({
         const Icon = b.icon;
         const active = bucket === b.id && !activeSavedViewId;
         const count = counts[b.id];
+        const secondary = secondaryCounts?.[b.id];
+        // Render a split "primary · secondary" badge when both numbers are
+        // available and they actually differ. This is the Quote requests
+        // case (Task #899): primary is the actionable "waiting on us"
+        // count and secondary is the total in the bucket. Falls back to
+        // the original single-number badge for every other bucket and
+        // whenever the two numbers happen to be equal (no extra info to
+        // surface).
+        const showSplit =
+          typeof count === "number" &&
+          typeof secondary === "number" &&
+          count !== secondary;
         return (
           <button
             key={b.id}
@@ -72,13 +90,28 @@ export function BucketSidebar({
           >
             <Icon className={cn("w-4 h-4 shrink-0", active ? "text-primary" : "text-muted-foreground")} />
             <span className="flex-1 truncate">{b.label}</span>
-            {typeof count === "number" && count > 0 && (
-              <span className={cn(
-                "text-xs px-1.5 py-0.5 rounded-full font-medium",
-                active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
-              )} data-testid={`count-${b.id}`}>
-                {count}
+            {showSplit ? (
+              <span
+                className={cn(
+                  "text-xs px-1.5 py-0.5 rounded-full font-medium tabular-nums",
+                  active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                )}
+                title={`${count} waiting on us · ${secondary} total`}
+                data-testid={`count-${b.id}`}
+              >
+                <span data-testid={`count-${b.id}-primary`}>{count}</span>
+                <span className="opacity-60 mx-1" aria-hidden>·</span>
+                <span className="opacity-70" data-testid={`count-${b.id}-secondary`}>{secondary}</span>
               </span>
+            ) : (
+              typeof count === "number" && count > 0 && (
+                <span className={cn(
+                  "text-xs px-1.5 py-0.5 rounded-full font-medium tabular-nums",
+                  active ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"
+                )} data-testid={`count-${b.id}`}>
+                  {count}
+                </span>
+              )
             )}
           </button>
         );

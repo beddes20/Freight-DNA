@@ -167,6 +167,13 @@ export default function ConversationsPage() {
   const [filterOverdue, setFilterOverdue] = useState(false);
   const [filterRep, setFilterRep] = useState<string>("all");
 
+  // Task #899 — Quote requests sub-toggle. Defaults to "waiting on us"
+  // because the QA pass on Task #862 surfaced that most reps care more
+  // about the actionable subset than the lifetime total of quote-request
+  // threads. The "all" mode is one click away and the sidebar badge
+  // shows both numbers ("X waiting · Y total") regardless of mode.
+  const [quoteWaitingMode, setQuoteWaitingMode] = useState<"waiting_on_us" | "all">("waiting_on_us");
+
   const [archiveSearch, setArchiveSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
 
@@ -347,6 +354,12 @@ export default function ConversationsPage() {
       p.set("waitingState", "waiting_on_us");
     } else if (bucket === "quote_requests") {
       p.set("signal", "quote_request");
+      // Task #899 — sub-toggle inside the bucket lets the rep flip between
+      // "waiting on us" (the actionable subset most reps care about) and
+      // "all" (every quote-request thread that ever existed). The default
+      // lands on the actionable subset; the split sidebar badge keeps the
+      // total visible regardless.
+      if (quoteWaitingMode === "waiting_on_us") p.set("waitingState", "waiting_on_us");
     } else if (bucket === "archived") {
       p.set("archived", "true");
       if (debouncedSearch) p.set("search", debouncedSearch);
@@ -400,6 +413,10 @@ export default function ConversationsPage() {
       debouncedSearch,
       effectiveDateFrom,
       effectiveDateTo,
+      // Task #899 — included so toggling the Quote requests sub-mode
+      // refetches the list (and resets the "Load more" accumulator via
+      // the dep effect below).
+      bucket === "quote_requests" ? quoteWaitingMode : "n/a",
     ],
     queryFn: async () => {
       const res = await fetch(`/api/internal/conversations?${buildParams()}`);
@@ -436,6 +453,7 @@ export default function ConversationsPage() {
     debouncedSearch,
     effectiveDateFrom,
     effectiveDateTo,
+    quoteWaitingMode,
   ]);
 
   // Track the cursor returned by the active first-page query so "Load more"
@@ -592,19 +610,13 @@ export default function ConversationsPage() {
     ...COUNT_REFRESH_OPTS,
   });
 
-  const { data: quoteData } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", "quote-request-count", audience, dateRangeKey],
+  // Task #899 — total quote-request count (every thread where the customer
+  // is asking for pricing, regardless of waiting state). Always fetched so
+  // the sidebar split badge can show "X waiting · Y total" and the in-bucket
+  // toggle's "All" label can render its companion count immediately.
+  const { data: quoteTotalData } = useQuery<ThreadsResponse>({
+    queryKey: ["/api/internal/conversations", "quote-request-count", "total", audience, dateRangeKey],
     queryFn: async () => {
-      // Task #862 (QA polish) — count query MUST mirror the visible-list
-      // filter set. The list (buildParams, bucket === "quote_requests")
-      // sets only `signal=quote_request` and intentionally does NOT add
-      // `waitingState=waiting_on_us` — Quote requests is "every thread
-      // where the customer is asking for pricing", not "open quote
-      // requests waiting on us." The QA pass surfaced a 6× drift between
-      // the badge (waiting_on_us only: ~292) and the visible list (all
-      // signal=quote_request: ~1,831). Drop the waiting-state filter so
-      // the badge matches what the rep can actually see when they open
-      // the bucket.
       const p = new URLSearchParams({ signal: "quote_request", limit: "1" });
       if (audience !== "all") p.set("audience", audience);
       applyDateRange(p);
@@ -615,11 +627,39 @@ export default function ConversationsPage() {
     ...COUNT_REFRESH_OPTS,
   });
 
+  // Task #899 — actionable subset count (quote requests waiting on us).
+  // This is what most reps care about (per the QA report on Task #862),
+  // and it's the bucket's default view. Sidebar badge primary number.
+  const { data: quoteWaitingData } = useQuery<ThreadsResponse>({
+    queryKey: ["/api/internal/conversations", "quote-request-count", "waiting", audience, dateRangeKey],
+    queryFn: async () => {
+      const p = new URLSearchParams({
+        signal: "quote_request",
+        waitingState: "waiting_on_us",
+        limit: "1",
+      });
+      if (audience !== "all") p.set("audience", audience);
+      applyDateRange(p);
+      const res = await fetch(`/api/internal/conversations?${p.toString()}`);
+      if (!res.ok) throw new Error("");
+      return res.json();
+    },
+    ...COUNT_REFRESH_OPTS,
+  });
+
+  // Sidebar badges: primary = "actionable" subset, secondary = total.
+  // For Quote requests this means waiting-on-us vs every quote-request
+  // thread — which is the whole point of Task #899. The split badge
+  // renders only when both are known and they differ, so the original
+  // single-number presentation is preserved for parity buckets.
   const counts: Partial<Record<ConversationBucket, number>> = {
     mine: mineData?.count,
     unowned: unownedData?.count,
     high_priority: highPriData?.count,
-    quote_requests: quoteData?.count,
+    quote_requests: quoteWaitingData?.count,
+  };
+  const secondaryCounts: Partial<Record<ConversationBucket, number>> = {
+    quote_requests: quoteTotalData?.count,
   };
 
   // ── Reps for the filter combobox ──────────────────────────────────────────
@@ -952,6 +992,7 @@ export default function ConversationsPage() {
                 bucket={bucket}
                 onChange={(b) => { setBucket(b); setMobileNavOpen(false); }}
                 counts={counts}
+                secondaryCounts={secondaryCounts}
                 savedViews={savedViews}
                 activeSavedViewId={activeSavedViewId}
                 onSelectSavedView={(v) => { applySavedView(v); setMobileNavOpen(false); }}
@@ -1011,6 +1052,7 @@ export default function ConversationsPage() {
             bucket={bucket}
             onChange={setBucket}
             counts={counts}
+            secondaryCounts={secondaryCounts}
             savedViews={savedViews}
             activeSavedViewId={activeSavedViewId}
             onSelectSavedView={applySavedView}
@@ -1102,6 +1144,57 @@ export default function ConversationsPage() {
               setFilterRep={setFilterRep}
               reps={sortedReps}
             />
+
+            {/* Task #899 — Quote requests sub-toggle. Inline (not buried in
+                the Filters popover) because it answers the rep's most
+                common Quote-requests question — "what's actually on me?"
+                vs "what's everything?" — in one click. The companion
+                count next to each label keeps both numbers visible so
+                the rep doesn't have to flip back and forth to compare. */}
+            {bucket === "quote_requests" && (
+              <ToggleGroup
+                type="single"
+                value={quoteWaitingMode}
+                onValueChange={(v) => {
+                  if (v === "waiting_on_us" || v === "all") setQuoteWaitingMode(v);
+                }}
+                className="h-8 rounded-md border bg-background"
+                data-testid="toggle-quote-waiting"
+              >
+                <ToggleGroupItem
+                  value="waiting_on_us"
+                  aria-label="Show only quote requests waiting on us"
+                  className="h-8 px-3 text-xs gap-1.5 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                  data-testid="toggle-quote-waiting-on-us"
+                >
+                  Waiting on us
+                  {typeof quoteWaitingData?.count === "number" && (
+                    <span
+                      className="text-[10px] tabular-nums opacity-70"
+                      data-testid="toggle-quote-waiting-on-us-count"
+                    >
+                      {quoteWaitingData.count}
+                    </span>
+                  )}
+                </ToggleGroupItem>
+                <ToggleGroupItem
+                  value="all"
+                  aria-label="Show all quote requests"
+                  className="h-8 px-3 text-xs gap-1.5 data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                  data-testid="toggle-quote-waiting-all"
+                >
+                  All
+                  {typeof quoteTotalData?.count === "number" && (
+                    <span
+                      className="text-[10px] tabular-nums opacity-70"
+                      data-testid="toggle-quote-waiting-all-count"
+                    >
+                      {quoteTotalData.count}
+                    </span>
+                  )}
+                </ToggleGroupItem>
+              </ToggleGroup>
+            )}
 
             {/* Archive search stays inline because reps type into it
                 continuously when scrubbing the archive — burying it
