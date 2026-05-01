@@ -458,6 +458,13 @@ export interface IStorage {
 
   getCompanies(organizationId: string): Promise<Company[]>;
   getCompaniesByIds(ids: string[], organizationId: string): Promise<Company[]>;
+  // Workflow OS — Task #930. Resolve a batch of free-text customer names
+  // (e.g. `load_fact.customer_name`) to their matching `companies` rows so
+  // the Available Loads `am_book` owner mode can populate the canonical
+  // `companyAssignedToByCompanyId` map. Comparison is case-insensitive and
+  // trim-tolerant on both sides so realistic TMS customer text matches the
+  // canonical company name. Org-scoped; an empty `names` array returns [].
+  getCompaniesByNames(names: string[], organizationId: string): Promise<Company[]>;
   /** Auth-only / FK-chain lookup by PK — trusted IDs only. No org filter. */
   getCompany(id: string): Promise<Company | undefined>;
   /** Route-level company lookup — scoped to org, returns undefined if not in org. */
@@ -1749,6 +1756,27 @@ export class DatabaseStorage implements IStorage {
   async getCompaniesByIds(ids: string[], organizationId: string): Promise<Company[]> {
     if (ids.length === 0) return [];
     return db.select().from(companies).where(and(inArray(companies.id, ids), eq(companies.organizationId, organizationId)));
+  }
+
+  // Workflow OS — Task #930. Customer-name → company resolver used by the
+  // Available Loads `am_book` owner mode. `load_fact.customer_name` is plain
+  // text (no FK to companies), so the canonical owner predicate has nothing
+  // to map a row to `companies.assignedTo` without this resolver. We
+  // normalize on both sides — `lower(btrim(...))` on the column and
+  // `name.trim().toLowerCase()` on the inputs — so realistic TMS spellings
+  // (extra whitespace, mixed case) still match the canonical company name.
+  async getCompaniesByNames(names: string[], organizationId: string): Promise<Company[]> {
+    if (names.length === 0) return [];
+    const normalized = Array.from(new Set(
+      names
+        .map((n) => (typeof n === "string" ? n.trim().toLowerCase() : ""))
+        .filter((n) => n.length > 0),
+    ));
+    if (normalized.length === 0) return [];
+    return db.select().from(companies).where(and(
+      eq(companies.organizationId, organizationId),
+      sql`lower(btrim(${companies.name})) = ANY(${normalized}::text[])`,
+    ));
   }
 
   async getCompany(id: string): Promise<Company | undefined> {

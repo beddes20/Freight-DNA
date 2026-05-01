@@ -405,12 +405,40 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
       )].sort((a, b) => a.localeCompare(b));
 
       // ── Workflow OS — Owner filter (pre-pickup-scope) ───────────────────
-      // load_fact stores customer as text (no FK to companies), so the
-      // canonical "am_book" mode can't resolve company.assignedTo on this
-      // surface yet. We pass an empty map; am_book returns zero matches —
-      // a follow-up task will add a customerName → company resolver.
-      // Reps still get full coverage via me / all / unassigned / specific.
+      // load_fact stores customer as text (no FK to companies). To support
+      // the canonical "am_book" mode (Task #930), we resolve the deduped
+      // non-empty customer names against companies.name (case-insensitive,
+      // trim-tolerant) and feed the resulting companyId → assignedTo map
+      // into `applyOwnerFilter`. We map every stamped row to its resolved
+      // companyId so isRowInUsersAmBook can match by `row.companyId` even
+      // when load_fact.companyId itself is null (the common case here).
+      // Other owner modes skip the lookup so they incur no extra cost.
       const companyAssignedToByCompanyId: Map<string, string | null> = new Map();
+      if (ownerFilterValue === "am_book") {
+        const customerNames = Array.from(new Set(
+          stamped
+            .map((l) => (l.customerName ?? "").trim())
+            .filter((n) => n.length > 0),
+        ));
+        if (customerNames.length > 0) {
+          const matchedCompanies = await storage.getCompaniesByNames(customerNames, orgId);
+          const companyIdByNormalizedName = new Map<string, string>();
+          for (const c of matchedCompanies) {
+            companyAssignedToByCompanyId.set(c.id, c.assignedTo ?? null);
+            const key = (c.name ?? "").trim().toLowerCase();
+            if (key) companyIdByNormalizedName.set(key, c.id);
+          }
+          // Project the resolved companyId onto each row so the WorkflowOsRow
+          // contract (`row.companyId → companies.assignedTo`) is satisfied
+          // for am_book without relying on the (usually-null) load_fact.companyId.
+          for (const row of stamped) {
+            const key = (row.customerName ?? "").trim().toLowerCase();
+            if (!key) continue;
+            const resolvedCompanyId = companyIdByNormalizedName.get(key);
+            if (resolvedCompanyId) row.companyId = resolvedCompanyId;
+          }
+        }
+      }
       const ownerCtx = {
         user: (sessionUser ?? { id: "", organizationId: orgId, role: "rep", name: "" }) as WorkflowOsUser,
         orgUsers: orgUsers as WorkflowOsUser[],
