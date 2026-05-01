@@ -6241,3 +6241,63 @@ export const cronHeartbeats = pgTable("cron_heartbeats", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 export type CronHeartbeat = typeof cronHeartbeats.$inferSelect;
+
+// ─── Manager Leak Console (Task #872) ────────────────────────────────────────
+// Manager-only console that surfaces 4 leak classes across Available Freight
+// (AF) and Lane Work Queue (LWQ). Persists daily KPI rollups and an audit row
+// per fix click.
+
+export const LEAK_CONSOLE_PANELS = [
+  "no_contactable_under_demand",
+  "unstable_spot_deployed",
+  "recurring_covered_on_spot",
+  "owned_untouched_under_pressure",
+] as const;
+export type LeakConsolePanel = typeof LEAK_CONSOLE_PANELS[number];
+
+export const LEAK_CONSOLE_FIX_KINDS = [
+  "build_bench",
+  "reassign_owner",
+  "stabilize",
+  "demote_from_recurring",
+  "push_to_lwq_owner",
+  "nudge_owner",
+] as const;
+export type LeakConsoleFixKind = typeof LEAK_CONSOLE_FIX_KINDS[number];
+
+export const leakConsoleAudit = pgTable("leak_console_audit", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  actorUserId: varchar("actor_user_id").notNull().references(() => users.id, { onDelete: "set null" }),
+  laneId: varchar("lane_id").references(() => recurringLanes.id, { onDelete: "set null" }),
+  laneSig: text("lane_sig").notNull(),
+  panel: text("panel").notNull(),
+  fixKind: text("fix_kind").notNull(),
+  payload: jsonb("payload"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  orgCreatedIdx: index("leak_console_audit_org_created_idx").on(t.orgId, t.createdAt),
+  laneIdx: index("leak_console_audit_lane_idx").on(t.laneId),
+}));
+export const insertLeakConsoleAuditSchema = createInsertSchema(leakConsoleAudit)
+  .omit({ id: true, createdAt: true })
+  .extend({
+    panel: z.enum(LEAK_CONSOLE_PANELS),
+    fixKind: z.enum(LEAK_CONSOLE_FIX_KINDS),
+  });
+export type InsertLeakConsoleAudit = z.infer<typeof insertLeakConsoleAuditSchema>;
+export type LeakConsoleAudit = typeof leakConsoleAudit.$inferSelect;
+
+export const leakConsoleDailySnapshot = pgTable("leak_console_daily_snapshot", {
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  snapshotDate: text("snapshot_date").notNull(), // YYYY-MM-DD (org-local day)
+  noContactableUnderDemand: integer("no_contactable_under_demand").notNull().default(0),
+  unstableSpotDeployed: integer("unstable_spot_deployed").notNull().default(0),
+  recurringCoveredOnSpot: integer("recurring_covered_on_spot").notNull().default(0),
+  ownedUntouchedUnderPressure: integer("owned_untouched_under_pressure").notNull().default(0),
+  computedAt: timestamp("computed_at").defaultNow().notNull(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.orgId, t.snapshotDate] }),
+}));
+export type LeakConsoleDailySnapshot = typeof leakConsoleDailySnapshot.$inferSelect;
+export type InsertLeakConsoleDailySnapshot = typeof leakConsoleDailySnapshot.$inferInsert;

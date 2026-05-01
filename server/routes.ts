@@ -51,6 +51,7 @@ import { registerCustomerQuoteRoutes } from "./routes/customerQuotes";
 import { registerLiveSyncRoutes } from "./routes/liveSync";
 import { publish as publishLiveSync, subscribeAll as subscribeAllLiveSync } from "./services/liveSync";
 import { registerLaneInboxRoutes } from "./routes/laneInbox";
+import { registerLeakConsoleRoutes } from "./routes/leakConsole";
 import { registerNotificationRoutes } from "./routes/notifications";
 import { registerContactRoutes } from "./routes/contacts";
 import { registerCompanyRoutes } from "./routes/companies";
@@ -2607,6 +2608,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerCustomerQuoteRoutes(app);
   registerLiveSyncRoutes(app);
   registerLaneInboxRoutes(app);
+  registerLeakConsoleRoutes(app);
   registerNotificationRoutes(app);
   registerContactRoutes(app);
   registerCompanyRoutes(app);

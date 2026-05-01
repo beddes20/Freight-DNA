@@ -12,7 +12,7 @@
  */
 
 import { useState, useMemo, useEffect, useRef } from "react";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -60,6 +60,7 @@ import {
   Database,
   PlusCircle,
   Shield,
+  ShieldAlert,
   TrendingUp,
   Trash2,
   Pencil,
@@ -2265,6 +2266,20 @@ export default function LaneWorkQueuePage() {
             <PlusCircle className="w-3.5 h-3.5" />
             Build Lane
           </Button>
+          {isManagerScope && (
+            <Link href="/leak-console">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs gap-1.5"
+                data-testid="btn-leak-console"
+                title="Manager-only console of coverage leaks"
+              >
+                <ShieldAlert className="w-3.5 h-3.5" />
+                Leak Console
+              </Button>
+            </Link>
+          )}
           <Button
             variant="outline"
             size="sm"

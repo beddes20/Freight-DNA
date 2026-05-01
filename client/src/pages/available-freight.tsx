@@ -35,8 +35,9 @@ import {
   Truck, AlertCircle, RefreshCw, Search, Inbox, Upload,
   CheckCircle2, Clock, Bookmark, MoreHorizontal, ChevronDown,
   Send, AlarmClock, X, UserCheck, ClipboardCheck, Star,
-  ChevronsUpDown, Check,
+  ChevronsUpDown, Check, ShieldAlert,
 } from "lucide-react";
+import { useAuth } from "@/hooks/use-auth";
 import type { FreightOpportunity } from "@shared/schema";
 import { applyCockpitFilters, type CockpitFilterDiagnostics } from "@/lib/cockpitFilters";
 import { resolveUserIdentity, isRowOwnedByUser } from "@shared/cockpitOwnership";
@@ -488,6 +489,10 @@ function CarrierCombobox({
 
 
 export default function AvailableFreightPage() {
+  const { user } = useAuth();
+  const isManagerScope =
+    !!user &&
+    ["admin", "director", "sales_director", "national_account_manager"].includes(user.role ?? "");
   const [search, setSearch] = useState("");
   const [companyFilter, setCompanyFilter] = useState<string>("all");
   // Task #635 — `?lane=<sig>` deep-link from LWQ filters the cockpit to a
@@ -1397,6 +1402,18 @@ export default function AvailableFreightPage() {
           >
             <Truck className="h-4 w-4 mr-2" /> Auto-pilot preview
           </Button>
+          {isManagerScope && (
+            <Link href="/leak-console">
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid="button-leak-console"
+                title="Manager-only console of coverage leaks"
+              >
+                <ShieldAlert className="h-4 w-4 mr-2" /> Leak Console
+              </Button>
+            </Link>
+          )}
         </div>
       </div>
       <AutoPilotPreviewDrawer
