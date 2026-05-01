@@ -1,3 +1,10 @@
+// Carrier Intelligence — Available Loads.
+//
+// Cross-cutting filter / selection / outreach contracts shared with
+// Available Freight and Lane Work Queue live in docs/workflow-os-spec.md.
+// Read it before changing the filter bar, selection grammar, bulk action
+// bar, or guardrail copy.
+
 import { useMemo, useRef, useState } from "react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";

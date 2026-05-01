@@ -6,6 +6,7 @@ export default defineConfig({
     environment: "node",
     include: [
       "client/src/lib/__tests__/**/*.test.ts",
+      "client/src/lib/workflow-os/__tests__/**/*.test.ts",
       "server/__tests__/**/*.test.ts",
     ],
     globals: false,

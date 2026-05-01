@@ -10,6 +10,8 @@ import {
   LANE_KEY_BINDINGS,
   assertNoDuplicateBindings,
   dispatchLaneKey,
+  makeChordDispatcherState,
+  CHORD_WINDOW_MS,
   type LaneKeyBinding,
 } from "@/hooks/useSharedLaneKeyboard";
 
@@ -63,7 +65,7 @@ describe("assertNoDuplicateBindings", () => {
   });
 });
 
-describe("dispatchLaneKey", () => {
+describe("dispatchLaneKey — single keys", () => {
   it("returns the binding whose key matches the event", () => {
     const hit = dispatchLaneKey(LANE_KEY_BINDINGS, { key: "j" });
     expect(hit?.id).toBe("next");
@@ -77,5 +79,64 @@ describe("dispatchLaneKey", () => {
   it("treats lowercase 'l' as a miss because cockpit binds uppercase 'L'", () => {
     expect(dispatchLaneKey(LANE_KEY_BINDINGS, { key: "l" })).toBeNull();
     expect(dispatchLaneKey(LANE_KEY_BINDINGS, { key: "L" })?.id).toBe("openCockpit");
+  });
+});
+
+describe("dispatchLaneKey — chord sequences (g o, g p)", () => {
+  it("fires `jumpOwnerFilter` after `g` then `o` within the chord window", () => {
+    const state = makeChordDispatcherState();
+    const t0 = 1000;
+    // First keystroke arms the prefix; nothing fires yet.
+    expect(dispatchLaneKey(LANE_KEY_BINDINGS, { key: "g" }, state, t0)).toBeNull();
+    expect(state.pendingPrefix).toBe("g");
+    // Second keystroke completes the chord.
+    const hit = dispatchLaneKey(LANE_KEY_BINDINGS, { key: "o" }, state, t0 + 100);
+    expect(hit?.id).toBe("jumpOwnerFilter");
+    expect(state.pendingPrefix).toBeNull();
+  });
+
+  it("fires `jumpPickupScope` after `g` then `p`", () => {
+    const state = makeChordDispatcherState();
+    expect(dispatchLaneKey(LANE_KEY_BINDINGS, { key: "g" }, state, 0)).toBeNull();
+    const hit = dispatchLaneKey(LANE_KEY_BINDINGS, { key: "p" }, state, 50);
+    expect(hit?.id).toBe("jumpPickupScope");
+  });
+
+  it("expires the prefix after the chord window and treats the next key as fresh", () => {
+    const state = makeChordDispatcherState();
+    expect(dispatchLaneKey(LANE_KEY_BINDINGS, { key: "g" }, state, 0)).toBeNull();
+    // After CHORD_WINDOW_MS+1, the prefix is stale — `o` should NOT fire jumpOwnerFilter.
+    const hit = dispatchLaneKey(LANE_KEY_BINDINGS, { key: "o" }, state, CHORD_WINDOW_MS + 1);
+    expect(hit).toBeNull();
+    expect(state.pendingPrefix).toBeNull();
+  });
+
+  it("falls through to a single-key match when the chord doesn't exist", () => {
+    const state = makeChordDispatcherState();
+    expect(dispatchLaneKey(LANE_KEY_BINDINGS, { key: "g" }, state, 0)).toBeNull();
+    // `g j` is not a chord. The dispatcher clears the prefix and tries
+    // `j` as a single-key — which is `next`.
+    const hit = dispatchLaneKey(LANE_KEY_BINDINGS, { key: "j" }, state, 50);
+    expect(hit?.id).toBe("next");
+    expect(state.pendingPrefix).toBeNull();
+  });
+
+  it("never matches `g` alone (it is purely a chord prefix)", () => {
+    const state = makeChordDispatcherState();
+    const hit = dispatchLaneKey(LANE_KEY_BINDINGS, { key: "g" }, state, 0);
+    expect(hit).toBeNull();
+  });
+});
+
+describe("KeyboardShortcutsPopover registry coverage", () => {
+  // The popover derives every cheat-sheet row from LANE_KEY_BINDINGS,
+  // so registering a binding (chord or single) automatically advertises
+  // it. We assert the chord rows are present in the registry; the
+  // popover's split-on-space then renders `g` then `o` as two kbd
+  // elements with a "then" between them.
+  it("includes the g o / g p chord rows so the cheat sheet picks them up", () => {
+    const labels = LANE_KEY_BINDINGS.map((b) => b.label);
+    expect(labels).toContain("Jump to Owner filter");
+    expect(labels).toContain("Jump to Pickup scope");
   });
 });

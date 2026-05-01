@@ -1,4 +1,9 @@
 // Available Freight Cockpit (Task #601) — triage cockpit page.
+//
+// Cross-cutting filter / selection / outreach contracts shared with
+// Lane Work Queue and Available Loads live in docs/workflow-os-spec.md.
+// Read it before changing the filter bar, selection grammar, bulk action
+// bar, or guardrail copy.
 
 import { useEffect, useMemo, useRef, useState, useCallback, Fragment } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";

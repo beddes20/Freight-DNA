@@ -1,3 +1,11 @@
+// Conversations Bulk Action Bar — thin wrapper over the shared
+// `BulkActionBar` in `client/src/components/workflow-os/BulkActionBar.tsx`.
+//
+// The original conversations bar was generalized into the workflow-os
+// version (Workflow OS spec section D, Task #907). This wrapper preserves
+// the existing call site by composing the conversations-specific actions
+// (resolve / reopen / archive / snooze / assign) into the shared slots.
+
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
@@ -8,8 +16,12 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { Check, Archive, Inbox, UserPlus, X, ChevronDown } from "lucide-react";
+import { Check, Archive, Inbox, UserPlus, ChevronDown } from "lucide-react";
 import { SnoozePopover } from "./snooze-popover";
+import {
+  BulkActionBar as SharedBulkActionBar,
+  type BulkAction,
+} from "@/components/workflow-os/BulkActionBar";
 
 interface Rep {
   id: string;
@@ -44,62 +56,51 @@ export function BulkActionBar({
 }: BulkActionBarProps) {
   const [assignOpen, setAssignOpen] = useState(false);
 
-  if (count === 0) return null;
-
-  return (
-    <div
-      className="flex items-center gap-2 px-3 py-2 border-b bg-primary/5 sticky top-0 z-10"
-      data-testid="bulk-action-bar"
-    >
-      <span className="text-sm font-medium" data-testid="text-bulk-count">
-        {count} selected
-      </span>
-      <div className="h-4 w-px bg-border mx-1" />
-      <Button
-        size="sm"
-        variant="outline"
-        className="h-8 text-xs gap-1"
-        onClick={onResolve}
-        disabled={busy}
-        data-testid="button-bulk-resolve"
-      >
-        <Check className="w-3 h-3" />
-        Resolve
-      </Button>
-      <Button
-        size="sm"
-        variant="outline"
-        className="h-8 text-xs gap-1"
-        onClick={onReopen}
-        disabled={busy}
-        data-testid="button-bulk-reopen"
-      >
-        <Inbox className="w-3 h-3" />
-        Reopen
-      </Button>
-      <Button
-        size="sm"
-        variant="outline"
-        className="h-8 text-xs gap-1"
-        onClick={onArchive}
-        disabled={busy}
-        data-testid="button-bulk-archive"
-      >
-        <Archive className="w-3 h-3" />
-        Archive
-      </Button>
+  const resolve: BulkAction = {
+    id: "resolve",
+    label: "Resolve",
+    icon: Check,
+    onSelect: onResolve,
+    testId: "button-bulk-resolve",
+  };
+  const reopen: BulkAction = {
+    id: "reopen",
+    label: "Reopen",
+    icon: Inbox,
+    onSelect: onReopen,
+    testId: "button-bulk-reopen",
+  };
+  const archive: BulkAction = {
+    id: "archive",
+    label: "Archive",
+    icon: Archive,
+    onSelect: onArchive,
+    testId: "button-bulk-archive",
+  };
+  const snooze: BulkAction = {
+    id: "snooze",
+    label: "Snooze",
+    onSelect: () => {},
+    render: ({ disabled }) => (
       <SnoozePopover
         onSnooze={onSnooze}
-        disabled={busy}
+        disabled={disabled}
         testId="button-bulk-snooze"
       />
+    ),
+  };
+  const assign: BulkAction = {
+    id: "assign",
+    label: "Assign",
+    onSelect: () => {},
+    render: ({ disabled }) => (
       <DropdownMenu open={assignOpen} onOpenChange={setAssignOpen}>
         <DropdownMenuTrigger asChild>
           <Button
             size="sm"
             variant="outline"
             className="h-8 text-xs gap-1"
-            disabled={busy}
+            disabled={disabled}
             data-testid="button-bulk-assign"
           >
             <UserPlus className="w-3 h-3" />
@@ -124,7 +125,7 @@ export function BulkActionBar({
             Unassign
           </DropdownMenuItem>
           {reps.length > 0 && <DropdownMenuSeparator />}
-          {reps.map(r => (
+          {reps.map((r) => (
             <DropdownMenuItem
               key={r.id}
               onClick={() => onAssign(r.id)}
@@ -135,18 +136,18 @@ export function BulkActionBar({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
-      <div className="flex-1" />
-      <Button
-        size="sm"
-        variant="ghost"
-        className="h-8 text-xs gap-1"
-        onClick={onClear}
-        disabled={busy}
-        data-testid="button-bulk-clear"
-      >
-        <X className="w-3 h-3" />
-        Clear
-      </Button>
-    </div>
+    ),
+  };
+
+  return (
+    <SharedBulkActionBar
+      count={count}
+      busy={busy}
+      onClear={onClear}
+      primary={resolve}
+      secondary={[reopen, archive, snooze, assign]}
+      // Conversations renders the toolbar at the top of the inbox column.
+      stickPosition="top"
+    />
   );
 }

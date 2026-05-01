@@ -9,6 +9,11 @@
  *
  * Managers see their full team-level view; other users see only their own lanes.
  * Clicking a row opens CarrierOutreachPanel for immediate action.
+ *
+ * Cross-cutting filter / selection / outreach contracts shared with
+ * Available Freight and Available Loads live in docs/workflow-os-spec.md.
+ * Read it before changing the filter bar, selection grammar, bulk action
+ * bar, or guardrail copy.
  */
 
 import { useState, useMemo, useEffect, useRef } from "react";
