@@ -144,6 +144,9 @@ export type Snapshot = {
     avgQuoted: number; avgCarrierCost: number;
     avgMarginDollar: number; avgMarginPct: number;
     avgResponseTime: number; pending: number; expiringSoon: number;
+    // Today's email-sourced opps (post customer-only chokepoint). See
+    // `automation-counters` for the leakage-path counter.
+    autoCapturedToday: number;
     trend: { winRate: number; total: number; avgMargin: number; avgResponse: number };
   };
   customers: QuoteCustomer[];
@@ -1882,11 +1885,20 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
   const streakAlerts = computeLostStreakAlerts(streakOpps, ctx.customerMap, new Map(ctx.laneGroups.map(lg => [lg.id, lg])));
   for (const sa of streakAlerts) alerts.push(sa.alert);
 
+  // Org-wide today's auto-captured count (post customer-only chokepoint).
+  const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+  const autoCapturedToday = allOpps.filter((o) =>
+    !nonCustomerIds.has(o.customerId)
+    && (o.source === "email" || o.source === "email_signal")
+    && o.requestDate.getTime() >= dayStart.getTime(),
+  ).length;
+
   return {
     total,
     kpis: {
       total, won: won.length, lost: lost.length, winRate, avgQuoted, avgCarrierCost,
       avgMarginDollar, avgMarginPct, avgResponseTime, pending: pending.length, expiringSoon,
+      autoCapturedToday,
       trend,
     },
     customers: ctx.customers, reps: ctx.reps, reasons: ctx.reasons, laneGroups: ctx.laneGroups, carriers: ctx.carriers,

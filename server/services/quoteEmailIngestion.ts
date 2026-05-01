@@ -284,7 +284,7 @@ const NOT_A_QUOTE_SUBJECTS = [
   /^unsubscribe\b/i,
 ];
 
-function isObviouslyNotAQuote(subject: string | null | undefined, body: string): boolean {
+export function isObviouslyNotAQuote(subject: string | null | undefined, body: string): boolean {
   const s = (subject ?? "").trim();
   if (s && NOT_A_QUOTE_SUBJECTS.some((re) => re.test(s))) return true;
   const t = `${s}\n${body}`;
@@ -381,7 +381,7 @@ export function parseQuoteEmail(input: {
 
 const QUOTE_SIGNAL_RE = /\b(quote|rate|load|FTL|LTL|freight|haul|tender|capacity|truck|equipment|pickup|delivery|origin|destination)\b/i;
 
-function looksLikeQuoteCandidate(subject: string, body: string): boolean {
+export function looksLikeQuoteCandidate(subject: string, body: string): boolean {
   const text = `${subject}\n${body}`;
   if (!text.trim()) return false;
   // Must have either a city-to-city hint OR a quote keyword.

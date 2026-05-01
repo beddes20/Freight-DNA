@@ -161,6 +161,8 @@ type Snapshot = {
     avgResponseTime: number;
     pending: number;
     expiringSoon: number;
+    // Server-side count of today's email-sourced opps. Optional during rollout.
+    autoCapturedToday?: number;
     trend: { winRate: number; total: number; avgMargin: number; avgResponse: number };
   };
   customers: Customer[];
@@ -798,11 +800,17 @@ function QuoteRequestsInner(): JSX.Element {
           <KpiTile
             label="Auto-captured today"
             icon={<Sparkles className="h-3 w-3" />}
-            value={automationQuery.data?.counters?.created ?? 0}
+            // Prefer the snapshot's SQL-backed count; fall back to the
+            // legacy in-process counter only during rollout.
+            value={
+              snapshotQuery.data?.kpis?.autoCapturedToday
+              ?? automationQuery.data?.counters?.created
+              ?? 0
+            }
             tone="amber"
-            isLoading={automationQuery.isLoading}
+            isLoading={snapshotQuery.isLoading || automationQuery.isLoading}
             testId="kpi-auto-captured"
-            disabled={!automationQuery.data}
+            disabled={!snapshotQuery.data && !automationQuery.data}
           />
         </div>
 
