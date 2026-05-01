@@ -37,6 +37,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Truck, Clock, ExternalLink } from "lucide-react";
 
+// Temporarily disabled at user request while upstream "load entered → AM/NAM
+// assigns to LM" process is still being shaped. Flip this back to `true` to
+// restore the popup. Setting this to `false` short-circuits the role check,
+// the 30s poll of /api/won-loads/pending-for-me, the SSE listener for
+// `won_load_pending_approval`, and the dialog render — i.e. the component
+// becomes a no-op without removing any code.
+const WON_LOAD_APPROVAL_MODAL_ENABLED = false;
+
 const ROLES_THAT_OWN_POPUP = new Set([
   "national_account_manager",
   "account_manager",
@@ -95,7 +103,10 @@ export function WonLoadApprovalModal() {
   const { toast } = useToast();
 
   const role = user?.role ?? null;
-  const enabled = !!user && ROLES_THAT_OWN_POPUP.has(role ?? "");
+  const enabled =
+    WON_LOAD_APPROVAL_MODAL_ENABLED &&
+    !!user &&
+    ROLES_THAT_OWN_POPUP.has(role ?? "");
 
   // Query: poll every 30s + on focus.
   const { data, refetch } = useQuery<{ items: PendingWonLoad[] }>({

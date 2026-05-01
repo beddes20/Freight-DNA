@@ -1,0 +1,86 @@
+Diagnose and fix the “Available Freight” tab bug in our web app.
+
+Observed behavior from production UI:
+- User context: viewing as Jared Reynolds (national account manager).
+- Header shows:
+  - Generated today: 46
+  - Ready to send: 85
+  - Sent / awaiting carrier: 0
+  - At-risk pickup <=24h: 31
+  - Covered today: 0
+  - Total in queue: 85
+- The selected chip is “My freight today”.
+- Main table says: “No freight matches your current filters.”
+- It also says there are 746 rows in scope, but everything is filtered out.
+- Hidden-by-filters panel shows:
+  - 381 past their pickup date — hidden by design
+  - 9 snoozed until later
+  - 85 hidden by the “Mine only” view
+- There is a visible action: “Switch to default view”.
+- Other visible filters include customer, queue, sort, group, layout, search, and chips like Team needs approval / Pickup tomorrow / Low confidence / No response in 4h. [file:1]
+
+Goal:
+Find the root cause and implement a durable fix so freight that belongs in Jared Reynolds’ “My freight today” view actually appears when the counters say it exists.
+
+Please do all of the following:
+
+1. Reproduce the issue in code
+- Find the Available Freight page/component, data loader, filter pipeline, saved-view logic, and “mine only / my freight today” logic.
+- Trace how top summary counts are computed versus how visible table rows are computed.
+- Identify whether counts are based on one dataset while the table uses a different filtered dataset or stale derived state.
+
+2. Inspect likely failure points
+Check for:
+- User identity mismatch: Jared Reynolds display name vs user id vs rep id vs owner id vs email normalization.
+- “Mine only” filter using wrong field (ownerId, accountManagerId, salesRepId, assignedTo, uploaderId, etc.).
+- Date boundary bug for “today” pickups, including timezone drift, UTC/local mismatch, startOfDay/endOfDay logic, or using server date instead of user-local date.
+- Filter composition bug where hidden rows are counted in cards but excluded in the table.
+- Saved view state bug where “My freight today” applies hidden filters on top of default filters unexpectedly.
+- Chips/UI state bug where cleared filters are not actually removed from query params/store.
+- Memoization/cache bug: summary cards not recomputing with same dependencies as row list.
+- Backend query mismatch: aggregation endpoint differs from list endpoint.
+- Row suppression logic incorrectly marking eligible rows as hidden.
+- “past pickup date” logic accidentally excluding same-day loads because of time truncation or timezone conversion.
+
+3. Add logging and evidence
+Instrument the flow and print a structured diagnostic report with:
+- raw row count fetched
+- count after each filter stage
+- ids of rows removed at each stage
+- active filter object
+- resolved current user identity fields
+- timezone used for pickup-date comparisons
+- summary-count query/result vs table query/result
+- whether “mine only” and “my freight today” are using the same predicates
+
+4. Fix requirements
+Implement the smallest correct fix, but make it robust:
+- Centralize filter predicates in shared code so cards and table cannot diverge.
+- Centralize “current user matches freight owner” logic in one helper.
+- Normalize all date comparisons in one utility using the intended business timezone.
+- Ensure “Switch to default view” and clearing filters fully resets persisted state.
+- Add guardrails so contradictory UI states cannot happen silently again.
+
+5. Tests
+Add or update tests for:
+- Jared-like user with freight picking up today appears in “My freight today”.
+- Summary counts equal visible rows for identical scope/filter definitions.
+- “Mine only” works for all supported owner field shapes.
+- Same-day pickup rows are not misclassified as past-due due to timezone.
+- Saved view reset removes hidden/stale filters.
+- Regression test for scenario:
+  - queue count = 85
+  - my-freight-today selected
+  - visible rows should be > 0 when those 85 belong to current user
+
+6. Deliverables
+Return:
+- root cause
+- files changed
+- exact code diff summary
+- tests added
+- any migration or data cleanup needed
+- concise explanation of why the bug happened and how the fix prevents recurrence
+
+Important:
+Do not just patch the UI empty state. Verify the data path end-to-end and make sure the count cards, hidden-by-filters panel, and visible table all use the same source-of-truth filtering rules.
