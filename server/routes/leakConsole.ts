@@ -11,6 +11,7 @@ import { z } from "zod";
 import { requireUser } from "../auth";
 import { db, storage } from "../storage";
 import { isManagerial } from "../lib/roles";
+import { pStr, qInt } from "../lib/req";
 import {
   carrierOutreachLogs,
   leakConsoleAudit,
@@ -116,7 +117,7 @@ export function registerLeakConsoleRoutes(app: Express) {
   // ── Panel feed ────────────────────────────────────────────────────────────
   app.get("/api/leak-console/panels/:panel", requireUser, async (req, res) => {
     if (!gateManager(req, res)) return;
-    const panel = req.params.panel as LeakConsolePanel;
+    const panel = pStr(req.params.panel) as LeakConsolePanel;
     if (!PANEL_SET.has(panel)) {
       return res.status(400).json({ error: `Unknown panel: ${panel}` });
     }
@@ -312,7 +313,7 @@ export function registerLeakConsoleRoutes(app: Express) {
   app.get("/api/leak-console/audit", requireUser, async (req, res) => {
     if (!gateManager(req, res)) return;
     const orgId = req.user!.organizationId;
-    const limit = Math.max(1, Math.min(200, Number(req.query.limit ?? 50)));
+    const limit = Math.max(1, Math.min(200, qInt(req.query.limit, 50)));
     const rows = await db
       .select()
       .from(leakConsoleAudit)
