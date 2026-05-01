@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, AlertTriangle, ShieldAlert, ThumbsDown, ThumbsUp, Activity, Wrench, Clock, X } from "lucide-react";
+import { Loader2, AlertTriangle, ShieldAlert, ThumbsDown, ThumbsUp, Activity, Wrench, Clock, X, FileText, RefreshCw } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 
@@ -110,6 +110,32 @@ export default function AdminCopilotAnalyticsPage() {
     queryFn: () => fetch(`/api/agent/analytics/actions?days=${days}`, { credentials: "include" }).then((r) => r.json()),
   });
 
+  // Task #910 — document processing queue (in-flight + failed)
+  const docQueue = useQuery<{ documents: Array<{
+    id: string;
+    filename: string;
+    classLabel: string;
+    status: "parsing" | "parsed" | "failed";
+    errorReason: string | null;
+    sourceChannel: string;
+    pageCount: number | null;
+    ocrUsed: boolean;
+    createdAt: string;
+  }> }>({
+    queryKey: ["/api/admin/copilot/documents/queue"],
+    queryFn: () => fetch(`/api/admin/copilot/documents/queue?status=parsing,failed`, { credentials: "include" }).then((r) => r.json()),
+  });
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const retryDoc = async (id: string) => {
+    setRetryingId(id);
+    try {
+      await fetch(`/api/admin/copilot/documents/${id}/retry`, { method: "POST", credentials: "include" });
+      await docQueue.refetch();
+    } finally {
+      setRetryingId(null);
+    }
+  };
+
   const ov = overview.data;
 
   return (
@@ -145,6 +171,7 @@ export default function AdminCopilotAnalyticsPage() {
             Needs Attention {needs.data?.length ? <Badge className="ml-2" variant="destructive">{needs.data.length}</Badge> : null}
           </TabsTrigger>
           <TabsTrigger value="actions" data-testid="tab-actions">Action Audit</TabsTrigger>
+          <TabsTrigger value="documents" data-testid="tab-documents">Document Queue</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4 mt-4">
@@ -419,6 +446,70 @@ export default function AdminCopilotAnalyticsPage() {
                           <Badge variant={a.result === "success" ? "secondary" : a.result === "dismissed" ? "outline" : "destructive"} className="text-[10px]">{a.result}</Badge>
                         </td>
                         <td className="p-2 font-mono text-[11px] truncate max-w-[420px]">{a.args ? JSON.stringify(a.args) : ""}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
+        {/* Task #910 — Document Processing Queue */}
+        <TabsContent value="documents" className="space-y-2 mt-4">
+          {docQueue.isLoading ? (
+            <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : (docQueue.data?.documents?.length ?? 0) === 0 ? (
+            <Card><CardContent className="p-8 text-center text-sm text-muted-foreground">No documents in flight or failed.</CardContent></Card>
+          ) : (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-1.5">
+                  <FileText className="h-4 w-4" /> Processing Queue
+                  <Badge variant="secondary" className="text-[10px] ml-2">{docQueue.data?.documents.length ?? 0}</Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <table className="w-full text-xs">
+                  <thead className="text-muted-foreground bg-muted/40">
+                    <tr>
+                      <th className="text-left p-2">When</th>
+                      <th className="text-left p-2">File</th>
+                      <th className="text-left p-2">Class</th>
+                      <th className="text-left p-2">Source</th>
+                      <th className="text-left p-2">Status</th>
+                      <th className="text-left p-2">Error</th>
+                      <th className="text-right p-2">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {docQueue.data!.documents.map((d) => (
+                      <tr key={d.id} className="border-t border-border/40" data-testid={`row-document-${d.id}`}>
+                        <td className="p-2 font-mono whitespace-nowrap">{fmtDate(d.createdAt)}</td>
+                        <td className="p-2 truncate max-w-[260px]" title={d.filename}>{d.filename}</td>
+                        <td className="p-2 font-mono">{d.classLabel}</td>
+                        <td className="p-2 text-muted-foreground">{d.sourceChannel}</td>
+                        <td className="p-2">
+                          <Badge variant={d.status === "parsed" ? "secondary" : d.status === "failed" ? "destructive" : "outline"} className="text-[10px]">
+                            {d.status}{d.ocrUsed ? " · OCR" : ""}
+                          </Badge>
+                        </td>
+                        <td className="p-2 text-amber-700 dark:text-amber-400 truncate max-w-[260px]" title={d.errorReason ?? ""}>{d.errorReason ?? ""}</td>
+                        <td className="p-2 text-right">
+                          {d.status !== "parsed" && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-[11px]"
+                              disabled={retryingId === d.id}
+                              onClick={() => retryDoc(d.id)}
+                              data-testid={`button-retry-document-${d.id}`}
+                            >
+                              {retryingId === d.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                              Retry
+                            </Button>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

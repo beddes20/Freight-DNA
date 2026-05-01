@@ -1365,6 +1365,85 @@ export const TOOLS: AgentTool[] = [
       return { kind: "data", text: `[${r.intent}${tag}] ${r.answer}${cites}` };
     },
   },
+  // ─── Phase 2 slice 1 — Copilot Doc Ingestion (Task #910) ───────────────
+  {
+    name: "find_documents",
+    capability: "read.document",
+    description: "Search documents (rate confirmations, BOLs, RFP/bid sheets, scorecards, contracts, routing guides, accessorials, emails) ingested via the copilot drop-zone or the docs forwarding inbox. Returns matches scoped to what the rep is allowed to see.",
+    parameters: {
+      type: "object",
+      properties: {
+        class_label: {
+          type: "string",
+          description: "Optional doc class to narrow on (rate_con, bol, rfp_bid_sheet, routing_guide, scorecard, tariff, accessorial_schedule, contract, spreadsheet_lanes, email_thread).",
+        },
+        company_name: {
+          type: "string",
+          description: "Optional — only return docs linked to this company (matched by name; partial ok).",
+        },
+        contains: {
+          type: "string",
+          description: "Optional substring to match against the filename or forwarded subject.",
+        },
+        days_back: {
+          type: "number",
+          description: "Optional — only return docs uploaded in the last N days.",
+        },
+        mine_only: {
+          type: "boolean",
+          description: "When true, restricts results to docs the rep uploaded themselves.",
+        },
+        limit: { type: "number", description: "Default 25, max 100." },
+      },
+    },
+    async execute(ctx, args) {
+      const visible = await getVisibleCompanyIds(ctx.rep);
+      let companyFilter: string[] | "all";
+      if (visible === null) companyFilter = "all";
+      else companyFilter = visible;
+
+      // Optional company narrowing — resolve by name first.
+      if (typeof args.company_name === "string" && args.company_name.trim()) {
+        const company = await findCompanyByName(ctx.organizationId, args.company_name);
+        if (!company) {
+          return { kind: "data", text: `No company found matching "${args.company_name}".` };
+        }
+        if (companyFilter !== "all" && !companyFilter.includes(company.id)) {
+          return { kind: "data", text: `You don't have access to documents for ${company.name}.` };
+        }
+        companyFilter = [company.id];
+      }
+
+      const sinceIso = typeof args.days_back === "number" && args.days_back > 0
+        ? new Date(Date.now() - Math.min(args.days_back, 365) * 86400000).toISOString()
+        : null;
+
+      const docs = await storage.findDocumentsForUser({
+        organizationId: ctx.organizationId,
+        visibleCompanyIds: companyFilter,
+        // Always pass uploaderId so the rep sees their own uploads in
+        // the union; `mineOnly` hard-restricts to self when asked.
+        uploaderId: ctx.rep.id,
+        mineOnly: args.mine_only === true,
+        classLabel: typeof args.class_label === "string" && args.class_label.trim() ? args.class_label.trim() : null,
+        sinceIso,
+        contentMatch: typeof args.contains === "string" && args.contains.trim() ? args.contains.trim() : null,
+        limit: typeof args.limit === "number" ? args.limit : 25,
+      });
+
+      if (docs.length === 0) {
+        return { kind: "data", text: "No matching documents found." };
+      }
+      const lines = [`Found ${docs.length} document${docs.length === 1 ? "" : "s"}:`];
+      for (const d of docs.slice(0, 25)) {
+        const when = d.createdAt ? new Date(d.createdAt).toISOString().slice(0, 10) : "?";
+        const status = d.status === "parsed" ? "" : ` [${d.status}${d.errorReason ? ` — ${d.errorReason.slice(0, 60)}` : ""}]`;
+        lines.push(`- [${when}] (${d.classLabel}) ${d.filename} — via ${d.sourceChannel}${status}`);
+      }
+      if (docs.length > 25) lines.push(`  ...and ${docs.length - 25} more`);
+      return { kind: "data", text: lines.join("\n") };
+    },
+  },
 ];
 
 export const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));

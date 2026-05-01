@@ -126,6 +126,151 @@ describe("agent tool: findCompanyByName cross-org isolation", () => {
   });
 });
 
+// ─── Task #910 — find_documents row-level leakage ─────────────────────────
+//
+// `find_documents` itself is allow-for-everyone in ROLE_DEFAULTS — the
+// storage layer is what enforces scope. This test mirrors the SQL predicate
+// in `DatabaseStorage.findDocumentsForUser` so a refactor that loosens
+// scope (e.g. dropping the org filter or the visibility array) trips a
+// red light here, not in production.
+
+type DocRow = {
+  id: string;
+  organizationId: string;
+  uploaderId: string;
+  classLabel: string;
+  uploadContext: { companyId?: string | null } | null;
+};
+
+function findDocumentsForUserSim(args: {
+  rows: DocRow[];
+  organizationId: string;
+  uploaderId: string | null;
+  /** Hard self-only restriction (UI "My uploads" toggle / mine_only=true). */
+  mineOnly?: boolean;
+  visibleCompanyIds: string[] | "all";
+  classLabel?: string | null;
+}): DocRow[] {
+  return args.rows.filter((d) => {
+    // 1. org scope is mandatory — defense-in-depth even if visibility is "all"
+    if (d.organizationId !== args.organizationId) return false;
+    // 2. mineOnly hard-restricts to the caller's own uploads.
+    if (args.mineOnly && args.uploaderId && d.uploaderId !== args.uploaderId) return false;
+    // 3. visibility union (skipped for "all" admin scope):
+    //    (uploader_id = caller) OR (linked company in visible set)
+    if (args.visibleCompanyIds !== "all") {
+      const linked = d.uploadContext?.companyId ?? null;
+      const isMine = !!args.uploaderId && d.uploaderId === args.uploaderId;
+      const isVisibleCompany = !!linked && args.visibleCompanyIds.includes(linked);
+      if (!(isMine || isVisibleCompany)) return false;
+    }
+    // 4. optional class filter
+    if (args.classLabel && d.classLabel !== args.classLabel) return false;
+    return true;
+  });
+}
+
+describe("agent tool: find_documents storage scope", () => {
+  const rows: DocRow[] = [
+    // org-A: rep-1 owns one doc anchored to company c1; rep-2 owns one anchored to c2.
+    { id: "d-a1", organizationId: "org-A", uploaderId: "rep-1", classLabel: "rate_con", uploadContext: { companyId: "c1" } },
+    { id: "d-a2", organizationId: "org-A", uploaderId: "rep-2", classLabel: "bol",      uploadContext: { companyId: "c2" } },
+    // org-A: rep-1 also has an orphan upload (no company anchor).
+    { id: "d-a3", organizationId: "org-A", uploaderId: "rep-1", classLabel: "scorecard", uploadContext: null },
+    // org-B: a doc that must NEVER be visible to any org-A caller.
+    { id: "d-b1", organizationId: "org-B", uploaderId: "rep-9", classLabel: "rate_con", uploadContext: { companyId: "c9" } },
+  ];
+
+  it("rep with visibility on c1 only sees their own uploads + their company's doc", () => {
+    const out = findDocumentsForUserSim({
+      rows,
+      organizationId: "org-A",
+      uploaderId: "rep-1",
+      visibleCompanyIds: ["c1"],
+    });
+    // d-a1 (own + visible co), d-a3 (own orphan).
+    const ids = out.map((d) => d.id).sort();
+    expect(ids).toEqual(["d-a1", "d-a3"]);
+  });
+
+  it("rep with no company visibility still sees their own uploads", () => {
+    const out = findDocumentsForUserSim({
+      rows,
+      organizationId: "org-A",
+      uploaderId: "rep-1",
+      visibleCompanyIds: [],
+    });
+    expect(out.map((d) => d.id).sort()).toEqual(["d-a1", "d-a3"]);
+  });
+
+  it("rep cannot see another rep's doc anchored to a company they don't own", () => {
+    const out = findDocumentsForUserSim({
+      rows,
+      organizationId: "org-A",
+      uploaderId: "rep-1",
+      visibleCompanyIds: ["c1"],
+    });
+    expect(out.find((d) => d.id === "d-a2")).toBeUndefined();
+  });
+
+  it("mineOnly hard-restricts to caller's uploads even when visibility is broad", () => {
+    const out = findDocumentsForUserSim({
+      rows,
+      organizationId: "org-A",
+      uploaderId: "rep-1",
+      mineOnly: true,
+      visibleCompanyIds: ["c1", "c2"], // would otherwise include rep-2's d-a2
+    });
+    expect(out.map((d) => d.id).sort()).toEqual(["d-a1", "d-a3"]);
+  });
+
+  it("admin with visibility=all sees every org-A doc but NEVER an org-B doc", () => {
+    const out = findDocumentsForUserSim({
+      rows,
+      organizationId: "org-A",
+      uploaderId: null,
+      visibleCompanyIds: "all",
+    });
+    expect(out.map((d) => d.id).sort()).toEqual(["d-a1", "d-a2", "d-a3"]);
+    expect(out.find((d) => d.organizationId === "org-B")).toBeUndefined();
+  });
+
+  it("class filter narrows results within the visibility set", () => {
+    const out = findDocumentsForUserSim({
+      rows,
+      organizationId: "org-A",
+      uploaderId: null,
+      visibleCompanyIds: "all",
+      classLabel: "bol",
+    });
+    expect(out.map((d) => d.id)).toEqual(["d-a2"]);
+  });
+
+  it("admin caller in org-B sees only org-B docs — never org-A (org filter wins)", () => {
+    const out = findDocumentsForUserSim({
+      rows,
+      organizationId: "org-B",
+      uploaderId: null,
+      visibleCompanyIds: "all",
+    });
+    expect(out.find((d) => d.organizationId === "org-A")).toBeUndefined();
+    expect(out.map((d) => d.id)).toEqual(["d-b1"]);
+  });
+
+  it("rep-1 (org-A) cannot see org-B docs even when company c9 is somehow in their visible set", () => {
+    // Defense-in-depth: even if a misconfigured visibleCompanyIds leaks
+    // a foreign org's company id, the org predicate still excludes the row.
+    const out = findDocumentsForUserSim({
+      rows,
+      organizationId: "org-A",
+      uploaderId: "rep-1",
+      visibleCompanyIds: ["c1", "c9"],
+    });
+    expect(out.find((d) => d.id === "d-b1")).toBeUndefined();
+    expect(out.map((d) => d.id).sort()).toEqual(["d-a1", "d-a3"]);
+  });
+});
+
 // Analytics route invariants — we model the row writers and confirm that
 // they always stamp the org/user from the authenticated session, never the
 // raw client body, so a malicious client can't spoof another org.
@@ -243,6 +388,8 @@ const TOOL_CAPABILITIES: Record<string, Capability> = {
   next_best_actions:              "read.nba",
   scorecard_lookup:               "read.scorecard",
   recurring_freight_pattern:      "read.lane",
+  // Phase 2 slice 1 — Copilot Doc Ingestion (Task #910)
+  find_documents:                 "read.document",
 };
 
 const ALL_ROLES: UserRole[] = [
@@ -300,6 +447,9 @@ const EXPECTED_MATRIX: Record<string, Record<UserRole, Eff>> = {
   next_best_actions:             everyone("allow"),
   scorecard_lookup:              everyone("allow"),
   recurring_freight_pattern:     everyone("allow"),
+  // Documents are scoped at runtime by visible companies / uploader; capability
+  // itself is allow for everyone — the storage layer enforces row-level scope.
+  find_documents:                everyone("allow"),
   recommend_carriers_for_order:  everyone("allow"),
   suggest_buy_rate_for_lane:     everyone("allow"),
   top_carriers_by_realized_margin: everyone("allow"),

@@ -11,6 +11,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { useChatPageContext } from "@/hooks/use-chat-page-context";
+import { DocumentDropzone } from "@/components/dna-copilot/document-dropzone";
 import { getSuggestedPrompts } from "./dna-copilot/prompts";
 import { type AnswerMeta } from "./dna-copilot/answer-card";
 import { MessageList } from "./dna-copilot/message-list";
@@ -884,6 +885,14 @@ export function CrmChatbot() {
               </button>
             </div>
           )}
+
+          {/* Document drop-zone (Task #910) */}
+          <div className="px-3 pt-2">
+            <DocumentDropzone
+              pageContext={pageContext?.route ?? null}
+              companyId={pageContext?.entityType === "company" ? pageContext.entityId : null}
+            />
+          </div>
 
           {/* Input */}
           <div className="p-3 border-t bg-background/95">

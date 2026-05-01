@@ -289,6 +289,12 @@ import {
   type TruckLoadMatch,
   type InsertTruckLoadMatch,
   type TruckLoadMatchState,
+  documents,
+  documentPages,
+  type Document,
+  type InsertDocument,
+  type DocumentPage,
+  type InsertDocumentPage,
 } from "@shared/schema";
 import { getStuckRunningThresholdMs } from "./lib/cronHeartbeat";
 
@@ -666,6 +672,41 @@ getContactsByIds(ids: string[]): Promise<Contact[]>;
   createAttachment(attachment: InsertAttachment): Promise<Attachment>;
   getAttachment(id: string): Promise<Attachment | undefined>;
   deleteAttachment(id: string): Promise<boolean>;
+
+  // ── Task #910 — Copilot Doc Ingestion & Classification ────────────────
+  /** Returns a previously ingested document with the same content hash, if
+   *  any, scoped to the org. Used for dedup so re-uploads don't reparse. */
+  getDocumentBySha256(organizationId: string, sha256: string): Promise<Document | undefined>;
+  createDocument(input: InsertDocument): Promise<Document>;
+  /** Auth-only PK lookup (admin retry, FK chains). Caller must enforce
+   *  org scoping before exposing. */
+  getDocument(id: string): Promise<Document | undefined>;
+  getDocumentInOrg(id: string, organizationId: string): Promise<Document | undefined>;
+  updateDocumentClass(id: string, organizationId: string, label: string, confidence: number, method: string): Promise<void>;
+  updateDocumentStatus(id: string, organizationId: string, status: "parsing" | "parsed" | "failed", errorReason: string | null, pageCount: number | null, ocrUsed: boolean): Promise<void>;
+  /** Replace ALL pages for a document atomically (delete + bulk insert). */
+  replaceDocumentPages(documentId: string, pages: InsertDocumentPage[]): Promise<void>;
+  getDocumentPages(documentId: string): Promise<DocumentPage[]>;
+  /** Filterable doc list scoped to org + visibility:
+   *   - role-broad: returns all docs in org
+   *   - rep:  returns docs the user uploaded OR linked to a company they can see
+   *   - mineOnly + uploaderId: hard self-only restriction (UI "My uploads")
+   */
+  findDocumentsForUser(args: {
+    organizationId: string;
+    visibleCompanyIds: string[] | "all";
+    uploaderId?: string | null;
+    mineOnly?: boolean;
+    classLabel?: string | null;
+    sinceIso?: string | null;
+    contentMatch?: string | null;
+    limit?: number;
+  }): Promise<Document[]>;
+  /** Admin queue — in-flight, failed, recently retried. */
+  listDocumentsByStatus(organizationId: string, statuses: Array<"parsing" | "parsed" | "failed">, limit: number): Promise<Document[]>;
+  /** Recent docs the rep uploaded OR that touched their visible accounts —
+   *  feeds the `recent_documents` context section. */
+  getRecentDocumentsForUser(organizationId: string, uploaderId: string, visibleCompanyIds: string[], limit: number): Promise<Document[]>;
 
   getGoals(filter: { namId?: string; amId?: string }): Promise<Goal[]>;
   getGoal(id: string): Promise<Goal | undefined>;
@@ -3540,6 +3581,154 @@ export class DatabaseStorage implements IStorage {
   async deleteAttachment(id: string): Promise<boolean> {
     const result = await db.delete(attachments).where(eq(attachments.id, id)).returning();
     return result.length > 0;
+  }
+
+  // ── Task #910 — Copilot Doc Ingestion & Classification ────────────────
+  async getDocumentBySha256(organizationId: string, sha256: string): Promise<Document | undefined> {
+    const [row] = await db.select().from(documents).where(
+      and(eq(documents.organizationId, organizationId), eq(documents.sha256, sha256))
+    ).limit(1);
+    return row;
+  }
+
+  async createDocument(input: InsertDocument): Promise<Document> {
+    const [row] = await db.insert(documents).values(input).returning();
+    return row;
+  }
+
+  async getDocument(id: string): Promise<Document | undefined> {
+    const [row] = await db.select().from(documents).where(eq(documents.id, id)).limit(1);
+    return row;
+  }
+
+  async getDocumentInOrg(id: string, organizationId: string): Promise<Document | undefined> {
+    const [row] = await db.select().from(documents).where(
+      and(eq(documents.id, id), eq(documents.organizationId, organizationId))
+    ).limit(1);
+    return row;
+  }
+
+  async updateDocumentClass(id: string, organizationId: string, label: string, confidence: number, method: string): Promise<void> {
+    await db.update(documents).set({
+      classLabel: label,
+      classConfidence: confidence.toFixed(3),
+      classMethod: method,
+      updatedAt: new Date(),
+    }).where(and(eq(documents.id, id), eq(documents.organizationId, organizationId)));
+  }
+
+  async updateDocumentStatus(
+    id: string,
+    organizationId: string,
+    status: "parsing" | "parsed" | "failed",
+    errorReason: string | null,
+    pageCount: number | null,
+    ocrUsed: boolean,
+  ): Promise<void> {
+    await db.update(documents).set({
+      status,
+      errorReason: errorReason ?? null,
+      pageCount: pageCount ?? null,
+      ocrUsed,
+      parsedAt: status === "parsed" ? new Date() : null,
+      updatedAt: new Date(),
+    }).where(and(eq(documents.id, id), eq(documents.organizationId, organizationId)));
+  }
+
+  async replaceDocumentPages(documentId: string, pages: InsertDocumentPage[]): Promise<void> {
+    await db.delete(documentPages).where(eq(documentPages.documentId, documentId));
+    if (pages.length === 0) return;
+    // Chunk inserts to keep parameter counts safe.
+    const CHUNK = 50;
+    for (let i = 0; i < pages.length; i += CHUNK) {
+      await db.insert(documentPages).values(pages.slice(i, i + CHUNK));
+    }
+  }
+
+  async getDocumentPages(documentId: string): Promise<DocumentPage[]> {
+    return db.select().from(documentPages).where(eq(documentPages.documentId, documentId))
+      .orderBy(documentPages.pageNumber);
+  }
+
+  async findDocumentsForUser(args: {
+    organizationId: string;
+    visibleCompanyIds: string[] | "all";
+    /** When set AND `mineOnly=true`, restrict to docs uploaded by this user. */
+    uploaderId?: string | null;
+    /** Hard self-only mode (UI "My uploads" toggle). */
+    mineOnly?: boolean;
+    classLabel?: string | null;
+    sinceIso?: string | null;
+    contentMatch?: string | null;
+    limit?: number;
+  }): Promise<Document[]> {
+    const conds = [eq(documents.organizationId, args.organizationId)];
+
+    // Hard mineOnly filter: callers explicitly asking for "my uploads" — UI
+    // toggle, default copilot recent-list, etc.
+    if (args.mineOnly && args.uploaderId) {
+      conds.push(eq(documents.uploaderId, args.uploaderId));
+    }
+    if (args.classLabel) conds.push(eq(documents.classLabel, args.classLabel));
+    if (args.sinceIso) conds.push(gte(documents.createdAt, new Date(args.sinceIso)));
+    if (args.contentMatch && args.contentMatch.trim()) {
+      const term = `%${args.contentMatch.trim().toLowerCase()}%`;
+      conds.push(sql`(LOWER(${documents.filename}) LIKE ${term} OR LOWER(COALESCE(${documents.forwardedSubject}, '')) LIKE ${term})`);
+    }
+
+    // Visibility filter for non-admin callers. Scope is the union of:
+    //   1. the caller's own uploads (so a rep can always see what THEY
+    //      dropped, even on an account they were just removed from), AND
+    //   2. docs anchored to a company the caller can see today.
+    // Admin / director callers pass `"all"` and skip this clause entirely.
+    if (args.visibleCompanyIds !== "all") {
+      const ids = args.visibleCompanyIds;
+      const uploaderClause = args.uploaderId
+        ? sql`${documents.uploaderId} = ${args.uploaderId}`
+        : sql`FALSE`;
+      const companyClause = ids.length > 0
+        ? sql`(${documents.uploadContext}->>'companyId') = ANY (${ids}::text[])`
+        : sql`FALSE`;
+      // If both sub-clauses are FALSE the predicate prunes everything,
+      // which is correct: no uploader, no visible companies → nothing.
+      conds.push(sql`(${uploaderClause} OR ${companyClause})`);
+    }
+
+    const lim = Math.min(Math.max(args.limit ?? 50, 1), 200);
+    return db.select().from(documents).where(and(...conds))
+      .orderBy(desc(documents.createdAt))
+      .limit(lim);
+  }
+
+  async listDocumentsByStatus(
+    organizationId: string,
+    statuses: Array<"parsing" | "parsed" | "failed">,
+    limit: number,
+  ): Promise<Document[]> {
+    if (statuses.length === 0) return [];
+    return db.select().from(documents).where(
+      and(eq(documents.organizationId, organizationId), inArray(documents.status, statuses))
+    ).orderBy(desc(documents.createdAt)).limit(Math.min(Math.max(limit, 1), 500));
+  }
+
+  async getRecentDocumentsForUser(
+    organizationId: string,
+    uploaderId: string,
+    visibleCompanyIds: string[],
+    limit: number,
+  ): Promise<Document[]> {
+    const lim = Math.min(Math.max(limit, 1), 50);
+    if (visibleCompanyIds.length === 0) {
+      return db.select().from(documents).where(
+        and(eq(documents.organizationId, organizationId), eq(documents.uploaderId, uploaderId))
+      ).orderBy(desc(documents.createdAt)).limit(lim);
+    }
+    return db.select().from(documents).where(
+      and(
+        eq(documents.organizationId, organizationId),
+        sql`(${documents.uploaderId} = ${uploaderId} OR (${documents.uploadContext}->>'companyId') = ANY (${visibleCompanyIds}::text[]))`,
+      )
+    ).orderBy(desc(documents.createdAt)).limit(lim);
   }
 
   async getPersonalAlerts(userId: string): Promise<PersonalAlert[]> {

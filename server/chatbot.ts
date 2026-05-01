@@ -386,6 +386,25 @@ async function buildPhase2Sections(
       });
     }
 
+    // — Recent documents (Task #910) — uploads + email-forwards relevant
+    //   to the rep. The actual tool call (find_documents) is the structured
+    //   path; this section just keeps the most recent items in the prompt
+    //   so the agent doesn't need a tool round-trip for "what did I drop in
+    //   last week?" style questions.
+    try {
+      const recentDocs = await storage.getRecentDocumentsForUser(orgId, selfUserId, companyIds, 8);
+      if (recentDocs.length) {
+        out += `\n=== RECENT DOCUMENTS (${recentDocs.length}) ===\n`;
+        recentDocs.forEach((d) => {
+          const when = d.createdAt ? new Date(d.createdAt).toISOString().slice(0, 10) : "?";
+          const status = d.status === "parsed" ? "" : ` [${d.status}]`;
+          out += `- [${when}] (${d.classLabel}) ${d.filename} via ${d.sourceChannel}${status}\n`;
+        });
+      }
+    } catch (err) {
+      console.warn("buildPhase2Sections: recent_documents failed:", err);
+    }
+
     // — Scorecards (latest snapshot per teammate) —
     if (safeIds.length) {
       const snaps = await db.select().from(reportCardSnapshots)

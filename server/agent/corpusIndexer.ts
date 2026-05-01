@@ -252,6 +252,35 @@ async function fetchMarketSignalRows(orgId: string): Promise<SourceRow[]> {
     }));
 }
 
+async function fetchDocumentPageRows(orgId: string): Promise<SourceRow[]> {
+  // Index a chunked excerpt per page. We cap text length and total rows so the
+  // indexer stays bounded — full-doc retrieval still happens via find_documents
+  // + the document_pages table directly. Skip non-parsed pages.
+  const rows = await db.execute<{
+    document_id: string;
+    page_number: number;
+    text: string | null;
+    filename: string;
+    class_label: string;
+  }>(sql`
+    SELECT dp.document_id, dp.page_number, dp.text, d.filename, d.class_label
+    FROM document_pages dp
+    INNER JOIN documents d ON d.id = dp.document_id
+    WHERE d.organization_id = ${orgId}
+      AND d.status = 'parsed'
+      AND dp.text IS NOT NULL
+      AND length(dp.text) > 40
+    ORDER BY d.created_at DESC
+    LIMIT 1000
+  `).catch(() => ({ rows: [] as any[] }));
+  return rows.rows.map((r) => ({
+    sourceKind: "document_page",
+    sourceId: `${r.document_id}:${r.page_number}`,
+    text: `Document "${r.filename}" (${r.class_label}) page ${r.page_number}: ${(r.text ?? "").slice(0, 1500)}`,
+    metadata: { documentId: r.document_id, pageNumber: r.page_number, classLabel: r.class_label, filename: r.filename },
+  }));
+}
+
 const FETCHERS: Array<(orgId: string) => Promise<SourceRow[]>> = [
   fetchCompanyRows,
   fetchContactRows,
@@ -264,6 +293,8 @@ const FETCHERS: Array<(orgId: string) => Promise<SourceRow[]>> = [
   fetchEmailBodyRows,
   fetchNbaCardRows,
   fetchPipelineNoteRows,
+  // Phase 2 slice 1 — Copilot Doc Ingestion (Task #910)
+  fetchDocumentPageRows,
 ];
 
 async function upsertChunk(orgId: string, row: SourceRow): Promise<boolean> {

@@ -6348,6 +6348,107 @@ export const insertLeakConsoleAuditSchema = createInsertSchema(leakConsoleAudit)
 export type InsertLeakConsoleAudit = z.infer<typeof insertLeakConsoleAuditSchema>;
 export type LeakConsoleAudit = typeof leakConsoleAudit.$inferSelect;
 
+// ─── Task #910 — Copilot Doc Ingestion & Classification ───────────────────
+//
+// Documents (rate cons, RFP bid sheets, BOLs, scorecards, contracts, …) the
+// rep drops into the copilot or forwards to the dedicated DNA inbox. Raw
+// bytes live in object storage; only the URL/key + SHA-256 hash live here.
+// `document_pages` holds page-level extracted text (native PDF or OCR) plus
+// any structured table rows (xlsx) and bounding-box JSON when the OCR
+// vendor returns it.
+export const DOCUMENT_CLASSES = [
+  "rate_con",
+  "rfp_bid_sheet",
+  "routing_guide",
+  "bol",
+  "tariff",
+  "accessorial_schedule",
+  "scorecard",
+  "contract",
+  "email_thread",
+  "spreadsheet_lanes",
+  "unknown",
+] as const;
+export type DocumentClass = (typeof DOCUMENT_CLASSES)[number];
+export const documentClassEnum = z.enum(DOCUMENT_CLASSES);
+
+export const DOCUMENT_SOURCE_CHANNELS = [
+  "drag_drop",
+  "email_forward",
+  "watched_folder",
+] as const;
+export type DocumentSourceChannel = (typeof DOCUMENT_SOURCE_CHANNELS)[number];
+export const documentSourceChannelEnum = z.enum(DOCUMENT_SOURCE_CHANNELS);
+
+export const DOCUMENT_STATUSES = ["parsing", "parsed", "failed"] as const;
+export type DocumentStatus = (typeof DOCUMENT_STATUSES)[number];
+
+export const documents = pgTable(
+  "documents",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    uploaderId: varchar("uploader_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    filename: text("filename").notNull(),
+    mimeType: text("mime_type").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    sha256: text("sha256").notNull(),
+    sourceChannel: text("source_channel").notNull(),
+    storageKey: text("storage_key").notNull(),
+    storageUrl: text("storage_url"),
+    // Free-form upload context: {entityType, entityId, page, etc.}
+    uploadContext: jsonb("upload_context"),
+    classLabel: text("class_label").notNull().default("unknown"),
+    classConfidence: decimal("class_confidence", { precision: 4, scale: 3 }),
+    classMethod: text("class_method"),
+    status: text("status").notNull().default("parsing"),
+    errorReason: text("error_reason"),
+    pageCount: integer("page_count"),
+    ocrUsed: boolean("ocr_used").notNull().default(false),
+    // Email-forward specifics — null for drag-drop uploads.
+    forwardedFromEmail: text("forwarded_from_email"),
+    forwardedSubject: text("forwarded_subject"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    parsedAt: timestamp("parsed_at"),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    // Dedup by (org, hash) — same file from two reps in two orgs is fine.
+    uniqueIndex("documents_org_sha256_idx").on(t.organizationId, t.sha256),
+    index("documents_org_status_idx").on(t.organizationId, t.status, t.createdAt),
+    index("documents_uploader_idx").on(t.uploaderId, t.createdAt),
+    index("documents_class_idx").on(t.organizationId, t.classLabel),
+  ],
+);
+export const insertDocumentSchema = createInsertSchema(documents).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  parsedAt: true,
+});
+export type InsertDocument = z.infer<typeof insertDocumentSchema>;
+export type Document = typeof documents.$inferSelect;
+
+export const documentPages = pgTable(
+  "document_pages",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    documentId: varchar("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
+    pageNumber: integer("page_number").notNull(),
+    text: text("text"),
+    // Spreadsheet rows or OCR table extractions.
+    tableRows: jsonb("table_rows"),
+    // {x,y,w,h} per text block when the OCR vendor returns it.
+    bbox: jsonb("bbox"),
+  },
+  (t) => [
+    uniqueIndex("document_pages_doc_page_idx").on(t.documentId, t.pageNumber),
+  ],
+);
+export const insertDocumentPageSchema = createInsertSchema(documentPages).omit({ id: true });
+export type InsertDocumentPage = z.infer<typeof insertDocumentPageSchema>;
+export type DocumentPage = typeof documentPages.$inferSelect;
+
 export const leakConsoleDailySnapshot = pgTable("leak_console_daily_snapshot", {
   orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   snapshotDate: text("snapshot_date").notNull(), // YYYY-MM-DD (org-local day)

@@ -27,6 +27,8 @@ export type Capability =
   | "read.coaching"
   | "read.scorecard"
   | "read.email"
+  // Phase 2 slice 1 — Copilot Doc Ingestion (Task #910)
+  | "read.document"
   // Navigation
   | "navigate.crm"
   // Writes inside the CRM — default HITL for everyone
@@ -55,6 +57,7 @@ const ALL_READS: Capability[] = [
   "read.award", "read.opportunity", "read.lane", "read.carrier", "read.market",
   "read.financial", "read.memory", "read.nba",
   "read.pipeline", "read.coaching", "read.scorecard", "read.email",
+  "read.document",
 ];
 
 const ALL_HITL_WRITES: Capability[] = [
