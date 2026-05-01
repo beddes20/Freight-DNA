@@ -5218,6 +5218,55 @@ export async function runMigrations() {
     clientFreshness.release();
   }
 
+  // ===================================================================
+  // Task #860 — `row_version_at` column on email_conversation_threads.
+  //
+  // Stops background sweeps (archive cron, classification reclassify,
+  // future denormalization passes) from bumping `updated_at` on rows
+  // whose actual conversation activity hasn't changed. The contract is:
+  //   - `updated_at`     → the conversation itself changed (new email,
+  //                        owner / waiting-state / priority / snooze
+  //                        flipped via a user action). Safe to read in
+  //                        user-visible signals like sort order or
+  //                        "recently active" badges.
+  //   - `row_version_at` → row-touched-by-anything clock; sweeps and
+  //                        re-stamps land here so the audit trail of
+  //                        touches stays debuggable.
+  //
+  // shared/schema.ts owns the Drizzle declaration; this ALTER mirrors
+  // it in the live DB and seeds the new column from the existing
+  // `updated_at` so historical rows get a sensible starting value.
+  // Idempotent — every statement is IF NOT EXISTS / IS NULL guarded.
+  // The companion guardrail in tests/code-quality-guardrails.test.ts
+  // fails the build if any sweep writer regresses by writing
+  // `updated_at` instead of `row_version_at`.
+  // ===================================================================
+  const clientRowVersion = await pool.connect();
+  try {
+    await clientRowVersion.query(`
+      ALTER TABLE email_conversation_threads
+        ADD COLUMN IF NOT EXISTS row_version_at timestamp NOT NULL DEFAULT now()
+    `);
+    // Seed historical rows: rowVersionAt should be at least as recent
+    // as the existing updated_at so the audit clock never appears to
+    // run backwards relative to the user-visible clock.
+    const seedResult = await clientRowVersion.query(`
+      UPDATE email_conversation_threads
+         SET row_version_at = updated_at
+       WHERE row_version_at < updated_at
+    `);
+    if ((seedResult.rowCount ?? 0) > 0) {
+      console.log(
+        `[migrations] email_conversation_threads.row_version_at seeded ` +
+        `from updated_at for ${seedResult.rowCount} historical row(s) (Task #860)`,
+      );
+    }
+  } catch (err) {
+    console.error("[migrations] row_version_at column migration error:", err);
+  } finally {
+    clientRowVersion.release();
+  }
+
   // Quote leak forward closure (Task #847). Fail-closed: the partial
   // unique index is the only thing protecting concurrent scheduler
   // ticks from creating duplicate opps for the same source_reference,

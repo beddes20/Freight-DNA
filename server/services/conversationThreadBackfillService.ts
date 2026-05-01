@@ -52,10 +52,16 @@ export async function reclassifyThreadsCustomerWins(opts: {
   const orgId = opts.orgId ?? null;
 
   // Step 1: drop carrier id on threads that already have a customer account.
+  // Task #860 — classification reclassify is a denormalization sweep, not
+  // a real conversation event. It bumps `row_version_at` (the audit
+  // clock) instead of `updated_at` so the user-visible freshness signal
+  // still reflects actual email activity. See the contract in
+  // shared/schema.ts; the guardrail in tests/code-quality-guardrails.test.ts
+  // pins this site.
   const threadFix = await db.execute(sql`
     UPDATE email_conversation_threads
        SET linked_carrier_id = NULL,
-           updated_at = NOW()
+           row_version_at = NOW()
      WHERE linked_account_id IS NOT NULL
        AND linked_carrier_id IS NOT NULL
        AND (${orgId}::text IS NULL OR org_id = ${orgId})
@@ -69,11 +75,14 @@ export async function reclassifyThreadsCustomerWins(opts: {
   // (e.g. arrived through the user-mailbox lane). Without this step
   // those threads would stay incorrectly carrier-only and never appear
   // on the Email Intelligence customer leaderboard.
+  // Task #860 — same contract as Step 1: this is a denormalization
+  // sweep, not a real conversation event. Bumps `row_version_at` only
+  // so the user-visible freshness signal stays honest.
   const threadPromote = await db.execute(sql`
     UPDATE email_conversation_threads ect
        SET linked_account_id = m.account_id,
            linked_carrier_id = NULL,
-           updated_at = NOW()
+           row_version_at = NOW()
       FROM (
         SELECT em.org_id,
                em.thread_id,

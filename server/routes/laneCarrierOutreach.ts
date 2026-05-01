@@ -3451,6 +3451,7 @@ async function processSingleOutlookReply(
           overdueAt: null,
           createdAt: now,
           updatedAt: now,
+          rowVersionAt: now,
         };
         const update = applyMessageToThread(threadBase, inboundMessage, now);
         await storage.upsertEmailConversationThread({

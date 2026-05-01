@@ -543,8 +543,12 @@ export function registerEmailAnalyticsRoutes(app: Express): void {
       }
 
       const threadIdParam = pStr(req.params.threadId);
+      // Task #860 — explicit owner reassignment from the analytics UI is
+      // a real, user-visible conversation event, so both `updatedAt` and
+      // `rowVersionAt` advance together. See the contract in shared/schema.ts.
+      const now = new Date();
       const updated = await db.update(emailConversationThreads)
-        .set({ ownerUserId: parsed.data.ownerUserId, updatedAt: new Date() })
+        .set({ ownerUserId: parsed.data.ownerUserId, updatedAt: now, rowVersionAt: now })
         .where(and(
           eq(emailConversationThreads.threadId, threadIdParam),
           eq(emailConversationThreads.orgId, user.organizationId),

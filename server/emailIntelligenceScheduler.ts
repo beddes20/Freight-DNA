@@ -287,6 +287,7 @@ export async function runEmailIntelligenceBatch(
             overdueAt: null,
             createdAt: now,
             updatedAt: now,
+            rowVersionAt: now,
           };
 
           const update = applyMessageToThread(threadBase as any, msg, now);

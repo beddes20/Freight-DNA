@@ -1891,6 +1891,135 @@ assert(
   "The webhook path also has to publish off the `created` flag now that the shared helper no longer auto-publishes.",
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 24: email_conversation_threads freshness contract (Task #860).
+//
+// Background sweeps used to bump `updated_at` on rows whose actual
+// conversation activity hadn't changed (auto-archive cron + the
+// classification reclassify pass were the loudest offenders). That made
+// `updated_at` lie about freshness and forced every consumer to invent
+// its own "did this row really change?" heuristic.
+//
+// The contract this section pins:
+//   - `updated_at`     advances ONLY when the conversation itself
+//                      changed in a way a rep would care about — a new
+//                      email landed, the owner / waiting-state /
+//                      priority / snooze flipped via a user action.
+//   - `row_version_at` advances on every write (including sweeps,
+//                      denormalization, and re-stamps) so the audit
+//                      trail of touches stays debuggable.
+//
+// If anyone re-introduces an `updated_at` write inside the two known
+// sweep call sites — or removes the column / migration / contract
+// comment from the source of truth — this fails the build.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n── 24. Conversation threads freshness contract (Task #860) ─────────\n");
+
+const schemaSrc860 = readFile("shared/schema.ts");
+assert(
+  "shared/schema.ts — emailConversationThreads declares rowVersionAt column",
+  /rowVersionAt:\s*timestamp\(\s*["']row_version_at["']\s*\)\s*\.defaultNow\(\)\s*\.notNull\(\)/.test(schemaSrc860),
+  "emailConversationThreads must own a `rowVersionAt: timestamp('row_version_at').defaultNow().notNull()` column — that's the audit clock sweeps write to instead of `updatedAt`.",
+);
+assert(
+  "shared/schema.ts — insertEmailConversationThreadSchema omits rowVersionAt",
+  /insertEmailConversationThreadSchema[\s\S]{0,400}\.omit\(\{[\s\S]*?rowVersionAt:\s*true/.test(schemaSrc860),
+  "rowVersionAt is auto-managed (DEFAULT now() on insert, written explicitly by sweeps) — exclude it from the insert schema like createdAt/updatedAt.",
+);
+assert(
+  "shared/schema.ts — documents the updated_at vs row_version_at contract inline",
+  /Task #860/.test(schemaSrc860) && /row_version_at|rowVersionAt/.test(schemaSrc860) &&
+    /sweep/i.test(schemaSrc860.slice(schemaSrc860.indexOf("Task #860"))),
+  "shared/schema.ts must keep the inline contract comment (Task #860) explaining when updatedAt vs rowVersionAt advances — that comment is the single source of truth other writers reference.",
+);
+
+const runMigrationsSrc860 = readFile("server/runMigrations.ts");
+assert(
+  "runMigrations.ts — adds row_version_at column (idempotent)",
+  /ADD COLUMN IF NOT EXISTS row_version_at\s+timestamp\s+NOT NULL\s+DEFAULT now\(\)/i.test(runMigrationsSrc860),
+  "runMigrations must materialize email_conversation_threads.row_version_at with NOT NULL DEFAULT now(); without it, a fresh checkout boot will fail when sweep writers try to set the column.",
+);
+assert(
+  "runMigrations.ts — seeds row_version_at from existing updated_at",
+  /SET\s+row_version_at\s*=\s*updated_at[\s\S]{0,200}WHERE\s+row_version_at\s*<\s*updated_at/i.test(runMigrationsSrc860),
+  "Historical rows need their row_version_at backfilled from updated_at so the audit clock never appears to run backwards relative to the user-visible clock immediately after deploy.",
+);
+
+const archiveSchedulerSrc = readFile("server/conversationArchiveScheduler.ts");
+assert(
+  "conversationArchiveScheduler.ts — auto-archive sweep does NOT bump updatedAt",
+  !/updatedAt:\s*new Date\(\)/.test(archiveSchedulerSrc),
+  "autoArchiveResolvedThreads is a background sweep, not a real conversation event. It must not write `updatedAt: new Date()` — use `rowVersionAt: new Date()` so the user-visible freshness signal stays honest.",
+);
+assert(
+  "conversationArchiveScheduler.ts — auto-archive sweep DOES bump rowVersionAt",
+  /rowVersionAt:\s*new Date\(\)/.test(archiveSchedulerSrc),
+  "autoArchiveResolvedThreads must still touch `rowVersionAt` so the audit trail of archive sweeps remains debuggable.",
+);
+
+const reclassifySrc = readFile("server/services/conversationThreadBackfillService.ts");
+assert(
+  "conversationThreadBackfillService.ts — reclassify sweep does NOT write updated_at = NOW()",
+  !/UPDATE\s+email_conversation_threads[\s\S]*?updated_at\s*=\s*NOW\(\)/i.test(reclassifySrc),
+  "reclassifyThreadsCustomerWins is a denormalization sweep — it must write `row_version_at = NOW()` instead of `updated_at = NOW()` so freshness signals don't lie when classification runs.",
+);
+assert(
+  "conversationThreadBackfillService.ts — reclassify sweep DOES write row_version_at = NOW() (both update steps)",
+  (reclassifySrc.match(/row_version_at\s*=\s*NOW\(\)/gi) ?? []).length >= 2,
+  "Both UPDATE steps in reclassifyThreadsCustomerWins (drop carrier id; promote linked_account_id from message evidence) must touch row_version_at so the audit clock advances even though updated_at intentionally stays put.",
+);
+
+// ── Snooze-wake routing — scheduler vs user split ────────────────────────────
+const storageSrc860 = readFile("server/storage.ts");
+assert(
+  "storage.ts — IStorage exposes touchEmailConversationThreadInternal",
+  /touchEmailConversationThreadInternal\s*\(/.test(storageSrc860),
+  "Storage layer must expose `touchEmailConversationThreadInternal` so background sweeps and scheduler-driven state changes (e.g. snooze-wake) can update rows without bumping `updated_at`.",
+);
+{
+  // Extract the `.set({...})` payload of touchEmailConversationThreadInternal
+  // and assert it bumps row_version_at but NOT updated_at. The destructure
+  // earlier in the function legitimately mentions `updatedAt:` (we strip
+  // caller-supplied bumps), so we have to scope the check tightly to the SET.
+  const fnMatch = storageSrc860.match(
+    /async\s+touchEmailConversationThreadInternal\b[\s\S]*?\.set\(\s*(\{[\s\S]*?\})\s*\)/,
+  );
+  assert(
+    "storage.ts — touchEmailConversationThreadInternal SET clause bumps rowVersionAt but NOT updatedAt",
+    !!fnMatch &&
+      /rowVersionAt\s*:/.test(fnMatch[1]) &&
+      !/updatedAt\s*:/.test(fnMatch[1]),
+    "touchEmailConversationThreadInternal must set `rowVersionAt` but NOT `updatedAt` — the whole point of the internal-touch path is to leave the user-visible freshness signal untouched. Found SET block: " +
+      (fnMatch ? fnMatch[1].replace(/\s+/g, " ") : "<no .set() found>"),
+  );
+}
+
+const waitingStateSrc860 = readFile("server/services/conversationWaitingStateService.ts");
+assert(
+  "conversationWaitingStateService.ts — exports separate wakeSnoozedThread + wakeSnoozedThreadInternal",
+  /export\s+async\s+function\s+wakeSnoozedThread\s*\(/.test(waitingStateSrc860) &&
+    /export\s+async\s+function\s+wakeSnoozedThreadInternal\s*\(/.test(waitingStateSrc860),
+  "The user-initiated and scheduler-initiated wake paths must be distinct exported entry points so call sites can opt into the right freshness behaviour explicitly.",
+);
+assert(
+  "conversationWaitingStateService.ts — wakeSnoozedThreadInternal writes via touchEmailConversationThreadInternal",
+  /export\s+async\s+function\s+wakeSnoozedThreadInternal[\s\S]*?storageInstance\.touchEmailConversationThreadInternal\(/.test(waitingStateSrc860),
+  "wakeSnoozedThreadInternal must write through the internal-touch storage method so scheduler wakes never bump `updated_at`.",
+);
+assert(
+  "conversationWaitingStateService.ts — wakeSnoozedThread (user path) writes via updateEmailConversationThread",
+  /export\s+async\s+function\s+wakeSnoozedThread\s*\([\s\S]*?\)\s*:\s*Promise<void>\s*\{[\s\S]*?storageInstance\.updateEmailConversationThread\(/.test(waitingStateSrc860),
+  "wakeSnoozedThread (user-initiated) must continue to write through updateEmailConversationThread because a rep clicking 'wake now' IS a real conversation event.",
+);
+
+const archiveSchedulerSrc860 = readFile("server/conversationArchiveScheduler.ts");
+assert(
+  "conversationArchiveScheduler.ts — wakeExpiredSnoozes calls the scheduler-only wake variant",
+  /wakeSnoozedThreadInternal\(/.test(archiveSchedulerSrc860) &&
+    !/(?<![A-Za-z])wakeSnoozedThread\(/.test(archiveSchedulerSrc860),
+  "wakeExpiredSnoozes runs every minute as a background cron — it must call wakeSnoozedThreadInternal, NEVER wakeSnoozedThread, otherwise every snooze-expiry would keep bumping updated_at and re-introduce the misleading-freshness bug.",
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

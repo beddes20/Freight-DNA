@@ -1173,6 +1173,15 @@ getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined>;
     sort?: "priority" | "recency";
   }): Promise<{ threads: EmailConversationThread[]; nextCursor: string | null; totalCount: number }>;
   updateEmailConversationThread(id: string, orgId: string, data: Partial<InsertEmailConversationThread>): Promise<EmailConversationThread | undefined>;
+  /**
+   * Task #860 — internal/background touch path. Bumps `row_version_at`
+   * (the audit clock) but DOES NOT touch `updated_at`. Use this from
+   * background sweeps and scheduler-driven state changes (e.g.
+   * snooze-wake) so the user-visible freshness signal keeps reflecting
+   * actual conversation activity. Real, user-initiated state mutations
+   * must continue to flow through `updateEmailConversationThread`.
+   */
+  touchEmailConversationThreadInternal(id: string, orgId: string, data: Partial<InsertEmailConversationThread>): Promise<EmailConversationThread | undefined>;
 
   // Per-user thread read state (Task #532)
   getEmailConversationReadStates(userId: string, threadIds: string[]): Promise<Map<string, Date | null>>;
@@ -7743,8 +7752,13 @@ export class DatabaseStorage implements IStorage {
       } else if (existing.linkedAccountId && existing.linkedCarrierId) {
         linkPatch.linkedCarrierId = null;
       }
+      // Task #860 — `updatedAt` and `rowVersionAt` advance together for
+      // real conversation events (a new email arrived, linkage changed
+      // from caller-supplied evidence). Sweep paths use `rowVersionAt`
+      // alone — see the contract on shared/schema.ts.
+      const now = new Date();
       const [updated] = await db.update(emailConversationThreads)
-        .set({ ...data.update, ...linkPatch, updatedAt: new Date() })
+        .set({ ...data.update, ...linkPatch, updatedAt: now, rowVersionAt: now })
         .where(eq(emailConversationThreads.id, existing.id))
         .returning();
       return updated;
@@ -8108,8 +8122,43 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateEmailConversationThread(id: string, orgId: string, data: Partial<InsertEmailConversationThread>): Promise<EmailConversationThread | undefined> {
+    // Task #860 — generic state mutation entry point for user actions
+    // (waiting state, owner, priority, manual snooze). Both `updatedAt`
+    // and `rowVersionAt` advance because every caller of this method
+    // represents a real, user-visible conversation change. Background
+    // sweeps and scheduler-driven state changes (e.g. snooze-wake) must
+    // route through `touchEmailConversationThreadInternal` instead so
+    // the user-visible freshness signal keeps reflecting actual
+    // conversation activity.
+    const now = new Date();
     const [row] = await db.update(emailConversationThreads)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...data, updatedAt: now, rowVersionAt: now })
+      .where(and(
+        eq(emailConversationThreads.id, id),
+        eq(emailConversationThreads.orgId, orgId),
+      ))
+      .returning();
+    return row;
+  }
+
+  async touchEmailConversationThreadInternal(
+    id: string,
+    orgId: string,
+    data: Partial<InsertEmailConversationThread>,
+  ): Promise<EmailConversationThread | undefined> {
+    // Task #860 — internal touch path used by background sweeps and
+    // scheduler-driven state changes (snooze-wake, future denorm
+    // passes). Bumps `rowVersionAt` so the audit trail of touches stays
+    // debuggable, but intentionally OMITS `updatedAt` so the
+    // user-visible freshness signal keeps reflecting real conversation
+    // activity. Defense-in-depth: caller-supplied `data.updatedAt` is
+    // stripped before the SET so a future caller can't accidentally
+    // smuggle a freshness bump through the internal path.
+    const { updatedAt: _strippedUpdatedAt, ...safeData } = data as Partial<
+      InsertEmailConversationThread
+    > & { updatedAt?: unknown };
+    const [row] = await db.update(emailConversationThreads)
+      .set({ ...safeData, rowVersionAt: new Date() })
       .where(and(
         eq(emailConversationThreads.id, id),
         eq(emailConversationThreads.orgId, orgId),

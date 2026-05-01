@@ -1991,7 +1991,29 @@ export const emailConversationThreads = pgTable("email_conversation_threads", {
   snoozedFromState: text("snoozed_from_state"),
   snoozedByUserId: varchar("snoozed_by_user_id").references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  // ─── Freshness contract (Task #860) ──────────────────────────────────────
+  // `updatedAt` means: the conversation itself changed in a way a rep would
+  // care about — a new email arrived (`upsertEmailConversationThread`), the
+  // owner / waiting-state / priority / manual snooze flipped via a user
+  // action (`updateEmailConversationThread`, `applyMessageToThread` insert,
+  // user-initiated `wakeSnoozedThread`). It is safe to read in user-visible
+  // signals like sort order, "recently active" badges, analytics, or
+  // exports — the freshness it advertises matches actual conversation
+  // activity.
+  //
+  // `rowVersionAt` is the row-touched-by-anything clock. Every write to the
+  // row (including denormalization sweeps, ownership/classification
+  // re-stamps, the auto-archive cron, and the scheduler-driven
+  // `wakeSnoozedThreadInternal` snooze-expiry path) advances it so the
+  // audit trail of touches remains debuggable. Background sweeps and
+  // scheduler-initiated state changes MUST route through
+  // `touchEmailConversationThreadInternal` (or write `row_version_at`
+  // directly in raw SQL sweeps) — never through
+  // `updateEmailConversationThread`. The guardrail in
+  // `tests/code-quality-guardrails.test.ts` (Section 24) fails the build if
+  // any sweep writer regresses this contract.
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  rowVersionAt: timestamp("row_version_at").defaultNow().notNull(),
 }, (t) => ({
   orgUpdatedIdx: index("ect_org_updated_idx").on(t.orgId, t.updatedAt),
   orgWaitingIdx: index("ect_org_waiting_idx").on(t.orgId, t.waitingState),
@@ -2007,6 +2029,7 @@ export const insertEmailConversationThreadSchema = createInsertSchema(emailConve
   id: true,
   createdAt: true,
   updatedAt: true,
+  rowVersionAt: true,
 });
 export type InsertEmailConversationThread = z.infer<typeof insertEmailConversationThreadSchema>;
 export type EmailConversationThread = typeof emailConversationThreads.$inferSelect;

@@ -2315,8 +2315,12 @@ export function registerConversationsRoutes(app: Express): void {
             if (threadRow && msgRow) {
               const { applyMessageToThread } = await import("../services/conversationWaitingStateService");
               const update = applyMessageToThread(threadRow, msgRow);
+              // Task #860 — a freshly-sent reply IS the conversation
+              // changing, so both `updatedAt` and `rowVersionAt` advance
+              // together. See the contract in shared/schema.ts.
+              const now = new Date();
               await db.update(emailConversationThreads)
-                .set(update)
+                .set({ ...update, updatedAt: now, rowVersionAt: now })
                 .where(eq(emailConversationThreads.id, threadRow.id));
             }
           } catch (err) {

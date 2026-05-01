@@ -206,17 +206,22 @@ export async function snoozeThread(
 }
 
 /**
- * Wake a snoozed thread back to its prior state. If the prior state was
- * waiting_on_us, recompute waitingSinceAt and overdueAt against the SLA.
+ * Compute the field patch for waking a snoozed thread back to its prior
+ * state. Returns `null` if the thread isn't currently snoozed (no-op).
+ *
+ * Pure helper — does not write. Both the user-initiated wake
+ * (`wakeSnoozedThread`) and the scheduler-initiated wake
+ * (`wakeSnoozedThreadInternal`) call this and then route the patch
+ * through the appropriate write path (Task #860).
  */
-export async function wakeSnoozedThread(
+async function computeWakePatch(
   threadRecordId: string,
   orgId: string,
-  storageInstance: Pick<IStorage, "updateEmailConversationThread" | "getEmailConversationThreadById">,
-  now: Date = new Date(),
-): Promise<void> {
+  storageInstance: Pick<IStorage, "getEmailConversationThreadById">,
+  now: Date,
+): Promise<Partial<EmailConversationThread> | null> {
   const thread = await storageInstance.getEmailConversationThreadById(threadRecordId);
-  if (!thread || thread.orgId !== orgId || thread.waitingState !== "snoozed") return;
+  if (!thread || thread.orgId !== orgId || thread.waitingState !== "snoozed") return null;
 
   const restoreState = (thread.snoozedFromState ?? "waiting_on_us") as
     | "waiting_on_us"
@@ -245,7 +250,45 @@ export async function wakeSnoozedThread(
     }
   }
 
+  return update;
+}
+
+/**
+ * USER-initiated wake — the rep clicked "Wake now" / "Unsnooze". This
+ * IS a real conversation event, so it routes through
+ * `updateEmailConversationThread` and bumps both `updated_at` and
+ * `row_version_at`. Background scheduler wakes must call
+ * `wakeSnoozedThreadInternal` instead (Task #860).
+ */
+export async function wakeSnoozedThread(
+  threadRecordId: string,
+  orgId: string,
+  storageInstance: Pick<IStorage, "updateEmailConversationThread" | "getEmailConversationThreadById">,
+  now: Date = new Date(),
+): Promise<void> {
+  const update = await computeWakePatch(threadRecordId, orgId, storageInstance, now);
+  if (!update) return;
   await storageInstance.updateEmailConversationThread(threadRecordId, orgId, update);
+}
+
+/**
+ * SCHEDULER-initiated wake — fired by `wakeExpiredSnoozes()` in the
+ * archive scheduler when `snoozedUntil` expires. NOT a user action, so
+ * it routes through `touchEmailConversationThreadInternal` and bumps
+ * only `row_version_at` — `updated_at` stays put so the user-visible
+ * freshness signal keeps reflecting actual conversation activity (Task
+ * #860). The companion guardrail in
+ * `tests/code-quality-guardrails.test.ts` pins this routing.
+ */
+export async function wakeSnoozedThreadInternal(
+  threadRecordId: string,
+  orgId: string,
+  storageInstance: Pick<IStorage, "touchEmailConversationThreadInternal" | "getEmailConversationThreadById">,
+  now: Date = new Date(),
+): Promise<void> {
+  const update = await computeWakePatch(threadRecordId, orgId, storageInstance, now);
+  if (!update) return;
+  await storageInstance.touchEmailConversationThreadInternal(threadRecordId, orgId, update);
 }
 
 export async function setPriority(

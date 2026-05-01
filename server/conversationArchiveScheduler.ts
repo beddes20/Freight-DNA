@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { db, storage } from "./storage";
 import { emailConversationThreads, emailMessages } from "@shared/schema";
 import { eq, and, isNull, lte, gt, sql } from "drizzle-orm";
-import { wakeSnoozedThread } from "./services/conversationWaitingStateService";
+import { wakeSnoozedThreadInternal } from "./services/conversationWaitingStateService";
 
 function logMessage(message: string): void {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -64,11 +64,18 @@ async function autoArchiveResolvedThreads(): Promise<void> {
       return;
     }
 
+    // Task #860 — auto-archive is a background sweep, NOT a real
+    // conversation event the rep would care about as "freshness". It
+    // bumps `rowVersionAt` (the audit clock) so the touch is still
+    // debuggable, but leaves `updatedAt` alone so the user-visible
+    // freshness signal keeps reflecting the last real conversation
+    // activity. See the contract in shared/schema.ts; the guardrail in
+    // tests/code-quality-guardrails.test.ts pins this site.
     const result = await db.update(emailConversationThreads)
       .set({
         waitingState: "archived",
         archivedAt: new Date(),
-        updatedAt: new Date(),
+        rowVersionAt: new Date(),
       })
       .where(
         sql`${emailConversationThreads.id} IN (${sql.join(idsToArchive.map(id => sql`${id}`), sql`, `)})`
@@ -95,7 +102,10 @@ async function wakeExpiredSnoozes(): Promise<void> {
     let notified = 0;
     for (const thread of expired) {
       try {
-        await wakeSnoozedThread(thread.id, thread.orgId, storage);
+        // Task #860 — scheduler-driven wake; routes through the
+        // internal-touch path so `updated_at` stays put. See
+        // conversationWaitingStateService.ts for the contract.
+        await wakeSnoozedThreadInternal(thread.id, thread.orgId, storage);
         waked++;
         // Notify the owner (or the user who snoozed it, as a fallback) so
         // they know the thread is back in their queue. This stays best-effort
