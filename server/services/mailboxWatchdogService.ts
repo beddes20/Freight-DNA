@@ -271,6 +271,124 @@ async function runWatchdogForMailbox(mb: MonitoredMailbox, now: Date): Promise<W
 const ALERT_KEY_UNHEALTHY = "mailbox_unhealthy";
 const ALERT_KEY_RENEWAL_FAILED = "subscription_renewal_failed";
 
+// Task #939 — classification-lag thresholds. The inline classifier
+// dispatcher targets <15s end-to-end; we treat anything beyond 60s as
+// "behind". Single-tick spikes are common (large attachment, brief
+// OpenAI 429) so we require TWO consecutive ticks to fire — at the 1-min
+// watchdog cadence that's a guaranteed-2-minute persistent backlog,
+// which is an unambiguous regression of the inline contract.
+const CLASSIFICATION_LAG_WARN_SECONDS = 60;
+const CLASSIFICATION_LAG_CONSECUTIVE_TICKS = 2;
+const ALERT_KEY_CLASSIFICATION_LAG = "classification_lag";
+
+// Per-org tracker so we don't fire on every transient blip. Lives at
+// module scope: the watchdog cron is a singleton in this process. When
+// an org returns to healthy lag (or has no monitored mailboxes) the
+// counter is cleared and the open alert is resolved.
+const _laggingTickCount: Map<string, number> = new Map();
+
+/**
+ * Per-org classification-lag check. Runs once per watchdog tick across
+ * all orgs that have at least one enabled monitored mailbox. Fires the
+ * `classification_lag` alert against the first enabled mailbox in the
+ * org (the alert is org-scoped semantically, but the FK schema requires
+ * a mailboxId — picking a stable anchor avoids creating multiple alerts
+ * for the same condition).
+ *
+ * Exported for unit testing; do NOT call from production code paths
+ * other than `runWatchdogCycle`.
+ */
+export async function runClassificationLagCheck(
+  mailboxes: MonitoredMailbox[],
+  now: Date,
+): Promise<{
+  orgsChecked: number;
+  orgsLagging: number;
+  alertsFired: number;
+  alertsResolved: number;
+}> {
+  // Group enabled mailboxes by org so we anchor the alert + skip orgs
+  // with no live mailboxes.
+  const byOrg = new Map<string, MonitoredMailbox[]>();
+  for (const mb of mailboxes) {
+    if (!mb.enabled) continue;
+    const arr = byOrg.get(mb.orgId) ?? [];
+    arr.push(mb);
+    byOrg.set(mb.orgId, arr);
+  }
+
+  let orgsLagging = 0;
+  let alertsFired = 0;
+  let alertsResolved = 0;
+
+  for (const [orgId, orgMailboxes] of byOrg.entries()) {
+    let lagInfo;
+    try {
+      lagInfo = await storage.getOldestUnprocessedInboundEmailAge(orgId);
+    } catch (err) {
+      log(`classification-lag query failed for org=${orgId}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+    const ageSec = lagInfo.ageSeconds ?? 0;
+    const isLagging = ageSec >= CLASSIFICATION_LAG_WARN_SECONDS;
+    const anchor = orgMailboxes[0]; // stable: getEnabledMonitoredMailboxes is ordered
+
+    if (isLagging) {
+      orgsLagging++;
+      const next = (_laggingTickCount.get(orgId) ?? 0) + 1;
+      _laggingTickCount.set(orgId, next);
+      if (next >= CLASSIFICATION_LAG_CONSECUTIVE_TICKS) {
+        const reason =
+          `Inline email classifier lag: ${ageSec}s old (${lagInfo.backlogCount} unprocessed inbound) — ` +
+          `the 2-min recovery cron should be draining this; check OpenAI/extraction errors.`;
+        const result = await storage.fireMailboxHealthAlert({
+          orgId,
+          mailboxId: anchor.id,
+          alertKey: ALERT_KEY_CLASSIFICATION_LAG,
+          severity: "warning",
+          reason,
+        }).catch(() => null);
+        if (result?.isNew) {
+          alertsFired++;
+          await fanOutAdminNotifications(
+            anchor,
+            "Email→quote pipeline classification lag",
+            reason,
+          ).catch(() => {});
+        }
+      }
+    } else {
+      // Healthy → clear the streak counter and resolve any open alert.
+      if (_laggingTickCount.has(orgId)) {
+        _laggingTickCount.delete(orgId);
+      }
+      const resolved = await storage
+        .resolveMailboxHealthAlert(anchor.id, ALERT_KEY_CLASSIFICATION_LAG)
+        .catch(() => null);
+      if (resolved) alertsResolved++;
+    }
+  }
+
+  return {
+    orgsChecked: byOrg.size,
+    orgsLagging,
+    alertsFired,
+    alertsResolved,
+  };
+}
+
+// Test-only: reset internal lag tracker so tests don't leak between cases.
+export function _resetClassificationLagTrackerForTests(): void {
+  _laggingTickCount.clear();
+}
+
+// Test-only: expose thresholds so unit tests can pin to the same constants.
+export const _CLASSIFICATION_LAG_THRESHOLDS_FOR_TESTS = {
+  warnSeconds: CLASSIFICATION_LAG_WARN_SECONDS,
+  consecutiveTicks: CLASSIFICATION_LAG_CONSECUTIVE_TICKS,
+  alertKey: ALERT_KEY_CLASSIFICATION_LAG,
+};
+
 async function reconcileAlerts(
   mb: MonitoredMailbox,
   cls: MailboxHealthClassification,
@@ -362,8 +480,22 @@ async function runWatchdogCycle(trigger: "boot" | "cron"): Promise<void> {
         log(`Tick for ${mb.email} failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    // Task #939 — classification-lag check. Runs once per watchdog tick,
+    // independent of the per-mailbox subscription/webhook checks above
+    // (the lag is an org-wide property of the inline classifier
+    // dispatcher, not a per-mailbox condition).
+    let lagSummary: Awaited<ReturnType<typeof runClassificationLagCheck>> | null = null;
+    try {
+      lagSummary = await runClassificationLagCheck(mailboxes, now);
+    } catch (err) {
+      log(`classification-lag check failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     if (trigger === "cron") {
-      log(`Cycle done: ${mailboxes.length} mailbox(es), ${unhealthy} unhealthy, ${degraded} degraded, ${healed} self-healed`);
+      const lagSuffix = lagSummary
+        ? `, lag: ${lagSummary.orgsLagging}/${lagSummary.orgsChecked} org(s) lagging, ${lagSummary.alertsFired} alert(s) fired, ${lagSummary.alertsResolved} resolved`
+        : "";
+      log(`Cycle done: ${mailboxes.length} mailbox(es), ${unhealthy} unhealthy, ${degraded} degraded, ${healed} self-healed${lagSuffix}`);
     }
   } finally {
     _tickInFlight = false;

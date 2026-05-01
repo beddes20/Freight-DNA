@@ -1166,12 +1166,29 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
             })),
           };
         });
+        // Task #939 — classification-lag metric. Cheap (single SQL agg
+        // on `email_messages` filtered by org+inbound+unprocessed). The
+        // watchdog uses this same value to decide when to fire the
+        // `classification_lag` alert; surfacing it here lets the admin
+        // health UI render the lag inline next to the per-mailbox tiles
+        // without a second round-trip.
+        const classificationLag = await storage
+          .getOldestUnprocessedInboundEmailAge(user.organizationId)
+          .catch(() => ({ oldestAt: null, ageSeconds: null, backlogCount: 0 }));
+
         const summary = {
           total: items.length,
           healthy: items.filter(i => i.status === "healthy").length,
           degraded: items.filter(i => i.status === "degraded").length,
           unhealthy: items.filter(i => i.status === "unhealthy").length,
           openAlerts: alerts.length,
+          classificationLag: {
+            // Age in seconds of the oldest inbound email still missing
+            // `processed_for_signals_at`. null when the backlog is empty.
+            oldestAgeSeconds: classificationLag.ageSeconds,
+            oldestAt: classificationLag.oldestAt,
+            backlogCount: classificationLag.backlogCount,
+          },
         };
         res.json({ summary, mailboxes: items });
       } catch (err) {

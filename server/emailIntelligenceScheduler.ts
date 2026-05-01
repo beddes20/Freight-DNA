@@ -90,8 +90,15 @@ export async function runEmailIntelligenceBatch(
   }
   if (messages.length === 0) return { processed: 0 };
 
+  // Task #939 — this batch is now the *recovery sweep* for the inline
+  // email→quote pipeline. The Graph webhook + delta-sync paths fire
+  // `dispatchInlineClassification` per message the moment they persist
+  // an inbound row, so on a healthy system this loop should process ~0
+  // messages per tick. Anything we DO see here is by definition something
+  // the inline path missed (process restart, OpenAI 5xx storm, dispatcher
+  // wall-clock timeout) — exactly what the recovery framing is for.
   console.log(
-    `[emailIntelligenceScheduler] processing ${messages.length} unprocessed messages` +
+    `[emailIntelligenceScheduler] recovery sweep: ${messages.length} unprocessed message(s) the inline dispatcher did not handle` +
     (orgId ? ` (org=${orgId})` : ` (fresh-first split: ≤${FRESH_SLICE} from last ${FRESH_LOOKBACK_HOURS}h, rest oldest-first)`)
   );
 
@@ -611,8 +618,13 @@ export function _runWithWallClockForTests<T>(
 export const _BatchTimeoutErrorForTests = BatchTimeoutError;
 
 export function startEmailIntelligenceScheduler(): void {
+  // Task #939 — this scheduler is now the *recovery sweep* for the
+  // event-driven inline email→quote pipeline. Live ingestion is handled
+  // by `dispatchInlineClassification` (`server/services/inlineEmailClassifier.ts`)
+  // fired from the Graph webhook + delta-sync persistence sites. This
+  // 2-minute cron only catches messages the inline path missed.
   console.log(
-    `[emailIntelligenceScheduler] starting — every 2 min (cron: */2 * * * *), batch=${BATCH_SIZE}, wall_clock=${BATCH_WALL_CLOCK_MS}ms, in-flight guard=on`,
+    `[emailIntelligenceScheduler] starting recovery sweep — every 2 min (cron: */2 * * * *), batch=${BATCH_SIZE}, wall_clock=${BATCH_WALL_CLOCK_MS}ms, in-flight guard=on`,
   );
 
   // Run an initial pass shortly after startup (30s delay to let DB settle).

@@ -2346,6 +2346,159 @@ assert(
   );
 }
 
+// ── Section 28: Event-driven email→quote pipeline (Task #939) ──────────────
+//
+// The email→quote pipeline used to wait on a 2-minute scheduler tick before
+// any inbound customer email got classified, deduped, and turned into a
+// quote_opportunities row. Task #939 makes the live-ingest paths
+// fire-and-forget the inline classifier the moment they persist a row, so
+// the typical webhook→quote latency drops from minutes to seconds. These
+// guardrails pin the contract:
+//
+//   1. The dispatcher module (`server/services/inlineEmailClassifier.ts`)
+//      exists and exports the `dispatchInlineClassification` entry point.
+//   2. Both live-ingest call sites — the Graph webhook handler and the
+//      polling delta-sync service — import and call the dispatcher,
+//      gated on `direction === "inbound"` + `messageId` (so duplicates
+//      and outbound rep mail never spend OpenAI tokens).
+//   3. `quoteEmailIngestion.ts` publishes the `customer_quote` live-sync
+//      hint immediately after the quote row is inserted, so the Quote
+//      Requests tab refreshes within ~50ms regardless of whether the
+//      ingest came from the inline dispatcher or the recovery cron.
+//   4. The historical 30-day backfill, the admin manual-drain handler,
+//      the email pipeline ops routes, and the conversation reply-capture
+//      service do NOT import the inline dispatcher. Those paths are
+//      batch-shaped and would blow OpenAI quota if every row dispatched
+//      inline; a future refactor that wires the dispatcher in there must
+//      fail CI loudly here so the contract is renegotiated explicitly.
+//   5. The 2-minute scheduler is reframed as a *recovery sweep* — both
+//      the boot log and the per-batch log say so — to make it obvious in
+//      production logs that the cron is the safety net, not the primary
+//      path.
+
+const inlineDispatcherPath939 = "server/services/inlineEmailClassifier.ts";
+const inlineDispatcherSrc939 = readFile(inlineDispatcherPath939);
+
+assert(
+  "inlineEmailClassifier — exports dispatchInlineClassification",
+  /export\s+function\s+dispatchInlineClassification\s*\(/.test(inlineDispatcherSrc939),
+  "The webhook + delta-sync paths import this exact named function. Renaming or removing it silently disables the inline pipeline and reverts to the 2-min cron.",
+);
+assert(
+  "inlineEmailClassifier — runs under a process-wide concurrency limit",
+  /INLINE_CLASSIFY_MAX_INFLIGHT/.test(inlineDispatcherSrc939),
+  "Without a semaphore, a webhook burst would hand thousands of concurrent OpenAI calls to extractEmailSignals at once and trigger the same rate-limit pile-up that Task #939 is meant to prevent.",
+);
+assert(
+  "inlineEmailClassifier — applies a per-message wall clock + AbortController",
+  /INLINE_CLASSIFY_TIMEOUT_MS/.test(inlineDispatcherSrc939) && /AbortController/.test(inlineDispatcherSrc939),
+  "A stuck OpenAI call must not pin a semaphore slot forever; the wall-clock + abort signal is what bounds the dispatcher's worst-case latency.",
+);
+
+const graphWebhookSrc939 = readFile("server/routes/graphWebhook.ts");
+assert(
+  "graphWebhook — imports dispatchInlineClassification",
+  /import\s*\{[^}]*dispatchInlineClassification[^}]*\}\s*from\s*["']\.\.\/services\/inlineEmailClassifier["']/.test(graphWebhookSrc939),
+  "Without this import the webhook handler can't dispatch the inline classifier and we'd silently fall back to the 2-min recovery cron.",
+);
+assert(
+  "graphWebhook — calls dispatchInlineClassification gated on inbound + messageId",
+  /dispatchInlineClassification\s*\(\s*\{\s*messageId:\s*ingestResult\.messageId\s*\}\s*\)/.test(graphWebhookSrc939) &&
+    /direction\s*===\s*["']inbound["']\s*&&\s*ingestResult\.messageId/.test(graphWebhookSrc939),
+  "The dispatch must be gated on direction === 'inbound' && messageId so outbound rep replies and dedupe-skipped rows never enter the OpenAI pipeline.",
+);
+assert(
+  "graphWebhook — UserMailboxIngestResult exposes messageId for the dispatcher",
+  /messageId\??:\s*string/.test(graphWebhookSrc939) &&
+    /return\s*\{\s*created:\s*true\s*,\s*direction\s*,\s*messageId:\s*message\.id/.test(graphWebhookSrc939),
+  "The dispatcher needs the freshly-persisted row's primary key to load it; surfacing messageId from the ingest helper avoids a redundant DB lookup at the call site.",
+);
+
+const deltaSyncSrc939 = readFile("server/services/mailboxDeltaSyncService.ts");
+assert(
+  "mailboxDeltaSyncService — imports dispatchInlineClassification",
+  /import\s*\{[^}]*dispatchInlineClassification[^}]*\}\s*from\s*["']\.\.\/services\/inlineEmailClassifier["']/.test(deltaSyncSrc939),
+  "When the polling delta path wins the upsert race (webhook missed or delayed) it must still hand off to the inline classifier; otherwise polling-fallback regresses to 2-min latency.",
+);
+assert(
+  "mailboxDeltaSyncService — calls dispatchInlineClassification gated on inbound + messageId",
+  /dispatchInlineClassification\s*\(\s*\{\s*messageId:\s*result\.messageId\s*\}\s*\)/.test(deltaSyncSrc939) &&
+    /result\.direction\s*===\s*["']inbound["']\s*&&\s*result\.messageId/.test(deltaSyncSrc939),
+  "Same gating as the webhook path so the two ingest sites have identical inline-dispatch semantics.",
+);
+
+const quoteIngestSrc939 = readFile("server/services/quoteEmailIngestion.ts");
+assert(
+  "quoteEmailIngestion — publishes customer_quote live-sync after quote insert",
+  /publish[^;]*customer_quote[^;]*opp\.id/.test(quoteIngestSrc939) ||
+    /publishLiveSync\([^)]*orgId[^)]*,\s*["']customer_quote["']\s*,\s*opp\.id/.test(quoteIngestSrc939),
+  "Without this publish the Quote Requests tab waits on its 30s React Query refetch even when the inline classifier just produced a quote — defeating the whole point of going event-driven.",
+);
+
+// Backfill / admin-drain isolation. These four files run on bulk-shaped
+// batch flows; importing the inline dispatcher there would route a 30-day
+// backfill through the live-pipeline limiter and burn OpenAI quota for
+// rows that don't need real-time treatment.
+for (const isolatedPath of [
+  "server/services/mailboxHistoricalBackfillService.ts",
+  "server/routes/emailPipelineOps.ts",
+  "server/routes/conversations.ts",
+  "server/services/conversationReplyCaptureService.ts",
+]) {
+  const fullPath = path.join(ROOT, isolatedPath);
+  if (!fs.existsSync(fullPath)) {
+    // The file may have been renamed; the guardrail is still meaningful
+    // for the ones that exist. Note this in the output so a renamer can
+    // re-anchor the assertion deliberately.
+    console.log(`  · skip ${isolatedPath} — file not found (re-anchor this assertion if intentional)`);
+    continue;
+  }
+  const src = fs.readFileSync(fullPath, "utf-8");
+  assert(
+    `${isolatedPath} — does NOT import dispatchInlineClassification (backfill / drain isolation)`,
+    !/dispatchInlineClassification/.test(src) &&
+      !/from\s*["'][^"']*inlineEmailClassifier["']/.test(src),
+    "Backfill + admin manual-drain are batch-shaped and intentionally bypass the inline pipeline. If you genuinely need inline-style behavior on one of these paths, build a separate batch-aware dispatcher rather than reusing the live one — that decision should be a deliberate code review, not an accidental import.",
+  );
+}
+
+const schedulerSrc939 = readFile("server/emailIntelligenceScheduler.ts");
+assert(
+  "emailIntelligenceScheduler — boot log advertises 'recovery sweep' framing",
+  /starting recovery sweep/.test(schedulerSrc939),
+  "The 2-min cron is now the recovery safety net for the inline pipeline. Re-framing the boot log makes that obvious in production logs and prevents a future on-call from concluding 'this cron is doing the work' when the dispatcher is silently broken.",
+);
+assert(
+  "emailIntelligenceScheduler — per-batch log calls itself a recovery sweep",
+  /recovery sweep:.*unprocessed message\(s\) the inline dispatcher did not handle/.test(schedulerSrc939),
+  "Anything this batch picks up is by definition something the inline path missed. The log should say so explicitly so backlog spikes are immediately attributable.",
+);
+
+// Watchdog classification-lag alert (Task #939 health metric).
+const watchdogSrc939 = readFile("server/services/mailboxWatchdogService.ts");
+assert(
+  "mailboxWatchdogService — runs the per-tick classification-lag check",
+  /export\s+async\s+function\s+runClassificationLagCheck\s*\(/.test(watchdogSrc939),
+  "The classification-lag metric is what tells admins the inline dispatcher is silently behind (e.g. OpenAI 5xx storm). Removing the per-tick check would degrade observability of exactly the regression Task #939 was meant to prevent.",
+);
+assert(
+  "mailboxWatchdogService — fires `classification_lag` alert key",
+  /["']classification_lag["']/.test(watchdogSrc939),
+  "The alert key must stay stable so the open-alerts dedupe ledger and the admin notification fan-out keep matching across deploys.",
+);
+assert(
+  "mailboxWatchdogService — requires consecutive lagging ticks before firing",
+  /CLASSIFICATION_LAG_CONSECUTIVE_TICKS/.test(watchdogSrc939),
+  "A single transient blip (large attachment, brief 429) must not page admins. Requiring N consecutive ticks at the 1-min cadence guarantees the lag is a real regression, not an isolated retry.",
+);
+
+const monitoredMailboxesSrc939 = readFile("server/routes/monitoredMailboxes.ts");
+assert(
+  "/api/admin/mailbox-health — surfaces classificationLag in the summary",
+  /classificationLag\s*:\s*\{[^}]*oldestAgeSeconds/.test(monitoredMailboxesSrc939),
+  "The admin health UI reads classificationLag.oldestAgeSeconds to render the inline-pipeline lag tile next to the per-mailbox health. Dropping this field reverts the admin to the old 'no idea why my quotes aren't showing' state.",
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

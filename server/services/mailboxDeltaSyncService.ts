@@ -25,6 +25,7 @@ import { JOB_NAMES, withHeartbeat } from "../lib/cronHeartbeat";
 // webhook path in `server/routes/graphWebhook.ts` so downstream subscribers
 // (`client/src/hooks/useLiveSync.ts`) cannot distinguish the two emit sources.
 import { publish as publishLiveSync } from "../services/liveSync";
+import { dispatchInlineClassification } from "../services/inlineEmailClassifier";
 import type { MailboxSyncFailure, MonitoredMailbox } from "@shared/schema";
 
 function log(msg: string) {
@@ -259,6 +260,17 @@ async function ingestMessage(
       );
     } catch (err) {
       log(`live-sync publish failed for ${mailbox.email}/${folder} ${providerMessageId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // Task #939 — polling-fallback equivalent of the inline classifier
+    // dispatch in `processGraphNotifications`. When the delta poll is the
+    // path that wins the upsert race (webhook missed or arrived later),
+    // we still want sub-15-second classification rather than waiting on
+    // the recovery cron. Inbound only — outbound rep mail does not feed
+    // the customer-quote pipeline. The dispatcher is fire-and-forget
+    // and never throws.
+    if (result.direction === "inbound" && result.messageId) {
+      dispatchInlineClassification({ messageId: result.messageId });
     }
   }
 }

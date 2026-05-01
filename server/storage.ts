@@ -1287,6 +1287,13 @@ getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined>;
   getUnprocessedEmailMessages(limit?: number): Promise<import('@shared/schema').EmailMessage[]>;
   getUnprocessedEmailMessagesForOrg(orgId: string, limit?: number): Promise<import('@shared/schema').EmailMessage[]>;
   getRecentUnprocessedEmailMessages(sinceHours: number, limit?: number): Promise<import('@shared/schema').EmailMessage[]>;
+  /** Task #939 — classification-lag health metric. Returns the oldest
+   *  inbound `email_messages` row in the org that still has
+   *  `processed_for_signals_at IS NULL`, plus the age in seconds. Used
+   *  by the watchdog to alert when the inline classifier is silently
+   *  falling behind (e.g. OpenAI 5xx storm) and the recovery cron
+   *  isn't draining fast enough. */
+  getOldestUnprocessedInboundEmailAge(orgId: string): Promise<{ oldestAt: Date | null; ageSeconds: number | null; backlogCount: number }>;
   getEmailSignalsByThread(threadId: string, since?: Date): Promise<import('@shared/schema').EmailSignal[]>;
   markEmailMessageProcessed(id: string): Promise<void>;
   // Task #751 — backlog drain + ops view support
@@ -7890,6 +7897,40 @@ export class DatabaseStorage implements IStorage {
     set.processedForSignalsAt = null;
     if (Object.keys(set).length === 0) return;
     await db.update(emailMessages).set(set).where(eq(emailMessages.id, id));
+  }
+
+  async getOldestUnprocessedInboundEmailAge(orgId: string): Promise<{
+    oldestAt: Date | null;
+    ageSeconds: number | null;
+    backlogCount: number;
+  }> {
+    // We restrict to inbound rows because outbound rep replies don't
+    // run through the customer-quote pipeline — counting them would
+    // make the metric noisy. The watchdog only cares about messages
+    // that *should* have been classified by the inline dispatcher.
+    function unwrapRows<T>(r: unknown): T[] {
+      if (Array.isArray(r)) return r as T[];
+      const wrapped = r as { rows?: T[] };
+      return wrapped?.rows ?? [];
+    }
+    const rows = await db.execute<{ oldest: Date | null; cnt: string }>(sql`
+      SELECT MIN(created_at) AS oldest, COUNT(*)::text AS cnt
+      FROM email_messages
+      WHERE org_id = ${orgId}
+        AND direction = 'inbound'
+        AND processed_for_signals_at IS NULL
+    `);
+    const row = unwrapRows<{ oldest: Date | null; cnt: string }>(rows)[0]
+      ?? { oldest: null, cnt: "0" };
+    const oldestAt = row.oldest ? new Date(row.oldest) : null;
+    const ageSeconds = oldestAt
+      ? Math.max(0, Math.floor((Date.now() - oldestAt.getTime()) / 1000))
+      : null;
+    return {
+      oldestAt,
+      ageSeconds,
+      backlogCount: parseInt(row.cnt ?? "0", 10),
+    };
   }
 
   async getEmailPipelineHealth(orgId: string): Promise<{

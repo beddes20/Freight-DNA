@@ -824,6 +824,23 @@ export async function ingestQuoteFromEmail(
     );
   }
 
+  // Task #939 — push live-sync hint on quote creation so any open
+  // /quote-requests tab in this org invalidates within ~50ms instead of
+  // waiting on the page's 30s React Query refetch. Lazy-imported to keep
+  // the live-sync module out of the cold-import graph for worker
+  // entrypoints that don't bundle it (mirrors the same lazy-require
+  // pattern used by `publishLiveSyncFromService` in `customerQuotes.ts`).
+  // Best-effort — a failed publish must NEVER fail the ingest write.
+  try {
+    const { publish: publishLiveSync } = await import("./liveSync");
+    publishLiveSync(message.orgId, "customer_quote", opp.id);
+  } catch (pubErr) {
+    console.warn(
+      `[quoteEmailIngestion] live-sync publish failed for quote ${opp.id}:`,
+      pubErr instanceof Error ? pubErr.message : pubErr,
+    );
+  }
+
   return { status: "ingested", quoteId: opp.id };
 }
 

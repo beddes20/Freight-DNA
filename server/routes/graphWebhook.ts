@@ -25,6 +25,7 @@ import {
 } from "../services/carrierContactMatchService";
 import { recordIntegrationEvent } from "../integrations/probeRegistry";
 import { publish as publishLiveSync } from "../services/liveSync";
+import { dispatchInlineClassification } from "../services/inlineEmailClassifier";
 
 function log(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -290,6 +291,20 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
         ingestResult.direction === "outbound" ? "mailbox_outbound" : "mailbox_inbound",
         conversationId ?? undefined,
       );
+
+      // Task #939 — event-driven email→quote pipeline. The moment an
+      // inbound customer email is persisted by the webhook path, hand the
+      // row off to the in-process classifier dispatcher. The dispatcher is
+      // fire-and-forget (returns void synchronously, runs async under a
+      // process-wide concurrency limiter + per-message wall clock) so the
+      // webhook handler can still return 202 to Microsoft Graph in <1s.
+      // Outbound rows skip this — quote ingestion only applies to inbound
+      // customer mail. Backfill / admin manual-drain paths intentionally
+      // do NOT call `dispatchInlineClassification`; their entry points are
+      // checked by `tests/code-quality-guardrails.test.ts` Section 28.
+      if (ingestResult.direction === "inbound" && ingestResult.messageId) {
+        dispatchInlineClassification({ messageId: ingestResult.messageId });
+      }
     }
     return;
   }
@@ -472,6 +487,13 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
 export interface UserMailboxIngestResult {
   created: boolean;
   direction: "inbound" | "outbound";
+  /** Internal `email_messages.id` for the persisted row. Populated only
+   *  when `created === true` so callers (Task #939 inline classifier
+   *  dispatch site below + the polling delta-sync equivalent) can hand
+   *  the freshly-persisted row off to the in-process classification
+   *  pipeline without re-querying. Undefined on the early-drop / dedupe
+   *  paths to keep "no row written, no follow-up work" obvious. */
+  messageId?: string;
 }
 
 async function processUserMailboxEmail(params: {
@@ -877,7 +899,9 @@ async function processUserMailboxEmail(params: {
   // Callers gate their `mailbox_inbound` / `mailbox_outbound` publish on
   // this exact `created` flag so the polling-fallback path emits live-sync
   // hints with the same idempotency guarantees as the webhook path.
-  return { created: true, direction };
+  // Task #939 — also surface `messageId` so callers can dispatch the new
+  // inline classifier for inbound rows without an extra DB lookup.
+  return { created: true, direction, messageId: message.id };
 }
 
 export { processUserMailboxEmail as processUserMailboxEmailForDelta };
