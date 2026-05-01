@@ -20,6 +20,12 @@ export interface LwqContextChipData {
   lastTouchAt: string | null;
   replyCount: number;
   hotReplyCount: number;
+  /**
+   * Task #871 — propagated from the LWQ scoring engine so AF rows can
+   * render the same Stable/Volatile/Hot badge LWQ shows. `null` when the
+   * lane has not been scored (treated as "Spot" by the badge).
+   */
+  stability?: "stable" | "volatile" | "hot" | null;
 }
 
 export interface LiveOppsChipData {

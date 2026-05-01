@@ -67,6 +67,38 @@ export interface LwqLaneContext {
   lastTouchAt: string | null;
   replyCount: number;
   hotReplyCount: number;
+  /**
+   * Task #871 — Lane stability badge derived from `scoreLane` volatility
+   * penalty. Mirrors what LWQ computes for its own list so AF rows can
+   * surface the same Stable/Volatile/Hot signal next to their cross-link
+   * chip. `null` when the lane has not been scored yet.
+   */
+  stability: LaneStability | null;
+}
+
+/**
+ * Stable = no volatility penalty; Volatile = mid penalty (CV > medThreshold);
+ * Hot    = high penalty (CV > highThreshold) — i.e. the most erratic lanes.
+ *
+ * The classifier is centralized so the AF row badge, LWQ row badge, and
+ * Lane Cockpit header strip cannot disagree.
+ */
+export type LaneStability = "stable" | "volatile" | "hot";
+
+export function classifyStability(
+  volatilityPenalty: number | null | undefined,
+): LaneStability | null {
+  if (volatilityPenalty === null || volatilityPenalty === undefined) return null;
+  if (!Number.isFinite(volatilityPenalty)) return null;
+  // recurringLaneCapacityEngine.LANE_CONFIG.scoring values:
+  //   volatilityHighPenalty = -10  (CV > 0.5)
+  //   volatilityMedPenalty  =  -5  (CV > 0.3)
+  //   else                  =   0
+  // We treat anything ≤ -8 as "hot" and the band (-8, 0) as "volatile" so a
+  // future tweak to the penalty scalars doesn't silently flip categories.
+  if (volatilityPenalty <= -8) return "hot";
+  if (volatilityPenalty < 0) return "volatile";
+  return "stable";
 }
 
 export interface OpenOppLaneContext {
@@ -113,6 +145,9 @@ export async function buildLwqContextByLaneSig(
       equipmentType: recurringLanes.equipmentType,
       ownerUserId: recurringLanes.ownerUserId,
       carriersContactedCount: recurringLanes.carriersContactedCount,
+      // Task #871 — pull the score factors jsonb so we can derive the
+      // Stable/Volatile/Hot stability badge without an extra round trip.
+      laneScoreFactors: recurringLanes.laneScoreFactors,
     })
     .from(recurringLanes)
     .where(eq(recurringLanes.orgId, orgId));
@@ -127,6 +162,7 @@ export async function buildLwqContextByLaneSig(
     equipmentType: string | null;
     ownerUserId: string | null;
     carriersContactedCount: number | null;
+    laneScoreFactors: any;
   }>).filter(l =>
     l.ownerUserId ? visibleSet.has(l.ownerUserId) : canSeeUnassigned,
   );
@@ -196,6 +232,10 @@ export async function buildLwqContextByLaneSig(
     // signature is a data-integrity edge case — pick the lower id which
     // matches default ordering.)
     if (out.has(sig)) continue;
+    const factors = lane.laneScoreFactors as { volatilityPenalty?: number } | null;
+    const volatilityPenalty = factors && typeof factors.volatilityPenalty === "number"
+      ? factors.volatilityPenalty
+      : null;
     out.set(sig, {
       laneId: lane.id,
       ownerUserId: lane.ownerUserId,
@@ -203,6 +243,7 @@ export async function buildLwqContextByLaneSig(
       lastTouchAt: last ? last.toISOString() : null,
       replyCount: replies.total,
       hotReplyCount: replies.hot,
+      stability: classifyStability(volatilityPenalty),
     });
   }
 

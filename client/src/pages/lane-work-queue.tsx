@@ -79,6 +79,13 @@ import {
 } from "@/components/ui/alert-dialog";
 import { CarrierOutreachPanel } from "@/components/CarrierOutreachPanel";
 import { LiveOppsChip } from "@/components/freight/lane-cross-link-chip";
+import { FreshnessPill, type FreshnessSignal } from "@/components/freight/freshness-pill";
+import { HiddenCountsDisclosure, type HiddenCountsSummary } from "@/components/freight/hidden-counts";
+import { LaneCockpitSheet } from "@/components/lane-cockpit/lane-cockpit-sheet";
+import {
+  useSharedLaneKeyboard,
+  useLaneCheatSheetRows,
+} from "@/hooks/useSharedLaneKeyboard";
 import { AccountSharingDialog } from "@/components/lane-work-queue/AccountSharingDialog";
 import { SendReplyAuditPanel } from "@/components/lane-work-queue/SendReplyAuditPanel";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -1924,6 +1931,19 @@ export default function LaneWorkQueuePage() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [openLaneId, setOpenLaneId] = useState<string | null>(null);
+  // Task #871 — Lane Cockpit overlay state. Opened by `L`, the row
+  // overflow chip, or `?` → "Open cockpit". Owns no business state, just
+  // the signature + display label so the sheet can render its title
+  // without waiting for the round-trip to resolve.
+  const [cockpitSignature, setCockpitSignature] = useState<string | null>(null);
+  const [cockpitLaneLabel, setCockpitLaneLabel] = useState<string | undefined>(undefined);
+  const [cockpitOpen, setCockpitOpen] = useState(false);
+  // Task #871 — focused row index drives the shared `j/k/Enter/L` flow.
+  // -1 means "nothing focused" (fresh page load) — j or k seed it to 0.
+  const [focusedIndex, setFocusedIndex] = useState<number>(-1);
+  // Task #871 — controls the keyboard cheat-sheet dialog.
+  const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+  const sharedCheatRows = useLaneCheatSheetRows({ surface: "lwq" });
   // Lazy initializers seed from URL once so a refresh / shared link replays
   // the same filtered view the rep was looking at. URL is updated below as
   // filters change so the back-button gives a sensible history of states.
@@ -2199,6 +2219,134 @@ export default function LaneWorkQueuePage() {
     });
   }, [filteredQueue?.unassigned, votriByLane]);
 
+  // Task #871 — AF-style freshness pill in the LWQ header. Shares the
+  // single org-scoped aggregate endpoint with the AF cockpit + Lane
+  // Cockpit overlay so all three surfaces show the same Fresh/Slowing/
+  // Stale story without disagreement.
+  const { data: freshnessSignal } = useQuery<FreshnessSignal>({
+    queryKey: ["/api/freight-freshness"],
+    queryFn: () => fetch("/api/freight-freshness").then(r => r.json()),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+
+  // Task #871 — flat ordering of every lane currently visible across the
+  // four buckets. j/k navigates this list and Enter / L acts on the
+  // focused entry. The order matches what reps see top-to-bottom on the
+  // page so keyboard focus tracks the visual order exactly.
+  const flatLaneOrder = useMemo(() => {
+    if (!filteredQueue) return [] as LaneItem[];
+    return [
+      ...sortedUnassigned,
+      ...filteredQueue.noContactable,
+      ...filteredQueue.assignedUntouched,
+      ...filteredQueue.inProgress,
+    ];
+  }, [filteredQueue, sortedUnassigned]);
+
+  // Task #871 — hidden-counts disclosure. Mirrors the AF disclosure: it
+  // explains *why* the visible total dropped (filters: high-frequency,
+  // manual-only, customer scope) without burying the rep in extra UI.
+  const hiddenCountsSummary = useMemo<HiddenCountsSummary | null>(() => {
+    if (!queue) return null;
+    const all: LaneItem[] = [
+      ...(queue.unassigned ?? []),
+      ...(queue.noContactable ?? []),
+      ...(queue.assignedUntouched ?? []),
+      ...(queue.inProgress ?? []),
+    ];
+    const totalInScope = all.length;
+    const visible = flatLaneOrder.length;
+    const hiddenByCustomer = customerFilter !== "__all__"
+      ? all.filter(i => i.companyName !== customerFilter).length
+      : 0;
+    const hiddenByHighFreq = highFreqOnly
+      ? all.filter(i => avgLoadsNum(i.avgLoadsPerWeek) < HIGH_FREQ_THRESHOLD).length
+      : 0;
+    const hiddenByManual = manualOnly
+      ? all.filter(i => !i.isManual).length
+      : 0;
+    return {
+      totalInScope,
+      visible,
+      buckets: [
+        { id: "customer-filter", label: `Customer filter (${customerFilter === "__all__" ? "none" : customerFilter})`, count: hiddenByCustomer },
+        { id: "high-freq-filter", label: "High-frequency filter (≥2/wk)", count: hiddenByHighFreq },
+        { id: "manual-only-filter", label: "Manual-lanes-only filter", count: hiddenByManual },
+      ],
+    };
+  }, [queue, flatLaneOrder, customerFilter, highFreqOnly, manualOnly]);
+
+  // Task #871 — open the cockpit overlay for a given LaneItem.
+  const openCockpitForLane = (it: LaneItem) => {
+    const sig = [
+      (it.origin ?? "").trim().toLowerCase(),
+      (it.originState ?? "").trim().toLowerCase(),
+      (it.destination ?? "").trim().toLowerCase(),
+      (it.destinationState ?? "").trim().toLowerCase(),
+      (it.equipmentType ?? "").trim().toLowerCase(),
+    ].join("|");
+    setCockpitSignature(sig);
+    setCockpitLaneLabel(
+      `${it.origin}${it.originState ? `, ${it.originState}` : ""} → ${it.destination}${it.destinationState ? `, ${it.destinationState}` : ""}`,
+    );
+    setCockpitOpen(true);
+  };
+
+  // Task #871 — wire the shared keyboard registry. Pages register only
+  // the handlers they own; the registry guarantees no two surfaces
+  // collide on the same key (asserted at module-load time).
+  useSharedLaneKeyboard({
+    enabled: !cockpitOpen && !showShortcutsHelp && !openLaneId && !buildLaneOpen && !sharingOpen,
+    handlers: {
+      next: () => {
+        if (flatLaneOrder.length === 0) return;
+        setFocusedIndex(prev => {
+          const start = prev < 0 ? -1 : prev;
+          return Math.min(flatLaneOrder.length - 1, start + 1);
+        });
+      },
+      prev: () => {
+        if (flatLaneOrder.length === 0) return;
+        setFocusedIndex(prev => {
+          if (prev < 0) return 0;
+          return Math.max(0, prev - 1);
+        });
+      },
+      open: () => {
+        const it = flatLaneOrder[focusedIndex];
+        if (it) setOpenLaneId(it.laneId);
+      },
+      openCockpit: () => {
+        const it = flatLaneOrder[focusedIndex >= 0 ? focusedIndex : 0];
+        if (it) openCockpitForLane(it);
+      },
+      swapSurface: () => {
+        const it = flatLaneOrder[focusedIndex];
+        // Carry the lane signature back to AF so the matching live row
+        // is auto-focused on landing — same contract AF→LWQ uses.
+        if (!it) return navigate("/available-freight?from=lane-work-queue");
+        const sig = [
+          (it.origin ?? "").trim().toLowerCase(),
+          (it.originState ?? "").trim().toLowerCase(),
+          (it.destination ?? "").trim().toLowerCase(),
+          (it.destinationState ?? "").trim().toLowerCase(),
+          (it.equipmentType ?? "").trim().toLowerCase(),
+        ].join("|");
+        navigate(`/available-freight?lane=${encodeURIComponent(sig)}&from=lane-work-queue`);
+      },
+      openContacts: () => {
+        const it = flatLaneOrder[focusedIndex];
+        if (it) setOpenLaneId(it.laneId);
+      },
+      openNote: () => {
+        const it = flatLaneOrder[focusedIndex];
+        if (it) setOpenLaneId(it.laneId);
+      },
+      showHelp: () => setShowShortcutsHelp(true),
+    },
+  });
+
   return (
     <div className="flex flex-col h-full">
       <div className="px-4 md:px-6 pt-2">
@@ -2256,6 +2404,31 @@ export default function LaneWorkQueuePage() {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Task #871 — AF-style freshness pill + hidden-counts disclosure
+              so the LWQ header tells the rep the same "is the import
+              healthy / what's hidden" story AF already does. */}
+          {freshnessSignal && (
+            <FreshnessPill
+              signal={freshnessSignal}
+              testId="pill-lwq-freshness"
+              popoverTestId="popover-lwq-freshness"
+            />
+          )}
+          <HiddenCountsDisclosure
+            summary={hiddenCountsSummary}
+            surface="lwq"
+            testId="disclosure-hidden-lwq"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs gap-1.5"
+            onClick={() => setShowShortcutsHelp(true)}
+            data-testid="btn-keyboard-help-lwq"
+            title="Keyboard shortcuts (?)"
+          >
+            ?
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -2802,6 +2975,47 @@ export default function LaneWorkQueuePage() {
           queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
         }}
       />
+
+      {/* Task #871 — Lane Cockpit overlay (single round-trip) */}
+      <LaneCockpitSheet
+        signature={cockpitSignature}
+        laneLabel={cockpitLaneLabel}
+        openedFrom="lwq"
+        open={cockpitOpen}
+        onOpenChange={(o) => {
+          setCockpitOpen(o);
+          if (!o) setCockpitSignature(null);
+        }}
+      />
+
+      {/* Task #871 — keyboard cheat sheet (sourced from the shared registry
+          so the help dialog and the actual handlers can never disagree). */}
+      <Dialog open={showShortcutsHelp} onOpenChange={setShowShortcutsHelp}>
+        <DialogContent data-testid="dialog-keyboard-help-lwq" className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Keyboard shortcuts</DialogTitle>
+            <DialogDescription>
+              These hot keys work across the Lane Work Queue and Available Freight.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="text-sm">
+            <ul className="divide-y divide-border">
+              {sharedCheatRows.map(row => (
+                <li
+                  key={row.key}
+                  className="py-2 flex items-center justify-between"
+                  data-testid={`row-cheat-${row.key === "?" ? "help" : row.key}`}
+                >
+                  <span>{row.label}</span>
+                  <kbd className="px-2 py-0.5 rounded border border-border bg-muted text-xs">
+                    {row.key === " " ? "Space" : row.key}
+                  </kbd>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

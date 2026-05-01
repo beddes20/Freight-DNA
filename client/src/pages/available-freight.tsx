@@ -1,6 +1,6 @@
 // Available Freight Cockpit (Task #601) — triage cockpit page.
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback, Fragment } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
@@ -45,6 +45,16 @@ import { todayIsoInOrgTz, ORG_LOCAL_TIMEZONE } from "@shared/orgLocalDate";
 import { CarrierReasonsPopover } from "@/components/CarrierReasonsPopover";
 import { AutoPilotPreviewDrawer } from "@/components/freight/auto-pilot-preview-drawer";
 import { LwqContextChip, type LwqContextChipData } from "@/components/freight/lane-cross-link-chip";
+// Task #871 — shared lane-cockpit + freshness pill modules.
+import {
+  FreshnessPill,
+  freshnessDotTone,
+  type FreshnessSignal,
+  type FreshnessProducerSignal as FreshnessProducer,
+} from "@/components/freight/freshness-pill";
+import { LaneStabilityBadge } from "@/components/freight/lane-stability-badge";
+import { LaneCockpitSheet } from "@/components/lane-cockpit/lane-cockpit-sheet";
+import { useSharedLaneKeyboard, useLaneCheatSheetRows } from "@/hooks/useSharedLaneKeyboard";
 
 
 interface CockpitChip {
@@ -147,27 +157,9 @@ interface UserOption {
 
 interface SavedViewResponse { view?: SavedView }
 
-interface FreshnessProducer {
-  id: "won_load_autopilot" | "available_freight_importer" | "manual";
-  label: string;
-  lastEventAt: string | null;
-  ageMinutes: number | null;
-  count24h: number;
-  healthState: "green" | "yellow" | "red";
-}
-interface FreshnessSignal {
-  overall: {
-    healthState: "green" | "yellow" | "red";
-    lastEventAt: string | null;
-    ageMinutes: number | null;
-  };
-  producers: FreshnessProducer[];
-  thresholds: {
-    greenMaxMinutes: number;
-    yellowMaxMinutes: number;
-    redMissingMinutes: number;
-  };
-}
+// Task #871 — FreshnessSignal/FreshnessPill now imported at the top of
+// the file from "@/components/freight/freshness-pill" so LWQ + the Lane
+// Cockpit overlay reuse the IDENTICAL pill from the same source.
 
 interface CockpitResponse {
   items: CockpitItem[];
@@ -309,88 +301,9 @@ function freshnessPulseColor(min: number | null) {
 // a popover with the per-producer breakdown (Won Load Autopilot / Importer /
 // Manual) so reps can spot a stalled feed at a glance instead of seeing a
 // silently-empty cockpit and assuming nothing is happening.
-function freshnessHeaderPillTone(state: "green" | "yellow" | "red"): string {
-  switch (state) {
-    case "green":
-      return "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
-    case "yellow":
-      return "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300";
-    case "red":
-      return "border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300";
-  }
-}
-function freshnessDotTone(state: "green" | "yellow" | "red"): string {
-  switch (state) {
-    case "green":
-      return "bg-emerald-500 animate-pulse";
-    case "yellow":
-      return "bg-amber-500";
-    case "red":
-      return "bg-red-500";
-  }
-}
-function freshnessLabel(signal: FreshnessSignal | undefined): string {
-  if (!signal) return "Freshness pending";
-  const { ageMinutes, healthState, lastEventAt } = signal.overall;
-  if (lastEventAt == null || ageMinutes == null) return "No ingestion in 24h";
-  const word = healthState === "green" ? "Fresh" : healthState === "yellow" ? "Slowing" : "Stale";
-  return `${word} · ${fmtAge(ageMinutes)} ago`;
-}
-function FreshnessPill({ signal }: { signal: FreshnessSignal | undefined }) {
-  const state = signal?.overall.healthState ?? "red";
-  const label = freshnessLabel(signal);
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium hover:opacity-90 ${freshnessHeaderPillTone(state)}`}
-          data-testid="pill-freight-freshness"
-          data-freshness-state={state}
-        >
-          <span className={`inline-block h-2 w-2 rounded-full ${freshnessDotTone(state)}`} />
-          {label}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 p-3 text-xs" data-testid="popover-freight-freshness">
-        <div className="font-semibold text-sm mb-2">Ingestion freshness</div>
-        {!signal ? (
-          <div className="text-muted-foreground">No signal available yet.</div>
-        ) : (
-          <>
-            <div className="text-muted-foreground mb-2">
-              Most recent event across all producers:{" "}
-              {signal.overall.lastEventAt
-                ? `${fmtAge(signal.overall.ageMinutes)} ago`
-                : "none in 24h"}
-            </div>
-            <div className="divide-y divide-border">
-              {signal.producers.map((p) => (
-                <div
-                  key={p.id}
-                  className="flex items-center justify-between py-1.5"
-                  data-testid={`row-freshness-producer-${p.id}`}
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className={`inline-block h-2 w-2 rounded-full ${freshnessDotTone(p.healthState)}`} />
-                    <span className="truncate">{p.label}</span>
-                  </div>
-                  <div className="text-muted-foreground tabular-nums whitespace-nowrap">
-                    {p.lastEventAt ? `${fmtAge(p.ageMinutes)} ago` : "dark"}
-                    <span className="ml-2 text-[10px]">({p.count24h}/24h)</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="mt-2 pt-2 border-t border-border text-[10px] text-muted-foreground">
-              Green ≤{signal.thresholds.greenMaxMinutes}m · Yellow ≤{signal.thresholds.yellowMaxMinutes}m · Red beyond
-            </div>
-          </>
-        )}
-      </PopoverContent>
-    </Popover>
-  );
-}
+// Task #871 — FreshnessPill / freshnessDotTone / freshnessLabel /
+// freshnessHeaderPillTone now come from "@/components/freight/freshness-pill"
+// so LWQ + the Lane Cockpit overlay render the IDENTICAL pill.
 
 interface CarrierOption {
   id: string;
@@ -572,6 +485,11 @@ export default function AvailableFreightPage() {
   const [outcomeApplyToRateBand, setOutcomeApplyToRateBand] = useState(true);
   const [outcomeOfferRecurringLane, setOutcomeOfferRecurringLane] = useState(true);
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+  // Task #871 — Lane Cockpit overlay state. Opens via the shared keyboard
+  // (`L` key), the row overflow menu, and the "Open cockpit" chip.
+  const [cockpitSignature, setCockpitSignature] = useState<string | null>(null);
+  const [cockpitLaneLabel, setCockpitLaneLabel] = useState<string | undefined>(undefined);
+  const [cockpitOpen, setCockpitOpen] = useState(false);
   const [lastSeenAt, setLastSeenAt] = useState<string | null>(() => {
     try { return localStorage.getItem("cockpit:lastSeenAt"); } catch { return null; }
   });
@@ -1305,6 +1223,55 @@ export default function AvailableFreightPage() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onKey]);
+
+  // Task #871 — bind shared keys (L for cockpit, w/c/n for cross-surface
+  // jumps). The shared hook only fires for handlers we register, so AF's
+  // existing j/k/Enter/?/x/a/s/r path above still owns those keys.
+  const openCockpitForFocused = useCallback(() => {
+    const it = filtered[focusIndex];
+    if (!it) return;
+    const o = it.opportunity;
+    const sig = [
+      (o.origin ?? "").trim().toLowerCase(),
+      (o.originState ?? "").trim().toLowerCase(),
+      (o.destination ?? "").trim().toLowerCase(),
+      (o.destinationState ?? "").trim().toLowerCase(),
+      (o.equipmentType ?? "").trim().toLowerCase(),
+    ].join("|");
+    setCockpitSignature(sig);
+    setCockpitLaneLabel(
+      `${o.origin}${o.originState ? `, ${o.originState}` : ""} → ${o.destination}${o.destinationState ? `, ${o.destinationState}` : ""}`,
+    );
+    setCockpitOpen(true);
+  }, [filtered, focusIndex]);
+
+  useSharedLaneKeyboard({
+    enabled: !showShortcutsHelp && !cockpitOpen,
+    handlers: {
+      openCockpit: openCockpitForFocused,
+      swapSurface: () => {
+        const it = filtered[focusIndex];
+        if (!it) return navigate("/lanes/work-queue?from=available-freight");
+        const ctxId = it.lwqContext?.laneId;
+        navigate(
+          ctxId
+            ? `/lanes/work-queue?laneId=${encodeURIComponent(ctxId)}&from=available-freight`
+            : `/lanes/work-queue?from=available-freight`,
+        );
+      },
+      openContacts: () => {
+        const it = filtered[focusIndex];
+        if (it) navigate(`/available-freight/${it.opportunity.id}#contacts`);
+      },
+      openNote: () => {
+        const it = filtered[focusIndex];
+        if (it) navigate(`/available-freight/${it.opportunity.id}#notes`);
+      },
+    },
+  });
+
+  // Cheat-sheet rows sourced from the same registry that fires the keys.
+  const sharedCheatRows = useLaneCheatSheetRows({ surface: "af" });
 
   function toggleSelected(id: string) {
     setSelected(prev => {
@@ -2592,22 +2559,57 @@ export default function AvailableFreightPage() {
             <DialogTitle>Keyboard shortcuts</DialogTitle>
             <DialogDescription>Move faster through the freight cockpit.</DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
-            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">j</kbd><span>Focus next row</span>
-            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">k</kbd><span>Focus previous row</span>
-            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">x</kbd><span>Toggle selection on focused row</span>
-            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">Enter</kbd><span>Open focused opportunity</span>
-            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">A</kbd><span>Approve selected</span>
-            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">S</kbd><span>Send top 3 carriers for selected</span>
-            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">R</kbd><span>Reassign selected (or focused) row</span>
-            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">?</kbd><span>Show this cheat sheet</span>
-            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">Esc</kbd><span>Clear selection / close dialogs</span>
+          {/* Task #871 — shared rows from the keyboard registry so AF + LWQ
+              cheat sheets cannot drift. Surface-specific keys (a/s/r/x) are
+              listed below the shared block. */}
+          <div className="space-y-3">
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">
+                Shared lane shortcuts
+              </div>
+              <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
+                {sharedCheatRows.map(r => (
+                  <Fragment key={r.key}>
+                    <kbd
+                      className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs"
+                      data-testid={`cheat-key-af-${r.key}`}
+                    >
+                      {r.key}
+                    </kbd>
+                    <span data-testid={`cheat-label-af-${r.key}`}>{r.label}</span>
+                  </Fragment>
+                ))}
+              </div>
+            </div>
+            <div className="border-t border-border pt-3">
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">
+                Available Freight only
+              </div>
+              <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">x</kbd><span>Toggle selection on focused row</span>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">A</kbd><span>Approve selected</span>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">S</kbd><span>Send top 3 carriers for selected</span>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">R</kbd><span>Reassign selected (or focused) row</span>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">Esc</kbd><span>Clear selection / close dialogs</span>
+              </div>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowShortcutsHelp(false)} data-testid="button-close-shortcuts">Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Task #871 — Lane Cockpit overlay. Triggered by `L`, the row
+          overflow menu, and the cross-link chip. Single backend round-trip
+          to /api/lanes/cockpit. */}
+      <LaneCockpitSheet
+        signature={cockpitSignature}
+        openedFrom="af"
+        open={cockpitOpen}
+        onOpenChange={setCockpitOpen}
+        laneLabel={cockpitLaneLabel}
+      />
 
       <Dialog open={saveViewOpen} onOpenChange={setSaveViewOpen}>
         <DialogContent>
@@ -2809,6 +2811,14 @@ function CockpitRowView(props: {
           {fmtLane(opp.origin, opp.originState, opp.destination, opp.destinationState)}
         </Link>
         {opp.equipmentType && <span className="text-xs text-muted-foreground">{opp.equipmentType}</span>}
+        {/* Task #871 — Stable/Volatile/Hot stability badge propagated from
+            LWQ via the lwqContext payload. Falls back to the "Spot" pill
+            when no recurring counterpart exists, so the column never
+            renders empty on AF rows. */}
+        <LaneStabilityBadge
+          stability={item.lwqContext?.stability ?? null}
+          testId={`badge-stability-${opp.id}`}
+        />
         {item.lwqContext && (
           <LwqContextChip
             data={item.lwqContext}

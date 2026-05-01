@@ -1363,10 +1363,22 @@ console.log("\n── 21. Available Freight — ingestion freshness pill (Phase 
   );
 
   const pageSrc = readFile("client/src/pages/available-freight.tsx");
+  // Task #871 — the FreshnessSignal type + pill component were extracted
+  // into client/src/components/freight/freshness-pill.tsx so LWQ can reuse
+  // them. The AF page imports the type and renders <FreshnessPill /> in
+  // its header; the type declaration + stable testid live in the shared
+  // module now.
+  const freshnessPillSrc = readFile("client/src/components/freight/freshness-pill.tsx");
   assert(
-    "client/src/pages/available-freight.tsx — declares FreshnessSignal type",
-    /interface\s+FreshnessSignal\b/.test(pageSrc),
-    "Frontend must declare a FreshnessSignal type matching the server contract.",
+    "client/src/components/freight/freshness-pill.tsx — declares FreshnessSignal type",
+    /interface\s+FreshnessSignal\b/.test(freshnessPillSrc),
+    "Shared FreshnessPill module must declare a FreshnessSignal type matching the server contract.",
+  );
+  assert(
+    "client/src/pages/available-freight.tsx — imports FreshnessSignal from the shared pill module",
+    /from\s+["']@\/components\/freight\/freshness-pill["']/.test(pageSrc)
+      && /\bFreshnessSignal\b/.test(pageSrc),
+    "AF page must import FreshnessSignal from the shared freshness-pill module so types stay in lock-step.",
   );
   assert(
     "client/src/pages/available-freight.tsx — renders the FreshnessPill in the header",
@@ -1374,8 +1386,8 @@ console.log("\n── 21. Available Freight — ingestion freshness pill (Phase 
     "Header must render <FreshnessPill signal={feed?.freshness} /> so the user sees freshness on every page load.",
   );
   assert(
-    "client/src/pages/available-freight.tsx — pill exposes data-testid='pill-freight-freshness'",
-    /data-testid="pill-freight-freshness"/.test(pageSrc),
+    "client/src/components/freight/freshness-pill.tsx — pill exposes data-testid='pill-freight-freshness'",
+    /["']pill-freight-freshness["']/.test(freshnessPillSrc),
     "Stable testid required for end-to-end coverage of the freshness signal.",
   );
 }
