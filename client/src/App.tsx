@@ -422,7 +422,19 @@ function useGlobalKeyboardShortcuts(openSwitchboard: () => void) {
       if (e.shiftKey && !isEditable && !e.metaKey && !e.ctrlKey) {
         if (e.key === "A") { e.preventDefault(); navigate("/customers"); return; }
         if (e.key === "D") { e.preventDefault(); navigate("/"); return; }
-        if (e.key === "L") { e.preventDefault(); navigate("/lanes/work-queue"); return; }
+        if (e.key === "L") {
+          // Task #871/#889 — Shift+L is the canonical "open Lane Cockpit"
+          // binding on the two lane surfaces. Yield to the page-level
+          // useSharedLaneKeyboard registry there instead of re-navigating
+          // away (or unmounting AF mid-keypress, which silently swallowed
+          // the cockpit-open intent). Match the surfaces exactly — the
+          // AF subroutes (`/available-freight/:id`,
+          // `/available-freight/capacity-matches`) don't bind Shift+L
+          // themselves and should keep the global "jump to LWQ" behavior.
+          const path = window.location.pathname;
+          if (path === "/available-freight" || path === "/lanes/work-queue") return;
+          e.preventDefault(); navigate("/lanes/work-queue"); return;
+        }
       }
     };
     document.addEventListener("keydown", handler);

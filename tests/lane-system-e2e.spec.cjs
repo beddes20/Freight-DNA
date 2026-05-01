@@ -121,7 +121,8 @@ test.beforeAll(async () => {
   // other's state. Each lane lives in its OWN stamped customer group so
   // assertions stay isolated from each other and from any pre-existing
   // manual lanes for the real company.
-  async function seedLane(suffix) {
+  async function seedLane(suffix, opts = {}) {
+    const { withLiveOpp = false } = opts;
     const stamp = `${shortId()}-${suffix}`;
     const laneId = `lane-e2e-${stamp}`;
     const origin = `OriginCity-${stamp}`;
@@ -146,11 +147,46 @@ test.beforeAll(async () => {
                true, true, 100, 100, 0, 5, 5, 0, 0)`,
       [laneId, orgId, company.id, companyName, origin, destination],
     );
-    return { laneId, origin, destination, companyName };
+    // Task #889 — for the cockpit-keyboard test, also seed a freight
+    // opportunity that shares the lane signature so BOTH faces of the
+    // cockpit (recurring + live) have data to render. Status must be one
+    // of OPEN_OPP_STATUSES (see server/routes/laneCockpit.ts) for the
+    // live half to surface it.
+    let oppId = null;
+    if (withLiveOpp) {
+      const pickup = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      const r = await pool.query(
+        `INSERT INTO freight_opportunities
+           (org_id, company_id, mode, origin, origin_state, destination, destination_state,
+            equipment_type, pickup_window_start, pickup_window_end, status, urgency_score,
+            owner_user_id, notes)
+         VALUES ($1, $2, 'exact_load', $3, 'GA', $4, 'TX', 'Reefer', $5, $5,
+                 'ready_to_send', 999, $6, $7)
+         RETURNING id`,
+        [orgId, company.id, origin, destination, pickup, DEV_AUTH_BYPASS_USER_ID,
+         `e2e-cockpit-${stamp}`],
+      );
+      oppId = r.rows[0].id;
+    }
+    // Canonical lane signature the cockpit endpoint expects: the same
+    // lower-cased pipe-joined string the LWQ + AF pages build before
+    // calling /api/lanes/cockpit.
+    const signature = [
+      origin.toLowerCase(),
+      'ga',
+      destination.toLowerCase(),
+      'tx',
+      'reefer',
+    ].join('|');
+    return { laneId, origin, destination, companyName, oppId, signature };
   }
 
   const assignSeed = await seedLane('a');
   const reassignSeed = await seedLane('r');
+  // Task #889 — dedicated lane + matching live opp for the L-key test.
+  // Kept separate from the assign/reassign seeds so those tests can
+  // freely mutate ownership without affecting the cockpit assertions.
+  const cockpitSeed = await seedLane('c', { withLiveOpp: true });
 
   seeded = {
     orgId,
@@ -158,6 +194,7 @@ test.beforeAll(async () => {
     otherUser, // { id, name, role }
     assign: assignSeed,
     reassign: reassignSeed,
+    cockpit: cockpitSeed,
   };
 });
 
@@ -168,7 +205,18 @@ test.afterAll(async () => {
   // the pool would crash subsequent setup with "Cannot use a pool after
   // calling end on the pool". The worker process exits cleanly without the
   // explicit close.
-  const laneIds = [seeded?.assign?.laneId, seeded?.reassign?.laneId].filter(Boolean);
+  // Task #889 — drop the matching live opp first so the deletion of its
+  // recurring lane below doesn't leave an orphan freight_opportunity
+  // hanging around.
+  const oppIds = [seeded?.cockpit?.oppId].filter(Boolean);
+  for (const oppId of oppIds) {
+    await pool.query(`DELETE FROM freight_opportunities WHERE id = $1`, [oppId]).catch(() => {});
+  }
+  const laneIds = [
+    seeded?.assign?.laneId,
+    seeded?.reassign?.laneId,
+    seeded?.cockpit?.laneId,
+  ].filter(Boolean);
   for (const laneId of laneIds) {
     // outreach logs cascade off the lane via FK ON DELETE SET NULL — clean
     // them explicitly so re-runs of the suite don't leave inbox spam behind.
@@ -406,5 +454,131 @@ test.describe('Lane assignment + SSE cross-tab sync', () => {
         [lane.laneId],
       );
     }
+  });
+});
+
+// Task #889 — Shift+L opens the Lane Cockpit overlay on both lane
+// surfaces. The shared keyboard registry already has unit coverage for
+// duplicate-detection and dispatch
+// (`client/src/lib/__tests__/sharedLaneKeyboard.test.ts`); this is the
+// missing end-to-end leg that exercises a real page: focus a row →
+// press uppercase L → assert <LaneCockpitSheet> renders and BOTH faces
+// (recurring + live) are wired up against the same lane signature.
+test.describe('Lane Cockpit keyboard (Task #889)', () => {
+  test.setTimeout(60_000);
+
+  test('LWQ: Shift+L on the focused row opens the cockpit with both faces wired up', async ({ page }) => {
+    const lane = seeded.cockpit;
+
+    // Filter to the seeded customer so the lane is the only group on the
+    // page — keeps the focus index deterministic regardless of how many
+    // other manual lanes the dev-bypass org carries.
+    await gotoAuth(
+      page,
+      `/lanes/work-queue?customer=${encodeURIComponent(lane.companyName)}`,
+    );
+
+    // Wait for the seeded lane row to render — it sits under the
+    // `bucket-unassigned` group (no owner) and inside the stamped
+    // customer group container.
+    const row = page.locator(`[data-testid="work-queue-row-${lane.laneId}"]`);
+    // The customer group is collapsed by default; expand it so the row
+    // mounts and the shared keyboard's `next` (j) handler can focus it.
+    const groupToggle = page
+      .locator(`[data-testid="customer-group-toggle-${lane.companyName}"]`)
+      .first();
+    await expect(groupToggle).toBeVisible({ timeout: 15_000 });
+    await groupToggle.click();
+    await expect(row).toBeVisible({ timeout: 10_000 });
+
+    // Drop focus onto a neutral element first (the page body) so the
+    // shared keyboard listener — which skips INPUT/TEXTAREA/SELECT —
+    // actually fires. Clicking a generic surface area achieves this
+    // without triggering the row's own onClick (which opens a drill).
+    await page.locator('body').click({ position: { x: 5, y: 5 } });
+
+    // Shared keyboard `next` handler — focuses index 0 (the seeded row).
+    await page.keyboard.press('j');
+    // Uppercase L → cockpit. Shift is the only modifier the registry
+    // tolerates (the hook bails on meta/ctrl/alt).
+    await page.keyboard.press('Shift+L');
+
+    // The sheet itself + both panes must mount. `data-opened-from="lwq"`
+    // proves the binding fired from this surface (vs e.g. a stale state
+    // from a prior test).
+    const sheet = page.locator('[data-testid="sheet-lane-cockpit"]');
+    await expect(sheet).toBeVisible({ timeout: 10_000 });
+    await expect(sheet).toHaveAttribute('data-opened-from', 'lwq');
+
+    // Title carries the seeded origin → destination so we know the
+    // cockpit opened on the RIGHT lane, not the first row of some
+    // unrelated bucket.
+    await expect(page.locator('[data-testid="text-cockpit-lane"]'))
+      .toContainText(`${lane.origin}, GA → ${lane.destination}, TX`);
+
+    // Both faces wired up: recurring pane shows the seeded customer,
+    // live pane shows the matching freight opp we seeded with the same
+    // signature.
+    await expect(page.locator('[data-testid="pane-cockpit-recurring"]'))
+      .toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-testid="pane-cockpit-live"]'))
+      .toBeVisible();
+    await expect(page.locator('[data-testid="stat-cockpit-customer"]'))
+      .toContainText(lane.companyName);
+    await expect(page.locator(`[data-testid="row-cockpit-live-${lane.oppId}"]`))
+      .toBeVisible({ timeout: 10_000 });
+  });
+
+  test('AF: Shift+L on the focused row opens the cockpit with both faces wired up', async ({ page }) => {
+    const lane = seeded.cockpit;
+
+    // `?lane=<signature>` filters AF down to just the matching opp so the
+    // seeded row is unambiguously row 0 — same deep-link contract LWQ
+    // uses to scope back into AF.
+    await gotoAuth(
+      page,
+      `/available-freight?lane=${encodeURIComponent(lane.signature)}`,
+    );
+
+    // Confirm the deep-link banner mounted — proves the URL filter took
+    // effect on first paint and the visible feed is scoped to our lane.
+    await expect(page.locator('[data-testid="banner-lane-filter"]'))
+      .toBeVisible({ timeout: 15_000 });
+
+    const row = page.locator(`[data-testid="row-opportunity-${lane.oppId}"]`);
+    await expect(row).toBeVisible({ timeout: 15_000 });
+
+    // AF's openCockpit handler reads `filtered[focusIndex]` and bails
+    // when focusIndex < 0, so we MUST focus a row before pressing L.
+    // Drop focus to a neutral element, then press `j` to set focusIndex=0
+    // via AF's local navigation key. Because the `?lane=` filter has
+    // narrowed `filtered` to exactly our seeded opp, 0 is unambiguously
+    // the right row — confirmed by the focus highlight wait below.
+    await page.locator('body').click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press('j');
+    await expect(page.locator(
+      `[data-testid="row-opportunity-${lane.oppId}"].bg-accent\\/40`,
+    )).toBeVisible({ timeout: 3_000 });
+
+    await page.keyboard.press('Shift+L');
+
+    const sheet = page.locator('[data-testid="sheet-lane-cockpit"]');
+    await expect(sheet).toBeVisible({ timeout: 10_000 });
+    await expect(sheet).toHaveAttribute('data-opened-from', 'af');
+
+    await expect(page.locator('[data-testid="text-cockpit-lane"]'))
+      .toContainText(`${lane.origin}, GA → ${lane.destination}, TX`);
+
+    // Both faces present: live half lists our seeded opp; recurring
+    // half lists the matching recurring lane (signature shared by
+    // construction in seedLane(..., { withLiveOpp: true })).
+    await expect(page.locator('[data-testid="pane-cockpit-recurring"]'))
+      .toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-testid="pane-cockpit-live"]'))
+      .toBeVisible();
+    await expect(page.locator(`[data-testid="row-cockpit-live-${lane.oppId}"]`))
+      .toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-testid="stat-cockpit-customer"]'))
+      .toContainText(lane.companyName);
   });
 });

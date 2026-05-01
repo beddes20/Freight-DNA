@@ -126,6 +126,17 @@ export function LaneCockpitSheet({
   const query = useQuery<LaneCockpitResponse>({
     queryKey: ["/api/lanes/cockpit", { signature }],
     enabled: open && !!signature,
+    // The default queryFn joins the queryKey with "/" — with an object segment
+    // that produces "/api/lanes/cockpit/[object Object]" which 404s. Build the
+    // URL explicitly so both panes actually receive data.
+    queryFn: async () => {
+      const res = await fetch(
+        `/api/lanes/cockpit?signature=${encodeURIComponent(signature ?? "")}`,
+        { credentials: "include" },
+      );
+      if (!res.ok) throw new Error(`cockpit fetch failed: ${res.status}`);
+      return (await res.json()) as LaneCockpitResponse;
+    },
   });
 
   const data = query.data;
