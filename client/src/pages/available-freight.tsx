@@ -1228,9 +1228,11 @@ export default function AvailableFreightPage() {
   // Task #871 — bind shared keys (L for cockpit, w/c/n for cross-surface
   // jumps). The shared hook only fires for handlers we register, so AF's
   // existing j/k/Enter/?/x/a/s/r path above still owns those keys.
-  const openCockpitForFocused = useCallback(() => {
-    const it = filtered[focusIndex];
-    if (!it) return;
+  // Task #888 — `openCockpitForItem` is the row-keyed entry point used by
+  // both the keyboard shortcut (focused row) and the per-row "Open in
+  // Cockpit" overflow-menu item, so they always pin the overlay to the
+  // same lane signature contract.
+  const openCockpitForItem = useCallback((it: CockpitItem) => {
     const o = it.opportunity;
     const sig = [
       (o.origin ?? "").trim().toLowerCase(),
@@ -1244,7 +1246,12 @@ export default function AvailableFreightPage() {
       `${o.origin}${o.originState ? `, ${o.originState}` : ""} → ${o.destination}${o.destinationState ? `, ${o.destinationState}` : ""}`,
     );
     setCockpitOpen(true);
-  }, [filtered, focusIndex]);
+  }, []);
+  const openCockpitForFocused = useCallback(() => {
+    const it = filtered[focusIndex];
+    if (!it) return;
+    openCockpitForItem(it);
+  }, [filtered, focusIndex, openCockpitForItem]);
 
   useSharedLaneKeyboard({
     enabled: !showShortcutsHelp && !cockpitOpen,
@@ -1953,6 +1960,7 @@ export default function AvailableFreightPage() {
                                 onOpenDraft={() => setDraftPreviewId(it.opportunity.id)}
                                 onLogOutcome={() => setOutcomeTargetId(it.opportunity.id)}
                                 onToggleAutoPilot={() => toggleAutoPilot(it)}
+                                onOpenCockpit={() => openCockpitForItem(it)}
                                 index={idx}
                                 lastSeenAt={lastSeenAt}
                                 compact
@@ -2002,6 +2010,7 @@ export default function AvailableFreightPage() {
                             onOpenDraft={() => setDraftPreviewId(it.opportunity.id)}
                             onLogOutcome={() => setOutcomeTargetId(it.opportunity.id)}
                             onToggleAutoPilot={() => toggleAutoPilot(it)}
+                            onOpenCockpit={() => openCockpitForItem(it)}
                             index={idx}
                             lastSeenAt={lastSeenAt}
                           />
@@ -2758,11 +2767,15 @@ function CockpitRowView(props: {
   onOpenDraft?: () => void;
   onLogOutcome?: () => void;
   onToggleAutoPilot?: () => void;
+  // Task #888 — opens the LaneCockpitSheet pinned to this row's lane
+  // signature. Mirrors the `L` keyboard shortcut so trackpad users have
+  // the same affordance from the row's overflow menu.
+  onOpenCockpit?: () => void;
   index: number;
   lastSeenAt: string | null;
   compact?: boolean;
 }) {
-  const { item, isSelected, isFocused, onToggleSelected, onFocus, onAction, onReassign, onOpenDraft, onLogOutcome, onToggleAutoPilot, lastSeenAt } = props;
+  const { item, isSelected, isFocused, onToggleSelected, onFocus, onAction, onReassign, onOpenDraft, onLogOutcome, onToggleAutoPilot, onOpenCockpit, lastSeenAt } = props;
   // Task #653 — local navigate so the "Make this recurring" item can deep-link
   // into LWQ. Defined here (rather than passed as a prop) to keep the row's
   // public surface unchanged.
@@ -2901,6 +2914,14 @@ function CockpitRowView(props: {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuLabel>Quick actions</DropdownMenuLabel>
+              {/* Task #888 — trackpad-friendly mirror of the `L` keyboard
+                  shortcut. Opens LaneCockpitSheet pinned to this row's
+                  lane signature (same contract as the keyboard handler). */}
+              {onOpenCockpit && (
+                <DropdownMenuItem onClick={() => onOpenCockpit()} data-testid={`menu-open-cockpit-${opp.id}`}>
+                  Open in Cockpit
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onClick={() => onOpenDraft?.()} data-testid={`menu-open-draft-${opp.id}`}>
                 Open draft
               </DropdownMenuItem>

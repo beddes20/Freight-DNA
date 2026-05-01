@@ -66,7 +66,14 @@ import {
   Pencil,
   MessageCircle,
   X,
+  MoreHorizontal,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -568,6 +575,7 @@ function LaneRow({
   item,
   completionThreshold,
   onOpen,
+  onOpenCockpit,
   bucket,
   teamMembers,
   selected = false,
@@ -577,6 +585,10 @@ function LaneRow({
   item: LaneItem;
   completionThreshold: number;
   onOpen: (laneId: string) => void;
+  // Task #888 — opens the LaneCockpitSheet pinned to this lane's
+  // signature. Mirrors the `L` keyboard shortcut so trackpad users
+  // have the same affordance from the row's overflow menu.
+  onOpenCockpit?: (item: LaneItem) => void;
   bucket: keyof WorkQueue;
   teamMembers: TeamMember[];
   selected?: boolean;
@@ -996,6 +1008,32 @@ function LaneRow({
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
             )}
+            {/* Task #888 — row overflow menu. Currently hosts the
+                trackpad-friendly mirror of the `L` keyboard shortcut so
+                users who don't reach for the keyboard can still open the
+                Lane Cockpit overlay pinned to this lane's signature. */}
+            {onOpenCockpit && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    className="p-1 rounded hover:bg-muted/60 text-muted-foreground hover:text-foreground"
+                    onClick={e => e.stopPropagation()}
+                    data-testid={`btn-row-menu-${item.laneId}`}
+                    title="More actions"
+                  >
+                    <MoreHorizontal className="w-3.5 h-3.5" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
+                  <DropdownMenuItem
+                    onClick={e => { e.stopPropagation(); onOpenCockpit(item); }}
+                    data-testid={`menu-open-cockpit-${item.laneId}`}
+                  >
+                    Open in Cockpit
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
           </div>
           <ChevronRight className="w-4 h-4 text-muted-foreground/40 group-hover:text-amber-400 transition-colors" />
         </div>
@@ -1150,6 +1188,8 @@ type LaneRowProps = {
   item: LaneItem;
   completionThreshold: number;
   onOpen: (laneId: string) => void;
+  // Task #888 — see LaneRow's prop docs.
+  onOpenCockpit?: (item: LaneItem) => void;
   bucket: keyof WorkQueue;
   teamMembers: TeamMember[];
   selected?: boolean;
@@ -1247,6 +1287,7 @@ function CustomerGroup({
   items,
   completionThreshold,
   onOpen,
+  onOpenCockpit,
   bucket,
   teamMembers,
   defaultExpanded,
@@ -1258,6 +1299,7 @@ function CustomerGroup({
   items: LaneItem[];
   completionThreshold: number;
   onOpen: (laneId: string) => void;
+  onOpenCockpit?: (item: LaneItem) => void;
   bucket: keyof WorkQueue;
   teamMembers: TeamMember[];
   defaultExpanded: boolean;
@@ -1320,6 +1362,7 @@ function CustomerGroup({
               item={item}
               completionThreshold={completionThreshold}
               onOpen={onOpen}
+              onOpenCockpit={onOpenCockpit}
               bucket={bucket}
               teamMembers={teamMembers}
               selected={selectedLaneIds?.has(item.laneId) ?? false}
@@ -1345,6 +1388,7 @@ function BucketSection({
   items,
   completionThreshold,
   onOpen,
+  onOpenCockpit,
   bucket,
   teamMembers,
   highFreqOnly,
@@ -1359,6 +1403,7 @@ function BucketSection({
   items: LaneItem[];
   completionThreshold: number;
   onOpen: (laneId: string) => void;
+  onOpenCockpit?: (item: LaneItem) => void;
   bucket: keyof WorkQueue;
   teamMembers: TeamMember[];
   highFreqOnly: boolean;
@@ -1454,6 +1499,7 @@ function BucketSection({
                 items={group.lanes}
                 completionThreshold={completionThreshold}
                 onOpen={onOpen}
+                onOpenCockpit={onOpenCockpit}
                 bucket={bucket}
                 teamMembers={teamMembers}
                 defaultExpanded={allCustomersExpanded}
@@ -2785,6 +2831,7 @@ export default function LaneWorkQueuePage() {
                   items={sortedUnassigned}
                   completionThreshold={completionThreshold}
                   onOpen={setOpenLaneId}
+                  onOpenCockpit={openCockpitForLane}
                   bucket="unassigned"
                   teamMembers={teamMembers}
                   highFreqOnly={highFreqOnly}
@@ -2800,6 +2847,7 @@ export default function LaneWorkQueuePage() {
                   items={filteredQueue.noContactable}
                   completionThreshold={completionThreshold}
                   onOpen={setOpenLaneId}
+                  onOpenCockpit={openCockpitForLane}
                   bucket="noContactable"
                   teamMembers={teamMembers}
                   highFreqOnly={highFreqOnly}
@@ -2815,6 +2863,7 @@ export default function LaneWorkQueuePage() {
                   items={filteredQueue.assignedUntouched}
                   completionThreshold={completionThreshold}
                   onOpen={setOpenLaneId}
+                  onOpenCockpit={openCockpitForLane}
                   bucket="assignedUntouched"
                   teamMembers={teamMembers}
                   highFreqOnly={highFreqOnly}
@@ -2830,6 +2879,7 @@ export default function LaneWorkQueuePage() {
                   items={filteredQueue.inProgress}
                   completionThreshold={completionThreshold}
                   onOpen={setOpenLaneId}
+                  onOpenCockpit={openCockpitForLane}
                   bucket="inProgress"
                   teamMembers={teamMembers}
                   highFreqOnly={highFreqOnly}
