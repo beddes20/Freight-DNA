@@ -561,6 +561,16 @@ export async function ingestDocument(args: IngestDocumentArgs): Promise<IngestDo
     console.warn("[documentIngestion] classification failed:", err);
   }
 
+  // 6.5 Task #926 — fire copilot extraction + intelligence + play caller.
+  // Centralized in `runCopilotPipelineForDocument` so the retry path runs
+  // the exact same sequence (no drift between initial ingest and retry).
+  try {
+    const refreshed = await storage.getDocument(created.id);
+    if (refreshed) await runCopilotPipelineForDocument(refreshed);
+  } catch (err) {
+    console.warn("[documentIngestion] copilot pipeline failed (non-fatal):", err);
+  }
+
   // 7. Mark final status
   let failed = false;
   let errorReason: string | null = null;
@@ -622,8 +632,51 @@ export async function ingestDocument(args: IngestDocumentArgs): Promise<IngestDo
 }
 
 /**
+ * Task #926 — Centralized Copilot pipeline executor.
+ *
+ * Runs extraction → entity resolution (inside extraction) → intelligence
+ * computation → play recommendations against a freshly-parsed document.
+ * Best-effort and idempotent: re-running for the same doc updates
+ * existing rows in place. Used by both the initial ingest path and
+ * `retryDocument` so the operational behavior never diverges.
+ */
+export async function runCopilotPipelineForDocument(doc: Document): Promise<{
+  extracted: boolean;
+  intelligenceRows: number;
+  playRows: number;
+}> {
+  if (!doc.classLabel || doc.classLabel === "unknown") {
+    return { extracted: false, intelligenceRows: 0, playRows: 0 };
+  }
+  const { runExtractionForDocument } = await import("./copilot/copilotExtractionEngine");
+  const { computeIntelligenceForDocument } = await import("./copilot/copilotIntelligenceEngine");
+  const { recommendPlaysForDocument } = await import("./copilot/copilotPlayCaller");
+  const result = await runExtractionForDocument(doc);
+  if (!result.extraction || (result.reason !== "ok" && result.reason !== "skipped_existing")) {
+    return { extracted: false, intelligenceRows: 0, playRows: 0 };
+  }
+  const intels = await computeIntelligenceForDocument({ document: doc, extraction: result.extraction });
+  let playRows = 0;
+  for (const intel of intels) {
+    try {
+      const recs = await recommendPlaysForDocument({
+        document: doc,
+        extraction: result.extraction,
+        intelligence: intel,
+      });
+      playRows += recs.length;
+    } catch (err) {
+      console.warn("[documentIngestion] play caller failed:", err);
+    }
+  }
+  return { extracted: true, intelligenceRows: intels.length, playRows };
+}
+
+/**
  * Admin retry — re-runs extraction + classification against the existing
- * stored bytes. Status flips back to `parsing` for the duration.
+ * stored bytes. Status flips back to `parsing` for the duration. After
+ * the parse step succeeds we re-run the full Copilot pipeline so the
+ * doc's intelligence + play recs reflect the new content.
  */
 export async function retryDocument(documentId: string, organizationId: string): Promise<IngestDocumentResult | null> {
   const doc = await storage.getDocumentInOrg(documentId, organizationId);
@@ -683,8 +736,18 @@ export async function retryDocument(documentId: string, organizationId: string):
   }
   await storage.updateDocumentStatus(doc.id, organizationId, failed ? "failed" : "parsed", errorReason, pageRows.length || null, ocrUsed);
   const final = await storage.getDocument(doc.id);
+  // Re-run the Copilot pipeline against the refreshed parse — same code
+  // path as initial ingest. Best-effort; never fail the retry response.
+  if (!failed && final) {
+    try {
+      await runCopilotPipelineForDocument(final);
+    } catch (err) {
+      console.warn("[documentIngestion] retry copilot pipeline failed (non-fatal):", err);
+    }
+  }
+  const refreshedAfterPipeline = await storage.getDocument(doc.id);
   return {
-    document: final ?? doc,
+    document: refreshedAfterPipeline ?? final ?? doc,
     deduped: false,
     classification,
     pagesWritten: pageRows.length,

@@ -23,6 +23,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QueryError } from "@/components/query-error";
 import { CrossTabBreadcrumb } from "@/components/freight/cross-tab-breadcrumb";
+import { EmbeddedPlayCard } from "@/components/dna-copilot/embedded-play-card";
 import { formatLaneDisplay, formatWeeklyLoadRange, formatCustomerName } from "@shared/laneFormatters";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -2524,6 +2525,12 @@ export default function LaneWorkQueuePage() {
       <div className="px-4 md:px-6 pt-2">
         <CrossTabBreadcrumb current="lane-work-queue" />
       </div>
+      {/* Task #926 — Copilot recommendations scoped to the open lane cockpit. */}
+      {cockpitSignature && (
+        <div className="px-4 md:px-6 pt-2">
+          <EmbeddedPlayCard scope={{ laneKey: cockpitSignature }} dataTestIdPrefix="lwq-embedded-plays" />
+        </div>
+      )}
       {/* Header */}
       <div className="border-b border-border px-4 md:px-6 py-3 md:py-4 flex flex-col md:flex-row md:items-center justify-between gap-3 bg-card">
         <div className="flex items-center gap-3">

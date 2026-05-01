@@ -29,6 +29,8 @@ export type Capability =
   | "read.email"
   // Phase 2 slice 1 — Copilot Doc Ingestion (Task #910)
   | "read.document"
+  // Phase 2 slice 2 — Copilot Intelligence (Task #926)
+  | "read.copilot_intelligence"
   // Navigation
   | "navigate.crm"
   // Writes inside the CRM — default HITL for everyone
@@ -40,6 +42,8 @@ export type Capability =
   | "write.opportunity"
   | "write.memory"
   | "write.email.draft"
+  // Task #926 — record an HITL play recommendation accept/dismiss/snooze
+  | "write.copilot.recommend"
   // External outreach (drivers/dispatchers) — default deny except admin/director
   | "write.sms.driver"
   | "write.voice.driver"
@@ -57,13 +61,13 @@ const ALL_READS: Capability[] = [
   "read.award", "read.opportunity", "read.lane", "read.carrier", "read.market",
   "read.financial", "read.memory", "read.nba",
   "read.pipeline", "read.coaching", "read.scorecard", "read.email",
-  "read.document",
+  "read.document", "read.copilot_intelligence",
 ];
 
 const ALL_HITL_WRITES: Capability[] = [
   "write.touchpoint", "write.task", "write.task.complete",
   "write.touchpoint.meaningful", "write.account", "write.opportunity",
-  "write.email.draft",
+  "write.email.draft", "write.copilot.recommend",
 ];
 
 // Writes that are safe to execute directly without a confirmation card.

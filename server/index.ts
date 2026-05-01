@@ -556,6 +556,11 @@ process.on("uncaughtException", (err) => {
         import("./services/quoteNoResponseSweep")
           .then(({ startQuoteNoResponseSweepScheduler }) => startQuoteNoResponseSweepScheduler())
           .catch(err => console.error("[quoteNoResponseSweep] scheduler init error:", err));
+        // Task #926 — Copilot learning loop. Aggregates copilot_outcomes
+        // into bounded copilot_adjustments factors every 6h. Best-effort.
+        import("./copilotLearningScheduler")
+          .then(({ startCopilotLearningScheduler }) => startCopilotLearningScheduler())
+          .catch(err => console.error("[copilotLearning] scheduler init error:", err));
       }, 4000);
       // Pre-warm the financial uploads cache so the first carrier-suggestions
       // request doesn't trigger a cold full-table JSONB scan in production.

@@ -134,3 +134,68 @@ export function getPlayByLabel(label: string): PlayDefinition | null {
 export function getAllPlayLabels(): string[] {
   return PLAYS_REGISTRY.map(p => p.name);
 }
+
+// ─── Task #926 — Doc-driven plays for the Copilot Play Caller ─────────────
+// Independent of the NBA plays above — these are emitted by the copilot
+// after a doc is classified + its intelligence row computed. They flow
+// through the same HITL action-card pipeline (no autonomous send) and
+// dedupe against open NBA cards via `dedupAgainstNbaRuleTypes` below.
+export interface DocPlayDef {
+  id: string;
+  name: string;
+  description: string;
+  outcomeType: "pursue" | "pass" | "clarify" | "execute" | "escalate";
+  /** Pending NBA rule types that should suppress this doc-play. */
+  dedupAgainstNbaRuleTypes?: string[];
+}
+
+export const DOC_DRIVEN_PLAYS: DocPlayDef[] = [
+  {
+    id: "pursue_quote_now",
+    name: "Pursue Quote Now",
+    description: "Lane fit, customer fit, and price band align — quote with the recommended target rate.",
+    outcomeType: "pursue",
+    dedupAgainstNbaRuleTypes: ["spot_to_contract"],
+  },
+  {
+    id: "clarify_before_quoting",
+    name: "Clarify Before Quoting",
+    description: "Evidence is thin — ask the customer for missing fields before committing to a number.",
+    outcomeType: "clarify",
+  },
+  {
+    id: "pass_low_margin",
+    name: "Pass — Low Margin",
+    description: "Comparable rate spread + risk profile don't support pursuing this load profitably.",
+    outcomeType: "pass",
+  },
+  {
+    id: "route_to_specialist_rep",
+    name: "Route to Specialist Rep",
+    description: "Lane is unfamiliar to the assigned rep — recommend handing it to a specialist who runs this lane often.",
+    outcomeType: "execute",
+  },
+  {
+    id: "start_with_carrier_bench_A",
+    name: "Start With A-Tier Bench",
+    description: "Carrier bench is performing strongly — start outreach with the A-tier carriers before going to market.",
+    outcomeType: "execute",
+  },
+  {
+    id: "negotiate_with_incumbent_first",
+    name: "Negotiate With Incumbent First",
+    description: "We have history on this lane — try to defend / re-negotiate with the incumbent before opening to spot.",
+    outcomeType: "execute",
+    dedupAgainstNbaRuleTypes: ["spot_to_contract", "rfp_coverage_gap"],
+  },
+  {
+    id: "escalate_to_manager",
+    name: "Escalate to Manager",
+    description: "Signals conflict or evidence is too low to recommend a move — needs human judgment.",
+    outcomeType: "escalate",
+  },
+];
+
+export function getDocPlayById(id: string): DocPlayDef | null {
+  return DOC_DRIVEN_PLAYS.find((p) => p.id === id) ?? null;
+}

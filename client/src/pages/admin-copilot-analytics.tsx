@@ -172,6 +172,7 @@ export default function AdminCopilotAnalyticsPage() {
           </TabsTrigger>
           <TabsTrigger value="actions" data-testid="tab-actions">Action Audit</TabsTrigger>
           <TabsTrigger value="documents" data-testid="tab-documents">Document Queue</TabsTrigger>
+          <TabsTrigger value="copilot-intelligence" data-testid="tab-copilot-intelligence">Copilot Intelligence</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4 mt-4">
@@ -518,6 +519,11 @@ export default function AdminCopilotAnalyticsPage() {
             </Card>
           )}
         </TabsContent>
+
+        {/* Task #926 — Copilot Intelligence analytics */}
+        <TabsContent value="copilot-intelligence" className="space-y-3 mt-4">
+          <CopilotIntelligenceTab days={days} />
+        </TabsContent>
       </Tabs>
 
       <TurnDetailDrawer turnId={drawerTurnId} onClose={() => setDrawerTurnId(null)} />
@@ -693,5 +699,138 @@ function TurnDetailDrawer({ turnId, onClose }: { turnId: string | null; onClose:
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ─── Task #926 — Copilot Intelligence tab ──────────────────────────────
+type ExtractionRateRow = { class: string; docs: number | string; extracted: number | string };
+type PlayAcceptanceRow = { play_id: string; total: string | number; accepted: string | number; dismissed: string | number; overridden: string | number; snoozed: string | number };
+type WinRateRow = { play_id: string; won_accepted: string | number; won_overridden: string | number; outcomes: string | number };
+type AdjustmentRow = { id: string; scope: string; scopeKey: string; factor: string; sampleCount: number; winRate: string | null; computedAt: string };
+
+function CopilotIntelligenceTab({ days }: { days: number }) {
+  const rates = useQuery<{ rows: ExtractionRateRow[] }>({ queryKey: ["/api/copilot/admin/extraction-rates", days] });
+  const plays = useQuery<{ acceptance: PlayAcceptanceRow[]; winRates: WinRateRow[] }>({ queryKey: ["/api/copilot/admin/play-acceptance", days] });
+  const adj = useQuery<{ adjustments: AdjustmentRow[] }>({ queryKey: ["/api/copilot/admin/adjustments"] });
+
+  if (rates.isLoading || plays.isLoading || adj.isLoading) {
+    return <div className="p-12 flex justify-center"><Loader2 className="h-6 w-6 animate-spin" /></div>;
+  }
+  const winByPlay = new Map<string, WinRateRow>();
+  for (const w of plays.data?.winRates ?? []) winByPlay.set(w.play_id, w);
+
+  return (
+    <div className="space-y-3">
+      <Card data-testid="card-extraction-rates">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-1.5">
+            <FileText className="h-4 w-4" /> Extraction rate by class
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <table className="w-full text-xs">
+            <thead className="text-muted-foreground bg-muted/40">
+              <tr><th className="text-left p-2">Class</th><th className="text-right p-2">Docs</th><th className="text-right p-2">Extracted</th><th className="text-right p-2">Rate</th></tr>
+            </thead>
+            <tbody>
+              {(rates.data?.rows ?? []).map((r) => {
+                const docs = Number(r.docs) || 0;
+                const extracted = Number(r.extracted) || 0;
+                const pct = docs ? `${((extracted / docs) * 100).toFixed(0)}%` : "—";
+                return (
+                  <tr key={r.class} className="border-t border-border/40" data-testid={`row-extract-${r.class}`}>
+                    <td className="p-2 font-mono">{r.class}</td>
+                    <td className="p-2 text-right">{docs}</td>
+                    <td className="p-2 text-right">{extracted}</td>
+                    <td className="p-2 text-right">{pct}</td>
+                  </tr>
+                );
+              })}
+              {!rates.data?.rows?.length && <tr><td colSpan={4} className="p-3 text-center text-muted-foreground">No documents in window.</td></tr>}
+            </tbody>
+          </table>
+        </CardContent>
+      </Card>
+
+      <Card data-testid="card-play-acceptance">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-1.5">
+            <Activity className="h-4 w-4" /> Play acceptance + accepted-vs-overridden win rate
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <table className="w-full text-xs">
+            <thead className="text-muted-foreground bg-muted/40">
+              <tr>
+                <th className="text-left p-2">Play</th>
+                <th className="text-right p-2">Total</th>
+                <th className="text-right p-2">Acc</th>
+                <th className="text-right p-2">Dis</th>
+                <th className="text-right p-2">Ovr</th>
+                <th className="text-right p-2">Snz</th>
+                <th className="text-right p-2">Acc-Win</th>
+                <th className="text-right p-2">Ovr-Win</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(plays.data?.acceptance ?? []).map((r) => {
+                const w = winByPlay.get(r.play_id);
+                const totalOutcomes = Number(w?.outcomes ?? 0);
+                const accWin = totalOutcomes ? `${((Number(w?.won_accepted ?? 0) / totalOutcomes) * 100).toFixed(0)}%` : "—";
+                const ovrWin = totalOutcomes ? `${((Number(w?.won_overridden ?? 0) / totalOutcomes) * 100).toFixed(0)}%` : "—";
+                return (
+                  <tr key={r.play_id} className="border-t border-border/40" data-testid={`row-play-${r.play_id}`}>
+                    <td className="p-2 font-mono">{r.play_id}</td>
+                    <td className="p-2 text-right">{Number(r.total)}</td>
+                    <td className="p-2 text-right">{Number(r.accepted)}</td>
+                    <td className="p-2 text-right">{Number(r.dismissed)}</td>
+                    <td className="p-2 text-right">{Number(r.overridden)}</td>
+                    <td className="p-2 text-right">{Number(r.snoozed)}</td>
+                    <td className="p-2 text-right" data-testid={`text-acc-win-${r.play_id}`}>{accWin}</td>
+                    <td className="p-2 text-right" data-testid={`text-ovr-win-${r.play_id}`}>{ovrWin}</td>
+                  </tr>
+                );
+              })}
+              {!plays.data?.acceptance?.length && <tr><td colSpan={8} className="p-3 text-center text-muted-foreground">No play recommendations in window.</td></tr>}
+            </tbody>
+          </table>
+        </CardContent>
+      </Card>
+
+      <Card data-testid="card-adjustments">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-1.5">
+            <Wrench className="h-4 w-4" /> Current learning factors (clamped 0.5–1.5)
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <table className="w-full text-xs">
+            <thead className="text-muted-foreground bg-muted/40">
+              <tr>
+                <th className="text-left p-2">Scope</th>
+                <th className="text-left p-2">Key</th>
+                <th className="text-right p-2">Factor</th>
+                <th className="text-right p-2">Win rate</th>
+                <th className="text-right p-2">Samples</th>
+                <th className="text-left p-2">Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(adj.data?.adjustments ?? []).map((a) => (
+                <tr key={a.id} className="border-t border-border/40" data-testid={`row-adj-${a.id}`}>
+                  <td className="p-2 font-mono">{a.scope}</td>
+                  <td className="p-2 font-mono truncate max-w-[260px]" title={a.scopeKey}>{a.scopeKey}</td>
+                  <td className="p-2 text-right" data-testid={`text-factor-${a.id}`}>{Number(a.factor).toFixed(3)}</td>
+                  <td className="p-2 text-right">{a.winRate != null ? `${(Number(a.winRate) * 100).toFixed(0)}%` : "—"}</td>
+                  <td className="p-2 text-right">{a.sampleCount}</td>
+                  <td className="p-2 font-mono whitespace-nowrap">{fmtDate(a.computedAt)}</td>
+                </tr>
+              ))}
+              {!adj.data?.adjustments?.length && <tr><td colSpan={6} className="p-3 text-center text-muted-foreground">No learning factors yet — outcomes table is below the threshold.</td></tr>}
+            </tbody>
+          </table>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

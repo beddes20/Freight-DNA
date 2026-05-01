@@ -6691,6 +6691,322 @@ export const RATE_CON_FIELD_PATHS = [
 ] as const;
 export type RateConFieldPath = (typeof RATE_CON_FIELD_PATHS)[number];
 
+// ─── Task #926 — Freight DNA Copilot Intelligence ─────────────────────────
+// Class-specific extraction payloads. One row per (documentId, schemaVersion).
+// `payload` is a discriminated union keyed by `classLabel` (validated by Zod
+// at the service boundary, not at the column level — Postgres only gets jsonb).
+// Citations live INSIDE the payload alongside each field as
+// `{ value, confidence, citation: { documentId, page, bbox? } }`.
+export const documentExtractions = pgTable(
+  "document_extractions",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    documentId: varchar("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    classLabel: text("class_label").notNull(),
+    schemaVersion: integer("schema_version").notNull().default(1),
+    extractor: text("extractor").notNull(), // 'rate_con@1', 'rfp_bid_sheet@1', etc.
+    payload: jsonb("payload").notNull(),
+    // {customerId, carrierIds[], laneKeys[], rfpId, awardId, opportunityId, freightId,
+    //  confidence: 'high'|'medium'|'low', path: ['exact_mc', 'fuzzy_company']}
+    resolvedEntities: jsonb("resolved_entities"),
+    needsHumanReview: boolean("needs_human_review").notNull().default(false),
+    extractedAt: timestamp("extracted_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("doc_extractions_doc_ver_uq").on(t.documentId, t.schemaVersion),
+    index("doc_extractions_org_class_idx").on(t.organizationId, t.classLabel, t.extractedAt),
+  ],
+);
+export const insertDocumentExtractionSchema = createInsertSchema(documentExtractions).omit({
+  id: true,
+  extractedAt: true,
+});
+export type InsertDocumentExtraction = z.infer<typeof insertDocumentExtractionSchema>;
+export type DocumentExtraction = typeof documentExtractions.$inferSelect;
+
+// Citation envelope used inside extraction payloads. Persisted as JSON.
+export const fieldCitationSchema = z.object({
+  documentId: z.string(),
+  page: z.number().int().min(1),
+  bbox: z.array(z.number()).optional(),
+  snippet: z.string().max(280).optional(),
+});
+export type FieldCitation = z.infer<typeof fieldCitationSchema>;
+
+export const extractedFieldSchema = z.object({
+  value: z.union([z.string(), z.number(), z.boolean(), z.null(), z.array(z.string()), z.array(z.number())]),
+  confidence: z.enum(["high", "medium", "low"]),
+  citation: fieldCitationSchema.optional(),
+  needs_review: z.boolean().optional(),
+});
+export type ExtractedField = z.infer<typeof extractedFieldSchema>;
+
+// Per-class payload schemas — validated at service boundary, stored as jsonb.
+export const rateConPayloadSchema = z.object({
+  customer: extractedFieldSchema.optional(),
+  mc_number: extractedFieldSchema.optional(),
+  origin: extractedFieldSchema.optional(),
+  destination: extractedFieldSchema.optional(),
+  equipment: extractedFieldSchema.optional(),
+  pickup_window: extractedFieldSchema.optional(),
+  delivery_window: extractedFieldSchema.optional(),
+  rate: extractedFieldSchema.optional(),
+  reference_numbers: extractedFieldSchema.optional(),
+  accessorials: extractedFieldSchema.optional(),
+});
+export type RateConPayload = z.infer<typeof rateConPayloadSchema>;
+
+export const rfpBidLaneSchema = z.object({
+  origin_city: extractedFieldSchema.optional(),
+  origin_state: extractedFieldSchema.optional(),
+  destination_city: extractedFieldSchema.optional(),
+  destination_state: extractedFieldSchema.optional(),
+  equipment: extractedFieldSchema.optional(),
+  projected_volume: extractedFieldSchema.optional(),
+  incumbent_rate: extractedFieldSchema.optional(),
+  requested_rate_field: extractedFieldSchema.optional(),
+});
+export type RfpBidLane = z.infer<typeof rfpBidLaneSchema>;
+
+export const rfpBidSheetPayloadSchema = z.object({
+  customer: extractedFieldSchema.optional(),
+  due_date: extractedFieldSchema.optional(),
+  lanes: z.array(rfpBidLaneSchema).default([]),
+});
+export type RfpBidSheetPayload = z.infer<typeof rfpBidSheetPayloadSchema>;
+
+export const routingGuideEntrySchema = z.object({
+  lane_key: z.string().optional(),
+  origin: extractedFieldSchema.optional(),
+  destination: extractedFieldSchema.optional(),
+  equipment: extractedFieldSchema.optional(),
+  primary_carrier: extractedFieldSchema.optional(),
+  backup_carrier: extractedFieldSchema.optional(),
+  tertiary_carrier: extractedFieldSchema.optional(),
+  fuel_handling: extractedFieldSchema.optional(),
+  tender_lead_time: extractedFieldSchema.optional(),
+});
+export type RoutingGuideEntry = z.infer<typeof routingGuideEntrySchema>;
+
+export const routingGuidePayloadSchema = z.object({
+  customer: extractedFieldSchema.optional(),
+  effective_date: extractedFieldSchema.optional(),
+  entries: z.array(routingGuideEntrySchema).default([]),
+});
+export type RoutingGuidePayload = z.infer<typeof routingGuidePayloadSchema>;
+
+export const bolPayloadSchema = z.object({
+  shipper: extractedFieldSchema.optional(),
+  consignee: extractedFieldSchema.optional(),
+  reference_numbers: extractedFieldSchema.optional(),
+  weight: extractedFieldSchema.optional(),
+  commodity: extractedFieldSchema.optional(),
+  signed_by: extractedFieldSchema.optional(),
+  special_instructions: extractedFieldSchema.optional(),
+  stops: z.array(z.object({
+    sequence: z.number().int(),
+    type: z.enum(["pickup", "delivery", "stop"]),
+    location: extractedFieldSchema.optional(),
+    appointment: extractedFieldSchema.optional(),
+  })).default([]),
+});
+export type BolPayload = z.infer<typeof bolPayloadSchema>;
+
+export const scorecardMetricSchema = z.object({
+  metric: z.string(),
+  value: extractedFieldSchema,
+  carrier_or_lane: z.string().optional(),
+});
+export type ScorecardMetric = z.infer<typeof scorecardMetricSchema>;
+
+export const scorecardPayloadSchema = z.object({
+  period_start: extractedFieldSchema.optional(),
+  period_end: extractedFieldSchema.optional(),
+  metrics: z.array(scorecardMetricSchema).default([]),
+});
+export type ScorecardPayload = z.infer<typeof scorecardPayloadSchema>;
+
+export const contractPayloadSchema = z.object({
+  customer: extractedFieldSchema.optional(),
+  effective_date: extractedFieldSchema.optional(),
+  term_months: extractedFieldSchema.optional(),
+  fuel_program: extractedFieldSchema.optional(),
+  accessorial_schedule_ref: extractedFieldSchema.optional(),
+  mfn_clause: extractedFieldSchema.optional(),
+  unrecognized_clauses: z.array(z.object({
+    text: z.string(),
+    citation: fieldCitationSchema.optional(),
+  })).default([]),
+});
+export type ContractPayload = z.infer<typeof contractPayloadSchema>;
+
+// Resolved-entities envelope written back onto the extraction row.
+export const resolvedEntitiesSchema = z.object({
+  customerId: z.string().nullable(),
+  customerName: z.string().nullable().optional(),
+  customerConfidence: z.enum(["high", "medium", "low", "ambiguous", "none"]).optional(),
+  customerPath: z.array(z.string()).optional(),
+  carrierIds: z.array(z.string()).default([]),
+  carriersByName: z.array(z.object({ name: z.string(), id: z.string().nullable() })).optional(),
+  laneKeys: z.array(z.string()).default([]),
+  recurringLaneIds: z.array(z.string()).default([]),
+  rfpId: z.string().nullable().optional(),
+  awardId: z.string().nullable().optional(),
+  opportunityId: z.string().nullable().optional(),
+  freightId: z.string().nullable().optional(),
+  ambiguities: z.array(z.object({
+    field: z.string(),
+    candidates: z.array(z.object({ id: z.string(), label: z.string() })),
+  })).default([]),
+});
+export type ResolvedEntities = z.infer<typeof resolvedEntitiesSchema>;
+
+// ─── copilot_intelligence — fit/risk/price card per (documentId, lane?) ────
+export const copilotIntelligence = pgTable(
+  "copilot_intelligence",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    documentId: varchar("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }),
+    extractionId: varchar("extraction_id").references(() => documentExtractions.id, { onDelete: "set null" }),
+    laneKey: text("lane_key"),                      // "ORIG_ST-DEST_ST-EQUIP" or null = doc-level
+    customerId: varchar("customer_id"),
+    laneFitScore: integer("lane_fit_score"),       // 0–100
+    customerFitScore: integer("customer_fit_score"),
+    carrierFitScore: integer("carrier_fit_score"),
+    priceLow: decimal("price_low", { precision: 10, scale: 2 }),
+    priceMid: decimal("price_mid", { precision: 10, scale: 2 }),
+    priceHigh: decimal("price_high", { precision: 10, scale: 2 }),
+    // [{label, severity:'high'|'medium'|'low', evidence:[{kind, id, label}]}]
+    risks: jsonb("risks").notNull().default(sql`'[]'::jsonb`),
+    opportunities: jsonb("opportunities").notNull().default(sql`'[]'::jsonb`),
+    // Aggregated evidence used by the entire row (denormalized for speed).
+    evidenceRefs: jsonb("evidence_refs").notNull().default(sql`'[]'::jsonb`),
+    confidence: text("confidence").notNull().default("low"),  // high|medium|low
+    scoringVersion: integer("scoring_version").notNull().default(1),
+    adjustmentsApplied: jsonb("adjustments_applied"),
+    computedAt: timestamp("computed_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("copilot_intel_doc_lane_uq").on(t.documentId, t.laneKey),
+    index("copilot_intel_org_idx").on(t.organizationId, t.computedAt),
+    index("copilot_intel_customer_idx").on(t.customerId),
+  ],
+);
+export const insertCopilotIntelligenceSchema = createInsertSchema(copilotIntelligence).omit({
+  id: true,
+  computedAt: true,
+});
+export type InsertCopilotIntelligence = z.infer<typeof insertCopilotIntelligenceSchema>;
+export type CopilotIntelligence = typeof copilotIntelligence.$inferSelect;
+
+// ─── copilot_play_recommendations — ranked plays per intelligence row ──────
+export const copilotPlayRecommendations = pgTable(
+  "copilot_play_recommendations",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    intelligenceId: varchar("intelligence_id").references(() => copilotIntelligence.id, { onDelete: "cascade" }),
+    documentId: varchar("document_id").references(() => documents.id, { onDelete: "set null" }),
+    laneKey: text("lane_key"),
+    customerId: varchar("customer_id"),
+    carrierId: varchar("carrier_id"),
+    rfpId: varchar("rfp_id"),
+    freightId: varchar("freight_id"),
+    playId: text("play_id").notNull(),
+    playName: text("play_name").notNull(),
+    rank: integer("rank").notNull().default(0),
+    confidence: text("confidence").notNull(),
+    // [{kind, id, label, href?, updatedAt?}]
+    evidence: jsonb("evidence").notNull().default(sql`'[]'::jsonb`),
+    // [{playId, playName, reason}]
+    alternatives: jsonb("alternatives").notNull().default(sql`'[]'::jsonb`),
+    // {tool, args:{}, preface?:string} — HITL action card draft
+    draftAction: jsonb("draft_action"),
+    rationale: text("rationale"),
+    status: text("status").notNull().default("pending"), // pending|accepted|dismissed|snoozed|expired|overridden
+    resolvedByUserId: varchar("resolved_by_user_id"),
+    resolvedAt: timestamp("resolved_at"),
+    snoozedUntil: timestamp("snoozed_until"),
+    overrideNote: text("override_note"),
+    ownerUserId: varchar("owner_user_id"),
+    dedupKey: text("dedup_key"),
+    nbaCardId: varchar("nba_card_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    index("copilot_plays_org_status_idx").on(t.organizationId, t.status, t.createdAt),
+    index("copilot_plays_owner_idx").on(t.ownerUserId, t.status),
+    index("copilot_plays_doc_idx").on(t.documentId),
+    index("copilot_plays_customer_idx").on(t.customerId, t.status),
+    index("copilot_plays_lane_idx").on(t.laneKey, t.status),
+    uniqueIndex("copilot_plays_dedup_uq")
+      .on(t.organizationId, t.dedupKey)
+      .where(sql`dedup_key IS NOT NULL AND status = 'pending'`),
+  ],
+);
+export const insertCopilotPlayRecommendationSchema = createInsertSchema(copilotPlayRecommendations).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertCopilotPlayRecommendation = z.infer<typeof insertCopilotPlayRecommendationSchema>;
+export type CopilotPlayRecommendation = typeof copilotPlayRecommendations.$inferSelect;
+
+// ─── copilot_outcomes — realized outcome per recommendation ────────────────
+export const copilotOutcomes = pgTable(
+  "copilot_outcomes",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    recommendationId: varchar("recommendation_id").notNull().references(() => copilotPlayRecommendations.id, { onDelete: "cascade" }),
+    userId: varchar("user_id"),
+    repAction: text("rep_action").notNull(), // accepted|overridden|ignored|dismissed|snoozed|edited
+    repEdits: jsonb("rep_edits"),            // {rate, carrier, language}
+    realizedOutcome: text("realized_outcome"), // won|lost|partial|no_response|unknown
+    realizedDollarImpact: decimal("realized_dollar_impact", { precision: 12, scale: 2 }),
+    realizedAt: timestamp("realized_at"),
+    signals: jsonb("signals"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("copilot_outcomes_rec_uq").on(t.recommendationId),
+    index("copilot_outcomes_org_idx").on(t.organizationId, t.createdAt),
+  ],
+);
+export const insertCopilotOutcomeSchema = createInsertSchema(copilotOutcomes).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertCopilotOutcome = z.infer<typeof insertCopilotOutcomeSchema>;
+export type CopilotOutcome = typeof copilotOutcomes.$inferSelect;
+
+// ─── copilot_adjustments — bounded learning factors ────────────────────────
+export const copilotAdjustments = pgTable(
+  "copilot_adjustments",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    scope: text("scope").notNull(), // 'customer'|'lane'|'carrier'|'play'
+    scopeKey: text("scope_key").notNull(),
+    factor: decimal("factor", { precision: 5, scale: 3 }).notNull().default("1.000"), // bounded 0.5–1.5
+    sampleCount: integer("sample_count").notNull().default(0),
+    winRate: decimal("win_rate", { precision: 5, scale: 4 }), // 0..1
+    evidence: jsonb("evidence"),
+    computedAt: timestamp("computed_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("copilot_adjustments_uq").on(t.organizationId, t.scope, t.scopeKey),
+    index("copilot_adjustments_scope_idx").on(t.organizationId, t.scope),
+  ],
+);
+export const insertCopilotAdjustmentSchema = createInsertSchema(copilotAdjustments).omit({
+  id: true,
+  computedAt: true,
+});
+export type InsertCopilotAdjustment = z.infer<typeof insertCopilotAdjustmentSchema>;
+export type CopilotAdjustment = typeof copilotAdjustments.$inferSelect;
+
 export const leakConsoleDailySnapshot = pgTable("leak_console_daily_snapshot", {
   orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
   snapshotDate: text("snapshot_date").notNull(), // YYYY-MM-DD (org-local day)

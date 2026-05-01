@@ -1590,6 +1590,116 @@ export const TOOLS: AgentTool[] = [
       return { kind: "data", text: JSON.stringify(envelope), related };
     },
   },
+  // ─── Phase 2 slice 2 — Copilot Intelligence (Task #926) ────────────────
+  {
+    name: "extract_document_fields",
+    capability: "write.copilot.recommend",
+    description: "Run (or re-run) the per-class field extractor for a previously ingested document. Returns the resulting extraction payload with citations. Use to refresh fields if the rep edits the doc class or to fall back when fields are missing.",
+    parameters: {
+      type: "object",
+      properties: {
+        document_id: { type: "string", description: "ID of the document to extract from." },
+        force: { type: "boolean", description: "If true, re-runs even when an extraction already exists for this schema version." },
+      },
+      required: ["document_id"],
+    },
+    execute: async (ctx, args) => {
+      const { db } = await import("../storage");
+      const { documents } = await import("@shared/schema");
+      const { and, eq } = await import("drizzle-orm");
+      const docId = String(args.document_id || "");
+      if (!docId) return { kind: "data", text: "extract_document_fields requires document_id." };
+      const [doc] = await db.select().from(documents).where(and(
+        eq(documents.id, docId),
+        eq(documents.organizationId, ctx.organizationId),
+      )).limit(1);
+      if (!doc) return { kind: "data", text: `Document ${docId} not visible to you.` };
+      const { runExtractionForDocument } = await import("../services/copilot/copilotExtractionEngine");
+      const r = await runExtractionForDocument(doc, { force: args.force === true });
+      if (!r.extraction) return { kind: "data", text: `No extraction (${r.reason}). ${r.message ?? ""}`.trim() };
+      const fields = Object.keys(r.extraction.payload as object ?? {});
+      return { kind: "data", text: `Extracted ${fields.length} field(s) from ${doc.classLabel}: ${fields.slice(0, 12).join(", ")}${fields.length > 12 ? ", …" : ""}` };
+    },
+  },
+  {
+    name: "get_document_intelligence",
+    capability: "read.copilot_intelligence",
+    description: "Return the lane/customer/carrier fit scores, price band, risks, and opportunities computed for a document. Each finding cites the underlying evidence rows.",
+    parameters: {
+      type: "object",
+      properties: {
+        document_id: { type: "string", description: "ID of the document to summarize." },
+      },
+      required: ["document_id"],
+    },
+    execute: async (ctx, args) => {
+      const { db } = await import("../storage");
+      const { copilotIntelligence } = await import("@shared/schema");
+      const { and, eq, desc } = await import("drizzle-orm");
+      const docId = String(args.document_id || "");
+      if (!docId) return { kind: "data", text: "get_document_intelligence requires document_id." };
+      const rows = await db
+        .select()
+        .from(copilotIntelligence)
+        .where(and(
+          eq(copilotIntelligence.organizationId, ctx.organizationId),
+          eq(copilotIntelligence.documentId, docId),
+        ))
+        .orderBy(desc(copilotIntelligence.computedAt))
+        .limit(5);
+      if (!rows.length) return { kind: "data", text: "No intelligence rows for this document yet." };
+      const lines = rows.map((r) => {
+        const lane = r.laneKey ?? "—";
+        const lo = r.priceLow != null ? `$${Number(r.priceLow).toFixed(2)}/mi` : "—";
+        const md = r.priceMid != null ? `$${Number(r.priceMid).toFixed(2)}/mi` : "—";
+        const hi = r.priceHigh != null ? `$${Number(r.priceHigh).toFixed(2)}/mi` : "—";
+        return `- ${lane} · lane ${r.laneFitScore ?? "?"} · cust ${r.customerFitScore ?? "?"} · carrier ${r.carrierFitScore ?? "?"} · price ${lo}/${md}/${hi} · ${r.confidence}`;
+      });
+      return { kind: "data", text: `Intelligence (${rows.length}):\n${lines.join("\n")}` };
+    },
+  },
+  {
+    name: "recommend_plays_for_document",
+    capability: "read.copilot_intelligence",
+    description: "Return the ranked HITL play recommendations the copilot has called for a given document. Plays are doc-driven (pursue, clarify, pass, route, start with bench, negotiate, escalate). Nothing is sent automatically.",
+    parameters: {
+      type: "object",
+      properties: {
+        document_id: { type: "string", description: "ID of the document to recommend plays for." },
+      },
+      required: ["document_id"],
+    },
+    execute: async (ctx, args) => {
+      const docId = String(args.document_id || "");
+      if (!docId) return { kind: "data", text: "recommend_plays_for_document requires document_id." };
+      const { listRecommendationsForDocument } = await import("../services/copilot/copilotPlayCaller");
+      const recs = await listRecommendationsForDocument(ctx.organizationId, docId);
+      if (!recs.length) return { kind: "data", text: "No play recommendations for this document yet." };
+      const lines = recs.slice(0, 8).map((r, i) => `${i + 1}. ${r.playName} · ${r.confidence} · ${r.status}${r.rationale ? ` — ${r.rationale.slice(0, 100)}` : ""}`);
+      return { kind: "data", text: `Plays:\n${lines.join("\n")}` };
+    },
+  },
+  {
+    name: "recommend_plays_for_lane",
+    capability: "read.copilot_intelligence",
+    description: "Return open HITL play recommendations scoped to a lane key (e.g. `IL-GA-VAN`). Use when working from a lane card to see what the copilot would recommend right now.",
+    parameters: {
+      type: "object",
+      properties: {
+        lane_key: { type: "string", description: "Lane key in `OO-DD-EQUIP` form (state-state-equipment, equipment may be ANY)." },
+      },
+      required: ["lane_key"],
+    },
+    execute: async (ctx, args) => {
+      const laneKey = String(args.lane_key || "");
+      if (!laneKey) return { kind: "data", text: "recommend_plays_for_lane requires lane_key." };
+      const { listOpenRecommendationsForLane } = await import("../services/copilot/copilotPlayCaller");
+      const recs = await listOpenRecommendationsForLane(ctx.organizationId, laneKey);
+      if (!recs.length) return { kind: "data", text: `No open play recommendations for lane ${laneKey}.` };
+      const lines = recs.slice(0, 8).map((r, i) => `${i + 1}. ${r.playName} · ${r.confidence}${r.rationale ? ` — ${r.rationale.slice(0, 100)}` : ""}`);
+      return { kind: "data", text: `Plays for ${laneKey}:\n${lines.join("\n")}` };
+    },
+  },
 ];
 
 export const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));

@@ -22,6 +22,9 @@ import { buildSystemPrompt, ensureDefaultAgent, getAgentRuntime } from "./person
 import { retrieveContext, formatHitsForPrompt, type RetrievalHit } from "./retrieval";
 import { rememberEntity } from "./sessionMemo";
 import type { DepthMode } from "./classifier";
+import { db } from "../storage";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { documents, documentExtractions, copilotIntelligence, copilotPlayRecommendations } from "@shared/schema";
 
 export interface AnswerMeta {
   sources?: Array<{
@@ -162,8 +165,122 @@ async function buildContextEnvelope(
   const formatted = formatHitsForPrompt(retrieval.hits, 3500);
   if (formatted) lines.push(formatted);
 
+  // Task #926: surface recent documents the rep has uploaded along with
+  // their resolved customer + computed intelligence summary + any open
+  // play recommendations. We scope strictly to docs uploaded by this rep
+  // (not the whole org) so we never leak someone else's customer doc into
+  // a chat envelope. This block is best-effort — failures degrade silently.
+  try {
+    const recentDocsBlock = await buildRecentDocumentsBlock(ctx);
+    if (recentDocsBlock) lines.push("", recentDocsBlock);
+  } catch (err) {
+    console.warn("[agent.core] recent_documents envelope skipped:", err);
+  }
+
   const health = retrieval.health ?? { embedder: "ok", orgCorpus: "ok", library: "ok", project: projectId ? "ok" : "n/a" };
   return { envelope: lines.join("\n"), degraded: retrieval.degraded, hits: retrieval.hits, health };
+}
+
+/**
+ * Recent-documents context block. Pulls up to 5 of the rep's most recent
+ * parsed documents in the last 14 days, joins resolved customer name from
+ * the extraction row, and surfaces any open play recommendations so the
+ * agent can reference them without an extra tool call.
+ *
+ * Visibility rule: uploader-only — we don't list documents tied to other
+ * reps' customers. This avoids leaking through the agent envelope what we
+ * gate behind canAccessCompany at the HTTP layer.
+ */
+async function buildRecentDocumentsBlock(ctx: AgentContext): Promise<string | null> {
+  const since = new Date(Date.now() - 14 * 86400_000);
+  const recent = await db
+    .select({
+      id: documents.id,
+      filename: documents.filename,
+      classLabel: documents.classLabel,
+      status: documents.status,
+      parsedAt: documents.parsedAt,
+      createdAt: documents.createdAt,
+      extractionResolved: documentExtractions.resolvedEntities,
+      extractionPayload: documentExtractions.payload,
+    })
+    .from(documents)
+    .leftJoin(
+      documentExtractions,
+      and(
+        eq(documentExtractions.documentId, documents.id),
+        eq(documentExtractions.organizationId, ctx.organizationId),
+      ),
+    )
+    .where(and(
+      eq(documents.organizationId, ctx.organizationId),
+      eq(documents.uploaderId, ctx.rep.id),
+      gte(documents.createdAt, since),
+    ))
+    .orderBy(desc(documents.createdAt))
+    .limit(5);
+
+  if (!recent.length) return null;
+
+  const docIds = recent.map((d) => d.id);
+  const intel = await db
+    .select({
+      documentId: copilotIntelligence.documentId,
+      laneFitScore: copilotIntelligence.laneFitScore,
+      customerFitScore: copilotIntelligence.customerFitScore,
+      priceMid: copilotIntelligence.priceMid,
+      confidence: copilotIntelligence.confidence,
+    })
+    .from(copilotIntelligence)
+    .where(and(
+      eq(copilotIntelligence.organizationId, ctx.organizationId),
+      sql`${copilotIntelligence.documentId} = ANY(${docIds}::text[])`,
+    ));
+  const intelByDoc = new Map(intel.map((i) => [i.documentId ?? "", i]));
+
+  const openPlays = await db
+    .select({
+      documentId: copilotPlayRecommendations.documentId,
+      playName: copilotPlayRecommendations.playName,
+      confidence: copilotPlayRecommendations.confidence,
+    })
+    .from(copilotPlayRecommendations)
+    .where(and(
+      eq(copilotPlayRecommendations.organizationId, ctx.organizationId),
+      eq(copilotPlayRecommendations.status, "pending"),
+      sql`${copilotPlayRecommendations.documentId} = ANY(${docIds}::text[])`,
+    ));
+  const playsByDoc = new Map<string, Array<{ playName: string; confidence: string }>>();
+  for (const p of openPlays) {
+    const k = p.documentId ?? "";
+    if (!playsByDoc.has(k)) playsByDoc.set(k, []);
+    playsByDoc.get(k)!.push({ playName: p.playName, confidence: p.confidence });
+  }
+
+  const out: string[] = ["Recent documents you've uploaded (last 14 days):"];
+  for (const d of recent) {
+    const resolved = (d.extractionResolved as { customerName?: string } | null) ?? null;
+    const intelRow = intelByDoc.get(d.id);
+    const plays = playsByDoc.get(d.id) ?? [];
+    const parts: string[] = [
+      `• [${d.classLabel}] ${d.filename}`,
+    ];
+    if (resolved?.customerName) parts.push(`customer=${resolved.customerName}`);
+    if (intelRow) {
+      const bits: string[] = [];
+      if (intelRow.laneFitScore != null) bits.push(`lane_fit=${intelRow.laneFitScore}`);
+      if (intelRow.customerFitScore != null) bits.push(`cust_fit=${intelRow.customerFitScore}`);
+      if (intelRow.priceMid != null) bits.push(`mid=$${Number(intelRow.priceMid).toFixed(2)}/mi`);
+      if (bits.length) parts.push(`intel: ${bits.join(", ")} (${intelRow.confidence})`);
+    }
+    if (plays.length) {
+      parts.push(`open_plays: ${plays.map((p) => `${p.playName}(${p.confidence})`).join("; ")}`);
+    }
+    parts.push(`docId=${d.id}`);
+    out.push(parts.join(" — "));
+  }
+  out.push("(Use get_document_intelligence or recommend_plays_for_document with docId for detail.)");
+  return out.join("\n");
 }
 
 export async function runAgentTurn({ ctx, history, userMessage, emit, agentId: agentIdArg, projectId, pageContextBlock, mode }: RunAgentTurnArgs): Promise<{ assistantText: string; hadError: boolean; surfacedAction: boolean; agentId: string; meta: AnswerMeta; confidence: number; route: string; mode: DepthMode }> {

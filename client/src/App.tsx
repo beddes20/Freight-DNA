@@ -115,6 +115,7 @@ import EmailIntelligencePage from "@/pages/email-intelligence";
 import ContactSuggestionsPage from "@/pages/contact-suggestions";
 import FreightTriagePage from "@/pages/freight-triage";
 import ArchitectureSketchPage from "@/pages/architecture-sketch";
+import DocumentWorkspacePage from "@/pages/copilot/document-workspace";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -213,6 +214,8 @@ function Router() {
       <Route path="/admin/freight-conversion-failures" component={AdminFreightConversionFailuresPage} />
       <Route path="/admin/sidebar-tooltips" component={AdminSidebarTooltipsPage} />
       <Route path="/admin/copilot-analytics" component={AiHubPage} />
+      {/* Task #926 — Copilot Intelligence document workspace. */}
+      <Route path="/copilot/documents/:docId" component={DocumentWorkspacePage} />
       <Route path="/admin/carriers" component={AdminCarriers} />
       <Route path="/admin/webex-health" component={AdminWebexHealth} />
       <Route path="/admin/ai-engagement" component={AiHubPage} />

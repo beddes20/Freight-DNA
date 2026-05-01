@@ -10,6 +10,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { CrossTabBreadcrumb } from "@/components/freight/cross-tab-breadcrumb";
+import { EmbeddedPlayCard } from "@/components/dna-copilot/embedded-play-card";
 import { useLaneSignals, laneSigKey } from "@/hooks/useLaneSignals";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
@@ -1622,6 +1623,14 @@ export default function AvailableFreightPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Task #926 — embedded Copilot recommendations scoped to the active filters. */}
+      {laneFilter && (
+        <EmbeddedPlayCard scope={{ laneKey: laneFilter }} dataTestIdPrefix="af-embedded-plays-lane" />
+      )}
+      {companyFilter !== "all" && (
+        <EmbeddedPlayCard scope={{ customerId: companyFilter }} dataTestIdPrefix="af-embedded-plays-customer" />
+      )}
 
       {/* Task #635 — Lane deep-link banner (clearable) */}
       {laneFilter && (

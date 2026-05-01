@@ -2628,6 +2628,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerAgentAdminRoutes(app);
   const { registerAgentAnalyticsRoutes } = await import("./routes/agentAnalytics");
   registerAgentAnalyticsRoutes(app);
+  // Task #926 — Copilot Intelligence (extractions, intelligence rows, plays).
+  const { registerCopilotIntelligenceRoutes } = await import("./routes/copilotIntelligence");
+  registerCopilotIntelligenceRoutes(app);
   // Task #700: AI engagement instrumentation — batched event ingest + admin overview.
   const { registerAiEngagementRoutes } = await import("./routes/aiEngagement");
   registerAiEngagementRoutes(app);
