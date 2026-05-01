@@ -65,19 +65,33 @@ export function applyMessageToThread(
     update.archivedAt = null;
   }
 
-  // Update timestamps. Phase 1 — "Stop lying about freshness."
-  // Prefer the email's actual provider_sent_at over wall-clock now() so
-  // the denormalized last-incoming / last-outgoing columns stay anchored
-  // to real email events. Without this, mailbox backfills and out-of-order
-  // delivery would stamp every replayed message with the same processing
-  // time, then surface that as "Customer replied 2m ago" in the UI even
-  // when the email itself was sent 18 days ago. Fall back to `now` only
-  // when provider_sent_at is unavailable (rare — mostly drafts).
+  // Update timestamps. Phase 1 — "Stop lying about freshness." Prefer
+  // the email's actual provider_sent_at over wall-clock now() so the
+  // denormalized last-incoming / last-outgoing columns stay anchored
+  // to real email events; fall back to `now` only when provider_sent_at
+  // is unavailable (rare — mostly drafts).
+  //
+  // Task #897 — also monotonic-guard the per-direction columns (the
+  // `lastEmailAt` block below is already monotonic). Real-world ingest
+  // is NOT chronological: webhook lands msg-B (sentAt=14:01), then the
+  // delta-sync / self-heal sweep re-processes msg-A (sentAt=13:35)
+  // minutes later. Without this guard, the older replay overwrites
+  // `lastIncomingAt` from 14:01 back to 13:35 while `lastEmailAt` holds
+  // 14:01 — the exact drift fingerprint QA caught 2026-05-01. The row
+  // label "Customer replied …" reads the per-direction column, so reps
+  // saw timestamps 5–30 min behind reality.
   const sentAt = message.providerSentAt ?? now;
+  const sentAtMs = sentAt.getTime();
   if (message.direction === "inbound") {
-    update.lastIncomingAt = sentAt;
+    const existingIncomingMs = thread.lastIncomingAt?.getTime() ?? 0;
+    if (sentAtMs > existingIncomingMs) {
+      update.lastIncomingAt = sentAt;
+    }
   } else {
-    update.lastOutgoingAt = sentAt;
+    const existingOutgoingMs = thread.lastOutgoingAt?.getTime() ?? 0;
+    if (sentAtMs > existingOutgoingMs) {
+      update.lastOutgoingAt = sentAt;
+    }
   }
 
   // Task #859 — keep the denormalized `last_email_at` column in sync.

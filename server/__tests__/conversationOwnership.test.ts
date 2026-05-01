@@ -138,6 +138,75 @@ describe("applyMessageToThread", () => {
     expect(update.waitingSinceAt).toBeUndefined();
   });
 
+  // Task #897 — out-of-order ingest must NOT regress the per-direction
+  // freshness columns. Real-world delivery is not chronological: a webhook
+  // can land msg-B (newer) first, then the delta-sync / self-heal sweep
+  // re-processes msg-A (older) for the same thread minutes later. Before
+  // this guard, the older replay would overwrite `lastIncomingAt` from
+  // 14:01 back to 13:35, while `lastEmailAt` (already monotonic) held
+  // 14:01 — exactly the drift fingerprint QA caught on 2026-05-01:
+  // last_email_at=14:01, last_incoming_at=13:35, max_in=14:01.
+  it("does not regress lastIncomingAt when an older inbound message is replayed", () => {
+    const newer = new Date("2026-04-10T14:01:00Z");
+    const older = new Date("2026-04-10T13:35:00Z");
+    const thread = makeThread({
+      waitingState: "waiting_on_us",
+      waitingSinceAt: newer,
+      lastIncomingAt: newer,
+      lastEmailAt: newer,
+    });
+    const replay = makeMessage({
+      direction: "inbound",
+      providerSentAt: older,
+    });
+    const update = applyMessageToThread(thread, replay, new Date("2026-04-10T14:05:00Z"));
+
+    // Per-direction column held at the newer time
+    expect(update.lastIncomingAt).toBeUndefined();
+    // lastEmailAt also held at the newer time (monotonic)
+    expect(update.lastEmailAt?.getTime()).toBe(newer.getTime());
+  });
+
+  it("does not regress lastOutgoingAt when an older outbound message is replayed", () => {
+    const newer = new Date("2026-04-10T14:01:00Z");
+    const older = new Date("2026-04-10T13:35:00Z");
+    const thread = makeThread({
+      waitingState: "waiting_on_them",
+      lastOutgoingAt: newer,
+      lastEmailAt: newer,
+    });
+    const replay = makeMessage({
+      direction: "outbound",
+      providerSentAt: older,
+    });
+    const update = applyMessageToThread(thread, replay, new Date("2026-04-10T14:05:00Z"));
+
+    expect(update.lastOutgoingAt).toBeUndefined();
+    expect(update.lastEmailAt?.getTime()).toBe(newer.getTime());
+  });
+
+  it("advances lastIncomingAt to the message's providerSentAt when it is the newest", () => {
+    const earlier = new Date("2026-04-10T13:35:00Z");
+    const newest = new Date("2026-04-10T14:01:00Z");
+    const thread = makeThread({
+      waitingState: "waiting_on_us",
+      waitingSinceAt: earlier,
+      lastIncomingAt: earlier,
+      lastEmailAt: earlier,
+    });
+    const msg = makeMessage({
+      direction: "inbound",
+      providerSentAt: newest,
+    });
+    const update = applyMessageToThread(thread, msg, new Date("2026-04-10T14:02:00Z"));
+
+    // The webhook contract: ingesting an inbound at provider_sent_at=14:01
+    // must immediately stamp lastIncomingAt=14:01 (no sweep needed). This
+    // pins the seam from .local/tasks/task-897.md "Done looks like".
+    expect(update.lastIncomingAt?.getTime()).toBe(newest.getTime());
+    expect(update.lastEmailAt?.getTime()).toBe(newest.getTime());
+  });
+
   it("clears overdueAt on outbound reply", () => {
     const thread = makeThread({
       waitingState: "waiting_on_us",
