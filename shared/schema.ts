@@ -7201,3 +7201,292 @@ export const leakConsoleDailySnapshot = pgTable("leak_console_daily_snapshot", {
 }));
 export type LeakConsoleDailySnapshot = typeof leakConsoleDailySnapshot.$inferSelect;
 export type InsertLeakConsoleDailySnapshot = typeof leakConsoleDailySnapshot.$inferInsert;
+
+// ─── Email Intelligence v1.5 — Fact Crystallization (Task #943) ──────────────
+// First-class fact tables built on top of the v1 email_signals layer. Every
+// table dedups on the unique index over (message_id, …) so replayed Graph
+// webhook + delta + backfill + self-heal paths are safe. Consumers read these
+// rows through `EmailFactsAdapter`, not by poking at email_signals.extractedData.
+
+// Tier 1.1 — Bounce / DSN / OOO classifier
+export const emailBounceTypes = [
+  "hard_bounce",
+  "soft_bounce",
+  "auto_reply_ooo",
+  "auto_reply_other",
+] as const;
+export type EmailBounceType = typeof emailBounceTypes[number];
+
+export const emailBounceEvents = pgTable(
+  "email_bounce_events",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    messageId: varchar("message_id").notNull().references(() => emailMessages.id, { onDelete: "cascade" }),
+    contactEmail: text("contact_email").notNull(),
+    contactId: varchar("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    bounceType: text("bounce_type").notNull(),
+    diagnosticCode: text("diagnostic_code"),
+    oooUntil: timestamp("ooo_until"),
+    alternateContactEmail: text("alternate_contact_email"),
+    alternateContactName: text("alternate_contact_name"),
+    rawHeaders: jsonb("raw_headers"),
+    detectedAt: timestamp("detected_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("ebe_message_email_idx").on(t.messageId, t.contactEmail),
+    index("ebe_org_email_idx").on(t.orgId, t.contactEmail),
+    index("ebe_org_type_idx").on(t.orgId, t.bounceType),
+  ],
+);
+export const insertEmailBounceEventSchema = createInsertSchema(emailBounceEvents).omit({ id: true, createdAt: true, detectedAt: true });
+export type InsertEmailBounceEvent = z.infer<typeof insertEmailBounceEventSchema>;
+export type EmailBounceEvent = typeof emailBounceEvents.$inferSelect;
+
+// Tier 1.2 — Participants
+export const emailParticipantRoles = [
+  "from",
+  "to",
+  "cc",
+  "bcc",
+  "reply_to",
+  // Parsed out of the body's "From:" header on FW:/Fwd:/Tr: subjects so the
+  // real decision-maker survives a rep's forward into the team inbox.
+  "forwarded_original_sender",
+] as const;
+export type EmailParticipantRole = typeof emailParticipantRoles[number];
+
+export const emailParticipants = pgTable(
+  "email_participants",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    messageId: varchar("message_id").notNull().references(() => emailMessages.id, { onDelete: "cascade" }),
+    threadId: text("thread_id"),
+    emailAddress: text("email_address").notNull(),
+    displayName: text("display_name"),
+    role: text("role").notNull(),
+    isInternal: boolean("is_internal").notNull().default(false),
+    contactId: varchar("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    companyId: varchar("company_id").references(() => companies.id, { onDelete: "set null" }),
+    messageSentAt: timestamp("message_sent_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("ep_msg_email_role_idx").on(t.messageId, t.emailAddress, t.role),
+    index("ep_thread_email_idx").on(t.threadId, t.emailAddress),
+    index("ep_org_email_idx").on(t.orgId, t.emailAddress),
+    index("ep_company_email_idx").on(t.companyId, t.emailAddress),
+  ],
+);
+export const insertEmailParticipantSchema = createInsertSchema(emailParticipants).omit({ id: true, createdAt: true });
+export type InsertEmailParticipant = z.infer<typeof insertEmailParticipantSchema>;
+export type EmailParticipant = typeof emailParticipants.$inferSelect;
+
+// Tier 1.3 — Attachment classifications
+export const emailAttachmentKinds = [
+  "pod",
+  "rate_con",
+  "bol",
+  "coi",
+  "msa",
+  "rfp_workbook",
+  "spreadsheet",
+  "image",
+  "document",
+  "generic",
+] as const;
+export type EmailAttachmentKind = typeof emailAttachmentKinds[number];
+
+export const emailAttachmentClassifications = pgTable(
+  "email_attachment_classifications",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    messageId: varchar("message_id").notNull().references(() => emailMessages.id, { onDelete: "cascade" }),
+    attachmentName: text("attachment_name").notNull(),
+    attachmentSize: integer("attachment_size"),
+    contentType: text("content_type"),
+    kind: text("kind").notNull(),
+    confidence: integer("confidence").notNull().default(50),
+    routedTo: text("routed_to"),
+    routedRefId: varchar("routed_ref_id"),
+    features: jsonb("features"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("eac_msg_name_idx").on(t.messageId, t.attachmentName),
+    index("eac_org_kind_idx").on(t.orgId, t.kind),
+  ],
+);
+export const insertEmailAttachmentClassificationSchema = createInsertSchema(emailAttachmentClassifications).omit({ id: true, createdAt: true });
+export type InsertEmailAttachmentClassification = z.infer<typeof insertEmailAttachmentClassificationSchema>;
+export type EmailAttachmentClassification = typeof emailAttachmentClassifications.$inferSelect;
+
+// Tier 2.1 — Slot extractor + forward calendar
+export const emailSlotNames = [
+  "target_rate",
+  "incumbent",
+  "incumbent_rate",
+  "competitor_name",
+  "rfp_date",
+  "contract_end_date",
+  "equipment",
+  "commodity",
+  "weight",
+  "temperature",
+  "transit_days",
+] as const;
+export type EmailSlotName = typeof emailSlotNames[number];
+
+export const emailExtractedSlots = pgTable(
+  "email_extracted_slots",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    messageId: varchar("message_id").notNull().references(() => emailMessages.id, { onDelete: "cascade" }),
+    threadId: text("thread_id"),
+    slotName: text("slot_name").notNull(),
+    slotValue: text("slot_value"),
+    slotValueNumeric: decimal("slot_value_numeric", { precision: 14, scale: 4 }),
+    slotValueDate: timestamp("slot_value_date"),
+    confidence: integer("confidence").notNull().default(50),
+    evidence: text("evidence"),
+    linkedAccountId: varchar("linked_account_id").references(() => companies.id, { onDelete: "set null" }),
+    linkedLaneId: varchar("linked_lane_id").references(() => recurringLanes.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("ees_msg_slot_idx").on(t.messageId, t.slotName),
+    index("ees_org_slot_idx").on(t.orgId, t.slotName),
+    index("ees_thread_slot_idx").on(t.threadId, t.slotName),
+  ],
+);
+export const insertEmailExtractedSlotSchema = createInsertSchema(emailExtractedSlots).omit({ id: true, createdAt: true });
+export type InsertEmailExtractedSlot = z.infer<typeof insertEmailExtractedSlotSchema>;
+export type EmailExtractedSlot = typeof emailExtractedSlots.$inferSelect;
+
+export const forwardCalendarEventTypes = ["rfp", "contract_end", "renewal", "follow_up_at"] as const;
+export type ForwardCalendarEventType = typeof forwardCalendarEventTypes[number];
+
+export const forwardCalendarEvents = pgTable(
+  "forward_calendar_events",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    messageId: varchar("message_id").notNull().references(() => emailMessages.id, { onDelete: "cascade" }),
+    threadId: text("thread_id"),
+    linkedAccountId: varchar("linked_account_id").references(() => companies.id, { onDelete: "set null" }),
+    linkedLaneId: varchar("linked_lane_id").references(() => recurringLanes.id, { onDelete: "set null" }),
+    eventType: text("event_type").notNull(),
+    eventDate: timestamp("event_date").notNull(),
+    description: text("description"),
+    confidence: integer("confidence").notNull().default(50),
+    status: text("status").notNull().default("pending"),
+    nbaCardId: varchar("nba_card_id").references(() => nbaCards.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("fce_msg_type_idx").on(t.messageId, t.eventType),
+    index("fce_org_date_idx").on(t.orgId, t.eventDate),
+    index("fce_status_idx").on(t.orgId, t.status),
+  ],
+);
+export const insertForwardCalendarEventSchema = createInsertSchema(forwardCalendarEvents).omit({ id: true, createdAt: true });
+export type InsertForwardCalendarEvent = z.infer<typeof insertForwardCalendarEventSchema>;
+export type ForwardCalendarEvent = typeof forwardCalendarEvents.$inferSelect;
+
+// Tier 2.2 — Promise register
+export const emailPromiseStatuses = ["open", "kept", "broken", "cancelled"] as const;
+export type EmailPromiseStatus = typeof emailPromiseStatuses[number];
+
+export const emailPromises = pgTable(
+  "email_promises",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    messageId: varchar("message_id").notNull().references(() => emailMessages.id, { onDelete: "cascade" }),
+    threadId: text("thread_id"),
+    repUserId: varchar("rep_user_id").references(() => users.id, { onDelete: "set null" }),
+    linkedAccountId: varchar("linked_account_id").references(() => companies.id, { onDelete: "set null" }),
+    linkedContactId: varchar("linked_contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    promiseText: text("promise_text").notNull(),
+    promiseDueAt: timestamp("promise_due_at"),
+    status: text("status").notNull().default("open"),
+    resolvedAt: timestamp("resolved_at"),
+    resolvedByMessageId: varchar("resolved_by_message_id").references(() => emailMessages.id, { onDelete: "set null" }),
+    confidence: integer("confidence").notNull().default(50),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("eprm_msg_text_idx").on(t.messageId, t.promiseText),
+    index("eprm_status_due_idx").on(t.orgId, t.status, t.promiseDueAt),
+    index("eprm_rep_status_idx").on(t.repUserId, t.status),
+  ],
+);
+export const insertEmailPromiseSchema = createInsertSchema(emailPromises).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertEmailPromise = z.infer<typeof insertEmailPromiseSchema>;
+export type EmailPromise = typeof emailPromises.$inferSelect;
+
+// Tier 2.3 — Question register
+export const emailQuestionStatuses = ["unanswered", "answered", "stale"] as const;
+export type EmailQuestionStatus = typeof emailQuestionStatuses[number];
+
+export const emailQuestions = pgTable(
+  "email_questions",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    messageId: varchar("message_id").notNull().references(() => emailMessages.id, { onDelete: "cascade" }),
+    threadId: text("thread_id"),
+    linkedAccountId: varchar("linked_account_id").references(() => companies.id, { onDelete: "set null" }),
+    linkedContactId: varchar("linked_contact_id").references(() => contacts.id, { onDelete: "set null" }),
+    askedByEmail: text("asked_by_email"),
+    questionText: text("question_text").notNull(),
+    status: text("status").notNull().default("unanswered"),
+    answeredAt: timestamp("answered_at"),
+    answeredByMessageId: varchar("answered_by_message_id").references(() => emailMessages.id, { onDelete: "set null" }),
+    timeToAnswerSec: integer("time_to_answer_sec"),
+    confidence: integer("confidence").notNull().default(50),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("eq_msg_text_idx").on(t.messageId, t.questionText),
+    index("eq_status_idx").on(t.orgId, t.status),
+    index("eq_thread_idx").on(t.threadId),
+  ],
+);
+export const insertEmailQuestionSchema = createInsertSchema(emailQuestions).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertEmailQuestion = z.infer<typeof insertEmailQuestionSchema>;
+export type EmailQuestion = typeof emailQuestions.$inferSelect;
+
+// Tier 2.4 — Outbound quality scores
+export const emailOutboundQualityScores = pgTable(
+  "email_outbound_quality_scores",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    messageId: varchar("message_id").notNull().references(() => emailMessages.id, { onDelete: "cascade" }),
+    repUserId: varchar("rep_user_id").references(() => users.id, { onDelete: "set null" }),
+    linkedAccountId: varchar("linked_account_id").references(() => companies.id, { onDelete: "set null" }),
+    clarityScore: integer("clarity_score").notNull().default(0),
+    toneScore: integer("tone_score").notNull().default(0),
+    valueAddScore: integer("value_add_score").notNull().default(0),
+    objectionHandlingScore: integer("objection_handling_score").notNull().default(0),
+    overallScore: integer("overall_score").notNull().default(0),
+    features: jsonb("features"),
+    graderVersion: text("grader_version").notNull().default("heuristic_v1"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("eoqs_msg_idx").on(t.messageId),
+    index("eoqs_rep_idx").on(t.repUserId, t.createdAt),
+    index("eoqs_account_idx").on(t.linkedAccountId, t.createdAt),
+  ],
+);
+export const insertEmailOutboundQualityScoreSchema = createInsertSchema(emailOutboundQualityScores).omit({ id: true, createdAt: true });
+export type InsertEmailOutboundQualityScore = z.infer<typeof insertEmailOutboundQualityScoreSchema>;
+export type EmailOutboundQualityScore = typeof emailOutboundQualityScores.$inferSelect;

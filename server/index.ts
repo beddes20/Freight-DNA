@@ -15,6 +15,7 @@ import { initDailyDigestScheduler } from "./dailyDigestScheduler";
 import { initRepReportScheduler } from "./repReportScheduler";
 import { initOneOnOneReminderScheduler } from "./oneOnOneReminderScheduler";
 import { initHealthAlertScheduler } from "./healthAlertScheduler";
+import { initEmailFactsScheduler } from "./emailFactsScheduler";
 import { initCallVolumeDropScheduler } from "./callVolumeDropScheduler";
 import { initPlayOutcomeWindowScheduler } from "./playOutcomeWindowScheduler";
 import { initNbaOutcomeClassifier } from "./nbaOutcomeClassifier";
@@ -491,6 +492,7 @@ process.on("uncaughtException", (err) => {
       initRepReportScheduler();
       initOneOnOneReminderScheduler();
       initHealthAlertScheduler();
+      initEmailFactsScheduler();
       initCallVolumeDropScheduler();
       initPlayOutcomeWindowScheduler();
       initNbaOutcomeClassifier();

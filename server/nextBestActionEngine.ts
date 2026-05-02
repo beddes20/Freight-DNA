@@ -667,6 +667,26 @@ export async function generateNbasFromEmailSignals(
   signals: EmailSignal[],
   storageInstance: NbaEmailStorage = defaultStorage,
 ): Promise<void> {
+  // Task #943 — Email Intelligence v1.5 bounce/OOO suppression.
+  // The "outreach target" for an inbound message is the contact who *sent* it
+  // (msg.fromEmail). For outbound messages it's the recipient (msg.toEmail).
+  // If that mailbox is currently bouncing or OOO, do not generate follow-up
+  // NBAs — they would just push reps to email a dead inbox. Best-effort: any
+  // adapter failure must NOT block v1 NBA generation.
+  const outreachEmail = (message.direction === "inbound" ? message.fromEmail : message.toEmail) || null;
+  if (outreachEmail) {
+    try {
+      const { isContactSuppressed } = await import("./services/emailFacts");
+      const status = await isContactSuppressed(orgId, outreachEmail.toLowerCase());
+      if (status.suppressed) {
+        console.log(`[nba] suppressing email NBAs for ${outreachEmail} (reason=${status.reason})`);
+        return;
+      }
+    } catch (err) {
+      console.error("[nba] bounce suppression check failed (continuing):", err);
+    }
+  }
+
   for (const signal of signals) {
     if (signal.confidence < SIGNAL_CONFIDENCE_THRESHOLD) continue;
 
@@ -858,6 +878,21 @@ export async function generateAccountEmailNbas(
   signals: EmailSignal[],
   storageInstance: AccountEmailNbaStorage = defaultStorage,
 ): Promise<void> {
+  // Task #943 — bounce/OOO suppression mirrors generateNbasFromEmailSignals.
+  const outreachEmail = (message.direction === "inbound" ? message.fromEmail : message.toEmail) || null;
+  if (outreachEmail) {
+    try {
+      const { isContactSuppressed } = await import("./services/emailFacts");
+      const status = await isContactSuppressed(orgId, outreachEmail.toLowerCase());
+      if (status.suppressed) {
+        console.log(`[nba] suppressing account email NBAs for ${outreachEmail} (reason=${status.reason})`);
+        return;
+      }
+    } catch (err) {
+      console.error("[nba] bounce suppression check failed (continuing):", err);
+    }
+  }
+
   const familiesProcessed = new Set<string>();
 
   for (const signal of signals) {

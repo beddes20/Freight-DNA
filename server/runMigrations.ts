@@ -5806,4 +5806,178 @@ export async function runMigrations() {
   } catch (err) {
     console.error("[migrations] Task #911 copilot extraction tables error:", err);
   }
+
+  // Task #943 — Email Intelligence Layer v1.5 fact crystallization tables.
+  await runEmailIntelV1_5Migrations();
+}
+
+/**
+ * Task #943 — Email Intelligence Layer v1.5 fact crystallization tables.
+ * All tables dedup on (message_id, …) so replayed Graph webhook + delta +
+ * backfill + self-heal paths are safe.
+ */
+export async function runEmailIntelV1_5Migrations() {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS email_bounce_events (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        message_id varchar NOT NULL REFERENCES email_messages(id) ON DELETE CASCADE,
+        contact_email text NOT NULL,
+        contact_id varchar REFERENCES contacts(id) ON DELETE SET NULL,
+        bounce_type text NOT NULL,
+        diagnostic_code text,
+        ooo_until timestamp,
+        alternate_contact_email text,
+        alternate_contact_name text,
+        raw_headers jsonb,
+        detected_at timestamp NOT NULL DEFAULT now(),
+        created_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS ebe_message_email_idx ON email_bounce_events (message_id, contact_email);
+      CREATE INDEX IF NOT EXISTS ebe_org_email_idx ON email_bounce_events (org_id, contact_email);
+      CREATE INDEX IF NOT EXISTS ebe_org_type_idx ON email_bounce_events (org_id, bounce_type);
+
+      CREATE TABLE IF NOT EXISTS email_participants (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        message_id varchar NOT NULL REFERENCES email_messages(id) ON DELETE CASCADE,
+        thread_id text,
+        email_address text NOT NULL,
+        display_name text,
+        role text NOT NULL,
+        is_internal boolean NOT NULL DEFAULT false,
+        contact_id varchar REFERENCES contacts(id) ON DELETE SET NULL,
+        company_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        message_sent_at timestamp,
+        created_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS ep_msg_email_role_idx ON email_participants (message_id, email_address, role);
+      CREATE INDEX IF NOT EXISTS ep_thread_email_idx ON email_participants (thread_id, email_address);
+      CREATE INDEX IF NOT EXISTS ep_org_email_idx ON email_participants (org_id, email_address);
+      CREATE INDEX IF NOT EXISTS ep_company_email_idx ON email_participants (company_id, email_address);
+
+      CREATE TABLE IF NOT EXISTS email_attachment_classifications (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        message_id varchar NOT NULL REFERENCES email_messages(id) ON DELETE CASCADE,
+        attachment_name text NOT NULL,
+        attachment_size integer,
+        content_type text,
+        kind text NOT NULL,
+        confidence integer NOT NULL DEFAULT 50,
+        routed_to text,
+        routed_ref_id varchar,
+        features jsonb,
+        created_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS eac_msg_name_idx ON email_attachment_classifications (message_id, attachment_name);
+      CREATE INDEX IF NOT EXISTS eac_org_kind_idx ON email_attachment_classifications (org_id, kind);
+
+      CREATE TABLE IF NOT EXISTS email_extracted_slots (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        message_id varchar NOT NULL REFERENCES email_messages(id) ON DELETE CASCADE,
+        thread_id text,
+        slot_name text NOT NULL,
+        slot_value text,
+        slot_value_numeric numeric(14,4),
+        slot_value_date timestamp,
+        confidence integer NOT NULL DEFAULT 50,
+        evidence text,
+        linked_account_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        linked_lane_id varchar REFERENCES recurring_lanes(id) ON DELETE SET NULL,
+        created_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS ees_msg_slot_idx ON email_extracted_slots (message_id, slot_name);
+      CREATE INDEX IF NOT EXISTS ees_org_slot_idx ON email_extracted_slots (org_id, slot_name);
+      CREATE INDEX IF NOT EXISTS ees_thread_slot_idx ON email_extracted_slots (thread_id, slot_name);
+
+      CREATE TABLE IF NOT EXISTS forward_calendar_events (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        message_id varchar NOT NULL REFERENCES email_messages(id) ON DELETE CASCADE,
+        thread_id text,
+        linked_account_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        linked_lane_id varchar REFERENCES recurring_lanes(id) ON DELETE SET NULL,
+        event_type text NOT NULL,
+        event_date timestamp NOT NULL,
+        description text,
+        confidence integer NOT NULL DEFAULT 50,
+        status text NOT NULL DEFAULT 'pending',
+        nba_card_id varchar REFERENCES nba_cards(id) ON DELETE SET NULL,
+        created_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS fce_msg_type_idx ON forward_calendar_events (message_id, event_type);
+      CREATE INDEX IF NOT EXISTS fce_org_date_idx ON forward_calendar_events (org_id, event_date);
+      CREATE INDEX IF NOT EXISTS fce_status_idx ON forward_calendar_events (org_id, status);
+
+      CREATE TABLE IF NOT EXISTS email_promises (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        message_id varchar NOT NULL REFERENCES email_messages(id) ON DELETE CASCADE,
+        thread_id text,
+        rep_user_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        linked_account_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        linked_contact_id varchar REFERENCES contacts(id) ON DELETE SET NULL,
+        promise_text text NOT NULL,
+        promise_due_at timestamp,
+        status text NOT NULL DEFAULT 'open',
+        resolved_at timestamp,
+        resolved_by_message_id varchar REFERENCES email_messages(id) ON DELETE SET NULL,
+        confidence integer NOT NULL DEFAULT 50,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS eprm_msg_text_idx ON email_promises (message_id, promise_text);
+      CREATE INDEX IF NOT EXISTS eprm_status_due_idx ON email_promises (org_id, status, promise_due_at);
+      CREATE INDEX IF NOT EXISTS eprm_rep_status_idx ON email_promises (rep_user_id, status);
+
+      CREATE TABLE IF NOT EXISTS email_questions (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        message_id varchar NOT NULL REFERENCES email_messages(id) ON DELETE CASCADE,
+        thread_id text,
+        linked_account_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        linked_contact_id varchar REFERENCES contacts(id) ON DELETE SET NULL,
+        asked_by_email text,
+        question_text text NOT NULL,
+        status text NOT NULL DEFAULT 'unanswered',
+        answered_at timestamp,
+        answered_by_message_id varchar REFERENCES email_messages(id) ON DELETE SET NULL,
+        time_to_answer_sec integer,
+        confidence integer NOT NULL DEFAULT 50,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS eq_msg_text_idx ON email_questions (message_id, question_text);
+      CREATE INDEX IF NOT EXISTS eq_status_idx ON email_questions (org_id, status);
+      CREATE INDEX IF NOT EXISTS eq_thread_idx ON email_questions (thread_id);
+
+      CREATE TABLE IF NOT EXISTS email_outbound_quality_scores (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        message_id varchar NOT NULL REFERENCES email_messages(id) ON DELETE CASCADE,
+        rep_user_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        linked_account_id varchar REFERENCES companies(id) ON DELETE SET NULL,
+        clarity_score integer NOT NULL DEFAULT 0,
+        tone_score integer NOT NULL DEFAULT 0,
+        value_add_score integer NOT NULL DEFAULT 0,
+        objection_handling_score integer NOT NULL DEFAULT 0,
+        overall_score integer NOT NULL DEFAULT 0,
+        features jsonb,
+        grader_version text NOT NULL DEFAULT 'heuristic_v1',
+        created_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS eoqs_msg_idx ON email_outbound_quality_scores (message_id);
+      CREATE INDEX IF NOT EXISTS eoqs_rep_idx ON email_outbound_quality_scores (rep_user_id, created_at);
+      CREATE INDEX IF NOT EXISTS eoqs_account_idx ON email_outbound_quality_scores (linked_account_id, created_at);
+    `);
+    console.log("[migrations] Task #943 email intel v1.5 fact tables ensured");
+  } catch (err) {
+    console.error("[migrations] Task #943 email intel v1.5 tables error:", err);
+  } finally {
+    client.release();
+  }
 }

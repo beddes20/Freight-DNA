@@ -17,6 +17,9 @@ import type {
 import { applyMessageToThread } from "./services/conversationWaitingStateService";
 import { determineInitialOwner } from "./services/conversationOwnershipService";
 import { ingestQuoteFromEmail, applyClosedLostToOpenQuote, applyClosedWonToOpenQuote, isWonLanguage, isLostLanguage } from "./services/quoteEmailIngestion";
+import { runEmailFactExtractors } from "./services/emailFacts";
+import type { AttachmentInput } from "./services/emailFacts/attachmentRouter";
+import { buildRateConRouter, resolveRateConUploaderId } from "./services/emailFacts/rateConEmailRouter";
 
 // ─── Intent taxonomy ─────────────────────────────────────────────────────────
 
@@ -527,6 +530,73 @@ export async function processEmailMessage(messageId: string): Promise<{
     await ingestTruckListFromEmail(msg).catch(err =>
       console.error(`[capacityMatches] truck-list ingestion failed for ${msg.id}:`, err),
     );
+  }
+
+  // Task #943 — Email Intelligence Layer v1.5: crystallize facts (bounce/OOO,
+  // participants, attachments, slots, promises, questions, outbound quality,
+  // sentiment) AFTER signals land. Best-effort + isolated; never regresses v1.
+  try {
+    // Resolve contactId (inbound) and repUserId (outbound) so the sentiment
+    // writeback + outbound quality grader actually persist; without these the
+    // adapters reduce to no-ops. Both lookups are scoped by org.
+    let contactId: string | null = null;
+    let repUserId: string | null = null;
+    if (msg.direction === "inbound" && msg.fromEmail) {
+      try {
+        const contact = await defaultStorage.getContactByEmailInOrg(msg.fromEmail, msg.orgId);
+        contactId = contact?.contactId ?? null;
+      } catch (err) {
+        console.error(`[emailFacts] contact lookup failed for ${msg.fromEmail}:`, err);
+      }
+    }
+    if (msg.direction === "outbound" && msg.fromEmail) {
+      try {
+        const user = await defaultStorage.getUserByEmailAddress(msg.fromEmail, msg.orgId);
+        repUserId = user?.id ?? null;
+      } catch (err) {
+        console.error(`[emailFacts] user lookup failed for ${msg.fromEmail}:`, err);
+      }
+    }
+
+    // Best-effort Graph attachment fetch for inbound messages with a
+    // resolvable mailbox + provider id. Mirrors the truck-list ingestion path
+    // so failures here don't break extraction.
+    let attachments: AttachmentInput[] | undefined;
+    const mailbox = (msg.toEmail || "").trim().toLowerCase();
+    if (msg.direction === "inbound" && mailbox && msg.providerMessageId) {
+      try {
+        const { downloadGraphAttachments } = await import("./services/podIntakeService");
+        const atts = await downloadGraphAttachments(mailbox, msg.providerMessageId);
+        attachments = atts.map(a => ({
+          name: a.name,
+          contentType: a.contentType ?? null,
+          size: a.sizeBytes ?? null,
+          contentBase64: a.contentBase64 ?? null,
+        }));
+      } catch (err) {
+        // Quiet — many messages legitimately have no attachments or no Graph hook.
+        if (process.env.DEBUG_EMAIL_FACTS) {
+          console.error(`[emailFacts] attachment fetch failed for ${msg.id}:`, err);
+        }
+      }
+    }
+
+    // Build the rate-con caller so any rate_con-classified attachment is
+    // ingested as a Document and queued for extraction (Tier 1.3 fully
+    // wired). We resolve an uploader from the rep on outbound mail or the
+    // mailbox owner on inbound mail; if neither resolves the router is a
+    // no-op and the attachment row records `rate_con_extractor_failed`.
+    const uploaderId = await resolveRateConUploaderId(defaultStorage, msg);
+    const rateConRouter = buildRateConRouter(uploaderId ? { uploaderId, orgId: msg.orgId } : null);
+
+    await runEmailFactExtractors(msg, saved, {
+      contactId,
+      repUserId,
+      attachments,
+      rateConRouter,
+    });
+  } catch (err) {
+    console.error(`[emailFacts] fact extraction failed for ${msg.id}:`, err);
   }
 
   return { message: msg, signals: saved, skipped: result.signals.length === 0 };

@@ -30,6 +30,7 @@ import { registerIntelRoutes } from "./routes/intel";
 import { registerGraphWebhookRoutes } from "./routes/graphWebhook";
 import { registerMarketSignalRoutes } from "./routes/marketSignals";
 import { registerEmailIntelligenceRoutes } from "./routes/emailIntelligence";
+import { registerEmailFactsRoutes } from "./routes/emailFacts";
 import { registerConversationsRoutes } from "./routes/conversations";
 import { registerProvenTacticsRoutes } from "./routes/provenTactics";
 import { registerPlaybookRoutes } from "./routes/playbook";
@@ -2595,6 +2596,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerGraphWebhookRoutes(app);
   registerMarketSignalRoutes(app);
   registerEmailIntelligenceRoutes(app);
+  registerEmailFactsRoutes(app);
   registerConversationsRoutes(app);
   registerProvenTacticsRoutes(app);
   registerPlaybookRoutes(app);
