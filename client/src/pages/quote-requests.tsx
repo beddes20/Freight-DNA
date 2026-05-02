@@ -66,6 +66,7 @@ import {
 } from "@/components/ui/hover-card";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ContextNotePanel, ContextNoteBadge } from "@/components/context-notes";
 
 import {
   Search,
@@ -1748,6 +1749,12 @@ function DetailDrawer({
 
               {/* Activity timeline */}
               <ActivityTimeline events={events} customer={customer} />
+
+              {/* Team notes (Task #950 — Context Notes v1) */}
+              <ContextNotePanel
+                anchor={{ type: "quote_request", id: opp.id }}
+                title="Team notes"
+              />
             </>
           )}
         </div>

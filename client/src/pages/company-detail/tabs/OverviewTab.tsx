@@ -12,6 +12,7 @@ import { NbaCompanyCard } from "@/components/NbaCompanyCard";
 import { MarketShareCard } from "@/components/market-share-card";
 import { CallActivityTrendline } from "@/components/call-activity-trendline";
 import { CopyButton } from "@/components/copy-button";
+import { ContextNotePanel } from "@/components/context-notes";
 import { fmtMoney } from "@/lib/rep-utils";
 import type { Contact, Rfp } from "@shared/schema";
 import type { AccountPerf, MonthBucket } from "../types";
@@ -242,6 +243,9 @@ export function OverviewTab({
       <RelationshipFreightCompanyPortlet companyId={companyId} companyName={companyName} onOpenContact={onOpenContact} />
 
       <OutreachPolicyCard companyId={companyId} />
+
+      {/* Team notes (Task #950 — Context Notes v1) */}
+      <ContextNotePanel anchor={{ type: "customer", id: companyId }} title="Team notes" />
 
       <ForcedFocusDialog
         open={ffDialogOpen}

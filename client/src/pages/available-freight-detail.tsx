@@ -27,6 +27,7 @@ import {
   type CarrierOverridePickerLane,
 } from "@/components/CarrierOverrideReasonPicker";
 import { getOutreachModalPhase } from "@/lib/outreach-modal-flag";
+import { ContextNotePopover } from "@/components/context-notes";
 import type {
   Company, Carrier, FreightOpportunity, FreightOpportunityCarrier,
   FreightOpportunityAudit, FreightOpportunityBucket,
@@ -2095,6 +2096,16 @@ export default function AvailableFreightDetailPage() {
             )}
           </div>
           <div className="ml-auto flex items-center gap-1.5">
+            {/* Task #950 — Context Notes on the available-freight detail
+                page. Anchored to type=`available_freight` (org-wide
+                visibility) so any rep watching this opportunity can post
+                or be mentioned. Deep-links route back to
+                /available-freight?lane=…&contextNote=…. */}
+            <ContextNotePopover
+              anchor={{ type: "available_freight", id: id }}
+              title="Team notes"
+              align="end"
+            />
             <Button
               variant="ghost"
               size="sm"

@@ -7490,3 +7490,157 @@ export const emailOutboundQualityScores = pgTable(
 export const insertEmailOutboundQualityScoreSchema = createInsertSchema(emailOutboundQualityScores).omit({ id: true, createdAt: true });
 export type InsertEmailOutboundQualityScore = z.infer<typeof insertEmailOutboundQualityScoreSchema>;
 export type EmailOutboundQualityScore = typeof emailOutboundQualityScores.$inferSelect;
+
+// ─── Task #950 — Context Notes v1 ────────────────────────────────────────────
+// Structured in-platform collaboration: reps anchor a short note to a workflow
+// object (quote, conversation, lane, customer, carrier, available freight),
+// optionally @-mention teammates, classify the action, and (later) convert to
+// a real task. Permissions delegate to the anchor's own access check via the
+// server-side anchor registry — there is no separate ACL.
+export const contextNoteAnchorTypes = [
+  "quote_request",
+  "conversation",
+  "available_freight",
+  "lane_work_queue",
+  "customer",
+  "carrier",
+  "load",
+] as const;
+export type ContextNoteAnchorType = (typeof contextNoteAnchorTypes)[number];
+
+export const contextNoteActionTypes = [
+  "fyi",
+  "question",
+  "please_review",
+  "please_handle",
+  "decision_needed",
+] as const;
+export type ContextNoteActionType = (typeof contextNoteActionTypes)[number];
+
+export const contextNoteStatuses = ["open", "acknowledged", "resolved"] as const;
+export type ContextNoteStatus = (typeof contextNoteStatuses)[number];
+
+export const contextNotes = pgTable("context_notes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  anchorType: varchar("anchor_type", { length: 32 }).notNull(),
+  anchorId: text("anchor_id").notNull(),
+  // Optional human-readable label snapshot ("Quote Q-1234", "Lane DAL→ATL")
+  // captured at write time so inbox rows remain readable if the anchor is
+  // renamed or its lookup is slow.
+  anchorLabel: text("anchor_label"),
+  // Optional payload of extra anchor context captured at write time so the
+  // inbox row can render a meaningful preview without re-fetching the
+  // anchor (e.g. lane string, customer name, opportunity number, MC#).
+  routePayload: jsonb("route_payload"),
+  body: text("body").notNull(),
+  actionType: varchar("action_type", { length: 32 }).notNull().default("fyi"),
+  status: varchar("status", { length: 16 }).notNull().default("open"),
+  resolvedAt: timestamp("resolved_at"),
+  resolvedBy: varchar("resolved_by").references(() => users.id, { onDelete: "set null" }),
+  // If the rep converted this note to a real task, link it here so the
+  // thread can show "Converted to task → ..." and we can deep-link to it.
+  convertedTaskId: varchar("converted_task_id").references(() => tasks.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  anchorIdx: index("context_notes_anchor_idx").on(t.anchorType, t.anchorId),
+  authorCreatedIdx: index("context_notes_author_created_idx").on(t.authorId, t.createdAt),
+  orgStatusIdx: index("context_notes_org_status_idx").on(t.orgId, t.status),
+}));
+
+export const insertContextNoteSchema = createInsertSchema(contextNotes).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  resolvedAt: true,
+  resolvedBy: true,
+  convertedTaskId: true,
+}).extend({
+  anchorType: z.enum(contextNoteAnchorTypes),
+  actionType: z.enum(contextNoteActionTypes).default("fyi"),
+  status: z.enum(contextNoteStatuses).default("open"),
+  body: z.string().min(1).max(4000),
+  routePayload: z.record(z.unknown()).optional().nullable(),
+});
+
+export type InsertContextNote = z.infer<typeof insertContextNoteSchema>;
+export type ContextNote = typeof contextNotes.$inferSelect;
+
+export const contextNoteMentions = pgTable("context_note_mentions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  noteId: varchar("note_id").notNull().references(() => contextNotes.id, { onDelete: "cascade" }),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  // Per-user state — when the mentioned rep marks the mention as read in their
+  // inbox we flip this so the bell badge clears even if the note itself is
+  // still open.
+  readAt: timestamp("read_at"),
+}, (t) => ({
+  noteUserUq: uniqueIndex("context_note_mentions_note_user_uq").on(t.noteId, t.userId),
+  userCreatedIdx: index("context_note_mentions_user_created_idx").on(t.userId, t.createdAt),
+}));
+
+export const insertContextNoteMentionSchema = createInsertSchema(contextNoteMentions).omit({
+  id: true,
+  createdAt: true,
+  readAt: true,
+});
+export type InsertContextNoteMention = z.infer<typeof insertContextNoteMentionSchema>;
+export type ContextNoteMention = typeof contextNoteMentions.$inferSelect;
+
+export const contextNoteReplies = pgTable("context_note_replies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  noteId: varchar("note_id").notNull().references(() => contextNotes.id, { onDelete: "cascade" }),
+  authorId: varchar("author_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  noteIdx: index("context_note_replies_note_idx").on(t.noteId),
+}));
+
+export const insertContextNoteReplySchema = createInsertSchema(contextNoteReplies).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  body: z.string().min(1).max(4000),
+});
+export type InsertContextNoteReply = z.infer<typeof insertContextNoteReplySchema>;
+export type ContextNoteReply = typeof contextNoteReplies.$inferSelect;
+
+// Lightweight audit log for state transitions (status changes, conversions).
+// Replies live in their own table; this is for "Sara acknowledged", "Mike
+// converted to task T-902", "Anna reopened", etc.
+export const contextNoteEventTypes = [
+  "created",
+  "mentioned",
+  "replied",
+  "acknowledged",
+  "resolved",
+  "reopened",
+  "converted_to_task",
+] as const;
+export type ContextNoteEventType = (typeof contextNoteEventTypes)[number];
+
+export const contextNoteEvents = pgTable("context_note_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  noteId: varchar("note_id").notNull().references(() => contextNotes.id, { onDelete: "cascade" }),
+  actorId: varchar("actor_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  type: varchar("type", { length: 32 }).notNull(),
+  detail: jsonb("detail"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  noteCreatedIdx: index("context_note_events_note_created_idx").on(t.noteId, t.createdAt),
+}));
+
+export const insertContextNoteEventSchema = createInsertSchema(contextNoteEvents).omit({
+  id: true,
+  createdAt: true,
+}).extend({
+  type: z.enum(contextNoteEventTypes),
+});
+export type InsertContextNoteEvent = z.infer<typeof insertContextNoteEventSchema>;
+export type ContextNoteEvent = typeof contextNoteEvents.$inferSelect;

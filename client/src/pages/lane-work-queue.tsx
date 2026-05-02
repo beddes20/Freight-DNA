@@ -23,6 +23,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import { QueryError } from "@/components/query-error";
 import { CrossTabBreadcrumb } from "@/components/freight/cross-tab-breadcrumb";
+import { ContextNotePopover, useRevealContextNoteRow } from "@/components/context-notes";
 import { EmbeddedPlayCard } from "@/components/dna-copilot/embedded-play-card";
 import { formatLaneDisplay, formatWeeklyLoadRange, formatCustomerName } from "@shared/laneFormatters";
 import { Badge } from "@/components/ui/badge";
@@ -1316,6 +1317,7 @@ function LazyLaneRow(props: LaneRowProps) {
       style={visible ? undefined : { minHeight: placeholderHeight }}
       data-testid={`lwq-lazy-row-${item.laneId}`}
       data-state={visible ? "mounted" : "placeholder"}
+      data-context-anchor-id={item.laneId}
     >
       {visible && <LaneRow {...props} votriData={votriData} />}
     </div>
@@ -1389,6 +1391,12 @@ function CustomerGroup({
           <Badge variant="secondary" className="text-[10px] h-5 px-1.5">
             {items.length} lane{items.length !== 1 ? "s" : ""}
           </Badge>
+          {items[0]?.laneId && (
+            <ContextNotePopover
+              anchor={{ type: "lane_work_queue", id: items[0].laneId }}
+              title="Lane notes"
+            />
+          )}
         </div>
       </button>
 
@@ -2046,6 +2054,20 @@ function readUrlFilters(): {
 export default function LaneWorkQueuePage() {
   const { user } = useAuth();
   const { toast } = useToast();
+  // Task #950 — deep-link reveal: when the user lands on /lanes/work-queue
+  // with `?contextNote=<id>`, find the lane row that owns the note, scroll
+  // it into view and ring it for ~2.5s. Falls back to a toast if the lane
+  // isn't currently rendered (e.g. filtered out by highFreq/manual/customer).
+  useRevealContextNoteRow({
+    surface: "lane_work_queue",
+    getRowEl: (anchorId) =>
+      document.querySelector<HTMLElement>(`[data-context-anchor-id="${anchorId}"]`),
+    fallbackToast: () =>
+      toast({
+        title: "Linked lane is not in the current view",
+        description: "Clear filters or open the note from your Notifications inbox.",
+      }),
+  });
   const [openLaneId, setOpenLaneId] = useState<string | null>(null);
   // Task #871 — Lane Cockpit overlay state. Opened by `L`, the row
   // overflow chip, or `?` → "Open cockpit". Owns no business state, just

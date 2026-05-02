@@ -25,6 +25,7 @@ import { CorrectionDialog } from "./correction-dialog";
 import { ThreadSummaryCard, ThreadSuggestionCard, ThreadEventsTimeline } from "./smart-pane-blocks";
 import { resolveThreadSubject } from "./utils";
 import type { ConversationThread, EmailMessage } from "./types";
+import { ContextNotePanel } from "@/components/context-notes";
 
 interface ThreadDetailPaneProps {
   thread: ConversationThread;
@@ -187,6 +188,9 @@ export function ThreadDetailPane({
   // back to thread.threadId (the Outlook AAQkAD… provider id) — a missing
   // subject renders as `(no subject)`.
   const subject = resolveThreadSubject({ messages });
+
+  // Task #950 — anchor for context-notes panel inside thread detail pane.
+  const contextNoteAnchor = { type: "conversation" as const, id: thread.threadId };
 
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-background" data-testid="thread-detail-panel">
@@ -401,6 +405,11 @@ export function ThreadDetailPane({
           });
         }}
       />
+
+      {/* Team notes (Task #950 — Context Notes v1) */}
+      <div className="border-t bg-muted/20 px-4 py-3">
+        <ContextNotePanel anchor={contextNoteAnchor} title="Team notes" />
+      </div>
     </div>
   );
 }

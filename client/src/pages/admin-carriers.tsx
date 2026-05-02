@@ -65,6 +65,7 @@ import {
 } from "lucide-react";
 import { InfoTooltip } from "@/components/info-tooltip";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { ContextNotePopover } from "@/components/context-notes";
 
 const LWQ_SOURCES = ["dat", "loadsmart", "csv_paste", "manual", "other"];
 const LWQ_SOURCE_LABELS: Record<string, string> = {
@@ -814,6 +815,15 @@ export default function AdminCarriers() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1 justify-end">
+                        {/* Task #950 — row-level Context Notes entry on the
+                            carrier rolodex. Anchors to type=`carrier` so
+                            mentions deep-link straight back to this carrier
+                            via /carrier-hub?carrierId=… */}
+                        <ContextNotePopover
+                          anchor={{ type: "carrier", id: c.id }}
+                          title="Team notes"
+                          align="end"
+                        />
                         <a
                           href={`/carrier-hub?carrierId=${c.id}`}
                           target="_blank"

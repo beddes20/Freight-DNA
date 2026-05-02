@@ -21,6 +21,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
+import { ContextNotePanel } from "@/components/context-notes";
 import { CrossTabBreadcrumb, appendCrossTabFromParam } from "@/components/freight/cross-tab-breadcrumb";
 import {
   Truck, Building2, Phone, Mail, MapPin, Search, Plus, X, ChevronRight, ChevronLeft,
@@ -1294,6 +1295,8 @@ function CarrierDrawer({ carrierId, onClose }: { carrierId: string; onClose: () 
                 {!carrier.legalName && !carrier.mcDot && !carrier.phone && !carrier.primaryEmail && !carrier.notes && (
                   <p className="text-sm text-muted-foreground italic">No profile details yet. Click the edit button to add information.</p>
                 )}
+                {/* Team notes (Task #950 — Context Notes v1) */}
+                <ContextNotePanel anchor={{ type: "carrier", id: carrier.id }} title="Team notes" />
               </>
             )}
           </TabsContent>

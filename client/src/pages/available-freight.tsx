@@ -10,6 +10,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { CrossTabBreadcrumb } from "@/components/freight/cross-tab-breadcrumb";
+import { ContextNotePopover, useRevealContextNoteRow } from "@/components/context-notes";
 import { EmbeddedPlayCard } from "@/components/dna-copilot/embedded-play-card";
 import { useLaneSignals, laneSigKey } from "@/hooks/useLaneSignals";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -419,6 +420,21 @@ function CarrierCombobox({
 
 export default function AvailableFreightPage() {
   const { user } = useAuth();
+  // Task #950 — when a notification deep-link lands here with
+  // `?contextNote=<id>`, scroll-and-ring the row that owns the note. If the
+  // anchor row isn't currently rendered (filtered out, paginated away) we
+  // fall back to a toast pointing the user to the inbox.
+  const { toast: cnToast } = useToast();
+  useRevealContextNoteRow({
+    surface: "available_freight",
+    getRowEl: (anchorId) =>
+      document.querySelector<HTMLElement>(`[data-context-anchor-id="${anchorId}"]`),
+    fallbackToast: () =>
+      cnToast({
+        title: "Linked freight is not in the current view",
+        description: "Open the note from your Notifications inbox to see the source row.",
+      }),
+  });
   const isManagerScope =
     !!user &&
     ["admin", "director", "sales_director", "national_account_manager"].includes(user.role ?? "");
@@ -2950,6 +2966,7 @@ function CockpitRowView(props: {
       onClick={onFocus}
       className={`flex flex-col gap-2 border-b px-3 py-3 hover:bg-accent/30 cursor-pointer ${isFocused ? "bg-accent/40" : ""}`}
       data-testid={`row-opportunity-${opp.id}`}
+      data-context-anchor-id={opp.id}
     >
       <div className="flex items-center gap-3 flex-wrap">
         <Checkbox
@@ -2979,6 +2996,13 @@ function CockpitRowView(props: {
         >
           {fmtLane(opp.origin, opp.originState, opp.destination, opp.destinationState)}
         </Link>
+        {/* Task #950 — full thread popover (composer + threaded view) is the
+            row-level entry point per ADR docs/context-notes.md. The badge
+            inside the popover doubles as the unread-mention counter. */}
+        <ContextNotePopover
+          anchor={{ type: "available_freight", id: opp.id }}
+          title="Lane notes"
+        />
         {opp.equipmentType && <span className="text-xs text-muted-foreground">{opp.equipmentType}</span>}
         {/* Task #871 — Stable/Volatile/Hot stability badge propagated from
             LWQ via the lwqContext payload. Falls back to the "Spot" pill

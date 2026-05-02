@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Bell, CheckCheck, ListTodo, MessageSquare, Loader2, Target, CheckCircle2, Users, BellRing, Building2, CalendarOff, SquareCheck, Lightbulb, Star, Truck, TrendingDown, BarChart2, Zap, AlertTriangle, Trophy, FileText, Inbox, ArrowRight } from "lucide-react";
+import { Bell, CheckCheck, ListTodo, MessageSquare, Loader2, Target, CheckCircle2, Users, BellRing, Building2, CalendarOff, SquareCheck, Lightbulb, Star, Truck, TrendingDown, BarChart2, Zap, AlertTriangle, Trophy, FileText, Inbox, ArrowRight, AtSign } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
@@ -39,12 +39,15 @@ const typeIcon: Record<string, React.ReactNode> = {
   quote_request_escalation: <AlertTriangle className="h-3.5 w-3.5 text-red-500" />,
   new_win:                  <Trophy className="h-3.5 w-3.5 text-amber-400" />,
   new_opportunity:          <FileText className="h-3.5 w-3.5 text-green-500" />,
+  context_note_mention:     <AtSign className="h-3.5 w-3.5 text-amber-500" />,
+  context_note_reply:       <MessageSquare className="h-3.5 w-3.5 text-amber-400" />,
 };
 
-type FilterKey = "all" | "tasks" | "quotes" | "lanes" | "ai" | "conversations" | "system";
+type FilterKey = "all" | "tasks" | "quotes" | "lanes" | "ai" | "mentions" | "conversations" | "system";
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "all",           label: "All" },
+  { key: "mentions",      label: "Mentions" },
   { key: "tasks",         label: "Tasks" },
   { key: "quotes",        label: "Quotes" },
   { key: "lanes",         label: "Lanes" },
@@ -81,6 +84,9 @@ const TYPE_TO_FILTER: Record<string, Exclude<FilterKey, "all">> = {
   session_closed: "conversations",
   post_reply:     "conversations",
   new_post:       "conversations",
+
+  context_note_mention: "mentions",
+  context_note_reply:   "mentions",
 };
 
 function bucketFor(type: string): Exclude<FilterKey, "all"> {
@@ -103,7 +109,7 @@ export function NotificationBell({ navBar }: { navBar?: boolean }) {
   const counts = useMemo(() => {
     const c: Record<FilterKey, number> = {
       all: safeNotifications.length,
-      tasks: 0, quotes: 0, lanes: 0, ai: 0, conversations: 0, system: 0,
+      tasks: 0, quotes: 0, lanes: 0, ai: 0, mentions: 0, conversations: 0, system: 0,
     };
     for (const n of safeNotifications) c[bucketFor(n.type)]++;
     return c;

@@ -58,6 +58,7 @@ import { registerLaneInboxRoutes } from "./routes/laneInbox";
 import { registerLeakConsoleRoutes } from "./routes/leakConsole";
 import { registerLaneStoryRoutes } from "./routes/laneStory";
 import { registerNotificationRoutes } from "./routes/notifications";
+import { registerContextNotesRoutes } from "./routes/contextNotes";
 import { registerContactRoutes } from "./routes/contacts";
 import { registerCompanyRoutes } from "./routes/companies";
 import { createRateLimiter } from "./lib/rateLimiter";
@@ -2618,6 +2619,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerLeakConsoleRoutes(app);
   registerLaneStoryRoutes(app);
   registerNotificationRoutes(app);
+  registerContextNotesRoutes(app);
   registerContactRoutes(app);
   registerCompanyRoutes(app);
   // Task #478 — periodic lost-streak alerts for customers and lane groups.
