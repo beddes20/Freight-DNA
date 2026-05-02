@@ -26,6 +26,7 @@ import {
   type CarrierOverridePickerCarrier,
   type CarrierOverridePickerLane,
 } from "@/components/CarrierOverrideReasonPicker";
+import { getOutreachModalPhase } from "@/lib/outreach-modal-flag";
 import type {
   Company, Carrier, FreightOpportunity, FreightOpportunityCarrier,
   FreightOpportunityAudit, FreightOpportunityBucket,
@@ -872,6 +873,113 @@ function ActivityDrawer({ open, onClose, audit }: { open: boolean; onClose: () =
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Outreach selection helpers (Task #946)
+// ────────────────────────────────────────────────────────────────────────────
+// `useOutreachSelection` keeps the carrier-row id selection synced with
+// sessionStorage so closing the send modal (or accidentally navigating
+// back) doesn't blow the rep's wave away. Keyed by opportunity id so two
+// loads in different tabs never cross-contaminate.
+function useOutreachSelection(
+  oppId: string,
+  selected: Set<string>,
+  setSelected: (next: Set<string> | ((prev: Set<string>) => Set<string>)) => void,
+) {
+  const storageKey = `freight.outreachSelection.${oppId}`;
+  const hydrated = useRef(false);
+
+  useEffect(() => {
+    if (hydrated.current || typeof window === "undefined") return;
+    hydrated.current = true;
+    try {
+      const raw = window.sessionStorage.getItem(storageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return;
+      const ids = parsed.filter((v): v is string => typeof v === "string");
+      if (ids.length === 0) return;
+      setSelected(prev => {
+        // Merge so anything already selected on this render (e.g. via deep
+        // link or quick add) wins alongside the persisted set.
+        const merged = new Set(prev);
+        ids.forEach(id => merged.add(id));
+        return merged;
+      });
+    } catch {
+      /* ignore corrupt entry */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (!hydrated.current || typeof window === "undefined") return;
+    try {
+      if (selected.size === 0) {
+        window.sessionStorage.removeItem(storageKey);
+      } else {
+        window.sessionStorage.setItem(storageKey, JSON.stringify(Array.from(selected)));
+      }
+    } catch {
+      /* ignore quota */
+    }
+  }, [storageKey, selected]);
+
+  const clearPersisted = () => {
+    if (typeof window === "undefined") return;
+    try {
+      window.sessionStorage.removeItem(storageKey);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  return { clearPersisted };
+}
+
+// Per-recipient guardrail evaluation. Returns null when the carrier is
+// good to send; returns a structured flag describing whether the send
+// will be skipped entirely (hard-fail) or merely flagged as a soft
+// warning the rep should acknowledge.
+type SendGuardrail = {
+  severity: "skip" | "warn";
+  code: "no_email" | "opted_out" | "excluded" | "low_fit" | "recently_contacted";
+  label: string;
+};
+
+function evaluateSendGuardrail(
+  row: DetailCarrier,
+  carrier: Carrier | null,
+): SendGuardrail | null {
+  // Hard fails — these carriers cannot receive outreach at all.
+  if (row.excludedReason === "opted_out") {
+    return { severity: "skip", code: "opted_out", label: "Opted out" };
+  }
+  if (row.excludedReason === "do_not_use") {
+    return { severity: "skip", code: "excluded", label: EXCLUDED_LABELS.do_not_use };
+  }
+  if (row.excludedReason === "customer_carrier_blocked") {
+    return { severity: "skip", code: "excluded", label: EXCLUDED_LABELS.customer_carrier_blocked };
+  }
+  if (!carrier?.primaryEmail) {
+    return { severity: "skip", code: "no_email", label: "Missing email" };
+  }
+  // Soft warnings — rep can still send.
+  if (row.excludedReason === "recent_contact") {
+    return { severity: "warn", code: "recently_contacted", label: "Recently contacted" };
+  }
+  if (row.excludedReason) {
+    return {
+      severity: "warn",
+      code: "excluded",
+      label: EXCLUDED_LABELS[row.excludedReason as FreightOpportunityExcludedReason] ?? row.excludedReason,
+    };
+  }
+  if (typeof row.fitScore === "number" && row.fitScore < 30) {
+    return { severity: "warn", code: "low_fit", label: "Low fit" };
+  }
+  return null;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Send modal body (kept from prior page)
 // ────────────────────────────────────────────────────────────────────────────
 function SendModalBody({
@@ -978,6 +1086,537 @@ function SendModalBody({
           </div>
         </>
       )}
+      <div>
+        <label className="text-xs text-muted-foreground">Schedule (optional)</label>
+        <Input
+          type="datetime-local"
+          value={scheduleAt}
+          onChange={(e) => setScheduleAt(e.target.value)}
+          data-testid="input-schedule-at"
+        />
+        <p className="text-[11px] text-muted-foreground mt-1">
+          Leave blank to send wave 1 immediately. Follow-up waves auto-cascade every 48h until a positive reply lands.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Review send modal body (Task #946 — phase A)
+// ────────────────────────────────────────────────────────────────────────────
+// Quick-fix UX for the carrier outreach send modal. Adds a bulk-action
+// toolbar, accurate "X of Y will receive" count, per-recipient guardrail
+// badges, and one-click recipient removal — all inside the existing
+// single-panel modal. Phases B (two-panel) and C (Available Freight tab
+// parity) are gated separately by `getOutreachModalPhase` and will
+// extend this component rather than replace it.
+function ReviewSendModalBody({
+  oppId, mode, opportunityCarriers, carriersById,
+  selected, setSelected,
+  draftIndex, setDraftIndex,
+  overrides, setOverrides,
+  scheduleAt, setScheduleAt,
+}: {
+  oppId: string;
+  mode: string;
+  opportunityCarriers: DetailCarrier[];
+  carriersById: Map<string, Carrier>;
+  selected: Set<string>;
+  setSelected: (next: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
+  draftIndex: number;
+  setDraftIndex: (n: number) => void;
+  overrides: Record<string, { subject: string; body: string }>;
+  setOverrides: (fn: (prev: Record<string, { subject: string; body: string }>) => Record<string, { subject: string; body: string }>) => void;
+  scheduleAt: string;
+  setScheduleAt: (s: string) => void;
+}) {
+  const [search, setSearch] = useState("");
+
+  // Eligible carriers for the wave: anything not already sent and not
+  // hard-blocked by guardrails. Sorted by ranker rank so "Top N" presets
+  // mirror the bucket layout the rep sees on the page.
+  const eligible = useMemo(() => {
+    return opportunityCarriers
+      .filter(r => !r.sentAt)
+      .slice()
+      .sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999));
+  }, [opportunityCarriers]);
+
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return eligible;
+    return eligible.filter(r => {
+      const c = carriersById.get(r.carrierId);
+      const hay = `${c?.name ?? ""} ${c?.mcDot ?? ""}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [eligible, search, carriersById]);
+
+  // Guardrail evaluation memoized so both the per-row badge and the
+  // summary roll-up agree on the same skip set.
+  const guardrails = useMemo(() => {
+    const m = new Map<string, SendGuardrail | null>();
+    for (const r of opportunityCarriers) {
+      m.set(r.id, evaluateSendGuardrail(r, carriersById.get(r.carrierId) ?? null));
+    }
+    return m;
+  }, [opportunityCarriers, carriersById]);
+
+  const summary = useMemo(() => {
+    let willSend = 0;
+    let warn = 0;
+    let skipNoEmail = 0;
+    let skipOptedOut = 0;
+    let skipExcluded = 0;
+    selected.forEach(id => {
+      const g = guardrails.get(id);
+      if (!g) { willSend++; return; }
+      if (g.severity === "warn") { willSend++; warn++; return; }
+      if (g.code === "no_email") skipNoEmail++;
+      else if (g.code === "opted_out") skipOptedOut++;
+      else skipExcluded++;
+    });
+    const skipTotal = skipNoEmail + skipOptedOut + skipExcluded;
+    const total = selected.size;
+    return { willSend, warn, skipTotal, skipNoEmail, skipOptedOut, skipExcluded, total };
+  }, [selected, guardrails]);
+
+  // Bulk action helpers. Each operates on the full eligible set rather
+  // than the search-filtered subset unless explicitly scoped to "visible"
+  // — this matches the brief's "Select all visible" vs. "Top N" split.
+  const selectAllVisible = () => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      visible.forEach(r => next.add(r.id));
+      return next;
+    });
+  };
+  const deselectAllVisible = () => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      visible.forEach(r => next.delete(r.id));
+      return next;
+    });
+  };
+  const deselectAll = () => setSelected(new Set());
+  // "Select all shortlisted" — every row in opportunityCarriers is by
+  // definition on the shortlist (shortlist = ranked + rep_added + any
+  // promoted pool carriers, all materialized as DetailCarrier rows
+  // before the modal opens). Distinct from "Select all visible" which
+  // honours the in-modal search filter.
+  const selectAllShortlisted = () => {
+    setSelected(new Set(eligible.map(r => r.id)));
+  };
+  // "Select all matching filter" — same set as "Select all visible"
+  // semantically (the in-modal search IS the filter), but exposed as a
+  // separate verb so the toolbar matches the brief's vocabulary and so
+  // future Phase B/C filter chips can rebind this action without a
+  // toolbar change.
+  const selectAllMatchingFilter = selectAllVisible;
+  const restoreRecommended20 = () => {
+    const top20 = eligible.slice(0, 20).map(r => r.id);
+    setSelected(new Set(top20));
+  };
+  const topN = (n: number) => {
+    const top = eligible.slice(0, n).map(r => r.id);
+    setSelected(new Set(top));
+  };
+  const usePriorRespondersFirst = () => {
+    const responders = eligible.filter(r => !!r.lastResponse).map(r => r.id);
+    const others = eligible.filter(r => !r.lastResponse).map(r => r.id);
+    const target = Math.max(20, responders.length);
+    setSelected(new Set([...responders, ...others].slice(0, target)));
+  };
+
+  const toggle = (id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  // Email editor focuses on the row at draftIndex (clamped to whatever
+  // is currently selected and not skipped).
+  const draftableIds = useMemo(() => {
+    return Array.from(selected).filter(id => {
+      const g = guardrails.get(id);
+      return !g || g.severity === "warn";
+    });
+  }, [selected, guardrails]);
+  const safeDraftIndex = Math.min(draftIndex, Math.max(0, draftableIds.length - 1));
+  const currentRowId = draftableIds[safeDraftIndex];
+  const currentRow = currentRowId
+    ? opportunityCarriers.find(r => r.id === currentRowId) ?? null
+    : null;
+  const currentCarrier = currentRow ? carriersById.get(currentRow.carrierId) ?? null : null;
+
+  const draftQuery = useQuery<{ draft: { subject: string; body: string; toEmail: string | null; templateKind: string } }>({
+    queryKey: ["/api/freight-opportunities", oppId, "carriers", currentRowId, "draft"],
+    enabled: !!currentRowId,
+  });
+
+  const ov = currentRowId ? overrides[currentRowId] : undefined;
+  const subjectValue = ov?.subject ?? draftQuery.data?.draft.subject ?? "";
+  const bodyValue = ov?.body ?? draftQuery.data?.draft.body ?? "";
+
+  return (
+    <div className="space-y-3" data-testid="review-send-modal-body">
+      {/* ── SELECTION SUMMARY ─────────────────────────────────────────── */}
+      <div
+        className="rounded-md border border-border bg-muted/30 px-3 py-2 flex items-center gap-3 flex-wrap"
+        data-testid="bar-send-summary"
+      >
+        <div className="text-sm font-semibold tabular-nums" data-testid="text-send-count">
+          {summary.willSend} of {selected.size} will receive
+        </div>
+        <span className="text-xs text-muted-foreground">
+          · {eligible.length} eligible on shortlist
+        </span>
+        {summary.skipTotal > 0 && (
+          <span
+            className="text-xs text-rose-700 dark:text-rose-300 inline-flex items-center gap-1"
+            data-testid="text-send-skipped"
+          >
+            <ShieldAlert className="h-3.5 w-3.5" />
+            {summary.skipTotal} will be skipped
+            {[
+              summary.skipOptedOut > 0 ? `${summary.skipOptedOut} opted out` : null,
+              summary.skipNoEmail > 0 ? `${summary.skipNoEmail} missing email` : null,
+              summary.skipExcluded > 0 ? `${summary.skipExcluded} excluded` : null,
+            ].filter(Boolean).length > 0 && (
+              <span className="text-muted-foreground">
+                ({[
+                  summary.skipOptedOut > 0 ? `${summary.skipOptedOut} opted out` : null,
+                  summary.skipNoEmail > 0 ? `${summary.skipNoEmail} missing email` : null,
+                  summary.skipExcluded > 0 ? `${summary.skipExcluded} excluded` : null,
+                ].filter(Boolean).join(", ")})
+              </span>
+            )}
+          </span>
+        )}
+        {summary.warn > 0 && (
+          <span
+            className="text-xs text-amber-700 dark:text-amber-300 inline-flex items-center gap-1"
+            data-testid="text-send-warnings"
+          >
+            <AlertTriangle className="h-3.5 w-3.5" />
+            {summary.warn} flagged
+          </span>
+        )}
+      </div>
+
+      {/* ── BULK ACTION TOOLBAR ───────────────────────────────────────── */}
+      <div
+        className="rounded-md border border-border bg-card px-2 py-1.5 flex flex-wrap items-center gap-1"
+        data-testid="bar-bulk-presets"
+      >
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs"
+          onClick={selectAllVisible}
+          disabled={visible.length === 0}
+          data-testid="button-select-all-visible"
+        >
+          Select all visible
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs"
+          onClick={selectAllShortlisted}
+          disabled={eligible.length === 0}
+          data-testid="button-select-all-shortlisted"
+        >
+          Select all shortlisted
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs"
+          onClick={selectAllMatchingFilter}
+          disabled={visible.length === 0}
+          data-testid="button-select-all-matching-filter"
+        >
+          Select all matching filter
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs"
+          onClick={deselectAllVisible}
+          disabled={visible.length === 0}
+          data-testid="button-deselect-visible"
+        >
+          Deselect visible
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs"
+          onClick={deselectAll}
+          disabled={selected.size === 0}
+          data-testid="button-deselect-all"
+        >
+          Deselect all
+        </Button>
+        <span className="h-4 w-px bg-border mx-1" />
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs"
+          onClick={restoreRecommended20}
+          disabled={eligible.length === 0}
+          data-testid="button-restore-recommended-20"
+        >
+          Restore recommended 20
+        </Button>
+        <span className="h-4 w-px bg-border mx-1" />
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs"
+          onClick={() => topN(10)}
+          disabled={eligible.length === 0}
+          data-testid="button-preset-top-10"
+        >
+          Top 10
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs"
+          onClick={() => topN(20)}
+          disabled={eligible.length === 0}
+          data-testid="button-preset-top-20"
+        >
+          Top 20
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs"
+          onClick={() => topN(50)}
+          disabled={eligible.length === 0}
+          data-testid="button-preset-top-50"
+        >
+          Top 50
+        </Button>
+        <span className="h-4 w-px bg-border mx-1" />
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs"
+          onClick={usePriorRespondersFirst}
+          disabled={eligible.length === 0}
+          data-testid="button-preset-prior-responders"
+        >
+          Prior responders first
+        </Button>
+      </div>
+
+      {/* ── RECIPIENT LIST ────────────────────────────────────────────── */}
+      <div className="rounded-md border border-border overflow-hidden">
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-muted/30">
+          <div className="relative flex-1">
+            <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Filter recipients"
+              className="pl-8 h-8 text-xs"
+              data-testid="input-recipients-search"
+            />
+          </div>
+          <span className="text-[11px] text-muted-foreground tabular-nums" data-testid="text-recipients-count">
+            {visible.length} shown
+          </span>
+        </div>
+        <div className="max-h-[260px] overflow-y-auto">
+          {visible.length === 0 && (
+            <div
+              className="px-4 py-6 text-xs text-center text-muted-foreground"
+              data-testid="state-recipients-empty"
+            >
+              {eligible.length === 0
+                ? "No carriers eligible for this wave."
+                : "No carriers match your search."}
+            </div>
+          )}
+          {visible.map(row => {
+            const carrier = carriersById.get(row.carrierId) ?? null;
+            const sel = selected.has(row.id);
+            const guard = guardrails.get(row.id) ?? null;
+            const isFocused = currentRowId === row.id;
+            return (
+              <div
+                key={row.id}
+                className={`grid grid-cols-[24px_1fr_auto_auto] items-center gap-2 px-3 py-1.5 border-b border-border/40 last:border-b-0 text-sm ${
+                  sel ? "bg-amber-500/5" : ""
+                } ${isFocused ? "ring-1 ring-amber-500/40 ring-inset" : ""}`}
+                data-testid={`row-recipient-${row.id}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={sel}
+                  onChange={() => toggle(row.id)}
+                  className="h-4 w-4 rounded border-input accent-amber-500"
+                  data-testid={`checkbox-recipient-${row.id}`}
+                />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!sel) toggle(row.id);
+                        const idx = draftableIds.indexOf(row.id);
+                        if (idx >= 0) setDraftIndex(idx);
+                      }}
+                      className="font-medium truncate text-left hover:underline"
+                      data-testid={`button-focus-recipient-${row.id}`}
+                    >
+                      {carrier?.name ?? "Unknown carrier"}
+                    </button>
+                    {typeof row.rank === "number" && (
+                      <span className="text-[10px] text-muted-foreground tabular-nums">
+                        #{row.rank}
+                      </span>
+                    )}
+                    {row.bucket && (
+                      <Badge variant="outline" className="text-[10px]">
+                        {BUCKET_LABELS[row.bucket as FreightOpportunityBucket] ?? row.bucket}
+                      </Badge>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground truncate">
+                    {carrier?.primaryEmail ?? <span className="italic">no email on file</span>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  {guard && (
+                    <Badge
+                      variant="outline"
+                      className={`text-[10px] ${
+                        guard.severity === "skip"
+                          ? "bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/30"
+                          : "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30"
+                      }`}
+                      data-testid={`badge-guardrail-${row.id}`}
+                    >
+                      {guard.label}
+                    </Badge>
+                  )}
+                </div>
+                {sel ? (
+                  <button
+                    type="button"
+                    onClick={() => toggle(row.id)}
+                    className="p-1 text-muted-foreground hover:text-foreground hover-elevate rounded"
+                    title="Remove from wave"
+                    data-testid={`button-remove-recipient-${row.id}`}
+                  >
+                    <XCircle className="h-3.5 w-3.5" />
+                  </button>
+                ) : (
+                  <span className="w-6" />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── EMAIL EDITOR ─────────────────────────────────────────────── */}
+      <div className="rounded-md border border-border bg-card p-3 space-y-2">
+        <div className="text-xs text-muted-foreground">
+          Template: <span className="font-medium">{mode === "lane_building" ? "Lane-building" : "Exact load"}</span>
+          {" · "}Edits below override the rendered template per-carrier for this send only.
+        </div>
+        {draftableIds.length === 0 ? (
+          <div
+            className="text-xs text-muted-foreground py-2 text-center"
+            data-testid="state-draft-empty"
+          >
+            Pick at least one recipient to preview the email draft.
+          </div>
+        ) : (
+          <>
+            {draftableIds.length > 1 && (
+              <div className="flex items-center gap-1 flex-wrap" data-testid="tabs-draft-carriers">
+                {draftableIds.slice(0, 12).map((rid, i) => {
+                  const r = opportunityCarriers.find(x => x.id === rid);
+                  const c = r ? carriersById.get(r.carrierId) : null;
+                  const edited = !!overrides[rid];
+                  return (
+                    <Button
+                      key={rid}
+                      size="sm"
+                      variant={i === safeDraftIndex ? "secondary" : "ghost"}
+                      className="h-7 text-xs"
+                      onClick={() => setDraftIndex(i)}
+                      data-testid={`tab-draft-${rid}`}
+                    >
+                      {c?.name ?? `#${i + 1}`}{edited ? " ●" : ""}
+                    </Button>
+                  );
+                })}
+                {draftableIds.length > 12 && (
+                  <span className="text-[11px] text-muted-foreground">
+                    +{draftableIds.length - 12} more
+                  </span>
+                )}
+              </div>
+            )}
+            <div className="text-[11px] text-muted-foreground">
+              To: <span className="font-medium">{draftQuery.data?.draft.toEmail ?? (draftQuery.isLoading ? "…" : "(no email on file)")}</span>
+              {currentCarrier && <> · {currentCarrier.name}</>}
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">Subject</label>
+              <Input
+                value={subjectValue}
+                disabled={draftQuery.isLoading || !currentRowId}
+                onChange={(e) => setOverrides(prev => ({
+                  ...prev,
+                  [currentRowId!]: { subject: e.target.value, body: prev[currentRowId!]?.body ?? bodyValue },
+                }))}
+                data-testid="input-draft-subject"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground">Body</label>
+              <Textarea
+                rows={8}
+                value={bodyValue}
+                disabled={draftQuery.isLoading || !currentRowId}
+                onChange={(e) => setOverrides(prev => ({
+                  ...prev,
+                  [currentRowId!]: { subject: prev[currentRowId!]?.subject ?? subjectValue, body: e.target.value },
+                }))}
+                data-testid="textarea-draft-body"
+              />
+              {ov && currentRowId && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="mt-1 h-6 text-[11px]"
+                  onClick={() => setOverrides(prev => {
+                    const { [currentRowId]: _drop, ...rest } = prev;
+                    return rest;
+                  })}
+                  data-testid="button-reset-draft"
+                >
+                  Reset to template
+                </Button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── SCHEDULE ─────────────────────────────────────────────────── */}
       <div>
         <label className="text-xs text-muted-foreground">Schedule (optional)</label>
         <Input
@@ -1149,6 +1788,21 @@ export default function AvailableFreightDetailPage() {
   const [activityOpen, setActivityOpen] = useState(false);
   const [excludedOpen, setExcludedOpen] = useState(false);
 
+  // Task #946 — phase A: persist `selected` to sessionStorage keyed by
+  // opportunity id so closing the modal or accidentally navigating back
+  // doesn't blow the wave away. Modal phase is captured once per page
+  // load so we don't flip layouts mid-edit if the rep changes the flag.
+  const { clearPersisted: clearSelectionPersistence } = useOutreachSelection(id, selected, setSelected);
+  const outreachPhase = useMemo(() => getOutreachModalPhase(), []);
+  const useReviewModal = outreachPhase !== "legacy";
+  // Soft-warning confirm gate (Task #946 / brief Step 4): when the wave
+  // includes any non-skip rows that still tripped a guardrail
+  // (recently_contacted, low_fit, etc.), the first Send click flips us
+  // into a "confirming" stage that requires one more click to actually
+  // submit. Reset on modal open/close and whenever selections change.
+  const [sendConfirmStage, setSendConfirmStage] = useState<"idle" | "confirming">("idle");
+  useEffect(() => { setSendConfirmStage("idle"); }, [sendModalOpen, selected]);
+
   const { data, isLoading, isError } = useQuery<DetailResponse>({
     queryKey: ["/api/freight-opportunities", id],
     queryFn: async () => {
@@ -1231,6 +1885,7 @@ export default function AvailableFreightDetailPage() {
       setScheduleAt("");
       setOverrides({});
       setDraftIndex(0);
+      clearSelectionPersistence();
     },
     onError: (err: any) => {
       toast({ title: "Send failed", description: err?.message ?? "Please try again", variant: "destructive" });
@@ -1734,39 +2389,100 @@ export default function AvailableFreightDetailPage() {
 
       {/* ── SEND DIALOG ─────────────────────────────────────────────────── */}
       <Dialog open={sendModalOpen} onOpenChange={setSendModalOpen}>
-        <DialogContent className="max-w-2xl" data-testid="dialog-send-outreach">
+        <DialogContent
+          className={useReviewModal ? "max-w-3xl" : "max-w-2xl"}
+          data-testid="dialog-send-outreach"
+        >
           <DialogHeader>
             <DialogTitle>Send outreach</DialogTitle>
             <DialogDescription>
-              {selected.size} carrier{selected.size === 1 ? "" : "s"} selected from shortlist. Templates render server-side. Guardrails are re-checked at send time.
+              {useReviewModal
+                ? "Review who's on the wave, edit per-carrier drafts, and send. Guardrails are re-checked at send time."
+                : `${selected.size} carrier${selected.size === 1 ? "" : "s"} selected from shortlist. Templates render server-side. Guardrails are re-checked at send time.`}
             </DialogDescription>
           </DialogHeader>
-          <SendModalBody
-            oppId={id}
-            mode={opp.mode}
-            carrierIds={Array.from(selected)}
-            carriersById={carrierById}
-            opportunityCarriers={carriers}
-            draftIndex={draftIndex}
-            setDraftIndex={setDraftIndex}
-            overrides={overrides}
-            setOverrides={setOverrides}
-            scheduleAt={scheduleAt}
-            setScheduleAt={setScheduleAt}
-          />
+          {useReviewModal ? (
+            <ReviewSendModalBody
+              oppId={id}
+              mode={opp.mode}
+              opportunityCarriers={carriers}
+              carriersById={carrierById}
+              selected={selected}
+              setSelected={setSelected}
+              draftIndex={draftIndex}
+              setDraftIndex={setDraftIndex}
+              overrides={overrides}
+              setOverrides={setOverrides}
+              scheduleAt={scheduleAt}
+              setScheduleAt={setScheduleAt}
+            />
+          ) : (
+            <SendModalBody
+              oppId={id}
+              mode={opp.mode}
+              carrierIds={Array.from(selected)}
+              carriersById={carrierById}
+              opportunityCarriers={carriers}
+              draftIndex={draftIndex}
+              setDraftIndex={setDraftIndex}
+              overrides={overrides}
+              setOverrides={setOverrides}
+              scheduleAt={scheduleAt}
+              setScheduleAt={setScheduleAt}
+            />
+          )}
           <DialogFooter>
             <Button variant="ghost" onClick={() => setSendModalOpen(false)} data-testid="button-cancel-send">Cancel</Button>
-            <Button
-              onClick={() => {
-                const carrierRowIds = Array.from(selected);
+            {(() => {
+              // Phase A — only carriers without a hard-skip guardrail are
+              // submitted. The server still re-checks at send time, but
+              // pre-filtering here keeps the rep's "X will receive" count
+              // honest and avoids a wave of synthetic "blocked" results.
+              const submittableIds = Array.from(selected).filter(rid => {
+                if (!useReviewModal) return true;
+                const row = carriers.find(c => c.id === rid);
+                if (!row) return false;
+                const guard = evaluateSendGuardrail(row, carrierById.get(row.carrierId) ?? null);
+                return !guard || guard.severity === "warn";
+              });
+              const flaggedCount = useReviewModal
+                ? submittableIds.reduce((n, rid) => {
+                    const row = carriers.find(c => c.id === rid);
+                    if (!row) return n;
+                    const guard = evaluateSendGuardrail(row, carrierById.get(row.carrierId) ?? null);
+                    return n + (guard && guard.severity === "warn" ? 1 : 0);
+                  }, 0)
+                : 0;
+              const hasOnlySkips = submittableIds.length === 0 && selected.size > 0;
+              const needsConfirm = useReviewModal && flaggedCount > 0;
+              const confirming = sendConfirmStage === "confirming";
+              const onSend = () => {
+                if (needsConfirm && !confirming) {
+                  setSendConfirmStage("confirming");
+                  return;
+                }
                 const scheduleAtIso = scheduleAt ? new Date(scheduleAt).toISOString() : null;
-                sendMutation.mutate({ carrierRowIds, scheduleAtIso, overrides });
-              }}
-              disabled={sendMutation.isPending || selected.size === 0}
-              data-testid="button-confirm-send"
-            >
-              {sendMutation.isPending ? "Sending…" : scheduleAt ? "Schedule wave" : "Send now"}
-            </Button>
+                sendMutation.mutate({ carrierRowIds: submittableIds, scheduleAtIso, overrides });
+              };
+              const label = sendMutation.isPending
+                ? "Sending…"
+                : confirming
+                  ? `Confirm send to ${flaggedCount} flagged`
+                  : scheduleAt
+                    ? "Schedule wave"
+                    : "Send now";
+              return (
+                <Button
+                  onClick={onSend}
+                  disabled={sendMutation.isPending || selected.size === 0 || hasOnlySkips}
+                  data-testid="button-confirm-send"
+                  data-confirm-stage={sendConfirmStage}
+                  className={confirming ? "bg-amber-500 text-zinc-900 hover:bg-amber-400" : undefined}
+                >
+                  {label}
+                </Button>
+              );
+            })()}
           </DialogFooter>
         </DialogContent>
       </Dialog>
