@@ -74,9 +74,14 @@ export function publish(
 ): void {
   if (!orgId) return;
   try {
-    const evt: LiveSyncEvent = { topic, key, ts: Date.now() };
+    const ts = Date.now();
+    const evt: LiveSyncEvent = { topic, key, ts };
     emitter.emit(channelFor(orgId), evt);
     emitter.emit(ALL_CHANNEL, { ...evt, orgId } as LiveSyncEventWithOrg);
+    // Health metric — record per-org per-topic last-publish-at so the
+    // watchdog can detect "ingest happened but live-sync is silent" (e.g.
+    // a future regression that drops the publish call from a write path).
+    _lastPublishByOrgTopic.set(`${orgId}::${topic}`, ts);
   } catch {
     // Swallow — pub/sub is purely advisory and must never break a write path.
   }
@@ -110,4 +115,109 @@ export function subscribeAll(
   return () => {
     emitter.off(ALL_CHANNEL, listener);
   };
+}
+
+// ── Health metrics (Task #951) ─────────────────────────────────────────────
+//
+// In-memory counters consumed by `mailboxWatchdogService.runLiveSyncHealthCheck`
+// to fire admin alerts when the live-sync stream is broken. Two failure
+// modes we explicitly want to detect early:
+//
+//   1. `live_sync_auth_failure` — the SSE endpoint is rejecting most/all
+//      connection attempts (the exact prod regression that caused
+//      Conversations to stop auto-updating). Tracked as a process-wide
+//      rolling 60s window of (success, failure) outcomes.
+//
+//   2. `live_sync_silent_stream` — mailbox ingest is happening (webhook
+//      or delta-sync just wrote a row) but `publish()` for the matching
+//      mailbox_inbound/_outbound topic never fired. Tracked per (orgId,
+//      topic) as the timestamp of the last publish.
+//
+// Module-scoped state — the server is a single process and the watchdog
+// cron is a singleton, so this is safe. If we ever scale horizontally
+// these getters move behind a Redis-backed counter.
+
+interface AuthOutcomeRing {
+  /** Unix-ms timestamps of recent successful connects. */
+  success: number[];
+  /** Unix-ms timestamps of recent rejected connects. */
+  failure: number[];
+}
+const _liveSyncAuthRing: AuthOutcomeRing = { success: [], failure: [] };
+const LIVE_SYNC_AUTH_WINDOW_MS = 60_000;
+// Cap each ring so a long-running burst can't grow unbounded between
+// watchdog ticks. 1000 events/min is far above any realistic prod rate
+// (each open tab reconnects every few seconds — caps out around ~300/min
+// for hundreds of tabs), and the watchdog drains it every minute anyway.
+const LIVE_SYNC_AUTH_RING_CAP = 1000;
+
+const _lastPublishByOrgTopic: Map<string, number> = new Map();
+
+function _pruneRing(ring: number[], now: number): void {
+  const cutoff = now - LIVE_SYNC_AUTH_WINDOW_MS;
+  // Timestamps are appended in monotonic order — find the first kept index
+  // and slice once. Cheaper than filter() for large rings.
+  let firstKept = 0;
+  while (firstKept < ring.length && ring[firstKept] < cutoff) firstKept++;
+  if (firstKept > 0) ring.splice(0, firstKept);
+}
+
+/**
+ * Record one outcome of an SSE connection attempt against
+ * `/api/live-sync/stream`. Called from the route handler after auth
+ * resolution, before the response is written.
+ */
+export function recordLiveSyncAuthOutcome(success: boolean): void {
+  const now = Date.now();
+  const ring = success ? _liveSyncAuthRing.success : _liveSyncAuthRing.failure;
+  ring.push(now);
+  if (ring.length > LIVE_SYNC_AUTH_RING_CAP) {
+    // Drop the oldest half — a hard cap keeps memory bounded under
+    // pathological loops without losing the recent signal.
+    ring.splice(0, ring.length - LIVE_SYNC_AUTH_RING_CAP / 2);
+  }
+}
+
+/**
+ * Snapshot of the SSE auth outcomes in the last 60 seconds. Read by the
+ * mailbox-health watchdog. Pure read — does not mutate the ring.
+ */
+export function getLiveSyncAuthStats(now: number = Date.now()): {
+  success: number;
+  failure: number;
+  total: number;
+  failureRatio: number;
+  windowMs: number;
+} {
+  _pruneRing(_liveSyncAuthRing.success, now);
+  _pruneRing(_liveSyncAuthRing.failure, now);
+  const success = _liveSyncAuthRing.success.length;
+  const failure = _liveSyncAuthRing.failure.length;
+  const total = success + failure;
+  return {
+    success,
+    failure,
+    total,
+    failureRatio: total === 0 ? 0 : failure / total,
+    windowMs: LIVE_SYNC_AUTH_WINDOW_MS,
+  };
+}
+
+/**
+ * Most recent publish timestamp for any mailbox topic for the given org.
+ * Returns null if no mailbox publish has ever been observed for the org
+ * during this process lifetime.
+ */
+export function getLastMailboxPublishAt(orgId: string): number | null {
+  const inbound = _lastPublishByOrgTopic.get(`${orgId}::mailbox_inbound`) ?? 0;
+  const outbound = _lastPublishByOrgTopic.get(`${orgId}::mailbox_outbound`) ?? 0;
+  const max = Math.max(inbound, outbound);
+  return max > 0 ? max : null;
+}
+
+/** Test-only: clear all health metric state between cases. */
+export function _resetLiveSyncMetricsForTests(): void {
+  _liveSyncAuthRing.success.length = 0;
+  _liveSyncAuthRing.failure.length = 0;
+  _lastPublishByOrgTopic.clear();
 }

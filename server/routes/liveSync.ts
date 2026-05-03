@@ -32,7 +32,11 @@
 
 import type { Express, Request, Response } from "express";
 import { verifyToken } from "@clerk/express";
-import { subscribe, type LiveSyncEvent } from "../services/liveSync";
+import {
+  subscribe,
+  recordLiveSyncAuthOutcome,
+  type LiveSyncEvent,
+} from "../services/liveSync";
 import { storage } from "../storage";
 import { qOptStr } from "../lib/req";
 
@@ -67,6 +71,11 @@ async function resolveOrgId(req: Request): Promise<string | null> {
 export function registerLiveSyncRoutes(app: Express): void {
   app.get("/api/live-sync/stream", async (req: Request, res: Response) => {
     const orgId = await resolveOrgId(req);
+    // Health metric — record every connect outcome (success or 401) so
+    // the mailbox-health watchdog can fire `live_sync_auth_failure` when
+    // the endpoint starts rejecting most/all attempts (the exact prod
+    // regression that caused Conversations to stop auto-updating).
+    recordLiveSyncAuthOutcome(orgId !== null);
     if (!orgId) {
       res.status(401).json({ error: "Authentication required" });
       return;

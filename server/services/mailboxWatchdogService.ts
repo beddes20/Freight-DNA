@@ -30,6 +30,10 @@ import { storage, db } from "../storage";
 import { users, type MonitoredMailbox } from "@shared/schema";
 import { JOB_NAMES, withHeartbeat } from "../lib/cronHeartbeat";
 import { renewSingleMailboxSubscription } from "../graphSubscriptionService";
+import {
+  getLiveSyncAuthStats,
+  getLastMailboxPublishAt,
+} from "./liveSync";
 
 function log(msg: string): void {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -389,6 +393,203 @@ export const _CLASSIFICATION_LAG_THRESHOLDS_FOR_TESTS = {
   alertKey: ALERT_KEY_CLASSIFICATION_LAG,
 };
 
+// ── Live-sync health (Task #951) ────────────────────────────────────────────
+//
+// Two failure modes — both invisible to the rep until they complain that
+// "Conversations stopped updating":
+//
+//   1. live_sync_auth_failure — the SSE endpoint starts rejecting most/all
+//      connection attempts. This is the exact regression caused by Clerk
+//      Bearer + EventSource (no header support). We require ≥10 attempts
+//      AND ≥90% failure inside the rolling 60s window to suppress noise on
+//      low-traffic envs, and 2 consecutive ticks before paging admins.
+//
+//   2. live_sync_silent_stream — per-org. A mailbox just received a webhook
+//      or completed a delta sync (lastInboxNotificationAt < 10min ago) but
+//      we have observed no `mailbox_inbound`/`mailbox_outbound` publish for
+//      that org during this process lifetime, or the most recent publish is
+//      older than the most recent ingest by more than 5 minutes. Catches
+//      future regressions where a write path forgets to call `publish()`.
+const ALERT_KEY_LIVE_SYNC_AUTH = "live_sync_auth_failure";
+const ALERT_KEY_LIVE_SYNC_SILENT = "live_sync_silent_stream";
+const LIVE_SYNC_AUTH_MIN_ATTEMPTS = 10;
+const LIVE_SYNC_AUTH_FAILURE_RATIO = 0.9;
+const LIVE_SYNC_AUTH_CONSECUTIVE_TICKS = 2;
+const LIVE_SYNC_INGEST_RECENCY_MS = 10 * 60 * 1000; // 10 min
+const LIVE_SYNC_PUBLISH_STALE_MS = 5 * 60 * 1000; // 5 min
+const LIVE_SYNC_SILENT_CONSECUTIVE_TICKS = 2;
+
+const _liveSyncAuthFailingTicks = { count: 0 };
+const _liveSyncSilentTickCount: Map<string, number> = new Map();
+
+export async function runLiveSyncHealthCheck(
+  mailboxes: MonitoredMailbox[],
+  now: Date,
+): Promise<{
+  authFailing: boolean;
+  authStats: ReturnType<typeof getLiveSyncAuthStats>;
+  orgsChecked: number;
+  orgsSilent: number;
+  alertsFired: number;
+  alertsResolved: number;
+}> {
+  const nowMs = now.getTime();
+  const stats = getLiveSyncAuthStats(nowMs);
+
+  // Group enabled mailboxes by org — same anchoring strategy as the
+  // classification-lag check (alert is org-scoped, schema needs a mailbox).
+  const byOrg = new Map<string, MonitoredMailbox[]>();
+  for (const mb of mailboxes) {
+    if (!mb.enabled) continue;
+    const arr = byOrg.get(mb.orgId) ?? [];
+    arr.push(mb);
+    byOrg.set(mb.orgId, arr);
+  }
+
+  let alertsFired = 0;
+  let alertsResolved = 0;
+  let orgsSilent = 0;
+
+  // ── 1. Auth-failure check (process-wide signal, fanned out per org) ─────
+  const authFailing =
+    stats.total >= LIVE_SYNC_AUTH_MIN_ATTEMPTS &&
+    stats.failureRatio >= LIVE_SYNC_AUTH_FAILURE_RATIO;
+  if (authFailing) {
+    _liveSyncAuthFailingTicks.count += 1;
+  } else {
+    _liveSyncAuthFailingTicks.count = 0;
+  }
+  const shouldFireAuth =
+    _liveSyncAuthFailingTicks.count >= LIVE_SYNC_AUTH_CONSECUTIVE_TICKS;
+
+  for (const [orgId, orgMailboxes] of byOrg.entries()) {
+    const anchor = orgMailboxes[0];
+
+    if (shouldFireAuth) {
+      const reason =
+        `Live-sync stream is rejecting ${stats.failure}/${stats.total} ` +
+        `connection attempts in the last ${Math.round(stats.windowMs / 1000)}s ` +
+        `(${Math.round(stats.failureRatio * 100)}% failure rate). ` +
+        `Reps will fall back to the 120s background poll until this clears — ` +
+        `check Clerk JWT validation and the ?token= query path.`;
+      const result = await storage.fireMailboxHealthAlert({
+        orgId,
+        mailboxId: anchor.id,
+        alertKey: ALERT_KEY_LIVE_SYNC_AUTH,
+        severity: "critical",
+        reason,
+      }).catch(() => null);
+      if (result?.isNew) {
+        alertsFired++;
+        await fanOutAdminNotifications(
+          anchor,
+          "Live-sync stream rejecting connections",
+          reason,
+        ).catch(() => {});
+      }
+    } else if (!authFailing) {
+      // Resolve only when the *current* tick is healthy — keeps a flapping
+      // condition pinned as open until it stabilizes.
+      const resolved = await storage
+        .resolveMailboxHealthAlert(anchor.id, ALERT_KEY_LIVE_SYNC_AUTH)
+        .catch(() => null);
+      if (resolved) alertsResolved++;
+    }
+
+    // ── 2. Silent-stream check (per org) ──────────────────────────────────
+    // Use the freshest mailbox notification across the org's mailboxes as
+    // the "ingest recently happened" signal. If no mailbox in this org has
+    // ever received a notification, skip — there's nothing to be silent
+    // about.
+    let latestIngestMs = 0;
+    for (const mb of orgMailboxes) {
+      const t = mb.lastInboxNotificationAt?.getTime() ?? 0;
+      if (t > latestIngestMs) latestIngestMs = t;
+    }
+    if (latestIngestMs === 0) {
+      // No ingest ever — no silent-stream signal to evaluate.
+      _liveSyncSilentTickCount.delete(orgId);
+      await storage
+        .resolveMailboxHealthAlert(anchor.id, ALERT_KEY_LIVE_SYNC_SILENT)
+        .catch(() => null);
+      continue;
+    }
+    const ingestRecent = nowMs - latestIngestMs <= LIVE_SYNC_INGEST_RECENCY_MS;
+    const lastPub = getLastMailboxPublishAt(orgId);
+    // Silent iff: ingest happened recently AND (no publish ever, OR last
+    // publish is meaningfully older than last ingest). The 5min slack
+    // tolerates one missed cron tick without paging.
+    const isSilent =
+      ingestRecent &&
+      (lastPub === null || latestIngestMs - lastPub > LIVE_SYNC_PUBLISH_STALE_MS);
+    if (isSilent) {
+      orgsSilent++;
+      const next = (_liveSyncSilentTickCount.get(orgId) ?? 0) + 1;
+      _liveSyncSilentTickCount.set(orgId, next);
+      if (next >= LIVE_SYNC_SILENT_CONSECUTIVE_TICKS) {
+        const lastPubLabel = lastPub
+          ? `${Math.round((nowMs - lastPub) / 1000)}s ago`
+          : "never (during this process)";
+        const reason =
+          `Mailbox ingest fired ${Math.round((nowMs - latestIngestMs) / 1000)}s ` +
+          `ago but the live-sync mailbox_inbound/_outbound publish is stale ` +
+          `(last publish: ${lastPubLabel}). A write path likely dropped ` +
+          `its publish() call — Conversations will not auto-update for this org.`;
+        const result = await storage.fireMailboxHealthAlert({
+          orgId,
+          mailboxId: anchor.id,
+          alertKey: ALERT_KEY_LIVE_SYNC_SILENT,
+          severity: "warning",
+          reason,
+        }).catch(() => null);
+        if (result?.isNew) {
+          alertsFired++;
+          await fanOutAdminNotifications(
+            anchor,
+            "Live-sync silent despite recent mailbox activity",
+            reason,
+          ).catch(() => {});
+        }
+      }
+    } else {
+      if (_liveSyncSilentTickCount.has(orgId)) {
+        _liveSyncSilentTickCount.delete(orgId);
+      }
+      const resolved = await storage
+        .resolveMailboxHealthAlert(anchor.id, ALERT_KEY_LIVE_SYNC_SILENT)
+        .catch(() => null);
+      if (resolved) alertsResolved++;
+    }
+  }
+
+  return {
+    authFailing,
+    authStats: stats,
+    orgsChecked: byOrg.size,
+    orgsSilent,
+    alertsFired,
+    alertsResolved,
+  };
+}
+
+// Test-only: clear all live-sync watchdog tracker state.
+export function _resetLiveSyncHealthTrackerForTests(): void {
+  _liveSyncAuthFailingTicks.count = 0;
+  _liveSyncSilentTickCount.clear();
+}
+
+// Test-only: thresholds so unit tests can pin them.
+export const _LIVE_SYNC_HEALTH_THRESHOLDS_FOR_TESTS = {
+  authMinAttempts: LIVE_SYNC_AUTH_MIN_ATTEMPTS,
+  authFailureRatio: LIVE_SYNC_AUTH_FAILURE_RATIO,
+  authConsecutiveTicks: LIVE_SYNC_AUTH_CONSECUTIVE_TICKS,
+  ingestRecencyMs: LIVE_SYNC_INGEST_RECENCY_MS,
+  publishStaleMs: LIVE_SYNC_PUBLISH_STALE_MS,
+  silentConsecutiveTicks: LIVE_SYNC_SILENT_CONSECUTIVE_TICKS,
+  alertKeyAuth: ALERT_KEY_LIVE_SYNC_AUTH,
+  alertKeySilent: ALERT_KEY_LIVE_SYNC_SILENT,
+};
+
 async function reconcileAlerts(
   mb: MonitoredMailbox,
   cls: MailboxHealthClassification,
@@ -491,11 +692,26 @@ async function runWatchdogCycle(trigger: "boot" | "cron"): Promise<void> {
       log(`classification-lag check failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
+    // Task #951 — live-sync health. Detects (a) prod SSE auth regression
+    // and (b) silent-stream regressions. Independent of per-mailbox
+    // checks; failure here is best-effort and never aborts the cycle.
+    let liveSyncSummary: Awaited<ReturnType<typeof runLiveSyncHealthCheck>> | null = null;
+    try {
+      liveSyncSummary = await runLiveSyncHealthCheck(mailboxes, now);
+    } catch (err) {
+      log(`live-sync health check failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     if (trigger === "cron") {
       const lagSuffix = lagSummary
         ? `, lag: ${lagSummary.orgsLagging}/${lagSummary.orgsChecked} org(s) lagging, ${lagSummary.alertsFired} alert(s) fired, ${lagSummary.alertsResolved} resolved`
         : "";
-      log(`Cycle done: ${mailboxes.length} mailbox(es), ${unhealthy} unhealthy, ${degraded} degraded, ${healed} self-healed${lagSuffix}`);
+      const lsSuffix = liveSyncSummary
+        ? `, live-sync: ${liveSyncSummary.authStats.success}/${liveSyncSummary.authStats.total} ok, ` +
+          `${liveSyncSummary.orgsSilent}/${liveSyncSummary.orgsChecked} silent, ` +
+          `${liveSyncSummary.alertsFired} alert(s) fired, ${liveSyncSummary.alertsResolved} resolved`
+        : "";
+      log(`Cycle done: ${mailboxes.length} mailbox(es), ${unhealthy} unhealthy, ${degraded} degraded, ${healed} self-healed${lagSuffix}${lsSuffix}`);
     }
   } finally {
     _tickInFlight = false;

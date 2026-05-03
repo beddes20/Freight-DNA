@@ -2499,6 +2499,81 @@ assert(
   "The admin health UI reads classificationLag.oldestAgeSeconds to render the inline-pipeline lag tile next to the per-mailbox health. Dropping this field reverts the admin to the old 'no idea why my quotes aren't showing' state.",
 );
 
+// ── 28. Live-sync auth + health probe (Task #951) ──────────────────────────
+// Pins the SSE auth contract that fixed the prod regression where
+// Conversations stopped auto-updating: the route MUST accept a Clerk JWT
+// in the ?token= query (because EventSource cannot set Authorization
+// headers), and the watchdog MUST run a per-tick health probe so the
+// next regression of this kind fires an alert instead of waiting for a
+// rep to complain.
+console.log("\n── 28. Live-sync auth + health probe (Task #951) ────────────");
+
+const liveSyncRouteSrc951 = readFile("server/routes/liveSync.ts");
+assert(
+  "routes/liveSync.ts — accepts ?token= query for Clerk JWT (EventSource can't set headers)",
+  /qOptStr\(req\.query\.token\)/.test(liveSyncRouteSrc951) &&
+    /verifyToken/.test(liveSyncRouteSrc951),
+  "Without `?token=` + verifyToken the SSE endpoint reverts to header-only auth, EventSource can't authenticate, and Conversations silently falls back to the 120s poll. This was the exact prod regression.",
+);
+assert(
+  "routes/liveSync.ts — does NOT use requireAuth middleware (header-only path is broken for SSE)",
+  // Detect real usage (import or middleware mount), not comment references.
+  !/import[^;]*\brequireAuth\b/.test(liveSyncRouteSrc951) &&
+    !/\brequireAuth\s*[,)]/.test(liveSyncRouteSrc951),
+  "`requireAuth` enforces an Authorization Bearer header; EventSource can only send cookies. Re-mounting this middleware re-introduces the prod bug.",
+);
+assert(
+  "routes/liveSync.ts — records auth outcome on every connect for the watchdog",
+  /recordLiveSyncAuthOutcome\(\s*orgId\s*!==\s*null\s*\)/.test(liveSyncRouteSrc951),
+  "If the route stops feeding the rolling auth-outcome ring, the live_sync_auth_failure watchdog goes blind and the next auth regression will only surface as rep complaints.",
+);
+
+const liveSyncSvcSrc951 = readFile("server/services/liveSync.ts");
+assert(
+  "services/liveSync.ts — exports recordLiveSyncAuthOutcome + getLiveSyncAuthStats",
+  /export\s+function\s+recordLiveSyncAuthOutcome\s*\(/.test(liveSyncSvcSrc951) &&
+    /export\s+function\s+getLiveSyncAuthStats\s*\(/.test(liveSyncSvcSrc951),
+  "These are the two-sided contract between the SSE route (writes outcomes) and the watchdog (reads the rolling window). Either side missing breaks the auth-failure alert.",
+);
+assert(
+  "services/liveSync.ts — exports getLastMailboxPublishAt for silent-stream detection",
+  /export\s+function\s+getLastMailboxPublishAt\s*\(/.test(liveSyncSvcSrc951),
+  "The silent-stream watchdog compares mailbox ingest recency against the most recent mailbox_inbound/_outbound publish per org. Removing this getter blinds the silent-stream alert.",
+);
+assert(
+  "services/liveSync.ts — publish() records last-publish-at for mailbox topics",
+  /_lastPublishByOrgTopic\.set\(`\$\{orgId\}::\$\{topic\}`/.test(liveSyncSvcSrc951),
+  "Without the per-(org, topic) timestamp set, getLastMailboxPublishAt always returns null and the silent-stream alert can never resolve.",
+);
+
+const watchdogSrc951 = readFile("server/services/mailboxWatchdogService.ts");
+assert(
+  "mailboxWatchdogService — exposes runLiveSyncHealthCheck",
+  /export\s+async\s+function\s+runLiveSyncHealthCheck\s*\(/.test(watchdogSrc951),
+  "The per-tick live-sync probe is the alarm the user explicitly asked for: 401/403 storms must fire loudly, not be discovered by reps complaining.",
+);
+assert(
+  "mailboxWatchdogService — fires `live_sync_auth_failure` alert key",
+  /["']live_sync_auth_failure["']/.test(watchdogSrc951),
+  "Stable alert key keeps the dedupe ledger and notification fan-out aligned across deploys.",
+);
+assert(
+  "mailboxWatchdogService — fires `live_sync_silent_stream` alert key",
+  /["']live_sync_silent_stream["']/.test(watchdogSrc951),
+  "Detects future regressions where a write path forgets to call publish() — same user-visible symptom (Conversations stops updating) but a different root cause from the auth failure.",
+);
+assert(
+  "mailboxWatchdogService — requires consecutive failing ticks before paging admins",
+  /LIVE_SYNC_AUTH_CONSECUTIVE_TICKS/.test(watchdogSrc951) &&
+    /LIVE_SYNC_SILENT_CONSECUTIVE_TICKS/.test(watchdogSrc951),
+  "A single transient blip (one bad tick of token-refresh races) must not page admins. Requiring N consecutive ticks at the 1-min cadence guarantees the condition is real.",
+);
+assert(
+  "mailboxWatchdogService — wires runLiveSyncHealthCheck into runWatchdogCycle",
+  /runLiveSyncHealthCheck\s*\(\s*mailboxes/.test(watchdogSrc951),
+  "Defining the function but not calling it from the cron is dead code. The probe must run every tick to be the early-warning the user asked for.",
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {
