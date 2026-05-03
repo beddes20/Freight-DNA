@@ -7,22 +7,68 @@
 //     mandatory to avoid leaks. Both `req.on("close")` and `req.on("error")`
 //     run the same cleanup so a flaky network can't strand subscribers.
 //   - Org-scoped subscription — never trust query params for orgId; always
-//     read from session via `requireAuth`.
+//     derive from the authenticated session/token.
 //   - Vite dev proxy / nginx friendly — `Cache-Control: no-transform`,
 //     `X-Accel-Buffering: no`, and an immediate `flushHeaders()` so the
 //     stream starts before any reverse proxy decides to buffer.
 //   - Heartbeats every 25s — comments (`:hb`) keep idle connections alive
 //     past common 30-60s proxy timeouts (Cloudflare, ALB, etc.).
+//
+// Auth — why this route does NOT use the standard `requireAuth` middleware:
+//   The browser `EventSource` API cannot set custom request headers (only
+//   cookies). Production auth on this app is Clerk JWT delivered via
+//   `Authorization: Bearer …` headers, which means a vanilla EventSource
+//   request hits the server with no Bearer token and `requireAuth` rejects
+//   it with 401 — every ~3s, forever, as EventSource auto-reconnects.
+//   That broke real-time updates on the Conversations page (the page fell
+//   back to its 120s background poll, so reps had to manually refresh to
+//   see new email activity).
+//
+//   Resolution: allow the SSE endpoint to accept a Clerk session JWT
+//   passed in the `?token=` query string. Verify it with Clerk's
+//   `verifyToken` and look the user up by `clerkUserId` to derive an
+//   org-scoped subscription. Existing session-based callers (dev cookies,
+//   impersonation paths) continue to work unchanged.
 
 import type { Express, Request, Response } from "express";
-import { requireAuth } from "../auth";
+import { verifyToken } from "@clerk/express";
 import { subscribe, type LiveSyncEvent } from "../services/liveSync";
+import { storage } from "../storage";
+import { qOptStr } from "../lib/req";
+
+async function resolveOrgId(req: Request): Promise<string | null> {
+  // 1) Existing session — dev cookies and any impersonation flows that
+  //    have already populated `req.session.organizationId` keep working
+  //    without round-tripping through Clerk.
+  const sessionOrgId = (req as any).session?.organizationId as string | undefined;
+  if (sessionOrgId) return sessionOrgId;
+
+  // 2) Clerk JWT in `?token=`. EventSource can include this in the URL
+  //    even though it can't set headers. Cookie-based Clerk sessions
+  //    (rare in this app) are not relied on here — the explicit token
+  //    is unambiguous and works in every browser/proxy combo.
+  const token = qOptStr(req.query.token);
+  const secretKey = process.env.CLERK_SECRET_KEY;
+  if (!token || !secretKey) return null;
+
+  try {
+    const claims = await verifyToken(token, { secretKey });
+    const clerkUserId = typeof claims.sub === "string" ? claims.sub : null;
+    if (!clerkUserId) return null;
+    const user = await storage.getUserByClerkId(clerkUserId);
+    return user?.organizationId ?? null;
+  } catch {
+    // Bad signature / expired / wrong issuer — caller will see 401 and
+    // its retry path will fetch a fresh token.
+    return null;
+  }
+}
 
 export function registerLiveSyncRoutes(app: Express): void {
-  app.get("/api/live-sync/stream", requireAuth, async (req: Request, res: Response) => {
-    const orgId = (req as any).session?.organizationId as string | undefined;
+  app.get("/api/live-sync/stream", async (req: Request, res: Response) => {
+    const orgId = await resolveOrgId(req);
     if (!orgId) {
-      res.status(403).json({ error: "no_org" });
+      res.status(401).json({ error: "Authentication required" });
       return;
     }
 

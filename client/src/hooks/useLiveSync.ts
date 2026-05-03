@@ -7,6 +7,17 @@
 // from multiple components is harmless (it just opens multiple
 // connections), but wasteful — one mount is enough.
 //
+// Auth — why this hook fetches a Clerk JWT before each connect:
+//   The browser `EventSource` API can't set custom request headers, only
+//   cookies. In production this app authenticates via Clerk's
+//   `Authorization: Bearer …` header, which means a naive EventSource
+//   request reaches the server with no credentials and gets 401-ed. The
+//   server-side route therefore also accepts a Clerk session JWT in
+//   `?token=`; we fetch one via Clerk's `getToken()` immediately before
+//   each connection (and re-fetch on every reconnect because Clerk's
+//   default session token lifetime is ~60s — the URL we used last time
+//   may already be expired by the time the browser reconnects).
+//
 // Topic → query-key invalidation map:
 //   The values are PREFIXES — TanStack Query's `invalidateQueries` matches
 //   any cached query whose key starts with the same array. That keeps the
@@ -16,6 +27,7 @@
 
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAuth as useClerkAuth } from "@clerk/clerk-react";
 
 // Every topic also invalidates `/api/lane-inbox` so the unified feed updates
 // in real time without per-page wiring. The inbox endpoint is cheap and
@@ -114,12 +126,57 @@ interface LiveSyncEvent {
   ts?: number;
 }
 
+// In dev with the local-auth bypass enabled, no <ClerkProvider> is mounted
+// (see `client/src/App.tsx`). The Clerk auth hooks would crash if called
+// in that mode, so we mirror the split used by `useAuth` and pick the
+// implementation at module load.
+const DEV_BYPASS =
+  import.meta.env.DEV && import.meta.env.VITE_DEV_AUTH_BYPASS === "true";
+
 export function useLiveSync(topics?: ReadonlyArray<string>): void {
+  if (DEV_BYPASS) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    return useLiveSyncCookies(topics);
+  }
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  return useLiveSyncClerk(topics);
+}
+
+function applyEvent(
+  evt: LiveSyncEvent,
+  topics: ReadonlyArray<string> | undefined,
+  invalidate: (key: ReadonlyArray<string>) => void,
+): void {
+  if (!evt || evt.type === "hello" || !evt.topic) return;
+  if (topics && !topics.includes(evt.topic)) return;
+
+  const keyPrefixes = TOPIC_TO_QUERY_KEYS[evt.topic];
+  if (!keyPrefixes) return;
+  for (const prefix of keyPrefixes) invalidate(prefix);
+
+  if (evt.key && PER_COMPANY_TOPICS.has(evt.topic)) {
+    for (const prefix of buildPerCompanyKeys(evt.key)) invalidate(prefix);
+  }
+}
+
+/**
+ * Connect-loop shared by both auth modes. `getStreamUrl` is awaited on
+ * every (re)connect so the Clerk-powered variant can mint a fresh JWT
+ * each time — Clerk's default session-token lifetime is ~60s, and an
+ * EventSource auto-reconnect with a stale token would just 401 again.
+ */
+function useStreamConnection(
+  topics: ReadonlyArray<string> | undefined,
+  enabled: boolean,
+  getStreamUrl: () => Promise<string | null>,
+  // Anything that should force a teardown + reconnect (e.g. signed-in
+  // state flipping). Stringified for stable identity in the dep array.
+  resetKey: string,
+): void {
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    // Skip in non-browser environments (defensive — this hook only runs in
-    // the browser, but TS narrowing protects SSR setups too).
+    if (!enabled) return;
     if (typeof window === "undefined" || typeof EventSource === "undefined") {
       return;
     }
@@ -128,12 +185,32 @@ export function useLiveSync(topics?: ReadonlyArray<string>): void {
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let mounted = true;
 
-    const open = () => {
+    const invalidate = (prefix: ReadonlyArray<string>) =>
+      queryClient.invalidateQueries({ queryKey: prefix as unknown as unknown[] });
+
+    const open = async () => {
       if (!mounted) return;
+      let url: string | null;
+      try {
+        url = await getStreamUrl();
+      } catch {
+        url = null;
+      }
+      if (!mounted) return;
+      if (!url) {
+        // Couldn't build a URL right now (e.g. Clerk getToken returned
+        // null transiently). Back off and try again.
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          open();
+        }, 2_000);
+        return;
+      }
+
       // EventSource sends the session cookie automatically when same-origin,
       // which is the case in dev and prod. `withCredentials` is only needed
       // for cross-origin streams; setting it here is harmless either way.
-      es = new EventSource("/api/live-sync/stream", { withCredentials: true });
+      es = new EventSource(url, { withCredentials: true });
 
       es.onmessage = (msg) => {
         let evt: LiveSyncEvent;
@@ -142,30 +219,18 @@ export function useLiveSync(topics?: ReadonlyArray<string>): void {
         } catch {
           return;
         }
-        if (!evt || evt.type === "hello" || !evt.topic) return;
-        if (topics && !topics.includes(evt.topic)) return;
-
-        const keyPrefixes = TOPIC_TO_QUERY_KEYS[evt.topic];
-        if (!keyPrefixes) return;
-        for (const prefix of keyPrefixes) {
-          // Cast: invalidateQueries accepts a readonly key, but the type
-          // signature here expects a mutable array. The runtime ignores
-          // mutability, so the cast is safe.
-          queryClient.invalidateQueries({ queryKey: prefix as unknown as unknown[] });
-        }
-        if (evt.key && PER_COMPANY_TOPICS.has(evt.topic)) {
-          for (const prefix of buildPerCompanyKeys(evt.key)) {
-            queryClient.invalidateQueries({ queryKey: prefix as unknown as unknown[] });
-          }
-        }
+        applyEvent(evt, topics, invalidate);
       };
 
       es.onerror = () => {
-        // EventSource re-connects on its own when readyState !== CLOSED.
-        // If the browser actually closed the stream (auth expired, server
-        // down), back off briefly and try again — one tab going stale would
-        // defeat the whole purpose of live sync.
-        if (es?.readyState === EventSource.CLOSED && mounted && !reconnectTimer) {
+        // Always force a clean teardown + manual reconnect so we mint a
+        // fresh token (the previous one may have expired). Without this,
+        // EventSource's built-in retry would re-issue the request with
+        // the original — now expired — `?token=` and 401 again.
+        const current = es;
+        es = null;
+        try { current?.close(); } catch { /* noop */ }
+        if (mounted && !reconnectTimer) {
           reconnectTimer = setTimeout(() => {
             reconnectTimer = null;
             open();
@@ -179,10 +244,34 @@ export function useLiveSync(topics?: ReadonlyArray<string>): void {
     return () => {
       mounted = false;
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      es?.close();
+      try { es?.close(); } catch { /* noop */ }
     };
-    // The topics array is intentionally not in the dep list — callers pass a
-    // static array and we want one connection per mount, not per render.
+    // The topics array is intentionally not in the dep list — callers pass
+    // a static array and we want one connection per mount, not per render.
+    // `resetKey` is the explicit signal for "tear down and reconnect".
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [enabled, resetKey]);
+}
+
+/** Dev-bypass path: cookies are sent automatically; no token needed. */
+function useLiveSyncCookies(topics?: ReadonlyArray<string>): void {
+  useStreamConnection(topics, true, async () => "/api/live-sync/stream", "cookies");
+}
+
+/** Production path: fetch a fresh Clerk JWT and pass it in the URL. */
+function useLiveSyncClerk(topics?: ReadonlyArray<string>): void {
+  const { isLoaded, isSignedIn, getToken } = useClerkAuth();
+
+  useStreamConnection(
+    topics,
+    Boolean(isLoaded && isSignedIn),
+    async () => {
+      const token = await getToken();
+      if (!token) return null;
+      return `/api/live-sync/stream?token=${encodeURIComponent(token)}`;
+    },
+    // Tear down + reopen whenever sign-in state changes so a fresh-login
+    // tab doesn't keep its anonymous (failing) connection.
+    `clerk:${isLoaded ? 1 : 0}:${isSignedIn ? 1 : 0}`,
+  );
 }
