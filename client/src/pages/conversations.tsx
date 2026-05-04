@@ -30,6 +30,12 @@ import { BucketSidebar } from "@/components/conversations/bucket-sidebar";
 import { ThreadList } from "@/components/conversations/thread-list";
 import { ThreadDetailPane, EmptyDetailPane } from "@/components/conversations/thread-detail-pane";
 import { CaptureAuditStatusPill } from "@/components/conversations/capture-audit-status-pill";
+// Task #967 — shared trust-layer primitives.
+import { LiveSyncPill } from "@/components/live-sync/LiveSyncPill";
+import {
+  HiddenCountsDisclosure,
+  type HiddenCountsSummary,
+} from "@/components/freight/hidden-counts";
 import { BulkActionBar } from "@/components/conversations/bulk-action-bar";
 import {
   DatePopover,
@@ -1014,6 +1020,32 @@ export default function ConversationsPage() {
           <CaptureAuditStatusPill
             onOpenThread={(threadId) => updateUrl({ threadId })}
           />
+          {/* Task #967 — shared live-sync health pill. */}
+          <LiveSyncPill testId="pill-live-sync-conversations" />
+          {/* Task #967 — hidden-counts disclosure. Surfaces "N hidden of
+              M total" when bucket selection or audience toggle is hiding
+              threads the rep would otherwise see. The total uses the
+              data.count facet (org-scope, pre-bucket); visible uses the
+              currently-rendered list size. */}
+          {(() => {
+            const total = data?.count ?? 0;
+            const visible = (data?.threads?.length ?? 0);
+            if (total <= visible) return null;
+            const summary: HiddenCountsSummary = {
+              totalInScope: total,
+              visible,
+              buckets: [
+                { id: "bucket", label: `Hidden by bucket "${bucket}" / audience "${audience}"`, count: Math.max(0, total - visible) },
+              ],
+            };
+            return (
+              <HiddenCountsDisclosure
+                summary={summary}
+                surface="conversations"
+                testId="disclosure-hidden-conversations"
+              />
+            );
+          })()}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <Button

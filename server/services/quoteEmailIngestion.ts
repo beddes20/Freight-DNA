@@ -924,7 +924,9 @@ export async function ingestQuoteFromEmail(
   // Best-effort — a failed publish must NEVER fail the ingest write.
   try {
     const { publish: publishLiveSync } = await import("./liveSync");
-    publishLiveSync(message.orgId, "customer_quote", opp.id);
+    // Task #967 — pass Date.now() so the client-side row-version guard
+    // can suppress late-arriving duplicates of this opp's events.
+    publishLiveSync(message.orgId, "customer_quote", opp.id, Date.now());
   } catch (pubErr) {
     console.warn(
       `[quoteEmailIngestion] live-sync publish failed for quote ${opp.id}:`,

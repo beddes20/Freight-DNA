@@ -7278,13 +7278,24 @@ export const SNOOZE_QUOTE_LIMITS = {
 // directly via `publish as publishLiveSync`). Inlined here to keep the
 // service file self-contained without forcing the import at top-of-file
 // (which would create a circular dep risk in a few entrypoints).
-function publishLiveSyncFromService(orgId: string, topic: string, key?: string): void {
+function publishLiveSyncFromService(
+  orgId: string,
+  topic: string,
+  key?: string,
+  rowVersionAt?: number,
+): void {
   try {
     // Lazy require so the service stays importable from worker entrypoints
     // that don't pull in the live-sync emitter eagerly.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const liveSync = require("./liveSync");
-    liveSync.publish(orgId, topic, key);
+    // Task #967 — default rowVersionAt to Date.now() at publish time so
+    // every customer_quote event participates in the client-side
+    // out-of-order guard. Publishes are emitted in commit order, so
+    // their wall-clock at publish is monotonic per (orgId, key) — the
+    // exact contract `applyRowVersionGuard` relies on.
+    const ver = typeof rowVersionAt === "number" ? rowVersionAt : Date.now();
+    liveSync.publish(orgId, topic, key, ver);
   } catch {
     // Live-sync is advisory; never fail a write because of it.
   }

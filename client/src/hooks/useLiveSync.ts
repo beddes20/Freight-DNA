@@ -24,10 +24,23 @@
 //   table tiny while still catching keys like
 //   `["/api/customer-quotes/list", filterQs]` or
 //   `["/api/carrier-hub", carrierId]`.
+//
+// Task #967 — health-status singleton:
+//   In addition to invalidating queries, every connection lifecycle event
+//   (connect, disconnect, message) updates a tiny module-scoped state
+//   store. `useLiveSyncStatus()` is a React-friendly selector that
+//   subscribes to that store so the shared <LiveSyncPill /> can render
+//   "live / connecting / stale" without each surface having to re-derive
+//   the signal. Topics seen during the session are tracked in a Set so
+//   per-tab "is my data being kept fresh?" diagnostics are honest.
 
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth as useClerkAuth } from "@clerk/clerk-react";
+import {
+  applyRowVersionGuard,
+  type RowVersionEvent,
+} from "@/lib/applyRowVersionGuard";
 
 // Every topic also invalidates `/api/lane-inbox` so the unified feed updates
 // in real time without per-page wiring. The inbox endpoint is cheap and
@@ -124,6 +137,14 @@ interface LiveSyncEvent {
   topic?: string;
   key?: string;
   ts?: number;
+  /**
+   * Task #967 — server-stamped row-version timestamp (epoch ms). Used by
+   * `applyRowVersionGuard` to drop late-arriving events that would clobber
+   * a fresher cache entry. Optional because not every publish path threads
+   * a per-row mtime yet (older topics will continue to invalidate
+   * unconditionally — that's the safe direction).
+   */
+  rowVersionAt?: number;
 }
 
 // In dev with the local-auth bypass enabled, no <ClerkProvider> is mounted
@@ -132,6 +153,143 @@ interface LiveSyncEvent {
 // implementation at module load.
 const DEV_BYPASS =
   import.meta.env.DEV && import.meta.env.VITE_DEV_AUTH_BYPASS === "true";
+
+// ── Live-sync health store (Task #967) ─────────────────────────────────────
+//
+// Module-scoped singleton state. `useLiveSyncStatus()` is a tiny
+// `useSyncExternalStore` selector that lets the shared <LiveSyncPill />
+// render the same "live / connecting / stale" signal across every tab
+// without each surface having to re-derive it from scratch.
+//
+// State machine:
+//   idle        → before the first connect attempt
+//   connecting  → an EventSource is being opened (or has errored and is
+//                 awaiting a reconnect timer)
+//   live        → onmessage has fired at least once on the current
+//                 connection (we treat the SSE "hello" frame as proof of
+//                 a working server-side stream)
+//   stale       → live, but no event has arrived in STALE_THRESHOLD_MS
+//                 (computed lazily by the consumer; see status snapshot)
+//   disabled    → the bootstrapper decided not to open a connection
+//                 (e.g. signed-out Clerk session or no EventSource shim)
+
+export type LiveSyncConnectionState =
+  | "idle"
+  | "connecting"
+  | "live"
+  | "stale"
+  | "disabled";
+
+export interface LiveSyncStatus {
+  state: LiveSyncConnectionState;
+  /** Wall-clock ms of the most recent inbound event (any topic). */
+  lastEventAt: number | null;
+  /** Wall-clock ms of the most recent successful EventSource open. */
+  lastConnectAt: number | null;
+  /** Topics observed at least once during this session. */
+  topicsSeen: ReadonlySet<string>;
+}
+
+/**
+ * Default freshness window. A live connection that hasn't received a
+ * frame in this many ms is reported as "stale" without tearing down. The
+ * window is generous (5 min) because most topics are bursty: a quiet
+ * stretch is normal in the middle of the night, but >5 min of nothing
+ * during the working day is a useful "are we still really connected?"
+ * tell.
+ */
+export const LIVE_SYNC_STALE_THRESHOLD_MS = 5 * 60 * 1000;
+
+interface MutableLiveSyncStatus {
+  state: LiveSyncConnectionState;
+  lastEventAt: number | null;
+  lastConnectAt: number | null;
+  topicsSeen: Set<string>;
+}
+
+const _status: MutableLiveSyncStatus = {
+  state: "idle",
+  lastEventAt: null,
+  lastConnectAt: null,
+  topicsSeen: new Set<string>(),
+};
+
+const _listeners = new Set<() => void>();
+let _snapshot: LiveSyncStatus = freezeStatus(_status);
+
+function freezeStatus(s: MutableLiveSyncStatus): LiveSyncStatus {
+  return {
+    state: s.state,
+    lastEventAt: s.lastEventAt,
+    lastConnectAt: s.lastConnectAt,
+    topicsSeen: new Set(s.topicsSeen),
+  };
+}
+
+function emit(): void {
+  _snapshot = freezeStatus(_status);
+  for (const l of _listeners) {
+    try { l(); } catch { /* listener errors must not break the store */ }
+  }
+}
+
+function subscribeStatus(listener: () => void): () => void {
+  _listeners.add(listener);
+  return () => { _listeners.delete(listener); };
+}
+
+function setState(next: LiveSyncConnectionState): void {
+  if (_status.state === next) return;
+  _status.state = next;
+  emit();
+}
+
+function recordConnect(now: number): void {
+  _status.state = "live";
+  _status.lastConnectAt = now;
+  emit();
+}
+
+function recordEvent(now: number, topic: string | undefined): void {
+  _status.lastEventAt = now;
+  if (topic) _status.topicsSeen.add(topic);
+  if (_status.state !== "live") _status.state = "live";
+  emit();
+}
+
+/**
+ * React hook returning the current live-sync health snapshot. Re-renders
+ * the consumer when any field changes. The `state` field is computed at
+ * read time so a long-quiet-but-still-open stream flips to "stale"
+ * without anyone having to schedule a periodic re-render.
+ *
+ * Pass `now` (defaults to Date.now()) to make tests deterministic.
+ */
+export function useLiveSyncStatus(now: number = Date.now()): LiveSyncStatus {
+  const raw = useSyncExternalStore(
+    subscribeStatus,
+    () => _snapshot,
+    () => _snapshot,
+  );
+  // Layer the staleness check on top of the raw snapshot. We only flip
+  // "live" → "stale"; transient states (idle / connecting / disabled)
+  // pass through unchanged.
+  if (raw.state === "live" && raw.lastEventAt !== null) {
+    if (now - raw.lastEventAt > LIVE_SYNC_STALE_THRESHOLD_MS) {
+      return { ...raw, state: "stale" };
+    }
+  }
+  return raw;
+}
+
+/** Test-only: reset the singleton between cases. */
+export function _resetLiveSyncStatusForTests(): void {
+  _status.state = "idle";
+  _status.lastEventAt = null;
+  _status.lastConnectAt = null;
+  _status.topicsSeen = new Set<string>();
+  emit();
+}
 
 export function useLiveSync(topics?: ReadonlyArray<string>): void {
   if (DEV_BYPASS) {
@@ -147,11 +305,30 @@ function applyEvent(
   topics: ReadonlyArray<string> | undefined,
   invalidate: (key: ReadonlyArray<string>) => void,
 ): void {
-  if (!evt || evt.type === "hello" || !evt.topic) return;
+  if (!evt) return;
+  // The "hello" frame proves the stream is open end-to-end; record it as
+  // a connect event so the pill flips out of "connecting" even when the
+  // org has zero traffic.
+  if (evt.type === "hello") {
+    recordConnect(Date.now());
+    return;
+  }
+  if (!evt.topic) return;
+  recordEvent(Date.now(), evt.topic);
   if (topics && !topics.includes(evt.topic)) return;
 
   const keyPrefixes = TOPIC_TO_QUERY_KEYS[evt.topic];
   if (!keyPrefixes) return;
+  // Task #967 — drop late-arriving events that would clobber a fresher
+  // cache entry. Returns true when this event should be *applied*. The
+  // guard is a no-op for topics that don't yet thread `rowVersionAt`.
+  const guardEvt: RowVersionEvent = {
+    topic: evt.topic,
+    key: evt.key,
+    rowVersionAt: evt.rowVersionAt,
+  };
+  if (!applyRowVersionGuard(guardEvt)) return;
+
   for (const prefix of keyPrefixes) invalidate(prefix);
 
   if (evt.key && PER_COMPANY_TOPICS.has(evt.topic)) {
@@ -176,8 +353,12 @@ function useStreamConnection(
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      setState("disabled");
+      return;
+    }
     if (typeof window === "undefined" || typeof EventSource === "undefined") {
+      setState("disabled");
       return;
     }
 
@@ -190,6 +371,7 @@ function useStreamConnection(
 
     const open = async () => {
       if (!mounted) return;
+      setState("connecting");
       let url: string | null;
       try {
         url = await getStreamUrl();
@@ -230,6 +412,7 @@ function useStreamConnection(
         const current = es;
         es = null;
         try { current?.close(); } catch { /* noop */ }
+        setState("connecting");
         if (mounted && !reconnectTimer) {
           reconnectTimer = setTimeout(() => {
             reconnectTimer = null;

@@ -95,6 +95,8 @@ import { CarrierOutreachPanel } from "@/components/CarrierOutreachPanel";
 import { LiveOppsChip } from "@/components/freight/lane-cross-link-chip";
 import { FreshnessPill, type FreshnessSignal } from "@/components/freight/freshness-pill";
 import { HiddenCountsDisclosure, type HiddenCountsSummary } from "@/components/freight/hidden-counts";
+// Task #967 — shared live-sync health pill.
+import { LiveSyncPill } from "@/components/live-sync/LiveSyncPill";
 import { LaneCockpitSheet } from "@/components/lane-cockpit/lane-cockpit-sheet";
 import {
   useSharedLaneKeyboard,
@@ -2615,6 +2617,8 @@ export default function LaneWorkQueuePage() {
               popoverTestId="popover-lwq-freshness"
             />
           )}
+          {/* Task #967 — shared live-sync health pill. */}
+          <LiveSyncPill testId="pill-live-sync-lwq" />
           <HiddenCountsDisclosure
             summary={hiddenCountsSummary}
             surface="lwq"

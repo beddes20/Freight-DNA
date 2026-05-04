@@ -1330,7 +1330,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     // Cross-tab UX (option A) — owner/preferred-program changes affect the
     // LWQ work queue and (for resolved lanes) NBA dashboards. Notify other
     // tabs so they refetch without waiting for window focus.
-    publishLiveSync(user.organizationId, "recurring_lane", pStr(req.params.id));
+    // Task #967 — Date.now() doubles as rowVersionAt for the client guard.
+    publishLiveSync(user.organizationId, "recurring_lane", pStr(req.params.id), Date.now());
 
     // Resolve linked NBA cards so they leave users' dashboards
     if (preferredProgramToggled) {
@@ -1520,7 +1521,8 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       // Cross-tab UX — owner change moves the lane between LWQ buckets and
       // also affects Carrier Hub / Lane Inbox surfaces. Notify other tabs so
       // they refetch without waiting for window focus. (Task #703 SSE wiring.)
-      publishLiveSync(user.organizationId, "recurring_lane", pStr(req.params.laneId));
+      // Task #967 — Date.now() doubles as rowVersionAt for the client guard.
+      publishLiveSync(user.organizationId, "recurring_lane", pStr(req.params.laneId), Date.now());
 
       res.json(updated);
     } catch (err) {
@@ -2836,8 +2838,10 @@ Rules for suggestions:
 
     // Cross-tab UX (option A) — manual outreach logging changes the LWQ
     // contact-lock status and the per-carrier activity tab. Hint both.
-    publishLiveSync(user.organizationId, "carrier_outreach", pStr(req.params.laneId));
-    publishLiveSync(user.organizationId, "recurring_lane", pStr(req.params.laneId));
+    // Task #967 — Date.now() doubles as rowVersionAt for the client guard.
+    const _laneVer = Date.now();
+    publishLiveSync(user.organizationId, "carrier_outreach", pStr(req.params.laneId), _laneVer);
+    publishLiveSync(user.organizationId, "recurring_lane", pStr(req.params.laneId), _laneVer);
 
     // First upsert bench entries so the count reflects real distinct carriers contacted
     const now = new Date().toISOString();

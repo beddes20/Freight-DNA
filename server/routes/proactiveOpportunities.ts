@@ -908,10 +908,13 @@ export function registerProactiveOpportunityRoutes(app: Express) {
       // Cross-tab UX (option A) — covering an opp changes its status, the
       // owning carrier's pipeline, and (sometimes) the recurring-lane queue.
       // Hint to other tabs to refetch.
-      publishLiveSync(org, "freight_opportunity", outcome.opportunity?.id ?? opp.id);
+      // Task #967 — Date.now() doubles as rowVersionAt for the client guard.
+      const _coverVer = Date.now();
+      publishLiveSync(org, "freight_opportunity", outcome.opportunity?.id ?? opp.id, _coverVer);
       const coveredCarrierId = parsed.data.carrierId ?? null;
-      if (coveredCarrierId) publishLiveSync(org, "carrier", coveredCarrierId);
+      if (coveredCarrierId) publishLiveSync(org, "carrier", coveredCarrierId, _coverVer);
       if (outcome.loops?.recurringLaneSuggestion?.suggested) {
+        // Topic-wide hint (no key) — guard is a no-op for keyless events.
         publishLiveSync(org, "recurring_lane");
       }
       return res.json({

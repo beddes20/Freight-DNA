@@ -27,6 +27,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { QueryError } from "@/components/query-error";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { EmptyState } from "@/components/ui/empty-state";
+// Task #967 — shared trust-layer primitives for the four ops tabs.
+import { LiveSyncPill } from "@/components/live-sync/LiveSyncPill";
+import { EmptyStateRecovery } from "@/components/empty-states/EmptyStateRecovery";
+import {
+  HiddenCountsDisclosure,
+  type HiddenCountsSummary,
+} from "@/components/freight/hidden-counts";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
@@ -718,7 +725,27 @@ function QuoteRequestsInner(): JSX.Element {
         {/* Top bar */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-card/50 shrink-0">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight" data-testid="text-page-title">Quote Requests</h1>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-xl font-semibold tracking-tight" data-testid="text-page-title">Quote Requests</h1>
+              {/* Task #967 — shared live-sync health pill. */}
+              <LiveSyncPill testId="pill-live-sync-quotes" />
+              {/* Task #967 — hidden-counts disclosure. Shown in the
+                  header so reps can see "N hidden of M total" without
+                  having to scroll through the table. Built from the
+                  list query's totals (server total) vs. the visible
+                  rows after page-local filters. */}
+              {(() => {
+                const total = listQuery.data?.total ?? 0;
+                const visible = visibleRows.length;
+                if (total <= visible) return null;
+                const buckets: HiddenCountsSummary["buckets"] = [];
+                if (mineOnly) buckets.push({ id: "mine-only", label: "Hidden by Mine only", count: Math.max(0, total - visible) });
+                else if (search) buckets.push({ id: "search", label: `Hidden by search "${search}"`, count: Math.max(0, total - visible) });
+                else buckets.push({ id: "filters", label: "Hidden by active filters", count: Math.max(0, total - visible) });
+                const summary: HiddenCountsSummary = { totalInScope: total, visible, buckets };
+                return <HiddenCountsDisclosure summary={summary} surface="quotes" testId="disclosure-hidden-quotes" />;
+              })()}
+            </div>
             <p className="text-xs text-muted-foreground mt-1">Every inbound request, one row, one source of truth</p>
           </div>
           <div className="flex items-center gap-2">
@@ -972,6 +999,33 @@ function QuoteRequestsInner(): JSX.Element {
               isElevated={isElevated}
               myRepId={myRepId}
               onRefresh={handleRefresh}
+              // Task #967 — empty-state recovery wiring. Surface the
+              // currently-active *page-local* filters as plain-text chips
+              // and offer a one-click "Reset filters" escape hatch on the
+              // shared <EmptyStateRecovery /> pane.
+              emptyStateFilters={(() => {
+                const out: string[] = [];
+                if (mineOnly) out.push("Mine only");
+                if (status !== "all") out.push(`Status: ${status}`);
+                if (age !== "today") out.push(`Age: ${age}`);
+                if (freeEmailOnly) out.push("Free email only");
+                if (includeSnoozed) out.push("Including snoozed");
+                if (pastSlaOnly) out.push("Past SLA only");
+                if (domainFilter) out.push(`Domain: ${domainFilter}`);
+                if (search) out.push(`Search: "${search}"`);
+                return out;
+              })()}
+              onResetFilters={() => {
+                setMineOnly(false);
+                setStatus("all");
+                setAge("today");
+                setFreeEmailOnly(false);
+                setIncludeSnoozed(false);
+                setPastSlaOnly(false);
+                setDomainFilter(null);
+                setSearch("");
+                setSearchInput("");
+              }}
             />
           </div>
           {selectedQuote && (
@@ -1092,6 +1146,7 @@ function ListTable({
   rows, isLoading, isError, error, total, offset, onSetOffset,
   selectedId, focusedId, onSelect, onOpen, sortKey, sortDir, onSort, isElevated, myRepId,
   onRefresh,
+  emptyStateFilters, onResetFilters,
 }: {
   rows: Quote[];
   isLoading: boolean;
@@ -1110,6 +1165,10 @@ function ListTable({
   isElevated: boolean;
   myRepId: string | null;
   onRefresh: () => void;
+  // Task #967 — filter signal flowed down so ZeroState can render the
+  // shared EmptyStateRecovery (filtered-empty pane) when appropriate.
+  emptyStateFilters?: ReadonlyArray<string>;
+  onResetFilters?: () => void;
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -1141,7 +1200,14 @@ function ListTable({
   }
 
   if (!isLoading && rows.length === 0) {
-    return <ZeroState isElevated={isElevated} onRefresh={onRefresh} />;
+    return (
+      <ZeroState
+        isElevated={isElevated}
+        onRefresh={onRefresh}
+        activeFilterLabels={emptyStateFilters}
+        onResetFilters={onResetFilters}
+      />
+    );
   }
 
   return (
@@ -1370,28 +1436,37 @@ function ListRow({
 /**
  * ZeroState — shown when the snapshot returns zero rows.
  *
- * Historical bug: the original "Review Capture Leak Queue" button used
- * wouter's `navigate()` to push `/admin/integrations-health#leak-tile`.
- * Wouter pushed the URL, but BOTH `/admin/integrations-health` and the
- * Task #952 `/admin/quote-pipeline-health` page hard-gate render to
- * `user.role === "admin"`. Non-admin reps perceived the click as a
- * dead button: URL changed, content area went blank, sidebar/header
- * stayed identical, no toast or error. This component now:
- *   - uses real `<Link>` elements (reliable wouter routing)
- *   - routes admins to the actionable pipeline-health page (with
- *     reprocess buttons) AND keeps the legacy leak-tile link
- *   - shows non-admin reps a "Refresh" action they can actually use
- *   - fires a toast on click so the rep sees feedback even if the
- *     destination page takes a moment to render
+ * Two shapes:
+ *   1. Filtered-empty (`activeFilterLabels` present) — Task #967's shared
+ *      <EmptyStateRecovery /> with a "Reset filters" escape hatch and an
+ *      admin-gated deep-link to the Capture Leak Queue.
+ *   2. Genuinely-empty — the elevated-aware pane that fixes a historical
+ *      "dead button" bug: the original "Review Capture Leak Queue" used
+ *      wouter's `navigate()` to push `/admin/integrations-health#leak-tile`.
+ *      Both `/admin/integrations-health` and `/admin/quote-pipeline-health`
+ *      hard-gate render to `user.role === "admin"`. Non-admin reps saw
+ *      the URL change, the content area go blank, and no feedback. This
+ *      branch now:
+ *        - uses real `<Link>` elements (reliable wouter routing)
+ *        - routes admins to the actionable pipeline-health page (with
+ *          reprocess buttons) AND keeps the legacy leak-tile link
+ *        - shows non-admin reps a "Refresh" action they can actually use
+ *        - fires a toast on click so the rep sees feedback even if the
+ *          destination page takes a moment to render
  */
 function ZeroState({
   isElevated,
   onRefresh,
+  activeFilterLabels,
+  onResetFilters,
 }: {
   isElevated: boolean;
   onRefresh: () => void;
+  activeFilterLabels?: ReadonlyArray<string>;
+  onResetFilters?: () => void;
 }): JSX.Element {
   const { toast } = useToast();
+  const [, navigate] = useLocation();
   const [refreshing, setRefreshing] = useState(false);
 
   const handleRefresh = useCallback(() => {
@@ -1407,6 +1482,28 @@ function ZeroState({
     window.setTimeout(() => setRefreshing(false), 1200);
   }, [onRefresh, toast]);
 
+  // Task #967 — when filters are active, prefer the shared
+  // EmptyStateRecovery so reps can tell "filtered to nothing" from
+  // "genuinely empty inbox" and have a one-click reset escape hatch.
+  // The admin-gated leak-queue link only appears for elevated users so
+  // we don't reintroduce the historical "dead button" bug.
+  if (activeFilterLabels && activeFilterLabels.length > 0) {
+    return (
+      <div className="h-full flex items-center justify-center p-8" data-testid="empty-quote-rows">
+        <EmptyStateRecovery
+          icon={InboxIcon}
+          activeFilterLabels={activeFilterLabels}
+          onResetFilters={onResetFilters}
+          extraActions={isElevated ? [{
+            label: "Review Capture Leak Queue",
+            onClick: () => navigate("/admin/integrations-health#leak-tile"),
+            testId: "button-review-capture-leak-queue",
+          }] : undefined}
+          testId="empty-quote-rows-recovery"
+        />
+      </div>
+    );
+  }
   return (
     <div className="h-full flex items-center justify-center p-8" data-testid="empty-quote-rows">
       <div className="flex flex-col items-center gap-4">

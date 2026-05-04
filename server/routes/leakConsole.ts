@@ -319,7 +319,8 @@ export function registerLeakConsoleRoutes(app: Express) {
       });
     }
 
-    publishLiveSync(user.organizationId, "recurring_lane", laneId);
+    // Task #967 — Date.now() doubles as rowVersionAt for the client guard.
+    publishLiveSync(user.organizationId, "recurring_lane", laneId, Date.now());
 
     res.json({
       ok: true,

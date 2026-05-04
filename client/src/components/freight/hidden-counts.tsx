@@ -35,20 +35,31 @@ export function sumHiddenBuckets(summary: HiddenCountsSummary): number {
   return summary.buckets.reduce((acc, b) => acc + Math.max(0, b.count), 0);
 }
 
+// Task #967 — extended to Quotes + Conversations so the same trust signal
+// ("N hidden of M total — here's why") appears on every ops tab.
+export type HiddenCountsSurface = "lwq" | "af" | "quotes" | "conversations";
+
+const SURFACE_NOUN: Record<HiddenCountsSurface, string> = {
+  lwq: "lanes",
+  af: "loads",
+  quotes: "quotes",
+  conversations: "threads",
+};
+
 export function HiddenCountsDisclosure({
   summary,
   surface,
   testId,
 }: {
   summary: HiddenCountsSummary | null | undefined;
-  surface: "lwq" | "af";
+  surface: HiddenCountsSurface;
   testId?: string;
 }) {
   if (!summary) return null;
   const hiddenTotal = Math.max(0, summary.totalInScope - summary.visible);
   if (hiddenTotal <= 0) return null;
   const nonZero = summary.buckets.filter(b => b.count > 0);
-  const surfaceLabel = surface === "lwq" ? "lanes" : "loads";
+  const surfaceLabel = SURFACE_NOUN[surface];
   return (
     <Popover>
       <PopoverTrigger asChild>

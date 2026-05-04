@@ -43,6 +43,16 @@ export interface LiveSyncEvent {
   /** Optional row id (opp id, lane id, etc.) for clients that key on it. */
   key?: string;
   ts: number;
+  /**
+   * Task #967 — server-stamped row-version timestamp (epoch ms). When the
+   * publish path knows the freshly-written row's mtime (or commit ts), it
+   * passes it through here so the client-side `applyRowVersionGuard` can
+   * drop late-arriving events that would otherwise clobber a fresher
+   * cache entry. Optional and additive: legacy publish paths that don't
+   * yet thread a row mtime continue to work (those events bypass the
+   * guard and always apply, which is the safe direction).
+   */
+  rowVersionAt?: number;
 }
 
 const emitter = new EventEmitter();
@@ -71,11 +81,20 @@ export function publish(
   orgId: string | null | undefined,
   topic: LiveSyncTopic,
   key?: string,
+  /**
+   * Optional row-version timestamp (epoch ms). Pass when the caller has
+   * the freshly-written row's mtime / commit ts so the client-side
+   * `applyRowVersionGuard` can suppress late-arriving events.
+   */
+  rowVersionAt?: number,
 ): void {
   if (!orgId) return;
   try {
     const ts = Date.now();
     const evt: LiveSyncEvent = { topic, key, ts };
+    if (typeof rowVersionAt === "number" && Number.isFinite(rowVersionAt)) {
+      evt.rowVersionAt = rowVersionAt;
+    }
     emitter.emit(channelFor(orgId), evt);
     emitter.emit(ALL_CHANNEL, { ...evt, orgId } as LiveSyncEventWithOrg);
     // Health metric — record per-org per-topic last-publish-at so the

@@ -456,7 +456,10 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       // snapshot KPIs, the list view, and the action queue. One topic
       // event covers all three (the client maps the topic to all three
       // query keys).
-      publishLiveSync(user.organizationId, "customer_quote", opp.id);
+      // Task #967 — Date.now() at publish doubles as the row-version
+      // stamp for the client-side `applyRowVersionGuard`. Publishes
+      // commit-ordered, so this is monotonic per opp id.
+      publishLiveSync(user.organizationId, "customer_quote", opp.id, Date.now());
       // Task #690 — any edit that could change a quote's outcome status
       // (won / lost / expired) drops it out of the stale-followup window;
       // any edit that revives a previously-decided quote could put one back
@@ -754,6 +757,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       );
       // Cross-tab UX (option A) — bulk flip mutates many rows; one
       // org-wide hint is enough to refresh the list / snapshot / queue.
+      // Task #967 — bulk topic-wide hint (no key); rowVersionAt left
+      // unset because the guard is keyed by (topic, key) and bulk fans
+      // out across many rows.
       publishLiveSync(user.organizationId, "customer_quote");
       // Task #690 — bulk status flip (e.g., ignored ↔ pending) can drop
       // many quotes out of, or back into, the stale-followup window in

@@ -75,6 +75,8 @@ import {
   type FreshnessSignal,
   type FreshnessProducerSignal as FreshnessProducer,
 } from "@/components/freight/freshness-pill";
+// Task #967 — shared live-sync health pill.
+import { LiveSyncPill } from "@/components/live-sync/LiveSyncPill";
 import { LaneStabilityBadge } from "@/components/freight/lane-stability-badge";
 import { LaneCockpitSheet } from "@/components/lane-cockpit/lane-cockpit-sheet";
 import { useSharedLaneKeyboard, useLaneCheatSheetRows } from "@/hooks/useSharedLaneKeyboard";
@@ -1830,6 +1832,8 @@ export default function AvailableFreightPage() {
               <Truck className="h-6 w-6" /> Available Freight Cockpit
             </h1>
             <FreshnessPill signal={feed?.freshness} />
+            {/* Task #967 — shared live-sync health pill. */}
+            <LiveSyncPill testId="pill-live-sync-af" />
           </div>
           <p className="text-sm text-muted-foreground">
             Triage open freight in priority order. Shortcuts: j/k move • x select • Enter open • A approve • S send top 3 • R reassign • Esc clear.
