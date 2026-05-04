@@ -128,6 +128,21 @@ interface SharedReplyMailboxHealth {
   warnings: string[];
 }
 
+/** Mirrors the server's CronJobHealth shape. Already on the wire response
+ * (sent from `getCaptureAuditHealthForUsers`); only typed here so the pill
+ * can disambiguate "unhealthy due to webhook" vs "unhealthy due to a
+ * critical cron job hanging" without a server change. */
+interface CronJobHealth {
+  jobName: string;
+  status: "ok" | "stale" | "failing" | "unknown";
+  expectedIntervalMs: number;
+  lastStartedAt: string | null;
+  lastFinishedAt: string | null;
+  nextExpectedAt: string | null;
+  consecutiveFailures: number;
+  lastError: string | null;
+}
+
 interface HealthPayload {
   ok: boolean;
   status: OverallStatus;
@@ -144,6 +159,34 @@ interface HealthPayload {
    * (configured && !enabled), the server rolls overall status to
    * "unhealthy" — we surface a one-line explanation in the popover. */
   sharedReplyMailbox?: SharedReplyMailboxHealth | null;
+  /** Per-job liveness for the email pipeline crons. The server already
+   * sends this on every poll; the pill uses it to render the correct
+   * "Webhook unhealthy" vs "Pipeline degraded" label. May be undefined
+   * for legacy responses — treat absence as "no cron info available". */
+  cronJobs?: CronJobHealth[];
+}
+
+/** Friendly names for the email-pipeline cron jobs surfaced in the pill
+ * title when a non-webhook degradation flips the rollup to "unhealthy".
+ * Falls back to the raw job_name token when not present so a newly-added
+ * job still produces a readable, if technical, label. */
+const CRON_JOB_LABELS: Record<string, string> = {
+  email_intelligence_batch: "AI classification batch",
+  mailbox_delta_sync_poll: "Mailbox delta-sync poll",
+  reply_capture_self_heal_sweep: "Reply-capture self-heal sweep",
+  graph_user_mailbox_renewal: "Mailbox subscription renewer",
+  graph_shared_mailbox_renewal: "Shared-mailbox subscription renewer",
+  graph_shared_mailbox_activation_retry: "Shared-mailbox activation retry",
+  mailbox_health_watchdog: "Mailbox health watchdog",
+};
+
+/** Pull every degraded (stale or failing) cron job from the payload so the
+ * pill can name the actual root cause in its title instead of falsely
+ * blaming the webhook. Returns [] when the payload predates this field
+ * or when no cron jobs are degraded. */
+function degradedCronJobs(payload: HealthPayload | undefined): CronJobHealth[] {
+  if (!payload?.cronJobs) return [];
+  return payload.cronJobs.filter(c => c.status === "stale" || c.status === "failing");
 }
 
 const ROOT_CAUSE_LABELS: Record<string, string> = {
@@ -173,7 +216,12 @@ function formatRelative(iso: string | null): string {
   return `${day}d ago`;
 }
 
-function pillVisuals(status: OverallStatus, payload: HealthPayload | undefined) {
+// Exported for unit tests in client/src/lib/__tests__/captureAuditPillVisuals.test.ts.
+// Pure function: computes label/title/icon/className purely from the wire
+// payload. Keeping it inline (not extracted) preserves the single-file
+// component shape; the export is the minimal seam needed to pin the
+// "Webhook unhealthy" vs "Pipeline degraded" disambiguation contract.
+export function pillVisuals(status: OverallStatus, payload: HealthPayload | undefined) {
   if (!payload) {
     return {
       label: "Sync status",
@@ -209,16 +257,64 @@ function pillVisuals(status: OverallStatus, payload: HealthPayload | undefined) 
           "dark:border-amber-800 dark:text-amber-300 dark:bg-amber-950/40 dark:hover:bg-amber-900/40",
         iconClassName: "",
       };
-    case "unhealthy":
+    case "unhealthy": {
+      // Disambiguate the red pill so the label matches the actual failure
+      // mode. Three independent server-side conditions can roll status to
+      // "unhealthy" (see `getCaptureAuditHealthForUsers`):
+      //   1. webhookFailureCount > 0  → a per-mailbox Graph subscription is
+      //      missing/expired. This is the original "Webhook unhealthy" case.
+      //   2. cronCritical             → a critical email-pipeline cron is
+      //      stale or failing (e.g. the AI classification batch hitting its
+      //      wall clock). The webhook is fine; calling this "Webhook
+      //      unhealthy" is misleading and was the trust regression we hit.
+      //   3. sharedReplyDegraded      → handled by its own popover banner;
+      //      not webhook-specific either.
+      // Render-only branch: priority goes to (1) when both are degraded, so
+      // the most severe ingestion-blocking failure still wins the label.
+      const isWebhook = payload.webhookFailureCount > 0;
+      const sharedDegraded = !!(
+        payload.sharedReplyMailbox &&
+        payload.sharedReplyMailbox.configured &&
+        !payload.sharedReplyMailbox.enabled
+      );
+      const degradedCrons = degradedCronJobs(payload);
+      let label: string;
+      let title: string;
+      if (isWebhook) {
+        label = "Webhook unhealthy";
+        title = "One or more mailbox subscriptions are missing or expired";
+      } else if (degradedCrons.length > 0) {
+        const named = degradedCrons
+          .slice(0, 2)
+          .map(c => CRON_JOB_LABELS[c.jobName] ?? c.jobName)
+          .join(", ");
+        const overflow = degradedCrons.length > 2 ? ` +${degradedCrons.length - 2} more` : "";
+        label = "Pipeline degraded";
+        title = `Email pipeline cron ${degradedCrons.length === 1 ? "job is" : "jobs are"} stalled: ${named}${overflow}. Mail capture itself is still flowing — click for details.`;
+      } else if (sharedDegraded) {
+        // Belt-and-suspenders: if the rollup says unhealthy and we have
+        // no webhook/cron evidence, the shared-reply mailbox is the only
+        // remaining trigger. Surface that explicitly instead of falling
+        // through to a misleading default.
+        label = "Pipeline degraded";
+        title = "Shared reply mailbox is configured but not actively capturing — click for details.";
+      } else {
+        // Defensive default: server says unhealthy but we can't pinpoint
+        // a sub-cause from the payload (older response, partial failure
+        // etc.). Use the neutral label rather than blaming the webhook.
+        label = "Pipeline degraded";
+        title = "Email capture pipeline is degraded — click for details.";
+      }
       return {
-        label: "Webhook unhealthy",
-        title: "One or more mailbox subscriptions are missing or expired",
+        label,
+        title,
         Icon: TriangleAlert,
         className:
           "border-red-300 text-red-700 bg-red-50 hover:bg-red-100 " +
           "dark:border-red-800 dark:text-red-300 dark:bg-red-950/40 dark:hover:bg-red-900/40",
         iconClassName: "",
       };
+    }
   }
 }
 
