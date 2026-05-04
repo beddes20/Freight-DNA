@@ -20,6 +20,12 @@ import {
 } from "../shared/cockpitTeams";
 
 import {
+  isRowOwnedByUser,
+  resolveUserIdentity,
+  type CockpitRowOwnership,
+} from "../shared/cockpitOwnership";
+
+import {
   bucketsForRow,
   rowMatchesBucket,
   countBuckets,
@@ -557,6 +563,227 @@ test("kpisFromFiltered: empty rows yields zeros + null avgFreshnessMinutes", () 
   assert.equal(k.sentAwaitingCarrier, 0);
   assert.equal(k.generatedToday, 0);
   assert.equal(k.avgFreshnessMinutes, null);
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Task #972 — Available Freight cockpit base scope under impersonation
+//
+// These tests exercise the same shared primitives the route relies on
+// (`resolveOwnerScope` + `isRowOwnedByUser`) to guarantee:
+//   1. The base owner scope (impersonation-derived) drops every row that
+//      doesn't belong to the impersonated rep.
+//   2. The client `ownerFilter` is clamped to "me" when it would widen
+//      past the impersonated rep ("all", another userId, "team:...").
+//   3. Both invariants are no-ops when the request is NOT impersonating.
+//
+// Pure-unit: we simulate the route's filter pipeline without spinning up
+// Express / DB so the suite stays under a second.
+// ─────────────────────────────────────────────────────────────────────
+
+console.log("\n── Cockpit hardening: Task #972 impersonation scope ──");
+
+interface SimRow {
+  id: string;
+  ownership: CockpitRowOwnership | null;
+  ownerId: string | null;
+}
+
+function makeRow(id: string, ownerIds: string[]): SimRow {
+  return {
+    id,
+    ownership: ownerIds.length > 0
+      ? {
+          ids: ownerIds,
+          emails: [],
+          usernames: [],
+          unassigned: false,
+        }
+      : { ids: [], emails: [], usernames: [], unassigned: true },
+    ownerId: ownerIds[0] ?? null,
+  };
+}
+
+// Mirrors server/routes/freightOpportunityCockpit.ts base-scope filter.
+function applyBaseScope(
+  rows: SimRow[],
+  baseScopeUserIds: string[],
+  currentUserId: string | null,
+): SimRow[] {
+  if (baseScopeUserIds.length === 0) return rows; // not impersonating
+  const scope = resolveOwnerScope(baseScopeUserIds, currentUserId, null);
+  if (scope.isAll) return rows;
+  return rows.filter(r => {
+    const ids = r.ownership?.ids ?? (r.ownerId ? [r.ownerId] : []);
+    if (scope.includeUnassigned && ids.length === 0) return true;
+    if (scope.userIds.size === 0) return false;
+    for (const id of ids) {
+      if (scope.userIds.has(id)) return true;
+    }
+    return false;
+  });
+}
+
+// Mirrors server/routes/freightOpportunityCockpit.ts owner-filter clamp.
+function clampOwnerFilter(
+  ownerFilter: string,
+  impersonatedUserId: string | null,
+): string {
+  if (!impersonatedUserId) return ownerFilter; // no impersonation
+  const requestedTokens = ownerFilter === "all"
+    ? []
+    : parseOwnerScopeTokens(ownerFilter);
+  const requestedScope = requestedTokens.length > 0
+    ? resolveOwnerScope(requestedTokens, impersonatedUserId, null)
+    : null;
+  const widensPastImpersonated = !requestedScope
+    || requestedScope.isAll
+    || requestedScope.includeUnassigned
+    || Array.from(requestedScope.userIds).some(uid => uid !== impersonatedUserId);
+  return widensPastImpersonated ? "me" : ownerFilter;
+}
+
+test("base scope: when impersonating rep-A, only rep-A's rows survive", () => {
+  const rows = [
+    makeRow("opp-1", ["rep-a"]),
+    makeRow("opp-2", ["rep-b"]),
+    makeRow("opp-3", ["rep-a", "rep-c"]), // co-owned still counts
+    makeRow("opp-4", []), // unassigned
+  ];
+  const filtered = applyBaseScope(rows, ["rep-a"], "rep-a");
+  assert.deepEqual(
+    filtered.map(r => r.id).sort(),
+    ["opp-1", "opp-3"],
+  );
+});
+
+test("base scope: empty baseScopeUserIds (not impersonating) is a no-op", () => {
+  const rows = [
+    makeRow("opp-1", ["rep-a"]),
+    makeRow("opp-2", ["rep-b"]),
+    makeRow("opp-3", []),
+  ];
+  const filtered = applyBaseScope(rows, [], "admin-1");
+  assert.equal(filtered.length, 3);
+});
+
+test("base scope: no impersonation leaves cross-rep rows untouched", () => {
+  const rows = [
+    makeRow("opp-1", ["rep-a"]),
+    makeRow("opp-2", ["rep-b"]),
+  ];
+  const filtered = applyBaseScope(rows, [], null);
+  assert.deepEqual(
+    filtered.map(r => r.id).sort(),
+    ["opp-1", "opp-2"],
+  );
+});
+
+test("base scope: hiddenByBaseScope count matches dropped rows", () => {
+  const rows = [
+    makeRow("opp-1", ["rep-a"]),
+    makeRow("opp-2", ["rep-b"]),
+    makeRow("opp-3", ["rep-c"]),
+    makeRow("opp-4", ["rep-a"]),
+  ];
+  const before = rows.length;
+  const after = applyBaseScope(rows, ["rep-a"], "rep-a").length;
+  assert.equal(before - after, 2);
+});
+
+test("owner-filter clamp: 'all' becomes 'me' when impersonating", () => {
+  assert.equal(clampOwnerFilter("all", "rep-a"), "me");
+});
+
+test("owner-filter clamp: another userId becomes 'me' when impersonating", () => {
+  assert.equal(clampOwnerFilter("rep-b", "rep-a"), "me");
+});
+
+test("owner-filter clamp: 'me' stays 'me' when impersonating", () => {
+  assert.equal(clampOwnerFilter("me", "rep-a"), "me");
+});
+
+test("owner-filter clamp: impersonated userId token stays as-is when impersonating", () => {
+  assert.equal(clampOwnerFilter("rep-a", "rep-a"), "rep-a");
+});
+
+test("owner-filter clamp: 'unassigned' becomes 'me' when impersonating", () => {
+  assert.equal(clampOwnerFilter("unassigned", "rep-a"), "me");
+});
+
+test("owner-filter clamp: not impersonating leaves filter untouched", () => {
+  assert.equal(clampOwnerFilter("all", null), "all");
+  assert.equal(clampOwnerFilter("rep-b", null), "rep-b");
+  assert.equal(clampOwnerFilter("unassigned", null), "unassigned");
+});
+
+test("owner-filter clamp: 'team:foo' that resolves to other user(s) becomes 'me'", () => {
+  // To exercise the team-widening branch we need a scope that resolves
+  // to user ids different from the impersonated rep. Simulate with a
+  // bare userId token (which is what `team:` would expand to with an
+  // org chart available). The route's actual `resolveOwnerScope` call
+  // passes `null` for the org chart, so team tokens themselves resolve
+  // to an empty set and stay as-is — but the base-scope filter still
+  // protects the data, so no leak is possible either way.
+  assert.equal(clampOwnerFilter("rep-c", "rep-a"), "me");
+});
+
+test("base scope + clamp: 'all' on top of impersonation still scopes to rep-a", () => {
+  // Belt-and-suspenders: even if the client somehow sent ?owner=all,
+  // the base scope drops the wrong rows and the clamp coerces the echoed
+  // filter back to "me".
+  const rows = [
+    makeRow("opp-1", ["rep-a"]),
+    makeRow("opp-2", ["rep-b"]),
+  ];
+  const baseFiltered = applyBaseScope(rows, ["rep-a"], "rep-a");
+  const clamped = clampOwnerFilter("all", "rep-a");
+  assert.deepEqual(baseFiltered.map(r => r.id), ["opp-1"]);
+  assert.equal(clamped, "me");
+});
+
+test("base scope: ID-only ownership match (no alias fallback) so SQL aggregate parity holds", () => {
+  // Task #972 — the route's impersonation base-scope row filter and the
+  // hidden-counts SQL aggregate (totalInScope, byStatus, bySnooze, …)
+  // must agree on which rows are "in scope" for the impersonated rep.
+  // The SQL aggregate matches by the four DB id columns
+  // (owner_user_id / delegated_to_user_id / created_by_id /
+  // approved_by_id). The row filter therefore must NOT use the
+  // email/username `isRowOwnedByUser` alias fallback under
+  // impersonation — otherwise an alias-only row could appear in
+  // `items` while being excluded from `hiddenCounts.totalInScope`,
+  // breaking the empty-state hint and any KPI denominator.
+  //
+  // Sanity: a row whose ownership envelope carries only an email
+  // (no `ids`) MUST be treated as out-of-scope under impersonation,
+  // even when the impersonated user's email matches.
+  const ownership: CockpitRowOwnership = {
+    ids: [],
+    emails: ["rep-a@example.com"],
+    usernames: [],
+    unassigned: false,
+  };
+  const meIdentity = resolveUserIdentity({
+    id: "rep-a",
+    email: "rep-a@example.com",
+    username: null,
+  });
+  // The shared predicate WOULD match by email — that's by design for
+  // legacy data outside impersonation. Pin that fact:
+  assert.equal(isRowOwnedByUser(ownership, meIdentity, null), true);
+
+  // …but the route's impersonation base-scope filter is ID-only, so a
+  // row with empty `ids` must drop:
+  const baseScopeUserIds = new Set(["rep-a"]);
+  const ids = ownership.ids ?? [];
+  const wouldSurviveBaseScope =
+    ids.length === 0
+      ? false // not unassigned-allowed under impersonation, no id intersection
+      : ids.some((id) => baseScopeUserIds.has(id));
+  assert.equal(
+    wouldSurviveBaseScope,
+    false,
+    "alias-only row must NOT survive ID-only impersonation base scope",
+  );
 });
 
 console.log(

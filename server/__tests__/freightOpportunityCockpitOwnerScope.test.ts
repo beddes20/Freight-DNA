@@ -215,7 +215,12 @@ describe("Task #900 — route source wiring", () => {
   });
 
   it("echoes ownerFilter back on the response payload", () => {
-    expect(routeSrc).toMatch(/\bownerFilter,\s*\}\);/);
+    // Task #972 — the response now echoes `effectiveOwnerFilter` instead
+    // of the raw client value, because impersonation can clamp "all" /
+    // other-user tokens down to "me". The contract is unchanged for the
+    // client (still `ownerFilter: <string>` on the payload), but the
+    // server-side variable name is different.
+    expect(routeSrc).toMatch(/ownerFilter:\s*effectiveOwnerFilter/);
   });
 
   it("widens the prefs PATCH schema with ownerFilter + pickupScope", () => {
@@ -276,6 +281,133 @@ describe("Task #900 — schema + storage round-trip wiring", () => {
     );
     expect(migSrc).toMatch(
       /ADD COLUMN IF NOT EXISTS pickup_scope text/,
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// Task #972 — Available Freight cockpit base scope under impersonation
+//
+// Source-grep tests that lock in the route wiring for "view as":
+//   1. The route imports + calls `getImpersonationContext`.
+//   2. A base owner scope filter is applied BEFORE the client owner
+//      filter, derived from the impersonated user id.
+//   3. The client owner filter is clamped to "me" when impersonating.
+//   4. The response echoes an `impersonation` envelope and a `byBaseScope`
+//      hidden-counts entry, and exposes a `?debug=cockpit` payload.
+//   5. The `getImpersonationContext` helper itself returns the documented
+//      shape for both Clerk and dev-session impersonation.
+// ─────────────────────────────────────────────────────────────────────
+
+describe("Task #972 — Available Freight cockpit base scope under impersonation", () => {
+  const routeSrc = readFileSync(
+    "server/routes/freightOpportunityCockpit.ts",
+    "utf8",
+  );
+  const authSrc = readFileSync("server/auth.ts", "utf8");
+
+  it("route imports getImpersonationContext from server/auth", () => {
+    expect(routeSrc).toMatch(
+      /import\s*\{[^}]*getImpersonationContext[^}]*\}\s*from\s*"\.\.\/auth"/,
+    );
+  });
+
+  it("route resolves impersonation once at the top of the cockpit handler", () => {
+    expect(routeSrc).toMatch(
+      /const\s+impersonation\s*=\s*getImpersonationContext\(req\)/,
+    );
+  });
+
+  it("route derives baseScopeUserIds from the impersonated user id", () => {
+    expect(routeSrc).toMatch(
+      /baseScopeUserIds[\s\S]{0,160}impersonation\.isImpersonating[\s\S]{0,80}impersonation\.impersonatedUserId/,
+    );
+  });
+
+  it("route applies the base scope BEFORE the client owner filter", () => {
+    const baseIdx = routeSrc.search(/const\s+baseScope\s*=/);
+    const ownerIdx = routeSrc.search(/itemsBeforeOwner\s*=/);
+    expect(baseIdx).toBeGreaterThan(0);
+    expect(ownerIdx).toBeGreaterThan(0);
+    expect(baseIdx).toBeLessThan(ownerIdx);
+  });
+
+  it("route tracks hiddenByBaseScope for KPI attribution", () => {
+    expect(routeSrc).toMatch(/hiddenByBaseScope/);
+  });
+
+  it("route clamps the client ownerFilter to 'me' when it widens past the impersonated rep", () => {
+    expect(routeSrc).toMatch(
+      /widensPastImpersonated[\s\S]{0,400}effectiveOwnerFilter\s*=\s*"me"/,
+    );
+  });
+
+  it("route widening guard rejects 'all', includeUnassigned, and other userIds", () => {
+    const guardBlock = routeSrc.match(
+      /widensPastImpersonated\s*=\s*[\s\S]{0,500}/,
+    )?.[0] ?? "";
+    expect(guardBlock).toMatch(/requestedScope\.isAll/);
+    expect(guardBlock).toMatch(/requestedScope\.includeUnassigned/);
+    expect(guardBlock).toMatch(
+      /Array\.from\(requestedScope\.userIds\)\.some/,
+    );
+  });
+
+  it("response echoes a stable impersonation envelope (always present)", () => {
+    expect(routeSrc).toMatch(
+      /impersonation:\s*\{\s*isImpersonating:\s*impersonation\.isImpersonating,\s*impersonatedUserId:\s*impersonation\.impersonatedUserId/,
+    );
+  });
+
+  it("response hiddenCounts payload exposes byBaseScope", () => {
+    expect(routeSrc).toMatch(/byBaseScope/);
+  });
+
+  it("?debug=cockpit gates the diagnostics payload", () => {
+    // The route reads the debug flag off the query string and only
+    // attaches the diagnostics block when it's truthy.
+    expect(routeSrc).toMatch(/debug.*===\s*"cockpit"|cockpitDebug/);
+    expect(routeSrc).toMatch(
+      /isImpersonating:\s*impersonation\.isImpersonating[\s\S]{0,400}impersonatedUserId:\s*impersonation\.impersonatedUserId[\s\S]{0,400}adminId:\s*impersonation\.adminId/,
+    );
+  });
+
+  it("getImpersonationContext returns the documented shape for Clerk-mode impersonation", () => {
+    // The helper's body checks the in-process impersonationMap keyed by
+    // the admin's Clerk user id; when present, the response shape is
+    // { isImpersonating: true, impersonatedUserId: <target>, adminId: <clerkId> }.
+    expect(authSrc).toMatch(
+      /const\s+target\s*=\s*impersonationMap\.get\(clerkUserId\)/,
+    );
+    expect(authSrc).toMatch(
+      /isImpersonating:\s*true,\s*impersonatedUserId:\s*target,\s*adminId:\s*clerkUserId/,
+    );
+  });
+
+  it("getImpersonationContext returns the documented shape for dev-session impersonation", () => {
+    // Dev path: req.session.impersonatingAdminId carries the admin DB id
+    // while req.session.userId points at the impersonated rep.
+    expect(authSrc).toMatch(
+      /req\.session\?\.impersonatingAdminId/,
+    );
+    expect(authSrc).toMatch(
+      /isImpersonating:\s*true,\s*impersonatedUserId:\s*req\.session\.userId,\s*adminId:\s*adminDbId/,
+    );
+  });
+
+  it("getImpersonationContext returns the no-impersonation default at the bottom", () => {
+    expect(authSrc).toMatch(
+      /isImpersonating:\s*false,\s*impersonatedUserId:\s*null,\s*adminId:\s*null/,
+    );
+  });
+
+  it("/api/auth/me uses the same getImpersonationContext helper as the cockpit route", () => {
+    // Single source of truth: the client `currentUser.isImpersonating`
+    // flag and the server cockpit base scope must derive from the same
+    // primitive, otherwise the client could think it isn't impersonating
+    // while the server is still scoping rows down.
+    expect(authSrc).toMatch(
+      /\/api\/auth\/me[\s\S]{0,2000}getImpersonationContext\(req\)/,
     );
   });
 });

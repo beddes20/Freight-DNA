@@ -37,6 +37,55 @@ declare module "express-serve-static-core" {
 // In-memory impersonation tracker: adminClerkUserId -> targetDbUserId
 const impersonationMap = new Map<string, string>();
 
+/**
+ * Resolved impersonation context for a request.
+ *
+ * Task #972 — single source of truth for "is this request happening under
+ * an admin's view-as session, and if so, who is being viewed?". The
+ * Available Freight cockpit (and any future scope-tightened endpoint)
+ * reads this via `getImpersonationContext(req)` so the rule for
+ * impersonation lives in exactly one place.
+ *
+ *   - `isImpersonating`     — true when an admin is viewing as another user.
+ *   - `impersonatedUserId`  — the DB user id of the impersonated rep, or null
+ *                             when the admin is signed in as themself.
+ *   - `adminId`             — best-effort identifier of the acting admin.
+ *                             In Clerk mode this is the admin's Clerk user
+ *                             id (the key in `impersonationMap`); in dev
+ *                             session mode this is the admin's DB user id
+ *                             (`req.session.impersonatingAdminId`).
+ */
+export interface ImpersonationContext {
+  isImpersonating: boolean;
+  impersonatedUserId: string | null;
+  adminId: string | null;
+}
+
+export function getImpersonationContext(req: Request): ImpersonationContext {
+  // Clerk-mode impersonation: the admin's Clerk user id is the key in
+  // `impersonationMap` and the value is the target DB user id.
+  const { userId: clerkUserId } = getAuth(req);
+  if (clerkUserId) {
+    const target = impersonationMap.get(clerkUserId);
+    if (target) {
+      return { isImpersonating: true, impersonatedUserId: target, adminId: clerkUserId };
+    }
+    return { isImpersonating: false, impersonatedUserId: null, adminId: null };
+  }
+  // Dev session-mode impersonation: `req.session.userId` has been swapped
+  // to the target's DB id and `req.session.impersonatingAdminId` carries
+  // the admin's DB id (see `/api/admin/impersonate/:userId`).
+  const adminDbId = req.session?.impersonatingAdminId;
+  if (adminDbId && req.session?.userId) {
+    return {
+      isImpersonating: true,
+      impersonatedUserId: req.session.userId,
+      adminId: adminDbId,
+    };
+  }
+  return { isImpersonating: false, impersonatedUserId: null, adminId: null };
+}
+
 export function setupAuth(app: any) {
   // Clerk middleware validates the session token / JWT on every request
   app.use(clerkMiddleware());
@@ -117,7 +166,11 @@ export function setupAuth(app: any) {
         }
         return res.status(401).json({ error: "Not authenticated" });
       }
-      const isImpersonating = clerkUserId ? impersonationMap.has(clerkUserId) : !!req.session?.impersonatingAdminId;
+      // Task #972 — single source of truth for impersonation state. Mirrors
+      // exactly what the cockpit route reads via `getImpersonationContext`,
+      // so the client `currentUser.isImpersonating` flag and the server-
+      // side base owner scope can never disagree about who is being viewed.
+      const { isImpersonating } = getImpersonationContext(req);
 
       let impersonatingAdminName: string | null = null;
       if (isImpersonating) {

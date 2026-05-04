@@ -225,6 +225,37 @@ interface CockpitResponse {
     visiblePastPickupRecent?: number;
     byLane: number;
     byCarrier: number;
+    /** Task #957 — number of rows the server-side owner filter dropped. */
+    byOwner?: number;
+    /**
+     * Task #972 — number of rows the impersonation base scope dropped.
+     * Always 0 outside viewing-as mode. Independent of `byOwner` so the
+     * empty-state hint can distinguish "your client owner filter hid M"
+     * from "view-as scope hid N".
+     */
+    byBaseScope?: number;
+  };
+  /**
+   * Task #972 — server-confirmed impersonation envelope. Always present
+   * for shape stability; `isImpersonating: false` outside viewing-as.
+   */
+  impersonation?: {
+    isImpersonating: boolean;
+    impersonatedUserId: string | null;
+  };
+  /** Task #972 — only present when `?debug=cockpit` is set on a non-prod host. */
+  debug?: {
+    isImpersonating: boolean;
+    impersonatedUserId: string | null;
+    adminId: string | null;
+    currentUserId: string | null;
+    baseScope: { userIds: string[]; includeUnassigned: boolean; isAll: boolean } | null;
+    requestedOwnerFilter: string;
+    effectiveOwnerFilter: string;
+    itemsBeforeBaseScope: number;
+    hiddenByBaseScope: number;
+    perOwnerCounts: Record<string, number>;
+    visibleItems: number;
   };
   /** Phase B1 / Task #900 — server-confirmed pickup scope. */
   pickupScope?: "upcoming" | "recent" | "all" | "actionable";
@@ -651,6 +682,12 @@ function BucketChipStrip({
 
 export default function AvailableFreightPage() {
   const { user } = useAuth();
+  // Task #972 — derive impersonation state from useAuth (which already
+  // exposes the server's `isImpersonating` flag). Hoisted to the top so
+  // every owner-filter helper below can clamp on it without forming a
+  // use-before-declare cycle with the typed `currentUser` query later
+  // in the file.
+  const isImpersonating = !!user?.isImpersonating;
   // Task #950 — when a notification deep-link lands here with
   // `?contextNote=<id>`, scroll-and-ring the row that owns the note. If the
   // anchor row isn't currently rendered (filtered out, paginated away) we
@@ -711,6 +748,12 @@ export default function AvailableFreightPage() {
   // hydrate from `?owner=`, sync via popstate, and write back to the URL on
   // change so the rep can share / bookmark a filtered cockpit URL. Anything
   // unrecognised silently degrades to "all" (matches the server's behavior).
+  //
+  // Task #972 — when an admin is impersonating a rep, the cockpit must
+  // default to "me" (which resolves to the impersonated rep). The actual
+  // override happens in a dedicated effect below once `currentUser` has
+  // arrived; here we keep the URL-driven default unchanged so deep-links
+  // still hydrate correctly when no impersonation is active.
   const [ownerFilter, setOwnerFilterState] = useState<string>(() => {
     if (typeof window === "undefined") return "all";
     const v = new URLSearchParams(window.location.search).get("owner");
@@ -727,19 +770,31 @@ export default function AvailableFreightPage() {
       const owner = params.get("owner");
       setLaneFilter(lane && lane.length > 0 ? lane : null);
       setCarrierIdFilter(cid && cid.length > 0 ? cid : null);
-      setOwnerFilterState(owner && owner.length > 0 ? owner : "all");
+      // Task #972 — back/forward into a wider owner value while
+      // impersonating must still clamp. The dedicated impersonation effect
+      // above will re-run anyway, but doing it inline keeps the URL bar
+      // and the combobox label visually consistent for one frame.
+      const next = owner && owner.length > 0 ? owner : "all";
+      setOwnerFilterState(isImpersonating && next !== "me" ? "me" : next);
     };
     window.addEventListener("popstate", sync);
     return () => window.removeEventListener("popstate", sync);
-  }, []);
+  }, [isImpersonating]);
   // Wrapper so every owner-filter change writes back to the URL (replaceState
   // so we don't pollute back-button history with every click).
   // Task #957 — accepts either the legacy string ("all" | "me" | <userId>)
   // or an array of multi-select tokens that get serialised as a comma-list.
   const setOwnerFilter = (next: string | string[]) => {
-    const serialised = Array.isArray(next)
+    let serialised = Array.isArray(next)
       ? (serializeOwnerScopeTokens(next) || "all")
       : next;
+    // Task #972 — when impersonating, no caller (combobox, saved view,
+    // chip handler) may set the owner filter wider than "me". This is
+    // belt-and-suspenders: the server already enforces the base scope,
+    // but clamping client-side keeps the URL + combobox label honest.
+    if (isImpersonating && serialised !== "me") {
+      serialised = "me";
+    }
     setOwnerFilterState(serialised);
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
@@ -858,12 +913,40 @@ export default function AvailableFreightPage() {
       }
       if (typeof window !== "undefined") {
         const urlOwner = new URLSearchParams(window.location.search).get("owner");
-        if (!urlOwner && typeof p.ownerFilter === "string" && p.ownerFilter.length > 0) {
+        // Task #972 — when impersonating, the persisted ownerFilter pref
+        // belongs to the admin (or to the rep from a previous session) and
+        // must NOT widen the cockpit. The dedicated impersonation effect
+        // below clamps to "me" regardless; we just skip rehydrating from
+        // prefs so the clamp wins on the very first render.
+        if (!isImpersonating && !urlOwner && typeof p.ownerFilter === "string" && p.ownerFilter.length > 0) {
           setOwnerFilterState(p.ownerFilter);
         }
       }
     }
-  }, [prefsResp]);
+  }, [prefsResp, isImpersonating]);
+
+  // Task #972 — viewing-as default + clamp. When impersonation flips on,
+  // the cockpit owner combobox MUST default to "me" (which the server
+  // resolves to the impersonated rep). Any URL/pref/saved-view value that
+  // resolves wider — "all", a different user id, or `unassigned` — is
+  // coerced back to "me" and the URL is rewritten so a copied link
+  // continues to honor scope after dismissal of view-as. Runs whenever
+  // impersonation transitions on so a mid-session "view as" click doesn't
+  // leak rows from the admin's previous filter.
+  useEffect(() => {
+    if (!isImpersonating) return;
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const current = url.searchParams.get("owner");
+    // The only owner token that's safely "me-only" is the literal "me".
+    // Any other multi-token / id-based filter would resolve wider than
+    // the impersonated rep on the server, so we collapse to "me".
+    if (current !== "me") {
+      url.searchParams.set("owner", "me");
+      window.history.replaceState({}, "", url.toString());
+    }
+    setOwnerFilterState("me");
+  }, [isImpersonating]);
 
   useEffect(() => {
     if (!activeViewId) return;
@@ -884,7 +967,10 @@ export default function AvailableFreightPage() {
     if (typeof f.companyId === "string") setCompanyFilter(f.companyId);
     if (typeof f.status === "string") setStatusFilter(f.status);
     if (typeof f.ownerFilter === "string" && f.ownerFilter.length > 0) {
-      setOwnerFilter(f.ownerFilter);
+      // Task #972 — saved views may carry an admin-authored owner filter
+      // (e.g. "Team needs approval"). When impersonating, clamp to "me"
+      // so loading a saved view never widens past the impersonated rep.
+      setOwnerFilter(isImpersonating ? "me" : f.ownerFilter);
     }
     if (
       f.pickupScope === "upcoming" ||
@@ -901,7 +987,17 @@ export default function AvailableFreightPage() {
   // users.username). The shared `isRowOwnedByUser` predicate matches by
   // id OR email, so an opp whose ownership was last stamped with a username
   // (e.g. legacy/imported rows) still maps back to the current user.
-  const { data: currentUser } = useQuery<{ id: string; username?: string | null; email?: string | null } | null>({
+  const { data: currentUser } = useQuery<{
+    id: string;
+    username?: string | null;
+    email?: string | null;
+    // Task #972 — flag mirrored from the server impersonation context.
+    // When true, the cockpit base scope is locked to this rep's book and
+    // the owner combobox defaults to "me". (We also expose this via
+    // `isImpersonating` higher up, derived from useAuth, since downstream
+    // owner-filter helpers need it earlier in the render.)
+    isImpersonating?: boolean;
+  } | null>({
     queryKey: ["/api/auth/me"],
   });
 
@@ -935,7 +1031,13 @@ export default function AvailableFreightPage() {
       ? ""
       : statusFilter;
 
-  const feedKey = ["/api/freight-opportunities/cockpit", { status: statusParam, sort, grouping, companyId: companyFilter, lane: laneFilter, carrierId: carrierIdFilter, pickupScope, ownerFilter }];
+  // Task #972 — propagate `?debug=cockpit` into the feed query key + URL
+  // so the server returns its scope-diagnostics payload alongside the
+  // normal response. Computed off `window.location` (not state) to avoid
+  // a re-render dependency cycle.
+  const debugCockpitParam = typeof window !== "undefined"
+    && new URL(window.location.href).searchParams.get("debug") === "cockpit";
+  const feedKey = ["/api/freight-opportunities/cockpit", { status: statusParam, sort, grouping, companyId: companyFilter, lane: laneFilter, carrierId: carrierIdFilter, pickupScope, ownerFilter, debug: debugCockpitParam }];
   const { data: serverFeed, isLoading, isError, refetch, isFetching } = useQuery<CockpitResponse>({
     queryKey: feedKey,
     queryFn: async () => {
@@ -951,6 +1053,8 @@ export default function AvailableFreightPage() {
       // keeps the URL clean and lets the server fast-path the unfiltered
       // case without re-running the ownership predicate per row.
       if (ownerFilter !== "all") params.set("ownerFilter", ownerFilter);
+      // Task #972 — opt the server into its scope-diagnostics payload.
+      if (debugCockpitParam) params.set("debug", "cockpit");
       params.set("limit", "200");
       const res = await fetch(`/api/freight-opportunities/cockpit?${params.toString()}`, { credentials: "include" });
       if (!res.ok) throw new Error(`${res.status}`);
@@ -1115,6 +1219,97 @@ export default function AvailableFreightPage() {
   }, [feed]);
 
   const items = feed?.items ?? [];
+  // Task #972 — base-scope leak detector. With impersonation active, every
+  // row in the feed must list the impersonated rep on its ownership
+  // envelope. Anything else — including unassigned / empty-ownership rows
+  // — means the server-side base scope wasn't applied (or the
+  // /api/auth/me + /api/freight-opportunities/cockpit responses disagree
+  // about who is being viewed). We surface this loudly via console.error
+  // so a dev / QA notices immediately; we never silently drop rows on the
+  // client (the server is the source of truth for scope).
+  useEffect(() => {
+    if (!isImpersonating) return;
+    if (!feed?.items) return;
+    const expected = feed.impersonation?.impersonatedUserId ?? currentUser?.id ?? null;
+    if (!expected) return;
+    const leaks = feed.items.filter((it) => {
+      const ids = it.ownership?.ids ?? (it.owner?.id ? [it.owner.id] : []);
+      // Empty / unassigned ownership is ALSO a leak under impersonation —
+      // the impersonated rep can't own a row that has no owner attribution.
+      if (ids.length === 0) return true;
+      return !ids.includes(expected);
+    });
+    if (leaks.length > 0) {
+      // eslint-disable-next-line no-console
+      console.error(
+        "[cockpit] base-scope leak",
+        {
+          expectedUserId: expected,
+          leakCount: leaks.length,
+          leaks: leaks.map((it) => ({
+            id: it.opportunity.id,
+            ownership: it.ownership,
+            owner: it.owner,
+          })),
+        },
+      );
+    }
+  }, [feed, isImpersonating, currentUser?.id]);
+  // Task #972 — surface impersonation state on the console even outside
+  // `?debug=cockpit` so a quick "open devtools" sanity check tells a rep
+  // exactly what scope they're viewing under.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!feed?.impersonation) return;
+    // Task #972 — only log the impersonation banner when ?debug=cockpit
+    // is on (signaled by the server attaching `feed.debug`). Outside
+    // debug mode this fires on every feed refetch, which is too noisy
+    // for normal use.
+    if (feed.impersonation.isImpersonating && feed.debug) {
+      // eslint-disable-next-line no-console
+      console.info(
+        `[cockpit] viewing as user ${feed.impersonation.impersonatedUserId} — base scope is active, owner filter is locked to "me"`,
+      );
+    }
+  }, [
+    feed?.impersonation?.isImpersonating,
+    feed?.impersonation?.impersonatedUserId,
+    feed?.debug,
+  ]);
+  // Task #972 — when the server returned its scope-diagnostics payload
+  // (only happens with `?debug=cockpit`), dump it once per response so an
+  // admin can confirm exactly what scope the server applied + how many
+  // rows the base scope dropped.
+  useEffect(() => {
+    if (!feed?.debug) return;
+    // eslint-disable-next-line no-console
+    console.groupCollapsed(
+      `[cockpit][debug] server scope diagnostics — visible ${feed.debug.visibleItems}, base-scope hid ${feed.debug.hiddenByBaseScope}`,
+    );
+    // eslint-disable-next-line no-console
+    console.log("impersonation:", {
+      isImpersonating: feed.debug.isImpersonating,
+      impersonatedUserId: feed.debug.impersonatedUserId,
+      adminId: feed.debug.adminId,
+      currentUserId: feed.debug.currentUserId,
+    });
+    // eslint-disable-next-line no-console
+    console.log("baseScope:", feed.debug.baseScope);
+    // eslint-disable-next-line no-console
+    console.log("ownerFilter:", {
+      requested: feed.debug.requestedOwnerFilter,
+      effective: feed.debug.effectiveOwnerFilter,
+    });
+    // eslint-disable-next-line no-console
+    console.log("counts:", {
+      itemsBeforeBaseScope: feed.debug.itemsBeforeBaseScope,
+      hiddenByBaseScope: feed.debug.hiddenByBaseScope,
+      visibleItems: feed.debug.visibleItems,
+      perOwnerCounts: feed.debug.perOwnerCounts,
+    });
+    // eslint-disable-next-line no-console
+    console.groupEnd();
+  }, [feed?.debug]);
   // Task #957 follow-up — KPI tiles now derive from the client `filtered`
   // collection (see the kpis useMemo below), not from `feed.kpis`. The
   // server payload is still kept for two purposes:
@@ -1181,7 +1376,16 @@ export default function AvailableFreightPage() {
     setCompanyFilter("all");
     setStatusFilter("active");
     setPickupScope("actionable");
-  }, []);
+    // Task #972 — when an admin is viewing as a rep, "reset" must NOT
+    // widen the cockpit back to "all". The default reset state for an
+    // impersonating admin is "me" (the impersonated rep). Outside of
+    // viewing-as mode the owner filter is left alone (matches prior
+    // behavior — `clearActiveView` historically only resets pickupScope
+    // and the saved-view-driven fields).
+    if (isImpersonating) {
+      setOwnerFilter("me");
+    }
+  }, [isImpersonating]);
 
   // Task #875 — `?debug=cockpit` opens a non-production diagnostic pane
   // that prints the per-stage drop counts, the resolved current-user

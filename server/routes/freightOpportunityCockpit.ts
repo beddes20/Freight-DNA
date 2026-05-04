@@ -2,7 +2,7 @@
 
 import type { Express } from "express";
 import { z } from "zod";
-import { requireAuth, getCurrentUser } from "../auth";
+import { requireAuth, getCurrentUser, getImpersonationContext } from "../auth";
 import { storage } from "../storage";
 import {
   FREIGHT_COCKPIT_GROUPINGS,
@@ -578,6 +578,13 @@ export function registerFreightCockpitRoutes(app: Express) {
       if (!org) return res.status(400).json({ error: "No organization" });
 
       const user = await getCurrentUser(req);
+      // Task #972 — viewing-as scope. When an admin is impersonating a rep,
+      // the entire cockpit response (rows, KPIs, bucket counts) is scoped
+      // to that rep's book BEFORE any client-supplied owner filter runs.
+      // The helper is the single source of truth: same logic as
+      // /api/auth/me's `isImpersonating` flag and Clerk's impersonation
+      // map. See server/auth.ts:getImpersonationContext.
+      const impersonation = getImpersonationContext(req);
       const {
         companyId,
         status,
@@ -588,7 +595,12 @@ export function registerFreightCockpitRoutes(app: Express) {
         carrierId: carrierFilter,
         pickupScope: pickupScopeRaw,
         ownerFilter: ownerFilterRaw,
+        debug: debugRaw,
       } = req.query as Record<string, string>;
+      // Task #972 — gated diagnostics. `?debug=cockpit` opens a small
+      // server-side payload that the client debug pane prints; it never
+      // changes the response shape used by production. Dev-only.
+      const cockpitDebug = process.env.NODE_ENV !== "production" && debugRaw === "cockpit";
       // Phase B1 / Task #900 — pickup-date scope. Default 'actionable' keeps
       // upcoming + today + ≤24h-overdue still-open rows visible and drops
       // older lingering past-pickup rows from the rep's morning queue (the
@@ -709,25 +721,109 @@ export function registerFreightCockpitRoutes(app: Express) {
         : enriched;
       const hiddenByLane = laneFilter ? Math.max(0, enrichedCount - items.length) : 0;
 
+      // Task #875 — current-user identity used by the canonical predicate
+      // for any "user X owns this row" check. Hoisted above the base-scope
+      // block so both the impersonation gate (Task #972) and the client
+      // owner filter share the same identity.
+      const meIdentity = user
+        ? resolveUserIdentity({
+            id: user.id,
+            email: (user as any).email ?? null,
+            username: (user as any).username ?? null,
+          })
+        : null;
+
+      // Task #972 — base owner scope (non-optional when impersonating).
+      //
+      // When an admin is "viewing as" a rep, every row in the response
+      // must belong to that rep BEFORE any other filter (lane, owner,
+      // carrier, …) runs. The base scope is derived from the impersonated
+      // identity at request time — no persisted preference, no client
+      // input. Outside viewing-as mode the base scope is "all" and the
+      // existing client `ownerFilter` block is the only owner gate.
+      //
+      // The base scope tokens are an array (currently `[<userId>]`) so
+      // we can grow this to "the impersonated rep's team" without
+      // changing the wiring.
+      const baseScopeUserIds: string[] = impersonation.isImpersonating && impersonation.impersonatedUserId
+        ? [impersonation.impersonatedUserId]
+        : [];
+      const baseScope = baseScopeUserIds.length > 0
+        ? resolveOwnerScope(baseScopeUserIds, user?.id ?? null, null)
+        : null;
+      const itemsBeforeBaseScope = items.length;
+      const debugBaseScopeOwnerCounts: Record<string, number> = {};
+      if (baseScope && !baseScope.isAll) {
+        // Task #972 — ID-ONLY ownership match for the impersonation base
+        // scope. The SQL aggregate that powers `hiddenCounts.totalInScope`
+        // (and the byStatus / bySnooze / byPastPickup / … counters)
+        // filters by the same four DB id columns
+        // (owner_user_id / delegated_to_user_id / created_by_id /
+        // approved_by_id). Using the email/username `isRowOwnedByUser`
+        // alias fallback here would let alias-only rows show up in
+        // `items` but be excluded from the aggregate, breaking parity
+        // between visible rows and the empty-state / KPI counters that
+        // surface them. The route's per-rep ownership lookup
+        // (buildRowOwnership above) populates `ownership.ids` from the
+        // same four columns the SQL aggregate counts, so an ID-only
+        // match is exact and safe.
+        items = items.filter(i => {
+          const ids = i.ownership?.ids ?? (i.owner?.id ? [i.owner.id] : []);
+          if (baseScope.includeUnassigned && ids.length === 0) return true;
+          if (baseScope.userIds.size === 0) return false;
+          for (const id of ids) {
+            if (baseScope.userIds.has(id)) {
+              if (cockpitDebug) {
+                debugBaseScopeOwnerCounts[id] = (debugBaseScopeOwnerCounts[id] ?? 0) + 1;
+              }
+              return true;
+            }
+          }
+          return false;
+        });
+      }
+      const hiddenByBaseScope = baseScope && !baseScope.isAll
+        ? Math.max(0, itemsBeforeBaseScope - items.length)
+        : 0;
+
       // Task #900 — server-side owner filter. Reuses the shared
       // `isRowOwnedByUser` predicate so the filter agrees row-for-row with
       // the client "Mine" toggle and the cockpit KPI counters. We apply it
       // BEFORE the carrier-coverable filter so `hiddenByCarrier` keeps its
       // existing meaning (rows the carrier-coverable filter dropped on top
       // of every other constraint).
+      //
+      // Task #972 — when impersonating, this filter can only NARROW within
+      // the base scope. Tokens that would widen beyond the impersonated
+      // rep (`all`, `team:<id>` containing other users, `<otherUserId>`)
+      // are ignored and we behave as if the rep had selected "me". The
+      // base-scope filter above already dropped every out-of-scope row,
+      // so this is belt-and-suspenders for the count attribution and the
+      // echoed `ownerFilter` payload.
       const itemsBeforeOwner = items.length;
-      if (ownerFilter !== "all") {
+      let effectiveOwnerFilter = ownerFilter;
+      if (impersonation.isImpersonating && impersonation.impersonatedUserId) {
+        const requestedTokens = ownerFilter === "all" ? [] : parseOwnerScopeTokens(ownerFilter);
+        const requestedScope = requestedTokens.length > 0
+          ? resolveOwnerScope(requestedTokens, impersonation.impersonatedUserId, null)
+          : null;
+        // Reject anything that resolves wider than {impersonatedUserId}:
+        // - empty / "all"
+        // - tokens that resolve to user ids not equal to the impersonated rep
+        // - includeUnassigned (admin would re-introduce unassigned rows)
+        const widensPastImpersonated = !requestedScope
+          || requestedScope.isAll
+          || requestedScope.includeUnassigned
+          || Array.from(requestedScope.userIds).some(uid => uid !== impersonation.impersonatedUserId);
+        if (widensPastImpersonated) {
+          effectiveOwnerFilter = "me";
+        }
+      }
+      if (effectiveOwnerFilter !== "all") {
         // Task #957 — resolve the (possibly multi-select) owner filter into
         // a canonical {userIds, includeUnassigned, isAll} envelope. Legacy
         // single-token values still flow through unchanged.
-        const meIdentity = user
-          ? resolveUserIdentity({
-              id: user.id,
-              email: (user as any).email ?? null,
-              username: (user as any).username ?? null,
-            })
-          : null;
-        const tokens = parseOwnerScopeTokens(ownerFilter);
+        const tokens = parseOwnerScopeTokens(effectiveOwnerFilter);
         const scope = resolveOwnerScope(tokens, user?.id ?? null, null);
         if (!scope.isAll) {
           items = items.filter(i => {
@@ -749,7 +845,7 @@ export function registerFreightCockpitRoutes(app: Express) {
           });
         }
       }
-      const hiddenByOwner = ownerFilter !== "all"
+      const hiddenByOwner = effectiveOwnerFilter !== "all"
         ? Math.max(0, itemsBeforeOwner - items.length)
         : 0;
       const itemsBeforeCarrier = items.length;
@@ -1133,6 +1229,23 @@ export function registerFreightCockpitRoutes(app: Express) {
           : pickupScope === "actionable"
             ? hiddenByActionableSql
             : isStaleSql;
+      // Task #972 — when impersonating, every hidden-count aggregate must
+      // ALSO be scoped to the impersonated rep so admins don't leak
+      // queue-level metadata about other reps' books (totalInScope,
+      // byStatus, bySnooze, byPastPickup, byPastStale, byActionable, …).
+      // Mirrors the row-level base-scope filter applied higher up — owner
+      // attribution comes from any of the four ownership-bearing columns
+      // (owner / delegated-to / created-by / approved-by) so the SQL count
+      // matches the per-row predicate `isRowOwnedByUser` uses.
+      const baseScopeImpersonationSql =
+        impersonation.isImpersonating && impersonation.impersonatedUserId
+          ? sql`AND (
+              ${freightOpportunities.ownerUserId} = ${impersonation.impersonatedUserId}
+              OR ${freightOpportunities.delegatedToUserId} = ${impersonation.impersonatedUserId}
+              OR ${freightOpportunities.createdById} = ${impersonation.impersonatedUserId}
+              OR ${freightOpportunities.approvedById} = ${impersonation.impersonatedUserId}
+            )`
+          : sql``;
       const hiddenRows = await db.execute(sql`
         SELECT
           COUNT(*) AS total_in_scope,
@@ -1175,6 +1288,7 @@ export function registerFreightCockpitRoutes(app: Express) {
         FROM ${freightOpportunities}
         WHERE ${freightOpportunities.orgId} = ${org}
         ${companyScopeSql}
+        ${baseScopeImpersonationSql}
       `);
       const h0: any = (hiddenRows as any).rows?.[0]
         ?? (Array.isArray(hiddenRows) ? (hiddenRows as any)[0] : null)
@@ -1190,6 +1304,11 @@ export function registerFreightCockpitRoutes(app: Express) {
         byLane: hiddenByLane,
         byOwner: hiddenByOwner,
         byCarrier: hiddenByCarrier,
+        // Task #972 — number of rows the impersonation base scope dropped
+        // (always 0 outside viewing-as mode). Surfaced for the empty-state
+        // hint and for parity between the per-stage drop counts and the
+        // final visible row count.
+        byBaseScope: hiddenByBaseScope,
       };
       // Task #900 — surface the actionable-rule hidden count on the kpis
       // envelope so the "Stale: N" chip in the cockpit header has it
@@ -1253,6 +1372,32 @@ export function registerFreightCockpitRoutes(app: Express) {
               : "all",
       }));
 
+      // Task #972 — debug payload only when `?debug=cockpit` is on a
+      // non-production host. Surfaces what the server saw + applied so a
+      // rep / admin can confirm scope is honest. Never includes PII —
+      // just ids and counts.
+      const cockpitDebugPayload = cockpitDebug
+        ? {
+            isImpersonating: impersonation.isImpersonating,
+            impersonatedUserId: impersonation.impersonatedUserId,
+            adminId: impersonation.adminId,
+            currentUserId: user?.id ?? null,
+            baseScope: baseScope
+              ? {
+                  userIds: Array.from(baseScope.userIds),
+                  includeUnassigned: baseScope.includeUnassigned,
+                  isAll: baseScope.isAll,
+                }
+              : null,
+            requestedOwnerFilter: ownerFilter,
+            effectiveOwnerFilter,
+            itemsBeforeBaseScope,
+            hiddenByBaseScope,
+            perOwnerCounts: debugBaseScopeOwnerCounts,
+            visibleItems: items.length,
+          }
+        : undefined;
+
       res.json({
         items: itemsWithGroup,
         kpis,
@@ -1268,7 +1413,19 @@ export function registerFreightCockpitRoutes(app: Express) {
         // Task #900 — echo so the client can confirm what the server applied
         // (URL persistence + saved-view restoration both rely on a confirmed
         // server value rather than the raw query string).
-        ownerFilter,
+        // Task #972 — when impersonating, the server may have coerced the
+        // requested filter back to "me" (no widening past the base scope).
+        // We echo the effective value so the combobox label matches what
+        // actually drives the rows.
+        ownerFilter: effectiveOwnerFilter,
+        // Task #972 — small impersonation envelope so the client never
+        // needs to re-derive view-as state from `currentUser`. Always
+        // present (false / null when no impersonation) for shape stability.
+        impersonation: {
+          isImpersonating: impersonation.isImpersonating,
+          impersonatedUserId: impersonation.impersonatedUserId,
+        },
+        ...(cockpitDebugPayload ? { debug: cockpitDebugPayload } : {}),
       });
     } catch (err) {
       console.error("[freight-cockpit] feed error:", err);
