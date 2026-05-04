@@ -615,28 +615,50 @@ async function processUserMailboxEmail(params: {
   }
   const effectiveCarrierId = carrierMatch?.carrierId ?? existingThreadCarrierId;
 
-  // If we have neither a contact match nor a carrier match nor an existing
-  // thread, drop the message — there's nothing to link it to. (If the
-  // thread exists but has no linkedAccountId, we still save the message
-  // below with linkedAccountId = null so the thread continuity is
-  // preserved.)
+  // P0 incident fix — DROP-GATE removed (was: silent early-return for inbound
+  // emails when sender wasn't a known contact, wasn't a known carrier, and
+  // didn't extend an existing thread). That gate destroyed brand-new
+  // customer first-touch quote emails because they look identical to noise:
+  // the sender has never emailed this org before, so contact + carrier +
+  // thread lookups all miss. Production logs showed thousands of these
+  // dropped per day with `fromEmpty=false subjEmpty=false` — i.e. real
+  // routable emails being thrown away.
   //
-  // EXCEPTION (Task #302): outbound rep emails must always reach the
-  // play-run stamping block below so we can attribute the send to a play
-  // run via tier-3 (unbound recent run) matching, even when the recipient
-  // doesn't match a CRM contact and no thread exists yet. Without this
-  // bypass, a class of rep-sent Outlook emails would never enter the
-  // outcome loop.
-  if (!accountMatch && !effectiveCarrierId && !existingThreadExists && direction !== "outbound") {
-    // TEMP-PROBE (remove after the inbound-email persistence incident is
-    // resolved): the silent-drop gate. When fromEmail is empty no
-    // counterparty match is ever possible, so every "inbound" row gets
-    // dropped here without a trace. Booleans only — no PII.
+  // Replacement contract (per the user directive on this incident):
+  //   - PRESERVE: persist the row via the upsert below, with linkedAccountId
+  //     and linkedCarrierId both null. The downstream upsert + thread create
+  //     are already null-safe.
+  //   - SCOPE: linkedAccountId IS NULL keeps these rows out of the rep's
+  //     "Customers" inbox tab (storage.ts:8736 filters on
+  //     linkedAccountId IS NOT NULL), so this change does not pollute the
+  //     existing rep view; the rows are visible to admin diagnostics + the
+  //     existing inline classifier so unknown-sender quote requests can
+  //     still be auto-extracted.
+  //   - LOG: emit a distinct `PERSIST-UNKNOWN` line so ops can count first-
+  //     touch traffic and so this branch is grep-attributable.
+  //
+  // The single guard we keep is for true Outlook tombstones — a Graph
+  // delivery with no from / no subject / no body is a `@removed` placeholder
+  // (or an empty-payload race), not a real email. Persisting those would
+  // create skinny rows that pollute the inbox without giving operators
+  // anything to act on. Skinny-row prevention proper is owned by a separate
+  // task; this is the minimum guard needed to make the DROP-GATE removal
+  // safe.
+  const isUnknownFirstTouch =
+    !accountMatch && !effectiveCarrierId && !existingThreadExists && direction !== "outbound";
+  if (isUnknownFirstTouch) {
+    if (!fromEmail && !subject && !bodyFull) {
+      log(
+        `[user-mailbox] TOMBSTONE-DROP direction=inbound msgId=${providerMessageId} ` +
+          `(no from / no subject / no body — Graph @removed placeholder)`,
+      );
+      return { created: false, direction };
+    }
     log(
-      `[user-mailbox] DROP-GATE direction=${direction} fromEmpty=${!fromEmail} ` +
-      `subjEmpty=${!subject} msgId=${providerMessageId}`,
+      `[user-mailbox] PERSIST-UNKNOWN direction=inbound from=${fromEmail || "(empty)"} ` +
+        `subjEmpty=${!subject} bodyEmpty=${!bodyFull} msgId=${providerMessageId} — ` +
+        `preserving as unknown first-touch (linkedAccountId=null, linkedCarrierId=null)`,
     );
-    return { created: false, direction };
   }
 
   // NOTE: we used to drop the message here when the matched account was

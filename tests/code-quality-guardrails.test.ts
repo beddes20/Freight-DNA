@@ -3196,6 +3196,64 @@ console.log("\n── Section 32: Carrier Ranking Lane-First Rebalance ───
   );
 })();
 
+// ── 30. graphWebhook DROP-GATE removed — never silently drop unknown-sender inbound ─
+// P0 incident: prior to this fix, `processUserMailboxEmail` short-circuited
+// inbound emails when the sender wasn't a known contact, wasn't a known
+// carrier, and didn't extend an existing thread, returning `{created: false}`
+// without persisting anything. That destroyed every brand-new customer's
+// first-touch quote email — they'd hit Outlook, get `DROP-GATE`'d in our
+// log, and never appear in `email_messages`, Conversations, or Customer
+// Quotes. This guardrail prevents that early-return from being re-introduced
+// and guarantees the new PERSIST-UNKNOWN log path stays in the file so the
+// branch is grep-attributable for ops.
+console.log("\n── 30. graphWebhook never silently drops unknown-sender inbound ──────\n");
+{
+  const graphWebhookSrc = readFile("server/routes/graphWebhook.ts");
+
+  // The legacy DROP-GATE early-return is gone. Match the actual log() call
+  // signature `[user-mailbox] DROP-GATE` — historical comments that mention
+  // the gate by name are fine, but the executable log line must not exist.
+  assert(
+    "graphWebhook.ts — legacy DROP-GATE log call removed (no silent inbound drop)",
+    !/\[user-mailbox\]\s+DROP-GATE/.test(graphWebhookSrc),
+    "DROP-GATE log call still present — unknown-sender inbound emails are being silently discarded again",
+  );
+
+  // The replacement contract: when the unknown-first-touch branch fires,
+  // it must either (a) drop with a TOMBSTONE-DROP reason for truly empty
+  // payloads, or (b) fall through to the upsert and emit PERSIST-UNKNOWN.
+  // Both log lines must exist; their presence is what makes the contract
+  // observable in production logs.
+  assert(
+    "graphWebhook.ts — PERSIST-UNKNOWN log present for unknown first-touch inbound",
+    /PERSIST-UNKNOWN direction=inbound/.test(graphWebhookSrc),
+    "PERSIST-UNKNOWN log missing — unknown-sender preservation is not observable in ops logs",
+  );
+  assert(
+    "graphWebhook.ts — TOMBSTONE-DROP log present for empty-payload Graph deliveries",
+    /TOMBSTONE-DROP direction=inbound/.test(graphWebhookSrc),
+    "TOMBSTONE-DROP log missing — the only safe drop path is no longer attributable",
+  );
+
+  // Hard structural check: in `processUserMailboxEmail`, between the carrier-
+  // match block and the upsert, the only `return { created: false` allowed
+  // is the TOMBSTONE-DROP branch. Any other early-return would re-introduce
+  // silent loss of inbound email.
+  const fnStart = graphWebhookSrc.indexOf("async function processUserMailboxEmail");
+  const fnEnd = graphWebhookSrc.indexOf("\n}\n", fnStart);
+  const fnBody = fnStart >= 0 && fnEnd > fnStart ? graphWebhookSrc.slice(fnStart, fnEnd) : "";
+  const earlyReturns = (fnBody.match(/return\s*\{\s*created:\s*false/g) ?? []).length;
+  // Allowed early-returns inside processUserMailboxEmail:
+  //   1. TOMBSTONE-DROP (truly empty Graph payload)
+  //   2. Duplicate provider_message_id (`if (!created) ... return { created: false`)
+  // Anything beyond these two is a regression.
+  assert(
+    "graphWebhook.ts — processUserMailboxEmail has at most 2 created:false early-returns (tombstone + duplicate)",
+    earlyReturns <= 2,
+    `Found ${earlyReturns} created:false early-returns — silent inbound drops may have been re-introduced`,
+  );
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {
