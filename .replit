@@ -156,3 +156,6 @@ OUTLOOK_REPLY_EMAIL = "Ops@valuetruck.com"
 [userenv.development]
 DEV_AUTH_BYPASS_USER_ID = "4e75fd7c-d462-42c5-a335-af327076416c"
 VITE_DEV_AUTH_BYPASS = "true"
+
+[userenv.production]
+EMAIL_INTEL_BATCH_SIZE = "50"
