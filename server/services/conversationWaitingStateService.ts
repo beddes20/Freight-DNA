@@ -16,6 +16,32 @@
 
 import type { IStorage } from "../storage";
 import type { EmailConversationThread, EmailMessage } from "@shared/schema";
+import { publish as publishLiveSync } from "./liveSync";
+
+// Task #968 — fire a conversation_thread bucket-change event when a
+// thread's waitingState or owner transitions. Best-effort, no-op when
+// nothing moved.
+export function publishBucketChange(
+  orgId: string,
+  threadId: string,
+  prev: { waitingState: string | null; ownerUserId: string | null },
+  curr: { waitingState: string | null; ownerUserId: string | null },
+  rowVersionAt?: number,
+): void {
+  if (
+    prev.waitingState === curr.waitingState &&
+    prev.ownerUserId === curr.ownerUserId
+  ) {
+    return;
+  }
+  publishLiveSync(orgId, "conversation_thread", threadId, rowVersionAt, {
+    threadId,
+    previousWaitingState: prev.waitingState,
+    currentWaitingState: curr.waitingState,
+    previousOwnerUserId: prev.ownerUserId,
+    currentOwnerUserId: curr.ownerUserId,
+  });
+}
 
 // ─── SLA constants ────────────────────────────────────────────────────────────
 
@@ -161,6 +187,13 @@ export async function setWaitingState(
 ): Promise<void> {
   const thread = await storageInstance.getEmailConversationThreadById(threadRecordId);
   if (!thread || thread.orgId !== orgId) return;
+  // Snapshot the bucket-derivable fields BEFORE the write so we can
+  // surface a destination-aware `conversation_thread` event for tabs
+  // watching this org. (Task #968)
+  const prevSnapshot = {
+    waitingState: thread.waitingState ?? null,
+    ownerUserId: thread.ownerUserId ?? null,
+  };
 
   const update: Partial<EmailConversationThread> = { waitingState: state };
 
@@ -185,7 +218,17 @@ export async function setWaitingState(
     update.overdueAt = null;
   }
 
-  await storageInstance.updateEmailConversationThread(threadRecordId, orgId, update);
+  const written = await storageInstance.updateEmailConversationThread(threadRecordId, orgId, update);
+  publishBucketChange(
+    orgId,
+    thread.threadId,
+    prevSnapshot,
+    {
+      waitingState: written?.waitingState ?? state,
+      ownerUserId: written?.ownerUserId ?? prevSnapshot.ownerUserId,
+    },
+    written?.rowVersionAt instanceof Date ? written.rowVersionAt.getTime() : undefined,
+  );
 }
 
 // ─── Snooze helpers (Task #533) ──────────────────────────────────────────────
@@ -212,7 +255,11 @@ export async function snoozeThread(
       ? thread.snoozedFromState ?? "waiting_on_us"
       : thread.waitingState;
 
-  await storageInstance.updateEmailConversationThread(threadRecordId, orgId, {
+  const prevSnapshot = {
+    waitingState: thread.waitingState ?? null,
+    ownerUserId: thread.ownerUserId ?? null,
+  };
+  const written = await storageInstance.updateEmailConversationThread(threadRecordId, orgId, {
     waitingState: "snoozed",
     snoozedUntil: until,
     snoozedFromState: fromState,
@@ -220,6 +267,16 @@ export async function snoozeThread(
     waitingSinceAt: null,
     overdueAt: null,
   });
+  publishBucketChange(
+    orgId,
+    thread.threadId,
+    prevSnapshot,
+    {
+      waitingState: written?.waitingState ?? "snoozed",
+      ownerUserId: written?.ownerUserId ?? prevSnapshot.ownerUserId,
+    },
+    written?.rowVersionAt instanceof Date ? written.rowVersionAt.getTime() : undefined,
+  );
 }
 
 /**
@@ -285,7 +342,26 @@ export async function wakeSnoozedThread(
 ): Promise<void> {
   const update = await computeWakePatch(threadRecordId, orgId, storageInstance, now);
   if (!update) return;
-  await storageInstance.updateEmailConversationThread(threadRecordId, orgId, update);
+  // Re-fetch for the prev-state snapshot. Cheap (single PK read) and
+  // makes the bucket-change publish path symmetric with setWaitingState.
+  const before = await storageInstance.getEmailConversationThreadById(threadRecordId);
+  const prevSnapshot = {
+    waitingState: before?.waitingState ?? "snoozed",
+    ownerUserId: before?.ownerUserId ?? null,
+  };
+  const written = await storageInstance.updateEmailConversationThread(threadRecordId, orgId, update);
+  if (before) {
+    publishBucketChange(
+      orgId,
+      before.threadId,
+      prevSnapshot,
+      {
+        waitingState: written?.waitingState ?? update.waitingState ?? null,
+        ownerUserId: written?.ownerUserId ?? prevSnapshot.ownerUserId,
+      },
+      written?.rowVersionAt instanceof Date ? written.rowVersionAt.getTime() : undefined,
+    );
+  }
 }
 
 /**

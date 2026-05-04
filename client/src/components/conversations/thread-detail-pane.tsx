@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ToastAction } from "@/components/ui/toast";
 import {
   Mail,
   ArrowLeft,
@@ -16,6 +17,8 @@ import {
   MailOpen,
   MailQuestion,
   FileQuestion,
+  FileText,
+  ArrowRightLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DraftEmailModal } from "@/components/DraftEmailModal";
@@ -24,8 +27,10 @@ import { EmailBody } from "./email-body";
 import { MessageHeader } from "./message-header";
 import { ReplyCaptureAuditButton } from "./capture-audit-popover";
 import { CorrectionDialog } from "./correction-dialog";
+import { ConvertToQuoteDialog } from "./convert-to-quote-dialog";
 import { ThreadSummaryCard, ThreadSuggestionCard, ThreadEventsTimeline } from "./smart-pane-blocks";
 import { resolveThreadSubject } from "./utils";
+import { hasQuoteSignal } from "./types";
 import type { ConversationThread, EmailMessage } from "./types";
 import { ContextNotePanel } from "@/components/context-notes";
 
@@ -51,6 +56,9 @@ export function ThreadDetailPane({
   const [correctionRepliedToId, setCorrectionRepliedToId] = useState<string | null>(null);
   const [correctedText, setCorrectedText] = useState("");
   const [correctionNotes, setCorrectionNotes] = useState("");
+  // Task #968 — Convert-to-quote dialog open state, gated to threads
+  // linked to a customer (carrier-side threads aren't quotes).
+  const [showConvertToQuote, setShowConvertToQuote] = useState(false);
   const { toast } = useToast();
   const { user } = useAuth();
 
@@ -175,7 +183,12 @@ export function ThreadDetailPane({
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Correction saved", description: "AI will learn from this in future drafts." });
+      // Task #968 — wording tweak: explicit "Saved" + first-person framing so
+      // the rep knows the rewrite landed and the AI will apply it next time.
+      toast({
+        title: "Correction saved — thanks for teaching the AI",
+        description: "Your rewrite is now part of how we draft future replies on this account.",
+      });
       setCorrectionMsg(null);
       setCorrectionRepliedToId(null);
       setCorrectedText("");
@@ -278,6 +291,20 @@ export function ThreadDetailPane({
   }, [data, thread.id]);
 
   const messages = data?.messages ?? [];
+  // Task #968 — latest inbound message body, used to pre-fill the
+  // Convert-to-quote dialog's Notes field so the rep doesn't retype the
+  // customer's actual ask. We pick the most recent inbound (i.e.
+  // direction !== "outbound") rather than the very last message,
+  // because a rep's outbound reply would otherwise overwrite the
+  // customer's request.
+  const latestInbound = [...messages].reverse().find(m => m.direction !== "outbound");
+  const latestInboundBody = latestInbound?.body ?? null;
+  // Quote signal — used to determine whether the Convert-to-quote
+  // button should be primary (the thread looks like a pricing intent
+  // but hasn't been converted yet) or secondary (the thread is
+  // unrelated and conversion is just an option). Mirrors the same
+  // hasQuoteSignal heuristic the list-view uses for its bucket chip.
+  const threadHasQuoteSignal = hasQuoteSignal(thread);
   const isOverdue = !!thread.overdueAt && thread.waitingState === "waiting_on_us";
   // Task #940 — share the same display contract as the list rows. Never falls
   // back to thread.threadId (the Outlook AAQkAD… provider id) — a missing
@@ -313,6 +340,10 @@ export function ThreadDetailPane({
                   <User className="w-3 h-3 inline mr-1" />{thread.ownerName}
                 </span>
               )}
+              {/* Task #968 — Reclassified breadcrumb chip. Surfaced when the
+                  thread's most recent reclassification event is < 24h old.
+                  See <ReclassifiedBreadcrumb /> for the toast handling. */}
+              <ReclassifiedBreadcrumb threadRecordId={thread.id} />
             </div>
           </div>
         </div>
@@ -341,6 +372,26 @@ export function ThreadDetailPane({
             <MailQuestion className="w-3.5 h-3.5" />
             Mark unread
           </Button>
+          {!readOnly && thread.linkedAccountId && (
+            <Button
+              size="sm"
+              // Task #968 — when the thread carries a quote/pricing
+              // signal but hasn't been converted yet, surface the
+              // action as the primary CTA (gold) so the rep
+              // immediately sees what to do next. Otherwise it stays
+              // secondary so it doesn't compete with Draft Reply.
+              variant={threadHasQuoteSignal ? "default" : "outline"}
+              className="gap-1"
+              onClick={() => setShowConvertToQuote(true)}
+              data-testid="button-convert-to-quote"
+              title={threadHasQuoteSignal
+                ? "This thread looks like a quote request — spin up an opportunity"
+                : "Spin up a quote opportunity from this thread"}
+            >
+              <FileText className="w-3.5 h-3.5" />
+              Convert to quote
+            </Button>
+          )}
           {!readOnly && (
             <Button
               size="sm"
@@ -499,6 +550,17 @@ export function ThreadDetailPane({
         />
       )}
 
+      {showConvertToQuote && (
+        <ConvertToQuoteDialog
+          open={showConvertToQuote}
+          onOpenChange={setShowConvertToQuote}
+          sourceThreadId={thread.threadId}
+          threadSubject={subject}
+          prefillCustomerName={thread.accountName ?? null}
+          latestInboundBody={latestInboundBody}
+        />
+      )}
+
       <CorrectionDialog
         open={!!correctionMsg}
         message={correctionMsg}
@@ -526,6 +588,109 @@ export function ThreadDetailPane({
         <ContextNotePanel anchor={contextNoteAnchor} title="Team notes" />
       </div>
     </div>
+  );
+}
+
+// Task #968 — Reclassified breadcrumb. Renders a chip + Open action in
+// the detail-pane header when the latest reclassification fired in the
+// last 24h. The chip surfaces the destination bucket (from the event's
+// `details.currentBucket`) and the Open button navigates the page to
+// that bucket so the rep can land in the queue the thread now belongs
+// in. Toasts once per new event per pane mount.
+const RECLASSIFIED_FRESHNESS_MS = 24 * 60 * 60 * 1000;
+
+const BUCKET_LABEL: Record<string, string> = {
+  mine: "Mine",
+  unowned: "Unowned",
+  quote_requests: "Quote Requests",
+  high_priority: "High priority",
+  all: "All",
+  snoozed: "Snoozed",
+  archived: "Archived",
+};
+
+interface ReclassifiedEvent {
+  id: string;
+  eventType: string;
+  description: string;
+  createdAt: string;
+  details?: { currentBucket?: unknown; previousBucket?: unknown } | null;
+}
+
+interface ReclassifiedBreadcrumbProps { threadRecordId: string }
+function ReclassifiedBreadcrumb({ threadRecordId }: ReclassifiedBreadcrumbProps) {
+  const { toast } = useToast();
+  const [, setLocation] = useLocation();
+  const lastSeenIdRef = useRef<string | null>(null);
+  const { data } = useQuery<{ events: ReclassifiedEvent[] }>({
+    queryKey: ["/api/internal/conversations", threadRecordId, "events"],
+    queryFn: async () => {
+      const res = await fetch(`/api/internal/conversations/${encodeURIComponent(threadRecordId)}/events`);
+      if (!res.ok) throw new Error("Failed to load events");
+      return res.json();
+    },
+  });
+
+  const latest = (data?.events ?? []).find(e => e.eventType === "reclassified");
+  const isFresh = !!latest && (Date.now() - new Date(latest.createdAt).getTime() < RECLASSIFIED_FRESHNESS_MS);
+
+  const destBucket = (latest?.details?.currentBucket as string | undefined) ?? null;
+  const destLabel = destBucket && BUCKET_LABEL[destBucket]
+    ? BUCKET_LABEL[destBucket]
+    : null;
+  const openDest = () => {
+    if (!destBucket) return;
+    const qs = destBucket === "mine" ? "" : `?bucket=${encodeURIComponent(destBucket)}`;
+    setLocation(`/conversations${qs}`);
+  };
+
+  // First paint for a thread with a stale event must NOT toast — seed
+  // the ref so we only fire on later transitions.
+  useEffect(() => {
+    if (!latest) return;
+    if (lastSeenIdRef.current === null) {
+      lastSeenIdRef.current = latest.id;
+      return;
+    }
+    if (lastSeenIdRef.current === latest.id) return;
+    lastSeenIdRef.current = latest.id;
+    toast({
+      title: destLabel ? `Reclassified to ${destLabel}` : "This thread was reclassified",
+      description: latest.description,
+      action: destBucket ? (
+        <ToastAction
+          altText="Open destination bucket"
+          onClick={openDest}
+          data-testid={`toast-action-open-reclassified-${threadRecordId}`}
+        >
+          Open
+        </ToastAction>
+      ) : undefined,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latest?.id]);
+
+  if (!isFresh || !latest) return null;
+  const chipText = destLabel ? `Reclassified to ${destLabel}` : "Reclassified";
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded border border-indigo-200 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:border-indigo-800 dark:text-indigo-300"
+      data-testid="badge-reclassified"
+      title={latest.description}
+    >
+      <ArrowRightLeft className="w-3 h-3" />
+      {chipText}
+      {destBucket && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); openDest(); }}
+          className="ml-1 underline text-indigo-700 dark:text-indigo-300 hover:opacity-80"
+          data-testid={`button-reclassified-open-${threadRecordId}`}
+        >
+          Open
+        </button>
+      )}
+    </span>
   );
 }
 

@@ -2625,6 +2625,14 @@ export type CreateQuoteInput = {
   notes?: string | null;
   score?: string | number | null;
   requestDate?: string | null;
+  // Task #968 — Convert-to-quote handoff from the Conversations detail
+  // pane. When provided, the create path resolves the most recent inbound
+  // message on the thread (org-scoped) and stamps `source = "email"` +
+  // `sourceReference = <message.id>` so the resulting opp shows up in
+  // `attachSourceThreads` with a working "Open in Conversations"
+  // deep-link. Mutually compatible with explicit source/sourceReference:
+  // an explicit pair wins, the thread fallback only fills blanks.
+  sourceThreadId?: string | null;
 };
 
 export type UpdateQuoteInput = Partial<CreateQuoteInput> & {
@@ -3085,6 +3093,34 @@ export async function createQuote(orgId: string, actor: string, input: CreateQuo
   const reqDate = toDate(input.requestDate ?? null) ?? new Date();
   const status = (input.outcomeStatus ?? "pending") as QuoteOutcomeStatus;
 
+  // Task #968 — Convert-to-quote handoff from the Conversations detail
+  // pane. When the rep passes `sourceThreadId` (and didn't explicitly set
+  // source/sourceReference), find the most recent inbound message on
+  // that thread inside this org and stamp it as the quote's source. This
+  // makes the new opp show up in `attachSourceThreads` with a working
+  // "Open in Conversations" deep-link, matching the email-ingested
+  // contract instead of leaving the source cell blank for a rep-initiated
+  // conversion. Outbound-only threads (rep started the convo) fall back
+  // to the latest message of any direction so the link still works.
+  let resolvedSource = input.source ?? null;
+  let resolvedSourceRef = input.sourceReference ?? null;
+  if (input.sourceThreadId && !resolvedSourceRef) {
+    const matches = await db.execute<{ id: string; direction: string }>(sql`
+      SELECT id, direction
+        FROM email_messages
+       WHERE org_id = ${orgId}
+         AND thread_id = ${input.sourceThreadId}
+       ORDER BY direction = 'inbound' DESC, COALESCE(provider_sent_at, created_at) DESC
+       LIMIT 1
+    `);
+    const msg = matches.rows[0];
+    if (!msg) {
+      throw new Error("Cannot convert thread to quote — no captured messages on this thread yet");
+    }
+    resolvedSourceRef = msg.id;
+    resolvedSource = resolvedSource ?? "email";
+  }
+
   const [opp] = await db.insert(quoteOpportunities).values({
     organizationId: orgId,
     customerId: input.customerId,
@@ -3102,8 +3138,8 @@ export async function createQuote(orgId: string, actor: string, input: CreateQuo
     outcomeStatus: status,
     carrierPaid: toDecimalString(input.carrierPaid ?? null),
     responseTimeHours: toDecimalString(input.responseTimeHours ?? null),
-    source: input.source ?? "manual",
-    sourceReference: input.sourceReference ?? null,
+    source: resolvedSource ?? "manual",
+    sourceReference: resolvedSourceRef,
     notes: input.notes ?? null,
     score: toDecimalString(input.score ?? null),
   }).returning();

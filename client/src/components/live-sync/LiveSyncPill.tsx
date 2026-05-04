@@ -144,6 +144,17 @@ export function LiveSyncPill({ testId, className }: LiveSyncPillProps): JSX.Elem
                 {status.topicsSeen.size === 0 ? "none" : status.topicsSeen.size}
               </span>
             </div>
+            {status.polledFallbackActive && (
+              // Task #968 — explicit "your screen is still updating, just
+              // via a polled refetch instead of SSE" trust-cue. Surfaces
+              // when the page-side fallback loop is running.
+              <div
+                className="mt-1 pt-1 border-t border-border/50 text-amber-600 dark:text-amber-400"
+                data-testid={`${rootTestId}-tooltip-fallback`}
+              >
+                Polling fallback active (30s)
+              </div>
+            )}
           </div>
         </TooltipContent>
       </Tooltip>

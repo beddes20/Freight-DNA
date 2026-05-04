@@ -30,7 +30,12 @@ export type ThreadEventType =
   | "ai_drafted"
   | "ai_corrected"
   | "human_sent"
-  | "capture_audit_recovery";
+  | "capture_audit_recovery"
+  // Task #968 — emitted when an inbound message changes the bucket the
+  // thread belongs to (e.g. a follow-up email turns a generic update into
+  // a quote request). Surfaced in the detail-pane breadcrumb + as a
+  // toast on the Conversations page so the rep notices the move.
+  | "reclassified";
 
 export interface RecordThreadEventInput {
   orgId: string;

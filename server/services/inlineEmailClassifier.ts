@@ -44,7 +44,7 @@
  * the ingest came from this dispatcher or the recovery cron.
  */
 
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { emailMessages, type EmailMessage, type InsertEmailSignal, type QuotePipelineDropReason } from "@shared/schema";
 import { db, storage } from "../storage";
 import { recordIntegrationEvent } from "../integrations/probeRegistry";
@@ -265,6 +265,53 @@ async function classifyOne(message: EmailMessage, signal: AbortSignal): Promise<
         });
         if (result.status === "ingested") {
           _totalQuoteIngestedInline++;
+          // Task #968 — record a reclassified event + emit a
+          // conversation_thread bucket-change to "Quote Requests" when
+          // a follow-up message promotes a thread that previously
+          // didn't carry pricing intent.
+          if (message.threadId) {
+            try {
+              const priorCount = await db.execute<{ c: number }>(sql`
+                SELECT COUNT(*)::int AS c
+                  FROM email_messages
+                 WHERE org_id = ${message.orgId}
+                   AND thread_id = ${message.threadId}
+                   AND id <> ${message.id}
+                 LIMIT 1
+              `);
+              const hadPrior = (priorCount.rows[0]?.c ?? 0) > 0;
+              if (hadPrior) {
+                const { recordThreadEvent } = await import("./conversationThreadEventsService");
+                await recordThreadEvent({
+                  orgId: message.orgId,
+                  threadId: message.threadId,
+                  eventType: "reclassified",
+                  description: "Reclassified to Quote Requests — a new inbound email added pricing intent.",
+                  details: {
+                    triggerMessageId: message.id,
+                    intentType: quoteSignal.intentType,
+                    quoteId: result.quoteId ?? null,
+                    previousBucket: "all",
+                    currentBucket: "quote_requests",
+                  },
+                });
+                try {
+                  const { publish: publishLiveSync } = await import("./liveSync");
+                  publishLiveSync(message.orgId, "mailbox_inbound", message.threadId, Date.now());
+                  publishLiveSync(message.orgId, "conversation_thread", message.threadId, Date.now(), {
+                    threadId: message.threadId,
+                    previousBucket: "all",
+                    currentBucket: "quote_requests",
+                  });
+                } catch { /* best-effort */ }
+              }
+            } catch (rErr) {
+              console.warn(
+                `[inlineEmailClassifier] reclassified-event emit failed for ${message.id}:`,
+                rErr instanceof Error ? rErr.message : rErr,
+              );
+            }
+          }
         }
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);

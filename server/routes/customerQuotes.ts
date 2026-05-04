@@ -544,6 +544,12 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     notes: z.string().max(2000).nullable().optional(),
     score: z.union([z.string(), z.number()]).nullable().optional(),
     requestDate: z.string().nullable().optional(),
+    // Task #968 — Convert-to-quote handoff from Conversations. Capped at
+    // 200 because Outlook conversationIds are ~140 base64 chars and
+    // we never want to accept arbitrarily-long values here. The service
+    // layer is responsible for resolving this to a concrete message id
+    // and stamping source/sourceReference.
+    sourceThreadId: z.string().max(200).nullable().optional(),
   });
 
   const updateQuoteSchema = createQuoteSchema.partial().extend({

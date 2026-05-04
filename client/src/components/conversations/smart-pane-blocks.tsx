@@ -400,6 +400,10 @@ function iconForEvent(eventType: string) {
     case "ai_corrected": return <Pencil className="w-3.5 h-3.5" />;
     case "human_sent": return <Mail className="w-3.5 h-3.5" />;
     case "capture_audit_recovery": return <RefreshCw className="w-3.5 h-3.5" />;
+    // Task #968 — reuses ArrowRightLeft (already imported for "reassigned")
+    // because the visual idea is the same: the thread moved from one
+    // place to another. The colour ramp distinguishes it.
+    case "reclassified": return <ArrowRightLeft className="w-3.5 h-3.5" />;
     default: return <History className="w-3.5 h-3.5" />;
   }
 }

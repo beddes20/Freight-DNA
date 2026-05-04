@@ -12,6 +12,7 @@
 
 import type { IStorage } from "../storage";
 import type { EmailMessage, EmailConversationThread } from "@shared/schema";
+import { publishBucketChange } from "./conversationWaitingStateService";
 
 export type ConversationOwnershipStorage = Pick<
   IStorage,
@@ -62,7 +63,26 @@ export async function assignOwner(
   threadRecordId: string,
   ownerUserId: string | null,
   orgId: string,
-  storageInstance: Pick<IStorage, "updateEmailConversationThread">,
+  storageInstance: Pick<IStorage, "updateEmailConversationThread" | "getEmailConversationThreadById">,
 ): Promise<void> {
-  await storageInstance.updateEmailConversationThread(threadRecordId, orgId, { ownerUserId });
+  // Task #968 — snapshot prev bucket fields, then publish a
+  // conversation_thread event so the client reclassification toast
+  // can name the destination bucket.
+  const before = await storageInstance.getEmailConversationThreadById(threadRecordId);
+  if (!before || before.orgId !== orgId) return;
+  const prevSnapshot = {
+    waitingState: before.waitingState ?? null,
+    ownerUserId: before.ownerUserId ?? null,
+  };
+  const written = await storageInstance.updateEmailConversationThread(threadRecordId, orgId, { ownerUserId });
+  publishBucketChange(
+    orgId,
+    before.threadId,
+    prevSnapshot,
+    {
+      waitingState: written?.waitingState ?? prevSnapshot.waitingState,
+      ownerUserId: written?.ownerUserId ?? ownerUserId,
+    },
+    written?.rowVersionAt instanceof Date ? written.rowVersionAt.getTime() : undefined,
+  );
 }

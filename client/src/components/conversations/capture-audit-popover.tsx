@@ -58,6 +58,29 @@ const ROOT_CAUSE_LABELS: Record<string, string> = {
   error: "Error",
 };
 
+/**
+ * Task #968 — destination summary appended to recheck-success toasts so
+ * the rep knows which inbox bucket the thread lives in after the
+ * pulled-in replies landed. Conservative wording — we only state what's
+ * directly readable from the thread row, not anything we'd need to guess.
+ */
+function describeDestination(thread: ConversationThread): string {
+  switch (thread.waitingState) {
+    case "waiting_on_us":
+      return thread.ownerUserId ? "now in Mine" : "now in Unowned";
+    case "waiting_on_them":
+      return "moved into Awaiting customer";
+    case "resolved":
+      return "moved into Resolved";
+    case "archived":
+      return "moved into Archived";
+    case "snoozed":
+      return "moved into Snoozed";
+    default:
+      return "moved into All";
+  }
+}
+
 function HealthDot({ health }: { health: MailboxHealth["sentItemsHealth"] | undefined }) {
   if (!health || health === "active") {
     return <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />;
@@ -88,19 +111,24 @@ export function ReplyCaptureAuditButton({ thread }: { thread: ConversationThread
       return res.json() as Promise<{ recovered: number; rootCause: string; messagesFoundUpstream: number }>;
     },
     onSuccess: (result) => {
+      // Task #968 — wording tweak: lead with the destination summary
+      // ("moved into All", "is now in Mine") so the rep knows where the
+      // thread ended up after the recheck pulled missing replies in,
+      // then explain the upstream cause for escalation context.
+      const destinationLabel = describeDestination(thread);
       if (result.recovered > 0) {
         toast({
-          title: `Recovered ${result.recovered} missing message${result.recovered === 1 ? "" : "s"}`,
-          description: `Cause: ${ROOT_CAUSE_LABELS[result.rootCause] ?? result.rootCause}`,
+          title: `Pulled ${result.recovered} missing reply${result.recovered === 1 ? "" : "s"} — ${destinationLabel}`,
+          description: `Root cause: ${ROOT_CAUSE_LABELS[result.rootCause] ?? result.rootCause}. The thread now matches the rep's mailbox.`,
         });
         queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations", thread.id, "messages"] });
         queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
       } else {
         toast({
-          title: "No new messages found",
+          title: `Thread is already up to date — ${destinationLabel}`,
           description: result.messagesFoundUpstream > 0
-            ? "All upstream messages are already captured."
-            : `SentItems has nothing for this thread. (${ROOT_CAUSE_LABELS[result.rootCause] ?? result.rootCause})`,
+            ? "Every reply in the rep's SentItems is already captured here."
+            : `Nothing in SentItems for this thread yet. (${ROOT_CAUSE_LABELS[result.rootCause] ?? result.rootCause})`,
         });
       }
       refetch();

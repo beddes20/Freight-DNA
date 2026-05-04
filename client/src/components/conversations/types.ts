@@ -208,3 +208,41 @@ export const QUOTE_SIGNAL_TYPES = new Set(["pricing_request", "quote_request"]);
 export function hasQuoteSignal(thread: ConversationThread): boolean {
   return (thread.signals ?? []).some(s => QUOTE_SIGNAL_TYPES.has(s));
 }
+
+// Task #968 — viewer-aware bucket-label resolver. Maps the
+// (waitingState, ownerUserId) tuple to the label the rep sees in the
+// sidebar + URL. Pure, exported so unit tests can pin the contract.
+export type BucketLabel =
+  | { key: "mine"; label: "Mine"; bucket: "mine" }
+  | { key: "unowned"; label: "Unowned"; bucket: "unowned" }
+  | { key: "owned"; label: "Owned"; bucket: "all" }
+  | { key: "awaiting_customer"; label: "Awaiting customer"; bucket: "all" }
+  | { key: "resolved"; label: "Resolved"; bucket: "all" }
+  | { key: "archived"; label: "Archived"; bucket: "archived" }
+  | { key: "snoozed"; label: "Snoozed"; bucket: "snoozed" }
+  | { key: "all"; label: "All"; bucket: "all" };
+
+export function resolveBucketLabel(
+  waitingState: string | null | undefined,
+  ownerUserId: string | null | undefined,
+  viewerUserId: string | null | undefined,
+): BucketLabel {
+  switch (waitingState) {
+    case "waiting_on_us":
+      if (ownerUserId && viewerUserId && ownerUserId === viewerUserId) {
+        return { key: "mine", label: "Mine", bucket: "mine" };
+      }
+      if (ownerUserId) return { key: "owned", label: "Owned", bucket: "all" };
+      return { key: "unowned", label: "Unowned", bucket: "unowned" };
+    case "waiting_on_them":
+      return { key: "awaiting_customer", label: "Awaiting customer", bucket: "all" };
+    case "resolved":
+      return { key: "resolved", label: "Resolved", bucket: "all" };
+    case "archived":
+      return { key: "archived", label: "Archived", bucket: "archived" };
+    case "snoozed":
+      return { key: "snoozed", label: "Snoozed", bucket: "snoozed" };
+    default:
+      return { key: "all", label: "All", bucket: "all" };
+  }
+}

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation, useSearch } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { QueryError } from "@/components/query-error";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +33,7 @@ import { ThreadDetailPane, EmptyDetailPane } from "@/components/conversations/th
 import { CaptureAuditStatusPill } from "@/components/conversations/capture-audit-status-pill";
 // Task #967 — shared trust-layer primitives.
 import { LiveSyncPill } from "@/components/live-sync/LiveSyncPill";
+import { useLiveSyncStatus, setPolledFallbackActive, subscribeLiveSyncEvents } from "@/hooks/useLiveSync";
 import {
   HiddenCountsDisclosure,
   type HiddenCountsSummary,
@@ -60,7 +62,7 @@ import type {
   SavedView,
   BulkActionResult,
 } from "@/components/conversations/types";
-import { parseBucket, buildGroups } from "@/components/conversations/types";
+import { parseBucket, buildGroups, resolveBucketLabel } from "@/components/conversations/types";
 
 // Re-export legacy public surface so unrelated importers still work.
 // (Some debug pages and tests import the ConversationThread type from here.)
@@ -73,6 +75,19 @@ const DENSITY_KEY = "conversations:density";
 const GROUP_BY_KEY_PREFIX = "conversations:groupBy:";
 const COLLAPSED_GROUPS_KEY_PREFIX = "conversations:collapsedGroups:";
 const AUDIENCE_KEY_PREFIX = "conversations:audience:";
+// Task #968 — rep filter persists per-user. URL `?rep=` wins on first
+// load (so a shared link still scopes correctly), then we mirror the
+// chosen value into localStorage so a follow-up reload without a query
+// string still lands on the rep's last selection. Helper + key prefix
+// live in @/lib/conversations/repFilterStorage so unit tests can import
+// them without dragging in React / wouter; we re-export here so existing
+// callers (and the hardening test's source-grep assertions) keep working.
+import {
+  REP_FILTER_KEY_PREFIX,
+  repFilterKey,
+  loadRepFilter,
+} from "@/lib/conversations/repFilterStorage";
+export { loadRepFilter, REP_FILTER_KEY_PREFIX };
 
 function groupByKey(userId: string | null | undefined): string | null {
   return userId ? `${GROUP_BY_KEY_PREFIX}${userId}` : null;
@@ -171,7 +186,17 @@ export default function ConversationsPage() {
   const [filterState, setFilterState] = useState<string>("all");
   const [filterPriority, setFilterPriority] = useState<string>("all");
   const [filterOverdue, setFilterOverdue] = useState(false);
-  const [filterRep, setFilterRep] = useState<string>("all");
+  // Rep filter (Task #968) — persists per-user via URL `?rep=` and
+  // localStorage. URL wins on first load so a shared link still scopes
+  // correctly; the chosen value mirrors back into both stores so a
+  // follow-up reload without a query string still lands on the rep's
+  // last selection.
+  const [filterRep, _setFilterRep] = useState<string>(() => {
+    if (typeof window === "undefined") return "all";
+    const url = new URLSearchParams(window.location.search).get("rep");
+    if (url) return url;
+    return "all";
+  });
 
   // Task #899 — Quote requests sub-toggle. Defaults to "waiting on us"
   // because the QA pass on Task #862 surfaced that most reps care more
@@ -273,9 +298,46 @@ export default function ConversationsPage() {
     setGroupBy(loadGroupBy(user.id));
     setAudience(loadAudience(user.id));
     setCollapsedGroupsByMode(loadCollapsedGroups(user.id));
+    // Task #968 — rep filter persistence contract:
+    //   • URL `?rep=` wins on first load (so a shared link still scopes
+    //     correctly), and we mirror that value into per-user
+    //     localStorage so a follow-up reload WITHOUT the query string
+    //     still lands on the rep's last selection.
+    //   • If there's no URL rep, fall back to the per-user persisted
+    //     value.
+    if (typeof window !== "undefined") {
+      const k = repFilterKey(user.id);
+      const urlRep = new URLSearchParams(window.location.search).get("rep");
+      if (urlRep) {
+        if (k) {
+          if (urlRep === "all") window.localStorage.removeItem(k);
+          else window.localStorage.setItem(k, urlRep);
+        }
+      } else {
+        const stored = loadRepFilter(user.id);
+        if (stored && stored !== filterRep) _setFilterRep(stored);
+      }
+    }
     // We intentionally only re-hydrate when the user identity changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
+
+  // Setter wrapper that mirrors the choice into the URL (so it survives a
+  // share-link copy/paste and is honored on reload) and into per-user
+  // localStorage (so a reload without a query string still lands on the
+  // rep's last selection). Both stores are updated synchronously here so
+  // a single user gesture lands in one consistent place.
+  const setFilterRep = (next: string) => {
+    _setFilterRep(next);
+    updateUrl({ rep: next === "all" ? null : next });
+    if (typeof window !== "undefined" && user?.id) {
+      const k = repFilterKey(user.id);
+      if (k) {
+        if (next === "all") window.localStorage.removeItem(k);
+        else window.localStorage.setItem(k, next);
+      }
+    }
+  };
   useEffect(() => {
     if (typeof window === "undefined") return;
     const k = groupByKey(user?.id);
@@ -439,6 +501,104 @@ export default function ConversationsPage() {
     refetchInterval: 120_000,
     refetchOnWindowFocus: true,
   });
+
+  // Task #968 — single-source bucket-move toast. Driven entirely by
+  // server-emitted `conversation_thread` events whose payload carries
+  // {previousBucket, currentBucket, previousWaitingState,
+  //  currentWaitingState, previousOwnerUserId, currentOwnerUserId}.
+  // Dedupes by `${threadId}|${currentBucket}` per session.
+  const bucketMoveSeenRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const unsubscribe = subscribeLiveSyncEvents("conversation_thread", (evt) => {
+      const p = evt.payload;
+      if (!p || typeof p !== "object") return;
+      const threadId = (p as { threadId?: unknown }).threadId;
+      if (typeof threadId !== "string" || !threadId) return;
+      const prevState = (p as { previousWaitingState?: unknown }).previousWaitingState;
+      const currState = (p as { currentWaitingState?: unknown }).currentWaitingState;
+      const prevOwner = (p as { previousOwnerUserId?: unknown }).previousOwnerUserId;
+      const currOwner = (p as { currentOwnerUserId?: unknown }).currentOwnerUserId;
+      // Server-supplied destination labels win when present (covers
+      // signal-driven moves like Quote Requests that aren't derivable
+      // from waitingState alone). Fall back to the viewer-aware
+      // resolver when the server didn't tag the bucket explicitly.
+      const serverPrev = (p as { previousBucket?: unknown }).previousBucket;
+      const serverCurr = (p as { currentBucket?: unknown }).currentBucket;
+      const prev = typeof serverPrev === "string"
+        ? { key: serverPrev, label: serverPrev }
+        : resolveBucketLabel(
+            typeof prevState === "string" ? prevState : null,
+            typeof prevOwner === "string" ? prevOwner : null,
+            user?.id ?? null,
+          );
+      const curr = typeof serverCurr === "string"
+        ? { key: serverCurr, label: serverCurr, bucket: serverCurr as ConversationBucket }
+        : resolveBucketLabel(
+            typeof currState === "string" ? currState : null,
+            typeof currOwner === "string" ? currOwner : null,
+            user?.id ?? null,
+          );
+      if (prev.key === curr.key) return;
+      const dedupeKey = `${threadId}|${curr.key}`;
+      if (bucketMoveSeenRef.current.has(dedupeKey)) return;
+      bucketMoveSeenRef.current.add(dedupeKey);
+      if (bucketMoveSeenRef.current.size > 500) {
+        const first = bucketMoveSeenRef.current.values().next().value;
+        if (first) bucketMoveSeenRef.current.delete(first);
+      }
+      const destBucket = (curr as { bucket?: ConversationBucket }).bucket ?? null;
+      toast({
+        title: `Reclassified to ${curr.label}`,
+        description: `Moved from ${prev.label} → ${curr.label}.`,
+        action: (
+          <ToastAction
+            altText="Open thread"
+            onClick={() => updateUrl(destBucket
+              ? { bucket: destBucket, threadId }
+              : { threadId })}
+            data-testid={`toast-action-open-bucket-move-${threadId}`}
+          >
+            Open
+          </ToastAction>
+        ),
+      });
+    });
+    return unsubscribe;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  // Polled fallback — activates after >60s of explicit offline state
+  // (anything other than live/stale). Tracks `offlineSinceRef` so the
+  // gate uses a single source of truth.
+  const liveSyncStatus = useLiveSyncStatus();
+  const isOfflineLike =
+    liveSyncStatus.state === "connecting" ||
+    liveSyncStatus.state === "idle" ||
+    liveSyncStatus.state === "disabled";
+  const offlineSinceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!isOfflineLike) {
+      offlineSinceRef.current = null;
+      setPolledFallbackActive(false);
+      return;
+    }
+    if (offlineSinceRef.current === null) {
+      offlineSinceRef.current = Date.now();
+    }
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    const elapsed = Date.now() - (offlineSinceRef.current ?? Date.now());
+    const remaining = Math.max(0, 60_000 - elapsed);
+    const startTimer = setTimeout(() => {
+      setPolledFallbackActive(true);
+      pollTimer = setInterval(() => {
+        void queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
+      }, 30_000);
+    }, remaining);
+    return () => {
+      clearTimeout(startTimer);
+      if (pollTimer) clearInterval(pollTimer);
+    };
+  }, [isOfflineLike]);
 
   // Reset "Load more" pagination ONLY when the user changes the filter
   // signature (bucket / audience / filters / date / search). A background

@@ -36,7 +36,13 @@ export type LiveSyncTopic =
   // its 30s background refetch. `mailbox_inbound` covers inbound rep mail
   // (Inbox folder), `mailbox_outbound` covers SentItems captures.
   | "mailbox_inbound"
-  | "mailbox_outbound";
+  | "mailbox_outbound"
+  // Task #968 — bucket-change events for a thread, with prev/current
+  // waitingState + ownerUserId (and optional prev/current bucket label).
+  | "conversation_thread";
+
+/** Loosely-typed payload bag — callers validate the shape they expect. */
+export type LiveSyncPayload = Record<string, unknown>;
 
 export interface LiveSyncEvent {
   topic: LiveSyncTopic;
@@ -53,6 +59,8 @@ export interface LiveSyncEvent {
    * guard and always apply, which is the safe direction).
    */
   rowVersionAt?: number;
+  /** Task #968 — optional structured payload, JSON-serialized over SSE. */
+  payload?: LiveSyncPayload;
 }
 
 const emitter = new EventEmitter();
@@ -87,6 +95,13 @@ export function publish(
    * `applyRowVersionGuard` can suppress late-arriving events.
    */
   rowVersionAt?: number,
+  /**
+   * Task #968 — optional structured payload. Currently used by
+   * `conversation_thread` events to carry the previous + current
+   * waitingState/ownerUserId so the client can compute viewer-specific
+   * bucket transitions. Pass `undefined` for topics that don't need it.
+   */
+  payload?: LiveSyncPayload,
 ): void {
   if (!orgId) return;
   try {
@@ -94,6 +109,9 @@ export function publish(
     const evt: LiveSyncEvent = { topic, key, ts };
     if (typeof rowVersionAt === "number" && Number.isFinite(rowVersionAt)) {
       evt.rowVersionAt = rowVersionAt;
+    }
+    if (payload && typeof payload === "object") {
+      evt.payload = payload;
     }
     emitter.emit(channelFor(orgId), evt);
     emitter.emit(ALL_CHANNEL, { ...evt, orgId } as LiveSyncEventWithOrg);

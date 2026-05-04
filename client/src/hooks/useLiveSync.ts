@@ -121,6 +121,12 @@ const TOPIC_TO_QUERY_KEYS: Record<string, ReadonlyArray<ReadonlyArray<string>>> 
   mailbox_outbound: [
     ["/api/internal/conversations"],
   ],
+  // Task #968 — bucket-change events. Bust the list + bucket counts so
+  // sidebar badges + the reclassification breadcrumb refetch.
+  conversation_thread: [
+    ["/api/internal/conversations"],
+    ["/api/internal/conversations", "counts"],
+  ],
 };
 
 // Topics that ship a per-company `key` and need per-company caches
@@ -138,7 +144,7 @@ const buildPerCompanyKeys = (companyId: string): ReadonlyArray<ReadonlyArray<str
   ["/api/tasks/company", companyId],
 ];
 
-interface LiveSyncEvent {
+export interface LiveSyncEvent {
   type?: string;
   topic?: string;
   key?: string;
@@ -151,6 +157,41 @@ interface LiveSyncEvent {
    * unconditionally — that's the safe direction).
    */
   rowVersionAt?: number;
+  /** Task #968 — optional structured payload (e.g. bucket-change details). */
+  payload?: Record<string, unknown>;
+}
+
+// Task #968 — per-topic event subscribers. Used by surfaces (e.g. the
+// conversations page) that need the raw event payload for reacting,
+// not just the cache-invalidation that TOPIC_TO_QUERY_KEYS handles.
+type LiveSyncEventListener = (evt: LiveSyncEvent) => void;
+const _topicListeners = new Map<string, Set<LiveSyncEventListener>>();
+
+export function subscribeLiveSyncEvents(
+  topic: string,
+  listener: LiveSyncEventListener,
+): () => void {
+  let bucket = _topicListeners.get(topic);
+  if (!bucket) {
+    bucket = new Set();
+    _topicListeners.set(topic, bucket);
+  }
+  bucket.add(listener);
+  return () => {
+    const b = _topicListeners.get(topic);
+    if (!b) return;
+    b.delete(listener);
+    if (b.size === 0) _topicListeners.delete(topic);
+  };
+}
+
+function dispatchTopicListeners(evt: LiveSyncEvent): void {
+  if (!evt.topic) return;
+  const bucket = _topicListeners.get(evt.topic);
+  if (!bucket || bucket.size === 0) return;
+  for (const l of bucket) {
+    try { l(evt); } catch { /* listener errors must not break other subscribers */ }
+  }
 }
 
 // In dev with the local-auth bypass enabled, no <ClerkProvider> is mounted
@@ -194,6 +235,14 @@ export interface LiveSyncStatus {
   lastConnectAt: number | null;
   /** Topics observed at least once during this session. */
   topicsSeen: ReadonlySet<string>;
+  /**
+   * Task #968 — set when a surface (e.g. the Conversations page) has
+   * decided that the SSE connection has been offline long enough that
+   * it switched to a polled fallback. The pill surfaces this in its
+   * tooltip so reps trust that the screen is still being kept fresh
+   * even when the green "Live" dot is missing.
+   */
+  polledFallbackActive: boolean;
 }
 
 /**
@@ -211,6 +260,7 @@ interface MutableLiveSyncStatus {
   lastEventAt: number | null;
   lastConnectAt: number | null;
   topicsSeen: Set<string>;
+  polledFallbackActive: boolean;
 }
 
 const _status: MutableLiveSyncStatus = {
@@ -218,6 +268,7 @@ const _status: MutableLiveSyncStatus = {
   lastEventAt: null,
   lastConnectAt: null,
   topicsSeen: new Set<string>(),
+  polledFallbackActive: false,
 };
 
 const _listeners = new Set<() => void>();
@@ -229,7 +280,20 @@ function freezeStatus(s: MutableLiveSyncStatus): LiveSyncStatus {
     lastEventAt: s.lastEventAt,
     lastConnectAt: s.lastConnectAt,
     topicsSeen: new Set(s.topicsSeen),
+    polledFallbackActive: s.polledFallbackActive,
   };
+}
+
+/**
+ * Task #968 — surfaces flag the polled-fallback state to the shared
+ * LiveSyncPill tooltip. Called by any page that's running its own
+ * polled refetch loop while SSE is degraded; the pill reads
+ * `polledFallbackActive` from the status snapshot.
+ */
+export function setPolledFallbackActive(active: boolean): void {
+  if (_status.polledFallbackActive === active) return;
+  _status.polledFallbackActive = active;
+  emit();
 }
 
 function emit(): void {
@@ -294,6 +358,7 @@ export function _resetLiveSyncStatusForTests(): void {
   _status.lastEventAt = null;
   _status.lastConnectAt = null;
   _status.topicsSeen = new Set<string>();
+  _status.polledFallbackActive = false;
   emit();
 }
 
@@ -321,6 +386,10 @@ function applyEvent(
   }
   if (!evt.topic) return;
   recordEvent(Date.now(), evt.topic);
+  // Task #968 — fan out to per-topic listeners before the topic-filter
+  // check so subscribers fire even when the page didn't register the
+  // topic in its `useLiveSync(topics)` array.
+  dispatchTopicListeners(evt);
   if (topics && !topics.includes(evt.topic)) return;
 
   const keyPrefixes = TOPIC_TO_QUERY_KEYS[evt.topic];
