@@ -1,0 +1,114 @@
+New high‑priority task: permanently fix Conversations live‑sync + mailbox sync errors.
+
+Context:
+- In the Conversations screen, the right-hand alert stack constantly shows sync errors such as:
+  - "Live-sync stream rejecting connections: <user email>… rejecting 88/91 connection attempts in the last 60s"
+  - "Mailbox sync unhealthy: <user email>… no Inbox webhook in X h, no SentItems webhook in Y h"
+  - "Live-sync silent despite recent mailbox activity… inbox_ingest fired 3x but the live-sync inbound/outbound pipelines are silent"
+- These alerts are still firing as of May 4, **even though we have attempted to “fix” Conversations multiple times** (at least 10 separate tasks). The last meaningful update looks to have been around May 1, but the same error patterns keep returning. [file:48]
+
+Problem statement:
+We are not dealing with a one-off bug. We have a **systemic reliability problem** in the Conversations sync pipeline (live-stream + mailbox integration + alerting) and repeated task-level fixes have not addressed the root cause. I need a single, end‑to‑end hardening task that:
+1) identifies and fixes the actual root causes, and
+2) leaves behind clear instrumentation and tests so this does not regress.
+
+Scope:
+- Conversations sync end‑to‑end:
+  - inbound mail ingestion (webhooks, polling, or API)
+  - outbound mail sending (and any Sent/Outbox hooks)
+  - live-sync stream / WebSocket / SSE layer that drives the UI
+  - alerting logic that raises the “rejecting connections / unhealthy / silent” alerts
+- This is **not** a UI polish task. It is about reliability, error handling, connection management, and backoff.
+
+Required work:
+
+1. Map the architecture and current failure modes
+- Locate and diagram the code paths for:
+  - inbound mail webhooks / handlers
+  - outbound mail handlers
+  - the live-sync stream (connection setup, authentication, fan-out, heartbeats)
+  - the alert generator that produces the specific alerts shown in the UI.
+- Produce a short *written architecture note* in the repo (e.g. docs/conversations-sync.md) explaining:
+  - data flow from provider → webhooks → persistence → live-stream → UI
+  - where connection limits / rate limiting / auth / retries live
+  - where alerts are generated and how thresholds are defined.
+
+2. Reproduce and log the current errors
+- Add temporary, structured logging around:
+  - live-sync connection attempts (user id, mailbox id, reason for reject)
+  - mailbox health checks (last webhook timestamps, expected cadence)
+  - any exceptions in the Conversations sync workers.
+- Reproduce each of the current alerts by:
+  - simulating multiple clients, stale connections, and typical mailbox activity
+  - or replaying recent logs if available.
+- For each alert type, capture:
+  - the **exact condition** that triggered it,
+  - whether that condition reflects a real outage, a transient/network blip, or simply a misconfigured threshold.
+
+3. Identify root causes
+For each recurring alert pattern:
+- Determine whether it’s caused by:
+  - bad connection lifecycle (stale clients not cleaned up, double connects, missing heartbeats)
+  - authentication/token expiry not being renewed properly
+  - provider rate limits / 4xx/5xx responses that we’re mishandling
+  - missing / delayed webhooks from the mail provider
+  - clock skew / incorrect “last activity” metrics
+  - or simply alert thresholds that are too aggressive or computed incorrectly.
+- Write down in the commit message and in docs/conversations-sync.md:
+  - the root cause(s),
+  - why previous fixes failed to address them,
+  - what we are changing now.
+
+4. Implement durable fixes
+Examples of acceptable fixes (depending on what you find):
+- Live‑sync:
+  - Enforce a single active connection per mailbox/user; reject duplicates with a clear reason and immediate clean-up of the old one.
+  - Implement or fix heartbeats and timeouts so dead connections are cleaned up, not counted as “rejecting connections” over and over.
+  - Add exponential backoff and jitter for reconnects so we don’t hammer the stream on transient failures.
+- Mailbox health:
+  - Make the health checker compute “expected webhook cadence” correctly for each mailbox and provider.
+  - Differentiate “no activity expected” from “no webhook received when we should have had some”.
+  - Ensure backfill/polling is triggered when webhooks are missing, not just alert spam.
+- Alerting:
+  - Change alerts so they only fire when there is a **real incident**:
+    - e.g. N consecutive failures over M minutes, or “no successful event in M minutes despite K attempts”.
+  - Deduplicate alerts per mailbox/user and add cool-downs.
+  - Clearly separate “degraded but auto‑recovering” from “action required”.
+
+5. Tests and verification
+- Add tests to cover:
+  - connection lifecycle (open, heartbeat, stale, reconnect, forced close)
+  - mailbox health detection thresholds
+  - alert generation for the three main patterns we currently see:
+    - live-sync stream rejecting connections
+    - mailbox sync unhealthy (no webhooks)
+    - live-sync silent despite activity.
+- Add at least one **integration-style or harness test** that simulates:
+  - normal mailbox activity over 24h → no alerts
+  - temporary provider outage / HTTP 5xx with backoff → at most one actionable alert, then automatic recovery
+  - a truly dead mailbox / misconfigured webhook → sustained actionable alert.
+- Update any existing flaky tests that were just asserting “no alerts” without controlling inputs.
+
+6. Observability and runbook
+- Add metrics (counters/gauges) for:
+  - active live-sync connections
+  - rejected connections and reasons
+  - last webhook received per mailbox
+  - alerts raised per mailbox.
+- Write a short “Conversations sync runbook” section in docs/conversations-sync.md that explains:
+  - how to interpret the alerts in the UI
+  - what steps an on‑call engineer should take when each alert type fires
+  - what metrics to look at first.
+
+7. Deliverables
+When you are done, return:
+- a brief root-cause summary for each alert type
+- files changed and the key code paths
+- a bullet list of behavioral changes (what users/admins will see differently)
+- test suites added/updated and their results
+- any remaining known limitations or TODOs.
+
+Important:
+- Do NOT just silence or reword the alerts.
+- Do NOT add another small patch to a single handler.
+- This is an end‑to‑end Conversations sync hardening pass focused on reliability and clear, actionable alerts.
