@@ -9,16 +9,16 @@
  *                      satisfies the entry's `roles` gate (today's
  *                      behavior). The default if `status` is omitted.
  *
- *   - "admin_preview"  visible to BOTH admins and non-admins (still
- *                      subject to the entry's `roles` gate), rendered
- *                      with a small "In development" tag so the surface
- *                      stays discoverable while we iterate. Non-admins
- *                      see it as disabled (clicks are no-ops). Admins
- *                      get full click-through and active-route
- *                      highlighting — same greyed visual, but real
- *                      navigation. Reserved for incubating product
- *                      surfaces; working admin tools should stay
- *                      "active".
+ *   - "admin_preview"  visible ONLY to admins, rendered greyed with a
+ *                      small "In development" tag so the surface stays
+ *                      discoverable while we iterate. Admins get full
+ *                      click-through and active-route highlighting —
+ *                      same greyed visual, but real navigation.
+ *                      Non-admins do not see the entry at all (it is
+ *                      hidden from the sidebar entirely until the
+ *                      surface is ready to roll out). Reserved for
+ *                      incubating product surfaces; working admin tools
+ *                      should stay "active".
  *
  *   - "hidden"         not rendered for anyone. Reserved for future use
  *                      (e.g. retiring a surface without deleting it).
@@ -61,11 +61,10 @@ export function isAdminRole(role: string | undefined | null): boolean {
  * Should this entry render in the sidebar for the given role?
  *
  *   - "hidden"         → never
- *   - "admin_preview"  → visible to everyone whose role satisfies the
- *                        entry's `roles` gate (admin always sees it,
- *                        non-admins see it as long as they pass the
- *                        gate). Non-admins get the disabled treatment
- *                        via `isFeatureDisabledFor`.
+ *   - "admin_preview"  → visible only to admins (`role === "admin"`).
+ *                        Non-admins never see the entry, regardless of
+ *                        the entry's `roles` gate — incubating surfaces
+ *                        stay invisible until they're ready to roll out.
  *   - "active"         → visible to everyone whose role satisfies the
  *                        entry's `roles` gate (existing behavior).
  */
@@ -80,8 +79,12 @@ export function isFeatureVisibleFor(
   // of an entry's `roles` gate.
   if (isAdminRole(role)) return true;
 
-  // Non-admins must satisfy the entry's `roles` gate (if any) for both
-  // "active" and "admin_preview" entries.
+  // Non-admins never see "admin_preview" entries — they're hidden
+  // entirely from the sidebar until the surface ships as "active".
+  if (status === "admin_preview") return false;
+
+  // Non-admins must satisfy the entry's `roles` gate (if any) for
+  // "active" entries.
   if (!item.roles) return true;
   if (!role) return false;
   return item.roles.includes(role);

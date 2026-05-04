@@ -44,16 +44,24 @@ describe("isFeatureVisibleFor", () => {
     expect(isFeatureVisibleFor(active, "sales")).toBe(true);
   });
 
-  it("non-admin × admin_preview (no roles gate) → visible (now visible-but-blocked, not hidden)", () => {
-    expect(isFeatureVisibleFor(preview, "sales")).toBe(true);
+  it("non-admin × admin_preview (no roles gate) → hidden (in-development entries are admin-only)", () => {
+    expect(isFeatureVisibleFor(preview, "sales")).toBe(false);
   });
 
   it("non-admin × admin_preview (roles-gated, role outside gate) → hidden", () => {
     expect(isFeatureVisibleFor(previewGated, "sales")).toBe(false);
   });
 
-  it("non-admin × admin_preview (roles-gated, role inside gate) → visible", () => {
-    expect(isFeatureVisibleFor(previewGated, "director")).toBe(true);
+  it("non-admin × admin_preview (roles-gated, role inside gate) → still hidden (admin_preview ignores roles gate for non-admins)", () => {
+    expect(isFeatureVisibleFor(previewGated, "director")).toBe(false);
+  });
+
+  it("director × admin_preview (no roles gate) → hidden (only role==='admin' sees previews)", () => {
+    expect(isFeatureVisibleFor(preview, "director")).toBe(false);
+  });
+
+  it("sales_director × admin_preview (no roles gate) → hidden", () => {
+    expect(isFeatureVisibleFor(preview, "sales_director")).toBe(false);
   });
 
   it("non-admin × active (roles-gated, role outside gate) → hidden", () => {
