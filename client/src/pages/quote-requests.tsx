@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
@@ -971,6 +971,7 @@ function QuoteRequestsInner(): JSX.Element {
               }}
               isElevated={isElevated}
               myRepId={myRepId}
+              onRefresh={handleRefresh}
             />
           </div>
           {selectedQuote && (
@@ -1090,6 +1091,7 @@ function ChipGroup<T extends string>({
 function ListTable({
   rows, isLoading, isError, error, total, offset, onSetOffset,
   selectedId, focusedId, onSelect, onOpen, sortKey, sortDir, onSort, isElevated, myRepId,
+  onRefresh,
 }: {
   rows: Quote[];
   isLoading: boolean;
@@ -1107,6 +1109,7 @@ function ListTable({
   onSort: (k: SortKey) => void;
   isElevated: boolean;
   myRepId: string | null;
+  onRefresh: () => void;
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -1138,7 +1141,7 @@ function ListTable({
   }
 
   if (!isLoading && rows.length === 0) {
-    return <ZeroState />;
+    return <ZeroState isElevated={isElevated} onRefresh={onRefresh} />;
   }
 
   return (
@@ -1364,19 +1367,90 @@ function ListRow({
   );
 }
 
-function ZeroState(): JSX.Element {
-  const [, navigate] = useLocation();
+/**
+ * ZeroState — shown when the snapshot returns zero rows.
+ *
+ * Historical bug: the original "Review Capture Leak Queue" button used
+ * wouter's `navigate()` to push `/admin/integrations-health#leak-tile`.
+ * Wouter pushed the URL, but BOTH `/admin/integrations-health` and the
+ * Task #952 `/admin/quote-pipeline-health` page hard-gate render to
+ * `user.role === "admin"`. Non-admin reps perceived the click as a
+ * dead button: URL changed, content area went blank, sidebar/header
+ * stayed identical, no toast or error. This component now:
+ *   - uses real `<Link>` elements (reliable wouter routing)
+ *   - routes admins to the actionable pipeline-health page (with
+ *     reprocess buttons) AND keeps the legacy leak-tile link
+ *   - shows non-admin reps a "Refresh" action they can actually use
+ *   - fires a toast on click so the rep sees feedback even if the
+ *     destination page takes a moment to render
+ */
+function ZeroState({
+  isElevated,
+  onRefresh,
+}: {
+  isElevated: boolean;
+  onRefresh: () => void;
+}): JSX.Element {
+  const { toast } = useToast();
+  const [refreshing, setRefreshing] = useState(false);
+
+  const handleRefresh = useCallback(() => {
+    setRefreshing(true);
+    onRefresh();
+    toast({
+      title: "Refreshing quote inbox",
+      description: "Re-pulling today's snapshot, list, and capture counters.",
+    });
+    // Clear the spinner after the queries have a chance to resolve.
+    // The actual data update is driven by the query layer; this is just
+    // a UX affordance so the click feels responsive.
+    window.setTimeout(() => setRefreshing(false), 1200);
+  }, [onRefresh, toast]);
+
   return (
     <div className="h-full flex items-center justify-center p-8" data-testid="empty-quote-rows">
-      <EmptyState
-        icon={InboxIcon}
-        title="No quote requests"
-        description="Your inbox is clear. New requests will appear here as they arrive or are auto-captured from customer emails."
-        action={{
-          label: "Review Capture Leak Queue",
-          onClick: () => navigate("/admin/integrations-health#leak-tile"),
-        }}
-      />
+      <div className="flex flex-col items-center gap-4">
+        <EmptyState
+          icon={InboxIcon}
+          title="No quote requests"
+          description="Your inbox is clear. New requests will appear here as they arrive or are auto-captured from customer emails."
+          action={{
+            label: refreshing ? "Refreshing…" : "Refresh inbox",
+            onClick: handleRefresh,
+            disabled: refreshing,
+          }}
+          testId="zero-state-empty"
+        />
+        {isElevated && (
+          <div className="flex flex-wrap items-center justify-center gap-2 -mt-2">
+            <Button
+              asChild
+              size="sm"
+              variant="ghost"
+              className="text-amber-600 hover:text-amber-500"
+              data-testid="zero-state-pipeline-health-link"
+              onClick={() =>
+                toast({
+                  title: "Opening Capture Leak Queue",
+                  description: "Loading the pipeline drops console…",
+                })
+              }
+            >
+              <Link href="/admin/quote-pipeline-health">Review Capture Leak Queue</Link>
+            </Button>
+            <span className="text-[10px] text-muted-foreground">·</span>
+            <Button
+              asChild
+              size="sm"
+              variant="ghost"
+              className="text-muted-foreground"
+              data-testid="zero-state-integrations-health-link"
+            >
+              <Link href="/admin/integrations-health#leak-tile">Integrations health</Link>
+            </Button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

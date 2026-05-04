@@ -2735,6 +2735,7 @@ export default function AvailableFreightPage() {
                       rowHeight={104}
                       overscanCount={6}
                       style={{ height: "min(70vh, 720px)" }}
+                      rowProps={{}}
                       rowComponent={({ index, style }: RowComponentProps) => {
                         const it = filtered[index];
                         if (!it) return null;

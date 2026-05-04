@@ -5,11 +5,11 @@ export const modules: ModuleMap = {
   "./components/mockups/quote-requests-post-2d/EmptyState.tsx": () => import("../components/mockups/quote-requests-post-2d/EmptyState.tsx"),
   "./components/mockups/quote-requests-post-2d/PopulatedList.tsx": () => import("../components/mockups/quote-requests-post-2d/PopulatedList.tsx"),
   "./components/mockups/quote-requests-post-2d/RowAndDetailDrawer.tsx": () => import("../components/mockups/quote-requests-post-2d/RowAndDetailDrawer.tsx"),
+  "./components/mockups/rep-report/Email.tsx": () => import("../components/mockups/rep-report/Email.tsx"),
+  "./components/mockups/rep-report/Portal.tsx": () => import("../components/mockups/rep-report/Portal.tsx"),
   "./components/mockups/quote-requests-tab/CanvasIndex.tsx": () => import("../components/mockups/quote-requests-tab/CanvasIndex.tsx"),
   "./components/mockups/quote-requests-tab/DetailDrawer.tsx": () => import("../components/mockups/quote-requests-tab/DetailDrawer.tsx"),
   "./components/mockups/quote-requests-tab/EmptyState.tsx": () => import("../components/mockups/quote-requests-tab/EmptyState.tsx"),
   "./components/mockups/quote-requests-tab/ListView.tsx": () => import("../components/mockups/quote-requests-tab/ListView.tsx"),
-  "./components/mockups/rep-report/Email.tsx": () => import("../components/mockups/rep-report/Email.tsx"),
-  "./components/mockups/rep-report/Portal.tsx": () => import("../components/mockups/rep-report/Portal.tsx"),
   "./components/mockups/vt-theme/BlackGold.tsx": () => import("../components/mockups/vt-theme/BlackGold.tsx")
 };
