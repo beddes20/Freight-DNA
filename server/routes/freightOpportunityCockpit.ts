@@ -55,6 +55,11 @@ import {
   resolveUserIdentity,
   type CockpitRowOwnership,
 } from "@shared/cockpitOwnership";
+import {
+  parseOwnerScopeTokens,
+  resolveOwnerScope,
+  isValidOwnerScopeToken,
+} from "@shared/cockpitTeams";
 
 function orgId(req: Express.Request): string {
   return (req as any).session?.organizationId as string;
@@ -224,6 +229,13 @@ const savedViewPatchSchema = z.object({
 // Task #900 — owner filter aliases. Specific-user filters pass through as
 // arbitrary userId strings; the route refuses anything that's neither an
 // alias nor a syntactically plausible id.
+//
+// Task #957 — owner filter is now multi-select: the value may be a single
+// alias / userId (legacy) OR a comma-joined list of tokens. Each token is
+// one of {"all" | "me" | "my-team" | "unassigned" | "team:<id>" | <userId>}.
+// `parseOwnerScopeTokens` + `resolveOwnerScope` from `shared/cockpitTeams`
+// handle the expansion server-side so the same predicate the client uses
+// drives the visible row set.
 const OWNER_FILTER_ALIASES = ["all", "me", "unassigned"] as const;
 type OwnerFilterAlias = typeof OWNER_FILTER_ALIASES[number];
 function isOwnerFilterAlias(v: unknown): v is OwnerFilterAlias {
@@ -233,7 +245,21 @@ function isPlausibleUserId(v: unknown): boolean {
   return typeof v === "string" && /^[A-Za-z0-9_-]{4,64}$/.test(v);
 }
 function isOwnerFilterValue(v: unknown): v is string {
-  return isOwnerFilterAlias(v) || isPlausibleUserId(v);
+  if (typeof v !== "string") return false;
+  // Empty string — treat as "all".
+  if (v.length === 0) return true;
+  // Comma-joined multi-select: every individual token must be valid.
+  if (v.includes(",")) {
+    const tokens = parseOwnerScopeTokens(v);
+    if (tokens.length === 0) return false;
+    return tokens.every((t) => isValidOwnerScopeToken(t));
+  }
+  // Single token — accept legacy aliases, plausible userIds, "my-team",
+  // and "team:<id>".
+  if (isOwnerFilterAlias(v)) return true;
+  if (v === "my-team" || v === "myteam") return true;
+  if (v.startsWith("team:") && v.length > "team:".length) return true;
+  return isPlausibleUserId(v);
 }
 
 const prefsPatchSchema = z.object({
@@ -691,30 +717,37 @@ export function registerFreightCockpitRoutes(app: Express) {
       // of every other constraint).
       const itemsBeforeOwner = items.length;
       if (ownerFilter !== "all") {
-        const meIdentity = ownerFilter === "me" && user
+        // Task #957 — resolve the (possibly multi-select) owner filter into
+        // a canonical {userIds, includeUnassigned, isAll} envelope. Legacy
+        // single-token values still flow through unchanged.
+        const meIdentity = user
           ? resolveUserIdentity({
               id: user.id,
               email: (user as any).email ?? null,
               username: (user as any).username ?? null,
             })
           : null;
-        // For specific-userId filters we synthesize a minimal identity from
-        // the request param; we deliberately don't look the target user up
-        // here (we'd just match on id, which is what the client sees too).
-        const targetIdentity = ownerFilter !== "me" && ownerFilter !== "unassigned"
-          ? { id: ownerFilter, emailLower: null, usernameLower: null }
-          : null;
-        items = items.filter(i => {
-          if (ownerFilter === "unassigned") {
+        const tokens = parseOwnerScopeTokens(ownerFilter);
+        const scope = resolveOwnerScope(tokens, user?.id ?? null, null);
+        if (!scope.isAll) {
+          items = items.filter(i => {
             const ids = i.ownership?.ids ?? (i.owner?.id ? [i.owner.id] : []);
-            return ids.length === 0;
-          }
-          if (ownerFilter === "me") {
-            return isRowOwnedByUser(i.ownership ?? null, meIdentity, i.owner?.id ?? null);
-          }
-          // Specific userId
-          return isRowOwnedByUser(i.ownership ?? null, targetIdentity, i.owner?.id ?? null);
-        });
+            if (scope.includeUnassigned && ids.length === 0) return true;
+            if (scope.userIds.size === 0) return false;
+            // Cheap fast-path: any direct id intersection wins.
+            for (const id of ids) {
+              if (scope.userIds.has(id)) return true;
+            }
+            // Fall back to the canonical predicate when "me" is in scope so
+            // email/username aliasing on the envelope still matches.
+            if (meIdentity && scope.userIds.has(meIdentity.id)) {
+              if (isRowOwnedByUser(i.ownership ?? null, meIdentity, i.owner?.id ?? null)) {
+                return true;
+              }
+            }
+            return false;
+          });
+        }
       }
       const hiddenByOwner = ownerFilter !== "all"
         ? Math.max(0, itemsBeforeOwner - items.length)

@@ -30,10 +30,15 @@ export type PickupScope = typeof PICKUP_SCOPES[number];
 //   'all'      — never hide on pickup (escape hatch + reveal-stale chip)
 export const DEFAULT_PICKUP_SCOPE: PickupScope = "actionable";
 
-// Task #900 — soft-overdue window for 'actionable'. Past-pickup rows whose
-// status is still actionable can stay visible for up to this many hours
-// past their pickup date. Anything older drops out (and is counted as
-// `kpis.hiddenStale`, surfaced via the "Stale: N" chip).
+// Task #900 — soft-overdue window for 'actionable'. Originally allowed
+// past-pickup rows whose status was still actionable to stay visible for
+// up to this many hours past their pickup date.
+//
+// Task #957 follow-up — Available Freight now uses a STRICT past
+// definition: any pickup before today is excluded by default regardless
+// of status. The constant is preserved (and exported) so future scopes
+// or downstream views can opt back into a soft-overdue window without
+// reintroducing it into the default `actionable` gate.
 export const SOFT_OVERDUE_HOURS = 24;
 
 // Task #900 — statuses considered "still open and worth chasing" by the
@@ -103,29 +108,31 @@ export interface PickupHideContext {
 
 // Should this row be hidden from the cockpit purely because of pickup date?
 // Under the legacy scopes ('upcoming' / 'recent' / 'all') this function only
-// answers the pickup-date question. Under the 'actionable' scope (Task #900)
-// it ALSO consults `ctx.status` and `ctx.daysSincePickup` so we can keep a
-// past-pickup row visible when it's still ≤ SOFT_OVERDUE_HOURS overdue AND
-// its status is in ACTIONABLE_OPEN_STATUSES.
+// answers the pickup-date question.
+//
+// Task #957 follow-up — the 'actionable' scope is now STRICT about "past":
+// any pickup whose freshness is `past_recent` or `past_stale` is hidden
+// regardless of status. Yesterday's pickup with a still-open status is no
+// longer visible in Available Freight; reps must flip pickupScope to
+// `recent` / `all` (or click the `Stale: N` chip) to surface those rows.
+// `ctx.status` / `ctx.daysSincePickup` remain on the signature so a future
+// scope can opt back into a status-aware soft-overdue window without
+// changing every call site.
 export function shouldHideForPickup(
   freshness: PickupFreshness,
   scope: PickupScope,
   ctx: PickupHideContext = {},
 ): boolean {
+  // ctx is intentionally unused under the strict 'actionable' rule. Kept
+  // on the signature for source/binary compatibility with callers.
+  void ctx;
   if (scope === "all") return false;
   if (scope === "upcoming") return freshness === "past_recent" || freshness === "past_stale";
   if (scope === "actionable") {
     // Future + today + no-pickup never get hidden by date alone.
     if (freshness === "upcoming" || freshness === "no_pickup") return false;
-    // Strictly stale (past graceDays) is always hidden.
-    if (freshness === "past_stale") return true;
-    // past_recent: keep visible only when within the soft-overdue window
-    // AND the status is still actionable.
-    const days = ctx.daysSincePickup ?? null;
-    const status = ctx.status ?? null;
-    const softWindowDays = Math.ceil(SOFT_OVERDUE_HOURS / 24); // 1
-    const withinSoftWindow = days !== null && days <= softWindowDays;
-    return !(withinSoftWindow && isActionableOpenStatus(status));
+    // Strict past: yesterday and older are always hidden under actionable.
+    return true;
   }
   // 'recent': only hide rows older than the grace window.
   return freshness === "past_stale";

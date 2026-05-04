@@ -119,12 +119,12 @@ isValidation = true
 name = "test:freight-capture-funnel"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "npx tsx tests/freight-capture-funnel.test.ts"
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npx tsx tests/freight-capture-funnel.test.ts && npx tsx tests/cockpit-hardening.test.ts"
 
 [[workflows.workflow]]
 name = "test:lane-system-e2e"

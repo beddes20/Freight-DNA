@@ -5,6 +5,10 @@ import {
   type CockpitFilterDiagnostics,
 } from "../cockpitFilters";
 import { resolveUserIdentity } from "@shared/cockpitOwnership";
+import {
+  kpisFromFiltered,
+  type BucketEvalContext,
+} from "@shared/cockpitBuckets";
 
 const NOW = new Date("2026-04-24T12:00:00Z").getTime(); // 7am CT, 4/24
 
@@ -201,5 +205,125 @@ describe("applyCockpitFilters", () => {
       { stage: "ownerScope:mine", kept: 1, droppedIds: ["wrongOwner"] },
       { stage: "pickupWithinHours", kept: 1, droppedIds: [] },
     ]);
+  });
+});
+
+// Task #957 follow-up #2 — When client-side filters narrow the visible
+// row set, the KPI tiles must narrow with them. Before the follow-up the
+// tiles came from `feed.kpis` (server-wide) so search/owner/bucket changes
+// did not move them. These tests pin the new contract: KPI math always
+// runs over `applyCockpitFilters(...)`'s output.
+describe("kpisFromFiltered tracks client-side filter changes", () => {
+  const TODAY_ISO = "2026-04-24"; // matches the NOW pin above (CT)
+  const ctx: BucketEvalContext = {
+    todayIso: TODAY_ISO,
+    currentUserId: "u1",
+    myTeamUserIds: new Set(["u1"]),
+  };
+
+  function mkRow(over: Partial<CockpitFilterItem> & { id: string }): CockpitFilterItem & { id: string } {
+    return {
+      opportunity: {
+        origin: "Chicago, IL",
+        destination: "Atlanta, GA",
+        equipmentType: "DRY",
+        pickupWindowStart: null,
+        status: "ready_to_send",
+        ...(over.opportunity ?? {}),
+      },
+      chips: over.chips ?? [{ carrierName: "Acme Logistics" }],
+      coverage: { sent: 0, responded: 0, ...(over.coverage ?? {}) },
+      suggestedBuy: over.suggestedBuy ?? null,
+      freshnessMinutes: over.freshnessMinutes ?? 0,
+      owner: over.owner ?? null,
+      ownership: over.ownership ?? null,
+      id: over.id,
+    };
+  }
+
+  it("search narrows KPIs (total + readyToSend follow filtered.length)", () => {
+    const items = [
+      mkRow({ id: "a", opportunity: { origin: "Atlanta, GA", destination: "Miami, FL", status: "ready_to_send" } }),
+      mkRow({ id: "b", opportunity: { origin: "Dallas, TX", destination: "Houston, TX", status: "ready_to_send" } }),
+      mkRow({ id: "c", opportunity: { origin: "Boise, ID", destination: "Reno, NV", status: "new" } }),
+    ];
+    const all = applyCockpitFilters(items, "", {}, null, NOW);
+    const allKpis = kpisFromFiltered(all, ctx);
+    expect(allKpis.total).toBe(3);
+    expect(allKpis.readyToSend).toBe(2);
+
+    const dallas = applyCockpitFilters(items, "dallas", {}, null, NOW);
+    const dallasKpis = kpisFromFiltered(dallas, ctx);
+    expect(dallasKpis.total).toBe(1);
+    expect(dallasKpis.readyToSend).toBe(1);
+  });
+
+  it("owner filter (mine) narrows KPIs to that owner's slice", () => {
+    const items = [
+      mkRow({ id: "mine-1", owner: { id: "u1" }, ownership: { ids: ["u1"], emails: [] }, opportunity: { status: "ready_to_send" } }),
+      mkRow({ id: "mine-2", owner: { id: "u1" }, ownership: { ids: ["u1"], emails: [] }, opportunity: { status: "new" } }),
+      mkRow({ id: "other-1", owner: { id: "u2" }, ownership: { ids: ["u2"], emails: [] }, opportunity: { status: "ready_to_send" } }),
+      mkRow({ id: "other-2", owner: { id: "u2" }, ownership: { ids: ["u2"], emails: [] }, opportunity: { status: "ready_to_send" } }),
+    ];
+    const all = applyCockpitFilters(items, "", {}, "u1", NOW);
+    expect(kpisFromFiltered(all, ctx).total).toBe(4);
+    expect(kpisFromFiltered(all, ctx).readyToSend).toBe(3);
+
+    const mineOnly = applyCockpitFilters(items, "", { ownerScope: "mine" }, "u1", NOW);
+    const mineKpis = kpisFromFiltered(mineOnly, ctx);
+    expect(mineKpis.total).toBe(2);
+    expect(mineKpis.readyToSend).toBe(1);
+  });
+
+  it("bucket=at_risk_24h narrows KPIs to that bucket only", () => {
+    const items = [
+      // at_risk: pickup today, not covered
+      mkRow({
+        id: "risk-1",
+        opportunity: { status: "ready_to_send", pickupWindowStart: "2026-04-24T18:00:00Z" },
+        coverage: { sent: 0, responded: 0, covered: false },
+      }),
+      // covered today (not at-risk)
+      mkRow({
+        id: "covered-1",
+        opportunity: { status: "covered", pickupWindowStart: "2026-04-24T18:00:00Z", coveredAt: "2026-04-24T15:00:00Z" },
+        coverage: { sent: 5, responded: 2, covered: true },
+      }),
+      // future pickup, not at-risk
+      mkRow({
+        id: "future-1",
+        opportunity: { status: "ready_to_send", pickupWindowStart: "2026-04-27T12:00:00Z" },
+      }),
+    ];
+    const all = applyCockpitFilters(items, "", {}, null, NOW);
+    const allKpis = kpisFromFiltered(all, ctx);
+    expect(allKpis.total).toBe(3);
+    expect(allKpis.atRiskPickup24h).toBe(1);
+    expect(allKpis.coveredToday).toBe(1);
+
+    const onlyAtRisk = applyCockpitFilters(
+      items,
+      "",
+      { bucket: "at_risk_24h", orgChart: [] },
+      null,
+      NOW,
+    );
+    const atRiskKpis = kpisFromFiltered(onlyAtRisk, ctx);
+    expect(atRiskKpis.total).toBe(1);
+    expect(atRiskKpis.atRiskPickup24h).toBe(1);
+    expect(atRiskKpis.coveredToday).toBe(0);
+    expect(atRiskKpis.total).toBe(onlyAtRisk.length);
+  });
+
+  it("status filter narrows readyToSend KPI to zero when status excludes ready_to_send", () => {
+    const items = [
+      mkRow({ id: "rts-1", opportunity: { status: "ready_to_send" } }),
+      mkRow({ id: "rts-2", opportunity: { status: "ready_to_send" } }),
+      mkRow({ id: "new-1", opportunity: { status: "new" } }),
+    ];
+    const onlyNew = applyCockpitFilters(items, "", { statuses: ["new"] }, null, NOW);
+    const k = kpisFromFiltered(onlyNew, ctx);
+    expect(k.total).toBe(1);
+    expect(k.readyToSend).toBe(0);
   });
 });

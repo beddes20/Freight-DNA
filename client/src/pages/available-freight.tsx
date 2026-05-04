@@ -49,6 +49,21 @@ import type { FreightOpportunity } from "@shared/schema";
 import { applyCockpitFilters, type CockpitFilterDiagnostics } from "@/lib/cockpitFilters";
 import { resolveUserIdentity, isRowOwnedByUser } from "@shared/cockpitOwnership";
 import { todayIsoInOrgTz, ORG_LOCAL_TIMEZONE } from "@shared/orgLocalDate";
+import {
+  BUCKETS,
+  BUCKET_ORDER,
+  countBuckets,
+  kpisFromFiltered,
+  type BucketKey,
+  type BucketEvalContext,
+} from "@shared/cockpitBuckets";
+import {
+  listCockpitTeams,
+  parseOwnerScopeTokens,
+  serializeOwnerScopeTokens,
+  resolveOwnerScope,
+} from "@shared/cockpitTeams";
+import { List as VirtualList, type RowComponentProps } from "react-window";
 import { laneStoryHref } from "@/lib/laneSignature";
 import { CarrierReasonsPopover } from "@/components/CarrierReasonsPopover";
 import { AutoPilotPreviewDrawer } from "@/components/freight/auto-pilot-preview-drawer";
@@ -418,6 +433,220 @@ function CarrierCombobox({
 }
 
 
+/**
+ * Task #957 — Multi-select owner combobox.
+ *
+ * Tokens accepted:
+ *   • "me"            — current user.
+ *   • "my-team"       — current user + direct reports (resolved by the
+ *                       cockpit page via the loaded users + cockpitTeamMap).
+ *   • "unassigned"    — rows with no owner.
+ *   • "team:<id>"     — every user in the named team roster entry.
+ *   • <userId>        — specific dispatcher.
+ *
+ * Empty selection means "all" (everyone). The trigger renders a count and
+ * the popover renders three sections: shortcuts, teams, and individual
+ * users.
+ */
+function OwnerCombobox({
+  tokens,
+  users,
+  teams,
+  ownerLabel,
+  onChange,
+  dataTestId,
+}: {
+  tokens: string[];
+  users: UserOption[];
+  teams: ReadonlyArray<{ id: string; name: string; userIds: string[] }>;
+  ownerLabel: (u: UserOption) => string;
+  onChange: (next: string[]) => void;
+  dataTestId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const tokenSet = useMemo(() => new Set(tokens.map((t) => t.toLowerCase())), [tokens]);
+  const isSelected = (token: string) => tokenSet.has(token.toLowerCase());
+  const toggle = (token: string) => {
+    const lower = token.toLowerCase();
+    const without = tokens.filter((t) => t.toLowerCase() !== lower);
+    if (without.length !== tokens.length) {
+      onChange(without);
+    } else {
+      onChange([...tokens, token]);
+    }
+  };
+  const label = useMemo(() => {
+    if (tokens.length === 0) return "Owner: all";
+    if (tokens.length === 1) {
+      const t = tokens[0];
+      const lower = t.toLowerCase();
+      if (lower === "me") return "Owner: me";
+      if (lower === "my-team" || lower === "myteam") return "Owner: my team";
+      if (lower === "unassigned") return "Owner: unassigned";
+      if (lower.startsWith("team:")) {
+        const team = teams.find((t2) => t2.id === t.slice("team:".length));
+        return team ? `Team: ${team.name}` : `Team: ${t.slice("team:".length)}`;
+      }
+      const u = users.find((u) => u.id === t);
+      return `Owner: ${u ? ownerLabel(u) : t.slice(0, 8)}`;
+    }
+    return `Owner: ${tokens.length} selected`;
+  }, [tokens, users, teams, ownerLabel]);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="w-full justify-between font-normal"
+          data-testid={dataTestId}
+        >
+          <span className="truncate text-left">{label}</span>
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Filter dispatchers…" data-testid={`${dataTestId}-input`} />
+          <CommandList>
+            <CommandEmpty>No matches.</CommandEmpty>
+            {/* Shortcuts */}
+            {(["me", "my-team", "unassigned"] as const).map((tok) => (
+              <CommandItem
+                key={tok}
+                value={tok}
+                onSelect={() => toggle(tok)}
+                data-testid={`${dataTestId}-option-${tok}`}
+              >
+                <Check className={cn("mr-2 h-4 w-4", isSelected(tok) ? "opacity-100" : "opacity-0")} />
+                <span className="text-sm">
+                  {tok === "me" ? "Me" : tok === "my-team" ? "My team" : "Unassigned"}
+                </span>
+              </CommandItem>
+            ))}
+            {teams.length > 0 && (
+              <>
+                <div className="border-t my-1" />
+                <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">Teams</div>
+                {teams.map((t) => (
+                  <CommandItem
+                    key={`team:${t.id}`}
+                    value={`team:${t.id} ${t.name}`}
+                    onSelect={() => toggle(`team:${t.id}`)}
+                    data-testid={`${dataTestId}-option-team-${t.id}`}
+                  >
+                    <Check className={cn("mr-2 h-4 w-4", isSelected(`team:${t.id}`) ? "opacity-100" : "opacity-0")} />
+                    <span className="text-sm">{t.name}</span>
+                    <Badge variant="outline" className="ml-2 text-[10px]">
+                      {t.userIds.length}
+                    </Badge>
+                  </CommandItem>
+                ))}
+              </>
+            )}
+            {users.length > 0 && (
+              <>
+                <div className="border-t my-1" />
+                <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">Users</div>
+                {users.map((u) => (
+                  <CommandItem
+                    key={u.id}
+                    value={`${u.id} ${ownerLabel(u)}`}
+                    onSelect={() => toggle(u.id)}
+                    data-testid={`${dataTestId}-option-${u.id}`}
+                  >
+                    <Check className={cn("mr-2 h-4 w-4", isSelected(u.id) ? "opacity-100" : "opacity-0")} />
+                    <span className="text-sm truncate">{ownerLabel(u)}</span>
+                  </CommandItem>
+                ))}
+              </>
+            )}
+            {tokens.length > 0 && (
+              <>
+                <div className="border-t my-1" />
+                <CommandItem
+                  value="__clear__"
+                  onSelect={() => onChange([])}
+                  data-testid={`${dataTestId}-clear`}
+                >
+                  <X className="mr-2 h-4 w-4" />
+                  <span className="text-sm">Clear selection</span>
+                </CommandItem>
+              </>
+            )}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
+ * Task #957 — Queue bucket chip strip. Each chip's count comes from
+ * `bucketCounts` (computed on the same pre-bucket pipeline that drives
+ * the visible row set), so the rep's mental model "this chip will give me
+ * N rows" always holds.
+ */
+function BucketChipStrip({
+  selected,
+  counts,
+  onSelect,
+}: {
+  selected: BucketKey;
+  counts: Record<BucketKey, number>;
+  onSelect: (bucket: BucketKey) => void;
+}) {
+  return (
+    <div
+      className="flex flex-wrap items-center gap-1.5"
+      role="tablist"
+      aria-label="Queue buckets"
+      data-testid="strip-bucket-chips"
+    >
+      {BUCKET_ORDER.map((key) => {
+        const def = BUCKETS[key];
+        const count = counts[key] ?? 0;
+        const isActive = selected === key;
+        const dim = !isActive && count === 0 && key !== "all";
+        return (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={isActive}
+            aria-label={def.description}
+            title={def.description}
+            onClick={() => onSelect(key)}
+            disabled={key !== "all" && count === 0 && !isActive}
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+              isActive
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-border bg-background hover:bg-muted",
+              dim && "opacity-60",
+            )}
+            data-testid={`chip-bucket-${key}`}
+            data-bucket-key={key}
+            data-bucket-active={isActive ? "true" : "false"}
+            data-bucket-count={count}
+          >
+            <span>{def.label}</span>
+            <Badge
+              variant={isActive ? "secondary" : "outline"}
+              className="h-4 px-1.5 text-[10px] font-mono"
+              data-testid={`chip-bucket-${key}-count`}
+            >
+              {count.toLocaleString()}
+            </Badge>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function AvailableFreightPage() {
   const { user } = useAuth();
   // Task #950 — when a notification deep-link lands here with
@@ -439,7 +668,29 @@ export default function AvailableFreightPage() {
     !!user &&
     ["admin", "director", "sales_director", "national_account_manager"].includes(user.role ?? "");
   const [search, setSearch] = useState("");
+  // Task #957 — debounced search (~150ms) so each keystroke doesn't re-run
+  // the filter pipeline + virtualizer over 2k rows. Mirrors the standard
+  // useDeferredValue pattern but with an explicit window so the perf tests
+  // can rely on the timing.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebouncedSearch(search), 150);
+    return () => window.clearTimeout(id);
+  }, [search]);
   const [companyFilter, setCompanyFilter] = useState<string>("all");
+  // Task #957 — queue bucket chip selection (drives row + KPI + ROI from
+  // the same filtered collection). "all" means no bucket narrowing.
+  const [bucket, setBucket] = useState<BucketKey>("all");
+  // Task #957 — per-saved-view safety-banner dismiss flag (localStorage).
+  const [dismissedViewWarn, setDismissedViewWarn] = useState<Record<string, boolean>>(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      const raw = localStorage.getItem("cockpit:viewWarn:dismissed");
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
   // Task #635 — `?lane=<sig>` deep-link from LWQ filters the cockpit to a
   // single lane signature so the rep lands directly on those opportunities.
   const [laneFilter, setLaneFilter] = useState<string | null>(() => {
@@ -481,14 +732,24 @@ export default function AvailableFreightPage() {
   }, []);
   // Wrapper so every owner-filter change writes back to the URL (replaceState
   // so we don't pollute back-button history with every click).
-  const setOwnerFilter = (next: string) => {
-    setOwnerFilterState(next);
+  // Task #957 — accepts either the legacy string ("all" | "me" | <userId>)
+  // or an array of multi-select tokens that get serialised as a comma-list.
+  const setOwnerFilter = (next: string | string[]) => {
+    const serialised = Array.isArray(next)
+      ? (serializeOwnerScopeTokens(next) || "all")
+      : next;
+    setOwnerFilterState(serialised);
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
-    if (next === "all") url.searchParams.delete("owner");
-    else url.searchParams.set("owner", next);
+    if (serialised === "all" || serialised.length === 0) url.searchParams.delete("owner");
+    else url.searchParams.set("owner", serialised);
     window.history.replaceState({}, "", url.toString());
   };
+  // Task #957 — selected tokens (parsed from the string state). Always
+  // contains at least one entry; "all" is implicit when the list is empty.
+  const ownerScopeTokens = useMemo<string[]>(() => {
+    return ownerFilter === "all" ? [] : parseOwnerScopeTokens(ownerFilter);
+  }, [ownerFilter]);
   const [statusFilter, setStatusFilter] = useState<string>("active");
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
   const [grouping, setGrouping] = useState<CockpitPrefs["grouping"]>("none");
@@ -852,7 +1113,15 @@ export default function AvailableFreightPage() {
   }, [feed]);
 
   const items = feed?.items ?? [];
-  const kpis = feed?.kpis;
+  // Task #957 follow-up — KPI tiles now derive from the client `filtered`
+  // collection (see the kpis useMemo below), not from `feed.kpis`. The
+  // server payload is still kept for two purposes:
+  //   1) `hiddenStale` — count of past-pickup rows the actionable rule
+  //      has hidden from the FEED (a server-only signal we merge on top).
+  //   2) Queue-wide reference total surfaced as a small label next to
+  //      "Total visible", so reps can still see how big the underlying
+  //      queue is.
+  const serverKpis = feed?.kpis;
 
   // Task #649 — toast fires off the raw server payload (not the buffered
   // displayedFeed) so reps still hear about new carrier replies the instant
@@ -884,7 +1153,8 @@ export default function AvailableFreightPage() {
 
   const activeView = activeViewId ? savedViews.find(v => v.id === activeViewId) : null;
   const viewFilters = (activeView?.filters ?? {}) as {
-    ownerScope?: "mine" | "team";
+    // Task #957 — `ownerScope` may also be a string[] of multi-select tokens.
+    ownerScope?: "mine" | "team" | string[];
     pickupWithinHours?: number;
     pickupAfterHours?: number;
     confidenceFlag?: "low" | "medium" | "high";
@@ -899,12 +1169,16 @@ export default function AvailableFreightPage() {
   // see the same constrained queue. Also revert pickupScope to its
   // default so a "My freight today" view that nudged scope can't lock
   // the queue down after dismissal.
+  // Task #957 follow-up — reset to the strict operational default, which is
+  // pickupScope = "actionable" (yesterday and older are excluded). The old
+  // "recent" reset re-introduced past pickups, contradicting the default
+  // Available Freight gate.
   const clearActiveView = useCallback(() => {
     setActiveViewId(null);
     setSearch("");
     setCompanyFilter("all");
     setStatusFilter("active");
-    setPickupScope("recent");
+    setPickupScope("actionable");
   }, []);
 
   // Task #875 — `?debug=cockpit` opens a non-production diagnostic pane
@@ -920,18 +1194,56 @@ export default function AvailableFreightPage() {
     }
   }, []);
 
+  // Task #957 — synthesize a minimal org-chart for `my-team` expansion +
+  // the team_needs_approval bucket. We use the loaded `users` list and the
+  // `managerId` field stamped on each user record. When a deployment hasn't
+  // populated managerId, the cockpitTeamMap roster is the source of truth.
+  const orgChartForBuckets = useMemo(() => {
+    return users.map((u) => ({ id: u.id, managerId: (u as any).managerId ?? null }));
+  }, [users]);
+
   const filtered = useMemo(() => {
     const diagnostics: CockpitFilterDiagnostics | undefined = cockpitDebugEnabled
       ? { enabled: true, stages: [] }
       : undefined;
+    // Task #957 — perf instrumentation. Gated under `?debug=cockpit` so
+    // production renders pay zero cost.
+    const perfStart = cockpitDebugEnabled && typeof performance !== "undefined"
+      ? performance.now()
+      : 0;
+    // Task #957 — merge the active saved-view filters with the page-local
+    // owner combobox + bucket chip selection. The combobox always wins over
+    // the saved view's `ownerScope` when the user picks tokens explicitly.
+    const mergedViewFilters = {
+      ...viewFilters,
+      ownerScope: ownerScopeTokens.length > 0
+        ? ownerScopeTokens
+        : viewFilters.ownerScope,
+      bucket: bucket === "all" ? undefined : bucket,
+      orgChart: orgChartForBuckets,
+    };
     const result = applyCockpitFilters(
       items,
-      search,
-      viewFilters,
+      debouncedSearch,
+      mergedViewFilters,
       currentIdentity,
       Date.now(),
       diagnostics,
     );
+    if (cockpitDebugEnabled && typeof performance !== "undefined") {
+      const dur = performance.now() - perfStart;
+      // eslint-disable-next-line no-console
+      console.log(`[cockpit][perf] applyCockpitFilters over ${items.length} rows: ${dur.toFixed(2)}ms`);
+      try {
+        performance.mark(`cockpit-filter-end-${items.length}`);
+        performance.measure(
+          `cockpit:filter:${items.length}`,
+          { start: perfStart, duration: dur } as PerformanceMeasureOptions,
+        );
+      } catch {
+        /* performance.measure is best-effort; silent failure is fine. */
+      }
+    }
     if (cockpitDebugEnabled && diagnostics) {
       const todayIso = todayIsoInOrgTz();
       const mineCountServer = currentIdentity
@@ -972,7 +1284,69 @@ export default function AvailableFreightPage() {
       console.groupEnd();
     }
     return result;
-  }, [items, search, viewFilters, currentIdentity, cockpitDebugEnabled, activeViewId, kpis]);
+  }, [items, debouncedSearch, viewFilters, currentIdentity, cockpitDebugEnabled, activeViewId, serverKpis, ownerScopeTokens, bucket, orgChartForBuckets]);
+
+  // Task #957 — bucket chip counts derived from the SAME filtered-without-
+  // bucket collection so the chip count is exactly how many rows the rep
+  // would see if they selected that chip. We compute counts off the
+  // pre-bucket pipeline (re-running applyCockpitFilters with bucket=all)
+  // to guarantee the "All" chip count == filtered.length when no bucket
+  // is selected, AND every other chip count is what the rep would see
+  // after clicking it.
+  // Task #957 — bucket evaluation context (todayIso + team set) is shared
+  // between bucket chip counts and the new client-derived KPIs so they can
+  // never disagree.
+  const bucketEvalCtx = useMemo<BucketEvalContext>(() => {
+    const todayIso = todayIsoInOrgTz();
+    return {
+      todayIso,
+      currentUserId: currentIdentity?.id ?? null,
+      myTeamUserIds: currentIdentity?.id
+        ? new Set(
+            [currentIdentity.id].concat(
+              orgChartForBuckets
+                .filter((u) => u.managerId === currentIdentity.id)
+                .map((u) => u.id),
+            ),
+          )
+        : null,
+    };
+  }, [currentIdentity, orgChartForBuckets]);
+
+  const bucketCounts = useMemo(() => {
+    // Pre-bucket pipeline: same merged view filters but without the
+    // bucket clause so each chip count reflects "what would survive if I
+    // clicked you".
+    const preBucket = applyCockpitFilters(
+      items,
+      debouncedSearch,
+      {
+        ...viewFilters,
+        ownerScope: ownerScopeTokens.length > 0
+          ? ownerScopeTokens
+          : viewFilters.ownerScope,
+        bucket: undefined,
+        orgChart: orgChartForBuckets,
+      },
+      currentIdentity,
+      Date.now(),
+    );
+    return countBuckets(preBucket, bucketEvalCtx);
+  }, [items, debouncedSearch, viewFilters, currentIdentity, ownerScopeTokens, orgChartForBuckets, bucketEvalCtx]);
+
+  // Task #957 follow-up — KPI tiles derive from the SAME `filtered`
+  // collection that drives visible rows. `hiddenStale` is a server-only
+  // signal (it counts feed-level past-pickup hidden rows) so we merge it
+  // on top. See `kpisFromFiltered` in shared/cockpitBuckets.ts for the
+  // contract; every predicate is shared with `bucketsForRow` so chip
+  // counts and KPI tiles can never diverge.
+  const kpis = useMemo(() => {
+    const derived = kpisFromFiltered(filtered, bucketEvalCtx);
+    return {
+      ...derived,
+      hiddenStale: serverKpis?.hiddenStale ?? 0,
+    };
+  }, [filtered, bucketEvalCtx, serverKpis?.hiddenStale]);
 
   // Task #651 — warm the shared lane-signal cache for every visible
   // opportunity. Per-lane react-query keys mean LWQ and Customer Quotes
@@ -1531,6 +1905,62 @@ export default function AvailableFreightPage() {
         </div>
       )}
 
+      {/* Task #957 — saved-view safety banner. Shows once per view (per-
+          user dismiss persisted in localStorage) so the rep is reminded
+          that the saved view's filters are layered on top of their own
+          owner / bucket selection. */}
+      {activeView && !dismissedViewWarn[activeView.id] && (
+        <div
+          className="flex items-center justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm"
+          data-testid={`banner-view-warn-${activeView.id}`}
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <ShieldAlert className="h-4 w-4 shrink-0 text-amber-500" />
+            <span className="truncate">
+              <span className="font-semibold" data-testid="text-view-warn-name">
+                {activeView.name}
+              </span>{" "}
+              is layering its filters over your current selection. Counts on
+              KPIs / buckets / ROI all reflect this combined scope.
+            </span>
+          </div>
+          <div className="flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7"
+              onClick={clearActiveView}
+              data-testid={`button-view-warn-reset-${activeView.id}`}
+            >
+              Reset to operational default
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7"
+              onClick={() => {
+                const id = activeView.id;
+                setDismissedViewWarn((prev) => {
+                  const next = { ...prev, [id]: true };
+                  try {
+                    localStorage.setItem(
+                      "cockpit:viewWarn:dismissed",
+                      JSON.stringify(next),
+                    );
+                  } catch {
+                    /* localStorage may be disabled — banner just re-shows next session */
+                  }
+                  return next;
+                });
+              }}
+              data-testid={`button-view-warn-dismiss-${activeView.id}`}
+            >
+              <X className="h-3.5 w-3.5 mr-1" /> Dismiss
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* KPI strip — Task #601 contract semantics + Task #900 stale chip */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2">
         <KpiTile label="Generated today" value={kpis?.generatedToday ?? 0} testId="kpi-generated-today" />
@@ -1538,7 +1968,20 @@ export default function AvailableFreightPage() {
         <KpiTile label="Sent / awaiting carrier" value={kpis?.sentAwaitingCarrier ?? 0} tone="info" testId="kpi-sent-awaiting" />
         <KpiTile label="At-risk pickup ≤24h" value={kpis?.atRiskPickup24h ?? 0} tone="critical" testId="kpi-at-risk-24h" />
         <KpiTile label="Covered today" value={kpis?.coveredToday ?? 0} tone="ok" testId="kpi-covered-today" />
-        <KpiTile label="Total in queue" value={kpis?.total ?? 0} testId="kpi-total" />
+        {/* Task #957 follow-up — `Total visible` reflects the post-filter
+            collection so it lines up with the visible row count and the
+            "All" bucket chip. The small subtitle preserves the queue-wide
+            total reps used to read off the old "Total in queue" tile. */}
+        <KpiTile
+          label="Total visible"
+          value={kpis?.total ?? 0}
+          testId="kpi-total"
+          subtitle={
+            typeof serverKpis?.total === "number" && serverKpis.total !== (kpis?.total ?? 0)
+              ? `Queue total: ${serverKpis.total}`
+              : undefined
+          }
+        />
         {/* Task #900 — Stale chip + reveal-stale recovery affordance.
             Click → switches scope to 'all' so the rep can immediately see
             the past-pickup rows the actionable rule had hidden. We render
@@ -1669,8 +2112,9 @@ export default function AvailableFreightPage() {
         </div>
       )}
 
-      {/* Filters & view controls */}
-      <Card>
+      {/* Filters & view controls — Task #957 sticky so the filter bar stays
+          visible while the rep scrolls a long queue. */}
+      <Card className="sticky top-0 z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80" data-testid="card-filter-bar-sticky">
         <CardContent className="p-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2">
             <div className="lg:col-span-2 relative">
@@ -1690,24 +2134,17 @@ export default function AvailableFreightPage() {
                 ))}
               </SelectContent>
             </Select>
-            {/* Task #900 — Owner filter. Reuses the same `users` query the
-                reassign modal uses so specific-user options always agree
-                with the rest of the cockpit. */}
-            <Select value={ownerFilter} onValueChange={setOwnerFilter}>
-              <SelectTrigger data-testid="select-filter-owner">
-                <SelectValue placeholder="Owner" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Owner: all</SelectItem>
-                <SelectItem value="me">Owner: mine</SelectItem>
-                <SelectItem value="unassigned">Owner: unassigned</SelectItem>
-                {users.map(u => (
-                  <SelectItem key={u.id} value={u.id} data-testid={`select-owner-option-${u.id}`}>
-                    {ownerLabel(u)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {/* Task #957 — Owner combobox (multi-select). Tokens accepted:
+                "me", "my-team", "unassigned", "team:<id>", and arbitrary
+                userIds. Empty selection == "all" (server-side fast path). */}
+            <OwnerCombobox
+              tokens={ownerScopeTokens}
+              users={users}
+              teams={listCockpitTeams()}
+              ownerLabel={ownerLabel}
+              onChange={(next) => setOwnerFilter(next)}
+              dataTestId="combobox-filter-owner"
+            />
             <Select value={statusFilter} onValueChange={setStatusFilter}>
               <SelectTrigger data-testid="select-filter-status"><SelectValue placeholder="Status" /></SelectTrigger>
               <SelectContent>
@@ -1793,6 +2230,130 @@ export default function AvailableFreightPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Task #957 — Queue bucket chip strip. Drives the same filtered
+          collection that powers KPIs / rows / ROI from a single source. */}
+      <BucketChipStrip
+        selected={bucket}
+        counts={bucketCounts}
+        onSelect={setBucket}
+      />
+
+      {/* Task #957 — Active filter chip strip. Renders a removable chip for
+          every constraint currently narrowing the queue so the rep can see
+          why they're not seeing rows and clear constraints individually. */}
+      {(() => {
+        const chips: Array<{ key: string; label: string; onClear: () => void; testId: string }> = [];
+        if (debouncedSearch.trim().length > 0) {
+          chips.push({
+            key: "search",
+            label: `Search: "${debouncedSearch.trim().slice(0, 24)}"`,
+            onClear: () => setSearch(""),
+            testId: "active-chip-search",
+          });
+        }
+        if (companyFilter !== "all") {
+          const c = customersForFilter.find((x) => x.id === companyFilter);
+          chips.push({
+            key: "customer",
+            label: `Customer: ${c?.name ?? companyFilter}`,
+            onClear: () => setCompanyFilter("all"),
+            testId: "active-chip-customer",
+          });
+        }
+        for (const tok of ownerScopeTokens) {
+          const lower = tok.toLowerCase();
+          let label = `Owner: ${tok}`;
+          if (lower === "me") label = "Owner: me";
+          else if (lower === "my-team" || lower === "myteam") label = "Owner: my team";
+          else if (lower === "unassigned") label = "Owner: unassigned";
+          else if (lower.startsWith("team:")) {
+            const team = listCockpitTeams().find((t) => t.id === tok.slice("team:".length));
+            label = team ? `Team: ${team.name}` : `Team: ${tok.slice("team:".length)}`;
+          } else {
+            const u = users.find((x) => x.id === tok);
+            if (u) label = `Owner: ${ownerLabel(u)}`;
+          }
+          chips.push({
+            key: `owner:${tok}`,
+            label,
+            onClear: () => setOwnerFilter(ownerScopeTokens.filter((x) => x !== tok)),
+            testId: `active-chip-owner-${tok.replace(/[^a-z0-9]/gi, "_")}`,
+          });
+        }
+        if (statusFilter !== "active") {
+          chips.push({
+            key: "status",
+            label: `Status: ${statusFilter}`,
+            onClear: () => setStatusFilter("active"),
+            testId: "active-chip-status",
+          });
+        }
+        if (bucket !== "all") {
+          chips.push({
+            key: "bucket",
+            label: `Queue: ${BUCKETS[bucket].label}`,
+            onClear: () => setBucket("all"),
+            testId: "active-chip-bucket",
+          });
+        }
+        if (laneFilter) {
+          chips.push({ key: "lane", label: "Lane (deep-link)", onClear: clearLaneFilter, testId: "active-chip-lane" });
+        }
+        if (carrierIdFilter) {
+          chips.push({ key: "carrier", label: "Carrier (deep-link)", onClear: clearCarrierFilter, testId: "active-chip-carrier" });
+        }
+        if (chips.length === 0) return null;
+        return (
+          <div className="flex flex-wrap items-center gap-1.5" data-testid="strip-active-filters">
+            <span className="text-[11px] uppercase tracking-wide text-muted-foreground mr-1">
+              Active filters:
+            </span>
+            {chips.map((c) => (
+              <Badge
+                key={c.key}
+                variant="secondary"
+                className="gap-1 pr-1"
+                data-testid={c.testId}
+              >
+                <span className="text-xs">{c.label}</span>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  className="h-4 w-4 p-0 hover:bg-transparent"
+                  onClick={c.onClear}
+                  data-testid={`${c.testId}-clear`}
+                  aria-label={`Clear ${c.label}`}
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              </Badge>
+            ))}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-[11px]"
+              onClick={() => {
+                setSearch("");
+                setCompanyFilter("all");
+                setOwnerFilter("all");
+                setStatusFilter("active");
+                setBucket("all");
+                // Task #957 follow-up — explicit strict default so this
+                // chip-strip Reset matches the empty-state Reset.
+                setPickupScope("actionable");
+                if (laneFilter) clearLaneFilter();
+                if (carrierIdFilter) clearCarrierFilter();
+                clearActiveView();
+              }}
+              data-testid="button-reset-operational-default"
+            >
+              Reset to operational default
+            </Button>
+          </div>
+        );
+      })()}
 
       {/* Bulk action bar */}
       {selected.size > 0 && (
@@ -2029,6 +2590,28 @@ export default function AvailableFreightPage() {
                         </p>
                       )}
                     </div>
+                    {/* Task #957 — Reset to operational default escape
+                        hatch on the diagnostic empty state. Clears every
+                        page-local filter that could be hiding rows so the
+                        rep can return to the default cockpit in one click. */}
+                    <Button
+                      size="sm"
+                      variant="default"
+                      onClick={() => {
+                        setSearch("");
+                        setCompanyFilter("all");
+                        setOwnerFilter("all");
+                        setStatusFilter("active");
+                        setBucket("all");
+                        setPickupScope("actionable");
+                        if (laneFilter) clearLaneFilter();
+                        if (carrierIdFilter) clearCarrierFilter();
+                        clearActiveView();
+                      }}
+                      data-testid="button-empty-reset-operational-default"
+                    >
+                      Reset to operational default
+                    </Button>
                     {hiddenBuckets.length > 0 && (
                       <div
                         className="w-full max-w-xl rounded-md border bg-muted/20 px-3 py-2 text-left text-xs"
@@ -2141,6 +2724,41 @@ export default function AvailableFreightPage() {
                         </div>
                       ));
                     })()}
+                  </div>
+                ) : grouping === "none" && filtered.length > 150 ? (
+                  // Task #957 — Row virtualization (only when ungrouped and
+                  // > 150 rows). Mirrors the today.tsx pattern but renders a
+                  // CockpitRowView per virtual row.
+                  <div data-testid="layout-table-virtual" data-virtual-row-count={filtered.length}>
+                    <VirtualList
+                      rowCount={filtered.length}
+                      rowHeight={104}
+                      overscanCount={6}
+                      style={{ height: "min(70vh, 720px)" }}
+                      rowComponent={({ index, style }: RowComponentProps) => {
+                        const it = filtered[index];
+                        if (!it) return null;
+                        return (
+                          <div style={style} key={it.opportunity.id}>
+                            <CockpitRowView
+                              item={it}
+                              isSelected={selected.has(it.opportunity.id)}
+                              onToggleSelected={() => toggleSelected(it.opportunity.id)}
+                              isFocused={focusIndex === index}
+                              onFocus={() => setFocusIndex(index)}
+                              onAction={(action, extra) => bulkMutate.mutate({ action, opportunityIds: [it.opportunity.id], ...(extra ?? {}) })}
+                              onReassign={() => { setReassignToUserId(""); setReassignTargetIds([it.opportunity.id]); }}
+                              onOpenDraft={() => setDraftPreviewId(it.opportunity.id)}
+                              onLogOutcome={() => setOutcomeTargetId(it.opportunity.id)}
+                              onToggleAutoPilot={() => toggleAutoPilot(it)}
+                              onOpenCockpit={() => openCockpitForItem(it)}
+                              index={index}
+                              lastSeenAt={lastSeenAt}
+                            />
+                          </div>
+                        );
+                      }}
+                    />
                   </div>
                 ) : (
                   groups.map(g => {
@@ -2829,7 +3447,7 @@ export default function AvailableFreightPage() {
 }
 
 
-function KpiTile({ label, value, tone, testId }: { label: string; value: number; tone?: "critical" | "warn" | "ready" | "info" | "ok"; testId: string }) {
+function KpiTile({ label, value, tone, testId, subtitle }: { label: string; value: number; tone?: "critical" | "warn" | "ready" | "info" | "ok"; testId: string; subtitle?: string }) {
   const toneCls = tone === "critical"
     ? "text-red-700 dark:text-red-300"
     : tone === "warn"
@@ -2846,6 +3464,11 @@ function KpiTile({ label, value, tone, testId }: { label: string; value: number;
       <CardContent className="p-3">
         <div className="text-xs text-muted-foreground">{label}</div>
         <div className={`text-2xl font-semibold tabular-nums ${toneCls}`} data-testid={`text-${testId}`}>{value}</div>
+        {subtitle && (
+          <div className="text-[10px] text-muted-foreground mt-0.5" data-testid={`text-${testId}-subtitle`}>
+            {subtitle}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
