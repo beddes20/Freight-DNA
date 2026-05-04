@@ -19,6 +19,7 @@ import { storage } from "../storage";
 import { generateAndPersistIntelligenceCard } from "../services/copilotIntelligenceCard";
 import { reactToCopilotRecommendationSchema, type CopilotRecommendation, type User } from "@shared/schema";
 import { getErrorMessage } from "../lib/errors";
+import { pStr } from "../lib/req";
 
 function isAdminish(role: string): boolean {
   return role === "admin" || role === "director" || role === "sales_director";
@@ -66,7 +67,7 @@ export function registerCopilotCardRoutes(app: Express): void {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const documentId = String(req.params.documentId || "").trim();
+      const documentId = pStr(req.params.documentId).trim();
       if (!documentId) return res.status(400).json({ error: "documentId required" });
       const card = await storage.getLatestRecommendationForDocument(documentId, currentUser.organizationId);
       if (!card) return res.status(404).json({ error: "no_card_for_document" });
@@ -84,7 +85,7 @@ export function registerCopilotCardRoutes(app: Express): void {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const companyId = String(req.params.companyId || "").trim();
+      const companyId = pStr(req.params.companyId).trim();
       if (!companyId) return res.status(400).json({ error: "companyId required" });
       const visible = await getVisibleCompanyIds(currentUser);
       if (!isAdminish(currentUser.role) && visible !== null && !visible.includes(companyId)) {
@@ -102,7 +103,7 @@ export function registerCopilotCardRoutes(app: Express): void {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const carrierId = String(req.params.carrierId || "").trim();
+      const carrierId = pStr(req.params.carrierId).trim();
       if (!carrierId) return res.status(400).json({ error: "carrierId required" });
       const cards = await storage.listRecommendationsForCarrier(carrierId, currentUser.organizationId, 25);
       const visibleCards = await filterVisibleCards(currentUser, cards);
@@ -117,7 +118,7 @@ export function registerCopilotCardRoutes(app: Express): void {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const opportunityId = String(req.params.opportunityId || "").trim();
+      const opportunityId = pStr(req.params.opportunityId).trim();
       if (!opportunityId) return res.status(400).json({ error: "opportunityId required" });
       const cards = await storage.listRecommendationsForOpportunity(opportunityId, currentUser.organizationId, 25);
       const visibleCards = await filterVisibleCards(currentUser, cards);
@@ -132,7 +133,7 @@ export function registerCopilotCardRoutes(app: Express): void {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const sig = decodeURIComponent(String(req.params.laneSig || ""));
+      const sig = decodeURIComponent(pStr(req.params.laneSig));
       if (!sig) return res.status(400).json({ error: "lane signature required" });
       const cards = await storage.listRecommendationsForLane(sig, currentUser.organizationId, 25);
       const visibleCards = await filterVisibleCards(currentUser, cards);
@@ -147,7 +148,7 @@ export function registerCopilotCardRoutes(app: Express): void {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const id = String(req.params.id || "").trim();
+      const id = pStr(req.params.id).trim();
       if (!id) return res.status(400).json({ error: "id required" });
       const parsed = reactToCopilotRecommendationSchema.safeParse(req.body ?? {});
       if (!parsed.success) {
@@ -179,7 +180,7 @@ export function registerCopilotCardRoutes(app: Express): void {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       if (!isAdminish(currentUser.role)) return res.status(403).json({ error: "forbidden" });
-      const documentId = String(req.params.documentId || "").trim();
+      const documentId = pStr(req.params.documentId).trim();
       if (!documentId) return res.status(400).json({ error: "documentId required" });
       const result = await generateAndPersistIntelligenceCard({
         documentId,
