@@ -943,10 +943,17 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
   // -----------------------------------------------------------------------
   // Task #549 — Go-live readiness checklist.
   //
-  // Aggregates the eight gates IT must clear before the shared-mailbox
-  // reply-tracking pipeline is safe to enable for an org:
+  // Aggregates the gates IT should clear before reply-tracking is safe to
+  // enable for an org:
   //   1. Azure app-only credentials configured (tenant/client/secret env)
-  //   2. Shared reply mailbox configured (OUTLOOK_REPLY_EMAIL)
+  //   2. Carrier reply mailbox (OUTLOOK_REPLY_EMAIL) — OPTIONAL. The
+  //      product's default reply-routing model is per-rep monitored
+  //      mailboxes (each rep's own inbox), so this row reports "ok"
+  //      both when a working shared mailbox is configured AND when the
+  //      env var is intentionally unset. It only flips to error if the
+  //      env var is set but the Graph probe rejects the address (404 /
+  //      Mail.Read denied) — that is the only state that silently loses
+  //      replies (Task #959).
   //   3. Public webhook URL configured (APP_BASE_URL)
   //   4. Webhook clientState secret configured (OUTLOOK_WEBHOOK_SECRET)
   //   5. Mail.Read tenant admin consent granted
@@ -1013,12 +1020,39 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
               : "Set OUTLOOK_TENANT_ID, OUTLOOK_CLIENT_ID and OUTLOOK_CLIENT_SECRET (Azure app registration).",
           },
           {
+            // Task #959 — readiness was previously "ok" on the mere
+            // presence of OUTLOOK_REPLY_EMAIL, regardless of whether
+            // the probe actually succeeded, AND it treated an unset
+            // env var as a hard error even though the per-rep mailbox
+            // model is the product's permanent default. The current
+            // contract:
+            //   • unset       → "ok" (intentionally disabled; replies
+            //                   route to each rep's monitored inbox)
+            //   • set + probe granted   → "ok"
+            //   • set + probe denied / 404 not-found → "error"
+            //                   (this is the silent-reply-loss state
+            //                   the original incident triggered)
+            //   • set + probe pending   → "warn"
             id: "reply_mailbox",
-            label: "Shared reply mailbox",
-            status: replyMailbox ? "ok" : "error",
-            hint: replyMailbox
-              ? `OUTLOOK_REPLY_EMAIL is ${replyMailbox}.`
-              : "Set OUTLOOK_REPLY_EMAIL to the shared M365 mailbox that receives carrier replies.",
+            label: "Carrier reply mailbox (optional)",
+            status: !replyMailbox
+              ? "ok"
+              : consent.status === "granted"
+                ? "ok"
+                : consent.status === "denied"
+                  ? "error"
+                  : (consent.lastError && /not\s+found/i.test(consent.lastError))
+                    ? "error"
+                    : "warn",
+            hint: !replyMailbox
+              ? "Reply routing uses each rep's monitored inbox by default. Leave OUTLOOK_REPLY_EMAIL unset unless you want to add a shared M365 reply mailbox on top."
+              : consent.status === "granted"
+                ? `OUTLOOK_REPLY_EMAIL is ${replyMailbox} (Graph probe succeeded).`
+                : consent.status === "denied"
+                  ? `OUTLOOK_REPLY_EMAIL is ${replyMailbox} but Mail.Read application permission is not granted in the tenant.`
+                  : (consent.lastError && /not\s+found/i.test(consent.lastError))
+                    ? `OUTLOOK_REPLY_EMAIL is ${replyMailbox} but the mailbox was not found in your Microsoft 365 tenant. Either provision the mailbox, replace the env var with one that exists, or unset OUTLOOK_REPLY_EMAIL to fall back to the per-rep inbox model (recommended default).`
+                    : `OUTLOOK_REPLY_EMAIL is ${replyMailbox} but the Graph probe has not yet confirmed the mailbox exists${consent.lastError ? ` (last error: ${consent.lastError})` : ""}.`,
           },
           {
             id: "app_base_url",

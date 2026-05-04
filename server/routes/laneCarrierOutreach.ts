@@ -51,7 +51,7 @@ import { buildOpenOppContextByLaneSig, laneSig, type OpenOppLaneContext } from "
 import { recordCarrierLaneOutcome } from "../services/carrierLaneOutcomes";
 import { sendOutlookEmail, outlookEnabled } from "../outlookService";
 import { getGraphAccessToken } from "../graphService";
-import { getReplyTrackingStatus } from "../graphSubscriptionService";
+import { getReplyTrackingStatus, replyTrackingEnabled } from "../graphSubscriptionService";
 import { logOutboundCarrierEmail, logInboundCarrierEmail } from "../emailIntelligenceService";
 import { findCarrierContactLocks, formatLockReason } from "../carrierContactLocks";
 // Task #917 — Workflow OS adoption (LWQ). Same shared primitives AF uses
@@ -2491,12 +2491,23 @@ Rules for suggestions:
 
     // Send from the logged-in user's own Outlook mailbox so the email looks native
     // (appears in their Sent Items, shows their name/address to the carrier).
-    // If OUTLOOK_REPLY_EMAIL is configured, a Reply-To header funnels carrier replies
-    // to that monitored mailbox so reply tracking works. When not configured, replies
-    // go directly back to the sending rep's inbox.
-    // username is the user's email address in this system
+    // Task #959 — only emit a Reply-To: <OUTLOOK_REPLY_EMAIL> header when the
+    // shared-mailbox subscription is actually live. Without this gate, a
+    // misconfigured / stale / unprovisioned shared mailbox (e.g. the
+    // Ops@valuetruck.com 404 reported in production) silently swallows every
+    // carrier reply: the carrier hits Reply, the mail bounces against a
+    // non-existent mailbox, and the rep never sees it. When the shared
+    // path is dormant, fall back to no Reply-To so replies land in the
+    // rep's own monitored inbox.
     const outlookFromEmail = user.username?.trim() ?? null;
-    const outlookReplyTo = process.env.OUTLOOK_REPLY_EMAIL?.trim() || null;
+    const sharedReplyMailbox = process.env.OUTLOOK_REPLY_EMAIL?.trim() || null;
+    const sharedReplyActive = replyTrackingEnabled();
+    const outlookReplyTo = sharedReplyActive ? sharedReplyMailbox : null;
+    if (sharedReplyMailbox && !sharedReplyActive) {
+      console.warn(
+        `[laneCarrierOutreach] Shared reply mailbox ${sharedReplyMailbox} is configured but the Graph subscription is dormant — falling back to no Reply-To (carrier replies will go to the sending rep's monitored inbox).`,
+      );
+    }
     const useOutlook = outlookEnabled() && !!outlookFromEmail;
 
     for (const draft of emailDrafts) {

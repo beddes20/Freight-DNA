@@ -365,8 +365,23 @@ export async function sendOpportunityWave(
   // Lazy-loaded outlook helpers (kept inside the loop's closure to avoid
   // import overhead when nothing is sent).
   const { sendOutlookEmail, outlookEnabled } = await import("./outlookService");
+  // Task #959 — gate the Reply-To header on the live shared-mailbox
+  // subscription state, not on the env var alone. A configured-but-dead
+  // shared mailbox (e.g. the Ops@valuetruck.com 404 incident) otherwise
+  // black-holes every carrier reply because the bounce hits a mailbox
+  // that doesn't exist in the M365 tenant. When the shared path is
+  // dormant, fall back to no Reply-To so the carrier reply lands back
+  // in the sending rep's own monitored inbox.
+  const { replyTrackingEnabled } = await import("./graphSubscriptionService");
   const outlookFromEmail = rep.username?.trim() ?? null;
-  const outlookReplyTo = process.env.OUTLOOK_REPLY_EMAIL?.trim() || null;
+  const sharedReplyMailbox = process.env.OUTLOOK_REPLY_EMAIL?.trim() || null;
+  const sharedReplyActive = replyTrackingEnabled();
+  const outlookReplyTo = sharedReplyActive ? sharedReplyMailbox : null;
+  if (sharedReplyMailbox && !sharedReplyActive) {
+    console.warn(
+      `[freightOpportunityOutreach] Shared reply mailbox ${sharedReplyMailbox} is configured but the Graph subscription is dormant — falling back to no Reply-To.`,
+    );
+  }
   const useOutlook = outlookEnabled() && !!outlookFromEmail;
 
   for (const rowId of opts.carrierRowIds) {

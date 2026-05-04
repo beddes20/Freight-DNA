@@ -2799,6 +2799,82 @@ assert(
   "When token verification fails (issuer mismatch, expired, bad signature) we have to log the cause — silently dropping the error is what made the original prod regression invisible until reps complained. At minimum a warn-level log inside the verify catch is required.",
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Section: Reply-To header gated on live shared-mailbox subscription (Task #959)
+//
+// Background — production was emitting `Reply-To: <OUTLOOK_REPLY_EMAIL>` on every
+// carrier-outreach email regardless of whether the shared mailbox actually existed
+// in the Microsoft 365 tenant. When the mailbox was misspelled / unprovisioned
+// (the Ops@valuetruck.com 404 incident), every carrier reply bounced into a
+// non-existent mailbox and was silently lost — the rep never saw the reply.
+//
+// The fix: each of the three carrier-outreach send paths must consult
+// `replyTrackingEnabled()` (the live "Mail.Read granted AND subscription active"
+// signal) before adding the `Reply-To` header. When the shared subscription is
+// dormant, fall back to no Reply-To so replies hit the sending rep's own
+// monitored mailbox instead. This guardrail catches a regression that goes
+// back to "Reply-To whenever env var is set".
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("\n── 959. Reply-To header gated on live shared-mailbox subscription ───\n");
+
+const replyToGatedFiles: Array<{ path: string; label: string }> = [
+  { path: "server/routes/laneCarrierOutreach.ts",         label: "lane carrier outreach (LWQ)" },
+  { path: "server/routes/procurementOutreach.ts",         label: "procurement outreach" },
+  { path: "server/freightOpportunityOutreachService.ts",  label: "freight opportunity outreach" },
+];
+
+for (const { path: relPath, label } of replyToGatedFiles) {
+  const src = readFile(relPath);
+
+  // Each path must call replyTrackingEnabled() before computing the Reply-To.
+  // Static check: the file must reference replyTrackingEnabled() (covers both
+  // top-level imports and lazy `await import("./graphSubscriptionService")`).
+  assert(
+    `${relPath} — ${label} consults replyTrackingEnabled() before adding Reply-To`,
+    /replyTrackingEnabled\s*\(\s*\)/.test(src),
+    "Without the live-subscription gate, a stale OUTLOOK_REPLY_EMAIL silently swallows every carrier reply",
+  );
+
+  // The legacy "Reply-To = env var, period" pattern must be gone. We refuse
+  // any direct `outlookReplyTo = process.env.OUTLOOK_REPLY_EMAIL?.trim() || null`
+  // assignment — the env var must flow through the gating ternary instead.
+  assert(
+    `${relPath} — ${label} does NOT assign Reply-To directly from OUTLOOK_REPLY_EMAIL without the gate`,
+    !/const\s+outlookReplyTo\s*=\s*process\.env\.OUTLOOK_REPLY_EMAIL\?\.trim\(\)\s*\|\|\s*null\s*;/.test(src),
+    "Reply-To must be gated on replyTrackingEnabled(), not on the raw env var",
+  );
+
+  // The gated form must compute Reply-To via the conditional.
+  assert(
+    `${relPath} — ${label} resolves Reply-To via the sharedReplyActive ternary`,
+    /sharedReplyActive\s*\?\s*sharedReplyMailbox\s*:\s*null/.test(src),
+    "The Reply-To value must be `sharedReplyActive ? sharedReplyMailbox : null` so a dormant subscription falls back to no Reply-To",
+  );
+
+  // Admins need to see the degradation when it fires — log a one-liner so
+  // "carrier replies stopped landing" is debuggable from server logs.
+  assert(
+    `${relPath} — ${label} logs a fallback warning when the shared subscription is dormant`,
+    /sharedReplyMailbox\s*&&\s*!sharedReplyActive[\s\S]{0,200}console\.(warn|log|error)/.test(src),
+    "Without the log line, admins have no breadcrumb that the fallback path engaged",
+  );
+}
+
+// The readiness panel must not flip to OK on the mere presence of the env var
+// — it has to cross-check the live Mail.Read consent / probe state. That's the
+// row-level fence on the same regression.
+const readinessSrc = readFile("server/routes/monitoredMailboxes.ts");
+assert(
+  "monitoredMailboxes.ts — reply_mailbox readiness row checks consent.status (not just env var presence)",
+  /id:\s*"reply_mailbox"[\s\S]{0,1500}consent\.status/.test(readinessSrc),
+  "Without this cross-check, a misspelled / unprovisioned OUTLOOK_REPLY_EMAIL keeps the row green while the shared subscription is permanently dormant",
+);
+assert(
+  "monitoredMailboxes.ts — reply_mailbox row surfaces the 404-not-found case as an error",
+  /id:\s*"reply_mailbox"[\s\S]{0,1500}not\\s\+found/.test(readinessSrc),
+  "404 ErrorInvalidUser from the Graph probe must mark the row as error so admins see the misconfiguration",
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

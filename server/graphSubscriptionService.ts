@@ -2,8 +2,15 @@
  * Microsoft Graph Change Notification Subscription Service — Task #182 / #230
  *
  * Registers and renews Graph change-notification subscriptions on:
- *   1. The shared OUTLOOK_REPLY_EMAIL mailbox (carrier reply tracking)
- *   2. Individual NAM/AM mailboxes from the monitored_mailboxes table (customer email sync)
+ *   1. Individual NAM/AM mailboxes from the monitored_mailboxes table
+ *      (per-rep model — this is the primary carrier-reply routing path
+ *      and the production default; replies hit the sending rep's own
+ *      monitored inbox).
+ *   2. *(Optional)* The shared OUTLOOK_REPLY_EMAIL mailbox — only when
+ *      that env var is explicitly set AND the address passes the
+ *      Mail.Read probe. When unset (current production state per
+ *      Task #959), this path is intentionally dormant and the boot log
+ *      records "shared mailbox reply tracking disabled".
  *
  * Prerequisites (all must be true before the service does anything):
  *   - OUTLOOK_TENANT_ID / OUTLOOK_CLIENT_ID / OUTLOOK_CLIENT_SECRET set

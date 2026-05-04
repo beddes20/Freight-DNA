@@ -24,6 +24,7 @@ import {
 } from "../laneOutreachEmailBuilder";
 import { sendEmail } from "../emailService";
 import { sendOutlookEmail, outlookEnabled } from "../outlookService";
+import { replyTrackingEnabled } from "../graphSubscriptionService";
 import type { RecurringLane } from "@shared/schema";
 import { z } from "zod";
 
@@ -440,9 +441,19 @@ House style — follow every rule:
     let failedCount = 0;
 
     // Use the logged-in user's own Outlook mailbox when available, mirroring the LWQ send path.
-    // username is the email address in this system.
+    // Task #959 — only emit Reply-To when the shared mailbox subscription is
+    // actually live; otherwise carrier replies bounce into a non-existent
+    // mailbox (see Ops@valuetruck.com 404 incident). Falling back to no
+    // Reply-To routes replies back to the rep's own monitored inbox.
     const outlookFromEmail = user.username?.trim() ?? null;
-    const outlookReplyTo = process.env.OUTLOOK_REPLY_EMAIL?.trim() || null;
+    const sharedReplyMailbox = process.env.OUTLOOK_REPLY_EMAIL?.trim() || null;
+    const sharedReplyActive = replyTrackingEnabled();
+    const outlookReplyTo = sharedReplyActive ? sharedReplyMailbox : null;
+    if (sharedReplyMailbox && !sharedReplyActive) {
+      console.warn(
+        `[procurementOutreach] Shared reply mailbox ${sharedReplyMailbox} is configured but the Graph subscription is dormant — falling back to no Reply-To.`,
+      );
+    }
     const useOutlook = outlookEnabled() && !!outlookFromEmail;
 
     for (const draft of emailDrafts) {

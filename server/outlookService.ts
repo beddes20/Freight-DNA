@@ -6,14 +6,17 @@
  * either:
  *   (a) Two-step: POST /users/{email}/messages → POST .../send  (captures messageId + conversationId)
  *   (b) One-step: POST /users/{email}/sendMail                  (HTTP 202, no body — legacy fallback)
- * A Reply-To header pointing at OUTLOOK_REPLY_EMAIL funnels all carrier replies to
- * one central monitored mailbox for reply-tracking regardless of who sent the email.
+ *
+ * Reply routing model: by default carrier replies hit the sending rep's own
+ * monitored M365 mailbox (per-rep model). Callers may also pass an
+ * `outlookReplyTo` to override the Reply-To header on a per-send basis,
+ * but that path is gated upstream on `replyTrackingEnabled()` so a stale
+ * shared mailbox cannot silently swallow replies (Task #959).
  *
  * Environment variables required:
  *   OUTLOOK_TENANT_ID      — Azure AD tenant ID
  *   OUTLOOK_CLIENT_ID      — Azure app registration client ID
  *   OUTLOOK_CLIENT_SECRET  — Azure app registration client secret
- *   OUTLOOK_REPLY_EMAIL    — Central mailbox watched for inbound replies (webhook)
  */
 
 import { getGraphAccessToken, azureCredentialsConfigured } from "./graphService";
