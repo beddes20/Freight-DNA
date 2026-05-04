@@ -31,7 +31,7 @@ import {
   type ManualMarkOutcomeStatus,
   type QuoteFilters, type ListSortKey,
 } from "../services/customerQuotes";
-import { QUOTE_PARTY_TYPES, CAPTURE_LEAK_TYPES, CAPTURE_LEAK_REVIEW_DECISIONS } from "@shared/schema";
+import { QUOTE_PARTY_TYPES, CAPTURE_LEAK_TYPES, CAPTURE_LEAK_REVIEW_DECISIONS, senderRoutingRules, quotePipelineDrops, SENDER_ROUTING_DECISIONS } from "@shared/schema";
 import { syncQuoteOutcomesFromTms } from "../services/quoteTmsSync";
 import { backfillQuotesFromEmails, ensureEmailBackfill, getEmailBackfillStatus } from "../services/quoteEmailIngestion";
 import {
@@ -151,7 +151,7 @@ import {
   MAX_INTAKE_TEXT_BYTES,
 } from "../services/spotQuoteIntake";
 import { getErrorMessage } from "../lib/errors";
-import { pStr, qStr, qInt } from "../lib/req";
+import { pStr, qStr, qInt, qBool } from "../lib/req";
 
 // Minimum margin % guardrail when estimatedCost is supplied. Env-tunable.
 const SPOT_MIN_MARGIN_PCT: number = (() => {
@@ -2259,4 +2259,186 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     }
   });
 
+  // ─── Task #1003 — Needs Routing tab + one-click routing ─────────────────
+  //
+  // Capture-first contract: every quote-shaped inbound email becomes a
+  // quote_opportunity row tagged with `routing_status`. The classifier
+  // gates AUTOMATION (auto_customer / auto_carrier) on confidence; rows
+  // it isn't sure about land in `needs_routing` and are surfaced here for
+  // a one-click human decision. This endpoint is intentionally separate
+  // from /list so the existing rep-facing Customer Quotes views never
+  // accidentally pick up unrouted rows in their default counters.
+  app.get("/api/customer-quotes/needs-routing", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const limit = Math.min(qInt(req.query.limit, 50), 200);
+      const includeAll = qBool(req.query.includeAll, false);
+      const elevatedRoles = new Set([
+        "admin", "director", "sales_director", "national_account_manager", "sales",
+      ]);
+      const isElevated = elevatedRoles.has(user.role);
+      // `users.username` holds the rep's email-like login in this codebase
+      // (there is no separate `user.email` column); use it for to/cc match.
+      const recipientMatch = (user.username ?? "").trim();
+      // Recipient scoping: by default a non-elevated rep only sees rows where
+      // they are the sender of one of the to/cc addresses on the source
+      // email. `includeAll=1` (manager toggle) lifts the scope.
+      const rows = await db.execute<any>(sqlExpr`
+        SELECT q.id, q.organization_id AS "organizationId", q.customer_id AS "customerId",
+               q.rep_id AS "repId", q.lane_group_id AS "laneGroupId",
+               q.origin_city AS "originCity", q.origin_state AS "originState",
+               q.dest_city AS "destCity", q.dest_state AS "destState",
+               q.equipment, q.request_date AS "requestDate",
+               q.routing_status AS "routingStatus", q.routing_note AS "routingNote",
+               q.source_reference AS "sourceReference",
+               c.name AS "customerName",
+               em.id AS "messageId", em.subject AS "subject", em.from_email AS "fromEmail",
+               em.from_name AS "fromName", em.body AS "body",
+               em.to_email AS "toEmail", em.cc_email AS "ccEmail",
+               em.thread_id AS "threadId", em.created_at AS "messageCreatedAt"
+          FROM quote_opportunities q
+          LEFT JOIN quote_customers c ON c.id = q.customer_id
+          LEFT JOIN email_messages em ON em.id = q.source_reference
+         WHERE q.organization_id = ${user.organizationId}
+           AND q.routing_status = 'needs_routing'
+           ${(!isElevated && !includeAll && recipientMatch)
+              ? sqlExpr`AND (em.to_email ILIKE ${'%' + recipientMatch + '%'}
+                          OR em.cc_email ILIKE ${'%' + recipientMatch + '%'})`
+              : sqlExpr``}
+         ORDER BY q.request_date DESC
+         LIMIT ${limit}
+      `);
+      const totalRow = await db.execute<{ c: number }>(sqlExpr`
+        SELECT COUNT(*)::int AS c
+          FROM quote_opportunities
+         WHERE organization_id = ${user.organizationId}
+           AND routing_status = 'needs_routing'
+      `);
+      res.json({
+        rows: rows.rows ?? [],
+        total: totalRow.rows?.[0]?.c ?? 0,
+        isElevated,
+        includeAll: !!includeAll,
+      });
+    } catch (err) {
+      console.error("[customer-quotes] needs-routing list error:", err);
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  app.post("/api/customer-quotes/:id/route", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const id = pStr(req.params.id);
+      const schema = z.object({
+        decision: z.enum(SENDER_ROUTING_DECISIONS),
+        remember: z.enum(["none", "email", "domain"]).default("none"),
+        note: z.string().max(500).optional().nullable(),
+      });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid body", issues: parsed.error.issues });
+      }
+      const { decision, remember, note } = parsed.data;
+
+      // Look up the quote + its source email (for the sender address).
+      const oppRow = await db.execute<any>(sqlExpr`
+        SELECT q.id, q.routing_status AS "routingStatus", q.source_reference AS "sourceReference",
+               em.from_email AS "fromEmail"
+          FROM quote_opportunities q
+          LEFT JOIN email_messages em ON em.id = q.source_reference
+         WHERE q.id = ${id} AND q.organization_id = ${user.organizationId}
+         LIMIT 1
+      `);
+      const opp = oppRow.rows?.[0];
+      if (!opp) return res.status(404).json({ error: "Quote not found" });
+      if (opp.routingStatus !== "needs_routing") {
+        return res.status(409).json({ error: "Quote is not in needs_routing state", currentStatus: opp.routingStatus });
+      }
+
+      const newStatus =
+        decision === "customer" ? "routed_customer"
+        : decision === "carrier" ? "routed_carrier"
+        : "dismissed";
+
+      await db.update(quoteOpportunities).set({
+        routingStatus: newStatus,
+        routingDecisionAt: new Date(),
+        routingDecisionByUserId: user.id,
+        routingNote: note ?? null,
+      }).where(andSql(eqSql(quoteOpportunities.id, id), eqSql(quoteOpportunities.organizationId, user.organizationId)));
+
+      // Optional: remember this decision for future mail from the same
+      // sender / domain. Idempotent via ON CONFLICT.
+      if (remember !== "none" && opp.fromEmail) {
+        const lower = String(opp.fromEmail).trim().toLowerCase();
+        const scopeValue = remember === "email"
+          ? lower
+          : (lower.split("@")[1] ?? "");
+        if (scopeValue) {
+          await db.execute(sqlExpr`
+            INSERT INTO sender_routing_rules (org_id, scope_type, scope_value, decision, remembered_by_user_id)
+            VALUES (${user.organizationId}, ${remember}, ${scopeValue}, ${decision}, ${user.id})
+            ON CONFLICT (org_id, scope_type, scope_value)
+            DO UPDATE SET decision = EXCLUDED.decision, remembered_by_user_id = EXCLUDED.remembered_by_user_id
+          `);
+        }
+      }
+
+      try {
+        publishLiveSync(user.organizationId, "customer_quote", id, Date.now());
+      } catch { /* best-effort */ }
+
+      res.json({ ok: true, id, newStatus, remembered: remember });
+    } catch (err) {
+      console.error("[customer-quotes] route decision error:", err);
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  // SLO endpoint — capture-first p50/p95/p99 + open backlog. Read-only,
+  // org-scoped, used by the admin pipeline observability page and the
+  // Needs Routing tab's small SLO chip.
+  app.get("/api/customer-quotes/routing-slo", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const sloRow = await db.execute<{ p50: number | null; p95: number | null; p99: number | null; sample: number }>(sqlExpr`
+        SELECT
+          PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (q.created_at - em.created_at))) AS p50,
+          PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (q.created_at - em.created_at))) AS p95,
+          PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (q.created_at - em.created_at))) AS p99,
+          COUNT(*)::int AS sample
+          FROM quote_opportunities q
+          JOIN email_messages em ON em.id = q.source_reference
+         WHERE q.organization_id = ${user.organizationId}
+           AND q.source = 'email'
+           AND q.created_at >= NOW() - INTERVAL '24 hours'
+      `);
+      const backlogRow = await db.execute<{ c: number }>(sqlExpr`
+        SELECT COUNT(*)::int AS c
+          FROM email_messages
+         WHERE org_id = ${user.organizationId}
+           AND direction = 'inbound'
+           AND processed_for_signals_at IS NULL
+           AND created_at >= NOW() - INTERVAL '24 hours'
+      `);
+      const needsRoutingRow = await db.execute<{ c: number }>(sqlExpr`
+        SELECT COUNT(*)::int AS c
+          FROM quote_opportunities
+         WHERE organization_id = ${user.organizationId}
+           AND routing_status = 'needs_routing'
+      `);
+      res.json({
+        p50Sec: sloRow.rows?.[0]?.p50 ?? null,
+        p95Sec: sloRow.rows?.[0]?.p95 ?? null,
+        p99Sec: sloRow.rows?.[0]?.p99 ?? null,
+        sampleSize: sloRow.rows?.[0]?.sample ?? 0,
+        unprocessedBacklog: backlogRow.rows?.[0]?.c ?? 0,
+        needsRoutingCount: needsRoutingRow.rows?.[0]?.c ?? 0,
+      });
+    } catch (err) {
+      console.error("[customer-quotes] routing-slo error:", err);
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
 }

@@ -253,15 +253,70 @@ async function classifyOne(message: EmailMessage, signal: AbortSignal): Promise<
     }
   }
 
-  // Customer-quote pipeline — the only consumer Task #939 promotes inline.
-  if (message.direction === "inbound" && extraction.actorType === "customer") {
+  // Task #1003 — capture-first contract. We no longer gate on
+  // `actorType === "customer"`. Any inbound email with a quote-shaped
+  // signal at conf >= 0.4 (or that looks quote-shaped via the regex
+  // candidate detector even when the LLM returned zero signals) becomes
+  // a quote_opportunity. The CONFIDENCE gates the routing bucket, not
+  // the row's existence:
+  //   - actorType=customer + quoteSignal conf >= 0.7 -> auto_customer
+  //   - actorType=carrier  + quoteSignal conf >= 0.7 -> auto_carrier
+  //   - everything else quote-shaped                  -> needs_routing
+  // A `senderRoutingRules` hit overrides the classifier verdict so the
+  // rep's prior "Remember for @rimlogistics.com" decision auto-routes
+  // future ambiguous mail from that domain.
+  if (message.direction === "inbound") {
+    const { lookupSenderRoutingDecision, looksLikeQuoteCandidate } = await import(
+      "./quoteEmailIngestion"
+    );
     const quoteSignal = extraction.signals.find(
       (s) => s.intentType === "pricing_request" || s.intentType === "new_opportunity",
     );
-    if (quoteSignal) {
+    const signalConf = quoteSignal?.confidence ?? 0;
+    const candidateBySignal = !!quoteSignal && signalConf >= 0.4;
+    const candidateByShape = looksLikeQuoteCandidate(
+      message.subject ?? "",
+      message.body ?? "",
+    );
+    const isCandidate = candidateBySignal || candidateByShape;
+    if (isCandidate) {
+      const senderRule = await lookupSenderRoutingDecision(
+        message.orgId,
+        message.fromEmail,
+      );
+      let routingStatus: "auto_customer" | "needs_routing" | "auto_carrier";
+      let routingNote: string | null = null;
+      if (senderRule?.decision === "customer") {
+        routingStatus = "auto_customer";
+        routingNote = `Auto-routed via remembered ${senderRule.scopeType} rule (${senderRule.scopeValue}).`;
+      } else if (senderRule?.decision === "carrier") {
+        routingStatus = "auto_carrier";
+        routingNote = `Auto-routed via remembered ${senderRule.scopeType} rule (${senderRule.scopeValue}).`;
+      } else if (senderRule?.decision === "dismiss") {
+        // Remembered "not a quote" - skip ingest entirely but record drop.
+        await recordClassificationDrop(
+          message,
+          "classifier_miss",
+          `Sender rule (${senderRule.scopeType}=${senderRule.scopeValue}) says dismiss; skipping ingest.`,
+          { confidence: signalConf },
+        );
+        return;
+      } else if (extraction.actorType === "customer" && signalConf >= 0.7) {
+        routingStatus = "auto_customer";
+      } else if (extraction.actorType === "carrier" && signalConf >= 0.7) {
+        routingStatus = "auto_carrier";
+      } else {
+        routingStatus = "needs_routing";
+        routingNote =
+          `Classifier uncertain (actor=${extraction.actorType ?? "unknown"}, ` +
+          `quoteSignalConf=${signalConf.toFixed(2)}). Awaiting human routing decision.`;
+      }
+      // Re-implement the original block here, but pass routingStatus.
       try {
         const result = await ingestQuoteFromEmail(message, {
-          extractedData: quoteSignal.extractedData ?? null,
+          extractedData: quoteSignal?.extractedData ?? null,
+          routingStatus,
+          routingNote,
         });
         if (result.status === "ingested") {
           _totalQuoteIngestedInline++;
@@ -269,7 +324,7 @@ async function classifyOne(message: EmailMessage, signal: AbortSignal): Promise<
           // conversation_thread bucket-change to "Quote Requests" when
           // a follow-up message promotes a thread that previously
           // didn't carry pricing intent.
-          if (message.threadId) {
+          if (message.threadId && quoteSignal) {
             try {
               const priorCount = await db.execute<{ c: number }>(sql`
                 SELECT COUNT(*)::int AS c
@@ -328,25 +383,17 @@ async function classifyOne(message: EmailMessage, signal: AbortSignal): Promise<
             actorType: extraction.actorType,
             signals: extraction.signals,
           },
-          confidence: quoteSignal.confidence ?? null,
+          confidence: quoteSignal?.confidence ?? null,
           errorMessage: errMsg,
         });
         return;
       }
     } else {
-      // Task #952 — classifier ran successfully and decided this customer
-      // inbound email carries NO pricing/new-opportunity signal. The
-      // existing pipeline silently moves on; we now record the miss so
-      // an operator can:
-      //   1. Verify the classifier really missed (vs. genuine non-quote
-      //      thread like a ticketing follow-up),
-      //   2. Reprocess after a prompt or rule change, and
-      //   3. Trend the classifier_miss rate via the funnel endpoint —
-      //      a sudden spike usually indicates an upstream regression
-      //      (model swap, prompt edit, OpenAI partial outage).
-      // We snapshot all extracted signals (even non-quote ones) because
-      // the highest-confidence non-quote signal is the most useful
-      // diagnostic ("model thought this was a status_update at 0.92").
+      // Task #1003 — classifier ran but the email did not look quote-shaped
+      // by either signal (>=0.4 pricing intent) or regex (subject/body
+      // mentions origin/dest/equipment/rate language). Record the miss
+      // so operators can spot regressions and reprocess after rule or
+      // prompt changes.
       const topSignal = extraction.signals.reduce<typeof extraction.signals[number] | null>(
         (best, s) => (best == null || (s.confidence ?? 0) > (best.confidence ?? 0)) ? s : best,
         null,
@@ -355,8 +402,8 @@ async function classifyOne(message: EmailMessage, signal: AbortSignal): Promise<
         message,
         "classifier_miss",
         topSignal
-          ? `Classifier returned ${extraction.signals.length} signal(s) but none were pricing_request/new_opportunity. Top signal: ${topSignal.intentType}@${(topSignal.confidence ?? 0).toFixed(2)}.`
-          : `Classifier returned 0 signals for this customer inbound message.`,
+          ? `Not quote-shaped. Top signal: ${topSignal.intentType}@${(topSignal.confidence ?? 0).toFixed(2)} (actor=${extraction.actorType ?? "unknown"}).`
+          : `Classifier returned 0 signals and body did not look quote-shaped (actor=${extraction.actorType ?? "unknown"}).`,
         {
           extractedSnapshot: {
             actorType: extraction.actorType,

@@ -3008,6 +3008,86 @@ console.log("\n── Section 31: ingestion-silent-drop & empty-content watchdog
   );
 })();
 
+// ── Section 33: Capture-first contract (Task #1003) ──────────────────
+// Locks the capture-first rewrite invariant:
+//
+//   Every quote-shaped inbound email becomes a quote_opportunities row
+//   tagged with `routing_status` ∈ {auto_customer, needs_routing,
+//   auto_carrier, routed_*, dismissed}. The ONLY allowed silent
+//   no-create paths are tombstone + duplicate; everything else MUST be
+//   captured (or recorded as a drop with a reason) so a rep can route
+//   it from the Needs Routing tab.
+//
+// Section 33 fires before a regression that re-introduces a silent drop
+// in the classifier or ingestion layer can ship.
+console.log("\n── Section 33: Capture-first contract (Task #1003) ──────────────────\n");
+
+(function pinCaptureFirstContract() {
+  const schemaSrc = readFile("shared/schema.ts");
+  const ingestSrc = readFile("server/services/quoteEmailIngestion.ts");
+  const classifierSrc = readFile("server/services/inlineEmailClassifier.ts");
+  const schedulerSrc = readFile("server/emailIntelligenceScheduler.ts");
+  const routesSrc = readFile("server/routes/customerQuotes.ts");
+  const pageSrc = readFile("client/src/pages/quote-requests.tsx");
+
+  assert(
+    "shared/schema.ts — quoteOpportunities.routingStatus column exists",
+    /routingStatus:\s*text\(/.test(schemaSrc),
+  );
+  assert(
+    "shared/schema.ts — senderRoutingRules table is exported",
+    /export const senderRoutingRules\s*=\s*pgTable/.test(schemaSrc),
+  );
+  assert(
+    "shared/schema.ts — QUOTE_ROUTING_STATUSES enum is exported",
+    /export const QUOTE_ROUTING_STATUSES/.test(schemaSrc),
+  );
+  assert(
+    "shared/schema.ts — SENDER_ROUTING_DECISIONS enum is exported",
+    /export const SENDER_ROUTING_DECISIONS/.test(schemaSrc),
+  );
+  assert(
+    "quoteEmailIngestion — exports lookupSenderRoutingDecision helper",
+    /export\s+(?:async\s+)?function\s+lookupSenderRoutingDecision/.test(ingestSrc),
+  );
+  assert(
+    "inlineEmailClassifier — uses looksLikeQuoteCandidate as a fallback gate",
+    /looksLikeQuoteCandidate\s*\(/.test(classifierSrc),
+  );
+  assert(
+    "inlineEmailClassifier — calls lookupSenderRoutingDecision before bucketing",
+    /lookupSenderRoutingDecision\s*\(/.test(classifierSrc),
+  );
+  assert(
+    "emailIntelligenceScheduler — cron runs every minute (`* * * * *`)",
+    /cron\.schedule\(\s*["']\*\s\*\s\*\s\*\s\*["']/.test(schedulerSrc),
+  );
+  assert(
+    "routes/customerQuotes.ts — registers GET /api/customer-quotes/needs-routing",
+    /app\.get\(\s*["']\/api\/customer-quotes\/needs-routing/.test(routesSrc),
+  );
+  assert(
+    "routes/customerQuotes.ts — registers POST /api/customer-quotes/:id/route",
+    /app\.post\(\s*["']\/api\/customer-quotes\/:id\/route/.test(routesSrc),
+  );
+  assert(
+    "routes/customerQuotes.ts — registers GET /api/customer-quotes/routing-slo",
+    /app\.get\(\s*["']\/api\/customer-quotes\/routing-slo/.test(routesSrc),
+  );
+  assert(
+    "routes/customerQuotes.ts — route POST persists `remember` decisions to sender_routing_rules",
+    /INSERT INTO sender_routing_rules/.test(routesSrc),
+  );
+  assert(
+    "quote-requests.tsx — StatusFilter includes 'needs_routing'",
+    /needs_routing/.test(pageSrc),
+  );
+  assert(
+    "quote-requests.tsx — renders NeedsRoutingPanel when status is 'needs_routing'",
+    /NeedsRoutingPanel/.test(pageSrc),
+  );
+})();
+
 // ── Section 32: Carrier Ranking Lane-First Rebalance (May 2026) ────────────
 // Pins the contract that lane fit (history + geography + equipment + recency)
 // is the PRIMARY signal in carrier ranking and customer history is a

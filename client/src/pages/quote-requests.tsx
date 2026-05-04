@@ -230,7 +230,7 @@ type AutomationCounters = {
   leakQueueDeepLink: string;
 };
 
-type StatusFilter = "all" | "new" | "quoted" | "won" | "lost" | "no_response";
+type StatusFilter = "all" | "new" | "quoted" | "won" | "lost" | "no_response" | "needs_routing";
 type AgeFilter = "today" | "24h" | "7d" | "30d";
 type SortKey = "requestDate" | "customerName" | "outcomeStatus" | "repName" | "originCity";
 type AttachDecision = "attached" | "duplicate";
@@ -278,6 +278,12 @@ const STATUS_GROUPS: Record<StatusFilter, string[]> = {
   won: ["won", "won_low_margin"],
   lost: ["lost_price", "lost_service", "lost_timing", "lost_incumbent"],
   no_response: ["no_response", "expired"],
+  // Task #1003 — Needs Routing is rendered from a separate endpoint
+  // (`/api/customer-quotes/needs-routing`) keyed off `routing_status`,
+  // not `outcome_status`. STATUS_GROUPS["needs_routing"] is intentionally
+  // empty so the legacy /list query, if it ever runs in this mode, won't
+  // accidentally narrow on outcome buckets.
+  needs_routing: [],
 };
 
 const FREE_EMAIL_DOMAINS = new Set([
@@ -568,6 +574,57 @@ function QuoteRequestsInner(): JSX.Element {
       return res.json();
     },
     refetchInterval: 30_000,
+  });
+
+  // Task #1003 — capture-first SLO + needs-routing badge count.
+  // Polls every 30s; failure is non-fatal (chip just shows no count).
+  const sloQuery = useQuery<{
+    p50Sec: number | null; p95Sec: number | null; p99Sec: number | null;
+    sampleSize: number; unprocessedBacklog: number; needsRoutingCount: number;
+  }>({
+    queryKey: ["/api/customer-quotes/routing-slo"],
+    queryFn: async () => {
+      const res = await fetch("/api/customer-quotes/routing-slo", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load routing SLO");
+      return res.json();
+    },
+    refetchInterval: 30_000,
+    retry: 1,
+  });
+  const needsRoutingCount = sloQuery.data?.needsRoutingCount ?? 0;
+
+  const needsRoutingQuery = useQuery<{ rows: any[]; total: number; isElevated: boolean; includeAll: boolean }>({
+    queryKey: ["/api/customer-quotes/needs-routing"],
+    queryFn: async () => {
+      const res = await fetch("/api/customer-quotes/needs-routing?limit=100", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load needs-routing queue");
+      return res.json();
+    },
+    enabled: status === "needs_routing",
+    refetchInterval: 30_000,
+  });
+
+  const routeMutation = useMutation({
+    mutationFn: async (vars: {
+      id: string;
+      decision: "customer" | "carrier" | "dismiss";
+      remember: "none" | "email" | "domain";
+    }) => {
+      const res = await apiRequest("POST", `/api/customer-quotes/${vars.id}/route`, {
+        decision: vars.decision,
+        remember: vars.remember,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/needs-routing"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/routing-slo"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/list"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/snapshot"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Routing failed", description: err.message, variant: "destructive" });
+    },
   });
 
   const automationQuery = useQuery<AutomationCounters>({
@@ -885,6 +942,12 @@ function QuoteRequestsInner(): JSX.Element {
                 { value: "won", label: "Won" },
                 { value: "lost", label: "Lost" },
                 { value: "no_response", label: "No-response" },
+                {
+                  value: "needs_routing",
+                  label: needsRoutingCount > 0
+                    ? `Needs routing (${needsRoutingCount})`
+                    : "Needs routing",
+                },
               ]}
             />
             <Separator orientation="vertical" className="h-5" />
@@ -989,6 +1052,17 @@ function QuoteRequestsInner(): JSX.Element {
         {/* Body: table + drawer */}
         <div className="flex flex-1 overflow-hidden relative">
           <div className={`flex-1 overflow-hidden transition-all ${selectedId ? "pr-[520px]" : ""}`}>
+            {status === "needs_routing" ? (
+              <NeedsRoutingPanel
+                rows={needsRoutingQuery.data?.rows ?? []}
+                total={needsRoutingQuery.data?.total ?? 0}
+                isLoading={needsRoutingQuery.isLoading}
+                onRoute={(id, decision, remember) =>
+                  routeMutation.mutate({ id, decision, remember })
+                }
+                isRouting={routeMutation.isPending}
+              />
+            ) : (
             <ListTable
               rows={visibleRows}
               isLoading={listQuery.isLoading}
@@ -1042,6 +1116,7 @@ function QuoteRequestsInner(): JSX.Element {
                 setSearchInput("");
               }}
             />
+            )}
           </div>
           {selectedQuote && (
             <DetailDrawer
@@ -1159,6 +1234,116 @@ function ChipGroup<T extends string>({
           {opt.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+// ─── NeedsRoutingPanel ────────────────────────────────────────────────────
+//
+// Task #1003 — capture-first contract panel. Renders the rep's slice of
+// `quote_opportunities WHERE routing_status = 'needs_routing'` with a
+// one-click decision row (Customer / Carrier / Not a quote) and an
+// optional "Remember for @domain" toggle that creates a
+// `sender_routing_rules` row so future mail from the same sender skips
+// this queue.
+
+function NeedsRoutingPanel({
+  rows, total, isLoading, onRoute, isRouting,
+}: {
+  rows: any[];
+  total: number;
+  isLoading: boolean;
+  onRoute: (id: string, decision: "customer" | "carrier" | "dismiss", remember: "none" | "email" | "domain") => void;
+  isRouting: boolean;
+}) {
+  const [remember, setRemember] = useState<Record<string, "none" | "email" | "domain">>({});
+  if (isLoading) {
+    return (
+      <div className="p-6 space-y-3" data-testid="needs-routing-loading">
+        {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)}
+      </div>
+    );
+  }
+  if (!rows.length) {
+    return (
+      <div className="p-10 text-center" data-testid="needs-routing-empty">
+        <p className="text-sm text-muted-foreground">
+          Nothing in the routing queue. Capture-first contract is healthy.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="p-4 space-y-3 overflow-auto h-full" data-testid="needs-routing-list">
+      <div className="text-xs text-muted-foreground" data-testid="text-needs-routing-count">
+        {total} email{total === 1 ? "" : "s"} need a routing decision.
+      </div>
+      {rows.map((r) => {
+        const fromEmail: string = r.fromEmail ?? "";
+        const domain = fromEmail.includes("@") ? fromEmail.split("@")[1] : "";
+        const lane = [
+          [r.originCity, r.originState].filter(Boolean).join(", "),
+          [r.destCity, r.destState].filter(Boolean).join(", "),
+        ].filter(Boolean).join(" → ") || "(lane not parsed)";
+        const rememberMode = remember[r.id] ?? "none";
+        return (
+          <Card key={r.id} className="p-3" data-testid={`row-needs-routing-${r.id}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="font-medium text-sm truncate" data-testid={`text-subject-${r.id}`}>
+                  {r.subject || "(no subject)"}
+                </div>
+                <div className="text-xs text-muted-foreground truncate">
+                  From <span className="font-mono" data-testid={`text-from-${r.id}`}>{fromEmail || "(unknown)"}</span>
+                  {r.fromName ? ` · ${r.fromName}` : ""}
+                </div>
+                <div className="text-xs mt-1">
+                  <span className="text-muted-foreground">Lane:</span> {lane}
+                  {r.equipment ? <span className="ml-2 text-muted-foreground">· {r.equipment}</span> : null}
+                </div>
+              </div>
+              <div className="flex flex-col items-end gap-2 shrink-0">
+                <div className="flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="default"
+                    disabled={isRouting}
+                    data-testid={`button-route-customer-${r.id}`}
+                    onClick={() => onRoute(r.id, "customer", rememberMode)}
+                  >Customer</Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={isRouting}
+                    data-testid={`button-route-carrier-${r.id}`}
+                    onClick={() => onRoute(r.id, "carrier", rememberMode)}
+                  >Carrier</Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={isRouting}
+                    data-testid={`button-route-dismiss-${r.id}`}
+                    onClick={() => onRoute(r.id, "dismiss", rememberMode)}
+                  >Not a quote</Button>
+                </div>
+                {domain ? (
+                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      data-testid={`checkbox-remember-${r.id}`}
+                      checked={rememberMode !== "none"}
+                      onChange={(e) =>
+                        setRemember(prev => ({ ...prev, [r.id]: e.target.checked ? "domain" : "none" }))
+                      }
+                    />
+                    Remember for @{domain}
+                  </label>
+                ) : null}
+              </div>
+            </div>
+          </Card>
+        );
+      })}
     </div>
   );
 }

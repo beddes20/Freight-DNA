@@ -5801,6 +5801,24 @@ export const quoteOpportunities = pgTable("quote_opportunities", {
   // (S4 / S7). The partial index below keeps this column zero-cost
   // for the ~100% of rows that never get snoozed.
   snoozedUntil: timestamp("snoozed_until"),
+  // Task #1003 — capture-first routing contract.
+  // `auto_customer`   : classifier confident this is a customer pricing
+  //                     request (or a sender_routing_rules decision said
+  //                     so). Visible in Customer Quotes as today.
+  // `needs_routing`   : the email looked quote-shaped but classifier was
+  //                     unsure if it's customer vs carrier (or unsure
+  //                     it's a quote at all). Held in the Needs Routing
+  //                     tab pending one-click human decision.
+  // `auto_carrier`    : classifier confident this is a carrier load /
+  //                     response. Routed to carrier workflow; hidden
+  //                     from Customer Quotes default views.
+  // `routed_customer` : human approved into customer flow.
+  // `routed_carrier`  : human approved into carrier flow.
+  // `dismissed`       : human declared "not a quote".
+  routingStatus: text("routing_status").notNull().default("auto_customer"),
+  routingDecisionAt: timestamp("routing_decision_at"),
+  routingDecisionByUserId: varchar("routing_decision_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  routingNote: text("routing_note"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
   orgIdx: index("quote_opportunities_org_idx").on(t.organizationId),
@@ -5812,7 +5830,62 @@ export const quoteOpportunities = pgTable("quote_opportunities", {
   snoozedIdx: index("quote_opportunities_snoozed_idx")
     .on(t.organizationId, t.snoozedUntil)
     .where(sql`snoozed_until IS NOT NULL`),
+  // Task #1003 — fast lookup for the Needs Routing tab.
+  routingIdx: index("quote_opportunities_routing_idx")
+    .on(t.organizationId, t.routingStatus)
+    .where(sql`routing_status = 'needs_routing'`),
 }));
+
+// Task #1003 — canonical routing-status values reused by the route
+// validator and the inline classifier so the schema is the single
+// source of truth.
+export const QUOTE_ROUTING_STATUSES = [
+  "auto_customer",
+  "needs_routing",
+  "auto_carrier",
+  "routed_customer",
+  "routed_carrier",
+  "dismissed",
+] as const;
+export type QuoteRoutingStatus = typeof QUOTE_ROUTING_STATUSES[number];
+
+// Task #1003 — sender-level remembered routing decisions. When a rep
+// clicks "Remember for @domain" or "Remember for this sender" while
+// resolving a Needs Routing row, we persist that decision here so
+// future ambiguous mail from the same sender/domain auto-routes
+// (and never lands in Needs Routing again).
+//
+// Lookup precedence: exact email match wins over domain match.
+// The classifier consults this BEFORE picking a routing status; a
+// hit overrides the classifier's actorType/confidence judgement.
+export const SENDER_ROUTING_DECISIONS = ["customer", "carrier", "dismiss"] as const;
+export type SenderRoutingDecision = typeof SENDER_ROUTING_DECISIONS[number];
+export const SENDER_ROUTING_SCOPE_TYPES = ["email", "domain"] as const;
+export type SenderRoutingScopeType = typeof SENDER_ROUTING_SCOPE_TYPES[number];
+
+export const senderRoutingRules = pgTable("sender_routing_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  scopeType: text("scope_type").notNull(), // SenderRoutingScopeType
+  // Lower-cased email or domain (no @ for domain). Exact-match column.
+  scopeValue: text("scope_value").notNull(),
+  decision: text("decision").notNull(), // SenderRoutingDecision
+  rememberedByUserId: varchar("remembered_by_user_id").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  // One active rule per (org, scope, value). New decisions overwrite
+  // via ON CONFLICT in the route handler.
+  uq: uniqueIndex("sender_routing_rules_uq").on(t.orgId, t.scopeType, t.scopeValue),
+  orgIdx: index("sender_routing_rules_org_idx").on(t.orgId),
+}));
+export const insertSenderRoutingRuleSchema = createInsertSchema(senderRoutingRules)
+  .omit({ id: true, createdAt: true })
+  .extend({
+    scopeType: z.enum(SENDER_ROUTING_SCOPE_TYPES),
+    decision: z.enum(SENDER_ROUTING_DECISIONS),
+  });
+export type InsertSenderRoutingRule = z.infer<typeof insertSenderRoutingRuleSchema>;
+export type SenderRoutingRule = typeof senderRoutingRules.$inferSelect;
 export const insertQuoteOpportunitySchema = createInsertSchema(quoteOpportunities).omit({ id: true, createdAt: true });
 export type InsertQuoteOpportunity = z.infer<typeof insertQuoteOpportunitySchema>;
 export type QuoteOpportunity = typeof quoteOpportunities.$inferSelect;

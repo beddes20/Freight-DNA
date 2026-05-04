@@ -22,9 +22,10 @@ import OpenAI from "openai";
 import { db, storage } from "../storage";
 import {
   quoteOpportunities, quoteEvents, quoteCustomers, quoteReps,
-  quoteOutcomeReasons, emailMessages, users,
+  quoteOutcomeReasons, emailMessages, users, senderRoutingRules,
   type EmailMessage, type QuoteOutcomeStatus,
   type QuotePipelineDropReason,
+  type SenderRoutingRule,
 } from "@shared/schema";
 import {
   resolveCustomerName,
@@ -382,6 +383,41 @@ export function parseQuoteEmail(input: {
 
 const QUOTE_SIGNAL_RE = /\b(quote|rate|load|FTL|LTL|freight|haul|tender|capacity|truck|equipment|pickup|delivery|origin|destination)\b/i;
 
+/**
+ * Task #1003 — capture-first routing helper.
+ *
+ * Look up the rep-remembered routing decision for `fromEmail`. Exact email
+ * match wins over domain match. Returns null when no rule applies.
+ *
+ * Called from the inline classifier and the recovery cron BEFORE picking
+ * the routing bucket so a rep's prior "Remember for @rimlogistics.com →
+ * customer" decision auto-routes future ambiguous mail without ever
+ * landing in the Needs Routing tab.
+ */
+export async function lookupSenderRoutingDecision(
+  orgId: string,
+  fromEmail: string | null | undefined,
+): Promise<SenderRoutingRule | null> {
+  if (!fromEmail) return null;
+  const lower = fromEmail.trim().toLowerCase();
+  if (!lower || !lower.includes("@")) return null;
+  const domain = lower.split("@")[1] ?? "";
+  try {
+    const rows = await db.select().from(senderRoutingRules)
+      .where(and(
+        eq(senderRoutingRules.orgId, orgId),
+        sql`(${senderRoutingRules.scopeType} = 'email' AND ${senderRoutingRules.scopeValue} = ${lower})
+            OR (${senderRoutingRules.scopeType} = 'domain' AND ${senderRoutingRules.scopeValue} = ${domain})`,
+      ));
+    if (rows.length === 0) return null;
+    // Exact email beats domain match.
+    return rows.find(r => r.scopeType === "email") ?? rows[0];
+  } catch (err) {
+    console.warn("[quoteEmailIngestion] lookupSenderRoutingDecision failed:", err);
+    return null;
+  }
+}
+
 export function looksLikeQuoteCandidate(subject: string, body: string): boolean {
   const text = `${subject}\n${body}`;
   if (!text.trim()) return false;
@@ -681,6 +717,20 @@ export async function ingestQuoteFromEmail(
      * the live ingestion path is rate-limited or you want regex-only
      * behaviour for cost / latency reasons). */
     useAiFallback?: boolean;
+    /** Task #1003 — capture-first routing contract. The CALLER decides
+     * which routing bucket the new quote_opportunity lands in:
+     *   - `auto_customer` (default): classifier confident this is a
+     *      customer pricing request — visible in Customer Quotes today.
+     *   - `needs_routing`: quote-shaped but classifier was unsure if
+     *      it's customer vs carrier (or unsure it's a quote at all) —
+     *      held in the Needs Routing tab pending one-click human
+     *      decision. Low-confidence inbound quote-shape mail must
+     *      ALWAYS land here instead of being silently dropped.
+     *   - `auto_carrier`: confident carrier load/response — routed
+     *      to the carrier workflow.
+     */
+    routingStatus?: "auto_customer" | "needs_routing" | "auto_carrier";
+    routingNote?: string | null;
   },
 ): Promise<IngestionResult> {
   if (message.direction !== "inbound") {
@@ -866,6 +916,11 @@ export async function ingestQuoteFromEmail(
           detectedAt: new Date().toISOString(),
         }
       : null,
+    // Task #1003 — capture-first routing contract. Caller specifies the
+    // bucket; default is the legacy `auto_customer` so existing callers
+    // keep their behaviour without an explicit flag.
+    routingStatus: opts?.routingStatus ?? "auto_customer",
+    routingNote: opts?.routingNote ?? null,
   }).returning();
 
   await db.insert(quoteEvents).values({

@@ -1,0 +1,30 @@
+Yes to all four — this is exactly what I want.
+The big picture is right: capture any quote‑shaped email first, then route it (automatically when you’re confident, via a simple human decision when you’re not). Being an unknown customer or carrier must never be a reason that a quote opportunity doesn’t exist.
+
+Specific answers:
+
+Single column vs new table
+Yes, go with a single routing_status column on quote_opportunities. I want one canonical object that represents “this is/was a quote,” with routing as a state, not a separate staging table.
+
+Quote‑shape detector / threshold
+Yes, use the existing extractEmailSignals output, and I’m OK with ≥ 0.4 as the “quote candidate” threshold, with one nuance:
+
+If the content is obviously a freight quote (origin, destination, dates, weight, equipment, rate language), I’d rather you err on the side of creating a quote_opportunity with routing_status = needs_routing than dropping it as classifier_miss.
+
+In other words: low confidence should mean “ask the user,” not “erase it from the funnel.”
+
+Where the “Needs Routing” tab lives
+Yes, put it as a tab on /quote-requests right next to the existing views. That’s where reps actually live; I don’t want another separate admin page.
+
+Who sees the queue
+Yes, default scope to the recipient, with a manager toggle to see all. That matches how we actually work: the person whose inbox it hit reviews it, but managers can clean up or supervise across the team.
+
+I’m also fully on board with:
+
+explicitly allowing only tombstone and duplicate as hard‑drop reasons,
+
+adding guardrails so no other early‑returns can silently bypass quote_pipeline_drops, and
+
+adding the SLO endpoint + throughput bump so we can see and enforce the “quote created or routed/queued within ~2 minutes” goal.
+
+Please go ahead and execute the full build in one pass (schema → ingest contract → API → UI → sender‑rule memory → guardrails → SLO endpoint → backlog drain), and then show me Andrea’s email plus at least two similar unknown‑sender examples flowing end‑to‑end through this new routing model.

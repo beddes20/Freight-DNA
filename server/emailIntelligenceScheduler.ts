@@ -40,12 +40,13 @@ import { recordIntegrationEvent } from "./integrations/probeRegistry";
 import { createHash } from "crypto";
 import type { EmailMessage, InsertEmailSignal } from "@shared/schema";
 
-const EMAIL_INTEL_INTERVAL_MS = 2 * 60 * 1000;
+// Task #1003 — capture-first contract requires a 2-minute SLO from
+// inbound email landing → quote_opportunity row visible. Drop the cron
+// interval to 60s and bump the default batch to 500 so a brief inline
+// dispatcher outage drains within the same SLO window.
+const EMAIL_INTEL_INTERVAL_MS = 60 * 1000;
 
-// Task #751: bumped default 50 → 200 to drain the historical backlog.
-// Each message is one OpenAI call so this caps at ~200 calls / 2 minutes
-// = 6000 / hour, well under typical org rate limits.
-const BATCH_SIZE = parseInt(process.env.EMAIL_INTEL_BATCH_SIZE ?? "200", 10);
+const BATCH_SIZE = parseInt(process.env.EMAIL_INTEL_BATCH_SIZE ?? "500", 10);
 
 // Freshness-first split. Of every cron tick's BATCH_SIZE budget, the first
 // FRESH_SLICE messages come from the newest unprocessed mail in the last
@@ -158,27 +159,66 @@ export async function runEmailIntelligenceBatch(
       // never stops downstream NBA / win-loss / enrichment paths from
       // running, and idempotency on (org, source=email, providerMessageId)
       // inside `ingestQuoteFromEmail` makes a same-message replay a no-op.
-      if (msg.direction === "inbound" && result.actorType === "customer") {
+      if (msg.direction === "inbound") {
+        // Task #1003 — capture-first contract: any inbound email with a
+        // quote-shaped signal at >=0.4 OR that looks quote-shaped via
+        // looksLikeQuoteCandidate becomes a quote_opportunity. The
+        // confidence/actorType only decides the routing bucket
+        // (auto_customer | needs_routing | auto_carrier).
+        const { lookupSenderRoutingDecision, looksLikeQuoteCandidate } = await import(
+          "./services/quoteEmailIngestion"
+        );
         const quoteSignal = result.signals.find(
           (s) => s.intentType === "pricing_request" || s.intentType === "new_opportunity",
         );
-        if (quoteSignal) {
-          try {
-            await ingestQuoteFromEmail(msg, { extractedData: quoteSignal.extractedData ?? null });
-          } catch (err) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            console.error(`[emailIntelligenceScheduler] quote ingest failed for ${msg.id}:`, err);
-            // Surface this previously-silent failure so admins can see
-            // "customer pricing emails are classifying but failing to land
-            // in the Customer Quotes dashboard" without having to grep logs.
-            recordIntegrationEvent({
-              source: "graph",
-              outcome: "error",
-              errorMessage: `quote_ingest:${msg.id}: ${errMsg.slice(0, 200)}`,
-            });
+        const signalConf = quoteSignal?.confidence ?? 0;
+        const candidateBySignal = !!quoteSignal && signalConf >= 0.4;
+        const candidateByShape = looksLikeQuoteCandidate(msg.subject ?? "", msg.body ?? "");
+        if (candidateBySignal || candidateByShape) {
+          const senderRule = await lookupSenderRoutingDecision(msg.orgId, msg.fromEmail);
+          let routingStatus: "auto_customer" | "needs_routing" | "auto_carrier" = "needs_routing";
+          let routingNote: string | null = null;
+          if (senderRule?.decision === "customer") {
+            routingStatus = "auto_customer";
+            routingNote = `Auto-routed via remembered ${senderRule.scopeType} rule (${senderRule.scopeValue}).`;
+          } else if (senderRule?.decision === "carrier") {
+            routingStatus = "auto_carrier";
+            routingNote = `Auto-routed via remembered ${senderRule.scopeType} rule (${senderRule.scopeValue}).`;
+          } else if (senderRule?.decision === "dismiss") {
+            // remembered "not a quote" - skip ingest entirely
+            // (we still mark message processed at the end of the loop)
+          } else if (result.actorType === "customer" && signalConf >= 0.7) {
+            routingStatus = "auto_customer";
+          } else if (result.actorType === "carrier" && signalConf >= 0.7) {
+            routingStatus = "auto_carrier";
+          } else {
+            routingStatus = "needs_routing";
+            routingNote = `Recovery sweep: classifier uncertain (actor=${result.actorType ?? "unknown"}, conf=${signalConf.toFixed(2)}). Awaiting human routing.`;
+          }
+          if (senderRule?.decision !== "dismiss") {
+            try {
+              await ingestQuoteFromEmail(msg, {
+                extractedData: quoteSignal?.extractedData ?? null,
+                routingStatus,
+                routingNote,
+              });
+            } catch (err) {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              console.error(`[emailIntelligenceScheduler] quote ingest failed for ${msg.id}:`, err);
+              recordIntegrationEvent({
+                source: "graph",
+                outcome: "error",
+                errorMessage: `quote_ingest:${msg.id}: ${errMsg.slice(0, 200)}`,
+              });
+            }
           }
         }
+      }
 
+      // Won/Lost language paths still gated on actorType=customer because
+      // they MUTATE an existing quote and a carrier "load won" reply must
+      // never flip a customer-facing quote.
+      if (msg.direction === "inbound" && result.actorType === "customer") {
         // Won-language path runs FIRST. Both Won and Lost detectors bail
         // when the quote is no longer pending, so Won claims the pending
         // row before Lost gets a chance on ambiguous-but-positive replies.
@@ -640,7 +680,10 @@ export function startEmailIntelligenceScheduler(): void {
   // the next tick will pick up wherever the in-flight one leaves off, and we
   // avoid the 16-overlapping-ticks pile-up that crashed the cron loop on
   // April 28.
-  cron.schedule("*/2 * * * *", () => {
+  // Task #1003 — every minute (was every 2 min). Capture-first contract
+  // SLO is "<= 2 min from inbound landing → quote_opportunity row visible";
+  // a 60s cron + 60s wall-clock fits the budget with margin.
+  cron.schedule("* * * * *", () => {
     _invokeBatch({ source: "cron" });
   }, { timezone: "America/Chicago" });
 }
