@@ -37,15 +37,55 @@ import {
   recordLiveSyncAuthOutcome,
   type LiveSyncEvent,
 } from "../services/liveSync";
-import { storage } from "../storage";
+import { resolveClerkUserToDbUser } from "../auth";
 import { qOptStr } from "../lib/req";
+import { getErrorMessage } from "../lib/errors";
 
-async function resolveOrgId(req: Request): Promise<string | null> {
+// Verbose per-connect diagnostic logging. Off by default — flip on with
+// `LIVE_SYNC_AUTH_DEBUG=1` to capture the structured per-connect record
+// without permanently logging every reconnect (the route fires several
+// times per minute per open tab).
+const LIVE_SYNC_AUTH_DEBUG = process.env.LIVE_SYNC_AUTH_DEBUG === "1";
+
+function emitAuthDiag(record: Record<string, unknown>): void {
+  if (LIVE_SYNC_AUTH_DEBUG) {
+    console.log(`[live-sync/auth] ${JSON.stringify(record)}`);
+  }
+}
+
+/**
+ * Truncate a Clerk user id for log lines so we get enough signal to
+ * correlate ("which user keeps 401-ing") without dumping the full id
+ * into log aggregation.
+ */
+function fingerprintClerkId(id: string): string {
+  if (id.length <= 12) return id;
+  return `${id.slice(0, 8)}…${id.slice(-4)}`;
+}
+
+/**
+ * Classify a `verifyToken` failure into a stable short label so the
+ * watchdog log scan ("which branch dominated rejection?") doesn't have
+ * to grep free-form messages.
+ */
+function classifyVerifyError(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes("expired")) return "expired";
+  if (lower.includes("signature")) return "bad-signature";
+  if (lower.includes("issuer")) return "bad-issuer";
+  if (lower.includes("audience")) return "bad-audience";
+  return "other";
+}
+
+export async function resolveOrgId(req: Request): Promise<string | null> {
   // 1) Existing session — dev cookies and any impersonation flows that
   //    have already populated `req.session.organizationId` keep working
   //    without round-tripping through Clerk.
   const sessionOrgId = (req as any).session?.organizationId as string | undefined;
-  if (sessionOrgId) return sessionOrgId;
+  if (sessionOrgId) {
+    emitAuthDiag({ outcome: "200", branch: "session" });
+    return sessionOrgId;
+  }
 
   // 2) Clerk JWT in `?token=`. EventSource can include this in the URL
   //    even though it can't set headers. Cookie-based Clerk sessions
@@ -53,19 +93,55 @@ async function resolveOrgId(req: Request): Promise<string | null> {
   //    is unambiguous and works in every browser/proxy combo.
   const token = qOptStr(req.query.token);
   const secretKey = process.env.CLERK_SECRET_KEY;
-  if (!token || !secretKey) return null;
-
-  try {
-    const claims = await verifyToken(token, { secretKey });
-    const clerkUserId = typeof claims.sub === "string" ? claims.sub : null;
-    if (!clerkUserId) return null;
-    const user = await storage.getUserByClerkId(clerkUserId);
-    return user?.organizationId ?? null;
-  } catch {
-    // Bad signature / expired / wrong issuer — caller will see 401 and
-    // its retry path will fetch a fresh token.
+  if (!token || !secretKey) {
+    emitAuthDiag({
+      outcome: "401",
+      branch: "no-token-or-secret",
+      hasToken: Boolean(token),
+      hasSecretKey: Boolean(secretKey),
+    });
     return null;
   }
+
+  let claims: Awaited<ReturnType<typeof verifyToken>>;
+  try {
+    claims = await verifyToken(token, { secretKey });
+  } catch (err) {
+    // Previously this branch silently swallowed the cause. Log the verify
+    // error message at warn level — it's the only signal we have when
+    // Clerk's issuer/audience config drifts from what the client mints,
+    // and it only fires while the auth path is actually broken.
+    const message = getErrorMessage(err);
+    const kind = classifyVerifyError(message);
+    console.warn(`[live-sync/auth] verifyToken failed (${kind}): ${message}`);
+    emitAuthDiag({ outcome: "401", branch: "verify-failed", kind, error: message });
+    return null;
+  }
+
+  const clerkUserId = typeof claims.sub === "string" ? claims.sub : null;
+  if (!clerkUserId) {
+    emitAuthDiag({ outcome: "401", branch: "no-claims-sub" });
+    return null;
+  }
+
+  // Use the shared Clerk → DB resolver so the SSE path inherits the same
+  // email-based back-fill that `requireAuth`/`getCurrentUser` performs on
+  // /api routes. Without it, any user whose `users.clerk_user_id` is
+  // still NULL (typical right after they're provisioned) 401s here even
+  // though their token is perfectly valid — that was the production
+  // root-cause of `live_sync_auth_failure` (Task #958).
+  const user = await resolveClerkUserToDbUser(clerkUserId);
+  const fp = fingerprintClerkId(clerkUserId);
+  if (!user) {
+    emitAuthDiag({ outcome: "401", branch: "no-db-user", clerkId: fp });
+    return null;
+  }
+  if (!user.organizationId) {
+    emitAuthDiag({ outcome: "401", branch: "no-org-id", clerkId: fp });
+    return null;
+  }
+  emitAuthDiag({ outcome: "200", branch: "clerk", clerkId: fp });
+  return user.organizationId;
 }
 
 export function registerLiveSyncRoutes(app: Express): void {

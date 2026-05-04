@@ -2759,6 +2759,46 @@ assert(
   "After a classification replay, the route needs a deterministic way to ask 'did a quote actually appear for this message?' so it can auto-resolve the drop. Without this lookup, every successful classifier replay leaves the drop open and the operator has to manually resolve it.",
 );
 
+// ── 28b. Live-sync auth resolver shares the email back-fill (Task #958) ────
+// In production we observed `/api/live-sync/stream` returning 401 ~50/min
+// for users whose `users.clerk_user_id` was still NULL — the SSE auth
+// resolver was looking up users by clerkUserId only, while every other
+// authenticated /api route went through `requireAuth → getCurrentUser`,
+// which performs an email-based back-fill and writes `clerk_user_id` on
+// first sign-in. The two paths MUST share the same Clerk-→-DB resolver
+// (or contain the same back-fill logic inline) — otherwise this exact
+// failure mode silently returns the next time someone refactors the SSE
+// resolver. See `server/auth.ts: resolveClerkUserToDbUser` and
+// `server/__tests__/liveSyncResolveOrgId.test.ts`.
+console.log("\n── 28b. Live-sync auth resolver shares the email back-fill (Task #958) ────────────");
+
+assert(
+  "auth.ts — exports resolveClerkUserToDbUser helper",
+  /export\s+async\s+function\s+resolveClerkUserToDbUser\s*\(/.test(readFile("server/auth.ts")),
+  "The shared Clerk → DB resolver was extracted so the SSE auth path can inherit the email back-fill that requireAuth/getCurrentUser already performs. Removing the export forces the SSE path back to a clerkUserId-only lookup, which 401s every user whose DB row hasn't been linked yet.",
+);
+
+assert(
+  "auth.ts — getCurrentUser delegates Clerk resolution to the shared helper (no duplicate back-fill)",
+  /if\s*\(\s*clerkUserId\s*\)\s*\{\s*return\s+resolveClerkUserToDbUser\s*\(\s*clerkUserId\s*\)\s*;\s*\}/.test(
+    readFile("server/auth.ts"),
+  ),
+  "If getCurrentUser keeps its own copy of the back-fill logic, the two implementations will drift the next time someone updates the email-link semantics — and the SSE path will silently regress.",
+);
+
+assert(
+  "routes/liveSync.ts — resolveOrgId calls resolveClerkUserToDbUser (NOT storage.getUserByClerkId directly)",
+  /resolveClerkUserToDbUser\s*\(\s*clerkUserId\s*\)/.test(liveSyncRouteSrc951) &&
+    !/storage\.getUserByClerkId\s*\(/.test(liveSyncRouteSrc951),
+  "The SSE resolver must use the shared helper so users whose `users.clerk_user_id` is still NULL get auto-linked the same way they would on any other /api route. A direct `storage.getUserByClerkId(...)` lookup re-introduces the prod regression where Conversations stops auto-updating until the user happens to hit a non-SSE /api route first.",
+);
+
+assert(
+  "routes/liveSync.ts — verifyToken failures are no longer silently swallowed",
+  /catch\s*\([^)]*\)\s*\{[\s\S]*?(console\.warn|console\.error)\s*\(/.test(liveSyncRouteSrc951),
+  "When token verification fails (issuer mismatch, expired, bad signature) we have to log the cause — silently dropping the error is what made the original prod regression invisible until reps complained. At minimum a warn-level log inside the verify catch is required.",
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

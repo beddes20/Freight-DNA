@@ -288,6 +288,53 @@ export async function requireUser(req: Request, res: Response, next: NextFunctio
   return next();
 }
 
+/**
+ * Resolve a Clerk user id to the matching DB user.
+ *
+ * This is the canonical Clerk → DB user resolver. It implements the
+ * "auto-link on first sign-in" semantics that `requireAuth`/`getCurrentUser`
+ * have always relied on:
+ *
+ *   1. Honour any active impersonation mapping (admin → target).
+ *   2. Direct lookup by `users.clerk_user_id` — the steady-state path.
+ *   3. **Email back-fill** — fetch the Clerk user, look up the matching
+ *      `users` row by lowercased email, write `clerk_user_id` so future
+ *      lookups skip Clerk entirely. This is the path that lets a
+ *      provisioned-by-email user actually authenticate the first time
+ *      they sign in (their DB row starts with `clerk_user_id = NULL`).
+ *
+ * Extracted from `getCurrentUser` (Task #958) so the SSE auth resolver in
+ * `server/routes/liveSync.ts` can share the exact same back-fill semantics
+ * — without it the SSE endpoint 401s for every user whose DB row has not
+ * yet been linked to a Clerk id, even with a perfectly valid token. That
+ * was the root cause of the `live_sync_auth_failure` watchdog alert.
+ */
+export async function resolveClerkUserToDbUser(clerkUserId: string): Promise<User | null> {
+  // 1. Impersonation
+  const impersonatedDbUserId = impersonationMap.get(clerkUserId);
+  if (impersonatedDbUserId) return (await storage.getUser(impersonatedDbUserId)) ?? null;
+
+  // 2. Direct lookup
+  const byClerkId = await storage.getUserByClerkId(clerkUserId);
+  if (byClerkId) return byClerkId;
+
+  // 3. Email back-fill
+  try {
+    const clerkUser = await clerkClient.users.getUser(clerkUserId);
+    const email = clerkUser.emailAddresses[0]?.emailAddress?.toLowerCase();
+    if (email) {
+      const dbUser = await storage.getUserByUsername(email);
+      if (dbUser) {
+        await storage.updateUser(dbUser.id, dbUser.organizationId, { clerkUserId });
+        return { ...dbUser, clerkUserId };
+      }
+    }
+  } catch (err) {
+    console.error("[resolveClerkUserToDbUser] Clerk user fetch failed:", err);
+  }
+  return null;
+}
+
 export async function getCurrentUser(req: Request): Promise<User | null> {
   // Return cached value if requireAuth already resolved it
   if ((req as any)[RESOLVED_USER]) return (req as any)[RESOLVED_USER];
@@ -303,29 +350,7 @@ export async function getCurrentUser(req: Request): Promise<User | null> {
   // should also win over the bypass.
   const { userId: clerkUserId } = getAuth(req);
   if (clerkUserId) {
-    // Check impersonation map
-    const impersonatedDbUserId = impersonationMap.get(clerkUserId);
-    if (impersonatedDbUserId) return (await storage.getUser(impersonatedDbUserId)) ?? null;
-
-    // Look up by Clerk ID, auto-syncing on first login
-    const byClerkId = await storage.getUserByClerkId(clerkUserId);
-    if (byClerkId) return byClerkId;
-
-    // First sign-in: try to link by email
-    try {
-      const clerkUser = await clerkClient.users.getUser(clerkUserId);
-      const email = clerkUser.emailAddresses[0]?.emailAddress?.toLowerCase();
-      if (email) {
-        const dbUser = await storage.getUserByUsername(email);
-        if (dbUser) {
-          await storage.updateUser(dbUser.id, dbUser.organizationId, { clerkUserId });
-          return { ...dbUser, clerkUserId };
-        }
-      }
-    } catch (err) {
-      console.error("[getCurrentUser] Clerk user fetch failed:", err);
-    }
-    return null;
+    return resolveClerkUserToDbUser(clerkUserId);
   }
 
   // Dev/test: session-based (already handled at the top, kept for impersonation clarity)
