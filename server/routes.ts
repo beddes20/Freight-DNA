@@ -570,6 +570,12 @@ export async function registerRoutes(
     if (req.path === "/webhooks/outlook-reply") return next();
     // Microsoft Graph webhook endpoints — public (Graph calls without session cookies)
     if (req.path.startsWith("/webhooks/graph/")) return next();
+    // Live-sync SSE — bypass requireAuth because EventSource cannot send the
+    // Authorization Bearer header. The route handler itself verifies a Clerk
+    // JWT in `?token=` (or falls back to req.session.organizationId) and
+    // returns 401 when neither is valid. See server/routes/liveSync.ts and
+    // tests/code-quality-guardrails.test.ts Section 28.
+    if (req.path === "/live-sync/stream") return next();
     // Internal service endpoints — can be accessed via INTERNAL_SERVICE_TOKEN header
     // (machine-to-machine) or by an authenticated user session (browser clients).
     if (req.path.startsWith("/internal/")) {

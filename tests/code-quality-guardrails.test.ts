@@ -2528,6 +2528,20 @@ assert(
   "If the route stops feeding the rolling auth-outcome ring, the live_sync_auth_failure watchdog goes blind and the next auth regression will only surface as rep complaints.",
 );
 
+// The /api/* global middleware MUST bypass requireAuth for the SSE
+// stream — otherwise the route's `?token=` handler never runs and every
+// EventSource gets 401'd before reaching `verifyToken`. This was the
+// post-deploy regression on 2026-05-03 that left Conversations dead in
+// the water even after the route-level fix shipped.
+const routesIndexSrc951 = readFile("server/routes.ts");
+assert(
+  "routes.ts — global /api requireAuth bypasses /live-sync/stream",
+  /req\.path\s*===\s*["']\/live-sync\/stream["']\s*\)\s*return\s+next\(\)/.test(
+    routesIndexSrc951,
+  ),
+  "Without this bypass, the global app.use('/api', requireAuth) at the top of registerRoutes intercepts every SSE connect and rejects it with 401 before the live-sync route's Clerk-token verification can run. Conversations falls back to the 120s poll. Same user-visible symptom as the original bug, different layer.",
+);
+
 const liveSyncSvcSrc951 = readFile("server/services/liveSync.ts");
 assert(
   "services/liveSync.ts — exports recordLiveSyncAuthOutcome + getLiveSyncAuthStats",
