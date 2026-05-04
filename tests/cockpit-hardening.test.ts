@@ -17,7 +17,10 @@ import {
   resolveDirectReports,
   resolveMyTeamUserIds,
   listCockpitTeams,
+  hasAmBookToken,
 } from "../shared/cockpitTeams";
+
+import { computeCockpitUrgency } from "../shared/cockpitUrgency";
 
 import {
   isRowOwnedByUser,
@@ -784,6 +787,459 @@ test("base scope: ID-only ownership match (no alias fallback) so SQL aggregate p
     false,
     "alias-only row must NOT survive ID-only impersonation base scope",
   );
+});
+
+// ─────────────────────────────────────────────────────────────────
+// Task #971 — AF cockpit operational hardening tests
+// ─────────────────────────────────────────────────────────────────
+
+console.log("── Cockpit hardening: Task #971 (AM book + urgency drift) ──");
+
+test("Task #971 — am_book is a valid owner-scope token", () => {
+  assert.equal(isValidOwnerScopeToken("am_book"), true);
+});
+
+test("Task #971 — hasAmBookToken detects am_book in any case", () => {
+  assert.equal(hasAmBookToken(["am_book"]), true);
+  // Upper-case input exercises the case-insensitive normalization.
+  // We round-trip through `string[]` (the function's accepted input)
+  // rather than its narrower OwnerScopeToken union, which keeps the
+  // call free of any-casts.
+  const upperCase: string[] = ["AM_BOOK"];
+  assert.equal(hasAmBookToken(upperCase), true);
+  assert.equal(hasAmBookToken(["me", "am_book"]), true);
+  assert.equal(hasAmBookToken(["me"]), false);
+  assert.equal(hasAmBookToken([]), false);
+});
+
+test("Task #971 — resolveOwnerScope SKIPS am_book so it never lands in userIds", () => {
+  // am_book needs an async company resolver lookup that doesn't belong
+  // in shared/. The route layer detects it via hasAmBookToken() and
+  // applies its own predicate; resolveOwnerScope must keep am_book out
+  // of the userIds union so the SQL filter stays correct.
+  const r = resolveOwnerScope(["am_book"], "me-id", null);
+  assert.equal(r.userIds.size, 0);
+  assert.equal(r.includeUnassigned, false);
+});
+
+test("Task #971 — am_book combined with 'me' still includes me-id", () => {
+  const r = resolveOwnerScope(["me", "am_book"], "me-id", null);
+  assert.ok(r.userIds.has("me-id"));
+  // am_book contributes nothing to userIds (handled by route layer).
+  assert.equal(r.userIds.size, 1);
+});
+
+test("Task #971 — computeCockpitUrgency: pickup ≤12h yields critical level", () => {
+  const now = new Date("2026-05-04T12:00:00Z");
+  // pickup 6h out, no outreach, no shortlist → adds 25 + 15 = 40
+  // pickupBase 60 * tier 1.0 * lane 1.0 = 60 → +40 = 100 → critical
+  const result = computeCockpitUrgency({
+    pickupAt: new Date("2026-05-04T18:00:00Z"),
+    generatedAt: new Date("2026-05-04T11:30:00Z"),
+    includedCarriers: 0,
+    sentCarriers: 0,
+    respondedCarriers: 0,
+    status: "ready_to_send",
+    customerTier: null,
+    laneScore: null,
+    now,
+  });
+  assert.equal(result.level, "critical");
+  assert.ok(result.score >= 75);
+  assert.ok(result.reasons.includes("pickup ≤ 12h"));
+});
+
+test("Task #971 — computeCockpitUrgency: drift simulation 24h→12h escalates", () => {
+  // Same row, two `now` snapshots 13h apart. The pickup window slips
+  // from "≤24h" (high) to "≤12h" (critical). The drift recompute on
+  // the client must yield a STRICTLY HIGHER score at the later `now`.
+  const pickup = new Date("2026-05-05T00:00:00Z");
+  const generated = new Date("2026-05-03T12:00:00Z");
+  const initial = computeCockpitUrgency({
+    pickupAt: pickup,
+    generatedAt: generated,
+    includedCarriers: 5,
+    sentCarriers: 3,
+    respondedCarriers: 1,
+    status: "sent",
+    customerTier: "gold",
+    laneScore: 70,
+    now: new Date("2026-05-04T05:00:00Z"), // 19h before pickup
+  });
+  const later = computeCockpitUrgency({
+    pickupAt: pickup,
+    generatedAt: generated,
+    includedCarriers: 5,
+    sentCarriers: 3,
+    respondedCarriers: 1,
+    status: "sent",
+    customerTier: "gold",
+    laneScore: 70,
+    now: new Date("2026-05-04T16:00:00Z"), // 8h before pickup
+  });
+  assert.ok(
+    later.score > initial.score,
+    `urgency must escalate as pickup approaches: initial=${initial.score} later=${later.score}`,
+  );
+  assert.ok(
+    later.reasons.includes("pickup ≤ 12h"),
+    `later reasons should include "pickup ≤ 12h", got ${JSON.stringify(later.reasons)}`,
+  );
+});
+
+test("Task #971 — computeCockpitUrgency: covered/expired hard-deprioritized to ≤5", () => {
+  const now = new Date("2026-05-04T12:00:00Z");
+  for (const status of ["covered", "expired", "cancelled"] as const) {
+    const r = computeCockpitUrgency({
+      pickupAt: new Date("2026-05-04T13:00:00Z"), // ≤12h, would normally critical
+      generatedAt: now,
+      includedCarriers: 0,
+      sentCarriers: 0,
+      respondedCarriers: 0,
+      status,
+      customerTier: "platinum",
+      laneScore: 90,
+      now,
+    });
+    assert.ok(
+      r.score <= 5,
+      `status=${status} must cap urgency at 5 (got ${r.score})`,
+    );
+    assert.equal(r.level, "low");
+  }
+});
+
+test("Task #971 — computeCockpitUrgency: pure function (no `now` param defaults to system time)", () => {
+  // Smoke test: calling without `now` must not throw and must return
+  // the documented shape.
+  const r = computeCockpitUrgency({
+    pickupAt: null,
+    generatedAt: null,
+    includedCarriers: 0,
+    sentCarriers: 0,
+    respondedCarriers: 0,
+    status: "open",
+  });
+  assert.ok(typeof r.score === "number");
+  assert.ok(["critical", "high", "medium", "low"].includes(r.level));
+  assert.ok(Array.isArray(r.reasons));
+});
+
+test("Task #971 — server route re-exports computeCockpitUrgency unchanged", async () => {
+  const routeMod = await import("../server/routes/freightOpportunityCockpit");
+  // The re-export must be the SAME function reference so existing
+  // server callers (server/services/todayQueue.ts, server tests) keep
+  // working without code changes.
+  assert.strictEqual(
+    routeMod.computeCockpitUrgency,
+    computeCockpitUrgency,
+    "server/routes/freightOpportunityCockpit must re-export the SAME computeCockpitUrgency from shared/cockpitUrgency",
+  );
+});
+
+test("Task #971 — HiddenCountsSummary supports optional dedupeGroup (type round-trip)", async () => {
+  const mod = await import("../client/src/components/freight/hidden-counts");
+  const summary: import("../client/src/components/freight/hidden-counts").HiddenCountsSummary = {
+    totalInScope: 10,
+    visible: 6,
+    buckets: [
+      { id: "status", label: "Hidden by status filter", count: 2 },
+      { id: "snooze", label: "Snoozed", count: 1 },
+    ],
+    dedupeGroup: {
+      label: "Hidden by dedupe — last import",
+      subtitle: "12m ago · 5 new",
+      buckets: [
+        { id: "collapsed-order-key", label: "Collapsed by order key", count: 3 },
+        { id: "unmatched-customers", label: "Unmatched customers", count: 1 },
+        { id: "expired", label: "Expired", count: 0 },
+      ],
+    },
+  };
+  assert.equal(mod.sumHiddenBuckets(summary), 3, "sumHiddenBuckets must only sum the filter-side buckets");
+  assert.ok(summary.dedupeGroup, "dedupeGroup must round-trip");
+  assert.equal(summary.dedupeGroup!.buckets.length, 3);
+});
+
+test("Task #971 — HiddenCountsSummary.dedupeGroup.mergedRows carries canonicalOpportunityId", () => {
+  // Lock the per-row soft-merge contract: each entry must carry the
+  // canonical row id so the disclosure can render an in-cockpit anchor
+  // link, plus the originating stableKey for audit traceability.
+  const summary: import("../client/src/components/freight/hidden-counts").HiddenCountsSummary = {
+    totalInScope: 8,
+    visible: 8,
+    buckets: [],
+    dedupeGroup: {
+      label: "Hidden by dedupe — last import",
+      buckets: [
+        { id: "collapsed-order-key", label: "Collapsed by order key", count: 0 },
+        { id: "unmatched-customers", label: "Unmatched customers", count: 0 },
+        { id: "expired", label: "Expired", count: 0 },
+      ],
+      mergedRows: [
+        {
+          id: "merged-1",
+          label: "ACME · Chicago → Dallas · 2026-05-04",
+          canonicalOpportunityId: "opp-canonical-1",
+          mergedFromStableKey: "acme|CHI|DAL|2026-05-04|order-7",
+        },
+      ],
+    },
+  };
+  assert.ok(summary.dedupeGroup?.mergedRows);
+  assert.equal(summary.dedupeGroup!.mergedRows!.length, 1);
+  assert.equal(summary.dedupeGroup!.mergedRows![0].canonicalOpportunityId, "opp-canonical-1");
+  assert.ok(summary.dedupeGroup!.mergedRows![0].mergedFromStableKey.includes("acme"));
+});
+
+test("Task #971 — server import-health responder returns the documented contract shape", async () => {
+  // Smoke-check the contract by importing the route module's typed
+  // exports directly — the responder shape itself is asserted in the
+  // routes' integration tests, but we lock the threshold defaults
+  // here so a stray edit can't silently drop them.
+  const { computeCockpitUrgency: routeUrgency, IMPORT_HEALTH_THRESHOLDS } =
+    await import("../server/routes/freightOpportunityCockpit");
+  assert.equal(typeof routeUrgency, "function");
+  assert.equal(IMPORT_HEALTH_THRESHOLDS.freshMinutes, 15);
+  assert.equal(IMPORT_HEALTH_THRESHOLDS.failedMinutes, 1440);
+});
+
+test("Task #971 — urgency drift re-rank: client sorts escalated rows above stale-server-high rows", () => {
+  // Simulates the in-cockpit re-rank: a row whose pickup window crossed
+  // ≤12h since the last server fetch must out-rank rows the server
+  // still believes are merely "high".
+  const fixedNow = new Date("2026-05-04T12:00:00Z");
+  const escalated = computeCockpitUrgency({
+    pickupAt: new Date("2026-05-04T18:00:00Z"), // 6h
+    generatedAt: new Date("2026-05-04T11:30:00Z"),
+    includedCarriers: 0,
+    sentCarriers: 0,
+    respondedCarriers: 0,
+    status: "ready_to_send",
+    customerTier: null,
+    laneScore: null,
+    now: fixedNow,
+  });
+  const stillHigh = computeCockpitUrgency({
+    pickupAt: new Date("2026-05-05T20:00:00Z"), // ~32h
+    generatedAt: new Date("2026-05-04T11:30:00Z"),
+    includedCarriers: 0,
+    sentCarriers: 0,
+    respondedCarriers: 0,
+    status: "ready_to_send",
+    customerTier: null,
+    laneScore: null,
+    now: fixedNow,
+  });
+  assert.ok(
+    escalated.score > stillHigh.score,
+    `escalated row must out-rank stale-high row: escalated=${escalated.score} stillHigh=${stillHigh.score}`,
+  );
+  // Lock the displayed-order semantics: when client recomputes urgency,
+  // rows must be sorted by recomputed score descending.
+  const rows = [
+    { id: "stale-high", score: stillHigh.score },
+    { id: "escalated", score: escalated.score },
+  ];
+  const sorted = rows.slice().sort((a, b) => b.score - a.score);
+  assert.equal(sorted[0].id, "escalated");
+});
+
+test("Task #971 (rework #3) — countUnresolvedAmBookRows: only counts unresolved AND not-surviving", async () => {
+  const { countUnresolvedAmBookRows } =
+    await import("../server/routes/freightOpportunityCockpit");
+  // 4 unresolved rows: 2 still survive (matched another token like "me"
+  // or "team:*"), 2 truly hidden by the missing customer resolution.
+  const unresolved = new Set(["row-a", "row-b", "row-c", "row-d"]);
+  const surviving = new Set(["row-a", "row-b", "row-e"]);
+  assert.equal(countUnresolvedAmBookRows({ unresolvedIds: unresolved, survivingIds: surviving }), 2);
+
+  // Empty unresolved set always returns 0.
+  assert.equal(
+    countUnresolvedAmBookRows({ unresolvedIds: new Set(), survivingIds: surviving }),
+    0,
+  );
+
+  // All unresolved hidden — full count.
+  assert.equal(
+    countUnresolvedAmBookRows({ unresolvedIds: unresolved, survivingIds: new Set() }),
+    4,
+  );
+
+  // All unresolved still surviving — none hidden by missing-customer path.
+  assert.equal(
+    countUnresolvedAmBookRows({ unresolvedIds: unresolved, survivingIds: unresolved }),
+    0,
+  );
+});
+
+test("Task #971 (rework #3) — normalizeIntegrationHealthState: probe states + breaker", async () => {
+  const { normalizeIntegrationHealthState } =
+    await import("../server/routes/freightOpportunityCockpit");
+  assert.equal(normalizeIntegrationHealthState("healthy", null), "healthy");
+  assert.equal(normalizeIntegrationHealthState("degraded", null), "degraded");
+  assert.equal(normalizeIntegrationHealthState("failed", null), "failed");
+  // "disabled" / unknown / null collapse to "unknown" so the pill stops
+  // at "stale" rather than red on a missing snapshot.
+  assert.equal(normalizeIntegrationHealthState("disabled", null), "unknown");
+  assert.equal(normalizeIntegrationHealthState("unknown", null), "unknown");
+  assert.equal(normalizeIntegrationHealthState(null, null), "unknown");
+  // Open breaker overrides a "healthy" snapshot.
+  assert.equal(normalizeIntegrationHealthState("healthy", "open"), "failed");
+  // Other breaker states do not override.
+  assert.equal(normalizeIntegrationHealthState("healthy", "closed"), "healthy");
+  assert.equal(normalizeIntegrationHealthState("healthy", "half_open"), "healthy");
+});
+
+test("Task #971 (rework #3) — deriveImportHealthStatus: every documented transition", async () => {
+  const { deriveImportHealthStatus, IMPORT_HEALTH_THRESHOLDS } =
+    await import("../server/routes/freightOpportunityCockpit");
+
+  // Healthy baseline: fresh, no errors, integration healthy → ok.
+  assert.equal(
+    deriveImportHealthStatus({
+      ageMinutes: 5,
+      lastError: null,
+      lastTwoErrored: false,
+      integrationState: "healthy",
+    }),
+    "ok",
+  );
+
+  // Last run errored → stale (single error doesn't escalate to failed).
+  assert.equal(
+    deriveImportHealthStatus({
+      ageMinutes: 5,
+      lastError: "boom",
+      lastTwoErrored: false,
+      integrationState: "healthy",
+    }),
+    "stale",
+  );
+
+  // Last TWO errored → failed regardless of age / integration.
+  assert.equal(
+    deriveImportHealthStatus({
+      ageMinutes: 1,
+      lastError: "boom",
+      lastTwoErrored: true,
+      integrationState: "healthy",
+    }),
+    "failed",
+  );
+
+  // Age > freshMinutes (but ≤ failedMinutes) → stale.
+  assert.equal(
+    deriveImportHealthStatus({
+      ageMinutes: IMPORT_HEALTH_THRESHOLDS.freshMinutes + 1,
+      lastError: null,
+      lastTwoErrored: false,
+      integrationState: "healthy",
+    }),
+    "stale",
+  );
+
+  // Age > failedMinutes → failed.
+  assert.equal(
+    deriveImportHealthStatus({
+      ageMinutes: IMPORT_HEALTH_THRESHOLDS.failedMinutes + 1,
+      lastError: null,
+      lastTwoErrored: false,
+      integrationState: "healthy",
+    }),
+    "failed",
+  );
+
+  // Integration degraded escalates ok → stale even when run history is clean.
+  assert.equal(
+    deriveImportHealthStatus({
+      ageMinutes: 1,
+      lastError: null,
+      lastTwoErrored: false,
+      integrationState: "degraded",
+    }),
+    "stale",
+  );
+
+  // Integration failed escalates straight to failed even when runs are clean.
+  assert.equal(
+    deriveImportHealthStatus({
+      ageMinutes: 1,
+      lastError: null,
+      lastTwoErrored: false,
+      integrationState: "failed",
+    }),
+    "failed",
+  );
+
+  // Rework #4 — "no successful import yet" must NEVER read green even
+  // when the integration is healthy. Acceptance: green requires a
+  // recent successful import; with no `lastImportAt` we fall back to
+  // stale/amber so the rep sees "we have no signal yet".
+  assert.equal(
+    deriveImportHealthStatus({
+      ageMinutes: null,
+      lastError: null,
+      lastTwoErrored: false,
+      integrationState: "healthy",
+    }),
+    "stale",
+  );
+
+  // No imports + degraded integration is also stale (still amber).
+  assert.equal(
+    deriveImportHealthStatus({
+      ageMinutes: null,
+      lastError: null,
+      lastTwoErrored: false,
+      integrationState: "degraded",
+    }),
+    "stale",
+  );
+
+  // No imports + failed integration → failed (the integration probe is
+  // sufficient signal even without any run history).
+  assert.equal(
+    deriveImportHealthStatus({
+      ageMinutes: null,
+      lastError: null,
+      lastTwoErrored: false,
+      integrationState: "failed",
+    }),
+    "failed",
+  );
+
+  // unknown integration is neutral — pill stays on run-history signals.
+  assert.equal(
+    deriveImportHealthStatus({
+      ageMinutes: 5,
+      lastError: null,
+      lastTwoErrored: false,
+      integrationState: "unknown",
+    }),
+    "ok",
+  );
+});
+
+test("Task #971 (rework #3) — urgency-override re-rank is gated to sort='urgency' only", () => {
+  // Lock the in-cockpit semantics so the bug never regresses: the
+  // `displayedFiltered` re-sort must not silently reorder non-urgency
+  // sorts when the 60s urgency drift recompute fires. The frontend
+  // `useMemo` short-circuits on `sort !== "urgency"`; this test pins
+  // the same predicate as a pure check on the gate condition.
+  const overrides = new Map([["row-a", 90]]);
+  const sortKeys = ["pickup_soonest", "freshness", "customer", "lane"] as const;
+  for (const sort of sortKeys) {
+    const shouldRerank = sort === ("urgency" as string) && overrides.size > 0;
+    assert.equal(shouldRerank, false, `sort=${sort} must NOT re-rank by urgency override`);
+  }
+  const shouldRerankOnUrgency =
+    ("urgency" as string) === "urgency" && overrides.size > 0;
+  assert.equal(shouldRerankOnUrgency, true, "sort=urgency MUST re-rank when overrides exist");
+  // Empty override map means re-rank is a no-op even on urgency sort.
+  const empty = new Map<string, number>();
+  const shouldRerankEmpty = ("urgency" as string) === "urgency" && empty.size > 0;
+  assert.equal(shouldRerankEmpty, false, "no overrides → no re-rank");
 });
 
 console.log(

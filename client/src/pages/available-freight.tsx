@@ -77,6 +77,9 @@ import {
 } from "@/components/freight/freshness-pill";
 // Task #967 — shared live-sync health pill.
 import { LiveSyncPill } from "@/components/live-sync/LiveSyncPill";
+import { AfImportHealthPill } from "@/components/freight/af-import-health-pill";
+import { HiddenCountsDisclosure, type HiddenCountsSummary } from "@/components/freight/hidden-counts";
+import { computeCockpitUrgency } from "@shared/cockpitUrgency";
 import { LaneStabilityBadge } from "@/components/freight/lane-stability-badge";
 import { LaneCockpitSheet } from "@/components/lane-cockpit/lane-cockpit-sheet";
 import { useSharedLaneKeyboard, useLaneCheatSheetRows } from "@/hooks/useSharedLaneKeyboard";
@@ -159,6 +162,20 @@ interface CockpitItem {
    *  drift off-by-one from the server's freshness/filter decision at the
    *  CT/UTC midnight rollover. */
   pickupDaysAgo?: number | null;
+  /**
+   * Task #971 — latest UNRESOLVED conversion failure for this row's
+   * source quote. Surfaces the red "Conversion failed — Retry" chip
+   * directly on the row so the rep doesn't have to detour through the
+   * admin Won-Quote audit page. Null when the row's source quote
+   * captured cleanly (or has no source quote at all).
+   */
+  latestConversionFailure?: {
+    id: string;
+    reason: string;
+    detail: string | null;
+    attemptedAt: string;
+    retryCount: number;
+  } | null;
 }
 
 interface BulkActionResult {
@@ -234,6 +251,10 @@ interface CockpitResponse {
      * from "view-as scope hid N".
      */
     byBaseScope?: number;
+    /** Task #971 — slice of byOwner attributable to am_book rows whose
+     *  customer didn't resolve to a CRM-owned company. Always present
+     *  (server defaults to 0 when am_book isn't active). */
+    byUnresolvedCustomer?: number;
   };
   /**
    * Task #972 — server-confirmed impersonation envelope. Always present
@@ -257,6 +278,23 @@ interface CockpitResponse {
     perOwnerCounts: Record<string, number>;
     visibleItems: number;
   };
+  /** Task #971 — companion to hiddenCounts. Combines the importer's
+   *  run-level audit with a per-row list of canonical rows that
+   *  absorbed a prior stableKey via soft-merge. Null when no import has
+   *  run yet AND no rows in the current view carry a soft-merge marker. */
+  dedupeCounts?: {
+    lastImportAt: string | null;
+    collapsedByOrderKey: number;
+    unmatchedCustomers: number;
+    expired: number;
+    inserted: number;
+    mergedRows: Array<{
+      id: string;
+      label: string;
+      canonicalOpportunityId: string;
+      mergedFromStableKey: string;
+    }>;
+  } | null;
   /** Phase B1 / Task #900 — server-confirmed pickup scope. */
   pickupScope?: "upcoming" | "recent" | "all" | "actionable";
   /** Task #900 — server-confirmed owner filter ('all'|'me'|'unassigned'|<userId>). */
@@ -516,6 +554,7 @@ function OwnerCombobox({
       if (lower === "me") return "Owner: me";
       if (lower === "my-team" || lower === "myteam") return "Owner: my team";
       if (lower === "unassigned") return "Owner: unassigned";
+      if (lower === "am_book") return "Owner: my AM book";
       if (lower.startsWith("team:")) {
         const team = teams.find((t2) => t2.id === t.slice("team:".length));
         return team ? `Team: ${team.name}` : `Team: ${t.slice("team:".length)}`;
@@ -546,7 +585,7 @@ function OwnerCombobox({
           <CommandList>
             <CommandEmpty>No matches.</CommandEmpty>
             {/* Shortcuts */}
-            {(["me", "my-team", "unassigned"] as const).map((tok) => (
+            {(["me", "my-team", "am_book", "unassigned"] as const).map((tok) => (
               <CommandItem
                 key={tok}
                 value={tok}
@@ -555,7 +594,13 @@ function OwnerCombobox({
               >
                 <Check className={cn("mr-2 h-4 w-4", isSelected(tok) ? "opacity-100" : "opacity-0")} />
                 <span className="text-sm">
-                  {tok === "me" ? "Me" : tok === "my-team" ? "My team" : "Unassigned"}
+                  {tok === "me"
+                    ? "Me"
+                    : tok === "my-team"
+                      ? "My team"
+                      : tok === "am_book"
+                        ? "My AM book"
+                        : "Unassigned"}
                 </span>
               </CommandItem>
             ))}
@@ -1218,6 +1263,119 @@ export default function AvailableFreightPage() {
     return () => clearTimeout(t);
   }, [feed]);
 
+  // Task #971 — urgency drift recompute. Tick every 60s (paused while
+  // the tab is hidden), recompute urgency via the shared helper, and
+  // surface diffs as overrides. When `?debug=cockpit` is on we log a
+  // warning if the server-stamped urgency disagrees with what we just
+  // computed at the same `now` (this means the importer/cockpit math
+  // has drifted out of sync, not just clock advance).
+  const [urgencyTickMs, setUrgencyTickMs] = useState<number>(() => Date.now());
+  const feedReceivedAtRef = useRef<number>(Date.now());
+  useEffect(() => {
+    feedReceivedAtRef.current = Date.now();
+  }, [feed]);
+  useEffect(() => {
+    const tick = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      setUrgencyTickMs(Date.now());
+    };
+    const id = setInterval(tick, 60_000);
+    const onVis = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        setUrgencyTickMs(Date.now());
+      }
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVis);
+    }
+    return () => {
+      clearInterval(id);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVis);
+      }
+    };
+  }, []);
+  const urgencyOverrides = useMemo(() => {
+    const out = new Map<string, { score: number; level: CockpitItem["urgency"]["level"]; reasons: string[] }>();
+    if (!feed) return out;
+    const now = new Date(urgencyTickMs);
+    const debugEnabled = (() => {
+      if (typeof window === "undefined") return false;
+      try {
+        return new URL(window.location.href).searchParams.get("debug") === "cockpit";
+      } catch {
+        return false;
+      }
+    })();
+    const feedAgeMs = Math.max(0, urgencyTickMs - feedReceivedAtRef.current);
+    for (const it of feed.items) {
+      const recomputed = computeCockpitUrgency({
+        pickupAt: it.opportunity.pickupWindowStart ?? null,
+        generatedAt: it.opportunity.generatedAt ?? null,
+        includedCarriers: it.coverage.included ?? 0,
+        sentCarriers: it.coverage.sent ?? 0,
+        respondedCarriers: it.coverage.responded ?? 0,
+        status: it.opportunity.status,
+        customerTier: it.customer?.accountTier ?? null,
+        laneScore: it.laneScore ?? null,
+        now,
+      });
+      if (recomputed.level !== it.urgency.level || recomputed.score !== it.urgency.score) {
+        out.set(it.opportunity.id, recomputed);
+        // Debug invariant: server vs client disagreed when the feed was
+        // freshly delivered (<5s ago). Means the math drifted, not just
+        // that the clock advanced through a band threshold.
+        if (debugEnabled && feedAgeMs < 5_000) {
+          // eslint-disable-next-line no-console
+          console.warn("[cockpit][urgency-drift] server vs client disagree at same now", {
+            opportunityId: it.opportunity.id,
+            serverLevel: it.urgency.level,
+            serverScore: it.urgency.score,
+            clientLevel: recomputed.level,
+            clientScore: recomputed.score,
+            now: now.toISOString(),
+          });
+        }
+      }
+    }
+    return out;
+  }, [feed, urgencyTickMs]);
+
+  // Task #971 — per-row conversion-failure retry. POSTs to the AF
+  // endpoint that mirrors the admin retry path (createFreight-
+  // OpportunityFromWonQuote) and resolves the failure row server-side
+  // when it succeeds. On success we invalidate the cockpit feed so the
+  // red chip vanishes without a manual refresh.
+  const conversionRetryMutation = useMutation<
+    { ok: boolean; opportunityId?: string; failureId: string },
+    Error,
+    { opportunityId: string; failureId: string }
+  >({
+    mutationFn: async ({ opportunityId }) => {
+      const res = await apiRequest(
+        "POST",
+        `/api/freight-opportunities/${opportunityId}/conversion-failure/retry`,
+      );
+      return res.json();
+    },
+    onSuccess: (_data, vars) => {
+      toast({
+        title: "Retry queued",
+        description: "Re-attempting conversion from the source quote.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities/cockpit"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/freight-opportunities/import-health"] });
+      void vars;
+    },
+    onError: (err) => {
+      toast({
+        title: "Retry failed",
+        description: err?.message ?? "Could not retry the failed conversion.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const items = feed?.items ?? [];
   // Task #972 — base-scope leak detector. With impersonation active, every
   // row in the feed must list the impersonated rep on its ownership
@@ -1492,6 +1650,32 @@ export default function AvailableFreightPage() {
     return result;
   }, [items, debouncedSearch, viewFilters, currentIdentity, cockpitDebugEnabled, activeViewId, serverKpis, ownerScopeTokens, bucket, orgChartForBuckets]);
 
+  /** Task #971 — when the 60s drift recompute escalates a row's urgency
+   *  client-side (e.g. pickup window crossed the ≤12h threshold while
+   *  the rep was on-screen), re-rank the displayed list so escalated
+   *  rows float to the top instead of stranding behind a now-stale
+   *  server sort. Only flat (non-grouped) layouts use this; grouped/
+   *  swimlane layouts keep their server order so the group structure
+   *  stays stable. */
+  const displayedFiltered = useMemo(() => {
+    // Task #971 (rework #3) — the urgency drift recompute always feeds
+    // `urgencyOverrides`, which row renderers consume to update the
+    // urgency badge in place every 60s regardless of sort mode. The
+    // re-sort below, however, only makes sense when the rep has the
+    // urgency sort selected — otherwise it would silently reorder a
+    // pickup-soonest / freshness / customer / lane list out from under
+    // them. Gate strictly on `sort === "urgency"`.
+    if (sort !== "urgency" || urgencyOverrides.size === 0) return filtered;
+    return filtered
+      .map((it, originalIndex) => ({
+        it,
+        originalIndex,
+        score: urgencyOverrides.get(it.opportunity.id)?.score ?? it.urgency.score,
+      }))
+      .sort((a, b) => (b.score - a.score) || (a.originalIndex - b.originalIndex))
+      .map((x) => x.it);
+  }, [filtered, urgencyOverrides, sort]);
+
   // Task #957 — bucket chip counts derived from the SAME filtered-without-
   // bucket collection so the chip count is exactly how many rows the rep
   // would see if they selected that chip. We compute counts off the
@@ -1639,7 +1823,11 @@ export default function AvailableFreightPage() {
 
   // Group items for display.
   const groups = useMemo(() => {
-    if (grouping === "none") return [{ key: "all", label: "All", items: filtered }];
+    // Task #971 — flat ("none") layout uses displayedFiltered so the
+    // 60s urgency-drift re-rank surfaces escalated rows. Grouped
+    // layouts keep the original filtered order to preserve group
+    // membership stability.
+    if (grouping === "none") return [{ key: "all", label: "All", items: displayedFiltered }];
     const m = new Map<string, CockpitItem[]>();
     filtered.forEach(it => {
       const k = it.groupKey;
@@ -1647,7 +1835,7 @@ export default function AvailableFreightPage() {
       m.get(k)!.push(it);
     });
     return Array.from(m.entries()).map(([k, v]) => ({ key: k, label: k, items: v }));
-  }, [filtered, grouping]);
+  }, [filtered, displayedFiltered, grouping]);
 
   const bulkMutate = useMutation<BulkActionResponse, Error, Record<string, unknown>>({
     mutationFn: async (body) => {
@@ -2038,6 +2226,10 @@ export default function AvailableFreightPage() {
             <FreshnessPill signal={feed?.freshness} />
             {/* Task #967 — shared live-sync health pill. */}
             <LiveSyncPill testId="pill-live-sync-af" />
+            {/* Task #971 — AF-specific Excel-importer health. Polls every
+                60s independently of the cockpit feed so a stalled importer
+                stays visible even when the rep isn't refreshing. */}
+            <AfImportHealthPill testId="pill-af-import-health" />
           </div>
           <p className="text-sm text-muted-foreground">
             Triage open freight in priority order. Shortcuts: j/k move • x select • Enter open • A approve • S send top 3 • R reassign • Esc clear.
@@ -2287,6 +2479,49 @@ export default function AvailableFreightPage() {
             {kpis?.avgFreshnessMinutes !== null && kpis?.avgFreshnessMinutes !== undefined && (
               <span>· avg row age {fmtAge(kpis.avgFreshnessMinutes)}</span>
             )}
+            {/* Task #971 — Hidden-vs-deduped split. Renders the existing
+                "Hidden by filters" rollup AND a separate top-level group
+                for the importer's run-level dedupe audit so reps can see
+                both signals at a glance. AF passes both groups; LWQ /
+                Quotes / Conversations continue to use the single-group
+                rendering of the same component. */}
+            {feed && (() => {
+              const h = feed.hiddenCounts;
+              const totalInScope = h?.totalInScope ?? items.length;
+              const visible = filtered.length;
+              const buckets: HiddenCountsSummary["buckets"] = h
+                ? [
+                    { id: "status", label: "Hidden by status filter", count: h.byStatus },
+                    { id: "snooze", label: "Snoozed", count: h.bySnooze },
+                    { id: "past-pickup", label: "Past pickup (recent)", count: Math.max(0, (h.byPastPickup ?? 0) - (h.byPastStale ?? 0)) },
+                    { id: "stale-pickup", label: `Stale pickup (>${feed.pickupGraceDays ?? 14}d)`, count: h.byPastStale ?? 0 },
+                    { id: "lane", label: "Hidden by lane filter", count: h.byLane },
+                    { id: "carrier", label: "Hidden by carrier filter", count: h.byCarrier },
+                    { id: "unresolved-customer", label: "AM book — unresolved customer", count: h.byUnresolvedCustomer ?? 0 },
+                  ]
+                : [];
+              const dedupe = feed.dedupeCounts;
+              const dedupeGroup = dedupe
+                ? {
+                    label: "Hidden by dedupe — last import",
+                    subtitle: dedupe.lastImportAt
+                      ? `${fmtAge(Math.round((Date.now() - new Date(dedupe.lastImportAt).getTime()) / 60_000))} ago · ${dedupe.inserted} new`
+                      : undefined,
+                    buckets: [
+                      { id: "collapsed-order-key", label: "Collapsed by order key", count: dedupe.collapsedByOrderKey },
+                      { id: "unmatched-customers", label: "Unmatched customers", count: dedupe.unmatchedCustomers },
+                      { id: "expired", label: "Expired (already past pickup)", count: dedupe.expired },
+                    ],
+                    mergedRows: dedupe.mergedRows,
+                  }
+                : null;
+              const summary: HiddenCountsSummary = { totalInScope, visible, buckets, dedupeGroup };
+              return (
+                <span className="ml-1">
+                  <HiddenCountsDisclosure summary={summary} surface="af" />
+                </span>
+              );
+            })()}
           </div>
         </CardContent>
       </Card>
@@ -2923,6 +3158,9 @@ export default function AvailableFreightPage() {
                                 onLogOutcome={() => setOutcomeTargetId(it.opportunity.id)}
                                 onToggleAutoPilot={() => toggleAutoPilot(it)}
                                 onOpenCockpit={() => openCockpitForItem(it)}
+                                urgencyOverride={urgencyOverrides.get(it.opportunity.id) ?? null}
+                                onRetryConversion={(failureId) => conversionRetryMutation.mutate({ opportunityId: it.opportunity.id, failureId })}
+                                retryingConversion={conversionRetryMutation.isPending && conversionRetryMutation.variables?.opportunityId === it.opportunity.id}
                                 index={idx}
                                 lastSeenAt={lastSeenAt}
                                 compact
@@ -2933,19 +3171,21 @@ export default function AvailableFreightPage() {
                       ));
                     })()}
                   </div>
-                ) : grouping === "none" && filtered.length > 150 ? (
+                ) : grouping === "none" && displayedFiltered.length > 150 ? (
                   // Task #957 — Row virtualization (only when ungrouped and
                   // > 150 rows). Mirrors the today.tsx pattern but renders a
-                  // CockpitRowView per virtual row.
-                  <div data-testid="layout-table-virtual" data-virtual-row-count={filtered.length}>
+                  // CockpitRowView per virtual row. Task #971 — uses the
+                  // urgency-re-ranked displayedFiltered so escalated rows
+                  // float up between server refetches.
+                  <div data-testid="layout-table-virtual" data-virtual-row-count={displayedFiltered.length}>
                     <VirtualList
-                      rowCount={filtered.length}
+                      rowCount={displayedFiltered.length}
                       rowHeight={104}
                       overscanCount={6}
                       style={{ height: "min(70vh, 720px)" }}
                       rowProps={{}}
                       rowComponent={({ index, style }: RowComponentProps) => {
-                        const it = filtered[index];
+                        const it = displayedFiltered[index];
                         if (!it) return null;
                         return (
                           <div style={style} key={it.opportunity.id}>
@@ -2961,6 +3201,9 @@ export default function AvailableFreightPage() {
                               onLogOutcome={() => setOutcomeTargetId(it.opportunity.id)}
                               onToggleAutoPilot={() => toggleAutoPilot(it)}
                               onOpenCockpit={() => openCockpitForItem(it)}
+                              urgencyOverride={urgencyOverrides.get(it.opportunity.id) ?? null}
+                              onRetryConversion={(failureId) => conversionRetryMutation.mutate({ opportunityId: it.opportunity.id, failureId })}
+                              retryingConversion={conversionRetryMutation.isPending && conversionRetryMutation.variables?.opportunityId === it.opportunity.id}
                               index={index}
                               lastSeenAt={lastSeenAt}
                             />
@@ -3009,6 +3252,9 @@ export default function AvailableFreightPage() {
                             onLogOutcome={() => setOutcomeTargetId(it.opportunity.id)}
                             onToggleAutoPilot={() => toggleAutoPilot(it)}
                             onOpenCockpit={() => openCockpitForItem(it)}
+                            urgencyOverride={urgencyOverrides.get(it.opportunity.id) ?? null}
+                            onRetryConversion={(failureId) => conversionRetryMutation.mutate({ opportunityId: it.opportunity.id, failureId })}
+                            retryingConversion={conversionRetryMutation.isPending && conversionRetryMutation.variables?.opportunityId === it.opportunity.id}
                             index={idx}
                             lastSeenAt={lastSeenAt}
                           />
@@ -3774,11 +4020,22 @@ function CockpitRowView(props: {
   // signature. Mirrors the `L` keyboard shortcut so trackpad users have
   // the same affordance from the row's overflow menu.
   onOpenCockpit?: () => void;
+  /** Task #971 — recomputed urgency override from the parent's 60s
+   *  drift recompute. When present, the badge prefers this over the
+   *  server-stamped value so a row whose pickup window crossed a
+   *  threshold while the rep was on-screen escalates without a
+   *  refetch. */
+  urgencyOverride?: { score: number; level: CockpitItem["urgency"]["level"]; reasons: string[] } | null;
+  /** Task #971 — invoked when the rep clicks the red "Retry"
+   *  button on a conversion-failure chip. */
+  onRetryConversion?: (failureId: string) => void;
+  /** True while a retry round-trip is in flight for this row. */
+  retryingConversion?: boolean;
   index: number;
   lastSeenAt: string | null;
   compact?: boolean;
 }) {
-  const { item, isSelected, isFocused, onToggleSelected, onFocus, onAction, onReassign, onOpenDraft, onLogOutcome, onToggleAutoPilot, onOpenCockpit, lastSeenAt } = props;
+  const { item, isSelected, isFocused, onToggleSelected, onFocus, onAction, onReassign, onOpenDraft, onLogOutcome, onToggleAutoPilot, onOpenCockpit, lastSeenAt, urgencyOverride, onRetryConversion, retryingConversion } = props;
   // Task #653 — local navigate so the "Make this recurring" item can deep-link
   // into LWQ. Defined here (rather than passed as a prop) to keep the row's
   // public surface unchanged.
@@ -3795,6 +4052,7 @@ function CockpitRowView(props: {
 
   return (
     <div
+      id={`freight-opportunity-${opp.id}`}
       onClick={onFocus}
       className={`flex flex-col gap-2 border-b px-3 py-3 hover:bg-accent/30 cursor-pointer ${isFocused ? "bg-accent/40" : ""}`}
       data-testid={`row-opportunity-${opp.id}`}
@@ -3815,9 +4073,119 @@ function CockpitRowView(props: {
             data-testid={`indicator-sla-${opp.id}`}
           />
         )}
-        <Badge variant="outline" className={urgencyTone(item.urgency.level)} data-testid={`badge-urgency-${opp.id}`}>
-          {item.urgency.level} · {item.urgency.score}
-        </Badge>
+        {/* Task #971 — prefer the parent's 60s drift recompute when it
+            differs from the server-stamped value so the badge cannot
+            stay "high" once a 24h pickup window has tipped into ≤12h
+            while the rep is staring at the row. */}
+        {(() => {
+          const u = urgencyOverride ?? item.urgency;
+          const drifted = !!urgencyOverride
+            && (urgencyOverride.level !== item.urgency.level
+              || urgencyOverride.score !== item.urgency.score);
+          return (
+            <Badge
+              variant="outline"
+              className={urgencyTone(u.level)}
+              data-testid={`badge-urgency-${opp.id}`}
+              data-urgency-drifted={drifted ? "true" : "false"}
+              title={drifted ? `Recomputed (was ${item.urgency.level} · ${item.urgency.score})` : undefined}
+            >
+              {u.level} · {u.score}
+            </Badge>
+          );
+        })()}
+        {/* Task #971 — Conversion-failure chip. Click opens an in-cockpit
+            detail panel (reason, full detail, last-attempted, retry
+            count) with the Retry action inside the panel. The chip
+            disappears when the server marks the failure resolved
+            (cockpit refetch invalidated by the mutation). */}
+        {item.latestConversionFailure && (() => {
+          const f = item.latestConversionFailure;
+          const attemptedAgo = (() => {
+            const t = Date.parse(f.attemptedAt);
+            if (!Number.isFinite(t)) return null;
+            return fmtAge(Math.max(0, Math.round((Date.now() - t) / 60_000)));
+          })();
+          return (
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-1 rounded-md border border-red-500/40 bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:text-red-300 hover:bg-red-500/20"
+                  data-testid={`chip-conversion-failure-${opp.id}`}
+                >
+                  <AlertCircle className="h-3 w-3" />
+                  <span>Conversion failed</span>
+                </button>
+              </PopoverTrigger>
+              <PopoverContent
+                className="w-80 p-3 text-xs"
+                onClick={(e) => e.stopPropagation()}
+                data-testid={`panel-conversion-failure-${opp.id}`}
+              >
+                <div className="mb-2 flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
+                  <span className="font-semibold">Capture failed</span>
+                </div>
+                <dl className="space-y-1.5">
+                  <div className="flex items-baseline gap-2">
+                    <dt className="w-20 shrink-0 text-muted-foreground">Reason</dt>
+                    <dd
+                      className="flex-1 break-words font-medium"
+                      data-testid={`text-conversion-failure-reason-${opp.id}`}
+                    >
+                      {f.reason}
+                    </dd>
+                  </div>
+                  {f.detail && (
+                    <div className="flex items-baseline gap-2">
+                      <dt className="w-20 shrink-0 text-muted-foreground">Detail</dt>
+                      <dd
+                        className="flex-1 break-words text-foreground/80"
+                        data-testid={`text-conversion-failure-detail-${opp.id}`}
+                      >
+                        {f.detail}
+                      </dd>
+                    </div>
+                  )}
+                  <div className="flex items-baseline gap-2">
+                    <dt className="w-20 shrink-0 text-muted-foreground">Attempted</dt>
+                    <dd
+                      className="flex-1 tabular-nums"
+                      data-testid={`text-conversion-failure-attempted-${opp.id}`}
+                    >
+                      {attemptedAgo ? `${attemptedAgo} ago` : f.attemptedAt}
+                    </dd>
+                  </div>
+                  <div className="flex items-baseline gap-2">
+                    <dt className="w-20 shrink-0 text-muted-foreground">Retries</dt>
+                    <dd
+                      className="flex-1 tabular-nums"
+                      data-testid={`text-conversion-failure-retry-count-${opp.id}`}
+                    >
+                      {f.retryCount}
+                    </dd>
+                  </div>
+                </dl>
+                <div className="mt-3 flex justify-end gap-2 border-t pt-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    disabled={retryingConversion}
+                    onClick={() => {
+                      if (onRetryConversion) onRetryConversion(f.id);
+                    }}
+                    data-testid={`button-retry-conversion-${opp.id}`}
+                  >
+                    {retryingConversion ? "Retrying…" : "Retry capture"}
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
+          );
+        })()}
         {isNewSinceLastView && (
           <Badge className="bg-violet-600 text-white hover:bg-violet-600" data-testid={`badge-new-${opp.id}`}>NEW</Badge>
         )}

@@ -18,7 +18,7 @@ import {
   type RecurringLane,
   type User,
 } from "@shared/schema";
-import { sql, and, eq, gte, isNotNull, isNull } from "drizzle-orm";
+import { sql, and, eq, gte, isNotNull, isNull, desc } from "drizzle-orm";
 import { ensureShortlistRanked } from "../proactiveOpportunityService";
 import { sendOpportunityWave } from "../freightOpportunityOutreachService";
 import { getBlendedRateCached } from "../pricingBlendService";
@@ -59,7 +59,16 @@ import {
   parseOwnerScopeTokens,
   resolveOwnerScope,
   isValidOwnerScopeToken,
+  hasAmBookToken,
 } from "@shared/cockpitTeams";
+import {
+  computeCockpitUrgency,
+  type CockpitUrgencyInput,
+  type CockpitUrgencyResult,
+} from "@shared/cockpitUrgency";
+import { freightOpportunityCaptureFailures, quoteOpportunities, integrationHealthSnapshots } from "@shared/schema";
+import { listAvailableFreightImports } from "../availableFreightImporter";
+import { createFreightOpportunityFromWonQuote } from "../services/customerQuotes";
 
 function orgId(req: Express.Request): string {
   return (req as any).session?.organizationId as string;
@@ -69,97 +78,107 @@ function userId(req: Express.Request): string | null {
 }
 
 
-// Normalized 0-100 urgency: pickup-proximity x tier x lane-score, plus coverage/freshness bonuses.
-export function computeCockpitUrgency(input: {
-  pickupAt: Date | string | null | undefined;
-  generatedAt: Date | string | null | undefined;
-  includedCarriers: number;
-  sentCarriers: number;
-  respondedCarriers: number;
-  status: string;
-  customerTier?: string | null;
-  laneScore?: number | null;
-  now?: Date;
-}): { score: number; level: "critical" | "high" | "medium" | "low"; reasons: string[] } {
-  const now = input.now ?? new Date();
-  const reasons: string[] = [];
+// Task #971 — `computeCockpitUrgency` moved to `shared/cockpitUrgency.ts`
+// so the AF cockpit page can recompute urgency in place every 60s. The
+// re-export below preserves the existing import surface for callers like
+// `server/services/todayQueue.ts` and the existing vitest suite.
+// Rework #3 — exported as a true value re-export (same function reference)
+// so server/client share one identity; the cockpit-hardening test
+// asserts `routeMod.computeCockpitUrgency === computeCockpitUrgency` to
+// keep that contract from regressing into a lossy wrapper.
+export { computeCockpitUrgency };
+export type { CockpitUrgencyInput, CockpitUrgencyResult };
 
-  // 1) Pickup proximity — base signal (0–60).
-  let pickupBase = 0;
-  const pickup = input.pickupAt ? new Date(input.pickupAt) : null;
-  if (pickup && Number.isFinite(pickup.getTime())) {
-    const hours = (pickup.getTime() - now.getTime()) / 3_600_000;
-    if (hours <= 12) { pickupBase = 60; reasons.push("pickup ≤ 12h"); }
-    else if (hours <= 24) { pickupBase = 50; reasons.push("pickup ≤ 24h"); }
-    else if (hours <= 48) { pickupBase = 35; reasons.push("pickup ≤ 48h"); }
-    else if (hours <= 96) { pickupBase = 20; reasons.push("pickup ≤ 4d"); }
-    else { pickupBase = 10; reasons.push("pickup > 4d"); }
-  } else {
-    pickupBase = 15;
-    reasons.push("pickup unknown");
+// Task #971 — AF import-health threshold contract. Exported so the
+// cockpit-hardening tests can lock the constants and the responder
+// stays the single source of truth.
+export const IMPORT_HEALTH_THRESHOLDS = {
+  freshMinutes: 15,
+  failedMinutes: 24 * 60,
+} as const;
+
+/**
+ * Task #971 (rework #3) — pure status derivation for the AF import-health
+ * pill. Combines run-history signals (age + recent errors) with the
+ * scheduler / integration health surface (OneDrive probe via
+ * `integration_health_snapshots`). Acceptance contract:
+ *   - "failed" when EITHER the last two import runs errored OR the
+ *     OneDrive integration is failing (breaker open / lastError without
+ *     recent success) OR the last successful import is older than
+ *     `failedMinutes`.
+ *   - "stale" when the last run errored OR the integration is degraded
+ *     OR the age exceeds `freshMinutes`.
+ *   - "ok" otherwise.
+ *
+ * Exported so cockpit-hardening tests can lock every transition without
+ * spinning up Express/DB.
+ */
+export type ImportHealthStatus = "ok" | "stale" | "failed";
+export type IntegrationHealthState = "healthy" | "degraded" | "failed" | "unknown";
+
+export interface ImportHealthInputs {
+  ageMinutes: number | null;
+  lastError: string | null;
+  lastTwoErrored: boolean;
+  integrationState: IntegrationHealthState;
+}
+
+export function deriveImportHealthStatus(
+  i: ImportHealthInputs,
+  thresholds: typeof IMPORT_HEALTH_THRESHOLDS = IMPORT_HEALTH_THRESHOLDS,
+): ImportHealthStatus {
+  const aged = i.ageMinutes != null && i.ageMinutes > thresholds.failedMinutes;
+  if (i.lastTwoErrored || i.integrationState === "failed" || aged) return "failed";
+  // Rework #4 — "no successful import yet" (ageMinutes == null) MUST
+  // never read green. Acceptance contract is: green only when the last
+  // import is <freshMinutes old AND integration is healthy. With no
+  // import timestamp the freshness condition cannot hold, so we
+  // downgrade to stale (or escalate to failed via the branch above
+  // when integration is failed).
+  if (i.ageMinutes == null) return "stale";
+  const stale = i.ageMinutes > thresholds.freshMinutes;
+  if (i.lastError || i.integrationState === "degraded" || stale) return "stale";
+  return "ok";
+}
+
+/**
+ * Task #971 (rework #3) — pure helper that maps a raw
+ * `integration_health_snapshots.health_state` (+ optional breaker hint)
+ * to the four-state surface the pill consumes. The probe surface uses
+ * "healthy | degraded | unknown | disabled"; we collapse "disabled" /
+ * "unknown" into "unknown" (no scheduler signal available) and treat an
+ * open breaker as "failed" regardless of the last persisted state.
+ */
+export function normalizeIntegrationHealthState(
+  raw: string | null | undefined,
+  breakerState?: string | null,
+): IntegrationHealthState {
+  if (breakerState === "open") return "failed";
+  switch (raw) {
+    case "healthy": return "healthy";
+    case "degraded": return "degraded";
+    case "failed": return "failed";
+    default: return "unknown";
   }
+}
 
-  // 2) Customer-tier multiplier (0.85–1.30). Platinum customers always
-  // float to the top of the queue even on calmer pickup days.
-  const tierMultiplier = (() => {
-    const t = (input.customerTier ?? "").toLowerCase();
-    if (t === "platinum") { reasons.push("platinum customer"); return 1.30; }
-    if (t === "gold")     { reasons.push("gold customer");      return 1.15; }
-    if (t === "silver")   {                                      return 1.05; }
-    if (t === "bronze")   {                                      return 0.95; }
-    return 1.0;
-  })();
-
-  // 3) Lane-score multiplier (0.9–1.20). Strategic lanes get a bump.
-  const laneMultiplier = (() => {
-    if (input.laneScore === null || input.laneScore === undefined) return 1.0;
-    if (input.laneScore >= 85) { reasons.push("top strategic lane"); return 1.20; }
-    if (input.laneScore >= 65) { reasons.push("strong lane");        return 1.10; }
-    if (input.laneScore >= 35) return 1.0;
-    return 0.9;
-  })();
-
-  let score = pickupBase * tierMultiplier * laneMultiplier;
-
-  // 4) Coverage gap (additive, up to 25 pts) — uncovered loads carry urgency.
-  if (input.respondedCarriers === 0 && input.sentCarriers === 0) {
-    score += 25;
-    reasons.push("no outreach yet");
-  } else if (input.respondedCarriers === 0) {
-    score += 15;
-    reasons.push("awaiting reply");
-  } else if (input.respondedCarriers < input.sentCarriers) {
-    score += 8;
-    reasons.push("partial replies");
+/**
+ * Task #971 (rework #3) — pure helper that counts AM-book rows whose
+ * customer name failed to resolve to a CRM-owned company. Mirrors the
+ * route's inline loop so the cockpit-hardening tests can exercise the
+ * exact bucket math (unresolved AND not-surviving) without an Express
+ * round-trip. `survivingIds` MUST be the post-filter id set; otherwise
+ * "covered by another token" rows would be over-counted.
+ */
+export function countUnresolvedAmBookRows(input: {
+  unresolvedIds: ReadonlySet<string>;
+  survivingIds: ReadonlySet<string>;
+}): number {
+  let n = 0;
+  for (const id of input.unresolvedIds) {
+    if (!input.survivingIds.has(id)) n += 1;
   }
-
-  // 5) Shortlist health (additive, up to 15 pts) — empty is itself urgent.
-  if (input.includedCarriers === 0) {
-    score += 15;
-    reasons.push("no shortlist");
-  } else if (input.includedCarriers < 3) {
-    score += 7;
-    reasons.push("thin shortlist");
-  }
-
-  // 6) Bonus for stale generatedAt (>4h with no replies).
-  const generated = input.generatedAt ? new Date(input.generatedAt) : null;
-  if (generated && Number.isFinite(generated.getTime())) {
-    const ageH = (now.getTime() - generated.getTime()) / 3_600_000;
-    if (ageH > 4 && input.respondedCarriers === 0) {
-      score += 5;
-      reasons.push("stale, no replies");
-    }
-  }
-
-  // Covered/expired/cancelled rows are de-prioritized hard.
-  if (input.status === "covered" || input.status === "expired" || input.status === "cancelled") {
-    score = Math.min(score, 5);
-  }
-
-  score = Math.max(0, Math.min(100, Math.round(score)));
-  const level = score >= 75 ? "critical" : score >= 55 ? "high" : score >= 30 ? "medium" : "low";
-  return { score, level, reasons };
+  return n;
 }
 
 // The companies table doesn't carry an explicit tier; we derive a comparable
@@ -819,17 +838,64 @@ export function registerFreightCockpitRoutes(app: Express) {
           effectiveOwnerFilter = "me";
         }
       }
+      // Task #971 — count rows the am_book filter dropped because their
+      // customer name didn't resolve to any company in the rep's CRM.
+      // Surfaces as `hiddenCounts.byUnresolvedCustomer`.
+      let hiddenByUnresolvedCustomer = 0;
       if (effectiveOwnerFilter !== "all") {
         // Task #957 — resolve the (possibly multi-select) owner filter into
         // a canonical {userIds, includeUnassigned, isAll} envelope. Legacy
         // single-token values still flow through unchanged.
         const tokens = parseOwnerScopeTokens(effectiveOwnerFilter);
         const scope = resolveOwnerScope(tokens, user?.id ?? null, null);
+        const amBookActive = hasAmBookToken(tokens);
+
+        // Task #971 — AM Book customer resolver. Look up each row's
+        // customer NAME via storage.getCompaniesByNames so the am_book
+        // predicate can match on the resolved company's `assignedTo`.
+        // A row is "unresolved" only when the name doesn't match ANY
+        // company; rows whose company exists but has no assignedTo are
+        // hidden by the am_book predicate but NOT counted as unresolved.
+        const companyAssignedToByCompanyId = new Map<string, string | null>();
+        const resolvedCompanyIdByRow = new Map<string, string>();
+        const unresolvedRowIds = new Set<string>();
+        if (amBookActive) {
+          const customerNames = Array.from(new Set(
+            items
+              .map((i) => (i.customer?.name ?? "").trim())
+              .filter((n) => n.length > 0),
+          ));
+          const companyIdByNormalizedName = new Map<string, string>();
+          if (customerNames.length > 0) {
+            try {
+              const matched = await storage.getCompaniesByNames(customerNames, org);
+              for (const c of matched) {
+                const assigned = (c as { assignedTo?: string | null }).assignedTo ?? null;
+                companyAssignedToByCompanyId.set(c.id, assigned);
+                const key = (c.name ?? "").trim().toLowerCase();
+                if (key) companyIdByNormalizedName.set(key, c.id);
+              }
+            } catch (err) {
+              console.error("[freight-cockpit] am_book name resolver error:", err);
+            }
+          }
+          for (const i of items) {
+            const rawCompanyId = i.opportunity.companyId ?? i.customer?.id ?? null;
+            const nameKey = (i.customer?.name ?? "").trim().toLowerCase();
+            const resolved = rawCompanyId
+              ?? (nameKey ? companyIdByNormalizedName.get(nameKey) ?? null : null);
+            if (resolved) {
+              resolvedCompanyIdByRow.set(i.opportunity.id, resolved);
+            } else {
+              unresolvedRowIds.add(i.opportunity.id);
+            }
+          }
+        }
+
         if (!scope.isAll) {
           items = items.filter(i => {
             const ids = i.ownership?.ids ?? (i.owner?.id ? [i.owner.id] : []);
             if (scope.includeUnassigned && ids.length === 0) return true;
-            if (scope.userIds.size === 0) return false;
             // Cheap fast-path: any direct id intersection wins.
             for (const id of ids) {
               if (scope.userIds.has(id)) return true;
@@ -841,7 +907,32 @@ export function registerFreightCockpitRoutes(app: Express) {
                 return true;
               }
             }
+            // Task #971 — am_book branch. Match when the resolved company's
+            // `assignedTo` is the current user. We require a current user
+            // (am_book without a session is meaningless) and a resolved
+            // companyId for the row.
+            if (amBookActive && user) {
+              const resolved = resolvedCompanyIdByRow.get(i.opportunity.id);
+              if (resolved) {
+                const assignedTo = companyAssignedToByCompanyId.get(resolved) ?? null;
+                if (assignedTo && assignedTo === user.id) return true;
+              }
+            }
             return false;
+          });
+        }
+
+        if (amBookActive) {
+          // Count unresolved rows that ALSO didn't pass any other token in
+          // the scope, so the bucket reports rows truly hidden by the
+          // missing-customer-resolution path (not rows the rep would have
+          // seen anyway via "me" or "team:*"). The shared
+          // `countUnresolvedAmBookRows` helper does the math; tests
+          // exercise it directly so this loop never silently regresses.
+          const survivingIds = new Set<string>(items.map((i) => i.opportunity.id));
+          hiddenByUnresolvedCustomer = countUnresolvedAmBookRows({
+            unresolvedIds: unresolvedRowIds,
+            survivingIds,
           });
         }
       }
@@ -1309,7 +1400,209 @@ export function registerFreightCockpitRoutes(app: Express) {
         // hint and for parity between the per-stage drop counts and the
         // final visible row count.
         byBaseScope: hiddenByBaseScope,
+        // Task #971 — am_book rows hidden because their customer name
+        // didn't match any company in the rep's CRM (truly unresolved
+        // names — not "company has no assignedTo").
+        byUnresolvedCustomer: hiddenByUnresolvedCustomer,
       };
+
+      // Task #971 — Hidden-vs-deduped split. Surfaces both a run-level
+      // summary (collapsed/unmatched/expired counts from the latest
+      // import audit) AND a per-row list of canonical rows that absorbed
+      // a prior stableKey via soft-merge. Each per-row entry carries the
+      // canonical opportunityId so the client can link/scroll to the
+      // canonical row in the cockpit.
+      const dedupeCounts = await (async () => {
+        try {
+          const recent = await listAvailableFreightImports(org, 1);
+          const last = recent[0];
+          // Rework #4 — source dedupe linkage from the audit log directly.
+          // Each `soft_merge_window_slip` event is the authoritative
+          // dedupe decision: `opportunity_id` is the canonical row that
+          // absorbed the duplicate, and `payload.previousStableKey` is
+          // the source key that was deduped INTO it. Iterating visible
+          // `items` (and pointing canonicalOpportunityId at the row's own
+          // id) was wrong because (a) it dropped pairs whose canonical
+          // row was filtered out of the current view, and (b) the
+          // self-pointing id couldn't anchor a deduped→canonical link.
+          let collapsedByOrderKey = 0;
+          const mergedRows: Array<{
+            id: string;
+            label: string;
+            canonicalOpportunityId: string;
+            mergedFromStableKey: string;
+          }> = [];
+          if (last?.createdAt) {
+            const sinceIso = typeof last.createdAt === "string"
+              ? last.createdAt
+              : new Date(last.createdAt).toISOString();
+            const auditRows = await db.execute<{
+              audit_id: string;
+              opportunity_id: string;
+              payload: Record<string, unknown> | null;
+              origin: string | null;
+              destination: string | null;
+              company_id: string | null;
+            }>(sql`
+              SELECT a.id          AS audit_id,
+                     a.opportunity_id,
+                     a.payload,
+                     o.origin,
+                     o.destination,
+                     o.company_id
+                FROM freight_opportunity_audit a
+                JOIN freight_opportunities o ON o.id = a.opportunity_id
+               WHERE o.organization_id = ${org}
+                 AND a.event_type = 'generated'
+                 AND a.payload->>'kind' = 'soft_merge_window_slip'
+                 AND a.created_at >= ${sinceIso}::timestamptz
+               ORDER BY a.created_at DESC
+            `);
+            const auditList = Array.isArray(auditRows)
+              ? (auditRows as Array<{
+                  audit_id: string;
+                  opportunity_id: string;
+                  payload: Record<string, unknown> | null;
+                  origin: string | null;
+                  destination: string | null;
+                  company_id: string | null;
+                }>)
+              : (auditRows as {
+                  rows: Array<{
+                    audit_id: string;
+                    opportunity_id: string;
+                    payload: Record<string, unknown> | null;
+                    origin: string | null;
+                    destination: string | null;
+                    company_id: string | null;
+                  }>;
+                }).rows ?? [];
+            collapsedByOrderKey = auditList.length;
+
+            // Build a one-shot lookup of customer names for the canonical
+            // opportunities surfaced by the audit log so the label can
+            // include the resolved customer + lane even when the
+            // canonical row isn't currently visible in `items`.
+            const visibleById = new Map<string, (typeof items)[number]>();
+            for (const it of items) visibleById.set(it.opportunity.id, it);
+            const missingCompanyIds = new Set<string>();
+            for (const a of auditList) {
+              if (a.company_id && !visibleById.has(a.opportunity_id)) {
+                missingCompanyIds.add(a.company_id);
+              }
+            }
+            const companyNameById = new Map<string, string>();
+            if (missingCompanyIds.size > 0) {
+              try {
+                const companies = await storage.getCompaniesByIds(
+                  Array.from(missingCompanyIds),
+                  org,
+                );
+                for (const c of companies) {
+                  if (c.name) companyNameById.set(c.id, c.name);
+                }
+              } catch (err) {
+                console.warn("[freight-cockpit] dedupe label company lookup failed:", err);
+              }
+            }
+
+            for (const a of auditList) {
+              const payload = a.payload ?? {};
+              const previousStableKey =
+                typeof payload.previousStableKey === "string"
+                  ? payload.previousStableKey
+                  : "";
+              if (!previousStableKey) continue;
+              const visible = visibleById.get(a.opportunity_id);
+              const customer = visible?.customer?.name
+                ?? (a.company_id ? companyNameById.get(a.company_id) : null)
+                ?? "Unknown customer";
+              const origin = visible?.opportunity.origin ?? a.origin ?? "?";
+              const destination = visible?.opportunity.destination ?? a.destination ?? "?";
+              mergedRows.push({
+                id: a.audit_id,
+                label: `${customer} — ${origin} → ${destination}`,
+                canonicalOpportunityId: a.opportunity_id,
+                mergedFromStableKey: previousStableKey,
+              });
+            }
+          }
+          if (!last && mergedRows.length === 0 && collapsedByOrderKey === 0) return null;
+          return {
+            lastImportAt: last?.createdAt ?? null,
+            collapsedByOrderKey,
+            unmatchedCustomers: last?.unmatchedCompanies ?? 0,
+            expired: last?.expired ?? 0,
+            inserted: last?.inserted ?? 0,
+            mergedRows,
+          };
+        } catch (err) {
+          console.error("[freight-cockpit] dedupeCounts read error:", err);
+          return null;
+        }
+      })();
+
+      // Task #971 — Per-row latest conversion failure. The cockpit only
+      // shows AF rows whose source is a won customer quote (sourceQuoteId
+      // present); we look up the OPEN failure for those quotes in one
+      // batched query so the chip + retry can render without a per-row
+      // round trip. Closed (resolvedAt IS NOT NULL) failures are skipped
+      // so a previously-fixed row never re-shows the chip.
+      type LatestConversionFailure = {
+        id: string;
+        reason: string;
+        detail: string | null;
+        attemptedAt: string;
+        retryCount: number;
+      };
+      const conversionFailureByOpp = new Map<string, LatestConversionFailure>();
+      const sourceQuoteIds = items
+        .map((i) => i.opportunity.sourceQuoteId)
+        .filter((q): q is string => typeof q === "string" && q.length > 0);
+      const sourceQuoteToOppId = new Map<string, string>();
+      for (const i of items) {
+        if (i.opportunity.sourceQuoteId) {
+          sourceQuoteToOppId.set(i.opportunity.sourceQuoteId, i.opportunity.id);
+        }
+      }
+      if (sourceQuoteIds.length > 0) {
+        try {
+          const failures = await db
+            .select()
+            .from(freightOpportunityCaptureFailures)
+            .where(and(
+              eq(freightOpportunityCaptureFailures.orgId, org),
+              isNull(freightOpportunityCaptureFailures.resolvedAt),
+              sql`${freightOpportunityCaptureFailures.quoteId} IN (${sql.join(
+                sourceQuoteIds.map((q) => sql`${q}`),
+                sql`, `,
+              )})`,
+            ));
+          for (const f of failures) {
+            const oppId = sourceQuoteToOppId.get(f.quoteId);
+            if (!oppId) continue;
+            const attemptedRaw: Date | string | null = f.attemptedAt;
+            const attempted = attemptedRaw instanceof Date
+              ? attemptedRaw
+              : typeof attemptedRaw === "string"
+                ? new Date(attemptedRaw)
+                : new Date(0);
+            const existing = conversionFailureByOpp.get(oppId);
+            const existingTs = existing ? new Date(existing.attemptedAt).getTime() : -Infinity;
+            if (attempted.getTime() >= existingTs) {
+              conversionFailureByOpp.set(oppId, {
+                id: f.id,
+                reason: f.reason,
+                detail: f.detail ?? null,
+                attemptedAt: attempted.toISOString(),
+                retryCount: f.retryCount ?? 0,
+              });
+            }
+          }
+        } catch (err) {
+          console.error("[freight-cockpit] latestConversionFailure read error:", err);
+        }
+      }
       // Task #900 — surface the actionable-rule hidden count on the kpis
       // envelope so the "Stale: N" chip in the cockpit header has it
       // alongside the other top-line counters. Patched onto `kpis` rather
@@ -1363,6 +1656,10 @@ export function registerFreightCockpitRoutes(app: Express) {
       const groupKey = (FREIGHT_COCKPIT_GROUPINGS as readonly string[]).includes(grouping) ? grouping : "none";
       const itemsWithGroup = items.map(i => ({
         ...i,
+        // Task #971 — surface latest unresolved conversion failure per row
+        // so the AF cockpit can render the red "Conversion failed — Retry"
+        // chip without a per-row round trip.
+        latestConversionFailure: conversionFailureByOpp.get(i.opportunity.id) ?? null,
         groupKey: groupKey === "customer"
           ? (i.opportunity.companyId || "—")
           : groupKey === "pickup_day"
@@ -1405,6 +1702,9 @@ export function registerFreightCockpitRoutes(app: Express) {
         nextImport,
         freshness,
         hiddenCounts,
+        // Task #971 — companion bucket for the HiddenCountsDisclosure
+        // two-group layout on AF. May be null when no import has run yet.
+        dedupeCounts,
         roiMetrics,
         sort: sortKey,
         grouping: groupKey,
@@ -2018,4 +2318,250 @@ export function registerFreightCockpitRoutes(app: Express) {
       res.status(400).json({ error: msg });
     }
   });
+
+  // Task #971 — AF import-health endpoint. Polled by AfImportHealthPill
+  // every 60s. Thresholds are exported above so tests can lock the
+  // contract.
+
+  app.get("/api/freight-opportunities/import-health", requireAuth, async (req, res) => {
+    try {
+      const uid = userId(req);
+      if (!uid) return res.status(401).json({ error: "Unauthenticated" });
+      const user = await storage.getUser(uid);
+      if (!user?.organizationId) return res.status(400).json({ error: "Missing organization" });
+      const org = user.organizationId;
+
+      const recent = await listAvailableFreightImports(org, 5);
+      const thresholds = {
+        freshMinutes: IMPORT_HEALTH_THRESHOLDS.freshMinutes,
+        failedMinutes: IMPORT_HEALTH_THRESHOLDS.failedMinutes,
+      };
+      const history = recent.map((r) => ({
+        id: r.id,
+        createdAt: r.createdAt,
+        inserted: r.inserted,
+        updated: r.updated,
+        expired: r.expired,
+        unmatchedCompanies: r.unmatchedCompanies,
+        triggeredBy: r.triggeredBy,
+        fileName: r.fileName,
+        error: r.error ?? null,
+      }));
+
+      // Task #971 (rework #3) — pull the OneDrive integration probe so the
+      // pill turns red on credential / breaker failures even when the
+      // scheduler stayed silent (no run rows to flag). Failure to read the
+      // snapshot table degrades to "unknown" (run-history signals only).
+      let integrationState: IntegrationHealthState = "unknown";
+      let integrationDetail: {
+        source: "onedrive";
+        healthState: IntegrationHealthState;
+        breakerState: string | null;
+        lastSuccessAt: string | null;
+        lastErrorAt: string | null;
+        lastErrorMessage: string | null;
+        snapshotAt: string | null;
+      } = {
+        source: "onedrive",
+        healthState: "unknown",
+        breakerState: null,
+        lastSuccessAt: null,
+        lastErrorAt: null,
+        lastErrorMessage: null,
+        snapshotAt: null,
+      };
+      try {
+        const [snap] = await db
+          .select()
+          .from(integrationHealthSnapshots)
+          .where(eq(integrationHealthSnapshots.source, "onedrive"))
+          .orderBy(desc(integrationHealthSnapshots.createdAt))
+          .limit(1);
+        if (snap) {
+          integrationState = normalizeIntegrationHealthState(snap.healthState, snap.breakerState);
+          integrationDetail = {
+            source: "onedrive",
+            healthState: integrationState,
+            breakerState: snap.breakerState ?? null,
+            lastSuccessAt: snap.lastSuccessAt ? new Date(snap.lastSuccessAt).toISOString() : null,
+            lastErrorAt: snap.lastErrorAt ? new Date(snap.lastErrorAt).toISOString() : null,
+            lastErrorMessage: snap.lastErrorMessage ?? null,
+            snapshotAt: new Date(snap.createdAt).toISOString(),
+          };
+        }
+      } catch (probeErr) {
+        console.warn("[freight-cockpit] onedrive health probe read failed:", probeErr);
+      }
+
+      if (recent.length === 0) {
+        const status = deriveImportHealthStatus({
+          ageMinutes: null,
+          lastError: null,
+          lastTwoErrored: false,
+          integrationState,
+        });
+        return res.json({
+          status,
+          ageMinutes: null,
+          lastImportAt: null,
+          lastError: null,
+          thresholds,
+          history,
+          integration: integrationDetail,
+        });
+      }
+
+      const latest = recent[0];
+      const lastImportAt = new Date(latest.createdAt).toISOString();
+      const ageMinutes = Math.round(Math.max(0, Date.now() - new Date(latest.createdAt).getTime()) / 60_000);
+      const lastError: string | null = latest.error ?? null;
+      const lastTwoErrored = recent.length >= 2 && !!recent[0].error && !!recent[1].error;
+
+      const status = deriveImportHealthStatus({
+        ageMinutes,
+        lastError,
+        lastTwoErrored,
+        integrationState,
+      });
+
+      res.json({
+        status,
+        ageMinutes,
+        lastImportAt,
+        lastError,
+        thresholds,
+        history,
+        integration: integrationDetail,
+      });
+    } catch (err) {
+      console.error("[freight-cockpit] import-health failed:", err);
+      res.status(500).json({ error: "Failed to load import health" });
+    }
+  });
+
+  // Task #971 — Per-row conversion-failure retry. Mirrors the admin
+  // /api/admin/freight-conversion-failures/:id/retry handler so the
+  // chip-driven retry on AF reuses the same converter contract: success
+  // auto-resolves the failure record (the converter does that itself),
+  // hard error bumps retryCount + lastRetryError, and a duplicate-quote
+  // race surfaces with the same 409 the admin surface uses.
+  app.post(
+    "/api/freight-opportunities/:id/conversion-failure/retry",
+    requireAuth,
+    async (req, res) => {
+      try {
+        const uid = userId(req);
+        if (!uid) return res.status(401).json({ error: "Unauthenticated" });
+        const user = await storage.getUser(uid);
+        if (!user?.organizationId) return res.status(400).json({ error: "Missing organization" });
+        const org = user.organizationId;
+        const oppId = pStr(req.params.id);
+
+        const [opp] = await db
+          .select()
+          .from(freightOpportunities)
+          .where(and(
+            eq(freightOpportunities.id, oppId),
+            eq(freightOpportunities.orgId, org),
+          ))
+          .limit(1);
+        if (!opp) return res.status(404).json({ error: "Opportunity not found" });
+        if (!opp.sourceQuoteId) {
+          return res.status(400).json({ error: "Opportunity has no source quote" });
+        }
+
+        const failures = await db
+          .select()
+          .from(freightOpportunityCaptureFailures)
+          .where(and(
+            eq(freightOpportunityCaptureFailures.orgId, org),
+            eq(freightOpportunityCaptureFailures.quoteId, opp.sourceQuoteId),
+            isNull(freightOpportunityCaptureFailures.resolvedAt),
+          ));
+        if (failures.length === 0) {
+          return res.status(404).json({ error: "No open conversion failure for this row" });
+        }
+        // Most recent open failure wins (largest attemptedAt). The drizzle
+        // column is `timestamp` so the runtime value is `Date`, but the
+        // narrow helper below stays robust to a hypothetical string row
+        // without resorting to `any` casts.
+        const toMillis = (v: Date | string | null): number => {
+          if (v instanceof Date) return v.getTime();
+          if (typeof v === "string") {
+            const t = Date.parse(v);
+            return Number.isFinite(t) ? t : 0;
+          }
+          return 0;
+        };
+        const failure = failures.slice().sort((a, b) => toMillis(b.attemptedAt) - toMillis(a.attemptedAt))[0];
+
+        const [quote] = await db
+          .select()
+          .from(quoteOpportunities)
+          .where(and(
+            eq(quoteOpportunities.id, failure.quoteId),
+            eq(quoteOpportunities.organizationId, org),
+          ))
+          .limit(1);
+        if (!quote) {
+          await db.update(freightOpportunityCaptureFailures).set({
+            resolvedAt: new Date(),
+            resolvedById: uid,
+            resolutionNote: "Source quote no longer exists — auto-resolved on retry.",
+          }).where(eq(freightOpportunityCaptureFailures.id, failure.id));
+          return res.json({ ok: true, retried: false, resolved: true, reason: "quote_missing" });
+        }
+        const isWonRetry = quote.outcomeStatus === "won" || quote.outcomeStatus === "won_low_margin";
+        if (!isWonRetry) {
+          await db.update(freightOpportunityCaptureFailures).set({
+            retryCount: failure.retryCount + 1,
+            lastRetryAt: new Date(),
+            lastRetryError: `Quote outcomeStatus is "${quote.outcomeStatus}", converter only runs on won quotes.`,
+          }).where(eq(freightOpportunityCaptureFailures.id, failure.id));
+          return res.status(409).json({
+            error: `Quote is not won (status="${quote.outcomeStatus}") — nothing to retry.`,
+          });
+        }
+
+        try {
+          const result = await createFreightOpportunityFromWonQuote(org, quote, uid);
+          if (result?.id) {
+            const [resolved] = await db
+              .select()
+              .from(freightOpportunityCaptureFailures)
+              .where(eq(freightOpportunityCaptureFailures.id, failure.id))
+              .limit(1);
+            return res.json({
+              ok: true,
+              retried: true,
+              freightOpportunityId: result.id,
+              created: result.created,
+              resolved: !!resolved?.resolvedAt,
+            });
+          }
+          const [refreshed] = await db
+            .select()
+            .from(freightOpportunityCaptureFailures)
+            .where(eq(freightOpportunityCaptureFailures.id, failure.id))
+            .limit(1);
+          return res.status(409).json({
+            ok: false,
+            retried: true,
+            error: refreshed?.detail ?? "Converter returned null — see updated failure detail.",
+            failure: refreshed,
+          });
+        } catch (err) {
+          await db.update(freightOpportunityCaptureFailures).set({
+            retryCount: failure.retryCount + 1,
+            lastRetryAt: new Date(),
+            lastRetryError: getErrorMessage(err),
+          }).where(eq(freightOpportunityCaptureFailures.id, failure.id));
+          throw err;
+        }
+      } catch (err) {
+        console.error("[freight-cockpit] conversion-failure retry failed:", err);
+        res.status(500).json({ error: getErrorMessage(err) });
+      }
+    },
+  );
 }

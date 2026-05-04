@@ -136,7 +136,18 @@ export interface ResolvedOwnerScope {
   tokens: OwnerScopeToken[];
 }
 
-const SPECIAL_TOKENS = new Set(["all", "me", "my-team", "myteam", "unassigned"]);
+// Task #971 — `am_book` is the canonical "rows whose customer is in the
+// rep's book of business" token. AF needs it for the AM Book filter to
+// match Available Loads + Carrier Intelligence. The token is recognised
+// here so it round-trips through parseOwnerScopeTokens; resolution to a
+// row predicate happens in the consuming route (the resolver needs the
+// async `getCompaniesByNames` lookup which doesn't belong in shared/).
+const SPECIAL_TOKENS = new Set(["all", "me", "my-team", "myteam", "unassigned", "am_book"]);
+
+// Convenience predicate so callers don't need to remember the token spelling.
+export function hasAmBookToken(tokens: OwnerScopeToken[]): boolean {
+  return tokens.some((t) => t.toLowerCase() === "am_book");
+}
 
 export function parseOwnerScopeTokens(raw: string | null | undefined): OwnerScopeToken[] {
   if (raw === null || raw === undefined) return [];
@@ -214,6 +225,14 @@ export function resolveOwnerScope(
       if (team) {
         for (const uid of team.userIds) userIds.add(uid);
       }
+      continue;
+    }
+    if (lower === "am_book") {
+      // Task #971 — am_book needs an async company-resolver lookup that
+      // doesn't belong in shared/. The consuming route detects am_book
+      // via `hasAmBookToken(tokens)` and applies its own predicate after
+      // the userIds-based filter; here we just keep am_book out of the
+      // userIds set so it never accidentally matches a literal user id.
       continue;
     }
     // Specific userId.
