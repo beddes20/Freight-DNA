@@ -3008,6 +3008,194 @@ console.log("\n── Section 31: ingestion-silent-drop & empty-content watchdog
   );
 })();
 
+// ── Section 32: Carrier Ranking Lane-First Rebalance (May 2026) ────────────
+// Pins the contract that lane fit (history + geography + equipment + recency)
+// is the PRIMARY signal in carrier ranking and customer history is a
+// secondary booster only. The detailed behavioural assertions live in
+// tests/carrier-ranking-lane-first.test.ts; this section pins the *shape* of
+// the contract (constants, exports, magnitudes) so future refactors can't
+// silently undo the rebalance.
+console.log("\n── Section 32: Carrier Ranking Lane-First Rebalance ─────────────────\n");
+
+(function pinLaneFirstRebalanceContract() {
+  const rankerSrc = readFile("server/carrierRankingService.ts");
+  const recSrc = readFile("server/carrierRecommendationEngine.ts");
+  const settingsSrc = readFile("server/carrierIntelligenceSettings.ts");
+
+  // ── Constants exist + match the canonical values ─────────────────────────
+  assert(
+    "carrierRankingService — exports MIN_LANE_FIT_FOR_TOP_RANK = 50",
+    /export\s+const\s+MIN_LANE_FIT_FOR_TOP_RANK\s*=\s*50\b/.test(rankerSrc),
+    "Floor constant missing or value drifted — lane-fit gating contract is broken",
+  );
+  assert(
+    "carrierRankingService — exports CUSTOMER_ONLY_FALLBACK_REASON with the spec wording",
+    /CUSTOMER_ONLY_FALLBACK_REASON\s*=[\s\S]{0,200}Customer history only on other lanes \(weak lane fit\)/.test(rankerSrc),
+    "Reason copy drifted — reps will see different wording per surface",
+  );
+  assert(
+    "carrierRankingService — exports classifyCustomerOnlyFallback helper",
+    /export\s+function\s+classifyCustomerOnlyFallback\s*\(/.test(rankerSrc),
+    "Pure helper missing — both branches + tests reuse it",
+  );
+  assert(
+    "carrierRecommendationEngine — exports REC_MIN_LANE_FIT_FOR_TOP_RANK = 50",
+    /export\s+const\s+REC_MIN_LANE_FIT_FOR_TOP_RANK\s*=\s*50\b/.test(recSrc),
+    "Floor constant missing — recommendCarriersForLoad won't gate weak-fit carriers",
+  );
+  assert(
+    "carrierRecommendationEngine — exports blendFitAndPerformance helper",
+    /export\s+function\s+blendFitAndPerformance\s*\(/.test(recSrc),
+    "Blend helper missing — weight changes can't be pinned by tests",
+  );
+
+  // ── Customer-history boost magnitudes are HALVED ─────────────────────────
+  // Catalog branch (lookupCustomerLoads → fitScore += Math.min(10, 5+custLoads*1))
+  assert(
+    "carrierRankingService — catalog customer-history boost is +5 + 1/load (cap 10)",
+    /Math\.min\(10,\s*5\s*\+\s*custLoads\s*\*\s*1\)/.test(rankerSrc),
+    "Customer-history magnitude drifted from the +5/+1/cap-10 spec — re-check carrier ranker",
+  );
+  assert(
+    "carrierRankingService — TMS-only customer-history boost is +5 + 1/load (cap 10)",
+    /Math\.min\(10,\s*5\s*\+\s*custLoadsHist\s*\*\s*1\)/.test(rankerSrc),
+    "TMS-only customer-history magnitude drifted from the +5/+1/cap-10 spec",
+  );
+  // The pre-rebalance values must NOT exist anywhere.
+  assert(
+    "carrierRankingService — old +12 base / cap-20 customer-history boost is gone",
+    !/Math\.min\(20,\s*12\s*\+\s*cust(?:Loads|LoadsHist)\s*\*\s*2\)/.test(rankerSrc),
+    "Pre-rebalance magnitude (+12 base, +2/load, cap 20) re-appeared — lane-first rebalance was reverted",
+  );
+
+  // ── Blend weights — fit ≥ 65% in both code paths ────────────────────────
+  assert(
+    "carrierRecommendationEngine — blend weights are 0.65·fit + 0.35·perf at loads≥3",
+    /loads\s*>=\s*3[\s\S]{0,200}Math\.round\(\s*0\.65\s*\*\s*fit\s*\+\s*0\.35\s*\*\s*perf\s*\)/.test(recSrc),
+    "Mature-carrier blend drifted from the 65/35 split — lane fit no longer carries primary weight",
+  );
+  assert(
+    "carrierRecommendationEngine — blend weights are 0.80·fit + 0.20·perf at loads<3",
+    /Math\.round\(\s*0\.80\s*\*\s*fit\s*\+\s*0\.20\s*\*\s*perf\s*\)/.test(recSrc),
+    "New-carrier blend drifted from the 80/20 split — performance can outweigh lane fit on cold carriers",
+  );
+  assert(
+    "carrierRecommendationEngine — old 0.55/0.45 blend is gone",
+    !/0\.55\s*\*\s*(?:i\.fitScore|fit\.fitScore)\s*\+\s*0\.45\s*\*/.test(recSrc),
+    "Pre-rebalance blend (0.55·fit + 0.45·perf) re-appeared — rebalance was reverted",
+  );
+
+  // ── RankedCarrier interface fields ───────────────────────────────────────
+  assert(
+    "carrierRankingService — RankedCarrier exposes laneFitBaseline + customerOnlyFallback",
+    /laneFitBaseline\?\s*:\s*number/.test(rankerSrc) &&
+      /customerOnlyFallback\?\s*:\s*boolean/.test(rankerSrc),
+    "Interface fields missing — debug + tests can't read the lane-first signal",
+  );
+
+  // ── Sort comparators include customerOnlyFallback demotion ──────────────
+  assert(
+    "carrierRankingService — both sort comparators demote customerOnlyFallback",
+    (rankerSrc.match(/customerOnlyFallback\s*===\s*true/g) ?? []).length >= 2,
+    "Demotion guard appears <2 times — at least the regular sort + HF sort must include it",
+  );
+
+  // ── Settings expose minLaneFitForTopRank ─────────────────────────────────
+  assert(
+    "carrierIntelligenceSettings — ScoringThresholds exposes minLaneFitForTopRank",
+    /minLaneFitForTopRank\s*:\s*number/.test(settingsSrc),
+    "Threshold is not org-tunable — a brokerage with a different appetite has no escape hatch",
+  );
+  assert(
+    "carrierIntelligenceSettings — DEFAULT_THRESHOLDS sets minLaneFitForTopRank: 50",
+    /DEFAULT_THRESHOLDS[\s\S]{0,800}minLaneFitForTopRank\s*:\s*50/.test(settingsSrc),
+    "Default threshold drifted from 50 — production behaviour will differ from the spec",
+  );
+
+  // ── Org-tunable threshold is actually wired into both engines ────────────
+  assert(
+    "carrierRankingService — rankCarriersForLane reads getThresholds(lane.orgId).minLaneFitForTopRank",
+    /getThresholds\(lane\.orgId\)/.test(rankerSrc) &&
+      /minLaneFitForTopRank\s*=\s*orgThresholds\.minLaneFitForTopRank/.test(rankerSrc),
+    "Threshold constant is fixed at compile time — orgs cannot tune it via settings",
+  );
+  assert(
+    "carrierRankingService — both classifyCustomerOnlyFallback call sites pass threshold: minLaneFitForTopRank",
+    (rankerSrc.match(/threshold:\s*minLaneFitForTopRank/g) ?? []).length >= 2,
+    "Wiring missing on at least one branch — TMS-only or catalog will silently use the hardcoded floor",
+  );
+  assert(
+    "carrierRecommendationEngine — recommendCarriersForLoad reads getThresholds(orgId).minLaneFitForTopRank",
+    /import\s*\{\s*getThresholds\s*\}\s*from\s*"\.\/carrierIntelligenceSettings"/.test(recSrc) &&
+      /getThresholds\(orgId\)/.test(recSrc) &&
+      /minLaneFit\s*=\s*orgThresholds\.minLaneFitForTopRank/.test(recSrc),
+    "Threshold constant is fixed at compile time — orgs cannot tune the rec engine floor via settings",
+  );
+
+  // ── classifyCustomerOnlyFallback excludes bench-win carriers ─────────────
+  // Bench wins prove capacity *on this lane* via positive outreach, so a
+  // carrier with bench wins is never a customer-only fallback regardless of
+  // historyMatch tier or baseline. Both call sites must pass benchWins.
+  assert(
+    "carrierRankingService — classifyCustomerOnlyFallback signature accepts benchWins",
+    /benchWins\?:\s*number/.test(rankerSrc),
+    "Bench-win exclusion isn't part of the classifier — bench-tier carriers can still be flagged as fallbacks",
+  );
+  assert(
+    "carrierRankingService — both call sites pass benchWins to classifyCustomerOnlyFallback",
+    (rankerSrc.match(/benchWins:\s*benchWinsForCarrier\(/g) ?? []).length >= 2,
+    "At least one branch is not passing benchWins — the bench-win exclusion only applies to one of catalog / TMS-only",
+  );
+
+  // ── AI re-sort path preserves the canonical ordering contract ────────────
+  // After the optional AI top-5 re-score, the re-sort MUST use the canonical
+  // bench → claimed → fallback → score → tier comparator. A naive
+  // `b.fitScore - a.fitScore` would let AI score adjustments push a fallback
+  // above a non-fallback. Also: AI cannot overwrite the fitReason of a
+  // customerOnlyFallback carrier (rep needs to see the canonical wording).
+  assert(
+    "carrierRankingService — AI re-sort applies the canonical comparator (not a naive score sort)",
+    !/top5\.sort\(\(a,\s*b\)\s*=>\s*b\.fitScore\s*-\s*a\.fitScore\)/.test(rankerSrc),
+    "Naive AI re-sort detected — bench tier-0, claimed-lane and fallback ordering will be silently violated",
+  );
+  assert(
+    "carrierRankingService — AI re-sort comparator demotes customerOnlyFallback inside top-5",
+    /top5\.sort\(\(a,\s*b\)\s*=>\s*\{[\s\S]{0,2000}aFallback\s*!==\s*bFallback/.test(rankerSrc),
+    "AI re-sort missing the fallback demotion — same regression risk as the naive sort",
+  );
+  assert(
+    "carrierRankingService — AI fitReason overwrite is gated on !customerOnlyFallback",
+    /if\s*\(\s*!\s*carrier\.customerOnlyFallback\s*\)\s*\{[\s\S]{0,200}carrier\.fitReason\s*=\s*aiItem\.reason/.test(rankerSrc),
+    "AI can overwrite the canonical fallback fitReason — reps lose the 'Customer history only on other lanes' explanation",
+  );
+
+  // ── Admin route + UI surface the new threshold so orgs can tune it ───────
+  // The settings layer is useless if admins can't actually edit the value.
+  // The PUT schema must accept it and the UI must render an input.
+  const adminRouteSrc = readFile("server/routes/carrierIntelligenceScoring.ts");
+  const adminUiSrc = readFile("client/src/pages/admin-carrier-intelligence-scoring.tsx");
+  assert(
+    "carrierIntelligenceScoring route — PUT thresholds schema accepts minLaneFitForTopRank",
+    /thresholds:\s*z\.object\(\{[\s\S]{0,1200}minLaneFitForTopRank:\s*z\.number\(\)/.test(adminRouteSrc),
+    "Admin PUT will silently drop minLaneFitForTopRank — orgs cannot persist their override",
+  );
+  assert(
+    "admin-carrier-intelligence-scoring page — ThresholdsCfg includes minLaneFitForTopRank",
+    /interface\s+ThresholdsCfg\s*\{[\s\S]{0,400}minLaneFitForTopRank:\s*number/.test(adminUiSrc),
+    "UI threshold type doesn't model the new field — it can never be sent to the server",
+  );
+  assert(
+    "admin-carrier-intelligence-scoring page — DEFAULT_THRESHOLDS sets minLaneFitForTopRank: 50",
+    /DEFAULT_THRESHOLDS[\s\S]{0,400}minLaneFitForTopRank:\s*50/.test(adminUiSrc),
+    "Default UI threshold drifted from 50 — admins see a misleading initial value",
+  );
+  assert(
+    "admin-carrier-intelligence-scoring page — renders an input bound to minLaneFitForTopRank",
+    /minLaneFitForTopRank:\s*v/.test(adminUiSrc) && /input-min-lane-fit/.test(adminUiSrc),
+    "No NumberField wired for minLaneFitForTopRank — admins have no way to tune it",
+  );
+})();
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

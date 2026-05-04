@@ -1,0 +1,89 @@
+Fix the Conversations “Webhook unhealthy” popover so it only shows actionable mailbox issues.
+
+Current problem:
+When I click the Webhook unhealthy pill in Conversations, the popover includes several mailboxes we already know are NOT supposed to be monitored/pulled:
+- Ben
+- Joe
+- Kylee
+- Josh
+- Jordan
+
+Those should not appear as unhealthy/actionable alerts if they are intentionally excluded from monitored mailboxes.
+
+Also:
+- Casey’s email/mailbox entry is incorrect and should be treated as a config/data issue, not lumped into the same noisy list. [file:73]
+
+Product requirement:
+The Webhook unhealthy UI must distinguish between:
+1. mailboxes intentionally not monitored,
+2. mailboxes misconfigured / invalid,
+3. mailboxes truly unhealthy and needing action.
+
+Desired behavior:
+- Intentionally excluded mailboxes should NOT appear in the red unhealthy list.
+- They may appear in a separate collapsed informational section like “Excluded / not monitored” if needed, but they must not count toward webhook issues.
+- Casey’s mailbox should be corrected at the source if possible; if not, show it as a config error with a clear message, separate from true webhook failures.
+- The top counters (mailboxes / pending / webhook issues) should only count actionable monitored-mailbox issues.
+
+Implementation requests:
+
+1. Introduce explicit mailbox monitoring state
+Add or use a canonical mailbox status model like:
+- monitored_active
+- monitored_unhealthy
+- excluded_intentional
+- invalid_config
+- disabled
+Do not infer “unhealthy” from absence alone if the mailbox is intentionally excluded.
+
+2. Fix the data source for mailbox health
+Wherever the popover gets mailbox health rows:
+- filter out intentionally excluded / disabled-by-choice mailboxes from the unhealthy issue count and main unhealthy list.
+- only include mailboxes in webhook issue counts if they are expected to be monitored.
+
+3. Casey-specific fix
+Find where Casey’s mailbox/email is configured.
+- Correct the mailbox identifier/email if it is wrong.
+- If the mailbox truly does not exist, classify it as invalid_config, not generic unhealthy.
+- Return a clear message like:
+  - “Mailbox configuration invalid — address not found in M365”
+  instead of mixing it with standard webhook subscription failures.
+
+4. UI changes in the popover
+Update the Webhook unhealthy popover to show separate sections:
+- Action required (true monitored unhealthy mailboxes)
+- Config issues (e.g. bad mailbox address / missing tenant mailbox)
+- Excluded / not monitored (optional collapsed section)
+
+Requirements:
+- The red issue count must reflect only Action required items.
+- Retry buttons should only appear for actionable monitored mailboxes, not excluded ones.
+- Excluded mailboxes should not generate noisy alerts.
+
+5. Alerting logic
+Make sure intentionally excluded mailboxes do not trigger:
+- unhealthy popover issue counts
+- unhealthy alert banners
+- retry suggestions
+- watchdog escalation
+
+6. Tests
+Add tests for:
+- excluded mailboxes do not count as unhealthy
+- excluded mailboxes do not show retry actions
+- invalid mailbox config is separated from unhealthy webhook state
+- Casey-like “mailbox not found” case appears under config issues
+- top “Webhook issues” count only reflects actionable monitored mailboxes
+
+7. Deliverables
+Return:
+- files changed
+- where mailbox monitoring state is defined
+- how excluded mailboxes are identified
+- how Casey’s mailbox config was fixed or classified
+- test results
+- before/after behavior summary
+
+Important:
+Do NOT just hide rows in the UI.
+Fix the underlying health classification so counters, alerts, retry actions, and the popover all use the same source-of-truth status.

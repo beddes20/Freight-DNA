@@ -53,6 +53,15 @@ export interface ScoringThresholds {
   refusalMinLoads: number;
   /** Confidence chip thresholds (UI red/yellow/green). */
   confidenceChips: ConfidenceChipThresholds;
+  /**
+   * Minimum lane-fit score (lane history + geography + equipment + recency,
+   * captured BEFORE customer-history boosts) required for a carrier to be
+   * eligible for the top-N suggestion list. Carriers below this floor are
+   * still surfaced as fallbacks (with a "weak lane fit" reason) so a thin
+   * lane never returns an empty shortlist, but they can never displace a
+   * carrier that meets the floor. Default 50 — tunable 0-100.
+   */
+  minLaneFitForTopRank: number;
 }
 
 export const DEFAULT_BLEND: PricingBlendConfig = {
@@ -77,6 +86,11 @@ export const DEFAULT_THRESHOLDS: ScoringThresholds = {
     greenMaxSpreadPct: 8,
     yellowMinLoads: 2,
   },
+  // Lane-first rebalance (May 2026): carriers whose pre-customer-history
+  // baseline falls below this floor cannot displace a carrier that meets it,
+  // and are tagged `customerOnlyFallback` when their only signal is "we ran
+  // for the same shipper on a different corridor".
+  minLaneFitForTopRank: 50,
 };
 
 const blendKey = (orgId: string) => `carrier_intel:blend:${orgId}`;
@@ -183,6 +197,7 @@ export async function getThresholds(orgId: string): Promise<ScoringThresholds> {
       refusalRateThreshold: clampNum(parsed.refusalRateThreshold, 0, 1, DEFAULT_THRESHOLDS.refusalRateThreshold),
       refusalMinLoads: clampNum(parsed.refusalMinLoads, 0, 100, DEFAULT_THRESHOLDS.refusalMinLoads),
       confidenceChips: sanitizeChips(parsed.confidenceChips),
+      minLaneFitForTopRank: clampNum(parsed.minLaneFitForTopRank, 0, 100, DEFAULT_THRESHOLDS.minLaneFitForTopRank),
     };
   } catch {
     return { ...DEFAULT_THRESHOLDS, confidenceChips: { ...DEFAULT_THRESHOLDS.confidenceChips } };
@@ -198,6 +213,7 @@ export async function setThresholds(orgId: string, partial: Partial<ScoringThres
     refusalRateThreshold: partial.refusalRateThreshold !== undefined ? clampNum(partial.refusalRateThreshold, 0, 1, current.refusalRateThreshold) : current.refusalRateThreshold,
     refusalMinLoads: partial.refusalMinLoads !== undefined ? clampNum(partial.refusalMinLoads, 0, 100, current.refusalMinLoads) : current.refusalMinLoads,
     confidenceChips: partial.confidenceChips !== undefined ? sanitizeChips(partial.confidenceChips) : current.confidenceChips,
+    minLaneFitForTopRank: partial.minLaneFitForTopRank !== undefined ? clampNum(partial.minLaneFitForTopRank, 0, 100, current.minLaneFitForTopRank) : current.minLaneFitForTopRank,
   };
   // Sanity: tierA must be >= tierB.
   if (next.tierAMinScore < next.tierBMinScore) next.tierAMinScore = next.tierBMinScore;

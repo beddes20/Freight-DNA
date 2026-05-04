@@ -36,6 +36,7 @@ interface ThresholdsCfg {
   recencyDecayDays: number;
   refusalRateThreshold: number;
   refusalMinLoads: number;
+  minLaneFitForTopRank: number;
   confidenceChips: ConfidenceChips;
 }
 interface ScoringResp {
@@ -68,6 +69,7 @@ const DEFAULT_THRESHOLDS: ThresholdsCfg = {
   recencyDecayDays: 90,
   refusalRateThreshold: 0.6,
   refusalMinLoads: 2,
+  minLaneFitForTopRank: 50,
   confidenceChips: { greenMinLoads: 5, greenMaxSpreadPct: 8, yellowMinLoads: 2 },
 };
 
@@ -230,6 +232,8 @@ export default function AdminCarrierIntelligenceScoringPage() {
             value={effT.refusalRateThreshold} onChange={v => setThresholds({ ...effT, refusalRateThreshold: v })} testId="input-refusal" />
           <NumberField label="Refusal min loads (don't suggest a rate when realized loads < N AND Sonar unavailable)" step={1} min={0} max={100}
             value={effT.refusalMinLoads} onChange={v => setThresholds({ ...effT, refusalMinLoads: v })} testId="input-refusal-min-loads" />
+          <NumberField label="Min lane-fit score for top rank (carriers below this only appear as flagged fallbacks)" step={5} min={0} max={100}
+            value={effT.minLaneFitForTopRank} onChange={v => setThresholds({ ...effT, minLaneFitForTopRank: v })} testId="input-min-lane-fit" />
           <Separator />
           <p className="text-sm font-medium">Confidence chips (UI red/yellow/green)</p>
           <NumberField label="Green: minimum history loads required" step={1} min={0} max={100}

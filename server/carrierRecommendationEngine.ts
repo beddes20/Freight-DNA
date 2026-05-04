@@ -34,6 +34,7 @@ import {
 } from "@shared/schema";
 import { scoreCarrierLaneFit, upsertCarrierLaneFit, type ScorecardSignal } from "./carrierLaneFitService";
 import { getBlendedRate, type BlendedRate } from "./pricingBlendService";
+import { getThresholds } from "./carrierIntelligenceSettings";
 
 export interface RecommendationCandidate {
   rank: number;
@@ -89,25 +90,58 @@ export interface RankerInput {
   loads: number;
   isDoNotUse: boolean;
 }
-export function rankCandidates(items: RankerInput[], limit = 5): RankerInput[] {
+
+/**
+ * Lane-first rebalance (May 2026) — minimum lane-fit score a carrier must
+ * clear to occupy a primary slot in the recommendation top-N. Mirrors
+ * `MIN_LANE_FIT_FOR_TOP_RANK` in carrierRankingService.ts; kept as a separate
+ * constant here so the rec engine has no dependency back into the LWQ ranker.
+ * Carriers below this floor are kept as fallbacks (so a thin lane never
+ * returns an empty list) but can never displace a carrier that meets it.
+ */
+export const REC_MIN_LANE_FIT_FOR_TOP_RANK = 50;
+
+/**
+ * Lane-first blend — fit (lane history + geography + equipment + recency)
+ * carries 65–80% of the score. Performance is a secondary booster, never the
+ * gate. Loads ≥ 3 → 0.65·fit + 0.35·perf; loads < 3 → 0.80·fit + 0.20·perf.
+ * Exported for unit tests so weight changes are pinned by guardrails.
+ */
+export function blendFitAndPerformance(fit: number, perf: number, loads: number): number {
+  if (loads >= 3) return Math.round(0.65 * fit + 0.35 * perf);
+  return Math.round(0.80 * fit + 0.20 * perf);
+}
+
+export function rankCandidates(
+  items: RankerInput[],
+  limit = 5,
+  threshold = REC_MIN_LANE_FIT_FOR_TOP_RANK,
+): RankerInput[] {
   type Scored = RankerInput & { _total: number };
-  const scored: Scored[] = items
+  const eligible: Scored[] = items
     .filter(i => !i.isDoNotUse)
     .filter(i => !(i.evidenceTier === "none" && i.performanceScore === 0))
-    .map(i => ({
-      ...i,
-      _total: i.loads >= 3
-        ? Math.round(0.55 * i.fitScore + 0.45 * i.performanceScore)
-        : Math.round(0.75 * i.fitScore + 0.25 * i.performanceScore),
-    }));
-  scored.sort((a, b) => b._total - a._total || b.fitScore - a.fitScore);
-  return scored.slice(0, limit).map(({ _total, ...rest }) => rest);
+    .map(i => ({ ...i, _total: blendFitAndPerformance(i.fitScore, i.performanceScore, i.loads) }));
+
+  // Lane-first split: carriers meeting the lane-fit floor are the primary
+  // shortlist; everything else is fallback. Within each bucket, sort by total
+  // (fit-weighted) then by raw fitScore so weak-perf carriers with strong fit
+  // still win ties.
+  const sortFn = (a: Scored, b: Scored) => b._total - a._total || b.fitScore - a.fitScore;
+  const primary = eligible.filter(i => i.fitScore >= threshold).sort(sortFn);
+  const fallback = eligible.filter(i => i.fitScore < threshold).sort(sortFn);
+  return [...primary, ...fallback].slice(0, limit).map(({ _total, ...rest }) => rest);
 }
 
 export async function recommendCarriersForLoad(orgId: string, loadFactId: string, opts: { limit?: number } = {}): Promise<RecommendationResult> {
   const limit = Math.min(25, Math.max(1, opts.limit ?? 5));
   const [load] = await db.select().from(loadFact).where(and(eq(loadFact.orgId, orgId), eq(loadFact.id, loadFactId))).limit(1);
   if (!load) throw new Error(`Load not found for org ${orgId}: ${loadFactId}`);
+
+  // Lane-first rebalance: read the org-tunable lane-fit floor at the top so
+  // every comparison and bucket-split uses the same value.
+  const orgThresholds = await getThresholds(orgId);
+  const minLaneFit = orgThresholds.minLaneFitForTopRank;
 
   const originState = (load.originState ?? "").toUpperCase();
   const destState = (load.destinationState ?? "").toUpperCase();
@@ -214,9 +248,14 @@ export async function recommendCarriersForLoad(orgId: string, loadFactId: string
       continue;
     }
 
-    const totalScore = loads >= 3
-      ? Math.round(0.55 * fit.fitScore + 0.45 * performanceScore)
-      : Math.round(0.75 * fit.fitScore + 0.25 * performanceScore);
+    const totalScore = blendFitAndPerformance(fit.fitScore, performanceScore, loads);
+    // Lane-first rebalance: carriers below the lane-fit floor get a leading
+    // "Weak lane fit — fallback" reason and are demoted by the sort below so
+    // they only fill remaining slots after every primary candidate.
+    const isWeakLaneFit = fit.fitScore < minLaneFit;
+    const reasonText = isWeakLaneFit
+      ? `Weak lane fit (${fit.fitScore}/100, threshold ${minLaneFit}) — fallback. ${fit.reason} Performance ${performanceScore}/100 (tier ${tier}, ${loads} loads${onTimePct !== null ? `, ${onTimePct.toFixed(0)}% OT` : ""}).`
+      : `${fit.reason} Performance ${performanceScore}/100 (tier ${tier}, ${loads} loads${onTimePct !== null ? `, ${onTimePct.toFixed(0)}% OT` : ""}).`;
 
     scored.push({
       rank: 0,
@@ -230,7 +269,7 @@ export async function recommendCarriersForLoad(orgId: string, loadFactId: string
       avgHistoricalBuyRpm: avgHistBuy,
       expectedMarginPct: pricing.expectedMarginPct,
       coverageUrgency: urgency,
-      reason: `${fit.reason} Performance ${performanceScore}/100 (tier ${tier}, ${loads} loads${onTimePct !== null ? `, ${onTimePct.toFixed(0)}% OT` : ""}).`,
+      reason: reasonText,
       rationale: {
         fit: { tier: fit.evidenceTier, reason: fit.reason },
         pricing,
@@ -240,8 +279,18 @@ export async function recommendCarriersForLoad(orgId: string, loadFactId: string
     });
   }
 
-  scored.sort((a, b) => b.totalScore - a.totalScore || b.fitScore - a.fitScore);
-  const topN = scored.slice(0, limit).map((c, i) => {
+  // Lane-first split: primary candidates (fit ≥ floor) always sort above
+  // fallbacks (fit < floor). Inside each bucket, totalScore desc then fit desc.
+  const primarySortFn = (a: RecommendationCandidate, b: RecommendationCandidate) =>
+    b.totalScore - a.totalScore || b.fitScore - a.fitScore;
+  const primaryScored = scored
+    .filter(c => c.fitScore >= minLaneFit)
+    .sort(primarySortFn);
+  const fallbackScored = scored
+    .filter(c => c.fitScore < minLaneFit)
+    .sort(primarySortFn);
+  const ordered = [...primaryScored, ...fallbackScored];
+  const topN = ordered.slice(0, limit).map((c, i) => {
     // Surface exclusions on rank=1's rationale so any caller reading a single
     // row can see who was filtered out and why.
     if (i === 0 && exclusions.length > 0) {

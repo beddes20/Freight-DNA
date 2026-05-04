@@ -486,6 +486,22 @@ export interface RankedCarrier {
     hasAcceptedServiceRisk: boolean;
     hasAcceptedPriceSensitivity: boolean;
   };
+  // ── Lane-first rebalance (May 2026) ───────────────────────────────────────
+  /**
+   * Lane-fit baseline captured BEFORE customer-history / outreach / outcome /
+   * override boosts are layered on. This is the score we compare against
+   * MIN_LANE_FIT_FOR_TOP_RANK to decide whether a carrier is "customer-only
+   * weak-fit". Surfaced for debug + tests; not used by the UI today.
+   */
+  laneFitBaseline?: number;
+  /**
+   * True when the carrier has customer history on other corridors but their
+   * lane-fit baseline (geography + equipment + lane history + recency) is
+   * below the configured floor. The sort comparator pushes these carriers
+   * below every non-fallback peer; the leading entry of `reasons[]` reads
+   * `CUSTOMER_ONLY_FALLBACK_REASON` so reps see exactly why.
+   */
+  customerOnlyFallback?: boolean;
   // ── Debug instrumentation (only populated when debug=true requested) ────────
   debugScores?: CarrierDebugScores;
 }
@@ -514,6 +530,51 @@ export const BENCH_TIER0_CAP = 5;
  * (one per scoring signal) but the UI tooltip stays scannable when bounded.
  */
 export const REASONS_DISPLAY_CAP = 8;
+
+/**
+ * Lane-first rebalance (May 2026) — minimum lane-fit baseline a carrier must
+ * clear (computed BEFORE customer-history / outreach / outcome boosts) to be
+ * eligible for the top-N suggestion list. Carriers below this floor are kept
+ * as fallbacks so a thin lane still returns a list, but the sort comparator
+ * pushes them below every carrier that meets the floor regardless of how much
+ * customer history they accumulated. Org-tunable via `getThresholds(orgId)`.
+ */
+export const MIN_LANE_FIT_FOR_TOP_RANK = 50;
+
+/** Plain-language reason rendered on carriers we mark customerOnlyFallback. */
+export const CUSTOMER_ONLY_FALLBACK_REASON =
+  "Customer history only on other lanes (weak lane fit)";
+
+/**
+ * Pure helper — exported for unit tests. A carrier is `customerOnlyFallback`
+ * when their pre-customer-history baseline is below the lane-fit floor AND
+ * the only thing pulling them onto the list is "we ran for this shipper on
+ * a different corridor" (no exact / nearby / state-pair evidence and no
+ * positive bench-outreach win on this lane). Carriers with real lane
+ * evidence — even if the baseline is weak — are NOT flagged, because their
+ * fit is genuine. Bench wins count as lane evidence: a carrier who replied
+ * "yes" to outreach on this lane has proven capacity here regardless of
+ * historyMatch tier.
+ */
+export function classifyCustomerOnlyFallback(args: {
+  laneFitBaseline: number;
+  historyMatch: RankedCarrier["historyMatch"];
+  customerHistoryLoads: number;
+  benchWins?: number;
+  threshold?: number;
+}): boolean {
+  if (args.customerHistoryLoads <= 0) return false;
+  if ((args.benchWins ?? 0) > 0) return false;
+  if (
+    args.historyMatch === "exact" ||
+    args.historyMatch === "nearby" ||
+    args.historyMatch === "state_pair"
+  ) {
+    return false;
+  }
+  const threshold = args.threshold ?? MIN_LANE_FIT_FOR_TOP_RANK;
+  return args.laneFitBaseline < threshold;
+}
 
 /**
  * Task #633 — Build the final ordered `reasons[]` exposed on RankedCarrier.
@@ -1198,10 +1259,19 @@ export async function rankCarriersForLane(
   debugMode = false,
   prefilter?: CarrierRankPrefilter,
 ): Promise<RankedCarrier[]> {
-  const [catalogCarriers, uploads] = await Promise.all([
+  const [catalogCarriers, uploads, orgThresholds] = await Promise.all([
     storage.getCarriers(lane.orgId),
     storage.getFinancialUploadsForOrg(lane.orgId),
+    // Lane-first rebalance: read the org-tunable lane-fit floor once at the
+    // top so both branches (catalog + TMS-only) and both sort comparators
+    // (regular + HF) use the same value. Defaults to MIN_LANE_FIT_FOR_TOP_RANK
+    // when no override is set.
+    (async () => {
+      const { getThresholds } = await import("./carrierIntelligenceSettings");
+      return getThresholds(lane.orgId);
+    })(),
   ]);
+  const minLaneFitForTopRank = orgThresholds.minLaneFitForTopRank;
 
   // Build a set of carrier names/ids that had positive prior outcomes on this bench
   const positiveOutcomeStatuses = new Set(["available_now", "available_next_week"]);
@@ -1549,12 +1619,24 @@ export async function rankCarriersForLane(
 
     // "Has email" is no longer a score signal — removed per recency fix (Task #162)
 
-    // Customer history signal: carrier has run freight for this same customer before
-    // Increased cap from +15 to +20; base from +8 to +12
+    // ── Lane-first rebalance (May 2026) ─────────────────────────────────────
+    // Capture the lane-fit baseline BEFORE customer history / outreach /
+    // outcome priors / overrides are layered on. This is the score the
+    // `customerOnlyFallback` classifier compares against the configured floor.
+    // Everything above this point is genuinely "lane fit" (history tier +
+    // recency + on-time + margin + equipment + region + HQ); customer-history
+    // and prior-outreach are explicitly secondary boosters.
+    const laneFitBaseline = fitScore;
+
+    // Customer history signal: carrier has run freight for this same customer before.
+    // Halved from "+12 base + 2/load (cap 20)" → "+5 base + 1/load (cap 10)" so
+    // it cannot outweigh real lane evidence. Strong customer history still gets
+    // a meaningful boost; weak-fit + customer-only carriers are additionally
+    // demoted by the sort comparator via `customerOnlyFallback`.
     const custLoads = lookupCustomerLoads(carrier.name);
     let _dbgCustHistScore = 0;
     if (custLoads > 0) {
-      _dbgCustHistScore = Math.min(20, 12 + custLoads * 2);
+      _dbgCustHistScore = Math.min(10, 5 + custLoads * 1);
       fitScore += _dbgCustHistScore;
       reasons.push(`Hauled for ${customerName} (${custLoads} loads)`);
     }
@@ -1664,6 +1746,20 @@ export async function rankCarriersForLane(
     const isDoNotUse =
       carrier.status === "do_not_use" ||
       (carrier.tags ?? []).some(t => ["do_not_use", "no_use"].includes(normStr(t)));
+    // Lane-first rebalance: classify customer-only weak-fit carriers and
+    // prepend a leading reason so the popover surfaces it before any other
+    // signal. Sort comparators downstream demote these below all non-fallback
+    // peers regardless of fitScore.
+    const customerOnlyFallback = classifyCustomerOnlyFallback({
+      laneFitBaseline,
+      historyMatch,
+      customerHistoryLoads: custLoads,
+      benchWins: benchWinsForCarrier(carrier.id, carrier.name),
+      threshold: minLaneFitForTopRank,
+    });
+    const reasonsForBuild = customerOnlyFallback
+      ? [CUSTOMER_ONLY_FALLBACK_REASON, ...reasons]
+      : reasons;
     ranked.push({
       carrierId: carrier.id,
       carrierName: carrier.name,
@@ -1675,7 +1771,7 @@ export async function rankCarriersForLane(
       tags: carrier.tags ?? [],
       notes: carrier.notes ?? null,
       fitScore,
-      fitReason: reasons.length > 0 ? reasons.join(". ") + "." : "Carrier in region catalog.",
+      fitReason: reasonsForBuild.length > 0 ? reasonsForBuild.join(". ") + "." : "Carrier in region catalog.",
       historyMatch,
       loadsOnLane: hist?.loads ?? 0,
       lastUsedMonth: hist?.lastUsedMonth ?? null,
@@ -1686,7 +1782,9 @@ export async function rankCarriersForLane(
       priorOutcomeBoost: hadPositiveOutcome,
       bench: hadPositiveOutcome && benchWinsForCarrier(carrier.id, carrier.name) > 0,
       benchWins: benchWinsForCarrier(carrier.id, carrier.name),
-      reasons: buildRankReasons(reasons, benchWinsForCarrier(carrier.id, carrier.name)),
+      reasons: buildRankReasons(reasonsForBuild, benchWinsForCarrier(carrier.id, carrier.name)),
+      laneFitBaseline,
+      customerOnlyFallback,
       sourceChannel: (carrier as any).sourceChannel ?? null,
       suppressionReasons,
       equipmentMatch,
@@ -1797,11 +1895,22 @@ export async function rankCarriersForLane(
       else if (hist.avgOnTimePct >= 85) { fitScore = Math.min(100, fitScore + 4); reasons.push(`On-time: ${hist.avgOnTimePct.toFixed(0)}%`); }
     }
 
-    // Customer history signal for TMS-only carriers
-    // Increased cap from +15 to +20; base from +8 to +12
+    // ── Lane-first rebalance (May 2026) — TMS-only branch ─────────────────
+    // Capture lane-fit baseline BEFORE customer-history boost (mirrors the
+    // catalog branch). For TMS-only carriers, lane history + recency + on-time
+    // ARE the lane fit (no equipment/region/HQ signals exist), so the baseline
+    // here is whatever fitScore reached after recency/on-time but before the
+    // customer-history layer.
+    const laneFitBaselineHist = fitScore;
+
+    // Customer history signal for TMS-only carriers.
+    // Halved from "+12 base + 2/load (cap 20)" → "+5 base + 1/load (cap 10)" so
+    // it cannot outweigh real lane evidence.
     const custLoadsHist = lookupCustomerLoads(carrierNorm);
+    let _dbgCustHistScoreHist = 0;
     if (custLoadsHist > 0) {
-      fitScore = Math.min(100, fitScore + Math.min(20, 12 + custLoadsHist * 2));
+      _dbgCustHistScoreHist = Math.min(10, 5 + custLoadsHist * 1);
+      fitScore = Math.min(100, fitScore + _dbgCustHistScoreHist);
       reasons.push(`Hauled for ${customerName} (${custLoadsHist} loads)`);
     }
 
@@ -1849,6 +1958,20 @@ export async function rankCarriersForLane(
 
     const histExactDbg = hist.exactLoads > 0 ? (hist.exactLoads >= 10 ? 85 : hist.exactLoads >= 5 ? 75 : 60) : 0;
     const histRegDbg = hist.exactLoads === 0 ? (hist.nearbyLoads > 0 ? (hist.nearbyLoads >= 10 ? 72 : hist.nearbyLoads >= 5 ? 62 : 48) : (hist.statePairLoads >= 10 ? 45 : hist.statePairLoads >= 5 ? 40 : 35)) : 0;
+    // Lane-first rebalance: TMS-only carriers always have at least exact /
+    // nearby / state-pair history (we filtered out hist.loads < 1 above) so
+    // they can NEVER be customerOnlyFallback by definition. We still record
+    // laneFitBaseline for observability.
+    const customerOnlyFallbackHist = classifyCustomerOnlyFallback({
+      laneFitBaseline: laneFitBaselineHist,
+      historyMatch,
+      customerHistoryLoads: custLoadsHist,
+      benchWins: benchWinsForCarrier(null, carrierNorm),
+      threshold: minLaneFitForTopRank,
+    });
+    const reasonsForBuildHist = customerOnlyFallbackHist
+      ? [CUSTOMER_ONLY_FALLBACK_REASON, ...reasons]
+      : reasons;
     ranked.push({
       carrierId: null,
       carrierName: toTitleCase(carrierNorm),
@@ -1860,7 +1983,7 @@ export async function rankCarriersForLane(
       tags: [],
       notes: null,
       fitScore,
-      fitReason: reasons.join(". ") + ".",
+      fitReason: reasonsForBuildHist.join(". ") + ".",
       historyMatch,
       loadsOnLane: hist.loads,
       lastUsedMonth: hist.lastUsedMonth,
@@ -1871,7 +1994,9 @@ export async function rankCarriersForLane(
       priorOutcomeBoost: hadPositiveOutcomeHist,
       bench: hadPositiveOutcomeHist && benchWinsForCarrier(null, carrierNorm) > 0,
       benchWins: benchWinsForCarrier(null, carrierNorm),
-      reasons: buildRankReasons(reasons, benchWinsForCarrier(null, carrierNorm)),
+      reasons: buildRankReasons(reasonsForBuildHist, benchWinsForCarrier(null, carrierNorm)),
+      laneFitBaseline: laneFitBaselineHist,
+      customerOnlyFallback: customerOnlyFallbackHist,
       sourceChannel: null,
       suppressionReasons,
       equipmentMatch: false,
@@ -1893,7 +2018,7 @@ export async function rankCarriersForLane(
       debugScores: debugMode ? {
         exactLaneScore: histExactDbg,
         regionalScore: histRegDbg,
-        customerHistoryScore: custLoadsHist > 0 ? Math.min(20, 12 + custLoadsHist * 2) : 0,
+        customerHistoryScore: _dbgCustHistScoreHist,
         outreachRecencyDelta: histDecay.score,
         marketNbaBoost: 0,
         hfFloorApplied: 0,
@@ -2081,6 +2206,15 @@ export async function rankCarriersForLane(
   // Sort by fitScore descending — scores encode history quality + recency + all signals.
   // historyMatch is a secondary tiebreaker only when scores are exactly equal.
   // Tier order: bench (top N wins) > exact > nearby > state_pair > region > none
+  //
+  // Lane-first rebalance (May 2026): customerOnlyFallback carriers (weak lane
+  // fit + customer-history-on-other-corridors) are pushed below every
+  // non-fallback peer regardless of score. Bench tier-0 still wins (it's
+  // proven *on this lane* via positive outreach), and a claimed-lane carrier
+  // still beats a non-claimed peer at the same fit. The fallback demotion
+  // sits between "claimed" and the score comparison so that any carrier with
+  // genuine lane evidence ranks above any customer-only-on-other-lanes
+  // carrier even when scores would tie or favor the fallback.
   ranked.sort((a, b) => {
     const aBench = isBenchTier0(a);
     const bBench = isBenchTier0(b);
@@ -2092,6 +2226,10 @@ export async function rankCarriersForLane(
     // Cross-tab UX (option C) — claimed-lane carriers outrank non-claimed
     // peers at the same fitScore band, but never override bench tier-0 above.
     if (a.claimed !== b.claimed) return a.claimed ? -1 : 1;
+    // Lane-first demotion — non-fallback always above fallback.
+    const aFallback = a.customerOnlyFallback === true;
+    const bFallback = b.customerOnlyFallback === true;
+    if (aFallback !== bFallback) return aFallback ? 1 : -1;
     const scoreDiff = b.fitScore - a.fitScore;
     if (scoreDiff !== 0) return scoreDiff;
     const matchRank: Record<string, number> = {
@@ -2132,7 +2270,14 @@ Respond ONLY with JSON array: [{"name": "<carrier name>", "reason": "<1 sentence
         for (const aiItem of aiResults) {
           const carrier = top5.find(c => normStr(c.carrierName) === normStr(aiItem.name));
           if (carrier && typeof aiItem.reason === "string" && typeof aiItem.adjustedScore === "number") {
-            carrier.fitReason = aiItem.reason;
+            // Lane-first rebalance: never let AI overwrite the canonical
+            // fallback explanation for a customerOnlyFallback carrier — the
+            // rep needs to see exactly why this carrier is shown despite weak
+            // lane fit.  For non-fallback carriers, AI may provide a richer
+            // 1-sentence framing.
+            if (!carrier.customerOnlyFallback) {
+              carrier.fitReason = aiItem.reason;
+            }
             // Blend rule-based and AI scores (70/30) but enforce history tier floors.
             // AI scoring cannot demote a carrier below its history-guaranteed floor.
             const blended = Math.min(100, Math.max(0,
@@ -2152,8 +2297,30 @@ Respond ONLY with JSON array: [{"name": "<carrier name>", "reason": "<1 sentence
             carrier.fitScore = Math.max(historyFloor, blended);
           }
         }
-        // Re-sort top-5 after AI score adjustments, then stitch back
-        top5.sort((a, b) => b.fitScore - a.fitScore);
+        // Lane-first rebalance: re-apply the SAME canonical comparator used
+        // in the original rule sort instead of a naive `b.fitScore - a.fitScore`.
+        // A naive re-sort would let AI score adjustments push a
+        // customerOnlyFallback carrier above a non-fallback peer or override
+        // the bench-tier-0 / claimed-lane preferences.
+        top5.sort((a, b) => {
+          const aBench = isBenchTier0(a);
+          const bBench = isBenchTier0(b);
+          if (aBench !== bBench) return aBench ? -1 : 1;
+          if (aBench && bBench) {
+            const winsDiff = b.benchWins - a.benchWins;
+            if (winsDiff !== 0) return winsDiff;
+          }
+          if (a.claimed !== b.claimed) return a.claimed ? -1 : 1;
+          const aFallback = a.customerOnlyFallback === true;
+          const bFallback = b.customerOnlyFallback === true;
+          if (aFallback !== bFallback) return aFallback ? 1 : -1;
+          const scoreDiff = b.fitScore - a.fitScore;
+          if (scoreDiff !== 0) return scoreDiff;
+          const matchRank: Record<string, number> = {
+            exact: 0, nearby: 1, state_pair: 2, region: 3, none: 4,
+          };
+          return (matchRank[a.historyMatch] ?? 4) - (matchRank[b.historyMatch] ?? 4);
+        });
         // Re-insert top-5 into the beginning of ranked array
         for (let i = 0; i < top5.length; i++) {
           ranked[i] = top5[i];
@@ -2183,6 +2350,10 @@ Respond ONLY with JSON array: [{"name": "<carrier name>", "reason": "<1 sentence
       // Cross-tab UX (option C) — same claimed-lane preference as the regular
       // sort path; keeps the two pipelines consistent for HF lanes too.
       if (a.claimed !== b.claimed) return a.claimed ? -1 : 1;
+      // Lane-first demotion (May 2026) — same as the regular path.
+      const aFallback = a.customerOnlyFallback === true;
+      const bFallback = b.customerOnlyFallback === true;
+      if (aFallback !== bFallback) return aFallback ? 1 : -1;
       const scoreDiff = b.fitScore - a.fitScore;
       if (scoreDiff !== 0) return scoreDiff;
       const matchRank: Record<string, number> = { exact: 0, nearby: 1, state_pair: 2, region: 3, none: 4 };

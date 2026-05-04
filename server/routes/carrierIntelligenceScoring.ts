@@ -575,6 +575,9 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
       recencyDecayDays: z.number().min(1).max(365).optional(),
       refusalRateThreshold: z.number().min(0).max(1).optional(),
       refusalMinLoads: z.number().min(0).max(100).optional(),
+      // Lane-first rebalance: org-tunable lane-fit floor below which a
+      // carrier can only appear as a flagged fallback. Default 50.
+      minLaneFitForTopRank: z.number().min(0).max(100).optional(),
       confidenceChips: confidenceChipsSchema.optional(),
     }).optional(),
   });
