@@ -4298,11 +4298,25 @@ export const quotePipelineDrops = pgTable("quote_pipeline_drops", {
   reprocessCount: integer("reprocess_count").notNull().default(0),
   lastReprocessAt: timestamp("last_reprocess_at"),
   lastReprocessError: text("last_reprocess_error"),
+  // Task #969 — soft-archive timestamp set by the daily cleanup job
+  // (`quotePipelineDropsCleanupScheduler`) when a drop becomes >30 days
+  // old. Archived rows are excluded from the default `/api/admin/quote-
+  // pipeline/drops` list view; admins can opt-in to see the historical
+  // tail with `?include_archived=1`. NULL means the row is still in the
+  // active triage window. We never DELETE drops — keeping them around
+  // (just hidden) preserves the audit trail for failure forensics.
+  archivedAt: timestamp("archived_at"),
 }, (t) => ({
   orgAttemptedIdx: index("quote_pipeline_drops_org_attempted_idx").on(t.orgId, t.attemptedAt),
   orgResolvedIdx: index("quote_pipeline_drops_org_resolved_idx").on(t.orgId, t.resolvedAt),
   orgReasonIdx: index("quote_pipeline_drops_org_reason_idx").on(t.orgId, t.reasonCode),
   messageIdx: index("quote_pipeline_drops_message_idx").on(t.messageId),
+  // Task #969 — partial index over the active (non-archived) tail keeps
+  // the default operator query (`archived_at IS NULL`) fast even after
+  // 10k+ historical drops accumulate.
+  orgArchivedIdx: index("quote_pipeline_drops_org_archived_idx")
+    .on(t.orgId, t.attemptedAt)
+    .where(sql`archived_at IS NULL`),
   // Partial unique — at most one OPEN drop per (org, message, reason). A
   // recovery cron re-running the same message refreshes the existing drop
   // (lastReprocessAt++) instead of writing a new row.

@@ -5,6 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ToastAction } from "@/components/ui/toast";
 import {
   Mail,
   ArrowLeft,
@@ -14,6 +15,7 @@ import {
   User,
   MailOpen,
   MailQuestion,
+  FileQuestion,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DraftEmailModal } from "@/components/DraftEmailModal";
@@ -63,6 +65,99 @@ export function ThreadDetailPane({
     },
   });
   const correctedMessageIds = new Set((correctionsData?.corrections ?? []).map(c => c.emailMessageId));
+
+  // Task #969 — "This should be a quote" rep-side reprocess. Calls the
+  // forced-reprocess endpoint, which routes through the same
+  // ingestQuoteFromEmail path autopilot uses. We surface created /
+  // duplicate / unparseable as distinct toast outcomes so the rep
+  // knows whether a fresh quote landed in their queue or not.
+  const forceReprocessMutation = useMutation({
+    mutationFn: async ({ messageId }: { messageId: string }) => {
+      const res = await apiRequest(
+        "POST",
+        "/api/customer-quotes/funnel-diagnostics/inbound/force-reprocess",
+        { messageId },
+      );
+      const json = await res.json();
+      return { httpStatus: res.status, ...json } as {
+        httpStatus: number;
+        status: "created" | "duplicate" | "unparseable" | "not_a_leak" | "not_found" | "wrong_direction";
+        quoteId?: string;
+        reason?: string;
+      };
+    },
+    onSuccess: (result) => {
+      // Build a clickable deep-link the toast can render. `created` /
+      // `duplicate` both have a quoteId — link to the quote-requests
+      // page with the row pre-selected. `unparseable` links to the
+      // admin drops queue (so an admin can see *why* the pipeline
+      // skipped it), filtered to this message reason. We use the
+      // shadcn `ToastAction` element so the action satisfies the
+      // `ToastActionElement` type and inherits the destructive-toast
+      // styling automatically.
+      const quoteHref = result.quoteId
+        ? `/quote-requests?quote=${encodeURIComponent(result.quoteId)}`
+        : null;
+      const dropsHref = `/admin-quote-pipeline-health?reason=unparseable`;
+      const linkAction = (href: string, label: string) => (
+        <ToastAction
+          altText={label}
+          asChild
+          data-testid="link-toast-action"
+        >
+          <a href={href}>{label}</a>
+        </ToastAction>
+      );
+      switch (result.status) {
+        case "created":
+          toast({
+            title: "Quote created",
+            description: "This email is now a customer quote in your queue.",
+            action: quoteHref ? linkAction(quoteHref, "Open quote") : undefined,
+          });
+          // Invalidate the customer-quotes list/snapshot so the new row
+          // appears without a manual page refresh.
+          queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/list"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/snapshot"] });
+          break;
+        case "duplicate":
+          toast({
+            title: "Already a quote",
+            description: "This email was already converted to a customer quote.",
+            action: quoteHref ? linkAction(quoteHref, "Open quote") : undefined,
+          });
+          break;
+        case "unparseable":
+          toast({
+            title: "Couldn't extract a quote",
+            description: result.reason ?? "The pipeline couldn't find a quote shape in this email.",
+            variant: "destructive",
+            action: linkAction(dropsHref, "View drops queue"),
+          });
+          break;
+        case "wrong_direction":
+          toast({
+            title: "Outbound email",
+            description: "Only inbound customer emails can become quotes.",
+            variant: "destructive",
+          });
+          break;
+        default:
+          toast({
+            title: "Couldn't reprocess",
+            description: `Status: ${result.status}`,
+            variant: "destructive",
+          });
+      }
+    },
+    onError: (err: Error) => {
+      toast({
+        title: "Reprocess failed",
+        description: err.message,
+        variant: "destructive",
+      });
+    },
+  });
 
   const correctionMutation = useMutation({
     mutationFn: async (params: { emailMessageId: string; originalText: string; correctedText: string; correctionNotes?: string; subject?: string; repliedToMessageId?: string | null }) => {
@@ -335,6 +430,26 @@ export function ThreadDetailPane({
                           >
                             <Sparkles className="w-3 h-3" />
                             Draft Reply
+                          </Button>
+                        )}
+                        {/* Task #969 — rep-side "This should be a quote"
+                            reprocess. Inbound messages only — outbound
+                            sends are never quote candidates. The button
+                            calls the forced-reprocess endpoint which
+                            bypasses the missed-inbound race-guard but
+                            still respects org / direction / dup-check. */}
+                        {!isOutbound && !readOnly && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 gap-1 text-xs text-muted-foreground hover:text-primary"
+                            title="Force this email through the customer-quote ingestion pipeline"
+                            disabled={forceReprocessMutation.isPending}
+                            onClick={() => forceReprocessMutation.mutate({ messageId: msg.id })}
+                            data-testid={`button-force-quote-${msg.id}`}
+                          >
+                            <FileQuestion className="w-3 h-3" />
+                            This should be a quote
                           </Button>
                         )}
                         {isOutbound && canCorrect && !readOnly && !corrected && (

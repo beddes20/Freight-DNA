@@ -11,6 +11,8 @@ import { computeQuoteSla, formatSlaBadge } from "@shared/quoteSla";
 import { EmailThreadViewerModal } from "@/components/conversations/email-thread-viewer-modal";
 import { PricingRecommendationCard } from "@/components/PricingRecommendationCard";
 import { NewContactReviewStrip } from "@/components/customer-quotes/NewContactReviewStrip";
+import { AttributionDrawer } from "@/components/customer-quotes/AttributionDrawer";
+import { formatQuoteConfidence } from "@/lib/customerQuotes";
 import { QuoteFreshnessStrip } from "@/components/QuoteFreshnessStrip";
 import { NewQuoteDialog, type NewQuoteInitialValues } from "@/components/quote-requests/NewQuoteDialog";
 import { SavedViewsDropdown, type QuoteViewFilters } from "@/components/quote-requests/SavedViewsDropdown";
@@ -417,6 +419,19 @@ function QuoteRequestsInner(): JSX.Element {
   // Tracks which Saved View (built-in key or saved id) is currently
   // applied. Cleared whenever the user changes any underlying filter.
   const [activeViewKey, setActiveViewKey] = useState<string | null>(null);
+
+  // Task #969 — "Why this rep?" attribution drawer state. Opened by a
+  // window CustomEvent dispatched from the rep-cell `why?` link in
+  // QuoteRow / DetailDrawer so the same drawer instance serves both.
+  const [attributionQuoteId, setAttributionQuoteId] = useState<string | null>(null);
+  useEffect(() => {
+    const handler = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ quoteId?: string }>).detail;
+      if (detail?.quoteId) setAttributionQuoteId(detail.quoteId);
+    };
+    window.addEventListener("customer-quotes:show-attribution", handler);
+    return () => window.removeEventListener("customer-quotes:show-attribution", handler);
+  }, []);
 
   // Mirror selectedId into ?quote=<id> via history.replaceState so the
   // drawer is deep-linkable and survives reload/share, without
@@ -1055,6 +1070,14 @@ function QuoteRequestsInner(): JSX.Element {
           onCreated={handleQuoteCreated}
           initialValues={newQuotePrefill}
         />
+
+        {/* Task #969 — single AttributionDrawer instance shared by every
+            "Why this rep?" trigger in the table + DetailDrawer. */}
+        <AttributionDrawer
+          quoteId={attributionQuoteId}
+          open={!!attributionQuoteId}
+          onOpenChange={(open) => { if (!open) setAttributionQuoteId(null); }}
+        />
       </div>
     </TooltipProvider>
   );
@@ -1411,6 +1434,24 @@ function ListRow({
             <AvatarFallback className="text-[9px]">{initials(q.repName)}</AvatarFallback>
           </Avatar>
           <span className="text-xs">{q.repName ?? "Unassigned"}</span>
+          {/* Task #969 — "Why this rep?" attribution drawer trigger.
+              Stop propagation so clicking the link doesn't bubble up to
+              the row's onClick (which selects the quote and opens the
+              detail drawer). */}
+          <button
+            type="button"
+            className="text-[10px] text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+            title="Why was this rep assigned?"
+            onClick={(e) => {
+              e.stopPropagation();
+              window.dispatchEvent(
+                new CustomEvent("customer-quotes:show-attribution", { detail: { quoteId: q.id } }),
+              );
+            }}
+            data-testid={`button-why-rep-${q.id}`}
+          >
+            why?
+          </button>
         </div>
       </td>
       <td className="px-3 text-xs text-muted-foreground max-w-[220px] truncate">
@@ -1754,6 +1795,22 @@ function DetailDrawer({
                 <AvatarFallback className="text-[10px] bg-card">{initials(opp.repName)}</AvatarFallback>
               </Avatar>
               <span className="font-medium text-xs">{opp.repName || "Unassigned"}</span>
+              {/* Task #969 — "Why this rep?" trigger on the open detail
+                  drawer. Shares the page-level AttributionDrawer via
+                  the same window CustomEvent the table cell uses. */}
+              <button
+                type="button"
+                className="text-[10px] text-muted-foreground hover:text-foreground underline-offset-2 hover:underline ml-1"
+                title="Why was this rep assigned?"
+                onClick={() => {
+                  window.dispatchEvent(
+                    new CustomEvent("customer-quotes:show-attribution", { detail: { quoteId: opp.id } }),
+                  );
+                }}
+                data-testid={`button-why-rep-drawer-${opp.id}`}
+              >
+                why?
+              </button>
             </div>
             <div className="flex items-center gap-1.5">
               {sourceMessage?.threadId && (
@@ -2168,9 +2225,16 @@ function LaneCard({ opp }: { opp: Quote }): JSX.Element {
 // ─── ConfidenceCard ───────────────────────────────────────────────────────
 
 function ConfidenceCard({ opp }: { opp: Quote }): JSX.Element {
-  const score = num(opp.score);
-  const pct = score > 1 ? Math.min(100, score) : Math.round(score * 100);
-  const label = pct >= 80 ? "high" : pct >= 60 ? "medium" : "low";
+  // Task #969 — render every Customer Quotes confidence value via the
+  // canonical `formatQuoteConfidence` clamp/format helper. Previously
+  // this card had its own ad-hoc clamp (`score > 1 ? Math.min(100,
+  // score) : Math.round(score * 100)`) that diverged from the admin
+  // pipeline-health drops table (which would render `1.42` as `142%`).
+  // We still need the bar % and the tone band locally for visuals,
+  // but both derive from the same canonical 0-100 integer.
+  const formatted = formatQuoteConfidence(opp.score);
+  const pct = formatted === "—" ? 0 : Math.max(0, Math.min(100, parseInt(formatted, 10)));
+  const label = formatted === "—" ? "unknown" : pct >= 80 ? "high" : pct >= 60 ? "medium" : "low";
   const tone = pct >= 80 ? "text-amber-500" : pct >= 60 ? "text-amber-600" : "text-red-500";
   return (
     <Card className="border-amber-500/20 bg-amber-500/5 shadow-sm p-4">
@@ -2179,12 +2243,15 @@ function ConfidenceCard({ opp }: { opp: Quote }): JSX.Element {
           <Sparkles className="h-4 w-4 text-amber-500" />
           <span className="font-semibold text-amber-600 dark:text-amber-500 text-sm">Auto-captured by Phase 2b</span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" data-testid="confidence-card-meter">
           <div className="w-16 h-1.5 bg-amber-500/20 rounded-full overflow-hidden">
             <div className="h-full bg-amber-500" style={{ width: `${pct}%` }} />
           </div>
-          <span className={`text-[10px] uppercase font-bold tracking-wider ${tone}`}>
-            {pct} · {label}
+          <span
+            className={`text-[10px] uppercase font-bold tracking-wider ${tone}`}
+            data-testid="text-confidence-label"
+          >
+            {formatted} · {label}
           </span>
         </div>
       </div>

@@ -28,6 +28,7 @@ import { initMissedInboundRecapScheduler } from "./missedInboundRecapScheduler";
 import { initLmCheckinScheduler } from "./lmCheckinScheduler";
 import { initCarrierIntelExpirationScheduler } from "./carrierIntelExpirationScheduler";
 import { initLeakConsoleSnapshotScheduler } from "./leakConsoleSnapshotScheduler";
+import { initQuotePipelineDropsCleanupScheduler } from "./services/quotePipelineDropsCleanupScheduler";
 import { initCarrierIntelNudgeScheduler } from "./carrierIntelNudgeScheduler";
 import { initTruckPostingScheduler } from "./truckPostingScheduler";
 import { initNbaPhase1Scheduler } from "./nbaPhase1Scheduler";
@@ -514,6 +515,11 @@ process.on("uncaughtException", (err) => {
       // when no manager visits the page on a given day. The on-read upsert
       // in routes/leakConsole.ts stays as defense in depth.
       initLeakConsoleSnapshotScheduler();
+      // Task #969 — daily 03:15 soft-archive of quote_pipeline_drops rows
+      // older than 30 days so the operator queue stays fast as the
+      // historical tail accumulates. Archived rows remain queryable via
+      // ?include_archived=1 on the admin endpoint.
+      initQuotePipelineDropsCleanupScheduler();
       // Task #844 — Capacity Matches: hourly expiration of stale truck postings
       // and the matches that pointed at them.
       initTruckPostingScheduler();

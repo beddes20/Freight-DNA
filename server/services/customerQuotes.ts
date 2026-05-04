@@ -5902,6 +5902,26 @@ export interface ManualLeakCreateResult {
 }
 
 /**
+ * Task #969 — options for `manuallyCreateQuoteFromLeakRow`.
+ *
+ * `forced=true` skips the "is this row still in the missed-inbound
+ * candidate set?" race-guard. It is set by the rep-side "This should
+ * be a quote" button in the conversation pane, where the rep is
+ * looking at a specific inbound message that the classifier did NOT
+ * flag as a leak (so it's not in `missedInboundIds`) but the rep
+ * believes is a quote request anyway.
+ *
+ * `forced` does NOT bypass the cross-tenant or direction guards: an
+ * outbound message or a message from another org still returns
+ * `wrong_direction` / `not_found`. It also does NOT bypass the
+ * `ingestQuoteFromEmail` idempotency — a duplicate `providerMessageId`
+ * still resolves to `duplicate`.
+ */
+export interface ManualLeakCreateOpts {
+  forced?: boolean;
+}
+
+/**
  * Manually convert a Missed Inbound leak row into a quote_opportunity.
  *
  * Reuses `ingestQuoteFromEmail` so parsing, idempotency (collision on
@@ -5940,6 +5960,7 @@ export async function manuallyCreateQuoteFromLeakRow(
   orgId: string,
   userId: string,
   messageId: string,
+  opts: ManualLeakCreateOpts = {},
 ): Promise<ManualLeakCreateResult> {
   const id = (messageId ?? "").trim();
   if (!id) return { status: "not_found" };
@@ -5954,7 +5975,7 @@ export async function manuallyCreateQuoteFromLeakRow(
     return existing;
   }
 
-  const work = _runManualLeakCreate(orgId, userId, id);
+  const work = _runManualLeakCreate(orgId, userId, id, opts);
   _manualLeakCreateInFlight.set(mutexKey, work);
   try {
     return await work;
@@ -5975,6 +5996,7 @@ async function _runManualLeakCreate(
   orgId: string,
   userId: string,
   id: string,
+  opts: ManualLeakCreateOpts = {},
 ): Promise<ManualLeakCreateResult> {
   // 1) Cross-tenant + direction check. We must load the row so we can
   // (a) verify the message belongs to this org, (b) reject outbound
@@ -5992,22 +6014,30 @@ async function _runManualLeakCreate(
   // create a quote for a row the user can no longer see. We use the
   // same default window as `getLeakedQuoteEmails` (14 days) so the
   // race-guard view matches what the UI was showing.
-  const candidates = await buildLeakCandidateIds(orgId, 14);
-  if (!candidates.missedInboundIds.includes(id)) {
-    // It's possible the message was already converted to a quote by
-    // the autopilot pipeline in the interim. Surface that quote so the
-    // client can still deep-link to it (treated as `duplicate` below).
-    const ref = msg.providerMessageId ?? msg.id;
-    const [existing] = await db.select({ id: quoteOpportunities.id })
-      .from(quoteOpportunities)
-      .where(and(
-        eq(quoteOpportunities.organizationId, orgId),
-        eq(quoteOpportunities.source, "email"),
-        eq(quoteOpportunities.sourceReference, ref),
-      ))
-      .limit(1);
-    if (existing) return { status: "duplicate", quoteId: existing.id };
-    return { status: "not_a_leak" };
+  //
+  // Task #969 — `forced` skips this guard. The rep-side
+  // "This should be a quote" button is invoked from the conversation
+  // pane on a specific inbound that the classifier did NOT flag as
+  // a leak. We still want the rep to be able to override that. The
+  // dup-check inside `ingestQuoteFromEmail` keeps idempotency intact.
+  if (!opts.forced) {
+    const candidates = await buildLeakCandidateIds(orgId, 14);
+    if (!candidates.missedInboundIds.includes(id)) {
+      // It's possible the message was already converted to a quote by
+      // the autopilot pipeline in the interim. Surface that quote so the
+      // client can still deep-link to it (treated as `duplicate` below).
+      const ref = msg.providerMessageId ?? msg.id;
+      const [existing] = await db.select({ id: quoteOpportunities.id })
+        .from(quoteOpportunities)
+        .where(and(
+          eq(quoteOpportunities.organizationId, orgId),
+          eq(quoteOpportunities.source, "email"),
+          eq(quoteOpportunities.sourceReference, ref),
+        ))
+        .limit(1);
+      if (existing) return { status: "duplicate", quoteId: existing.id };
+      return { status: "not_a_leak" };
+    }
   }
 
   // 3) Hand off to the canonical ingestion path. `useAiFallback` is left

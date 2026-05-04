@@ -32,6 +32,7 @@ import {
 import {
   CheckCircle2, AlertTriangle, RefreshCw, Loader2, Wrench, ShieldCheck, Clock, Activity,
 } from "lucide-react";
+import { formatQuoteConfidence } from "@/lib/customerQuotes";
 
 type Reason =
   | "classifier_miss"
@@ -62,7 +63,7 @@ type DropRow = {
   lastReprocessError: string | null;
 };
 
-type DropsResponse = { ok: true; rows: DropRow[]; total: number; limit: number; offset: number };
+type DropsResponse = { ok: true; rows: DropRow[]; total: number; limit: number; offset: number; includeArchived?: boolean };
 type HealthResponse = {
   ok: true;
   openCount: number;
@@ -120,13 +121,16 @@ export default function AdminQuotePipelineHealthPage(): JSX.Element {
   const { toast } = useToast();
   const [reasonFilter, setReasonFilter] = useState<"" | Reason>("");
   const [showResolved, setShowResolved] = useState<"open" | "all">("open");
+  // Task #969 — opt-in toggle for the historical (archived) tail.
+  // The default operator view shows only the active 30-day window.
+  const [includeArchived, setIncludeArchived] = useState(false);
   const [funnelWindow, setFunnelWindow] = useState<"24h" | "7d">("24h");
   const [resolveDialog, setResolveDialog] = useState<{ row: DropRow } | null>(null);
   const [resolveNote, setResolveNote] = useState("");
 
   const isAuthorized = !!user && user.role === "admin";
 
-  const dropsQueryKey = ["/api/admin/quote-pipeline/drops", reasonFilter, showResolved] as const;
+  const dropsQueryKey = ["/api/admin/quote-pipeline/drops", reasonFilter, showResolved, includeArchived] as const;
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery<DropsResponse>({
     queryKey: dropsQueryKey,
     enabled: isAuthorized,
@@ -134,6 +138,7 @@ export default function AdminQuotePipelineHealthPage(): JSX.Element {
       const params = new URLSearchParams({ limit: "100" });
       if (reasonFilter) params.set("reason", reasonFilter);
       if (showResolved === "all") params.set("resolved", "all");
+      if (includeArchived) params.set("include_archived", "1");
       const res = await fetch(`/api/admin/quote-pipeline/drops?${params.toString()}`, { credentials: "include" });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
       return res.json();
@@ -355,8 +360,11 @@ export default function AdminQuotePipelineHealthPage(): JSX.Element {
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div>
               <CardTitle>Drops</CardTitle>
-              <CardDescription>
-                Showing <strong>{showResolved}</strong> drops{reasonFilter ? <> filtered by <strong>{REASON_LABEL[reasonFilter]}</strong></> : null}.
+              <CardDescription data-testid="text-drops-window">
+                Showing drops from the last <strong>30 days</strong>
+                {includeArchived ? <> (<strong>including archived</strong>)</> : null}.
+                {" "}
+                <strong>{showResolved}</strong> drops{reasonFilter ? <> filtered by <strong>{REASON_LABEL[reasonFilter]}</strong></> : null}.
                 Reprocess re-runs ingestion; the row auto-clears on success.
               </CardDescription>
             </div>
@@ -379,6 +387,20 @@ export default function AdminQuotePipelineHealthPage(): JSX.Element {
                   <SelectItem value="all" data-testid="option-resolved-all">Include resolved</SelectItem>
                 </SelectContent>
               </Select>
+              {/* Task #969 — opt-in to the historical (archived) tail. */}
+              <label
+                className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none"
+                data-testid="label-include-archived"
+              >
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 cursor-pointer"
+                  checked={includeArchived}
+                  onChange={(e) => setIncludeArchived(e.target.checked)}
+                  data-testid="toggle-include-archived"
+                />
+                Include archived
+              </label>
             </div>
           </div>
         </CardHeader>
@@ -436,7 +458,9 @@ export default function AdminQuotePipelineHealthPage(): JSX.Element {
                       <TableCell className="text-xs" data-testid={`text-stage-${r.id}`}>
                         {r.stage}
                         {r.confidence != null && (
-                          <div className="text-[11px] text-muted-foreground">conf {Number(r.confidence).toFixed(2)}</div>
+                          <div className="text-[11px] text-muted-foreground" data-testid={`text-confidence-${r.id}`}>
+                            conf {formatQuoteConfidence(r.confidence)}
+                          </div>
                         )}
                       </TableCell>
                       <TableCell><ReasonBadge reason={r.reasonCode} /></TableCell>

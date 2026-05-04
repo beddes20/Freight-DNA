@@ -181,20 +181,45 @@ function ActionSection({
         <ul className="space-y-1.5">
           {rows.map(r => (
             <li key={r.id}>
-              <button
-                onClick={() => onOpenQuote(r.id)}
-                className="w-full text-left rounded-md border border-border/60 bg-muted/30 hover:bg-muted/60 px-2 py-1.5 transition-colors"
-                data-testid={`row-${testIdRoot}-${r.id}`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-medium text-foreground truncate">{r.customerName}</span>
-                  <SlaBadge requestDate={r.requestDate} status={r.outcomeStatus} testId={`sla-${testIdRoot}-${r.id}`} />
-                </div>
-                <div className="text-[11px] text-muted-foreground truncate mt-0.5">
-                  {r.originCity}, {r.originState} → {r.destCity}, {r.destState}
-                  <span className="ml-1.5 uppercase">{r.equipment}</span>
-                </div>
-              </button>
+              <div className="rounded-md border border-border/60 bg-muted/30 hover:bg-muted/60 px-2 py-1.5 transition-colors">
+                <button
+                  type="button"
+                  onClick={() => onOpenQuote(r.id)}
+                  className="w-full text-left"
+                  data-testid={`row-${testIdRoot}-${r.id}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-foreground truncate">{r.customerName}</span>
+                    <SlaBadge requestDate={r.requestDate} status={r.outcomeStatus} testId={`sla-${testIdRoot}-${r.id}`} />
+                  </div>
+                  <div className="text-[11px] text-muted-foreground truncate mt-0.5">
+                    {r.originCity}, {r.originState} → {r.destCity}, {r.destState}
+                    <span className="ml-1.5 uppercase">{r.equipment}</span>
+                  </div>
+                </button>
+                {/* Task #969 — "Why this rep?" trigger so reps in the
+                    action queue can audit attribution without first
+                    opening the detail drawer. Dispatches the same
+                    page-level CustomEvent the table-cell trigger uses
+                    so a single AttributionDrawer instance handles all
+                    open requests. Stops propagation so a click on the
+                    link doesn't double-fire onOpenQuote. */}
+                <button
+                  type="button"
+                  className="mt-1 text-[10px] text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                  title="Why was this rep assigned?"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (typeof window === "undefined") return;
+                    window.dispatchEvent(
+                      new CustomEvent("customer-quotes:show-attribution", { detail: { quoteId: r.id } }),
+                    );
+                  }}
+                  data-testid={`button-why-rep-action-queue-${r.id}`}
+                >
+                  why this rep?
+                </button>
+              </div>
             </li>
           ))}
         </ul>

@@ -678,10 +678,47 @@ async function fanOutAdminNotifications(mb: MonitoredMailbox, title: string, rea
 const ALERT_KEY_QUOTE_ZERO_CAPTURE = "quote_pipeline_zero_capture";
 const ALERT_KEY_QUOTE_CLASSIFIER_OUTAGE = "quote_pipeline_classifier_outage";
 const QUOTE_PIPELINE_WINDOW_MIN = 60;
-const QUOTE_PIPELINE_MIN_INBOUND_FOR_ALERT = 5;        // skip orgs below this
+// Task #969 — scaled inbound floor. The original `MIN_INBOUND_FOR_ALERT`
+// constant (5) silenced low-traffic orgs but caused noisy pages on high-
+// volume orgs whose 5-email lull in a 60-min window was within normal
+// variance. The threshold now scales with the org's 7-day average daily
+// inbound:
+//
+//   threshold = max(WATCHDOG_FLOOR, 0.05 * sevenDayAvgDaily)
+//
+// For a 400-emails/day org this lifts the trigger to 20 inbound in the
+// window; for a 50-emails/day org it stays at the floor of 5. The rule
+// that fired (`floor` or `scaled`) is named in the alert reason so the
+// on-call admin can sanity-check whether the page is real signal.
+const QUOTE_PIPELINE_WATCHDOG_FLOOR = 5;
+const QUOTE_PIPELINE_SEVEN_DAY_FRACTION = 0.05;
 const QUOTE_PIPELINE_CLASSIFIER_MISS_RATIO = 0.5;       // ≥50% of inbound dropped as miss/exception
 const QUOTE_PIPELINE_MIN_DROPS_FOR_OUTAGE = 5;          // and ≥5 absolute
 const QUOTE_PIPELINE_CONSECUTIVE_TICKS = 2;
+
+/**
+ * Resolve the inbound-volume threshold for the given org based on its
+ * trailing 7-day average daily inbound. Pure-functional so unit tests
+ * can pin both the floor and scaled branches deterministically.
+ *
+ * Returns:
+ *   - `value`: the integer threshold to compare 60-min inbound against
+ *   - `rule`:  which branch produced it — `"floor"` or `"scaled"`
+ *   - `sevenDayAvgDaily`: the per-day average used for the scaled branch
+ *
+ * The value is rounded up so a fractional 5%-of-avg never silently rounds
+ * down to a smaller-than-floor number.
+ */
+export function resolveQuotePipelineThreshold(
+  sevenDayAvgDaily: number,
+): { value: number; rule: "floor" | "scaled"; sevenDayAvgDaily: number } {
+  const safeAvg = Math.max(0, Number.isFinite(sevenDayAvgDaily) ? sevenDayAvgDaily : 0);
+  const scaled = Math.ceil(QUOTE_PIPELINE_SEVEN_DAY_FRACTION * safeAvg);
+  if (scaled > QUOTE_PIPELINE_WATCHDOG_FLOOR) {
+    return { value: scaled, rule: "scaled", sevenDayAvgDaily: safeAvg };
+  }
+  return { value: QUOTE_PIPELINE_WATCHDOG_FLOOR, rule: "floor", sevenDayAvgDaily: safeAvg };
+}
 
 const _quoteZeroCaptureTickCount: Map<string, number> = new Map();
 const _quoteClassifierOutageTickCount: Map<string, number> = new Map();
@@ -719,6 +756,7 @@ export async function runQuotePipelineHealthCheck(
       ingested: number;
       classifierMiss: number;
       exception: number;
+      sevenDayAvgDaily: number;
     };
     try {
       const result = await db.execute(sql`
@@ -742,14 +780,26 @@ export async function runQuotePipelineHealthCheck(
             WHERE org_id = ${orgId}
               AND reason_code = 'exception'
               AND attempted_at >= now() - (${QUOTE_PIPELINE_WINDOW_MIN}::text || ' minutes')::interval
-          ) AS exception
+          ) AS exception,
+          -- Task #969 — 7-day rolling average daily inbound, used to
+          -- scale the watchdog threshold. We divide the trailing 7d
+          -- count by 7 (rather than the more-correct distinct-day
+          -- count) because a quiet weekend still belongs in the avg
+          -- — the watchdog should pause for low-traffic periods, not
+          -- just low-traffic days.
+          (SELECT COUNT(*)::numeric / 7.0 FROM email_messages
+            WHERE org_id = ${orgId}
+              AND direction = 'inbound'
+              AND COALESCE(provider_sent_at, created_at) >= now() - INTERVAL '7 days'
+          ) AS seven_day_avg_daily
       `);
-      const row = (result.rows?.[0] ?? {}) as Record<string, number | null>;
+      const row = (result.rows?.[0] ?? {}) as Record<string, number | string | null>;
       metrics = {
         inboundCustomer: Number(row.inbound_customer ?? 0),
         ingested: Number(row.ingested ?? 0),
         classifierMiss: Number(row.classifier_miss ?? 0),
         exception: Number(row.exception ?? 0),
+        sevenDayAvgDaily: Number(row.seven_day_avg_daily ?? 0),
       };
     } catch (err) {
       log(`quote-pipeline metrics query failed for org=${orgId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -757,18 +807,24 @@ export async function runQuotePipelineHealthCheck(
     }
 
     // ── 1. Zero-capture: meaningful inbound, but zero ingests. ────────────
+    // Task #969 — `meaningful` is now scaled to the org's 7-day baseline.
+    const threshold = resolveQuotePipelineThreshold(metrics.sevenDayAvgDaily);
     const zeroCapture =
-      metrics.inboundCustomer >= QUOTE_PIPELINE_MIN_INBOUND_FOR_ALERT &&
+      metrics.inboundCustomer >= threshold.value &&
       metrics.ingested === 0;
     if (zeroCapture) {
       orgsZeroCapture++;
       const next = (_quoteZeroCaptureTickCount.get(orgId) ?? 0) + 1;
       _quoteZeroCaptureTickCount.set(orgId, next);
       if (next >= QUOTE_PIPELINE_CONSECUTIVE_TICKS) {
+        const ruleSuffix =
+          threshold.rule === "scaled"
+            ? `Threshold rule: scaled (5% of 7-day avg ${threshold.sevenDayAvgDaily.toFixed(1)}/day = ${threshold.value}).`
+            : `Threshold rule: floor (${threshold.value}).`;
         const reason =
           `Quote capture stalled: ${metrics.inboundCustomer} inbound email(s) in last ${QUOTE_PIPELINE_WINDOW_MIN} min ` +
           `but 0 quote opportunities ingested. Drops: ${metrics.classifierMiss} classifier_miss, ${metrics.exception} exception. ` +
-          `Inspect /admin/quote-pipeline-health.`;
+          `${ruleSuffix} Inspect /admin/quote-pipeline-health.`;
         const result = await storage.fireMailboxHealthAlert({
           orgId,
           mailboxId: anchor.id,
@@ -796,11 +852,13 @@ export async function runQuotePipelineHealthCheck(
     }
 
     // ── 2. Classifier outage: high drop ratio AND absolute volume. ────────
+    // Task #969 — same scaled inbound floor as zero-capture so the two
+    // probes share the same "meaningful traffic" definition.
     const dropTotal = metrics.classifierMiss + metrics.exception;
     const dropRatio =
       metrics.inboundCustomer > 0 ? dropTotal / metrics.inboundCustomer : 0;
     const classifierOutage =
-      metrics.inboundCustomer >= QUOTE_PIPELINE_MIN_INBOUND_FOR_ALERT &&
+      metrics.inboundCustomer >= threshold.value &&
       dropTotal >= QUOTE_PIPELINE_MIN_DROPS_FOR_OUTAGE &&
       dropRatio >= QUOTE_PIPELINE_CLASSIFIER_MISS_RATIO;
     if (classifierOutage) {
@@ -809,10 +867,14 @@ export async function runQuotePipelineHealthCheck(
       _quoteClassifierOutageTickCount.set(orgId, next);
       if (next >= QUOTE_PIPELINE_CONSECUTIVE_TICKS) {
         const pct = Math.round(dropRatio * 100);
+        const ruleSuffix =
+          threshold.rule === "scaled"
+            ? `Threshold rule: scaled (5% of 7-day avg ${threshold.sevenDayAvgDaily.toFixed(1)}/day = ${threshold.value}).`
+            : `Threshold rule: floor (${threshold.value}).`;
         const reason =
           `Classifier appears regressed: ${pct}% of inbound emails dropped ` +
           `(${metrics.classifierMiss} miss + ${metrics.exception} exception of ${metrics.inboundCustomer} inbound) in last ${QUOTE_PIPELINE_WINDOW_MIN} min. ` +
-          `Check OpenAI prompt/model + /admin/quote-pipeline-health.`;
+          `${ruleSuffix} Check OpenAI prompt/model + /admin/quote-pipeline-health.`;
         const result = await storage.fireMailboxHealthAlert({
           orgId,
           mailboxId: anchor.id,
@@ -857,7 +919,10 @@ export function _resetQuotePipelineTrackersForTests(): void {
 
 export const _QUOTE_PIPELINE_THRESHOLDS_FOR_TESTS = {
   windowMin: QUOTE_PIPELINE_WINDOW_MIN,
-  minInbound: QUOTE_PIPELINE_MIN_INBOUND_FOR_ALERT,
+  // Task #969 — `minInbound` is now derived; tests should use
+  // `resolveQuotePipelineThreshold` to compute the expected value.
+  watchdogFloor: QUOTE_PIPELINE_WATCHDOG_FLOOR,
+  sevenDayFraction: QUOTE_PIPELINE_SEVEN_DAY_FRACTION,
   classifierMissRatio: QUOTE_PIPELINE_CLASSIFIER_MISS_RATIO,
   minDropsForOutage: QUOTE_PIPELINE_MIN_DROPS_FOR_OUTAGE,
   consecutiveTicks: QUOTE_PIPELINE_CONSECUTIVE_TICKS,

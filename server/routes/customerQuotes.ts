@@ -287,6 +287,143 @@ async function applyMineOnly(req: Request, f: QuoteFilters): Promise<QuoteFilter
   return { ...f, repId: rep?.id ?? NO_REP_SENTINEL };
 }
 
+// ─── Attribution response builder ──────────────────────────────────────
+// Pure helper extracted so `tests/customer-quotes-attribution-endpoint.test.ts`
+// can pin the JSON shape without standing up Express + Clerk middleware.
+// Takes a row from the attribution SELECT (snake_case keys, all string|null)
+// and returns the camelCase response payload the AttributionDrawer expects.
+export interface AttributionRow {
+  quote_id: string | null;
+  source_reference: string | null;
+  created_at: string | null;
+  customer_id: string | null;
+  customer_name: string | null;
+  rep_id: string | null;
+  rep_name: string | null;
+  rep_email: string | null;
+  message_id: string | null;
+  sender_email: string | null;
+  sender_name: string | null;
+  recipient_email: string | null;
+  subject: string | null;
+  sent_at: string | null;
+  received_at: string | null;
+  contact_id: string | null;
+  contact_name: string | null;
+  contact_email: string | null;
+  contact_title: string | null;
+}
+
+// ─── Force-reprocess body-status mapping ──────────────────────────────
+// Pure helper that converts a `ManualLeakCreateResult` (from the
+// service layer) into the JSON body the route returns on HTTP 200.
+// Extracted so the rep-side toast contract is unit-testable without
+// standing up Express + Clerk + a stubbed `manuallyCreateQuoteFromLeakRow`.
+// Returning every handled outcome (created, duplicate, unparseable,
+// not_a_leak, not_found, wrong_direction) at HTTP 200 with `status`
+// in the body is required by the rep-side mutations that call
+// `apiRequest` (which throws on non-2xx) — see the inline comment on
+// the force-reprocess route below.
+export interface ForceReprocessResultLike {
+  status:
+    | "created"
+    | "duplicate"
+    | "unparseable"
+    | "not_a_leak"
+    | "not_found"
+    | "wrong_direction";
+  quoteId?: string;
+  reason?: string;
+}
+export interface ForceReprocessBody {
+  status: ForceReprocessResultLike["status"];
+  quoteId: string | null;
+  reason: string | null;
+  messageId: string | null;
+}
+export function buildForceReprocessBody(
+  result: ForceReprocessResultLike,
+  messageId: string | null,
+): ForceReprocessBody {
+  return {
+    status: result.status,
+    quoteId: result.quoteId ?? null,
+    reason: result.reason ?? null,
+    messageId,
+  };
+}
+
+// Canonical assignment-rule taxonomy from task #969:
+//   • account_owner — rep owns the customer-facing inbox the email arrived at
+//   • lane_pattern  — rep matched a lane-pattern rule (reserved; not yet wired)
+//   • last_toucher  — rep was the most recent rep to touch this customer (reserved)
+//   • fallback      — no automated rule fired (manual intake)
+// `ingestQuoteFromEmail` currently only resolves the rep via
+// `findOrCreateRep(toEmail)` (rep that owns the recipient inbox), so
+// the only two values this helper emits today are `account_owner`
+// and `fallback`. Persisting `lane_pattern` and `last_toucher` is
+// follow-up #980; the type stays open so wiring those rules later is
+// a value-only change.
+export type AssignmentRule = "account_owner" | "lane_pattern" | "last_toucher" | "fallback";
+
+export function buildAttributionResponse(row: AttributionRow | Record<string, string | null>) {
+  // Rule inference. `findOrCreateRep(toEmail)` finds the rep that owns
+  // the customer-facing inbox the email was sent to, which is the
+  // closest match to `account_owner` in the canonical taxonomy. If
+  // the quote was created without an email source (e.g. spot intake),
+  // no automated rule fired — surface `fallback` so the drawer can
+  // render an honest "manual entry" explanation.
+  const ruleName: AssignmentRule = row.message_id ? "account_owner" : "fallback";
+  // `decidedAt` is the assignment-resolution timestamp the code review
+  // asked for. We don't yet persist a per-rule audit row (see follow-up
+  // #980), so the closest honest proxy is the inbound message's
+  // received-at (when the inbox-recipient rule ran) — falling back to
+  // sent-at and finally the quote's created_at for manual rows.
+  const decidedAt = row.received_at ?? row.sent_at ?? row.created_at ?? null;
+  return {
+    ok: true as const,
+    quoteId: row.quote_id,
+    customer: row.customer_id
+      ? { id: row.customer_id, name: row.customer_name ?? "(unnamed)" }
+      : null,
+    rep: row.rep_id
+      ? { id: row.rep_id, name: row.rep_name ?? "(unnamed)", email: row.rep_email ?? null }
+      : null,
+    contact: row.contact_id
+      ? {
+          id: row.contact_id,
+          name: row.contact_name ?? null,
+          email: row.contact_email ?? null,
+          title: row.contact_title ?? null,
+        }
+      : null,
+    sender: row.message_id
+      ? {
+          email: row.sender_email,
+          name: row.sender_name,
+          recipientEmail: row.recipient_email,
+          subject: row.subject,
+          sentAt: row.sent_at,
+        }
+      : null,
+    rule: {
+      name: ruleName,
+      description:
+        ruleName === "account_owner"
+          ? "Rep owns the customer-facing inbox this inbound email was sent to."
+          : "No automated assignment rule fired; rep was set manually.",
+      decidedAt,
+      inputs: ruleName === "account_owner"
+        ? {
+            inboundMessageId: row.message_id,
+            recipientEmail: row.recipient_email,
+            senderEmail: row.sender_email,
+          }
+        : null,
+    },
+  };
+}
+
 export function registerCustomerQuoteRoutes(app: Express): void {
   // Task #923 — Quote Requests freshness strip.
   // Always-honest answer to "how stale is this page?" Read-only, no filters,
@@ -1251,6 +1388,157 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     } catch (err) {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] funnel-diagnostics/leaks/create-quote error:", err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // ── Task #969 — rep-side "This should be a quote" reprocess. ──────────
+  // The conversation pane lets reps look at a specific inbound message
+  // that the classifier did NOT flag as a missed-inbound leak (e.g. a
+  // status_update that was actually a pricing request) and force it
+  // through ingestion. The endpoint is callable by any authenticated
+  // user — reps see a quote in their queue, not an admin tool — but
+  // every call writes a `quote_events` audit row tagged with the
+  // triggering userId via `manuallyCreateQuoteFromLeakRow`'s existing
+  // audit path. The `forced` flag in the underlying service skips the
+  // missed-inbound race-guard but keeps every other safety check
+  // (org boundary, direction, ingestQuoteFromEmail dup-check).
+  // Body accepts `messageId` OR `threadId`. When `threadId` is given we
+  // resolve to the latest inbound message in that thread (within the
+  // caller's org). At least one of the two must be present.
+  const forceReprocessBodySchema = z
+    .object({
+      messageId: z.string().min(1).optional(),
+      threadId: z.string().min(1).optional(),
+    })
+    .refine((v) => !!(v.messageId || v.threadId), {
+      message: "messageId or threadId required",
+    });
+  app.post(
+    "/api/customer-quotes/funnel-diagnostics/inbound/force-reprocess",
+    requireUser,
+    async (req, res) => {
+      try {
+        const user = req.user!;
+        const parsed = forceReprocessBodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+        }
+        // Resolve threadId → latest inbound messageId within the
+        // caller's org. We pick the most recent inbound because that
+        // is the message the rep was looking at when they clicked
+        // "This should be a quote" from a thread-level surface.
+        let messageId = parsed.data.messageId ?? null;
+        if (!messageId && parsed.data.threadId) {
+          const lookup = await db.execute(sqlExpr`
+            SELECT id
+            FROM email_messages
+            WHERE org_id = ${user.organizationId}
+              AND thread_id = ${parsed.data.threadId}
+              AND direction = 'inbound'
+            ORDER BY provider_sent_at DESC NULLS LAST, id DESC
+            LIMIT 1
+          `);
+          const row = lookup.rows?.[0] as { id?: string } | undefined;
+          if (!row?.id) {
+            // Task #969 review-fix: keep this on the body-status path
+            // so the rep-side toast `onSuccess` switch can render the
+            // "no inbound messages" branch (the shared `apiRequest`
+            // helper would throw on a 404 and skip the switch).
+            return res.status(200).json({
+              status: "not_found",
+              quoteId: null,
+              reason: "No inbound messages on this thread",
+              messageId: null,
+            });
+          }
+          messageId = row.id;
+        }
+        if (!messageId) {
+          return res.status(400).json({ error: "messageId or threadId required" });
+        }
+        const result = await manuallyCreateQuoteFromLeakRow(
+          user.organizationId,
+          user.id,
+          messageId,
+          { forced: true },
+        );
+        // Task #969 review fix: every handled outcome returns HTTP 200
+        // with the status carried in the body. Reserve non-2xx for
+        // genuine errors (auth/server). The client uses the shared
+        // `apiRequest` helper which throws on non-2xx; if we surfaced
+        // 422/409/404/400 here, the toast switch in the caller would
+        // never see `unparseable | not_a_leak | not_found |
+        // wrong_direction` and the "View drops queue" deep link would
+        // be unreachable. Returning 200 keeps the status routing in
+        // one place (the body).
+        return res.status(200).json(buildForceReprocessBody(result, messageId));
+      } catch (err) {
+        const msg = getErrorMessage(err);
+        console.error("[customer-quotes] force-reprocess error:", err);
+        res.status(500).json({ error: msg });
+      }
+    },
+  );
+
+  // ── Task #969 — "Why this rep?" attribution drawer. ───────────────────
+  // Surfaces the human-readable inputs the email-ingestion pipeline
+  // used to assign this quote's rep + customer. Attribution rules are
+  // not yet persisted (Task #969 ships the reduced explainer only),
+  // so the rule name is inferred from how `ingestQuoteFromEmail`
+  // currently routes: `findOrCreateRep(toEmail)` — i.e. the inbox the
+  // customer emailed wins. We label that as `inbox_recipient` so the
+  // UI doesn't claim a sophistication the system doesn't yet have.
+  app.get("/api/customer-quotes/quote/:id/attribution", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const quoteId = pStr(req.params.id);
+      if (!quoteId) return res.status(400).json({ error: "id required" });
+      const result = await db.execute(sqlExpr`
+        SELECT
+          q.id              AS quote_id,
+          q.organization_id AS org_id,
+          q.source_reference AS source_reference,
+          q.created_at      AS created_at,
+          c.id              AS customer_id,
+          c.name            AS customer_name,
+          r.id              AS rep_id,
+          r.name            AS rep_name,
+          r.email           AS rep_email,
+          em.id             AS message_id,
+          em.from_email     AS sender_email,
+          em.from_name      AS sender_name,
+          em.to_email       AS recipient_email,
+          em.subject        AS subject,
+          em.provider_sent_at AS sent_at,
+          em.received_at    AS received_at,
+          ct.id             AS contact_id,
+          ct.name           AS contact_name,
+          ct.email          AS contact_email,
+          ct.title          AS contact_title
+        FROM quote_opportunities q
+        LEFT JOIN quote_customers c ON c.id = q.customer_id
+        LEFT JOIN quote_reps r      ON r.id = q.rep_id
+        LEFT JOIN email_messages em ON (
+          em.org_id = q.organization_id
+          AND em.direction = 'inbound'
+          AND (em.provider_message_id = q.source_reference OR em.id = q.source_reference)
+        )
+        LEFT JOIN contacts ct ON (
+          em.from_email IS NOT NULL
+          AND ct.organization_id = q.organization_id
+          AND lower(ct.email) = lower(em.from_email)
+        )
+        WHERE q.id = ${quoteId}
+          AND q.organization_id = ${user.organizationId}
+        LIMIT 1
+      `);
+      const row = (result.rows?.[0] ?? null) as null | Record<string, string | null>;
+      if (!row) return res.status(404).json({ error: "Not found" });
+      res.json(buildAttributionResponse(row));
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      console.error("[customer-quotes] attribution error:", err);
       res.status(500).json({ error: msg });
     }
   });

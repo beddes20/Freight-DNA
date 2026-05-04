@@ -1,5 +1,8 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
+import { queryClient, apiRequest } from "@/lib/queryClient";
+import { ToastAction } from "@/components/ui/toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -71,6 +74,85 @@ export function ThreadRow({
   const isOverdue = !!thread.overdueAt && thread.waitingState === "waiting_on_us";
   const isUnread = !!thread.unread;
   const isCompact = density === "compact";
+
+  const { toast } = useToast();
+  // Task #969 — rep-side "This should be a quote" reprocess from the
+  // thread-list overflow. Calls the new force-reprocess endpoint with
+  // `threadId`; the server resolves to the latest inbound message.
+  // Toast deep-links to the created quote on success and to the drops
+  // queue when the pipeline can't extract a quote.
+  const forceReprocessMutation = useMutation({
+    mutationFn: async (vars: { threadId: string }) => {
+      const res = await apiRequest(
+        "POST",
+        "/api/customer-quotes/funnel-diagnostics/inbound/force-reprocess",
+        { threadId: vars.threadId },
+      );
+      const json = await res.json();
+      return json as {
+        status: "created" | "duplicate" | "unparseable" | "not_a_leak" | "not_found" | "wrong_direction";
+        quoteId?: string;
+        reason?: string;
+      };
+    },
+    onSuccess: (result) => {
+      const linkAction = (href: string, label: string) => (
+        <ToastAction altText={label} asChild data-testid="link-toast-action">
+          <a href={href}>{label}</a>
+        </ToastAction>
+      );
+      const quoteHref = result.quoteId
+        ? `/quote-requests?quote=${encodeURIComponent(result.quoteId)}`
+        : null;
+      const dropsHref = `/admin-quote-pipeline-health?reason=unparseable`;
+      switch (result.status) {
+        case "created":
+          toast({
+            title: "Quote created",
+            description: "This thread is now a customer quote.",
+            action: quoteHref ? linkAction(quoteHref, "Open quote") : undefined,
+          });
+          queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/list"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/snapshot"] });
+          break;
+        case "duplicate":
+          toast({
+            title: "Already a quote",
+            description: "This thread was already converted to a customer quote.",
+            action: quoteHref ? linkAction(quoteHref, "Open quote") : undefined,
+          });
+          break;
+        case "unparseable":
+          toast({
+            title: "Couldn't extract a quote",
+            description: result.reason ?? "The pipeline couldn't find a quote shape.",
+            variant: "destructive",
+            action: linkAction(dropsHref, "View drops queue"),
+          });
+          break;
+        case "wrong_direction":
+          toast({
+            title: "No inbound to reprocess",
+            description: "Only inbound customer emails can become quotes.",
+            variant: "destructive",
+          });
+          break;
+        default:
+          toast({
+            title: "Couldn't reprocess",
+            description: `Status: ${result.status}`,
+            variant: "destructive",
+          });
+      }
+    },
+    onError: (err: Error) => {
+      toast({
+        title: "Reprocess failed",
+        description: err.message,
+        variant: "destructive",
+      });
+    },
+  });
 
   const { data: msgData } = useQuery<{ messages: EmailMessage[] }>({
     queryKey: ["/api/internal/conversations", thread.id, "messages"],
@@ -357,6 +439,25 @@ export function ThreadRow({
                 <BellOff className="w-3.5 h-3.5 mr-2" />
                 Wake now
               </DropdownMenuItem>
+            )}
+            {/* Task #969 — rep-side "This should be a quote" reprocess
+                in the thread-list overflow. Only offer it when the
+                thread has at least one inbound message (otherwise the
+                forced-reprocess endpoint will return wrong_direction).
+                We pass `threadId` (the provider thread id) so the
+                endpoint resolves to the latest inbound on its own. */}
+            {!!thread.lastIncomingAt && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => forceReprocessMutation.mutate({ threadId: thread.threadId })}
+                  disabled={forceReprocessMutation.isPending}
+                  data-testid={`menu-force-quote-${thread.id}`}
+                >
+                  <Sparkles className="w-3.5 h-3.5 mr-2" />
+                  This should be a quote
+                </DropdownMenuItem>
+              </>
             )}
             {canArchive && (
               <>

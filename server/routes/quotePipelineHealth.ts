@@ -209,6 +209,10 @@ export function registerQuotePipelineHealthRoutes(app: Express): void {
 
         const reason = qOptStr(req.query.reason);
         const resolvedParam = qOptStr(req.query.resolved);
+        // Task #969 — admins opt-in to historical (archived) drops with
+        // `?include_archived=1`. Default view shows only the active 30-day
+        // tail so the queue stays focused on rows that still need triage.
+        const includeArchived = qOptStr(req.query.include_archived) === "1";
         const limit = Math.min(Math.max(parseInt(qOptStr(req.query.limit) ?? "50", 10) || 50, 1), 500);
         const offset = Math.max(parseInt(qOptStr(req.query.offset) ?? "0", 10) || 0, 0);
 
@@ -221,6 +225,9 @@ export function registerQuotePipelineHealthRoutes(app: Express): void {
         }
         if (resolvedParam !== "all" && resolvedParam !== "true") {
           conditions.push(sql`${quotePipelineDrops.resolvedAt} IS NULL`);
+        }
+        if (!includeArchived) {
+          conditions.push(sql`${quotePipelineDrops.archivedAt} IS NULL`);
         }
 
         const rows = await db.select({
@@ -241,6 +248,7 @@ export function registerQuotePipelineHealthRoutes(app: Express): void {
           reprocessCount: quotePipelineDrops.reprocessCount,
           lastReprocessAt: quotePipelineDrops.lastReprocessAt,
           lastReprocessError: quotePipelineDrops.lastReprocessError,
+          archivedAt: quotePipelineDrops.archivedAt,
         })
           .from(quotePipelineDrops)
           .where(and(...conditions))
@@ -255,10 +263,11 @@ export function registerQuotePipelineHealthRoutes(app: Express): void {
           WHERE org_id = ${org}
             ${reason && isValidReason(reason) ? sql`AND reason_code = ${reason}` : sql`AND reason_code != 'duplicate'`}
             ${resolvedParam === "all" || resolvedParam === "true" ? sql`` : sql`AND resolved_at IS NULL`}
+            ${includeArchived ? sql`` : sql`AND archived_at IS NULL`}
         `);
         const total = Number((totalResult.rows?.[0] as Record<string, number> | undefined)?.c ?? 0);
 
-        res.json({ ok: true, rows, total, limit, offset });
+        res.json({ ok: true, rows, total, limit, offset, includeArchived });
       } catch (err) {
         res.status(500).json({ error: getErrorMessage(err) });
       }
