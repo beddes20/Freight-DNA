@@ -62,6 +62,10 @@ args = "test:freight-capture-funnel"
 task = "workflow.run"
 args = "test:lane-system-e2e"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "backfill-incident"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -136,6 +140,17 @@ args = "npx playwright test --config=playwright.config.cjs tests/lane-system-e2e
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "backfill-incident"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "BACKFILL_CONCURRENCY=12 npx tsx tools/backfill-incident-window.ts"
 
 [postMerge]
 path = "scripts/post-merge.sh"
