@@ -1232,6 +1232,40 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
     },
   );
 
+  // GET /api/admin/live-sync-metrics
+  // Task #973 — surfaces the in-process live-sync registry + auth ring
+  // for the /admin/integrations-health Live-sync tile. Cheap (pure
+  // in-memory reads, no DB), so safe to poll every 30s. Org-scoped at
+  // a coarse level: the count/breakdown is process-wide (the metric
+  // is an operational signal, not a tenant secret), but the active-by-
+  // org list is filtered to the caller's org so we never leak which
+  // other orgs have open tabs right now.
+  app.get(
+    "/api/admin/live-sync-metrics",
+    requireAuth,
+    requireAdmin,
+    async (req: Request, res: Response) => {
+      try {
+        const user = await getCurrentUser(req);
+        if (!user) return res.status(401).json({ error: "Unauthorized" });
+        const { getLiveSyncMetricsSnapshot } = await import("../services/liveSync");
+        const snap = getLiveSyncMetricsSnapshot();
+        res.json({
+          activeConnections: snap.activeConnections,
+          activeForMyOrg: snap.activeByOrg.find((o) => o.orgId === user.organizationId)?.count ?? 0,
+          authStats: snap.authStats,
+          rejectionsByReason: snap.rejectionsByReason,
+          topUsers: snap.topUsers,
+          perUserMedianFailureRatio: snap.perUserMedianFailureRatio,
+          usersObserved: snap.usersObserved,
+        });
+      } catch (err) {
+        console.error("[monitoredMailboxes] GET /live-sync-metrics error:", err);
+        res.status(500).json({ error: "Failed to load live-sync metrics" });
+      }
+    },
+  );
+
   // POST /api/admin/monitored-mailboxes/:id/resubscribe
   // Manual self-heal trigger. Re-registers (or renews) both the Inbox and
   // SentItems subscriptions for the given mailbox via the same code path

@@ -32,6 +32,7 @@ import { JOB_NAMES, withHeartbeat } from "../lib/cronHeartbeat";
 import { renewSingleMailboxSubscription } from "../graphSubscriptionService";
 import {
   getLiveSyncAuthStats,
+  getLiveSyncMetricsSnapshot,
   getLastMailboxPublishAt,
 } from "./liveSync";
 
@@ -55,6 +56,149 @@ export const LAST_SYNC_FLOOR_UNHEALTHY_MS = 30 * 60 * 1000; // 30 min
 export const HEALTHY_POLL_CADENCE_S = 300;   // 5 min
 export const DEGRADED_POLL_CADENCE_S = 60;   // 1 min
 
+// ── Task #973 — quiet-hours + per-mailbox baseline tunables ────────────────
+//
+// During the rep org's quiet window (default 22:00–06:00 local UTC)
+// inbound mail volume drops to near-zero, so a "no Inbox webhook in 1 h"
+// signal is the *expected* state rather than a regression. We apply two
+// adjustments during this window:
+//
+//   1. Webhook-silence thresholds are scaled by `QUIET_HOURS_FACTOR`
+//      (default 4×) — a mailbox that's silent for 6 h overnight is
+//      degraded, not unhealthy.
+//   2. The alert severity tag is downgraded from `action-required` to
+//      `auto-recovering` so admins aren't paged for a condition that
+//      will resolve itself once business hours return.
+//
+// The window is in UTC for portability — most ops envs run UTC clocks
+// even when reps are split across multiple time zones. Tighten via
+// `MAILBOX_QUIET_HOUR_START_UTC` / `MAILBOX_QUIET_HOUR_END_UTC` env
+// vars when an org needs a different schedule.
+export const QUIET_HOURS_FACTOR = 4;
+const QUIET_HOUR_START_UTC = clampHour(parseInt(process.env.MAILBOX_QUIET_HOUR_START_UTC ?? "22", 10), 22);
+const QUIET_HOUR_END_UTC = clampHour(parseInt(process.env.MAILBOX_QUIET_HOUR_END_UTC ?? "6", 10), 6);
+
+function clampHour(n: number, fallback: number): number {
+  if (!Number.isFinite(n) || n < 0 || n > 23) return fallback;
+  return Math.floor(n);
+}
+
+/**
+ * True when `now` falls inside the configured nightly quiet window
+ * (UTC). Wraps midnight when start > end (which is the common case —
+ * 22:00 → 06:00). Pure for unit-testing.
+ */
+export function isQuietHourUTC(now: Date): boolean {
+  const h = now.getUTCHours();
+  if (QUIET_HOUR_START_UTC === QUIET_HOUR_END_UTC) return false;
+  if (QUIET_HOUR_START_UTC < QUIET_HOUR_END_UTC) {
+    return h >= QUIET_HOUR_START_UTC && h < QUIET_HOUR_END_UTC;
+  }
+  // Wraps midnight: e.g. start=22, end=6 → quiet at h ∈ {22,23,0,1,2,3,4,5}.
+  return h >= QUIET_HOUR_START_UTC || h < QUIET_HOUR_END_UTC;
+}
+
+/**
+ * Compute the per-mailbox webhook-silence thresholds for *this* tick,
+ * scaled by quiet-hours and (if available) the mailbox's own historical
+ * cadence baseline.
+ *
+ * Inputs:
+ *   - `mb.pollCadenceSeconds` — already adapted by the watchdog itself
+ *     (5 min healthy / 1 min degraded). We use it as a proxy for "how
+ *     often does this mailbox normally tick?" — a mailbox cron'd at 1m
+ *     should not be allowed to go silent for 90 minutes.
+ *   - Quiet-hours scale factor (4×) when `now` is in the night window.
+ *
+ * Returns the (degraded, unhealthy) silence thresholds in ms.
+ *
+ * The baseline factor (6×) and ratio (1.5×) were chosen so a healthy
+ * 5-min cadence mailbox uses the existing 30/90-min thresholds, while
+ * a 1-min cadence mailbox tightens to 6/15 min — matching the user's
+ * mental model of "I'd notice within a couple of poll cycles".
+ */
+export function computeMailboxSilenceThresholds(
+  mb: MonitoredMailbox,
+  now: Date,
+): { degradedMs: number; unhealthyMs: number; quietHours: boolean } {
+  // Prefer the rolling-historical baseline when we've seen enough
+  // recent webhook intervals for this mailbox; otherwise fall back to
+  // the configured `pollCadenceSeconds`. The historical p75 is the
+  // honest answer to "how often does this mailbox actually publish?",
+  // which is what we want to compare ingest staleness against — a
+  // mailbox configured for 5min cadence but actually publishing every
+  // 10min should not page admins at the 30/90-min defaults.
+  const observedMs = getExpectedMailboxCadenceMs(mb.id);
+  const configuredMs = (mb.pollCadenceSeconds ?? 300) * 1000;
+  const cadenceMs = Math.max(60_000, observedMs ?? configuredMs);
+  // Use max(constant default, cadence×N) so we never tighten below the
+  // existing baseline. Loosening *above* the default is fine.
+  const baseDegraded = Math.max(WEBHOOK_SILENCE_DEGRADED_MS, cadenceMs * 6);
+  const baseUnhealthy = Math.max(WEBHOOK_SILENCE_UNHEALTHY_MS, cadenceMs * 18);
+  const quietHours = isQuietHourUTC(now);
+  if (quietHours) {
+    return {
+      degradedMs: baseDegraded * QUIET_HOURS_FACTOR,
+      unhealthyMs: baseUnhealthy * QUIET_HOURS_FACTOR,
+      quietHours,
+    };
+  }
+  return { degradedMs: baseDegraded, unhealthyMs: baseUnhealthy, quietHours };
+}
+
+// ── Rolling per-mailbox cadence baseline (Task #973) ──────────────────────
+//
+// We can't trust `pollCadenceSeconds` alone — it's the *target* cadence,
+// not the observed one. A mailbox that's actually publishing at half
+// that rate (because Graph throttling / quiet user / weekend) should
+// not get paged at the configured-cadence-derived thresholds.
+//
+// Implementation: ring buffer of the last N intervals between
+// successive `lastInboxNotificationAt` advances. We use the p75 as the
+// baseline so a single quiet stretch doesn't push the threshold up
+// catastrophically.
+
+const MAILBOX_INTERVAL_RING_SIZE = 20;
+const MAILBOX_INTERVAL_MIN_SAMPLES = 5;
+const _mailboxIntervalSamples: Map<
+  string,
+  { lastIngestMs: number; intervalsMs: number[] }
+> = new Map();
+
+export function observeMailboxIngest(mailboxId: string, ingestMs: number): void {
+  if (!ingestMs || !Number.isFinite(ingestMs)) return;
+  const entry = _mailboxIntervalSamples.get(mailboxId);
+  if (!entry) {
+    _mailboxIntervalSamples.set(mailboxId, { lastIngestMs: ingestMs, intervalsMs: [] });
+    return;
+  }
+  // Only forward-moving observations contribute. The watchdog re-reads
+  // each tick so we'd otherwise inject zero-intervals on every tick.
+  if (ingestMs <= entry.lastIngestMs) return;
+  const interval = ingestMs - entry.lastIngestMs;
+  entry.intervalsMs.push(interval);
+  if (entry.intervalsMs.length > MAILBOX_INTERVAL_RING_SIZE) entry.intervalsMs.shift();
+  entry.lastIngestMs = ingestMs;
+}
+
+/**
+ * Returns the p75 of recent webhook intervals for a mailbox, or null
+ * when we have fewer than `MAILBOX_INTERVAL_MIN_SAMPLES` observations
+ * (the caller should then fall back to the configured cadence).
+ */
+export function getExpectedMailboxCadenceMs(mailboxId: string): number | null {
+  const entry = _mailboxIntervalSamples.get(mailboxId);
+  if (!entry || entry.intervalsMs.length < MAILBOX_INTERVAL_MIN_SAMPLES) return null;
+  const sorted = [...entry.intervalsMs].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.floor(sorted.length * 0.75));
+  return sorted[idx];
+}
+
+/** Test-only: clear the rolling cadence baseline cache. */
+export function _resetMailboxCadenceBaselineForTests(): void {
+  _mailboxIntervalSamples.clear();
+}
+
 export type MailboxHealthStatus = "healthy" | "degraded" | "unhealthy";
 
 export interface MailboxHealthClassification {
@@ -66,6 +210,16 @@ export interface MailboxHealthClassification {
   needsResubscribe: boolean;
   /** Which sub(s) need resubscribing. */
   resubscribeReasons: string[];
+  /** Task #973 — true when the watchdog observed this condition during
+   *  the configured quiet window. The reconciler downgrades the alert
+   *  severity to "warning" (auto-recovering) instead of "critical"
+   *  (action-required) when this is set. */
+  quietHours: boolean;
+  /** Task #973 — true when the *only* reason this mailbox is degraded
+   *  or unhealthy is webhook silence. The reconciler will run a delta
+   *  backfill before escalating, on the theory that a missing webhook
+   *  is often a single dropped notification rather than a dead sub. */
+  silenceOnly: boolean;
 }
 
 /**
@@ -82,8 +236,14 @@ export function classifyMailboxHealth(
   let needsResub = false;
   let unhealthy = false;
   let degraded = false;
+  // Track which reasons stem purely from webhook silence so the
+  // reconciler knows it's safe to attempt a delta-sync backfill before
+  // escalating to "unhealthy".
+  let silenceContributedToUnhealthy = false;
+  let nonSilenceContributedToUnhealthy = false;
 
   const nowMs = now.getTime();
+  const { degradedMs, unhealthyMs, quietHours } = computeMailboxSilenceThresholds(mb, now);
 
   // Subscription presence + expiry — the most common silent-failure mode.
   if (!mb.subscriptionId) {
@@ -106,6 +266,7 @@ export function classifyMailboxHealth(
     if (msUntilExpiry <= 0) {
       needsResub = true;
       unhealthy = true;
+      nonSilenceContributedToUnhealthy = true;
       resubReasons.push("Subscription expired");
       reasons.push(`Subscription expired ${formatAgo(-msUntilExpiry)} ago`);
     } else if (msUntilExpiry <= SUB_EXPIRY_HEADROOM_MS) {
@@ -114,17 +275,21 @@ export function classifyMailboxHealth(
       reasons.push(`Subscription expires in ${formatAgo(msUntilExpiry)}`);
     }
   }
+  if (!mb.subscriptionId) nonSilenceContributedToUnhealthy = true;
 
   // Webhook silence — Inbox is the load-bearing one, SentItems is
-  // secondary.
+  // secondary. Thresholds are per-mailbox (scaled by pollCadence and
+  // by quiet-hours) so we don't over-page mailboxes that legitimately
+  // sit quiet between business hours.
   const inboxSince = mb.lastInboxNotificationAt
     ? nowMs - mb.lastInboxNotificationAt.getTime()
     : null;
   if (inboxSince !== null) {
-    if (inboxSince > WEBHOOK_SILENCE_UNHEALTHY_MS) {
+    if (inboxSince > unhealthyMs) {
       unhealthy = true;
+      silenceContributedToUnhealthy = true;
       reasons.push(`No Inbox webhook in ${formatAgo(inboxSince)}`);
-    } else if (inboxSince > WEBHOOK_SILENCE_DEGRADED_MS) {
+    } else if (inboxSince > degradedMs) {
       degraded = true;
       reasons.push(`No Inbox webhook in ${formatAgo(inboxSince)}`);
     }
@@ -133,16 +298,22 @@ export function classifyMailboxHealth(
   const sentSince = mb.lastSentItemsNotificationAt
     ? nowMs - mb.lastSentItemsNotificationAt.getTime()
     : null;
-  if (sentSince !== null && sentSince > WEBHOOK_SILENCE_UNHEALTHY_MS) {
+  if (sentSince !== null && sentSince > unhealthyMs) {
     degraded = true;
     reasons.push(`No SentItems webhook in ${formatAgo(sentSince)}`);
   }
 
   // Last-sync floor — delta loop is the safety net; if even *that* is
-  // dragging, we're not catching mail.
+  // dragging, we're not catching mail. The floor is also scaled by
+  // quiet-hours; otherwise an overnight gap with no inbound mail
+  // (and therefore no webhook to trigger a delta) trips this branch.
+  const syncFloorMs = quietHours
+    ? LAST_SYNC_FLOOR_UNHEALTHY_MS * QUIET_HOURS_FACTOR
+    : LAST_SYNC_FLOOR_UNHEALTHY_MS;
   const syncSince = mb.lastSyncAt ? nowMs - mb.lastSyncAt.getTime() : null;
-  if (syncSince !== null && syncSince > LAST_SYNC_FLOOR_UNHEALTHY_MS) {
+  if (syncSince !== null && syncSince > syncFloorMs) {
     unhealthy = true;
+    silenceContributedToUnhealthy = true;
     reasons.push(`No successful sync in ${formatAgo(syncSince)}`);
   }
 
@@ -157,6 +328,7 @@ export function classifyMailboxHealth(
   // already saying "error" we trust that and escalate.
   if (mb.syncStatus === "error") {
     unhealthy = true;
+    nonSilenceContributedToUnhealthy = true;
     if (mb.syncError) reasons.push(`Sync error: ${mb.syncError.slice(0, 120)}`);
   } else if (mb.syncStatus === "partial") {
     degraded = true;
@@ -172,6 +344,8 @@ export function classifyMailboxHealth(
     recommendedPollCadenceS: cadence,
     needsResubscribe: needsResub,
     resubscribeReasons: resubReasons,
+    quietHours,
+    silenceOnly: silenceContributedToUnhealthy && !nonSilenceContributedToUnhealthy,
   };
 }
 
@@ -210,7 +384,7 @@ interface WatchdogOutcome {
 }
 
 async function runWatchdogForMailbox(mb: MonitoredMailbox, now: Date): Promise<WatchdogOutcome> {
-  const cls = classifyMailboxHealth(mb, now);
+  let cls = classifyMailboxHealth(mb, now);
   const before = (mb.healthStatus as MailboxHealthStatus | "unknown") === "unknown"
     ? null
     : (mb.healthStatus as MailboxHealthStatus);
@@ -218,6 +392,7 @@ async function runWatchdogForMailbox(mb: MonitoredMailbox, now: Date): Promise<W
   let action = "none";
   let resubscribed = false;
   let resubscribeError: string | undefined;
+  let backfilledMb: MonitoredMailbox = mb;
 
   if (cls.needsResubscribe) {
     const result = await renewSingleMailboxSubscription(mb.id).catch((err): { skipped: true; reason: string } => ({
@@ -238,12 +413,40 @@ async function runWatchdogForMailbox(mb: MonitoredMailbox, now: Date): Promise<W
     }
   }
 
-  // Re-classify with fresh state if we just touched the subscriptions —
-  // a successful renewal should immediately drop us out of the
-  // "expiring soon" branch on this same tick.
+  // Task #973 — delta backfill before escalation. When a mailbox would
+  // be classified `unhealthy` purely because of webhook silence (no
+  // missing/expired sub, no sync error), give the delta-sync loop one
+  // chance to catch up *this tick* before we mark the mailbox dead and
+  // page admins. The delta endpoint is idempotent and cheap; if a
+  // single notification was dropped, this resolves the alert without a
+  // human in the loop. The reclassification below picks up the fresh
+  // `lastSyncAt` written by the delta sync.
+  if (
+    cls.silenceOnly &&
+    cls.status === "unhealthy" &&
+    !resubscribed &&
+    !resubscribeError
+  ) {
+    try {
+      const { syncMailboxDelta } = await import("./mailboxDeltaSyncService");
+      await syncMailboxDelta(mb.id);
+      action = action === "none" ? "backfill-before-escalate" : `${action}+backfill`;
+      backfilledMb = (await storage.getMonitoredMailbox(mb.id)) ?? mb;
+    } catch (err) {
+      log(
+        `backfill-before-escalate failed for ${mb.email}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  // Re-classify with fresh state if we just touched the subscriptions
+  // OR ran a backfill — both can move the mailbox back to healthy on
+  // this same tick.
   const after = resubscribed
     ? classifyMailboxHealth((await storage.getMonitoredMailbox(mb.id)) ?? mb, now)
-    : cls;
+    : backfilledMb !== mb
+      ? classifyMailboxHealth(backfilledMb, now)
+      : cls;
 
   await storage.updateMonitoredMailbox(mb.id, {
     healthStatus: after.status,
@@ -415,6 +618,12 @@ const ALERT_KEY_LIVE_SYNC_SILENT = "live_sync_silent_stream";
 const LIVE_SYNC_AUTH_MIN_ATTEMPTS = 10;
 const LIVE_SYNC_AUTH_FAILURE_RATIO = 0.9;
 const LIVE_SYNC_AUTH_CONSECUTIVE_TICKS = 2;
+// Task #973 — minimum distinct user fingerprints observed in the
+// rolling window before the org-wide `live_sync_auth_failure` alert
+// can fire. Prevents one looping client from poisoning the org-wide
+// signal during low-traffic windows. 2 is the lowest value that
+// makes a "median across users" meaningful.
+const LIVE_SYNC_AUTH_MIN_USERS = 2;
 const LIVE_SYNC_INGEST_RECENCY_MS = 10 * 60 * 1000; // 10 min
 const LIVE_SYNC_PUBLISH_STALE_MS = 5 * 60 * 1000; // 5 min
 const LIVE_SYNC_SILENT_CONSECUTIVE_TICKS = 2;
@@ -435,6 +644,11 @@ export async function runLiveSyncHealthCheck(
 }> {
   const nowMs = now.getTime();
   const stats = getLiveSyncAuthStats(nowMs);
+  // Task #973 — also pull the per-user-fingerprint snapshot. Watching
+  // the *median across users* prevents one bad client (looped 401s
+  // from a stale tab in a single browser) from blowing up the global
+  // failure ratio and paging admins for what is effectively client noise.
+  const snapshot = getLiveSyncMetricsSnapshot(nowMs);
 
   // Group enabled mailboxes by org — same anchoring strategy as the
   // classification-lag check (alert is org-scoped, schema needs a mailbox).
@@ -451,9 +665,27 @@ export async function runLiveSyncHealthCheck(
   let orgsSilent = 0;
 
   // ── 1. Auth-failure check (process-wide signal, fanned out per org) ─────
-  const authFailing =
+  // Two-of-two trigger: (a) the legacy global ratio is hot AND (b) the
+  // per-user median is also hot. Either signal alone can flap; both
+  // together is a real outage. Min-attempts gate suppresses noise on
+  // low-traffic envs.
+  //
+  // Task #973 (review-pass-3) — the previous "fall back to global when
+  // usersObserved < 2" branch defeated the per-user-bucketing goal: a
+  // single noisy/misconfigured client during a quiet hour could drag
+  // the global ratio over the threshold and trigger the org-wide
+  // alert. We now *require* `LIVE_SYNC_AUTH_MIN_USERS` distinct
+  // fingerprints in the window before the auth alert can fire,
+  // exactly as the task brief asks ("one client should not poison the
+  // org-wide signal"). Low-traffic windows simply do not page.
+  const globalHot =
     stats.total >= LIVE_SYNC_AUTH_MIN_ATTEMPTS &&
     stats.failureRatio >= LIVE_SYNC_AUTH_FAILURE_RATIO;
+  const haveEnoughUsers = snapshot.usersObserved >= LIVE_SYNC_AUTH_MIN_USERS;
+  const medianHot =
+    haveEnoughUsers &&
+    snapshot.perUserMedianFailureRatio >= LIVE_SYNC_AUTH_FAILURE_RATIO;
+  const authFailing = globalHot && medianHot;
   if (authFailing) {
     _liveSyncAuthFailingTicks.count += 1;
   } else {
@@ -465,27 +697,43 @@ export async function runLiveSyncHealthCheck(
   for (const [orgId, orgMailboxes] of byOrg.entries()) {
     const anchor = orgMailboxes[0];
 
+    // Observe ingest for the rolling cadence baseline. Done here so the
+    // baseline keeps building even when we never reach the silent-stream
+    // branch below.
+    for (const mb of orgMailboxes) {
+      const t = mb.lastInboxNotificationAt?.getTime() ?? 0;
+      if (t > 0) observeMailboxIngest(mb.id, t);
+    }
+
     if (shouldFireAuth) {
-      const reason =
-        `Live-sync stream is rejecting ${stats.failure}/${stats.total} ` +
-        `connection attempts in the last ${Math.round(stats.windowMs / 1000)}s ` +
-        `(${Math.round(stats.failureRatio * 100)}% failure rate). ` +
-        `Reps will fall back to the 120s background poll until this clears — ` +
-        `check Clerk JWT validation and the ?token= query path.`;
-      const result = await storage.fireMailboxHealthAlert({
-        orgId,
-        mailboxId: anchor.id,
-        alertKey: ALERT_KEY_LIVE_SYNC_AUTH,
-        severity: "critical",
-        reason,
-      }).catch(() => null);
-      if (result?.isNew) {
-        alertsFired++;
-        await fanOutAdminNotifications(
-          anchor,
-          "Live-sync stream rejecting connections",
-          reason,
-        ).catch(() => {});
+      // Live-sync auth alert goes through the same cool-down + flap
+      // dampening as the per-mailbox alerts. Bypassing this was the
+      // original noise source: a sustained outage fired one alert *per
+      // tick* per anchor mailbox, even though the storage layer dedupes.
+      const decision = shouldFireAlert(anchor.id, ALERT_KEY_LIVE_SYNC_AUTH, nowMs);
+      if (decision.fire) {
+        const reason =
+          `Live-sync stream is rejecting ${stats.failure}/${stats.total} ` +
+          `connection attempts in the last ${Math.round(stats.windowMs / 1000)}s ` +
+          `(${Math.round(stats.failureRatio * 100)}% failure rate). ` +
+          `Reps will fall back to the 120s background poll until this clears — ` +
+          `check Clerk JWT validation and the ?token= query path.`;
+        const result = await storage.fireMailboxHealthAlert({
+          orgId,
+          mailboxId: anchor.id,
+          alertKey: ALERT_KEY_LIVE_SYNC_AUTH,
+          severity: "critical",
+          reason: tagReason("action-required", reason),
+        }).catch(() => null);
+        const dampened = recordFire(anchor.id, ALERT_KEY_LIVE_SYNC_AUTH, nowMs);
+        if (result?.isNew && !dampened) {
+          alertsFired++;
+          await fanOutAdminNotifications(
+            anchor,
+            "Live-sync stream rejecting connections",
+            reason,
+          ).catch(() => {});
+        }
       }
     } else if (!authFailing) {
       // Resolve only when the *current* tick is healthy — keeps a flapping
@@ -493,7 +741,10 @@ export async function runLiveSyncHealthCheck(
       const resolved = await storage
         .resolveMailboxHealthAlert(anchor.id, ALERT_KEY_LIVE_SYNC_AUTH)
         .catch(() => null);
-      if (resolved) alertsResolved++;
+      if (resolved) {
+        alertsResolved++;
+        recordResolve(anchor.id, ALERT_KEY_LIVE_SYNC_AUTH, nowMs);
+      }
     }
 
     // ── 2. Silent-stream check (per org) ──────────────────────────────────
@@ -527,28 +778,35 @@ export async function runLiveSyncHealthCheck(
       const next = (_liveSyncSilentTickCount.get(orgId) ?? 0) + 1;
       _liveSyncSilentTickCount.set(orgId, next);
       if (next >= LIVE_SYNC_SILENT_CONSECUTIVE_TICKS) {
-        const lastPubLabel = lastPub
-          ? `${Math.round((nowMs - lastPub) / 1000)}s ago`
-          : "never (during this process)";
-        const reason =
-          `Mailbox ingest fired ${Math.round((nowMs - latestIngestMs) / 1000)}s ` +
-          `ago but the live-sync mailbox_inbound/_outbound publish is stale ` +
-          `(last publish: ${lastPubLabel}). A write path likely dropped ` +
-          `its publish() call — Conversations will not auto-update for this org.`;
-        const result = await storage.fireMailboxHealthAlert({
-          orgId,
-          mailboxId: anchor.id,
-          alertKey: ALERT_KEY_LIVE_SYNC_SILENT,
-          severity: "warning",
-          reason,
-        }).catch(() => null);
-        if (result?.isNew) {
-          alertsFired++;
-          await fanOutAdminNotifications(
-            anchor,
-            "Live-sync silent despite recent mailbox activity",
-            reason,
-          ).catch(() => {});
+        // Same cool-down + flap-dampening guard as the auth alert
+        // above — a sustained "silent stream" condition must produce
+        // exactly one notification fanout, not one per tick.
+        const decision = shouldFireAlert(anchor.id, ALERT_KEY_LIVE_SYNC_SILENT, nowMs);
+        if (decision.fire) {
+          const lastPubLabel = lastPub
+            ? `${Math.round((nowMs - lastPub) / 1000)}s ago`
+            : "never (during this process)";
+          const reason =
+            `Mailbox ingest fired ${Math.round((nowMs - latestIngestMs) / 1000)}s ` +
+            `ago but the live-sync mailbox_inbound/_outbound publish is stale ` +
+            `(last publish: ${lastPubLabel}). A write path likely dropped ` +
+            `its publish() call — Conversations will not auto-update for this org.`;
+          const result = await storage.fireMailboxHealthAlert({
+            orgId,
+            mailboxId: anchor.id,
+            alertKey: ALERT_KEY_LIVE_SYNC_SILENT,
+            severity: "warning",
+            reason: tagReason("action-required", reason),
+          }).catch(() => null);
+          const dampened = recordFire(anchor.id, ALERT_KEY_LIVE_SYNC_SILENT, nowMs);
+          if (result?.isNew && !dampened) {
+            alertsFired++;
+            await fanOutAdminNotifications(
+              anchor,
+              "Live-sync silent despite recent mailbox activity",
+              reason,
+            ).catch(() => {});
+          }
         }
       }
     } else {
@@ -558,7 +816,10 @@ export async function runLiveSyncHealthCheck(
       const resolved = await storage
         .resolveMailboxHealthAlert(anchor.id, ALERT_KEY_LIVE_SYNC_SILENT)
         .catch(() => null);
-      if (resolved) alertsResolved++;
+      if (resolved) {
+        alertsResolved++;
+        recordResolve(anchor.id, ALERT_KEY_LIVE_SYNC_SILENT, nowMs);
+      }
     }
   }
 
@@ -576,6 +837,7 @@ export async function runLiveSyncHealthCheck(
 export function _resetLiveSyncHealthTrackerForTests(): void {
   _liveSyncAuthFailingTicks.count = 0;
   _liveSyncSilentTickCount.clear();
+  _resetMailboxCadenceBaselineForTests();
 }
 
 // Test-only: thresholds so unit tests can pin them.
@@ -583,6 +845,7 @@ export const _LIVE_SYNC_HEALTH_THRESHOLDS_FOR_TESTS = {
   authMinAttempts: LIVE_SYNC_AUTH_MIN_ATTEMPTS,
   authFailureRatio: LIVE_SYNC_AUTH_FAILURE_RATIO,
   authConsecutiveTicks: LIVE_SYNC_AUTH_CONSECUTIVE_TICKS,
+  authMinUsers: LIVE_SYNC_AUTH_MIN_USERS,
   ingestRecencyMs: LIVE_SYNC_INGEST_RECENCY_MS,
   publishStaleMs: LIVE_SYNC_PUBLISH_STALE_MS,
   silentConsecutiveTicks: LIVE_SYNC_SILENT_CONSECUTIVE_TICKS,
@@ -590,46 +853,195 @@ export const _LIVE_SYNC_HEALTH_THRESHOLDS_FOR_TESTS = {
   alertKeySilent: ALERT_KEY_LIVE_SYNC_SILENT,
 };
 
+// Task #973 — per-(mailbox, alertKey) cool-down + flap dampening.
+//
+// The previous watchdog had no memory across ticks beyond the alert
+// row in the DB, so a flapping mailbox (e.g. webhook silence that
+// keeps oscillating around the threshold every couple of minutes) fired
+// a fresh notification *every* tick it crossed the line. The cool-down
+// suppresses that storm: once an alert has been resolved, we won't
+// re-fire the same (mailboxId, alertKey) for at least
+// `ALERT_COOLDOWN_MS` — and we count the resolve→fire flip as a
+// "flap". Three flaps inside `FLAP_WINDOW_MS` is itself a signal
+// (something is genuinely unstable), so we promote the alert to a
+// sticky `flap_dampened` variant that requires manual ack.
+//
+// The state lives at module scope alongside the other watchdog
+// trackers; the watchdog cron is a singleton in this process.
+const ALERT_COOLDOWN_MS = 10 * 60 * 1000;
+const FLAP_WINDOW_MS = 60 * 60 * 1000;
+const FLAP_THRESHOLD = 3;
+
+interface AlertCooldownState {
+  /** Last time this (mailboxId, alertKey) was *fired* by the watchdog. */
+  lastFiredAt: number;
+  /** Last time this (mailboxId, alertKey) was *resolved* by the watchdog. */
+  lastResolvedAt: number;
+  /** Timestamps of recent fire→resolve→fire transitions (rolling window). */
+  flaps: number[];
+  /** Whether a flap-dampened sticky alert is currently active. */
+  dampened: boolean;
+}
+const _alertCooldown: Map<string, AlertCooldownState> = new Map();
+function _cooldownKey(mailboxId: string, alertKey: string): string {
+  return `${mailboxId}::${alertKey}`;
+}
+
+/** Test-only: clear the cool-down tracker between cases. */
+export function _resetAlertCooldownForTests(): void {
+  _alertCooldown.clear();
+}
+
+export const _ALERT_COOLDOWN_THRESHOLDS_FOR_TESTS = {
+  cooldownMs: ALERT_COOLDOWN_MS,
+  flapWindowMs: FLAP_WINDOW_MS,
+  flapThreshold: FLAP_THRESHOLD,
+};
+
+/**
+ * Decide whether to fire an alert this tick. Encapsulates the
+ * cool-down + flap-dampening rules so both the per-mailbox path and the
+ * org-scoped paths (live-sync, classification-lag) get the same
+ * behavior.
+ */
+function shouldFireAlert(mailboxId: string, alertKey: string, now: number): {
+  fire: boolean;
+  dampened: boolean;
+  reason: string;
+} {
+  const key = _cooldownKey(mailboxId, alertKey);
+  const state = _alertCooldown.get(key);
+  if (!state) return { fire: true, dampened: false, reason: "first-fire" };
+  // Already firing — let the underlying `fireMailboxHealthAlert` dedup
+  // (it returns isNew=false for existing open alerts).
+  if (state.lastFiredAt > state.lastResolvedAt) {
+    return { fire: true, dampened: state.dampened, reason: "still-open" };
+  }
+  // Just resolved → in cool-down.
+  if (now - state.lastResolvedAt < ALERT_COOLDOWN_MS) {
+    return { fire: false, dampened: false, reason: "cooldown" };
+  }
+  return { fire: true, dampened: state.dampened, reason: "post-cooldown" };
+}
+
+function recordFire(mailboxId: string, alertKey: string, now: number): boolean {
+  const key = _cooldownKey(mailboxId, alertKey);
+  const state = _alertCooldown.get(key) ?? {
+    lastFiredAt: 0,
+    lastResolvedAt: 0,
+    flaps: [],
+    dampened: false,
+  };
+  // A fire that follows a resolve is a flap — track it.
+  if (state.lastResolvedAt > 0 && state.lastResolvedAt > state.lastFiredAt) {
+    state.flaps.push(now);
+    // Prune old flaps outside the window.
+    state.flaps = state.flaps.filter((t) => now - t <= FLAP_WINDOW_MS);
+    if (state.flaps.length >= FLAP_THRESHOLD) state.dampened = true;
+  }
+  state.lastFiredAt = now;
+  _alertCooldown.set(key, state);
+  return state.dampened;
+}
+
+function recordResolve(mailboxId: string, alertKey: string, now: number): void {
+  const key = _cooldownKey(mailboxId, alertKey);
+  const state = _alertCooldown.get(key);
+  if (!state) {
+    // Never seen — track the resolve anyway so the next fire is a flap.
+    _alertCooldown.set(key, {
+      lastFiredAt: 0,
+      lastResolvedAt: now,
+      flaps: [],
+      dampened: false,
+    });
+    return;
+  }
+  state.lastResolvedAt = now;
+  // Once we sustain "resolved" for a full flap window, drop the
+  // dampened flag so the alert can be ordinary again.
+  state.flaps = state.flaps.filter((t) => now - t <= FLAP_WINDOW_MS);
+  if (state.flaps.length === 0) state.dampened = false;
+  _alertCooldown.set(key, state);
+}
+
+/**
+ * Tag for the alert escalation level. `auto-recovering` means the
+ * watchdog expects the condition to clear without human intervention
+ * (quiet-hours silence, single missed webhook before backfill, etc.);
+ * `action-required` means an admin needs to look. The tag is folded
+ * into the alert reason so it's visible everywhere the reason is —
+ * notifications, the admin UI tile, and the DB row.
+ */
+type EscalationTag = "auto-recovering" | "action-required";
+function tagReason(tag: EscalationTag, reason: string): string {
+  return `[${tag}] ${reason}`;
+}
+
 async function reconcileAlerts(
   mb: MonitoredMailbox,
   cls: MailboxHealthClassification,
   resubscribeError: string | undefined,
   now: Date,
 ): Promise<void> {
+  const nowMs = now.getTime();
+
   // Mailbox-unhealthy alert — fired only when the watchdog can't fix it
-  // itself in this tick (i.e., still unhealthy after attempted resub).
+  // itself in this tick (i.e., still unhealthy after attempted resub
+  // and backfill). Severity downgraded during quiet-hours so we don't
+  // page admins overnight; the alert row is still recorded so the gap
+  // is visible in the morning.
   if (cls.status === "unhealthy") {
-    const result = await storage.fireMailboxHealthAlert({
-      orgId: mb.orgId,
-      mailboxId: mb.id,
-      alertKey: ALERT_KEY_UNHEALTHY,
-      severity: "critical",
-      reason: cls.reason,
-    }).catch(() => null);
-    if (result?.isNew) {
-      await fanOutAdminNotifications(mb, "Mailbox sync unhealthy", cls.reason).catch(() => {});
+    const tag: EscalationTag = cls.quietHours ? "auto-recovering" : "action-required";
+    const decision = shouldFireAlert(mb.id, ALERT_KEY_UNHEALTHY, nowMs);
+    if (decision.fire) {
+      const severity = cls.quietHours ? "warning" : "critical";
+      const reason = tagReason(tag, cls.reason);
+      const result = await storage.fireMailboxHealthAlert({
+        orgId: mb.orgId,
+        mailboxId: mb.id,
+        alertKey: ALERT_KEY_UNHEALTHY,
+        severity,
+        reason,
+      }).catch(() => null);
+      const dampened = recordFire(mb.id, ALERT_KEY_UNHEALTHY, nowMs);
+      if (result?.isNew && tag === "action-required" && !dampened) {
+        await fanOutAdminNotifications(mb, "Mailbox sync unhealthy", reason).catch(() => {});
+      }
     }
   } else {
-    await storage.resolveMailboxHealthAlert(mb.id, ALERT_KEY_UNHEALTHY).catch(() => {});
+    const resolved = await storage
+      .resolveMailboxHealthAlert(mb.id, ALERT_KEY_UNHEALTHY)
+      .catch(() => null);
+    if (resolved) recordResolve(mb.id, ALERT_KEY_UNHEALTHY, nowMs);
   }
 
   // Renewal-failed alert — separate channel because a transient renewal
   // failure can happen without the mailbox going fully unhealthy
   // (e.g., expiring-soon renewal flopped but the existing sub still
-  // covers us for an hour).
+  // covers us for an hour). Always tagged `auto-recovering` because
+  // the periodic renewer will retry on its own cadence.
   if (resubscribeError) {
-    const result = await storage.fireMailboxHealthAlert({
-      orgId: mb.orgId,
-      mailboxId: mb.id,
-      alertKey: ALERT_KEY_RENEWAL_FAILED,
-      severity: "warning",
-      reason: `Subscription renewal failed: ${resubscribeError}`,
-    }).catch(() => null);
-    if (result?.isNew) {
-      await fanOutAdminNotifications(mb, "Mailbox subscription renewal failing", resubscribeError).catch(() => {});
+    const decision = shouldFireAlert(mb.id, ALERT_KEY_RENEWAL_FAILED, nowMs);
+    if (decision.fire) {
+      const reason = tagReason("auto-recovering", `Subscription renewal failed: ${resubscribeError}`);
+      const result = await storage.fireMailboxHealthAlert({
+        orgId: mb.orgId,
+        mailboxId: mb.id,
+        alertKey: ALERT_KEY_RENEWAL_FAILED,
+        severity: "warning",
+        reason,
+      }).catch(() => null);
+      recordFire(mb.id, ALERT_KEY_RENEWAL_FAILED, nowMs);
+      if (result?.isNew) {
+        await fanOutAdminNotifications(mb, "Mailbox subscription renewal failing", reason).catch(() => {});
+      }
     }
   } else if (cls.status === "healthy") {
-    await storage.resolveMailboxHealthAlert(mb.id, ALERT_KEY_RENEWAL_FAILED).catch(() => {});
+    const resolved = await storage
+      .resolveMailboxHealthAlert(mb.id, ALERT_KEY_RENEWAL_FAILED)
+      .catch(() => null);
+    if (resolved) recordResolve(mb.id, ALERT_KEY_RENEWAL_FAILED, nowMs);
   }
 }
 

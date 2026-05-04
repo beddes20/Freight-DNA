@@ -102,6 +102,11 @@ beforeEach(() => {
   };
 });
 
+// Task #973 — `resolveOrgId` now returns a structured `ResolveResult`
+// rather than the legacy `string | null` so the SSE route can record
+// per-user auth metrics + emit a labelled rejection reason. These
+// tests assert both the org-id (legacy contract) and the new fields.
+
 describe("resolveOrgId — steady-state path", () => {
   it("returns the org when getUserByClerkId already finds a linked row", async () => {
     const user = {
@@ -113,8 +118,13 @@ describe("resolveOrgId — steady-state path", () => {
     dbUsers.set(user.id, user);
     usersByClerkId.set(user.clerkUserId, user);
 
-    const orgId = await resolveOrgId(makeReq({ token: "tok" }));
-    expect(orgId).toBe("org-1");
+    const result = await resolveOrgId(makeReq({ token: "tok" }));
+    expect(result.orgId).toBe("org-1");
+    expect(result.userId).toBe("db-1");
+    expect(result.rejectionReason).toBeNull();
+    // Fingerprint is a truncated form of the Clerk user id — short enough
+    // for log lines, long enough to correlate.
+    expect(result.fingerprint).not.toBe("anon");
     // No back-fill write because the row was already linked.
     expect(updateUserCalls.length).toBe(0);
   });
@@ -135,9 +145,11 @@ describe("resolveOrgId — email back-fill (the Task #958 regression)", () => {
       emailAddresses: [{ emailAddress: "Taylor.Cal@ValueTruck.com" }],
     });
 
-    const orgId = await resolveOrgId(makeReq({ token: "tok" }));
+    const result = await resolveOrgId(makeReq({ token: "tok" }));
 
-    expect(orgId).toBe("org-2");
+    expect(result.orgId).toBe("org-2");
+    expect(result.userId).toBe("db-2");
+    expect(result.rejectionReason).toBeNull();
     // The back-fill MUST persist clerkUserId so the next connect
     // takes the cheap getUserByClerkId path.
     expect(updateUserCalls.length).toBe(1);
@@ -148,26 +160,30 @@ describe("resolveOrgId — email back-fill (the Task #958 regression)", () => {
     });
   });
 
-  it("returns null when neither getUserByClerkId nor email lookup finds a row", async () => {
+  it("returns no-db-user when neither getUserByClerkId nor email lookup finds a row", async () => {
     clerkGetUserImpl = async () => ({
       emailAddresses: [{ emailAddress: "ghost@nowhere.com" }],
     });
-    const orgId = await resolveOrgId(makeReq({ token: "tok" }));
-    expect(orgId).toBeNull();
+    const result = await resolveOrgId(makeReq({ token: "tok" }));
+    expect(result.orgId).toBeNull();
+    expect(result.rejectionReason).toBe("no-db-user");
     expect(updateUserCalls.length).toBe(0);
   });
 });
 
 describe("resolveOrgId — token failure modes", () => {
-  it("returns null and logs (does not throw) when verifyToken throws", async () => {
+  it("returns the labelled verify error and logs (does not throw) when verifyToken throws", async () => {
     verifyTokenImpl = async () => {
       throw new Error("token expired");
     };
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const orgId = await resolveOrgId(makeReq({ token: "tok" }));
-    expect(orgId).toBeNull();
-    // Critical: the cause must be surfaced to logs (was previously
-    // silently swallowed, which made the prod regression invisible).
+    const result = await resolveOrgId(makeReq({ token: "tok" }));
+    expect(result.orgId).toBeNull();
+    // The structured rejection reason replaces the previous null-only
+    // signal so the watchdog can label the auth alert.
+    expect(result.rejectionReason).toBe("expired");
+    // Cause must be surfaced to logs (was previously silently swallowed,
+    // which made the prod regression invisible).
     expect(warnSpy).toHaveBeenCalled();
     const logged = String(warnSpy.mock.calls[0]?.[0] ?? "");
     expect(logged).toMatch(/live-sync\/auth/);
@@ -175,15 +191,17 @@ describe("resolveOrgId — token failure modes", () => {
     warnSpy.mockRestore();
   });
 
-  it("returns null when no token is supplied", async () => {
-    const orgId = await resolveOrgId(makeReq({}));
-    expect(orgId).toBeNull();
+  it("returns no-token-or-secret when no token is supplied", async () => {
+    const result = await resolveOrgId(makeReq({}));
+    expect(result.orgId).toBeNull();
+    expect(result.rejectionReason).toBe("no-token-or-secret");
   });
 
-  it("returns null when CLERK_SECRET_KEY is not set, even with a token", async () => {
+  it("returns no-token-or-secret when CLERK_SECRET_KEY is not set, even with a token", async () => {
     delete process.env.CLERK_SECRET_KEY;
-    const orgId = await resolveOrgId(makeReq({ token: "tok" }));
-    expect(orgId).toBeNull();
+    const result = await resolveOrgId(makeReq({ token: "tok" }));
+    expect(result.orgId).toBeNull();
+    expect(result.rejectionReason).toBe("no-token-or-secret");
   });
 });
 
@@ -192,7 +210,8 @@ describe("resolveOrgId — session shortcut", () => {
     verifyTokenImpl = async () => {
       throw new Error("verifyToken should never be called on the session path");
     };
-    const orgId = await resolveOrgId(makeReq({ sessionOrgId: "org-session" }));
-    expect(orgId).toBe("org-session");
+    const result = await resolveOrgId(makeReq({ sessionOrgId: "org-session" }));
+    expect(result.orgId).toBe("org-session");
+    expect(result.rejectionReason).toBeNull();
   });
 });

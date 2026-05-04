@@ -41,6 +41,12 @@ import {
   applyRowVersionGuard,
   type RowVersionEvent,
 } from "@/lib/applyRowVersionGuard";
+import {
+  computeReconnectDelayMs,
+  ensureTabId,
+  shouldResetAttemptCount,
+  LIVE_SYNC_RECONNECT_BASE_MS,
+} from "@/lib/liveSyncBackoff";
 
 // Every topic also invalidates `/api/lane-inbox` so the unified feed updates
 // in real time without per-page wiring. The inbox endpoint is cheap and
@@ -336,104 +342,278 @@ function applyEvent(
   }
 }
 
+// ── Module-scoped subscriber registry (Task #973) ─────────────────────────
+//
+// `useLiveSync` is mounted once near the top of the authenticated app
+// shell *and* by individual pages that pass topic filters. The naive
+// implementation opened one EventSource per mount — that contributed
+// to the "rejecting connections" alert during reload storms.
+//
+// The original singleton-lock fix was wrong: it gated on "first mount
+// wins" without a real refcount. In React, child effects run before
+// parent effects, so a page mounted under <App> would acquire the
+// lock first; when the user navigated away the lock was released and
+// the App-level mount — whose effect had already run and was sitting
+// in a no-op cleanup — never re-opened. The result was a *silently
+// disabled* live-sync for the rest of the session.
+//
+// The correct model: a module-scoped "connection manager" with a
+// subscriber list. Each `useLiveSync()` mount registers a demand
+// (enabled flag, getStreamUrl factory, resetKey, topics, invalidator)
+// and gets back an unsubscribe. The manager owns exactly one
+// EventSource at a time and keeps it alive for as long as *any*
+// enabled demand is registered. Demands going from N→0 close the
+// stream; 0→N opens it. Topic filtering is per-demand: each subscriber
+// only reacts to the topics it cares about.
+
+interface LiveSyncDemand {
+  id: number;
+  enabled: boolean;
+  getStreamUrl: () => Promise<string | null>;
+  resetKey: string;
+  topics?: ReadonlyArray<string>;
+  invalidate: (key: ReadonlyArray<string>) => void;
+}
+
+interface LiveSyncManagerDeps {
+  // Indirected so the regression test can inject a fake EventSource
+  // (Vitest runs in a node environment with no real EventSource).
+  EventSourceCtor: typeof EventSource | null;
+  scheduleTimeout: (fn: () => void, ms: number) => unknown;
+  clearScheduledTimeout: (handle: unknown) => void;
+  now: () => number;
+  ensureTabId: () => string;
+}
+
+const _defaultDeps: LiveSyncManagerDeps = {
+  EventSourceCtor:
+    typeof window !== "undefined" && typeof EventSource !== "undefined"
+      ? EventSource
+      : null,
+  scheduleTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearScheduledTimeout: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+  now: () => Date.now(),
+  ensureTabId,
+};
+let _deps: LiveSyncManagerDeps = _defaultDeps;
+
+const _demands = new Map<number, LiveSyncDemand>();
+let _demandSeq = 0;
+let _es: EventSource | null = null;
+let _reconnectTimer: unknown = null;
+let _attempt = 0;
+let _openedAt: number | null = null;
+let _activeResetKey: string | null = null;
+let _connecting = false;
+// Bumped whenever the demand set changes in a way that could
+// invalidate an in-flight `openConnection()` (subscribe/unsubscribe
+// or a resetKey shift). The in-flight open captures the generation
+// before awaiting `getStreamUrl()`; on resume it bails out if the
+// generation has moved, so a stale Clerk JWT minted under the prior
+// session can't end up wired into the new EventSource.
+let _openGeneration = 0;
+
+function pickDemand(): LiveSyncDemand | null {
+  // Insertion-order iteration → deterministic pick. We need *any*
+  // enabled demand; they are functionally equivalent in this app
+  // (same Clerk session per tab) so it doesn't matter which one
+  // supplies the URL.
+  for (const d of _demands.values()) {
+    if (d.enabled) return d;
+  }
+  return null;
+}
+
+function dispatchEvent(evt: LiveSyncEvent): void {
+  // Each subscriber filters independently — the page-mount with
+  // ["customer_quote", "email_thread"] and the global App mount with
+  // no filter both see the same raw event and apply their own rules.
+  for (const d of _demands.values()) {
+    if (!d.enabled) continue;
+    applyEvent(evt, d.topics, d.invalidate);
+  }
+}
+
+function teardownConnection(): void {
+  if (_reconnectTimer) {
+    _deps.clearScheduledTimeout(_reconnectTimer);
+    _reconnectTimer = null;
+  }
+  const current = _es;
+  _es = null;
+  _openedAt = null;
+  _connecting = false;
+  try { current?.close(); } catch { /* noop */ }
+}
+
+function scheduleReconnect(): void {
+  if (_reconnectTimer || _connecting) return;
+  if (!pickDemand()) return;
+  _attempt += 1;
+  const delay = computeReconnectDelayMs(_attempt);
+  _reconnectTimer = _deps.scheduleTimeout(() => {
+    _reconnectTimer = null;
+    void openConnection();
+  }, delay);
+}
+
+async function openConnection(): Promise<void> {
+  if (_es || _connecting) return;
+  const demand = pickDemand();
+  if (!demand) return;
+  if (!_deps.EventSourceCtor) {
+    setState("disabled");
+    return;
+  }
+  _connecting = true;
+  setState("connecting");
+  _activeResetKey = demand.resetKey;
+  const myGen = ++_openGeneration;
+  let url: string | null;
+  try {
+    url = await demand.getStreamUrl();
+  } catch {
+    url = null;
+  }
+  _connecting = false;
+  // Race: subscribe/unsubscribe happened during the await. The new
+  // demand set may carry a different resetKey (Clerk session flipped),
+  // so the URL we just minted is stale. Drop it; if an enabled demand
+  // still exists, kick off a fresh open with the up-to-date factory.
+  if (myGen !== _openGeneration) {
+    if (pickDemand() && !_es && !_reconnectTimer) void openConnection();
+    return;
+  }
+  if (!pickDemand()) {
+    _activeResetKey = null;
+    return;
+  }
+  if (!url) {
+    scheduleReconnect();
+    return;
+  }
+  // Append the per-tab id so the server can dedup reconnects from
+  // the same tab (Task #973 server-side single-conn enforcement).
+  const tabId = _deps.ensureTabId();
+  const tabSep = url.includes("?") ? "&" : "?";
+  const fullUrl = tabId ? `${url}${tabSep}tab=${encodeURIComponent(tabId)}` : url;
+  const es = new _deps.EventSourceCtor(fullUrl, { withCredentials: true });
+  _es = es;
+  _openedAt = _deps.now();
+
+  es.onmessage = (msg: MessageEvent) => {
+    let evt: LiveSyncEvent;
+    try {
+      evt = JSON.parse(msg.data);
+    } catch {
+      return;
+    }
+    if (
+      _openedAt !== null &&
+      shouldResetAttemptCount(_deps.now() - _openedAt)
+    ) {
+      _attempt = 0;
+    }
+    dispatchEvent(evt);
+  };
+
+  es.onerror = () => {
+    const livedFor = _openedAt !== null ? _deps.now() - _openedAt : 0;
+    teardownConnection();
+    setState("connecting");
+    if (shouldResetAttemptCount(livedFor)) _attempt = 0;
+    scheduleReconnect();
+  };
+}
+
 /**
- * Connect-loop shared by both auth modes. `getStreamUrl` is awaited on
- * every (re)connect so the Clerk-powered variant can mint a fresh JWT
- * each time — Clerk's default session-token lifetime is ~60s, and an
- * EventSource auto-reconnect with a stale token would just 401 again.
+ * Register a connection demand. Returns an unsubscribe function. The
+ * manager opens the underlying EventSource lazily (on the first
+ * enabled demand) and tears it down when the last enabled demand
+ * unsubscribes — this is the refcount the original singleton lock
+ * lacked. Mount/unmount order between sibling/parent components is
+ * therefore irrelevant: as long as one mount remains, the stream
+ * stays alive.
+ *
+ * If the new demand has a different `resetKey` than the active
+ * connection (e.g. Clerk sign-in state flipped), the existing stream
+ * is torn down and re-opened so the next URL build picks up fresh
+ * credentials.
+ */
+export function subscribeLiveSyncDemand(
+  demand: Omit<LiveSyncDemand, "id">,
+): () => void {
+  const id = ++_demandSeq;
+  _demands.set(id, { id, ...demand });
+  // Any demand-set change invalidates an in-flight openConnection's
+  // captured generation; the in-flight call will see the mismatch on
+  // resume and either abort or hand off to a fresh open.
+  _openGeneration += 1;
+
+  if (!demand.enabled) {
+    if (!pickDemand()) {
+      teardownConnection();
+      setState("disabled");
+    }
+  } else {
+    if (
+      _activeResetKey !== null &&
+      _activeResetKey !== demand.resetKey
+    ) {
+      // Stale credentials — tear down any open connection so the next
+      // open() re-fetches a URL via the freshest demand's factory.
+      // (The generation bump above forces any in-flight open to bail
+      // out, so we don't need to special-case `_connecting` here.)
+      teardownConnection();
+      _attempt = 0;
+    }
+    if (!_es && !_reconnectTimer && !_connecting) void openConnection();
+  }
+
+  return () => {
+    _demands.delete(id);
+    _openGeneration += 1;
+    if (!pickDemand()) {
+      teardownConnection();
+      setState("disabled");
+      _attempt = 0;
+      _activeResetKey = null;
+    }
+  };
+}
+
+/**
+ * React effect that registers the calling component with the manager.
+ * Re-registers whenever `enabled` or `resetKey` changes (Clerk session
+ * flips, dev/prod auth bypass, etc).
  */
 function useStreamConnection(
   topics: ReadonlyArray<string> | undefined,
   enabled: boolean,
   getStreamUrl: () => Promise<string | null>,
-  // Anything that should force a teardown + reconnect (e.g. signed-in
-  // state flipping). Stringified for stable identity in the dep array.
   resetKey: string,
 ): void {
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    if (!enabled) {
-      setState("disabled");
-      return;
-    }
-    if (typeof window === "undefined" || typeof EventSource === "undefined") {
-      setState("disabled");
-      return;
-    }
-
-    let es: EventSource | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let mounted = true;
-
     const invalidate = (prefix: ReadonlyArray<string>) =>
       queryClient.invalidateQueries({ queryKey: prefix as unknown as unknown[] });
-
-    const open = async () => {
-      if (!mounted) return;
-      setState("connecting");
-      let url: string | null;
-      try {
-        url = await getStreamUrl();
-      } catch {
-        url = null;
-      }
-      if (!mounted) return;
-      if (!url) {
-        // Couldn't build a URL right now (e.g. Clerk getToken returned
-        // null transiently). Back off and try again.
-        reconnectTimer = setTimeout(() => {
-          reconnectTimer = null;
-          open();
-        }, 2_000);
-        return;
-      }
-
-      // EventSource sends the session cookie automatically when same-origin,
-      // which is the case in dev and prod. `withCredentials` is only needed
-      // for cross-origin streams; setting it here is harmless either way.
-      es = new EventSource(url, { withCredentials: true });
-
-      es.onmessage = (msg) => {
-        let evt: LiveSyncEvent;
-        try {
-          evt = JSON.parse(msg.data);
-        } catch {
-          return;
-        }
-        applyEvent(evt, topics, invalidate);
-      };
-
-      es.onerror = () => {
-        // Always force a clean teardown + manual reconnect so we mint a
-        // fresh token (the previous one may have expired). Without this,
-        // EventSource's built-in retry would re-issue the request with
-        // the original — now expired — `?token=` and 401 again.
-        const current = es;
-        es = null;
-        try { current?.close(); } catch { /* noop */ }
-        setState("connecting");
-        if (mounted && !reconnectTimer) {
-          reconnectTimer = setTimeout(() => {
-            reconnectTimer = null;
-            open();
-          }, 2_000);
-        }
-      };
-    };
-
-    open();
-
-    return () => {
-      mounted = false;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      try { es?.close(); } catch { /* noop */ }
-    };
-    // The topics array is intentionally not in the dep list — callers pass
-    // a static array and we want one connection per mount, not per render.
-    // `resetKey` is the explicit signal for "tear down and reconnect".
+    const unsubscribe = subscribeLiveSyncDemand({
+      enabled,
+      getStreamUrl,
+      resetKey,
+      topics,
+      invalidate,
+    });
+    return unsubscribe;
+    // The topics array is intentionally not in the dep list — callers
+    // pass a static array and we don't want re-subscription per render.
+    // `resetKey` is the explicit signal for "tear down and re-open".
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, resetKey]);
+
+  // Reference the constant so dead-code-elimination doesn't drop it.
+  void LIVE_SYNC_RECONNECT_BASE_MS;
 }
 
 /** Dev-bypass path: cookies are sent automatically; no token needed. */
@@ -457,4 +637,37 @@ function useLiveSyncClerk(topics?: ReadonlyArray<string>): void {
     // tab doesn't keep its anonymous (failing) connection.
     `clerk:${isLoaded ? 1 : 0}:${isSignedIn ? 1 : 0}`,
   );
+}
+
+/** Test-only: clear all demands and tear down any active connection. */
+export function _resetLiveSyncMountLockForTests(): void {
+  _demands.clear();
+  teardownConnection();
+  _attempt = 0;
+  _activeResetKey = null;
+  _deps = _defaultDeps;
+}
+
+/** Test-only: inject a fake EventSource / timer / clock for the manager. */
+export function _setLiveSyncManagerDepsForTests(
+  patch: Partial<LiveSyncManagerDeps>,
+): void {
+  _deps = { ..._defaultDeps, ..._deps, ...patch };
+}
+
+/** Test-only: read the current demand count + active connection state. */
+export function _getLiveSyncManagerStateForTests(): {
+  demandCount: number;
+  enabledCount: number;
+  hasConnection: boolean;
+  activeResetKey: string | null;
+} {
+  let enabledCount = 0;
+  for (const d of _demands.values()) if (d.enabled) enabledCount += 1;
+  return {
+    demandCount: _demands.size,
+    enabledCount,
+    hasConnection: _es !== null,
+    activeResetKey: _activeResetKey,
+  };
 }

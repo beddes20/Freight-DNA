@@ -2524,7 +2524,7 @@ assert(
 );
 assert(
   "routes/liveSync.ts — records auth outcome on every connect for the watchdog",
-  /recordLiveSyncAuthOutcome\(\s*orgId\s*!==\s*null\s*\)/.test(liveSyncRouteSrc951),
+  /recordLiveSyncAuthOutcome\(\s*orgId\s*!==\s*null\s*[,)]/.test(liveSyncRouteSrc951),
   "If the route stops feeding the rolling auth-outcome ring, the live_sync_auth_failure watchdog goes blind and the next auth regression will only surface as rep complaints.",
 );
 

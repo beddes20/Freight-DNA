@@ -371,6 +371,8 @@ export default function AdminIntegrationsHealthPage() {
         </div>
       )}
 
+      <LiveSyncMetricsTile />
+
       <MonitoredMailboxesSection
         mailboxes={mailboxesQuery.data?.mailboxes ?? []}
         isLoading={mailboxesQuery.isLoading}
@@ -379,6 +381,117 @@ export default function AdminIntegrationsHealthPage() {
         onReregister={(id) => reregisterMutation.mutate(id)}
         reregisteringId={reregisterMutation.isPending ? (reregisterMutation.variables as string | undefined) : undefined}
       />
+    </div>
+  );
+}
+
+// Task #973 — Live-sync metrics tile.
+//
+// Surfaces the in-process metrics from `services/liveSync.ts` so admins
+// can see the live state of the SSE endpoint at a glance: how many
+// browser tabs are currently subscribed, what the rejection breakdown
+// looks like, and which user fingerprints are dominating the failure
+// count. Polled every 30s so the values are always current within
+// roughly the same freshness as the rest of the page.
+interface LiveSyncMetricsResponse {
+  activeConnections: number;
+  activeForMyOrg: number;
+  authStats: { success: number; failure: number; total: number; failureRatio: number; windowMs: number };
+  rejectionsByReason: Array<{ reason: string; count: number }>;
+  topUsers: Array<{ fingerprint: string; count: number }>;
+  perUserMedianFailureRatio: number;
+  usersObserved: number;
+}
+
+function LiveSyncMetricsTile() {
+  const { data, isLoading, isError, refetch } = useQuery<LiveSyncMetricsResponse>({
+    queryKey: ["/api/admin/live-sync-metrics"],
+    queryFn: async () => {
+      const r = await fetch("/api/admin/live-sync-metrics", { credentials: "include" });
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    },
+    refetchInterval: 30_000,
+  });
+
+  return (
+    <Card data-testid="card-live-sync-metrics">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm flex items-center justify-between gap-2">
+          <span>Live-sync (SSE) — connections, auth ring</span>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => refetch()}
+            disabled={isLoading}
+            data-testid="button-live-sync-refresh"
+          >
+            <RefreshCw className={`h-3 w-3 ${isLoading ? "animate-spin" : ""}`} />
+          </Button>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 text-xs">
+        {isError ? (
+          <ErrorBanner message="Couldn't load live-sync metrics" onRetry={() => refetch()} />
+        ) : !data ? (
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        ) : (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <Stat label="Active conns" value={data.activeConnections} testId="text-live-sync-active" />
+              <Stat label="My org" value={data.activeForMyOrg} testId="text-live-sync-active-org" />
+              <Stat
+                label={`Connects (${Math.round(data.authStats.windowMs / 1000)}s)`}
+                value={`${data.authStats.success} ok / ${data.authStats.failure} rej`}
+                testId="text-live-sync-auth-ratio"
+              />
+              <Stat
+                label="User-median fail"
+                value={`${Math.round(data.perUserMedianFailureRatio * 100)}% (n=${data.usersObserved})`}
+                testId="text-live-sync-median"
+              />
+            </div>
+            {data.rejectionsByReason.length > 0 && (
+              <div>
+                <div className="text-muted-foreground mb-1">Rejections by reason</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {data.rejectionsByReason.map((r) => (
+                    <Badge key={r.reason} variant="outline" className="text-[10px]" data-testid={`badge-reject-${r.reason}`}>
+                      {r.reason}: {r.count}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+            {data.topUsers.length > 0 && (
+              <div>
+                <div className="text-muted-foreground mb-1">Top failing user fingerprints</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {data.topUsers.map((u) => (
+                    <Badge
+                      key={u.fingerprint}
+                      variant="outline"
+                      className="text-[10px] font-mono"
+                      data-testid={`badge-user-${u.fingerprint}`}
+                    >
+                      {u.fingerprint}: {u.count}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function Stat({ label, value, testId }: { label: string; value: number | string; testId?: string }) {
+  return (
+    <div className="space-y-0.5">
+      <div className="text-muted-foreground text-[11px]">{label}</div>
+      <div className="text-sm tabular-nums" data-testid={testId}>{value}</div>
     </div>
   );
 }
