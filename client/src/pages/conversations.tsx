@@ -6,6 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { QueryError } from "@/components/query-error";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { runWithUndo } from "@/lib/workflow-os/withUndo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -910,39 +911,103 @@ export default function ConversationsPage() {
     onError: () => toast({ title: "Failed to wake conversation", variant: "destructive" }),
   });
 
-  // ── Bulk action mutation (Task #533) ──────────────────────────────────────
-  // Single endpoint accepts any of resolve/reopen/archive/assign/snooze. Toast
-  // surfaces a per-action success summary, including any per-thread failures
-  // so the user knows when (e.g.) an archive was rejected for an un-resolved
-  // thread.
+  // ── Bulk action mutation (Task #533, hardened in #970) ────────────────────
+  // Single endpoint accepts resolve/reopen/archive/assign/snooze/unsnooze.
+  // The mutation itself is the workhorse; bulk callsites route through
+  // `runBulkActionWithUndo` below so every successful bulk surfaces a
+  // selection-cleared toast with an Undo affordance for actions that
+  // have a clean inverse (snooze ↔ unsnooze, resolve ↔ reopen). Archive
+  // and assign omit `invert`: archive has no symmetric "unarchive" bulk
+  // path, and assign would need per-thread prior-owner snapshots that
+  // the bulk endpoint doesn't return.
+  type BulkBody = {
+    action: "resolve" | "reopen" | "archive" | "assign" | "snooze" | "unsnooze";
+    threadIds: string[];
+    ownerUserId?: string | null;
+    snoozedUntil?: string;
+  };
   const bulkMutation = useMutation({
-    mutationFn: async (body: {
-      action: "resolve" | "reopen" | "archive" | "assign" | "snooze";
-      threadIds: string[];
-      ownerUserId?: string | null;
-      snoozedUntil?: string;
-    }) => {
+    mutationFn: async (body: BulkBody) => {
       const res = await apiRequest("POST", "/api/internal/conversations/bulk", body);
       return (await res.json()) as BulkActionResult;
     },
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
-      setSelectedIds(new Set());
-      const failed = result.failed;
-      const verb =
-        result.action === "resolve" ? "resolved"
-        : result.action === "reopen" ? "reopened"
-        : result.action === "archive" ? "archived"
-        : result.action === "assign" ? "assigned"
-        : "snoozed";
-      toast({
-        title: `${result.succeeded} of ${result.total} conversations ${verb}`,
-        description: failed > 0 ? `${failed} could not be updated.` : undefined,
-        variant: failed > 0 && result.succeeded === 0 ? "destructive" : "default",
-      });
-    },
-    onError: () => toast({ title: "Bulk action failed", variant: "destructive" }),
+    // No onSuccess/onError here — the runWithUndo wrapper surfaces toasts
+    // and clears the selection so the inverse can replay the prior state.
   });
+
+  const VERB_BY_ACTION: Record<BulkBody["action"], string> = {
+    resolve: "resolved",
+    reopen: "reopened",
+    archive: "archived",
+    assign: "assigned",
+    snooze: "snoozed",
+    unsnooze: "woken",
+  };
+
+  const runBulkActionWithUndo = useCallback(
+    async (body: BulkBody, opts?: { invert?: BulkBody["action"] }) => {
+      const inverseAction = opts?.invert;
+      try {
+        await runWithUndo(
+          {
+            perform: async (params: BulkBody) => {
+              const result = await bulkMutation.mutateAsync(params);
+              queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
+              const verb =
+                VERB_BY_ACTION[result.action as BulkBody["action"]] ?? result.action;
+              const failed = result.failed;
+              // Surface per-action failures inline before the Undo
+              // toast so reps see them even if they Undo immediately.
+              if (failed > 0 && result.succeeded === 0) {
+                toast({
+                  title: `Bulk ${result.action} failed`,
+                  description: `${failed} of ${result.total} could not be updated.`,
+                  variant: "destructive",
+                });
+              } else if (failed > 0) {
+                toast({
+                  title: `${result.succeeded} of ${result.total} ${verb}`,
+                  description: `${failed} could not be updated.`,
+                });
+              }
+              return result;
+            },
+            invert: inverseAction
+              ? async (result) => {
+                  // Replay the inverse against the threads that
+                  // *actually* succeeded so we don't re-touch threads
+                  // the forward call already failed on.
+                  const succeededIds = result.results
+                    .filter(r => r.ok)
+                    .map(r => r.id);
+                  if (succeededIds.length === 0) return;
+                  await bulkMutation.mutateAsync({
+                    action: inverseAction,
+                    threadIds: succeededIds,
+                  });
+                  queryClient.invalidateQueries({
+                    queryKey: ["/api/internal/conversations"],
+                  });
+                }
+              : undefined,
+            toastTitle: `${body.threadIds.length} ${VERB_BY_ACTION[body.action] ?? body.action}`,
+            toast,
+            captureSelection: () => Array.from(selectedIds),
+            clearSelection: () => setSelectedIds(new Set()),
+            restoreSelection: (ids) => setSelectedIds(new Set(ids)),
+          },
+          body,
+        );
+      } catch (err) {
+        toast({
+          title: "Bulk action failed",
+          description: (err as { message?: string })?.message,
+          variant: "destructive",
+        });
+      }
+    },
+    [bulkMutation, toast, selectedIds],
+  );
 
   // ── Saved views (Task #533) ───────────────────────────────────────────────
   const { data: savedViewsData } = useQuery<{ views: SavedView[] }>({
@@ -1454,19 +1519,41 @@ export default function ConversationsPage() {
             count={selectedIds.size}
             busy={bulkMutation.isPending}
             onClear={() => setSelectedIds(new Set())}
-            onResolve={() => bulkMutation.mutate({ action: "resolve", threadIds: Array.from(selectedIds) })}
-            onReopen={() => bulkMutation.mutate({ action: "reopen", threadIds: Array.from(selectedIds) })}
-            onArchive={() => bulkMutation.mutate({ action: "archive", threadIds: Array.from(selectedIds) })}
-            onSnooze={(until) => bulkMutation.mutate({
-              action: "snooze",
-              threadIds: Array.from(selectedIds),
-              snoozedUntil: until.toISOString(),
-            })}
-            onAssign={(ownerUserId) => bulkMutation.mutate({
-              action: "assign",
-              threadIds: Array.from(selectedIds),
-              ownerUserId,
-            })}
+            onResolve={() =>
+              runBulkActionWithUndo(
+                { action: "resolve", threadIds: Array.from(selectedIds) },
+                { invert: "reopen" },
+              )
+            }
+            onReopen={() =>
+              runBulkActionWithUndo(
+                { action: "reopen", threadIds: Array.from(selectedIds) },
+                { invert: "resolve" },
+              )
+            }
+            onArchive={() =>
+              runBulkActionWithUndo({
+                action: "archive",
+                threadIds: Array.from(selectedIds),
+              })
+            }
+            onSnooze={(until) =>
+              runBulkActionWithUndo(
+                {
+                  action: "snooze",
+                  threadIds: Array.from(selectedIds),
+                  snoozedUntil: until.toISOString(),
+                },
+                { invert: "unsnooze" },
+              )
+            }
+            onAssign={(ownerUserId) =>
+              runBulkActionWithUndo({
+                action: "assign",
+                threadIds: Array.from(selectedIds),
+                ownerUserId,
+              })
+            }
             reps={sortedReps}
             currentUserId={user?.id}
           />

@@ -20,6 +20,7 @@ import { ErrorBanner } from "@/components/ui/error-banner";
 import { EmptyState } from "@/components/ui/empty-state";
 import { CrossTabBreadcrumb, appendCrossTabFromParam } from "@/components/freight/cross-tab-breadcrumb";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { fetchWithFreshnessGuard } from "@/lib/queryFreshness";
 import {
   Inbox,
   Truck,
@@ -158,12 +159,24 @@ export default function LaneInboxPage() {
     // by prefix (`["/api/lane-inbox"]`) and refetch with whatever filters
     // are currently active.
     queryKey: ["/api/lane-inbox", queryString],
-    queryFn: async () => {
-      const url = queryString ? `/api/lane-inbox?${queryString}` : "/api/lane-inbox";
-      const res = await fetch(url, { credentials: "include" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
-    },
+    // Task #970 — wrap in `fetchWithFreshnessGuard` (matching LWQ). The
+    // Lane Inbox is the surface that surfaces "Lane reassigned" /
+    // "Replied" events fastest, so the SSE→cache race here is the most
+    // visible: an in-flight inbox fetch racing a `lane_assignment_changed`
+    // SSE could otherwise paint the pre-assignment row briefly before
+    // the next refetch corrects it. The guard discards a fetch whose
+    // start time predates the most-recent invalidation watermark.
+    queryFn: () =>
+      fetchWithFreshnessGuard<LaneInboxResponse>({
+        cacheKey: "/api/lane-inbox",
+        debugTag: "lane-inbox",
+        fetcher: async () => {
+          const url = queryString ? `/api/lane-inbox?${queryString}` : "/api/lane-inbox";
+          const res = await fetch(url, { credentials: "include" });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        },
+      }),
     // Background refetch every 30s as a fallback in case an SSE event is
     // dropped — the inbox is the one place where stale data is most jarring.
     refetchInterval: 30_000,

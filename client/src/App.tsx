@@ -442,7 +442,18 @@ function useGlobalKeyboardShortcuts(openSwitchboard: () => void) {
           // themselves and should keep the global "jump to LWQ" behavior.
           const path = window.location.pathname;
           if (path === "/available-freight" || path === "/lanes/work-queue") return;
-          e.preventDefault(); navigate("/lanes/work-queue"); return;
+          e.preventDefault();
+          navigate("/lanes/work-queue");
+          // Task #970 — replace the previous setTimeout-based focus dance
+          // with the shortcut-target registry. If the LWQ page is already
+          // mounted (rare but possible via wouter cache), the callback
+          // fires synchronously. If not, the invocation is queued and the
+          // page drains it from `useShortcutTarget("lwq:focus-first-row")`
+          // on mount. No timing assumptions, no setTimeout.
+          import("@/lib/shortcutTargets").then((m) =>
+            m.invokeShortcutTarget("lwq:focus-first-row"),
+          );
+          return;
         }
       }
     };

@@ -1114,6 +1114,10 @@ getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined>;
   createRecurringLane(data: InsertRecurringLane): Promise<RecurringLane>;
   updateRecurringLane(id: string, data: Partial<InsertRecurringLane>): Promise<RecurringLane | undefined>;
   deleteRecurringLane(id: string): Promise<boolean>;
+  // Task #970 — bulk LWQ actions: snooze/unsnooze a batch of lanes
+  // (per-lane org check enforced) and report which succeeded so the
+  // route can return a per-id result map for the Undo replay.
+  bulkSnoozeRecurringLanes(orgId: string, laneIds: string[], snoozedUntil: string | null): Promise<{ id: string; ok: boolean; error?: string }[]>;
   getEligibleRecurringLanes(orgId: string): Promise<RecurringLane[]>;
   retractIneligibleLanes(orgId: string, eligibleIds: string[]): Promise<void>;
 
@@ -6329,6 +6333,31 @@ export class DatabaseStorage implements IStorage {
   async deleteRecurringLane(id: string): Promise<boolean> {
     const result = await db.delete(recurringLanes).where(eq(recurringLanes.id, id));
     return (result.rowCount ?? 0) > 0;
+  }
+
+  async bulkSnoozeRecurringLanes(
+    orgId: string,
+    laneIds: string[],
+    snoozedUntil: string | null,
+  ): Promise<{ id: string; ok: boolean; error?: string }[]> {
+    if (!laneIds.length) return [];
+    // Per-lane org check via a single SELECT then UPDATE so cross-tenant
+    // ids fail closed without aborting the whole batch.
+    const owned = await db
+      .select({ id: recurringLanes.id })
+      .from(recurringLanes)
+      .where(and(eq(recurringLanes.orgId, orgId), inArray(recurringLanes.id, laneIds)));
+    const ownedSet = new Set(owned.map(r => r.id));
+    const targets = laneIds.filter(id => ownedSet.has(id));
+    if (targets.length) {
+      await db
+        .update(recurringLanes)
+        .set({ snoozedUntil, updatedAt: new Date() })
+        .where(and(eq(recurringLanes.orgId, orgId), inArray(recurringLanes.id, targets)));
+    }
+    return laneIds.map(id =>
+      ownedSet.has(id) ? { id, ok: true } : { id, ok: false, error: "not_found" },
+    );
   }
 
   async getEligibleRecurringLanes(orgId: string): Promise<RecurringLane[]> {

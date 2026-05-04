@@ -1388,6 +1388,45 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
   // ── Lane Assignment ────────────────────────────────────────────────────────
 
+  // Task #970 — bulk snooze / unsnooze for the LWQ BulkActionBar.
+  // Returns a per-id result map so the client's Undo path can replay the
+  // inverse against only the lanes that succeeded. Snooze "duration"
+  // semantics live entirely on the client; the server takes the
+  // resolved date string (or null to clear).
+  app.post("/api/recurring-lanes/bulk-snooze", requireUser, async (req, res) => {
+    const user = req.user!;
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    const body = req.body as { laneIds?: unknown; snoozedUntil?: unknown };
+    if (!Array.isArray(body.laneIds) || body.laneIds.some(id => typeof id !== "string")) {
+      return res.status(400).json({ error: "laneIds must be a string[]" });
+    }
+    const laneIds = body.laneIds as string[];
+    let snoozedUntil: string | null = null;
+    if (body.snoozedUntil !== null && body.snoozedUntil !== undefined) {
+      if (typeof body.snoozedUntil !== "string") {
+        return res.status(400).json({ error: "snoozedUntil must be a date string or null" });
+      }
+      const parsed = new Date(body.snoozedUntil);
+      if (Number.isNaN(parsed.getTime())) {
+        return res.status(400).json({ error: "snoozedUntil is not a valid date" });
+      }
+      snoozedUntil = parsed.toISOString().split("T")[0];
+    }
+    const results = await storage.bulkSnoozeRecurringLanes(user.organizationId, laneIds, snoozedUntil);
+    const succeededIds = results.filter(r => r.ok).map(r => r.id);
+    const ver = Date.now();
+    for (const id of succeededIds) {
+      publishLiveSync(user.organizationId, "recurring_lane", id, ver);
+    }
+    res.json({
+      action: snoozedUntil === null ? "unsnooze" : "snooze",
+      total: laneIds.length,
+      succeeded: succeededIds.length,
+      failed: laneIds.length - succeededIds.length,
+      results,
+    });
+  });
+
   app.post("/api/recurring-lanes/:laneId/assign", requireUser, async (req, res) => {
     const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
@@ -1397,7 +1436,26 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
     const isManager = ["admin", "director", "national_account_manager", "logistics_manager"].includes(user.role);
 
-    const { ownerUserId } = req.body as { ownerUserId: string | null };
+    // Task #970 — clients may pass `assignAnyway` + `overrideReason` to
+    // signal that the rep intentionally chose a candidate the picker
+    // flagged as structurally inadvisable (wrong team, non-outreach
+    // role, …). The override is a UX + audit hook ONLY — it does NOT
+    // grant additional authority. Every existing access-control gate
+    // (manager-only assign-to-other, hierarchy visibility, org
+    // membership) still runs. The rationale is captured on a separate
+    // `assignment_override` log row so replay/audit shows the path
+    // was taken.
+    const {
+      ownerUserId,
+      assignAnyway,
+      overrideReason,
+    } = req.body as {
+      ownerUserId: string | null;
+      assignAnyway?: boolean;
+      overrideReason?: string;
+    };
+
+    const isOverride = !!assignAnyway && isManager;
 
     const isSelfUnassign = ownerUserId === null && lane.ownerUserId === user.id;
     const isLaneOwner = lane.ownerUserId === user.id;
@@ -1427,7 +1485,11 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         return res.status(400).json({ error: "User not found in your organization" });
       }
 
-      // Hierarchy scope check: non-admins may only assign within their visible user set
+      // Hierarchy scope check: non-admins may only assign within their
+      // visible user set. The Task #970 override path does NOT bypass
+      // this gate — it only signals intent for the audit log. A rep who
+      // can't already see a candidate via the hierarchy gate has no
+      // route to reach them, regardless of `assignAnyway`.
       if (user.role !== "admin") {
         const { visibleUserIds } = await storage.resolveVisibleUserIds(user.id, user.organizationId, user.role);
         if (!visibleUserIds.includes(ownerUserId)) {
@@ -1453,6 +1515,31 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         outreachMode: "assignment",
         emailDrafts: [],
       });
+
+      // Task #970 — when the assigner used the override path, write a
+      // second audit entry tagged `assignment_override` with the
+      // free-text rationale so audit/replay can distinguish "ordinary
+      // reassignment" from "override of structural eligibility check".
+      // The carrier_outreach_logs table has no dedicated `notes` column;
+      // we reuse `bodyPreview` (capped 255 chars in the schema) since
+      // this row carries no real email body. The shape is consistent
+      // with how inbound rows use `bodyPreview` for snippets.
+      if (isOverride) {
+        await storage.createCarrierOutreachLog({
+          orgId: user.organizationId,
+          laneId: pStr(req.params.laneId),
+          companyId: lane.companyId ?? null,
+          carrierIds: [],
+          carrierNames: [],
+          actorUserId: user.id,
+          ownerUserId: ownerUserId ?? null,
+          overseerUserId: lane.overseerUserId ?? null,
+          outreachMode: "assignment_override",
+          emailDrafts: [],
+          bodyPreview: ((overrideReason ?? "").trim() || "non_outreach_role").slice(0, 255),
+          subject: "lane_assign_override",
+        });
+      }
 
       // In-app notification — always notify the assignee (includes self-assign)
       if (ownerUserId) {

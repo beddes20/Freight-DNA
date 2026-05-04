@@ -128,7 +128,22 @@ export function registerCompanyRoutes(app: Express): void {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const allUsers = await storage.getUsers(req.session.organizationId!);
-      const safeUsers = allUsers.map(({ password, ...u }) => u);
+      // Task #970 — annotate every team member with the canonical
+      // cockpit team they belong to (per `shared/data/cockpitTeamMap.json`).
+      // Surfaces like LWQ thread `teamId`/`teamLabel` into
+      // `canAssignLane` so the wrong-team diagnostic actually fires
+      // against real data instead of staying theoretical. Users not in
+      // any team get `teamId: null` and the predicate skips the team
+      // check (matches early-rollout reality).
+      const { findCockpitTeamForUser } = await import("@shared/cockpitTeams");
+      const safeUsers = allUsers.map(({ password, ...u }) => {
+        const team = findCockpitTeamForUser(u.id);
+        return {
+          ...u,
+          teamId: team?.id ?? null,
+          teamLabel: team?.name ?? null,
+        };
+      });
       if (isAdmin(currentUser)) {
         return res.json(safeUsers);
       }

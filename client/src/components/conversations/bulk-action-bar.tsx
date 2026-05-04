@@ -56,12 +56,18 @@ export function BulkActionBar({
 }: BulkActionBarProps) {
   const [assignOpen, setAssignOpen] = useState(false);
 
+  // Conversations actions are unconditionally available against any
+  // selection — eligibility is gated by row state at the inbox level,
+  // not per-action.
+  const ALWAYS_AVAILABLE = { state: "available" } as const;
+
   const resolve: BulkAction = {
     id: "resolve",
     label: "Resolve",
     icon: Check,
     onSelect: onResolve,
     testId: "button-bulk-resolve",
+    availability: ALWAYS_AVAILABLE,
   };
   const reopen: BulkAction = {
     id: "reopen",
@@ -69,6 +75,7 @@ export function BulkActionBar({
     icon: Inbox,
     onSelect: onReopen,
     testId: "button-bulk-reopen",
+    availability: ALWAYS_AVAILABLE,
   };
   const archive: BulkAction = {
     id: "archive",
@@ -76,11 +83,13 @@ export function BulkActionBar({
     icon: Archive,
     onSelect: onArchive,
     testId: "button-bulk-archive",
+    availability: ALWAYS_AVAILABLE,
   };
   const snooze: BulkAction = {
     id: "snooze",
     label: "Snooze",
     onSelect: () => {},
+    availability: ALWAYS_AVAILABLE,
     render: ({ disabled }) => (
       <SnoozePopover
         onSnooze={onSnooze}
@@ -93,6 +102,7 @@ export function BulkActionBar({
     id: "assign",
     label: "Assign",
     onSelect: () => {},
+    availability: ALWAYS_AVAILABLE,
     render: ({ disabled }) => (
       <DropdownMenu open={assignOpen} onOpenChange={setAssignOpen}>
         <DropdownMenuTrigger asChild>

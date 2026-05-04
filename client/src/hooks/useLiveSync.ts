@@ -47,6 +47,7 @@ import {
   shouldResetAttemptCount,
   LIVE_SYNC_RECONNECT_BASE_MS,
 } from "@/lib/liveSyncBackoff";
+import { markQueryInvalidated } from "@/lib/queryFreshness";
 
 // Every topic also invalidates `/api/lane-inbox` so the unified feed updates
 // in real time without per-page wiring. The inbox endpoint is cheap and
@@ -665,8 +666,16 @@ function useStreamConnection(
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    const invalidate = (prefix: ReadonlyArray<string>) =>
+    const invalidate = (prefix: ReadonlyArray<string>) => {
+      // Stamp the watermark BEFORE invalidating so a queryFn wrapped in
+      // fetchWithFreshnessGuard can detect a fetch that started before
+      // this event and discard the stale response.
+      const cacheKey = prefix[0];
+      if (typeof cacheKey === "string" && cacheKey.length > 0) {
+        markQueryInvalidated(cacheKey);
+      }
       queryClient.invalidateQueries({ queryKey: prefix as unknown as unknown[] });
+    };
     const unsubscribe = subscribeLiveSyncDemand({
       enabled,
       getStreamUrl,

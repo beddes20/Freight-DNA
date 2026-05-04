@@ -16,7 +16,7 @@
  * bar, or guardrail copy.
  */
 
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { useLocation, Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
@@ -74,6 +74,7 @@ import {
   MessageCircle,
   X,
   MoreHorizontal,
+  Clock,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -134,8 +135,21 @@ import {
 import { OwnerFilterSelect } from "@/components/workflow-os/OwnerFilterSelect";
 import { PickupScopeSelect } from "@/components/workflow-os/PickupScopeSelect";
 import { StaleCountChip } from "@/components/workflow-os/StaleCountChip";
-import { BulkActionBar, type BulkAction } from "@/components/workflow-os/BulkActionBar";
+import {
+  BulkActionBar,
+  type BulkAction,
+  type BulkActionAvailability,
+} from "@/components/workflow-os/BulkActionBar";
 import { useRowSelection } from "@/hooks/workflow-os/useRowSelection";
+import { fetchWithFreshnessGuard } from "@/lib/queryFreshness";
+import { runWithUndo } from "@/lib/workflow-os/withUndo";
+import { useShortcutTarget } from "@/hooks/useShortcutTarget";
+import {
+  canAssignLane,
+  summarizeBulkAssign,
+  ASSIGNABLE_OUTREACH_ROLES,
+  type AssignableOutreachRole,
+} from "@/lib/workflow-os/canAssignLane";
 import {
   serializeFiltersToUrl,
   deserializeFiltersFromUrl,
@@ -267,6 +281,10 @@ interface TeamMember {
   id: string;
   name: string;
   role: string;
+  // Cockpit-team membership (from /api/team-members). Optional because
+  // not every user is yet assigned to a team in early-rollout orgs.
+  teamId?: string | null;
+  teamLabel?: string | null;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -538,23 +556,53 @@ function ReplyBadge({ summary, laneId }: { summary: LaneReplySummary; laneId: st
 
 function AssignToDropdown({
   laneId,
+  laneOwnerUserId,
   teamMembers,
   onAssigned,
 }: {
   laneId: string;
+  laneOwnerUserId?: string | null;
   teamMembers: TeamMember[];
   onAssigned: () => void;
 }) {
+  // Derive the lane's team from its current owner; returns nulls when
+  // the owner isn't in the roster yet (predicate then skips team check).
+  const findOwnerTeam = (
+    userId?: string | null,
+  ): { teamId: string | null; teamLabel: string | null } => {
+    if (!userId) return { teamId: null, teamLabel: null };
+    const owner = teamMembers.find(m => m.id === userId);
+    return {
+      teamId: owner?.teamId ?? null,
+      teamLabel: owner?.teamLabel ?? null,
+    };
+  };
+  const laneTeam = findOwnerTeam(laneOwnerUserId);
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
+  // Inline assignability override state — captured when the rep
+  // confirms an ineligible pick; the rationale is sent on the assign
+  // request and logged server-side.
+  const [pendingOverride, setPendingOverride] = useState<{
+    candidate: TeamMember;
+    reason: string;
+    rationale: string;
+  } | null>(null);
+
+  type AssignVariables = {
+    ownerUserId: string;
+    assignAnyway?: boolean;
+    overrideReason?: string;
+  };
 
   const assignMutation = useMutation({
-    mutationFn: (ownerUserId: string) =>
-      apiRequest("POST", `/api/recurring-lanes/${laneId}/assign`, { ownerUserId }).then(r => r.json()),
+    mutationFn: (vars: AssignVariables) =>
+      apiRequest("POST", `/api/recurring-lanes/${laneId}/assign`, vars).then(r => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
       toast({ title: "Lane assigned" });
       setOpen(false);
+      setPendingOverride(null);
       onAssigned();
     },
     onError: (err: unknown) => {
@@ -563,12 +611,12 @@ function AssignToDropdown({
     },
   });
 
-  // Assignable roles: people who actually do outreach
-  const assignable = teamMembers.filter(m =>
-    ["account_manager", "logistics_manager", "logistics_coordinator", "sales"].includes(m.role)
-  ).sort((a, b) => a.name.localeCompare(b.name));
+  // Show every team member so the diagnostic can flag non-outreach roles
+  // explicitly rather than silently hiding them. The predicate decides
+  // whether each entry is eligible, partial, or override-only.
+  const candidates = [...teamMembers].sort((a, b) => a.name.localeCompare(b.name));
 
-  if (assignable.length === 0) return null;
+  if (candidates.length === 0) return null;
 
   return (
     <div className="relative" onClick={e => e.stopPropagation()}>
@@ -576,7 +624,7 @@ function AssignToDropdown({
         size="sm"
         variant="outline"
         className="h-6 text-[10px] px-2 border-amber-400/30 text-amber-400 hover:bg-amber-500/10 gap-1"
-        onClick={() => setOpen(v => !v)}
+        onClick={() => { setOpen(v => !v); setPendingOverride(null); }}
         disabled={assignMutation.isPending}
         data-testid={`btn-assign-to-${laneId}`}
       >
@@ -586,21 +634,114 @@ function AssignToDropdown({
         }
       </Button>
       {open && (
-        <div className="absolute left-0 top-7 z-50 bg-card border border-border rounded-lg shadow-lg min-w-[180px] py-1 max-h-48 overflow-y-auto">
-          {assignable.map(m => (
-            <button
-              key={m.id}
-              className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/60 transition-colors flex items-center gap-2"
-              onClick={() => assignMutation.mutate(m.id)}
-              data-testid={`assign-option-${laneId}-${m.id}`}
+        <div className="absolute left-0 top-7 z-50 bg-card border border-border rounded-lg shadow-lg min-w-[220px] py-1 max-h-72 overflow-y-auto">
+          {candidates.map(m => {
+            const verdict = canAssignLane(
+              {
+                laneId,
+                ownerUserId: laneOwnerUserId ?? null,
+                teamId: laneTeam.teamId,
+                teamLabel: laneTeam.teamLabel,
+              },
+              {
+                id: m.id,
+                name: m.name,
+                role: m.role,
+                teamId: m.teamId ?? null,
+                teamLabel: m.teamLabel ?? null,
+              },
+            );
+            const ineligible = !verdict.ok;
+            return (
+              <button
+                key={m.id}
+                className={`w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center gap-2 ${
+                  ineligible
+                    ? "hover:bg-amber-500/10 text-muted-foreground"
+                    : "hover:bg-muted/60"
+                }`}
+                onClick={() => {
+                  if (verdict.ok) {
+                    assignMutation.mutate({ ownerUserId: m.id });
+                    return;
+                  }
+                  // Open the inline confirmation row instead of firing.
+                  setPendingOverride({
+                    candidate: m,
+                    reason: verdict.reason,
+                    rationale: "",
+                  });
+                }}
+                data-testid={`assign-option-${laneId}-${m.id}`}
+              >
+                <User className="w-3 h-3 text-muted-foreground shrink-0" />
+                <span className="truncate">{m.name}</span>
+                {ineligible && (
+                  <span
+                    className="text-[10px] text-amber-400 shrink-0 ml-auto"
+                    data-testid={`assign-option-flag-${laneId}-${m.id}`}
+                  >
+                    Override
+                  </span>
+                )}
+                {!ineligible && (
+                  <span className="text-[10px] text-muted-foreground/60 shrink-0 ml-auto">
+                    {m.role === "account_manager" ? "AM" : m.role === "logistics_manager" ? "LM" : ""}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          {pendingOverride && (
+            <div
+              className="border-t border-border px-3 py-2 space-y-2 bg-amber-500/5"
+              data-testid={`assign-override-row-${laneId}`}
             >
-              <User className="w-3 h-3 text-muted-foreground shrink-0" />
-              <span className="truncate">{m.name}</span>
-              <span className="text-[10px] text-muted-foreground/60 shrink-0 ml-auto">
-                {m.role === "account_manager" ? "AM" : m.role === "logistics_manager" ? "LM" : ""}
-              </span>
-            </button>
-          ))}
+              <p className="text-[11px] text-amber-400 leading-snug">
+                {pendingOverride.reason}
+              </p>
+              <Input
+                value={pendingOverride.rationale}
+                onChange={e =>
+                  setPendingOverride(p =>
+                    p ? { ...p, rationale: e.target.value } : p,
+                  )
+                }
+                placeholder="Why assign anyway? (logged for audit)"
+                className="h-7 text-[11px]"
+                data-testid={`input-assign-override-reason-${laneId}`}
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="default"
+                  className="h-6 text-[10px] px-2"
+                  onClick={() =>
+                    assignMutation.mutate({
+                      ownerUserId: pendingOverride.candidate.id,
+                      assignAnyway: true,
+                      overrideReason:
+                        pendingOverride.rationale.trim() ||
+                        pendingOverride.reason,
+                    })
+                  }
+                  disabled={assignMutation.isPending}
+                  data-testid={`btn-assign-override-confirm-${laneId}`}
+                >
+                  Assign anyway
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 text-[10px] px-2"
+                  onClick={() => setPendingOverride(null)}
+                  data-testid={`btn-assign-override-cancel-${laneId}`}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -763,7 +904,16 @@ function LaneRow({
 
   return (
     <div
-      className={`bg-card border rounded-lg p-4 hover:border-amber-500/30 transition-colors cursor-pointer group ${
+      // Focusable so Shift+L moves real DOM focus (not just state).
+      tabIndex={0}
+      role="button"
+      onKeyDown={e => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(item.laneId);
+        }
+      }}
+      className={`bg-card border rounded-lg p-4 hover:border-amber-500/30 transition-colors cursor-pointer group focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 ${
         selected
           ? "border-blue-500/60 bg-blue-950/10 ring-1 ring-blue-500/30"
           : hasHotReply
@@ -1021,6 +1171,7 @@ function LaneRow({
                 {isManager && teamMembers.length > 0 && (
                   <AssignToDropdown
                     laneId={item.laneId}
+                    laneOwnerUserId={item.ownerUserId}
                     teamMembers={teamMembers}
                     onAssigned={() => {}}
                   />
@@ -2174,22 +2325,181 @@ export default function LaneWorkQueuePage() {
   const selectedLaneIds = useMemo(() => new Set(selection.selectedIds), [selection.selectedIds]);
   const handleToggleSelect = selection.toggle;
   const [bulkAssignUserId, setBulkAssignUserId] = useState<string>("");
+  // Bulk-assign override state captured when the rep picks an
+  // ineligible candidate; rationale is sent on the assign request.
+  const [bulkAssignOverride, setBulkAssignOverride] = useState<{
+    candidateId: string;
+    candidateName: string;
+    reason: string;
+    rationale: string;
+  } | null>(null);
 
-  const bulkAssignMutation = useMutation({
-    mutationFn: async ({ laneIds, ownerUserId }: { laneIds: string[]; ownerUserId: string }) => {
-      await Promise.all(
-        laneIds.map(laneId =>
-          apiRequest("POST", `/api/recurring-lanes/${laneId}/assign`, { ownerUserId }).then(r => r.json())
-        )
+  // Bulk assign through runWithUndo: the forward call snapshots prior
+  // owners per lane so Undo can restore them individually.
+  type BulkAssignResult = {
+    ownerUserId: string;
+    /** Snapshot of pre-mutation owners so Undo can restore them. */
+    prevOwners: Array<{ laneId: string; ownerUserId: string | null }>;
+    count: number;
+    /** True when the rep used the override path. */
+    assignAnyway: boolean;
+  };
+
+  const performBulkAssign = async (vars: {
+    laneIds: string[];
+    ownerUserId: string;
+    assignAnyway?: boolean;
+    overrideReason?: string;
+  }): Promise<BulkAssignResult> => {
+    // Snapshot pre-state from the cache so the Undo can target each
+    // lane back to its real previous owner instead of nulling the world.
+    const cache = queryClient.getQueryData<WorkQueue>([
+      "/api/recurring-lanes/work-queue",
+      { owner: ownerFilter, pickupScope },
+    ]) ?? queryClient.getQueryData<WorkQueue>(["/api/recurring-lanes/work-queue"]);
+    const prevOwners: Array<{ laneId: string; ownerUserId: string | null }> = [];
+    if (cache) {
+      const allLanes = [
+        ...(cache.unassigned ?? []),
+        ...(cache.noContactable ?? []),
+        ...(cache.assignedUntouched ?? []),
+        ...(cache.inProgress ?? []),
+      ];
+      for (const id of vars.laneIds) {
+        const lane = allLanes.find(l => l.laneId === id);
+        prevOwners.push({ laneId: id, ownerUserId: lane?.ownerUserId ?? null });
+      }
+    }
+    await Promise.all(
+      vars.laneIds.map(laneId =>
+        apiRequest("POST", `/api/recurring-lanes/${laneId}/assign`, {
+          ownerUserId: vars.ownerUserId,
+          assignAnyway: vars.assignAnyway,
+          overrideReason: vars.overrideReason,
+        }).then(r => r.json()),
+      ),
+    );
+    queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
+    return {
+      ownerUserId: vars.ownerUserId,
+      prevOwners,
+      count: vars.laneIds.length,
+      assignAnyway: !!vars.assignAnyway,
+    };
+  };
+
+  const invertBulkAssign = async (result: BulkAssignResult): Promise<void> => {
+    await Promise.all(
+      result.prevOwners.map(({ laneId, ownerUserId }) =>
+        apiRequest("POST", `/api/recurring-lanes/${laneId}/assign`, {
+          ownerUserId,
+          // Always pass override on undo so previous owners outside the
+          // outreach role set still restore cleanly.
+          assignAnyway: true,
+          overrideReason: "undo_bulk_assign",
+        }).then(r => r.json()),
+      ),
+    );
+    queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
+  };
+
+  // Bulk snooze via runWithUndo. Undo replays an unsnooze against only
+  // the ids the server reports succeeded forward.
+  type BulkSnoozeResult = {
+    succeededIds: string[];
+    snoozedUntil: string | null;
+    total: number;
+    succeeded: number;
+    failed: number;
+  };
+  const performBulkSnooze = async (vars: {
+    laneIds: string[];
+    snoozedUntil: string | null;
+  }): Promise<BulkSnoozeResult> => {
+    const r = await apiRequest("POST", "/api/recurring-lanes/bulk-snooze", {
+      laneIds: vars.laneIds,
+      snoozedUntil: vars.snoozedUntil,
+    });
+    const j = (await r.json()) as {
+      total: number;
+      succeeded: number;
+      failed: number;
+      results: Array<{ id: string; ok: boolean }>;
+    };
+    queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
+    return {
+      succeededIds: j.results.filter(x => x.ok).map(x => x.id),
+      snoozedUntil: vars.snoozedUntil,
+      total: j.total,
+      succeeded: j.succeeded,
+      failed: j.failed,
+    };
+  };
+  const invertBulkSnooze = async (result: BulkSnoozeResult): Promise<void> => {
+    if (!result.succeededIds.length) return;
+    await apiRequest("POST", "/api/recurring-lanes/bulk-snooze", {
+      laneIds: result.succeededIds,
+      snoozedUntil: null,
+    });
+    queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
+  };
+  const bulkSnoozeMutation = useMutation({
+    mutationFn: (vars: { laneIds: string[]; durationHours: number }) => {
+      const until = new Date(Date.now() + vars.durationHours * 60 * 60 * 1000);
+      const snoozedUntil = until.toISOString();
+      return runWithUndo<typeof vars, BulkSnoozeResult>(
+        {
+          perform: () => performBulkSnooze({ laneIds: vars.laneIds, snoozedUntil }),
+          invert: invertBulkSnooze,
+          toastTitle: `Snoozed ${vars.laneIds.length} lane${vars.laneIds.length !== 1 ? "s" : ""}`,
+          toastDescription: `Will reappear in ${vars.durationHours}h`,
+          toast,
+          clearSelection: () => selection.clear(),
+          captureSelection: () => selection.selectedIds.slice(),
+          restoreSelection: (ids) => selection.replace(ids),
+          undoSuccessTitle: "Snooze undone",
+          undoFailureTitle: "Couldn't undo snooze",
+        },
+        vars,
       );
     },
-    onSuccess: () => {
-      const count = selection.selectedCount;
-      queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
-      selection.clear();
-      setBulkAssignUserId("");
-      toast({ title: `${count} lane${count !== 1 ? "s" : ""} assigned` });
+    onError: () => {
+      toast({ title: "Failed to snooze lanes", variant: "destructive" });
     },
+  });
+
+  const bulkAssignMutation = useMutation({
+    mutationFn: (vars: {
+      laneIds: string[];
+      ownerUserId: string;
+      assignAnyway?: boolean;
+      overrideReason?: string;
+    }) =>
+      runWithUndo<typeof vars, BulkAssignResult>(
+        {
+          perform: performBulkAssign,
+          invert: invertBulkAssign,
+          toastTitle: `${vars.laneIds.length} lane${vars.laneIds.length !== 1 ? "s" : ""} assigned`,
+          toastDescription:
+            (teamMembers.find(m => m.id === vars.ownerUserId)?.name
+              ? `Assigned to ${teamMembers.find(m => m.id === vars.ownerUserId)!.name}`
+              : undefined) +
+            (vars.assignAnyway ? " (override)" : ""),
+          toast,
+          clearSelection: () => {
+            selection.clear();
+            setBulkAssignUserId("");
+            setBulkAssignOverride(null);
+          },
+          // Restore the prior selection on Undo so the rep can immediately
+          // re-pick a different action.
+          captureSelection: () => selection.selectedIds.slice(),
+          restoreSelection: (ids) => selection.replace(ids),
+          undoSuccessTitle: "Reassignment undone",
+          undoFailureTitle: "Couldn't undo reassignment",
+        },
+        vars,
+      ),
     onError: () => {
       toast({ title: "Failed to assign lanes", variant: "destructive" });
     },
@@ -2290,8 +2600,16 @@ export default function LaneWorkQueuePage() {
   }, [ownerFilter, pickupScope]);
   const { data: queue, isLoading, isError, refetch } = useQuery<WorkQueue>({
     queryKey: ["/api/recurring-lanes/work-queue", { owner: ownerFilter, pickupScope }],
+    // SSE-mid-fetch race guard; append ?debug=lwq to log dropped fetches.
     queryFn: () =>
-      fetch(`/api/recurring-lanes/work-queue${workQueueQueryParams ? `?${workQueueQueryParams}` : ""}`).then(r => r.json()),
+      fetchWithFreshnessGuard<WorkQueue>({
+        cacheKey: "/api/recurring-lanes/work-queue",
+        debugTag: "lwq",
+        fetcher: () =>
+          fetch(
+            `/api/recurring-lanes/work-queue${workQueueQueryParams ? `?${workQueueQueryParams}` : ""}`,
+          ).then(r => r.json()),
+      }),
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
   });
@@ -2489,6 +2807,37 @@ export default function LaneWorkQueuePage() {
     );
     setCockpitOpen(true);
   };
+
+  // Shift+L handshake: focus immediately when ready, otherwise queue
+  // the intent and drain when the row list first becomes non-empty.
+  const pendingFocusRef = useRef(false);
+  const focusFirstRow = useCallback(() => {
+    if (flatLaneOrder.length === 0) return false;
+    setFocusedIndex(0);
+    const first = flatLaneOrder[0];
+    if (typeof window !== "undefined" && typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => {
+        const el = document.querySelector<HTMLElement>(
+          `[data-testid="work-queue-row-${first.laneId}"]`,
+        );
+        el?.focus({ preventScroll: false });
+      });
+    }
+    return true;
+  }, [flatLaneOrder]);
+
+  useShortcutTarget("lwq:focus-first-row", () => {
+    if (focusFirstRow()) return;
+    // Rows not loaded yet — defer until the effect below replays.
+    pendingFocusRef.current = true;
+  });
+
+  useEffect(() => {
+    if (flatLaneOrder.length === 0) return;
+    if (!pendingFocusRef.current) return;
+    pendingFocusRef.current = false;
+    focusFirstRow();
+  }, [flatLaneOrder, focusFirstRow]);
 
   // Task #871 — wire the shared keyboard registry. Pages register only
   // the handlers they own; the registry guarantees no two surfaces
@@ -3147,59 +3496,211 @@ export default function LaneWorkQueuePage() {
         )}
       </div>
 
-      {/*
-        Workflow OS — Task #917. Replaces the legacy floating panel with the
-        canonical `BulkActionBar`. LWQ exposes only "Reassign" today; per
-        spec section D, surfaces simply omit canonical actions they don't
-        own (Snooze / Outreach / Tag-Status are not LWQ concepts), and any
-        truly surface-specific extras would go in the `…` overflow menu —
-        never in front of the canonical four.
-      */}
+      {/* Workflow OS Task #917 — canonical BulkActionBar. LWQ exposes
+          only "Reassign" today; surfaces omit canonical actions they
+          don't own. */}
       <BulkActionBar
         count={selection.selectedCount}
-        busy={bulkAssignMutation.isPending}
+        selectedIds={selection.selectedIds}
+        busy={bulkAssignMutation.isPending || bulkSnoozeMutation.isPending}
         onClear={() => selection.clear()}
+        secondary={[
+          {
+            id: "snooze-24h",
+            label: bulkSnoozeMutation.isPending ? "Snoozing…" : "Snooze 24h",
+            icon: Clock,
+            testId: "button-bulk-snooze-24h",
+            onSelect: () =>
+              bulkSnoozeMutation.mutate({
+                laneIds: selection.selectedIds.slice(),
+                durationHours: 24,
+              }),
+            // Snooze is available against any selection — every recurring
+            // lane has a snoozedUntil column. The eligibility predicate is
+            // intentionally permissive here; the server enforces org
+            // membership per id and reports per-id failures back.
+            availability: ({ selectedCount }) =>
+              selectedCount > 0
+                ? { state: "available" }
+                : { state: "unavailable", reason: "Select lanes first" },
+          },
+        ]}
         primary={{
           id: "reassign",
           label: bulkAssignMutation.isPending ? "Assigning…" : "Reassign",
           testId: "button-bulk-assign-confirm",
-          // No-op default onSelect — the inline picker (`render`) owns the
-          // actual mutation trigger. The shared `BulkAction` contract still
-          // requires this field so that headless callers (e.g. the cheat
-          // sheet, kbd shortcuts) have something to invoke.
+          // The inline picker (`render`) owns the actual mutation trigger;
+          // the no-op default keeps the BulkAction contract satisfied for
+          // headless callers (cheat sheet, future kbd shortcuts).
           onSelect: () => undefined,
+          availability: { state: "available" },
           // Custom render so the action can own its inline owner picker.
-          render: ({ disabled }) => (
-            <div className="flex items-center gap-2" data-testid="bulk-reassign-control">
-              <select
-                className="rounded-md border border-border bg-background text-sm px-2 py-1.5 text-foreground"
-                value={bulkAssignUserId}
-                onChange={e => setBulkAssignUserId(e.target.value)}
-                disabled={disabled}
-                data-testid="select-bulk-assign-user"
-              >
-                <option value="">Assign to…</option>
-                {teamMembers.map(m => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </select>
-              <Button
-                size="sm"
-                variant="default"
-                className="h-8 text-xs gap-1"
-                onClick={() =>
-                  bulkAssignMutation.mutate({
-                    laneIds: selection.selectedIds.slice(),
-                    ownerUserId: bulkAssignUserId,
-                  })
-                }
-                disabled={disabled || !bulkAssignUserId}
-                data-testid="button-bulk-assign-confirm"
-              >
-                {bulkAssignMutation.isPending ? "Assigning…" : "Reassign"}
-              </Button>
-            </div>
-          ),
+          render: ({ disabled }) => {
+            // Resolve the picked candidate against `summarizeBulkAssign`
+            // so the bar can surface "5 of 7 eligible" inline plus the
+            // override flow when the rep tries to commit.
+            const candidate = teamMembers.find(m => m.id === bulkAssignUserId);
+            // Index team members by id so each lane's team can be
+            // derived from its current owner. Lanes whose owner has no
+            // team membership get `teamId: null` and the predicate
+            // skips the team check.
+            const memberById = new Map<string, TeamMember>();
+            for (const m of teamMembers) memberById.set(m.id, m);
+            const allLanes = filteredQueue
+              ? [
+                  ...filteredQueue.unassigned,
+                  ...filteredQueue.noContactable,
+                  ...filteredQueue.assignedUntouched,
+                  ...filteredQueue.inProgress,
+                ]
+              : [];
+            const selectedLanes = selection.selectedIds
+              .map(id => allLanes.find(l => l.laneId === id))
+              .filter((l): l is LaneItem => !!l)
+              .map(l => {
+                const owner = l.ownerUserId
+                  ? memberById.get(l.ownerUserId) ?? null
+                  : null;
+                return {
+                  laneId: l.laneId,
+                  ownerUserId: l.ownerUserId,
+                  teamId: owner?.teamId ?? null,
+                  teamLabel: owner?.teamLabel ?? null,
+                };
+              });
+            const summary = candidate
+              ? summarizeBulkAssign(selectedLanes, {
+                  id: candidate.id,
+                  name: candidate.name,
+                  role: candidate.role,
+                  teamId: candidate.teamId ?? null,
+                  teamLabel: candidate.teamLabel ?? null,
+                })
+              : null;
+            const fullyEligible =
+              summary === null || summary.eligibleCount === summary.totalCount;
+            const fullyIneligible =
+              !!summary && summary.eligibleCount === 0;
+            const showOverridePrompt =
+              !!summary && !fullyEligible && bulkAssignOverride === null;
+            return (
+              <div className="flex flex-col gap-1" data-testid="bulk-reassign-control">
+                <div className="flex items-center gap-2">
+                  <select
+                    className="rounded-md border border-border bg-background text-sm px-2 py-1.5 text-foreground"
+                    value={bulkAssignUserId}
+                    onChange={e => {
+                      setBulkAssignUserId(e.target.value);
+                      setBulkAssignOverride(null);
+                    }}
+                    disabled={disabled}
+                    data-testid="select-bulk-assign-user"
+                  >
+                    <option value="">Assign to…</option>
+                    {teamMembers.map(m => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  </select>
+                  {summary && !fullyEligible && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span
+                          className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] bg-amber-500/15 text-amber-300 border border-amber-500/40"
+                          data-testid="badge-bulk-assign-availability"
+                        >
+                          {summary.eligibleCount} of {summary.totalCount} eligible
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent
+                        side="top"
+                        className="text-xs max-w-[260px]"
+                        data-testid="tooltip-bulk-assign-availability"
+                      >
+                        {summary.firstReason ?? "Some lanes aren't structurally eligible for this owner."}
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="default"
+                    className="h-8 text-xs gap-1"
+                    onClick={() => {
+                      if (!candidate || !bulkAssignUserId) return;
+                      if (fullyEligible) {
+                        bulkAssignMutation.mutate({
+                          laneIds: selection.selectedIds.slice(),
+                          ownerUserId: bulkAssignUserId,
+                        });
+                        return;
+                      }
+                      // Open the inline override prompt instead of firing.
+                      setBulkAssignOverride({
+                        candidateId: candidate.id,
+                        candidateName: candidate.name,
+                        reason:
+                          summary?.firstReason ??
+                          "Selection contains lanes outside the candidate's outreach scope.",
+                        rationale: "",
+                      });
+                    }}
+                    disabled={disabled || !bulkAssignUserId || fullyIneligible && !showOverridePrompt}
+                    data-testid="button-bulk-assign-confirm"
+                  >
+                    {bulkAssignMutation.isPending ? "Assigning…" : "Reassign"}
+                  </Button>
+                </div>
+                {bulkAssignOverride && (
+                  <div
+                    className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-amber-500/10 border border-amber-500/30"
+                    data-testid="bulk-assign-override-row"
+                  >
+                    <span className="text-[11px] text-amber-300 leading-snug max-w-[260px]">
+                      {bulkAssignOverride.reason}
+                    </span>
+                    <Input
+                      value={bulkAssignOverride.rationale}
+                      onChange={e =>
+                        setBulkAssignOverride(prev =>
+                          prev ? { ...prev, rationale: e.target.value } : prev,
+                        )
+                      }
+                      placeholder="Reason (logged)"
+                      className="h-7 text-[11px] w-44"
+                      data-testid="input-bulk-assign-override-reason"
+                    />
+                    <Button
+                      size="sm"
+                      variant="default"
+                      className="h-7 text-[11px] px-2"
+                      onClick={() =>
+                        bulkAssignMutation.mutate({
+                          laneIds: selection.selectedIds.slice(),
+                          ownerUserId: bulkAssignOverride.candidateId,
+                          assignAnyway: true,
+                          overrideReason:
+                            bulkAssignOverride.rationale.trim() ||
+                            bulkAssignOverride.reason,
+                        })
+                      }
+                      disabled={disabled}
+                      data-testid="button-bulk-assign-override-confirm"
+                    >
+                      Assign anyway
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-[11px] px-2"
+                      onClick={() => setBulkAssignOverride(null)}
+                      data-testid="button-bulk-assign-override-cancel"
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                )}
+              </div>
+            );
+          },
         }}
       />
 

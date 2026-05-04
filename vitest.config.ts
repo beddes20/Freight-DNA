@@ -11,6 +11,14 @@ export default defineConfig({
     ],
     globals: false,
   },
+  // Task #970 — opt the test transformer into the automatic JSX
+  // runtime so source files that contain JSX (e.g. workflow-os helpers
+  // that render shadcn primitives) compile under vitest without
+  // requiring an explicit `import React` (which the Vite frontend
+  // setup intentionally forbids).
+  esbuild: {
+    jsx: "automatic",
+  },
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),

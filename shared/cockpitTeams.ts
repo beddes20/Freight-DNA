@@ -77,6 +77,22 @@ export function getCockpitTeam(teamId: string): CockpitTeam | null {
   return PARSED.teams.find((t) => t.id === teamId) ?? null;
 }
 
+/**
+ * Locate the cockpit team a given userId belongs to. Returns the first
+ * team whose `userIds` (or `managerId`) contains the user, or `null` if
+ * none does. Useful for surfaces that need to colour an owner badge by
+ * team, or for `canAssignLane` to flag wrong-team picks. Pure lookup —
+ * does not mutate the parsed roster.
+ */
+export function findCockpitTeamForUser(userId: string): CockpitTeam | null {
+  if (!userId) return null;
+  for (const team of PARSED.teams) {
+    if (team.userIds.includes(userId)) return team;
+    if (team.managerId === userId) return team;
+  }
+  return null;
+}
+
 // Direct-report lookup. Callers may pass an org-chart map (userId →
 // managerId) when the app DB has authoritative manager assignments; the
 // team roster's `managerId` is consulted as a fallback so a manager who
