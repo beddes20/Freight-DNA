@@ -2409,9 +2409,11 @@ export function registerCustomerQuoteRoutes(app: Express): void {
           PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (q.created_at - em.created_at))) AS p99,
           COUNT(*)::int AS sample
           FROM quote_opportunities q
-          JOIN email_messages em ON em.id = q.source_reference
+          JOIN email_messages em
+            ON em.provider_message_id = q.source_reference
+           AND em.org_id = q.organization_id
          WHERE q.organization_id = ${user.organizationId}
-           AND q.source = 'email'
+           AND q.source IN ('email', 'email_signal')
            AND q.created_at >= NOW() - INTERVAL '24 hours'
       `);
       const backlogRow = await db.execute<{ c: number }>(sqlExpr`
