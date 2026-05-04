@@ -424,6 +424,71 @@ export function buildAttributionResponse(row: AttributionRow | Record<string, st
   };
 }
 
+// ─── Attribution SQL (Task #994) ──────────────────────────────────────
+// Extracted from the inline route handler so the regression test in
+// `tests/customer-quotes-attribution-endpoint.test.ts` can exercise
+// the actual SELECT against a live database. Pinning only
+// `buildAttributionResponse` is what let Task #969 ship a SQL bug
+// (`ct.organization_id` does not exist on the `contacts` table) —
+// contacts are org-scoped indirectly via `companies.organization_id`,
+// so the fix joins through `companies` via an EXISTS subquery and
+// preserves the `LEFT JOIN` semantics (no contact match still
+// returns the quote row, just with a null contact).
+export async function fetchAttributionRow(
+  quoteId: string,
+  organizationId: string,
+): Promise<AttributionRow | null> {
+  const result = await db.execute(sqlExpr`
+    SELECT
+      q.id              AS quote_id,
+      q.organization_id AS org_id,
+      q.source_reference AS source_reference,
+      q.created_at      AS created_at,
+      c.id              AS customer_id,
+      c.name            AS customer_name,
+      r.id              AS rep_id,
+      r.name            AS rep_name,
+      r.email           AS rep_email,
+      em.id             AS message_id,
+      em.from_email     AS sender_email,
+      -- email_messages does not store a separate sender display name today
+      -- (only from_email); surface NULL so AttributionRow stays well-typed.
+      NULL::text        AS sender_name,
+      em.to_email       AS recipient_email,
+      em.subject        AS subject,
+      em.provider_sent_at AS sent_at,
+      -- email_messages has no dedicated received_at column; created_at is
+      -- the ingestion timestamp, which is the closest honest proxy for
+      -- when the inbound email entered the system.
+      em.created_at     AS received_at,
+      ct.id             AS contact_id,
+      ct.name           AS contact_name,
+      ct.email          AS contact_email,
+      ct.title          AS contact_title
+    FROM quote_opportunities q
+    LEFT JOIN quote_customers c ON c.id = q.customer_id
+    LEFT JOIN quote_reps r      ON r.id = q.rep_id
+    LEFT JOIN email_messages em ON (
+      em.org_id = q.organization_id
+      AND em.direction = 'inbound'
+      AND (em.provider_message_id = q.source_reference OR em.id = q.source_reference)
+    )
+    LEFT JOIN contacts ct ON (
+      em.from_email IS NOT NULL
+      AND lower(ct.email) = lower(em.from_email)
+      AND EXISTS (
+        SELECT 1 FROM companies co
+        WHERE co.id = ct.company_id
+          AND co.organization_id = q.organization_id
+      )
+    )
+    WHERE q.id = ${quoteId}
+      AND q.organization_id = ${organizationId}
+    LIMIT 1
+  `);
+  return (result.rows?.[0] ?? null) as unknown as AttributionRow | null;
+}
+
 export function registerCustomerQuoteRoutes(app: Express): void {
   // Task #923 — Quote Requests freshness strip.
   // Always-honest answer to "how stale is this page?" Read-only, no filters,
@@ -1500,46 +1565,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const user = req.user!;
       const quoteId = pStr(req.params.id);
       if (!quoteId) return res.status(400).json({ error: "id required" });
-      const result = await db.execute(sqlExpr`
-        SELECT
-          q.id              AS quote_id,
-          q.organization_id AS org_id,
-          q.source_reference AS source_reference,
-          q.created_at      AS created_at,
-          c.id              AS customer_id,
-          c.name            AS customer_name,
-          r.id              AS rep_id,
-          r.name            AS rep_name,
-          r.email           AS rep_email,
-          em.id             AS message_id,
-          em.from_email     AS sender_email,
-          em.from_name      AS sender_name,
-          em.to_email       AS recipient_email,
-          em.subject        AS subject,
-          em.provider_sent_at AS sent_at,
-          em.received_at    AS received_at,
-          ct.id             AS contact_id,
-          ct.name           AS contact_name,
-          ct.email          AS contact_email,
-          ct.title          AS contact_title
-        FROM quote_opportunities q
-        LEFT JOIN quote_customers c ON c.id = q.customer_id
-        LEFT JOIN quote_reps r      ON r.id = q.rep_id
-        LEFT JOIN email_messages em ON (
-          em.org_id = q.organization_id
-          AND em.direction = 'inbound'
-          AND (em.provider_message_id = q.source_reference OR em.id = q.source_reference)
-        )
-        LEFT JOIN contacts ct ON (
-          em.from_email IS NOT NULL
-          AND ct.organization_id = q.organization_id
-          AND lower(ct.email) = lower(em.from_email)
-        )
-        WHERE q.id = ${quoteId}
-          AND q.organization_id = ${user.organizationId}
-        LIMIT 1
-      `);
-      const row = (result.rows?.[0] ?? null) as null | Record<string, string | null>;
+      const row = await fetchAttributionRow(quoteId, user.organizationId);
       if (!row) return res.status(404).json({ error: "Not found" });
       res.json(buildAttributionResponse(row));
     } catch (err) {
