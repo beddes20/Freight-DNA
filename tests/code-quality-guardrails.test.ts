@@ -2875,6 +2875,139 @@ assert(
   "404 ErrorInvalidUser from the Graph probe must mark the row as error so admins see the misconfiguration",
 );
 
+// ── Section 30: email_messages canonical write path ────────────────────────
+// Lock the invariant exposed during the inbound-email persistence incident:
+// there must be EXACTLY ONE canonical write path into `email_messages` for
+// Graph traffic — `storage.upsertInboundEmailMessage` (called from
+// `processUserMailboxEmail` in `server/routes/graphWebhook.ts`). The only
+// other production-code insert is the manual capture-leak attach action in
+// `server/routes/conversations.ts`. Tests are excluded.
+//
+// If a future PR adds a third `db.insert(emailMessages)` call (especially
+// one that hard-codes `direction='outbound'` or skips field validation),
+// this assertion fires before the regression can ship.
+console.log("\n── Section 30: email_messages canonical write path ──────────────────\n");
+
+(function pinCanonicalEmailMessagesWritePath() {
+  const inserts: string[] = [];
+  const InsertPattern = /db\.insert\(emailMessages\)/g;
+  function scan(dir: string) {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        // Exclude test directories (their fixtures legitimately seed rows).
+        if (entry.name === "__tests__") continue;
+        scan(full);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
+      const rel = path.relative(ROOT, full);
+      const content = fs.readFileSync(full, "utf-8");
+      const matches = content.match(InsertPattern);
+      if (matches) {
+        for (let i = 0; i < matches.length; i++) inserts.push(rel);
+      }
+    }
+  }
+  scan(path.join(ROOT, "server"));
+
+  const allowed = new Set([
+    "server/storage.ts",
+    "server/routes/conversations.ts",
+  ]);
+  const unexpected = inserts.filter(p => !allowed.has(p));
+  assert(
+    "server/* — db.insert(emailMessages) appears only in the two sanctioned files",
+    unexpected.length === 0,
+    unexpected.length > 0
+      ? `Unexpected insert site(s): ${Array.from(new Set(unexpected)).join(", ")} — ` +
+        `every Graph-sourced write must go through processUserMailboxEmail → storage.upsertInboundEmailMessage`
+      : undefined,
+  );
+  for (const p of allowed) {
+    assert(
+      `${p} — sanctioned db.insert(emailMessages) site is still present`,
+      inserts.includes(p),
+      `Expected at least one db.insert(emailMessages) call in ${p}; this file is the canonical write path and removing it without updating Section 30 will cause a silent regression`,
+    );
+  }
+})();
+
+// ── Section 31: ingestion-silent-drop & empty-content-spike watchdog ───────
+// Pins the two new watchdog checks added after the inbound-email persistence
+// incident: ingestion_silent_drop fires when Graph webhooks deliver but
+// nothing lands in email_messages; email_empty_content_spike fires when a
+// large fraction of new rows have empty from_email/subject. Both reuse the
+// existing per-org streak gating so cross-tab alerts stay deduped.
+console.log("\n── Section 31: ingestion-silent-drop & empty-content watchdog ───────\n");
+
+(function pinIngestionWatchdogContract() {
+  const watchdogSrc = readFile("server/services/mailboxWatchdogService.ts");
+
+  assert(
+    "mailboxWatchdogService — ALERT_KEY_INGESTION_SILENT_DROP defined",
+    /ALERT_KEY_INGESTION_SILENT_DROP\s*=\s*"ingestion_silent_drop"/.test(watchdogSrc),
+    "Alert key constant missing — admins won't be able to dedupe or auto-resolve ingestion-silent-drop alerts",
+  );
+  assert(
+    "mailboxWatchdogService — ALERT_KEY_EMPTY_CONTENT_SPIKE defined",
+    /ALERT_KEY_EMPTY_CONTENT_SPIKE\s*=\s*"email_empty_content_spike"/.test(watchdogSrc),
+    "Alert key constant missing — admins won't be able to dedupe or auto-resolve empty-content-spike alerts",
+  );
+
+  assert(
+    "mailboxWatchdogService — runIngestionSilentDropCheck export exists",
+    /export\s+async\s+function\s+runIngestionSilentDropCheck\s*\(/.test(watchdogSrc),
+    "The watchdog cycle imports this name; renaming it without updating the cycle will silently disable the check",
+  );
+  assert(
+    "mailboxWatchdogService — runEmptyContentSpikeCheck export exists",
+    /export\s+async\s+function\s+runEmptyContentSpikeCheck\s*\(/.test(watchdogSrc),
+    "The watchdog cycle imports this name; renaming it without updating the cycle will silently disable the check",
+  );
+
+  // Both checks must be wired into runWatchdogCycle so they actually run.
+  // Without the wire-up the exports are dead code.
+  assert(
+    "mailboxWatchdogService — runWatchdogCycle invokes runIngestionSilentDropCheck",
+    /runWatchdogCycle[\s\S]{0,4000}runIngestionSilentDropCheck\s*\(/.test(watchdogSrc),
+    "Wire-up missing — the check exists but never runs",
+  );
+  assert(
+    "mailboxWatchdogService — runWatchdogCycle invokes runEmptyContentSpikeCheck",
+    /runWatchdogCycle[\s\S]{0,4000}runEmptyContentSpikeCheck\s*\(/.test(watchdogSrc),
+    "Wire-up missing — the check exists but never runs",
+  );
+
+  // Both checks must reuse the same per-org consecutive-tick gating constant
+  // as runQuotePipelineHealthCheck so a one-tick blip can't page on-call.
+  assert(
+    "mailboxWatchdogService — ingestion-silent-drop honors QUOTE_PIPELINE_CONSECUTIVE_TICKS",
+    /_ingestSilentDropTickCount[\s\S]{0,2000}QUOTE_PIPELINE_CONSECUTIVE_TICKS/.test(watchdogSrc),
+    "Without consecutive-tick gating, a single transient minute will wake on-call",
+  );
+  assert(
+    "mailboxWatchdogService — empty-content-spike honors QUOTE_PIPELINE_CONSECUTIVE_TICKS",
+    /_emptyContentTickCount[\s\S]{0,2000}QUOTE_PIPELINE_CONSECUTIVE_TICKS/.test(watchdogSrc),
+    "Without consecutive-tick gating, a single transient minute will wake on-call",
+  );
+
+  // Both checks must auto-resolve via storage.resolveMailboxHealthAlert, the
+  // same primitive every other watchdog alert uses, so the admin console can
+  // clear them automatically once the underlying condition lifts.
+  assert(
+    "mailboxWatchdogService — ingestion-silent-drop calls resolveMailboxHealthAlert on recovery",
+    /_ingestSilentDropTickCount[\s\S]{0,2500}resolveMailboxHealthAlert\([^)]*ALERT_KEY_INGESTION_SILENT_DROP/.test(watchdogSrc),
+    "Without the auto-resolve call, a recovered alert will sit red in the admin console forever",
+  );
+  assert(
+    "mailboxWatchdogService — empty-content-spike calls resolveMailboxHealthAlert on recovery",
+    /_emptyContentTickCount[\s\S]{0,2500}resolveMailboxHealthAlert\([^)]*ALERT_KEY_EMPTY_CONTENT_SPIKE/.test(watchdogSrc),
+    "Without the auto-resolve call, a recovered alert will sit red in the admin console forever",
+  );
+})();
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

@@ -865,6 +865,220 @@ export const _QUOTE_PIPELINE_THRESHOLDS_FOR_TESTS = {
   alertKeyClassifierOutage: ALERT_KEY_QUOTE_CLASSIFIER_OUTAGE,
 };
 
+// ── Ingestion-silent-drop & empty-content-spike (post-incident guardrails) ──
+//
+// These two checks would have alerted within the first hour of the May-2026
+// inbound-email persistence incident (Graph webhooks kept delivering, but
+// every row that landed in email_messages was outbound with empty content).
+// They reuse the existing per-org streak gating so cross-tab alerts stay
+// deduped, and they auto-resolve via the same storage primitives every other
+// watchdog alert already uses.
+
+const ALERT_KEY_INGESTION_SILENT_DROP = "ingestion_silent_drop";
+const ALERT_KEY_EMPTY_CONTENT_SPIKE = "email_empty_content_spike";
+
+// Window over which we compare Graph activity to inbound row landings. 30
+// minutes is wide enough to absorb a slow delta cycle but tight enough to
+// catch a real persistence regression before the bake-window expires.
+const INGEST_DROP_WINDOW_MIN = 30;
+// Don't alert on tiny windows — orgs with low mail volume would page
+// every quiet evening. A handful of mailboxes must have actually fired
+// notifications before we treat zero-rows as suspicious.
+const INGEST_DROP_MIN_NOTIFICATIONS = 5;
+const _ingestSilentDropTickCount = new Map<string, number>();
+
+// Empty-content spike thresholds. 60-min window matches the org-wide
+// observability surface; ratio is intentionally conservative so a single
+// genuinely-empty notification email can't trip the alert.
+const EMPTY_CONTENT_WINDOW_MIN = 60;
+const EMPTY_CONTENT_MIN_VOLUME = 50;
+const EMPTY_CONTENT_RATIO_THRESHOLD = 0.20;
+const _emptyContentTickCount = new Map<string, number>();
+
+export async function runIngestionSilentDropCheck(
+  mailboxes: MonitoredMailbox[],
+  now: Date,
+): Promise<{ orgsChecked: number; orgsTripped: number; alertsFired: number; alertsResolved: number }> {
+  const byOrg = new Map<string, MonitoredMailbox[]>();
+  for (const mb of mailboxes) {
+    if (!mb.enabled) continue;
+    const arr = byOrg.get(mb.orgId) ?? [];
+    arr.push(mb);
+    byOrg.set(mb.orgId, arr);
+  }
+
+  let orgsTripped = 0;
+  let alertsFired = 0;
+  let alertsResolved = 0;
+  const windowStart = new Date(now.getTime() - INGEST_DROP_WINDOW_MIN * 60_000);
+
+  for (const [orgId, orgMailboxes] of byOrg.entries()) {
+    const anchor = orgMailboxes[0];
+
+    // "Graph activity" = mailboxes whose Inbox webhook fired inside the
+    // window. We rely on the same `lastInboxNotificationAt` column the
+    // graphWebhook handler stamps on every accepted notification, so the
+    // signal is always in sync with the persister's input.
+    const mailboxesActive = orgMailboxes.filter(
+      mb => mb.lastInboxNotificationAt && mb.lastInboxNotificationAt >= windowStart,
+    ).length;
+
+    let inboundRowsInWindow = 0;
+    try {
+      const result = await db.execute(sql`
+        SELECT COUNT(*)::int AS n FROM email_messages
+        WHERE org_id = ${orgId}
+          AND direction = 'inbound'
+          AND created_at >= ${windowStart}
+      `);
+      const row = (result.rows?.[0] ?? {}) as { n?: number };
+      inboundRowsInWindow = Number(row.n ?? 0);
+    } catch (err) {
+      log(`ingestion-silent-drop query failed org=${orgId}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+
+    const tripped =
+      mailboxesActive >= INGEST_DROP_MIN_NOTIFICATIONS && inboundRowsInWindow === 0;
+
+    if (tripped) {
+      orgsTripped++;
+      const next = (_ingestSilentDropTickCount.get(orgId) ?? 0) + 1;
+      _ingestSilentDropTickCount.set(orgId, next);
+      if (next >= QUOTE_PIPELINE_CONSECUTIVE_TICKS) {
+        const reason =
+          `Ingestion silent drop: ${mailboxesActive} mailbox(es) received Graph notifications ` +
+          `in last ${INGEST_DROP_WINDOW_MIN} min but 0 inbound rows landed in email_messages. ` +
+          `Likely persistence-layer regression — check graphWebhook + mailboxDeltaSyncService logs.`;
+        const result = await storage
+          .fireMailboxHealthAlert({
+            orgId,
+            mailboxId: anchor.id,
+            alertKey: ALERT_KEY_INGESTION_SILENT_DROP,
+            severity: "critical",
+            reason,
+          })
+          .catch(() => null);
+        if (result?.isNew) {
+          alertsFired++;
+          await fanOutAdminNotifications(
+            anchor,
+            "Email ingestion: silent drop",
+            reason,
+          ).catch(() => {});
+        }
+      }
+    } else {
+      _ingestSilentDropTickCount.delete(orgId);
+      const resolved = await storage
+        .resolveMailboxHealthAlert(anchor.id, ALERT_KEY_INGESTION_SILENT_DROP)
+        .catch(() => null);
+      if (resolved) alertsResolved++;
+    }
+  }
+
+  return { orgsChecked: byOrg.size, orgsTripped, alertsFired, alertsResolved };
+}
+
+export async function runEmptyContentSpikeCheck(
+  mailboxes: MonitoredMailbox[],
+  now: Date,
+): Promise<{ orgsChecked: number; orgsTripped: number; alertsFired: number; alertsResolved: number }> {
+  const byOrg = new Map<string, MonitoredMailbox[]>();
+  for (const mb of mailboxes) {
+    if (!mb.enabled) continue;
+    const arr = byOrg.get(mb.orgId) ?? [];
+    arr.push(mb);
+    byOrg.set(mb.orgId, arr);
+  }
+
+  let orgsTripped = 0;
+  let alertsFired = 0;
+  let alertsResolved = 0;
+  const windowStart = new Date(now.getTime() - EMPTY_CONTENT_WINDOW_MIN * 60_000);
+
+  for (const [orgId, orgMailboxes] of byOrg.entries()) {
+    const anchor = orgMailboxes[0];
+    let total = 0;
+    let empty = 0;
+    try {
+      const result = await db.execute(sql`
+        SELECT COUNT(*)::int AS total,
+               COUNT(*) FILTER (WHERE from_email = '' OR subject = '')::int AS empty
+        FROM email_messages
+        WHERE org_id = ${orgId}
+          AND created_at >= ${windowStart}
+      `);
+      const row = (result.rows?.[0] ?? {}) as { total?: number; empty?: number };
+      total = Number(row.total ?? 0);
+      empty = Number(row.empty ?? 0);
+    } catch (err) {
+      log(`empty-content query failed org=${orgId}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+
+    const ratio = total > 0 ? empty / total : 0;
+    const tripped =
+      total >= EMPTY_CONTENT_MIN_VOLUME && ratio >= EMPTY_CONTENT_RATIO_THRESHOLD;
+
+    if (tripped) {
+      orgsTripped++;
+      const next = (_emptyContentTickCount.get(orgId) ?? 0) + 1;
+      _emptyContentTickCount.set(orgId, next);
+      if (next >= QUOTE_PIPELINE_CONSECUTIVE_TICKS) {
+        const pct = Math.round(ratio * 100);
+        const reason =
+          `Empty-content spike: ${pct}% of new email_messages rows in last ${EMPTY_CONTENT_WINDOW_MIN} min ` +
+          `have empty from_email or subject (${empty}/${total}). ` +
+          `Likely Graph payload missing fields or extraction regression — check mailboxDeltaSyncService.`;
+        const result = await storage
+          .fireMailboxHealthAlert({
+            orgId,
+            mailboxId: anchor.id,
+            alertKey: ALERT_KEY_EMPTY_CONTENT_SPIKE,
+            severity: "warning",
+            reason,
+          })
+          .catch(() => null);
+        if (result?.isNew) {
+          alertsFired++;
+          await fanOutAdminNotifications(
+            anchor,
+            "Email ingestion: empty-content spike",
+            reason,
+          ).catch(() => {});
+        }
+      }
+    } else {
+      _emptyContentTickCount.delete(orgId);
+      const resolved = await storage
+        .resolveMailboxHealthAlert(anchor.id, ALERT_KEY_EMPTY_CONTENT_SPIKE)
+        .catch(() => null);
+      if (resolved) alertsResolved++;
+    }
+  }
+
+  return { orgsChecked: byOrg.size, orgsTripped, alertsFired, alertsResolved };
+}
+
+// Test-only: reset per-org streak trackers so unit tests can assert
+// streak-gating behavior deterministically.
+export function _resetIngestionWatchdogTrackersForTests(): void {
+  _ingestSilentDropTickCount.clear();
+  _emptyContentTickCount.clear();
+}
+
+export const _INGESTION_WATCHDOG_THRESHOLDS_FOR_TESTS = {
+  ingestDropWindowMin: INGEST_DROP_WINDOW_MIN,
+  ingestDropMinNotifications: INGEST_DROP_MIN_NOTIFICATIONS,
+  emptyContentWindowMin: EMPTY_CONTENT_WINDOW_MIN,
+  emptyContentMinVolume: EMPTY_CONTENT_MIN_VOLUME,
+  emptyContentRatioThreshold: EMPTY_CONTENT_RATIO_THRESHOLD,
+  consecutiveTicks: QUOTE_PIPELINE_CONSECUTIVE_TICKS,
+  alertKeyIngestionSilentDrop: ALERT_KEY_INGESTION_SILENT_DROP,
+  alertKeyEmptyContentSpike: ALERT_KEY_EMPTY_CONTENT_SPIKE,
+};
+
 // ── Cron scheduler ──────────────────────────────────────────────────────────
 
 let _watchdogCron: ScheduledTask | null = null;
@@ -924,6 +1138,24 @@ async function runWatchdogCycle(trigger: "boot" | "cron"): Promise<void> {
       log(`quote-pipeline health check failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
+    // Post-incident guardrails — ingestion silent drop (Graph delivers but
+    // nothing lands) and empty-content spike (rows land but with empty
+    // required fields). Both auto-resolve once the underlying condition
+    // lifts. Best-effort; never aborts the cycle.
+    let ingestSilentDropSummary: Awaited<ReturnType<typeof runIngestionSilentDropCheck>> | null = null;
+    try {
+      ingestSilentDropSummary = await runIngestionSilentDropCheck(mailboxes, now);
+    } catch (err) {
+      log(`ingestion-silent-drop check failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    let emptyContentSummary: Awaited<ReturnType<typeof runEmptyContentSpikeCheck>> | null = null;
+    try {
+      emptyContentSummary = await runEmptyContentSpikeCheck(mailboxes, now);
+    } catch (err) {
+      log(`empty-content-spike check failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     if (trigger === "cron") {
       const lagSuffix = lagSummary
         ? `, lag: ${lagSummary.orgsLagging}/${lagSummary.orgsChecked} org(s) lagging, ${lagSummary.alertsFired} alert(s) fired, ${lagSummary.alertsResolved} resolved`
@@ -938,7 +1170,13 @@ async function runWatchdogCycle(trigger: "boot" | "cron"): Promise<void> {
           `${quotePipelineSummary.orgsClassifierOutage} classifier-outage, ` +
           `${quotePipelineSummary.alertsFired} alert(s) fired, ${quotePipelineSummary.alertsResolved} resolved`
         : "";
-      log(`Cycle done: ${mailboxes.length} mailbox(es), ${unhealthy} unhealthy, ${degraded} degraded, ${healed} self-healed${lagSuffix}${lsSuffix}${qpSuffix}`);
+      const ingestSuffix = ingestSilentDropSummary
+        ? `, ingest-drop: ${ingestSilentDropSummary.orgsTripped}/${ingestSilentDropSummary.orgsChecked} tripped, ${ingestSilentDropSummary.alertsFired} alert(s) fired, ${ingestSilentDropSummary.alertsResolved} resolved`
+        : "";
+      const emptySuffix = emptyContentSummary
+        ? `, empty-content: ${emptyContentSummary.orgsTripped}/${emptyContentSummary.orgsChecked} tripped, ${emptyContentSummary.alertsFired} alert(s) fired, ${emptyContentSummary.alertsResolved} resolved`
+        : "";
+      log(`Cycle done: ${mailboxes.length} mailbox(es), ${unhealthy} unhealthy, ${degraded} degraded, ${healed} self-healed${lagSuffix}${lsSuffix}${qpSuffix}${ingestSuffix}${emptySuffix}`);
     }
   } finally {
     _tickInFlight = false;

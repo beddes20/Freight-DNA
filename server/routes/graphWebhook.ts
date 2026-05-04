@@ -525,6 +525,18 @@ async function processUserMailboxEmail(params: {
   const isFromMailboxOwner = fromEmail.toLowerCase() === mailboxEmail.toLowerCase();
   const direction = isFromMailboxOwner ? "outbound" : "inbound";
 
+  // TEMP-PROBE (remove after the inbound-email persistence incident is
+  // resolved): catch the case where mailboxEmail is empty/normalized-empty,
+  // which collapses the from-comparison to "" === "" and mis-classifies
+  // every row as outbound. Booleans only — no PII.
+  if (!fromEmail || !mailboxEmail) {
+    log(
+      `[user-mailbox] MAILBOX-EMPTY-PROBE direction=${direction} ` +
+      `fromEmpty=${!fromEmail} mailboxEmpty=${!mailboxEmail} ` +
+      `msgId=${providerMessageId} ingestedVia=${ingestedVia}`,
+    );
+  }
+
   const counterpartyEmails = isFromMailboxOwner
     ? [...new Set([toEmail, ...(allToRecipients ?? [])].filter(Boolean))]
     : [fromEmail];
@@ -616,6 +628,14 @@ async function processUserMailboxEmail(params: {
   // bypass, a class of rep-sent Outlook emails would never enter the
   // outcome loop.
   if (!accountMatch && !effectiveCarrierId && !existingThreadExists && direction !== "outbound") {
+    // TEMP-PROBE (remove after the inbound-email persistence incident is
+    // resolved): the silent-drop gate. When fromEmail is empty no
+    // counterparty match is ever possible, so every "inbound" row gets
+    // dropped here without a trace. Booleans only — no PII.
+    log(
+      `[user-mailbox] DROP-GATE direction=${direction} fromEmpty=${!fromEmail} ` +
+      `subjEmpty=${!subject} msgId=${providerMessageId}`,
+    );
     return { created: false, direction };
   }
 

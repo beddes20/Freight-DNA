@@ -206,6 +206,25 @@ async function ingestMessage(
 ): Promise<void> {
   const { processUserMailboxEmailForDelta } = await import("../routes/graphWebhook");
 
+  // TEMP-PROBE (remove after the inbound-email persistence incident is
+  // resolved): distinguish "Graph payload missing required fields" from
+  // "our extraction/comparison wrong". Logs only booleans + the Graph
+  // messageId; never the body, subject, or sender (those are PII and
+  // this log surface is not a sanctioned PII destination).
+  {
+    const hasFrom = !!msg.from?.emailAddress?.address;
+    const hasSubj = !!msg.subject;
+    const hasBody = !!msg.body?.content;
+    const mailboxOk = !!mailbox.email;
+    if (!hasFrom || !hasSubj || !hasBody || !mailboxOk) {
+      log(
+        `EMPTY-FIELD payload mailbox=${mailbox.email || "(empty!)"} folder=${folder} ` +
+        `msgId=${msg.id} hasFrom=${hasFrom} hasSubj=${hasSubj} hasBody=${hasBody} ` +
+        `mailboxOk=${mailboxOk}`,
+      );
+    }
+  }
+
   const fromEmail = msg.from?.emailAddress?.address ?? "";
   const fromName = msg.from?.emailAddress?.name ?? "";
   const allToRecipients = (msg.toRecipients ?? [])
