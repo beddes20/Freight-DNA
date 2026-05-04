@@ -110,6 +110,7 @@ import CarrierIntelligenceLanePricingPage from "@/pages/carrier-intelligence-lan
 import CarrierIntelligenceSettingsPage from "@/pages/carrier-intelligence-settings";
 import AdminSidebarTooltipsPage from "@/pages/admin-sidebar-tooltips";
 import QuoteRequestsPage from "@/pages/quote-requests";
+import QuoteCockpitPage from "@/pages/quote-cockpit";
 import FreightCapturePage from "@/pages/freight-capture";
 import AiHubPage from "@/pages/ai-hub";
 import EmailIntelligencePage from "@/pages/email-intelligence";
@@ -196,6 +197,9 @@ function Router() {
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/customers" component={Customers} />
       <Route path="/quote-requests" component={QuoteRequestsPage} />
+      {/* Phase 1 — full-page Customer Quote Cockpit. Coexists with the
+          list+drawer at /quote-requests; deep-linkable per-quote. */}
+      <Route path="/quote-requests/:id" component={QuoteCockpitPage} />
       {/* Task #850 — legacy `/customer-quotes` URL is permanently re-routed
           to the new `/quote-requests` operator surface. */}
       <Route path="/customer-quotes">{() => <Redirect to="/quote-requests" replace />}</Route>
