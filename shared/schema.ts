@@ -4223,6 +4223,102 @@ export const insertFreightOpportunityCaptureFailureSchema = createInsertSchema(f
 export type InsertFreightOpportunityCaptureFailure = z.infer<typeof insertFreightOpportunityCaptureFailureSchema>;
 export type FreightOpportunityCaptureFailure = typeof freightOpportunityCaptureFailures.$inferSelect;
 
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Task #952 — Customer Quotes pipeline hardening (Phase A0).
+ *
+ * `quote_pipeline_drops` is the email → quote opportunity equivalent of the
+ * Phase A5 `freight_opportunity_capture_failures` table. Phase A5 records
+ * won-quote → freight conversion drops; Phase A0 records the upstream
+ * "inbound customer email never became a quote opportunity row" cases.
+ *
+ * Every silent-skip branch in the email→quote pipeline writes one row here:
+ *   - `quoteEmailIngestion.ingestQuoteFromEmail` skipped_outbound / _duplicate
+ *     / _unparseable branches.
+ *   - `inlineEmailClassifier.classifyOne` when the message classifies as a
+ *     customer inbound email but produces no pricing_request / new_opportunity
+ *     signal (classifier_miss).
+ *   - The same dispatcher when ingestQuoteFromEmail throws (exception).
+ *
+ * The admin operator UI at `/admin/quote-pipeline-health` lists open drops,
+ * supports filtering by `reasonCode`, and exposes a one-click "Reprocess"
+ * action that re-runs the classifier+ingest end-to-end. The dedupe guard
+ * inside ingestQuoteFromEmail makes reprocess safe to retry repeatedly.
+ *
+ * Partial unique index on (org_id, message_id, reason_code) WHERE
+ * resolved_at IS NULL guarantees at most one OPEN drop per reason per
+ * message — a re-run of the cron / inline dispatcher updates the existing
+ * row rather than spawning duplicates.
+ * ─────────────────────────────────────────────────────────────────────────── */
+export const QUOTE_PIPELINE_DROP_STAGES = [
+  "classification",
+  "ingest",
+] as const;
+export type QuotePipelineDropStage = typeof QUOTE_PIPELINE_DROP_STAGES[number];
+
+export const QUOTE_PIPELINE_DROP_REASONS = [
+  "classifier_miss",   // classifier ran, no pricing_request/new_opportunity signal
+  "outbound",          // ingest called on an outbound message (defensive guard)
+  "duplicate",         // already an existing quote row for (org, source, ref)
+  "unparseable",       // regex+AI both failed to extract origin/dest/equipment
+  "exception",         // ingest threw — see error_message
+] as const;
+export type QuotePipelineDropReason = typeof QUOTE_PIPELINE_DROP_REASONS[number];
+
+export const quotePipelineDrops = pgTable("quote_pipeline_drops", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  // Nullable so we can record drops where the email_messages row was deleted
+  // out from under us (rare). The admin UI joins LEFT to email_messages.
+  messageId: varchar("message_id").references(() => emailMessages.id, { onDelete: "set null" }),
+  stage: text("stage").notNull(), // QuotePipelineDropStage
+  reasonCode: text("reason_code").notNull(), // QuotePipelineDropReason
+  detail: text("detail"),
+  errorMessage: text("error_message"),
+  // Snapshot of message context at drop time so the admin row stays
+  // useful even if the email_messages row is later purged / archived.
+  senderEmail: text("sender_email"),
+  subject: text("subject"),
+  receivedAt: timestamp("received_at"),
+  // Classifier confidence (0..1) when available — for `classifier_miss` rows
+  // this is the highest signal confidence even if it was not a quote intent,
+  // useful for triaging "almost matched" cases.
+  confidence: decimal("confidence", { precision: 5, scale: 4 }),
+  // Full extracted snapshot from the classifier — signals[], actorType, etc.
+  // Lets us understand why the classifier missed, and lets the reprocess
+  // path replay with the original extraction context if we want to bypass
+  // re-running OpenAI (we don't today, but the data is here for future use).
+  extractedSnapshot: jsonb("extracted_snapshot"),
+  // For `duplicate` rows, the existing quote we collided with. NULL on all
+  // other reasons (the whole point is no quote was created).
+  quoteId: varchar("quote_id").references(() => quoteOpportunities.id, { onDelete: "set null" }),
+  attemptedAt: timestamp("attempted_at").defaultNow().notNull(),
+  resolvedAt: timestamp("resolved_at"),
+  resolvedById: varchar("resolved_by_id").references(() => users.id, { onDelete: "set null" }),
+  resolutionNote: text("resolution_note"),
+  reprocessCount: integer("reprocess_count").notNull().default(0),
+  lastReprocessAt: timestamp("last_reprocess_at"),
+  lastReprocessError: text("last_reprocess_error"),
+}, (t) => ({
+  orgAttemptedIdx: index("quote_pipeline_drops_org_attempted_idx").on(t.orgId, t.attemptedAt),
+  orgResolvedIdx: index("quote_pipeline_drops_org_resolved_idx").on(t.orgId, t.resolvedAt),
+  orgReasonIdx: index("quote_pipeline_drops_org_reason_idx").on(t.orgId, t.reasonCode),
+  messageIdx: index("quote_pipeline_drops_message_idx").on(t.messageId),
+  // Partial unique — at most one OPEN drop per (org, message, reason). A
+  // recovery cron re-running the same message refreshes the existing drop
+  // (lastReprocessAt++) instead of writing a new row.
+  openUq: uniqueIndex("quote_pipeline_drops_open_uq")
+    .on(t.orgId, t.messageId, t.reasonCode)
+    .where(sql`resolved_at IS NULL AND message_id IS NOT NULL`),
+}));
+export const insertQuotePipelineDropSchema = createInsertSchema(quotePipelineDrops)
+  .omit({ id: true, attemptedAt: true, reprocessCount: true })
+  .extend({
+    stage: z.enum(QUOTE_PIPELINE_DROP_STAGES),
+    reasonCode: z.enum(QUOTE_PIPELINE_DROP_REASONS),
+  });
+export type InsertQuotePipelineDrop = z.infer<typeof insertQuotePipelineDropSchema>;
+export type QuotePipelineDrop = typeof quotePipelineDrops.$inferSelect;
+
 export const insertFreightOpportunitySchema = createInsertSchema(freightOpportunities)
   .omit({ id: true, generatedAt: true })
   .extend({

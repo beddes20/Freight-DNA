@@ -2588,6 +2588,177 @@ assert(
   "Defining the function but not calling it from the cron is dead code. The probe must run every tick to be the early-warning the user asked for.",
 );
 
+// ── Section 29: Customer-Quote pipeline observability (Task #952) ──────────
+//
+// Pre-Task #952, every email→quote attempt that the inline classifier or
+// the ingestion stage decided not to capture was a SILENT skip — the only
+// signal was a rep noticing missing rows in /quote-requests. Task #952
+// introduces a durable, replayable record (`quote_pipeline_drops`) of
+// every such skip + a watchdog probe that pages admins on a stalled
+// pipeline. These guardrails pin the contract so a future refactor can't
+// silently revert to the old "drop on the floor" behavior.
+//
+//   1. The four skip branches in `quoteEmailIngestion.ts` MUST persist a
+//      drop row before returning.
+//   2. The classifier-miss + ingest-exception branches in
+//      `inlineEmailClassifier.ts` MUST persist a drop row before silently
+//      moving on to the next message.
+//   3. Both helpers MUST be best-effort try/catch — a drops-table outage
+//      cannot break customer-quote capture.
+//   4. The admin endpoints + page MUST exist.
+//   5. The watchdog MUST run a per-tick quote-pipeline probe + fire two
+//      stable alert keys (zero_capture, classifier_outage).
+console.log("\n── 29. Customer-Quote pipeline observability (Task #952) ────");
+
+const ingestSrc952 = readFile("server/services/quoteEmailIngestion.ts");
+assert(
+  "quoteEmailIngestion — defines recordIngestionDrop helper",
+  /async\s+function\s+recordIngestionDrop\s*\(/.test(ingestSrc952),
+  "The ingestion-stage drops helper is the only sink that records `outbound`/`duplicate`/`unparseable` skips. Removing it re-introduces the silent-drop bug.",
+);
+for (const reason of ["outbound", "duplicate", "unparseable"]) {
+  assert(
+    `quoteEmailIngestion — wires recordIngestionDrop("${reason}")`,
+    new RegExp(`recordIngestionDrop\\([^)]*["']${reason}["']`).test(ingestSrc952),
+    `The ${reason} skip branch in ingestQuoteFromEmail must record a drop row so an admin can see why the email never became a quote and trigger a reprocess after a fix lands.`,
+  );
+}
+assert(
+  "quoteEmailIngestion — recordIngestionDrop is best-effort (try/catch around storage write)",
+  /async\s+function\s+recordIngestionDrop[\s\S]{0,3000}try\s*\{[\s\S]{0,3000}storage\.recordQuotePipelineDrop[\s\S]{0,3000}\}\s*catch/.test(ingestSrc952),
+  "A failure writing to quote_pipeline_drops MUST NOT bubble — capture-side metrics outage cannot block customer-quote capture, which is the higher-priority contract.",
+);
+
+const classifierSrc952 = readFile("server/services/inlineEmailClassifier.ts");
+assert(
+  "inlineEmailClassifier — defines recordClassificationDrop helper",
+  /async\s+function\s+recordClassificationDrop\s*\(/.test(classifierSrc952),
+  "Mirror of recordIngestionDrop for the earlier classification stage. Removing it loses visibility into the classifier_miss + exception cases — exactly the cases an OpenAI prompt regression would surface as.",
+);
+for (const reason of ["classifier_miss", "exception"]) {
+  assert(
+    `inlineEmailClassifier — wires recordClassificationDrop("${reason}")`,
+    new RegExp(`recordClassificationDrop\\([^)]*["']${reason}["']`).test(classifierSrc952),
+    `The ${reason} branch in classifyOne must record a drop row so admins can trend the rate (catches classifier regressions) and replay individual messages after a fix.`,
+  );
+}
+assert(
+  "inlineEmailClassifier — recordClassificationDrop is best-effort (try/catch around storage write)",
+  /async\s+function\s+recordClassificationDrop[\s\S]{0,3000}try\s*\{[\s\S]{0,3000}storage\.recordQuotePipelineDrop[\s\S]{0,3000}\}\s*catch/.test(classifierSrc952),
+  "Same contract as the ingestion-side helper: a metrics-write failure cannot break inline classification.",
+);
+
+const quotePipelineRoutesSrc952 = readFile("server/routes/quotePipelineHealth.ts");
+for (const endpoint of ["/funnel", "/health", "/drops"]) {
+  assert(
+    `routes/quotePipelineHealth.ts — registers GET ${endpoint}`,
+    new RegExp(`app\\.get\\(\\s*["']/api/admin/quote-pipeline${endpoint.replace(/\//g, "\\/")}["']`).test(quotePipelineRoutesSrc952),
+    `The admin operator console reads ${endpoint}. Removing or renaming it breaks the page silently (it'll show "Failed to load…" instead of pipeline data).`,
+  );
+}
+for (const action of ["reprocess", "resolve"]) {
+  assert(
+    `routes/quotePipelineHealth.ts — registers POST drops/:id/${action}`,
+    new RegExp(`app\\.post\\(\\s*["']/api/admin/quote-pipeline/drops/:id/${action}["']`).test(quotePipelineRoutesSrc952),
+    `The ${action} action is what makes drops actionable. Without it the page becomes a read-only ticker and admins have no way to clear the queue.`,
+  );
+}
+
+const routesIndexSrc952 = readFile("server/routes.ts");
+assert(
+  "routes.ts — mounts registerQuotePipelineHealthRoutes",
+  /registerQuotePipelineHealthRoutes\s*\(\s*app\s*\)/.test(routesIndexSrc952),
+  "The route module exists but is not wired in. Mount it so /admin/quote-pipeline-health can fetch data.",
+);
+
+const watchdogSrc952 = readFile("server/services/mailboxWatchdogService.ts");
+assert(
+  "mailboxWatchdogService — exposes runQuotePipelineHealthCheck",
+  /export\s+async\s+function\s+runQuotePipelineHealthCheck\s*\(/.test(watchdogSrc952),
+  "The per-tick quote-pipeline probe is the early-warning system for `pipeline silently captured zero quotes`. Without it, the next regression of the kind Task #952 fixes would only surface as customer complaints.",
+);
+for (const key of ["quote_pipeline_zero_capture", "quote_pipeline_classifier_outage"]) {
+  assert(
+    `mailboxWatchdogService — fires \`${key}\` alert key`,
+    new RegExp(`["']${key}["']`).test(watchdogSrc952),
+    "Stable alert keys keep the dedupe ledger and admin notification fan-out aligned across deploys.",
+  );
+}
+assert(
+  "mailboxWatchdogService — wires runQuotePipelineHealthCheck into runWatchdogCycle",
+  /runQuotePipelineHealthCheck\s*\(\s*mailboxes/.test(watchdogSrc952),
+  "Defining the probe but not calling it from the cron is dead code. The probe must run every tick to be the alarm.",
+);
+assert(
+  "mailboxWatchdogService — requires consecutive ticks before firing quote-pipeline alerts",
+  /QUOTE_PIPELINE_CONSECUTIVE_TICKS/.test(watchdogSrc952),
+  "A single transient blip (e.g. brief OpenAI 5xx during a quiet hour) must not page admins. Consecutive-tick gating ensures the condition is a real regression.",
+);
+
+const schemaSrc952 = readFile("shared/schema.ts");
+assert(
+  "shared/schema.ts — defines quotePipelineDrops table",
+  /export\s+const\s+quotePipelineDrops\s*=\s*pgTable\(\s*["']quote_pipeline_drops["']/.test(schemaSrc952),
+  "The drops table is the durable record of every silent skip. Removing it reverts the entire Task #952 hardening pass to the old fire-and-forget behavior.",
+);
+assert(
+  "shared/schema.ts — exports QUOTE_PIPELINE_DROP_REASONS enum with all 5 reasons",
+  /QUOTE_PIPELINE_DROP_REASONS\s*=\s*\[[^\]]*classifier_miss[^\]]*outbound[^\]]*duplicate[^\]]*unparseable[^\]]*exception/.test(schemaSrc952),
+  "The reason enum is the join key between the writers (ingestion + classifier helpers) and the readers (funnel endpoint + filter UI). Adding/removing reasons must be deliberate.",
+);
+
+// SSE freshness — consumer side. The producer (publishLiveSync on
+// `customer_quote` after a quote insert) is already pinned in Section 28.
+// This pins the OTHER half of the contract: the Quote Requests page must
+// subscribe to that topic, otherwise the publish lands on a topic with no
+// listeners and the page silently waits on its 30s React Query refetch
+// — exactly the user-visible regression Task #952 is hardening against.
+const quoteRequestsPageSrc952 = readFile("client/src/pages/quote-requests.tsx");
+assert(
+  "client/src/pages/quote-requests.tsx — subscribes to customer_quote live-sync topic",
+  /useLiveSync\(\s*\[[^\]]*["']customer_quote["']/.test(quoteRequestsPageSrc952),
+  "The producer (publishLiveSync on customer_quote in quoteEmailIngestion.ts) is meaningless without a subscriber on the page. Removing this subscription reverts the page to ~30s React Query latency and re-introduces the perceived 'silent drop' regression Task #952 is hardening against.",
+);
+
+// Defensive numeric handling on the classification-side helper. The
+// `quote_pipeline_drops.confidence` column is decimal(5,4) so the max
+// value is 9.9999. OpenAI extraction occasionally returns a confidence
+// > 1 (or NaN/Infinity) which would otherwise crash the classifier on
+// what is supposed to be a best-effort metrics write — defeating the
+// "no silent drops" contract by introducing a NEW silent drop.
+assert(
+  "inlineEmailClassifier — clamps confidence to [0,1] and rejects non-finite values",
+  /Number\.isFinite\(opts\.confidence\)/.test(classifierSrc952) &&
+    /Math\.max\(\s*0\s*,\s*Math\.min\(\s*1\s*,\s*opts\.confidence/.test(classifierSrc952),
+  "decimal(5,4) max is 9.9999 — an OpenAI hallucination of e.g. 12.3 would overflow. The classifier MUST normalize the value before storing or the metrics-write side-effect becomes a primary-path crash.",
+);
+
+// Reprocess endpoint — stage-aware replay. The admin reprocess action is
+// only meaningful if a `classifier_miss` drop is replayed through the
+// classifier (not just through the ingest stage), because the live path
+// is classify → ingest. A reprocess that calls ingest directly on a
+// classification-stage drop would silently skip the very logic the drop
+// flagged, and the operator would never see the missing quote even
+// after a prompt fix lands.
+assert(
+  "inlineEmailClassifier — exports replayClassificationForReprocess for admin replay",
+  /export\s+async\s+function\s+replayClassificationForReprocess\s*\(/.test(classifierSrc952),
+  "The admin reprocess path needs a synchronous classification-stage replay primitive. Without it, classifier_miss drops can only be replayed through ingest — defeating the purpose of recording them.",
+);
+assert(
+  "routes/quotePipelineHealth.ts — reprocess branches on drop.stage to pick replay primitive",
+  /drop\.stage\s*===\s*["']classification["']/.test(quotePipelineRoutesSrc952) &&
+    /replayClassificationForReprocess/.test(quotePipelineRoutesSrc952),
+  "A `classifier_miss` drop replayed via ingestQuoteFromEmail alone would skip the classifier entirely — the operator would think the prompt fix worked when in fact ingest just hit the same dead-end signals. The reprocess route MUST branch on drop.stage so classification drops go through the classifier and ingestion drops bypass it.",
+);
+assert(
+  "storage — exposes findQuoteOpportunityByMessageRef for replay confirmation",
+  /findQuoteOpportunityByMessageRef\s*\(\s*orgId:\s*string\s*,\s*messageRef:\s*string\s*,?\s*\)/.test(
+    readFile("server/storage.ts"),
+  ),
+  "After a classification replay, the route needs a deterministic way to ask 'did a quote actually appear for this message?' so it can auto-resolve the drop. Without this lookup, every successful classifier replay leaves the drop open and the operator has to manually resolve it.",
+);
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {

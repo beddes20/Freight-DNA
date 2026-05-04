@@ -25,7 +25,7 @@
  * can pin the exact thresholds without standing up a test database.
  */
 import cron, { type ScheduledTask } from "node-cron";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { storage, db } from "../storage";
 import { users, type MonitoredMailbox } from "@shared/schema";
 import { JOB_NAMES, withHeartbeat } from "../lib/cronHeartbeat";
@@ -653,6 +653,218 @@ async function fanOutAdminNotifications(mb: MonitoredMailbox, title: string, rea
   }
 }
 
+// ── Quote-pipeline health (Task #952) ───────────────────────────────────────
+//
+// Two failure modes — both invisible until a customer asks "where's my quote?":
+//
+//   1. quote_pipeline_zero_capture — per-org. Inbound customer email
+//      volume is non-trivial in the trailing 60-min window but ZERO
+//      quotes were ingested. Prior to Task #952 the only signal was the
+//      rep noticing missing rows in /quote-requests; we now record
+//      every drop in `quote_pipeline_drops`, and the simplest health
+//      signal is "are we ingesting anything at all?". 2 consecutive
+//      ticks before paging to suppress weekend/quiet-period noise.
+//
+//   2. quote_pipeline_classifier_outage — per-org. The fraction of
+//      inbound customer messages dropped as `classifier_miss` or
+//      `exception` exceeds the warn threshold over the trailing window
+//      AND the absolute count is non-trivial. This catches a regression
+//      in the OpenAI prompt/model swap that quietly turns most
+//      pricing_request emails into status_update misses.
+//
+// Both probes use `quote_pipeline_drops.attempted_at` as their time axis
+// (not message receivedAt) so that a backfill replay doesn't trigger a
+// historical alert. The min-volume gates keep low-traffic orgs silent.
+const ALERT_KEY_QUOTE_ZERO_CAPTURE = "quote_pipeline_zero_capture";
+const ALERT_KEY_QUOTE_CLASSIFIER_OUTAGE = "quote_pipeline_classifier_outage";
+const QUOTE_PIPELINE_WINDOW_MIN = 60;
+const QUOTE_PIPELINE_MIN_INBOUND_FOR_ALERT = 5;        // skip orgs below this
+const QUOTE_PIPELINE_CLASSIFIER_MISS_RATIO = 0.5;       // ≥50% of inbound dropped as miss/exception
+const QUOTE_PIPELINE_MIN_DROPS_FOR_OUTAGE = 5;          // and ≥5 absolute
+const QUOTE_PIPELINE_CONSECUTIVE_TICKS = 2;
+
+const _quoteZeroCaptureTickCount: Map<string, number> = new Map();
+const _quoteClassifierOutageTickCount: Map<string, number> = new Map();
+
+export async function runQuotePipelineHealthCheck(
+  mailboxes: MonitoredMailbox[],
+  now: Date,
+): Promise<{
+  orgsChecked: number;
+  orgsZeroCapture: number;
+  orgsClassifierOutage: number;
+  alertsFired: number;
+  alertsResolved: number;
+}> {
+  // Anchor on the first enabled mailbox per org — same convention as the
+  // classification-lag and live-sync checks, since alerts are org-scoped
+  // semantically but require a mailboxId in schema.
+  const byOrg = new Map<string, MonitoredMailbox[]>();
+  for (const mb of mailboxes) {
+    if (!mb.enabled) continue;
+    const arr = byOrg.get(mb.orgId) ?? [];
+    arr.push(mb);
+    byOrg.set(mb.orgId, arr);
+  }
+
+  let orgsZeroCapture = 0;
+  let orgsClassifierOutage = 0;
+  let alertsFired = 0;
+  let alertsResolved = 0;
+
+  for (const [orgId, orgMailboxes] of byOrg.entries()) {
+    const anchor = orgMailboxes[0];
+    let metrics: {
+      inboundCustomer: number;
+      ingested: number;
+      classifierMiss: number;
+      exception: number;
+    };
+    try {
+      const result = await db.execute(sql`
+        SELECT
+          (SELECT COUNT(*)::int FROM email_messages
+            WHERE org_id = ${orgId}
+              AND direction = 'inbound'
+              AND COALESCE(provider_sent_at, created_at) >= now() - (${QUOTE_PIPELINE_WINDOW_MIN}::text || ' minutes')::interval
+          ) AS inbound_customer,
+          (SELECT COUNT(*)::int FROM quote_opportunities
+            WHERE organization_id = ${orgId}
+              AND source = 'email'
+              AND created_at >= now() - (${QUOTE_PIPELINE_WINDOW_MIN}::text || ' minutes')::interval
+          ) AS ingested,
+          (SELECT COUNT(*)::int FROM quote_pipeline_drops
+            WHERE org_id = ${orgId}
+              AND reason_code = 'classifier_miss'
+              AND attempted_at >= now() - (${QUOTE_PIPELINE_WINDOW_MIN}::text || ' minutes')::interval
+          ) AS classifier_miss,
+          (SELECT COUNT(*)::int FROM quote_pipeline_drops
+            WHERE org_id = ${orgId}
+              AND reason_code = 'exception'
+              AND attempted_at >= now() - (${QUOTE_PIPELINE_WINDOW_MIN}::text || ' minutes')::interval
+          ) AS exception
+      `);
+      const row = (result.rows?.[0] ?? {}) as Record<string, number | null>;
+      metrics = {
+        inboundCustomer: Number(row.inbound_customer ?? 0),
+        ingested: Number(row.ingested ?? 0),
+        classifierMiss: Number(row.classifier_miss ?? 0),
+        exception: Number(row.exception ?? 0),
+      };
+    } catch (err) {
+      log(`quote-pipeline metrics query failed for org=${orgId}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+
+    // ── 1. Zero-capture: meaningful inbound, but zero ingests. ────────────
+    const zeroCapture =
+      metrics.inboundCustomer >= QUOTE_PIPELINE_MIN_INBOUND_FOR_ALERT &&
+      metrics.ingested === 0;
+    if (zeroCapture) {
+      orgsZeroCapture++;
+      const next = (_quoteZeroCaptureTickCount.get(orgId) ?? 0) + 1;
+      _quoteZeroCaptureTickCount.set(orgId, next);
+      if (next >= QUOTE_PIPELINE_CONSECUTIVE_TICKS) {
+        const reason =
+          `Quote capture stalled: ${metrics.inboundCustomer} inbound email(s) in last ${QUOTE_PIPELINE_WINDOW_MIN} min ` +
+          `but 0 quote opportunities ingested. Drops: ${metrics.classifierMiss} classifier_miss, ${metrics.exception} exception. ` +
+          `Inspect /admin/quote-pipeline-health.`;
+        const result = await storage.fireMailboxHealthAlert({
+          orgId,
+          mailboxId: anchor.id,
+          alertKey: ALERT_KEY_QUOTE_ZERO_CAPTURE,
+          severity: "critical",
+          reason,
+        }).catch(() => null);
+        if (result?.isNew) {
+          alertsFired++;
+          await fanOutAdminNotifications(
+            anchor,
+            "Customer-quote pipeline: zero capture",
+            reason,
+          ).catch(() => {});
+        }
+      }
+    } else {
+      if (_quoteZeroCaptureTickCount.has(orgId)) {
+        _quoteZeroCaptureTickCount.delete(orgId);
+      }
+      const resolved = await storage
+        .resolveMailboxHealthAlert(anchor.id, ALERT_KEY_QUOTE_ZERO_CAPTURE)
+        .catch(() => null);
+      if (resolved) alertsResolved++;
+    }
+
+    // ── 2. Classifier outage: high drop ratio AND absolute volume. ────────
+    const dropTotal = metrics.classifierMiss + metrics.exception;
+    const dropRatio =
+      metrics.inboundCustomer > 0 ? dropTotal / metrics.inboundCustomer : 0;
+    const classifierOutage =
+      metrics.inboundCustomer >= QUOTE_PIPELINE_MIN_INBOUND_FOR_ALERT &&
+      dropTotal >= QUOTE_PIPELINE_MIN_DROPS_FOR_OUTAGE &&
+      dropRatio >= QUOTE_PIPELINE_CLASSIFIER_MISS_RATIO;
+    if (classifierOutage) {
+      orgsClassifierOutage++;
+      const next = (_quoteClassifierOutageTickCount.get(orgId) ?? 0) + 1;
+      _quoteClassifierOutageTickCount.set(orgId, next);
+      if (next >= QUOTE_PIPELINE_CONSECUTIVE_TICKS) {
+        const pct = Math.round(dropRatio * 100);
+        const reason =
+          `Classifier appears regressed: ${pct}% of inbound emails dropped ` +
+          `(${metrics.classifierMiss} miss + ${metrics.exception} exception of ${metrics.inboundCustomer} inbound) in last ${QUOTE_PIPELINE_WINDOW_MIN} min. ` +
+          `Check OpenAI prompt/model + /admin/quote-pipeline-health.`;
+        const result = await storage.fireMailboxHealthAlert({
+          orgId,
+          mailboxId: anchor.id,
+          alertKey: ALERT_KEY_QUOTE_CLASSIFIER_OUTAGE,
+          severity: "warning",
+          reason,
+        }).catch(() => null);
+        if (result?.isNew) {
+          alertsFired++;
+          await fanOutAdminNotifications(
+            anchor,
+            "Customer-quote pipeline: classifier outage",
+            reason,
+          ).catch(() => {});
+        }
+      }
+    } else {
+      if (_quoteClassifierOutageTickCount.has(orgId)) {
+        _quoteClassifierOutageTickCount.delete(orgId);
+      }
+      const resolved = await storage
+        .resolveMailboxHealthAlert(anchor.id, ALERT_KEY_QUOTE_CLASSIFIER_OUTAGE)
+        .catch(() => null);
+      if (resolved) alertsResolved++;
+    }
+  }
+
+  return {
+    orgsChecked: byOrg.size,
+    orgsZeroCapture,
+    orgsClassifierOutage,
+    alertsFired,
+    alertsResolved,
+  };
+}
+
+// Test-only: reset the per-org streak trackers.
+export function _resetQuotePipelineTrackersForTests(): void {
+  _quoteZeroCaptureTickCount.clear();
+  _quoteClassifierOutageTickCount.clear();
+}
+
+export const _QUOTE_PIPELINE_THRESHOLDS_FOR_TESTS = {
+  windowMin: QUOTE_PIPELINE_WINDOW_MIN,
+  minInbound: QUOTE_PIPELINE_MIN_INBOUND_FOR_ALERT,
+  classifierMissRatio: QUOTE_PIPELINE_CLASSIFIER_MISS_RATIO,
+  minDropsForOutage: QUOTE_PIPELINE_MIN_DROPS_FOR_OUTAGE,
+  consecutiveTicks: QUOTE_PIPELINE_CONSECUTIVE_TICKS,
+  alertKeyZeroCapture: ALERT_KEY_QUOTE_ZERO_CAPTURE,
+  alertKeyClassifierOutage: ALERT_KEY_QUOTE_CLASSIFIER_OUTAGE,
+};
+
 // ── Cron scheduler ──────────────────────────────────────────────────────────
 
 let _watchdogCron: ScheduledTask | null = null;
@@ -702,6 +914,16 @@ async function runWatchdogCycle(trigger: "boot" | "cron"): Promise<void> {
       log(`live-sync health check failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
+    // Task #952 — quote-pipeline health. Catches "zero capture" (org
+    // receiving customer email but ingesting no quotes) and "classifier
+    // outage" (large fraction dropped). Best-effort.
+    let quotePipelineSummary: Awaited<ReturnType<typeof runQuotePipelineHealthCheck>> | null = null;
+    try {
+      quotePipelineSummary = await runQuotePipelineHealthCheck(mailboxes, now);
+    } catch (err) {
+      log(`quote-pipeline health check failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     if (trigger === "cron") {
       const lagSuffix = lagSummary
         ? `, lag: ${lagSummary.orgsLagging}/${lagSummary.orgsChecked} org(s) lagging, ${lagSummary.alertsFired} alert(s) fired, ${lagSummary.alertsResolved} resolved`
@@ -711,7 +933,12 @@ async function runWatchdogCycle(trigger: "boot" | "cron"): Promise<void> {
           `${liveSyncSummary.orgsSilent}/${liveSyncSummary.orgsChecked} silent, ` +
           `${liveSyncSummary.alertsFired} alert(s) fired, ${liveSyncSummary.alertsResolved} resolved`
         : "";
-      log(`Cycle done: ${mailboxes.length} mailbox(es), ${unhealthy} unhealthy, ${degraded} degraded, ${healed} self-healed${lagSuffix}${lsSuffix}`);
+      const qpSuffix = quotePipelineSummary
+        ? `, quote-pipeline: ${quotePipelineSummary.orgsZeroCapture} zero-capture, ` +
+          `${quotePipelineSummary.orgsClassifierOutage} classifier-outage, ` +
+          `${quotePipelineSummary.alertsFired} alert(s) fired, ${quotePipelineSummary.alertsResolved} resolved`
+        : "";
+      log(`Cycle done: ${mailboxes.length} mailbox(es), ${unhealthy} unhealthy, ${degraded} degraded, ${healed} self-healed${lagSuffix}${lsSuffix}${qpSuffix}`);
     }
   } finally {
     _tickInFlight = false;

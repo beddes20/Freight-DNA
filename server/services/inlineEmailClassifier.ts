@@ -45,9 +45,68 @@
  */
 
 import { eq } from "drizzle-orm";
-import { emailMessages, type EmailMessage, type InsertEmailSignal } from "@shared/schema";
+import { emailMessages, type EmailMessage, type InsertEmailSignal, type QuotePipelineDropReason } from "@shared/schema";
 import { db, storage } from "../storage";
 import { recordIntegrationEvent } from "../integrations/probeRegistry";
+
+/**
+ * Task #952 — Phase A0 classifier-side drop helper.
+ *
+ * Mirror of `recordIngestionDrop` inside `quoteEmailIngestion.ts` for the
+ * earlier classifier stage. Distinct stage (`classification` vs `ingest`)
+ * so the operator UI can tell apart "we never attempted ingestion" (signal
+ * never matched) from "we attempted ingestion and it skipped" (parse failed
+ * etc).
+ *
+ * Best-effort: a write failure here is logged but NEVER bubbles, so a
+ * metrics outage cannot break customer-quote capture.
+ */
+async function recordClassificationDrop(
+  message: EmailMessage,
+  reasonCode: QuotePipelineDropReason,
+  detail: string,
+  opts?: {
+    extractedSnapshot?: Record<string, unknown> | null;
+    confidence?: number | null;
+    errorMessage?: string | null;
+  },
+): Promise<void> {
+  try {
+    await storage.recordQuotePipelineDrop({
+      orgId: message.orgId,
+      messageId: message.id,
+      stage: "classification",
+      reasonCode,
+      detail: detail.slice(0, 1000),
+      errorMessage: opts?.errorMessage?.slice(0, 1000) ?? null,
+      senderEmail: message.fromEmail ?? null,
+      subject: message.subject ?? null,
+      receivedAt: message.providerSentAt ?? message.createdAt ?? null,
+      // Drizzle's numeric column accepts string; pass the raw decimal so
+      // precision survives the round-trip. Clamp to [0,1] and reject
+      // non-finite values — the column is decimal(5,4) (max 9.9999) and
+      // an OpenAI hallucination of e.g. 12.3 would otherwise crash the
+      // classifier with a numeric overflow on what is supposed to be a
+      // best-effort metrics write.
+      confidence:
+        opts?.confidence != null && Number.isFinite(opts.confidence)
+          ? String(Math.max(0, Math.min(1, opts.confidence)))
+          : null,
+      extractedSnapshot: opts?.extractedSnapshot ?? null,
+      quoteId: null,
+      resolvedAt: null,
+      resolvedById: null,
+      resolutionNote: null,
+      lastReprocessAt: null,
+      lastReprocessError: null,
+    });
+  } catch (err) {
+    console.error(
+      `[inlineEmailClassifier] recordQuotePipelineDrop(${reasonCode}) failed for message ${message.id}:`,
+      err,
+    );
+  }
+}
 
 // Tunables — overridable via env so an operator can dial concurrency or
 // the per-message budget down without a redeploy.
@@ -214,8 +273,51 @@ async function classifyOne(message: EmailMessage, signal: AbortSignal): Promise<
           outcome: "error",
           errorMessage: `inline_quote_ingest:${message.id}: ${errMsg.slice(0, 200)}`,
         });
+        // Task #952 — record the exception so the operator console can
+        // surface it next to the silent skips. Snapshot the signals so
+        // a reprocess after a fix can replay with the original context.
+        await recordClassificationDrop(message, "exception", errMsg, {
+          extractedSnapshot: {
+            actorType: extraction.actorType,
+            signals: extraction.signals,
+          },
+          confidence: quoteSignal.confidence ?? null,
+          errorMessage: errMsg,
+        });
         return;
       }
+    } else {
+      // Task #952 — classifier ran successfully and decided this customer
+      // inbound email carries NO pricing/new-opportunity signal. The
+      // existing pipeline silently moves on; we now record the miss so
+      // an operator can:
+      //   1. Verify the classifier really missed (vs. genuine non-quote
+      //      thread like a ticketing follow-up),
+      //   2. Reprocess after a prompt or rule change, and
+      //   3. Trend the classifier_miss rate via the funnel endpoint —
+      //      a sudden spike usually indicates an upstream regression
+      //      (model swap, prompt edit, OpenAI partial outage).
+      // We snapshot all extracted signals (even non-quote ones) because
+      // the highest-confidence non-quote signal is the most useful
+      // diagnostic ("model thought this was a status_update at 0.92").
+      const topSignal = extraction.signals.reduce<typeof extraction.signals[number] | null>(
+        (best, s) => (best == null || (s.confidence ?? 0) > (best.confidence ?? 0)) ? s : best,
+        null,
+      );
+      await recordClassificationDrop(
+        message,
+        "classifier_miss",
+        topSignal
+          ? `Classifier returned ${extraction.signals.length} signal(s) but none were pricing_request/new_opportunity. Top signal: ${topSignal.intentType}@${(topSignal.confidence ?? 0).toFixed(2)}.`
+          : `Classifier returned 0 signals for this customer inbound message.`,
+        {
+          extractedSnapshot: {
+            actorType: extraction.actorType,
+            signals: extraction.signals,
+          },
+          confidence: topSignal?.confidence ?? null,
+        },
+      );
     }
   }
 
@@ -317,6 +419,28 @@ export function dispatchInlineClassification(input: { messageId: string }): void
       );
     }
   })();
+}
+
+/**
+ * Task #952 — Synchronous classification replay for the admin reprocess
+ * path. Unlike `dispatchInlineClassification` (fire-and-forget), this:
+ *   - awaits classifyOne to completion so the operator sees a real result,
+ *   - bypasses the semaphore + wall-clock timeout (the operator is making
+ *     a deliberate per-message call from the admin UI; a long classify
+ *     here is acceptable, vs. the live path where it would back-pressure
+ *     the webhook fan-out),
+ *   - rethrows on failure so the route can render the error to the admin.
+ *
+ * This is the only correct primitive for replaying a `classifier_miss`
+ * drop: the live path goes classifier → ingest, so a replay that skips
+ * straight to ingest would never re-run the classification logic the
+ * drop was created to flag.
+ */
+export async function replayClassificationForReprocess(
+  message: EmailMessage,
+): Promise<void> {
+  const controller = new AbortController();
+  await classifyOne(message, controller.signal);
 }
 
 // ── Test / observability helpers ────────────────────────────────────────────

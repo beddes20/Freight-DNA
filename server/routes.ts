@@ -26,6 +26,7 @@ import { registerProcurementOutreachRoutes } from "./routes/procurementOutreach"
 import { registerProactiveOpportunityRoutes } from "./routes/proactiveOpportunities";
 import { registerFreightCockpitRoutes } from "./routes/freightOpportunityCockpit";
 import { registerFreightConversionFailuresRoutes } from "./routes/freightConversionFailures";
+import { registerQuotePipelineHealthRoutes } from "./routes/quotePipelineHealth";
 import { registerIntelRoutes } from "./routes/intel";
 import { registerGraphWebhookRoutes } from "./routes/graphWebhook";
 import { registerMarketSignalRoutes } from "./routes/marketSignals";
@@ -2598,6 +2599,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // /saved-views aren't shadowed by the proactiveOpportunities `/:id` catch-alls.
   registerFreightCockpitRoutes(app);
   registerFreightConversionFailuresRoutes(app);
+  registerQuotePipelineHealthRoutes(app);
   registerProactiveOpportunityRoutes(app);
   registerIntelRoutes(app);
   registerGraphWebhookRoutes(app);

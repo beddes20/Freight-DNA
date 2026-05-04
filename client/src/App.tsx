@@ -49,6 +49,7 @@ import TermsPage from "@/pages/terms";
 import AdminUsers from "@/pages/admin-users";
 import AdminFreightCaptureRepAuditPage from "@/pages/admin-freight-capture-rep-audit";
 import AdminFreightConversionFailuresPage from "@/pages/admin-freight-conversion-failures";
+import AdminQuotePipelineHealthPage from "@/pages/admin-quote-pipeline-health";
 import AdminCarriers from "@/pages/admin-carriers";
 import AdminWebexHealth from "@/pages/admin-webex-health";
 import AdminIntegrationsHealthPage from "@/pages/admin-integrations-health";
@@ -212,6 +213,7 @@ function Router() {
       <Route path="/admin/users" component={AdminUsers} />
       <Route path="/admin/freight-capture-rep-audit" component={AdminFreightCaptureRepAuditPage} />
       <Route path="/admin/freight-conversion-failures" component={AdminFreightConversionFailuresPage} />
+      <Route path="/admin/quote-pipeline-health" component={AdminQuotePipelineHealthPage} />
       <Route path="/admin/sidebar-tooltips" component={AdminSidebarTooltipsPage} />
       <Route path="/admin/copilot-analytics" component={AiHubPage} />
       {/* Task #926 — Copilot Intelligence document workspace. */}

@@ -204,6 +204,11 @@ import {
   mailboxHealthAlerts,
   type MailboxHealthAlert,
   type InsertMailboxHealthAlert,
+  quotePipelineDrops,
+  type QuotePipelineDrop,
+  type InsertQuotePipelineDrop,
+  type QuotePipelineDropReason,
+  quoteOpportunities,
   mailboxHistoricalBackfills,
   type MailboxHistoricalBackfill,
   type InsertMailboxHistoricalBackfill,
@@ -1495,6 +1500,38 @@ getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined>;
   resolveMailboxHealthAlert(mailboxId: string, alertKey: string): Promise<MailboxHealthAlert | undefined>;
   getOpenMailboxHealthAlerts(orgId: string): Promise<MailboxHealthAlert[]>;
   getOpenMailboxHealthAlertsForMailbox(mailboxId: string): Promise<MailboxHealthAlert[]>;
+
+  // Quote pipeline drops (Task #952 — Phase A0 email→quote hardening).
+  // Records every silent skip / classifier-miss / ingest exception with the
+  // message context needed to investigate and reprocess. Idempotent on
+  // (orgId, messageId, reasonCode) for OPEN rows so a recovery cron retry
+  // refreshes the existing drop instead of duplicating it.
+  recordQuotePipelineDrop(input: InsertQuotePipelineDrop): Promise<QuotePipelineDrop>;
+  resolveQuotePipelineDrop(
+    id: string,
+    orgId: string,
+    opts: { resolvedById: string | null; note: string | null },
+  ): Promise<QuotePipelineDrop | undefined>;
+  getOpenQuotePipelineDropsForOrg(orgId: string): Promise<QuotePipelineDrop[]>;
+  getQuotePipelineDrop(id: string, orgId: string): Promise<QuotePipelineDrop | undefined>;
+  bumpQuotePipelineDropReprocess(id: string, error: string | null): Promise<void>;
+  /**
+   * Task #952 — Look up the quote_opportunities row created from a given
+   * email message. Used by the admin reprocess path to confirm whether a
+   * classification-stage replay actually produced a quote (so the drop
+   * can be auto-resolved).
+   *
+   * Mirrors the dedupe lookup in `quoteEmailIngestion.ts` exactly:
+   *   ref = message.providerMessageId ?? message.id
+   *   match: source = "email" AND sourceReference = ref AND organizationId
+   *
+   * Returns the quote opportunity id, or null if no quote exists for
+   * this message yet.
+   */
+  findQuoteOpportunityByMessageRef(
+    orgId: string,
+    messageRef: string,
+  ): Promise<string | null>;
 
   // Cron heartbeats (never-fail-again pass) — every recurring background
   // job writes here so we can detect when one silently dies. See
@@ -9749,6 +9786,123 @@ export class DatabaseStorage implements IStorage {
         sql`${mailboxHealthAlerts.resolvedAt} IS NULL`,
       ))
       .orderBy(desc(mailboxHealthAlerts.lastFiredAt));
+  }
+
+  // ── Quote pipeline drops (Task #952 — Phase A0) ─────────────────────────────
+
+  async recordQuotePipelineDrop(input: InsertQuotePipelineDrop): Promise<QuotePipelineDrop> {
+    // Idempotent on (orgId, messageId, reasonCode) for OPEN rows. If a
+    // matching open drop already exists, refresh `attemptedAt` + `detail` /
+    // `errorMessage` / `extractedSnapshot` (so the latest cron tick wins
+    // for diagnostics) instead of inserting a duplicate. Drops without a
+    // messageId (rare — message row was deleted out from under us) always
+    // insert because the partial unique index requires message_id IS NOT NULL.
+    const now = new Date();
+    if (input.messageId) {
+      const [existing] = await db
+        .select()
+        .from(quotePipelineDrops)
+        .where(and(
+          eq(quotePipelineDrops.orgId, input.orgId),
+          eq(quotePipelineDrops.messageId, input.messageId),
+          eq(quotePipelineDrops.reasonCode, input.reasonCode),
+          sql`${quotePipelineDrops.resolvedAt} IS NULL`,
+        ))
+        .limit(1);
+      if (existing) {
+        const [refreshed] = await db.update(quotePipelineDrops)
+          .set({
+            attemptedAt: now,
+            detail: input.detail ?? existing.detail,
+            errorMessage: input.errorMessage ?? existing.errorMessage,
+            extractedSnapshot: input.extractedSnapshot ?? existing.extractedSnapshot,
+            confidence: input.confidence ?? existing.confidence,
+            quoteId: input.quoteId ?? existing.quoteId,
+            stage: input.stage,
+          })
+          .where(eq(quotePipelineDrops.id, existing.id))
+          .returning();
+        return refreshed;
+      }
+    }
+    const [inserted] = await db.insert(quotePipelineDrops).values(input).returning();
+    return inserted;
+  }
+
+  async resolveQuotePipelineDrop(
+    id: string,
+    orgId: string,
+    opts: { resolvedById: string | null; note: string | null },
+  ): Promise<QuotePipelineDrop | undefined> {
+    const [row] = await db.update(quotePipelineDrops)
+      .set({
+        resolvedAt: new Date(),
+        resolvedById: opts.resolvedById,
+        resolutionNote: opts.note,
+      })
+      .where(and(
+        eq(quotePipelineDrops.id, id),
+        eq(quotePipelineDrops.orgId, orgId),
+        sql`${quotePipelineDrops.resolvedAt} IS NULL`,
+      ))
+      .returning();
+    return row;
+  }
+
+  async getOpenQuotePipelineDropsForOrg(orgId: string): Promise<QuotePipelineDrop[]> {
+    return db.select().from(quotePipelineDrops)
+      .where(and(
+        eq(quotePipelineDrops.orgId, orgId),
+        sql`${quotePipelineDrops.resolvedAt} IS NULL`,
+      ))
+      .orderBy(desc(quotePipelineDrops.attemptedAt))
+      .limit(500);
+  }
+
+  async getQuotePipelineDrop(id: string, orgId: string): Promise<QuotePipelineDrop | undefined> {
+    const [row] = await db.select().from(quotePipelineDrops)
+      .where(and(
+        eq(quotePipelineDrops.id, id),
+        eq(quotePipelineDrops.orgId, orgId),
+      ))
+      .limit(1);
+    return row;
+  }
+
+  async findQuoteOpportunityByMessageRef(
+    orgId: string,
+    messageRef: string,
+  ): Promise<string | null> {
+    const [row] = await db
+      .select({ id: quoteOpportunities.id })
+      .from(quoteOpportunities)
+      .where(
+        and(
+          eq(quoteOpportunities.organizationId, orgId),
+          eq(quoteOpportunities.source, "email"),
+          eq(quoteOpportunities.sourceReference, messageRef),
+        ),
+      )
+      .limit(1);
+    return row?.id ?? null;
+  }
+
+  async bumpQuotePipelineDropReprocess(id: string, error: string | null): Promise<void> {
+    // Read-then-update so we increment from the actual stored value (rather
+    // than depending on a server-side `+ 1` SQL expression that wouldn't
+    // round-trip through Drizzle's type system as cleanly).
+    const [existing] = await db.select({ reprocessCount: quotePipelineDrops.reprocessCount })
+      .from(quotePipelineDrops)
+      .where(eq(quotePipelineDrops.id, id))
+      .limit(1);
+    if (!existing) return;
+    await db.update(quotePipelineDrops)
+      .set({
+        reprocessCount: existing.reprocessCount + 1,
+        lastReprocessAt: new Date(),
+        lastReprocessError: error?.slice(0, 1000) ?? null,
+      })
+      .where(eq(quotePipelineDrops.id, id));
   }
 
   // ── Mailbox historical backfills (Task #508) ────────────────────────────────

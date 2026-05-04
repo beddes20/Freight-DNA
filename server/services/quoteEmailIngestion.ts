@@ -19,11 +19,12 @@
 
 import { and, eq, inArray, sql } from "drizzle-orm";
 import OpenAI from "openai";
-import { db } from "../storage";
+import { db, storage } from "../storage";
 import {
   quoteOpportunities, quoteEvents, quoteCustomers, quoteReps,
   quoteOutcomeReasons, emailMessages, users,
   type EmailMessage, type QuoteOutcomeStatus,
+  type QuotePipelineDropReason,
 } from "@shared/schema";
 import {
   resolveCustomerName,
@@ -613,6 +614,59 @@ export interface IngestionResult {
 }
 
 /**
+ * Task #952 — Phase A0 hardening helper.
+ *
+ * Records a row in `quote_pipeline_drops` for every silent-skip branch of
+ * `ingestQuoteFromEmail`. Best-effort: a write failure here is logged but
+ * NEVER propagated, because a metrics-side failure must not gate ingest
+ * recovery (the recovery cron will retry the whole message anyway).
+ *
+ * `recordQuotePipelineDrop` itself is idempotent on (orgId, messageId,
+ * reasonCode) — a repeat call from the cron just refreshes `attemptedAt`
+ * and the latest detail/snapshot, instead of cluttering the admin UI with
+ * duplicates.
+ */
+async function recordIngestionDrop(
+  message: EmailMessage,
+  reasonCode: QuotePipelineDropReason,
+  detail: string,
+  opts?: {
+    quoteId?: string | null;
+    extractedSnapshot?: Record<string, unknown> | null;
+    errorMessage?: string | null;
+  },
+): Promise<void> {
+  try {
+    await storage.recordQuotePipelineDrop({
+      orgId: message.orgId,
+      messageId: message.id,
+      stage: "ingest",
+      reasonCode,
+      detail: detail.slice(0, 1000),
+      errorMessage: opts?.errorMessage?.slice(0, 1000) ?? null,
+      senderEmail: message.fromEmail ?? null,
+      subject: message.subject ?? null,
+      receivedAt: message.providerSentAt ?? message.createdAt ?? null,
+      confidence: null,
+      extractedSnapshot: opts?.extractedSnapshot ?? null,
+      quoteId: opts?.quoteId ?? null,
+      resolvedAt: null,
+      resolvedById: null,
+      resolutionNote: null,
+      lastReprocessAt: null,
+      lastReprocessError: null,
+    });
+  } catch (err) {
+    // Drop-record write failed — log and move on. The pipeline must never
+    // observe an error from observability instrumentation.
+    console.error(
+      `[quoteEmailIngestion] recordQuotePipelineDrop(${reasonCode}) failed for message ${message.id}:`,
+      err,
+    );
+  }
+}
+
+/**
  * Ingest a single inbound email as a quote_opportunity.
  *
  * Idempotent: if a quote with the same (org, source=email, sourceReference)
@@ -629,7 +683,17 @@ export async function ingestQuoteFromEmail(
     useAiFallback?: boolean;
   },
 ): Promise<IngestionResult> {
-  if (message.direction !== "inbound") return { status: "skipped_outbound" };
+  if (message.direction !== "inbound") {
+    // Task #952 — record the silent skip so the operator console can
+    // surface "we tried to ingest an outbound message" cases (rare; usually
+    // means the dispatcher was called from a wrong code path).
+    await recordIngestionDrop(
+      message,
+      "outbound",
+      `ingestQuoteFromEmail called on direction=${message.direction}; only inbound is eligible.`,
+    );
+    return { status: "skipped_outbound" };
+  }
 
   const ref = message.providerMessageId ?? message.id;
 
@@ -638,7 +702,19 @@ export async function ingestQuoteFromEmail(
     eq(quoteOpportunities.source, "email"),
     eq(quoteOpportunities.sourceReference, ref),
   )).limit(1);
-  if (dup.length > 0) return { status: "skipped_duplicate", quoteId: dup[0].id };
+  if (dup.length > 0) {
+    // Task #952 — record the dedupe hit. The admin UI defaults to filtering
+    // duplicates out (the existing quote IS visible to reps); the row is
+    // here so an operator investigating "rep says quote is here twice" can
+    // see the dedupe collision history without spelunking server logs.
+    await recordIngestionDrop(
+      message,
+      "duplicate",
+      `Duplicate of existing quote ${dup[0].id} (org=${message.orgId}, source=email, ref=${ref}).`,
+      { quoteId: dup[0].id },
+    );
+    return { status: "skipped_duplicate", quoteId: dup[0].id };
+  }
 
   // Anchor relative pickup-date phrases ("tomorrow", "next Tuesday") on the
   // email's send time. Falls back to createdAt / now when missing so the
@@ -655,7 +731,22 @@ export async function ingestQuoteFromEmail(
   if (!parsed && opts?.useAiFallback !== false) {
     parsed = await parseQuoteEmailAi({ subject: message.subject, body: message.body });
   }
-  if (!parsed) return { status: "skipped_unparseable" };
+  if (!parsed) {
+    // Task #952 — record the parse failure so an operator can:
+    //   1. Inspect the snapshot to understand what the classifier extracted
+    //      vs. what the regex/AI parser couldn't reconcile,
+    //   2. Click "Reprocess" after improving the parser, and
+    //   3. Have the row auto-resolve once the next attempt produces a quote.
+    await recordIngestionDrop(
+      message,
+      "unparseable",
+      "Regex + AI parser could not extract origin/destination/equipment from the email body.",
+      {
+        extractedSnapshot: opts?.extractedData ?? null,
+      },
+    );
+    return { status: "skipped_unparseable" };
+  }
 
   // Customer Quotes #3 — sender-domain learning. Check the learned
   // mappings table BEFORE the heuristic resolver. If a rep previously

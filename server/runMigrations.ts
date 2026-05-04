@@ -5681,6 +5681,55 @@ export async function runMigrations() {
     console.error("[migrations] Phase A5 capture-failures table guard error:", err);
   }
 
+  // Task #952 — Phase A0 quote_pipeline_drops.
+  //
+  // Email → quote opportunity hardening. Every silent skip / classifier-miss
+  // / ingest exception inside the email-to-quote pipeline lands here, joined
+  // to the source email_messages row (LEFT — `set null` on delete) so the
+  // /admin/quote-pipeline-health operator UI can list, reprocess, or
+  // resolve them. See `quote_pipeline_drops` in shared/schema.ts for the
+  // full design rationale.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS quote_pipeline_drops (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        message_id varchar REFERENCES email_messages(id) ON DELETE SET NULL,
+        stage text NOT NULL,
+        reason_code text NOT NULL,
+        detail text,
+        error_message text,
+        sender_email text,
+        subject text,
+        received_at timestamp,
+        confidence numeric(5,4),
+        extracted_snapshot jsonb,
+        quote_id varchar REFERENCES quote_opportunities(id) ON DELETE SET NULL,
+        attempted_at timestamp NOT NULL DEFAULT now(),
+        resolved_at timestamp,
+        resolved_by_id varchar REFERENCES users(id) ON DELETE SET NULL,
+        resolution_note text,
+        reprocess_count integer NOT NULL DEFAULT 0,
+        last_reprocess_at timestamp,
+        last_reprocess_error text
+      );
+      CREATE INDEX IF NOT EXISTS quote_pipeline_drops_org_attempted_idx
+        ON quote_pipeline_drops (org_id, attempted_at);
+      CREATE INDEX IF NOT EXISTS quote_pipeline_drops_org_resolved_idx
+        ON quote_pipeline_drops (org_id, resolved_at);
+      CREATE INDEX IF NOT EXISTS quote_pipeline_drops_org_reason_idx
+        ON quote_pipeline_drops (org_id, reason_code);
+      CREATE INDEX IF NOT EXISTS quote_pipeline_drops_message_idx
+        ON quote_pipeline_drops (message_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS quote_pipeline_drops_open_uq
+        ON quote_pipeline_drops (org_id, message_id, reason_code)
+        WHERE resolved_at IS NULL AND message_id IS NOT NULL;
+    `);
+    console.log("[migrations] Task #952 quote_pipeline_drops ensured");
+  } catch (err) {
+    console.error("[migrations] Task #952 quote_pipeline_drops guard error:", err);
+  }
+
   try {
     const backfill = await pool.query(`
       INSERT INTO freight_opportunity_capture_failures
