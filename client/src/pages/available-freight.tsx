@@ -86,6 +86,7 @@ import {
 import { LiveSyncPill } from "@/components/live-sync/LiveSyncPill";
 import { AfImportHealthPill } from "@/components/freight/af-import-health-pill";
 import { HiddenCountsDisclosure, type HiddenCountsSummary } from "@/components/freight/hidden-counts";
+import { AfOpsSignalsBar } from "@/components/freight/af-ops-signals-bar";
 import {
   AVAILABLE_FREIGHT_MODE_META,
   AVAILABLE_FREIGHT_MODES,
@@ -2506,19 +2507,10 @@ export default function AvailableFreightPage() {
               with primary triage actions. It now lives inside Ops mode
               alongside the import-health surfaces. Action mode shows a
               small status pill (below the mode switcher) that links to
-              Ops mode so reps can still reach it in one click. */}
-          {isManagerScope && (
-            <Link href="/leak-console">
-              <Button
-                variant="outline"
-                size="sm"
-                data-testid="button-leak-console"
-                title="Manager-only console of coverage leaks"
-              >
-                <ShieldAlert className="h-4 w-4 mr-2" /> Leak Console
-              </Button>
-            </Link>
-          )}
+              Ops mode so reps can still reach it in one click.
+              Task #1024 — the prominent "Leak Console" header button is
+              gone too. The Leak count now appears as a small signal pill
+              in the AfOpsSignalsBar below the mode switcher. */}
         </div>
       </div>
       <AutoPilotPreviewDrawer
@@ -2572,20 +2564,26 @@ export default function AvailableFreightPage() {
           {AVAILABLE_FREIGHT_MODE_META[mode].description}
         </span>
         {mode !== "ops" && (
-          // Small status pill that links to Ops mode so the auto-pilot
-          // and import-health surfaces are still one click away from
-          // Action / Coverage modes.
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 px-2 text-[11px] ml-auto"
-            onClick={() => setMode("ops")}
-            data-testid="link-to-ops-mode"
-            title="Switch to Ops & health for import status, hidden loads, and the auto-pilot preview."
-          >
-            <ShieldAlert className="h-3 w-3 mr-1" />
-            Ops & health
-          </Button>
+          // Task #1024 — Action / Coverage modes show ONLY signals + links
+          // to ops surfaces. The AfOpsSignalsBar bundles Health, Hidden N,
+          // Auto-pilot status, and the manager-only Leak count as small
+          // same-weight pills that each link to their dedicated ops home.
+          <div className="ml-auto">
+            <AfOpsSignalsBar
+              hiddenCount={Math.max(
+                0,
+                (feed?.hiddenCounts?.totalInScope ?? items.length) - filtered.length,
+              )}
+              opsModeHref={(() => {
+                const params = new URLSearchParams();
+                params.set("mode", "ops");
+                if (carrierIdFilter) params.set("carrierId", carrierIdFilter);
+                if (laneFilter) params.set("lane", laneFilter);
+                return `/available-freight?${params.toString()}`;
+              })()}
+              isManagerScope={isManagerScope}
+            />
+          </div>
         )}
       </div>
 
@@ -2874,8 +2872,13 @@ export default function AvailableFreightPage() {
                 for the importer's run-level dedupe audit so reps can see
                 both signals at a glance. AF passes both groups; LWQ /
                 Quotes / Conversations continue to use the single-group
-                rendering of the same component. */}
-            {feed && (() => {
+                rendering of the same component.
+                Task #1024 — only mounted in Ops mode now. Action /
+                Coverage modes get a tiny link-out "Hidden N" pill in the
+                AfOpsSignalsBar above the saved-view tab strip; the full
+                disclosure stays in Ops where the dedicated Hidden loads
+                & dedupe panel lives. */}
+            {mode === "ops" && feed && (() => {
               const h = feed.hiddenCounts;
               const totalInScope = h?.totalInScope ?? items.length;
               const visible = filtered.length;
