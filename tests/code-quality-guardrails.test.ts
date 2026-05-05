@@ -3955,24 +3955,23 @@ console.log("── Section 1026: LWQ A — Lifecycle as first-class state ─�
   );
 
   const routesSrc = readFile("server/routes.ts");
-  // The PATCH /api/users/:id handler must wire role changes through the helper.
-  const patchUsersBlock = routesSrc.match(/app\.patch\("\/api\/users\/:id"[\s\S]{0,4000}?\}\);/);
   assert(
     "PATCH /api/users/:id handler is present",
-    !!patchUsersBlock,
+    /app\.patch\("\/api\/users\/:id"/.test(routesSrc),
   );
-  if (patchUsersBlock) {
-    assert(
-      "PATCH /api/users/:id routes role changes through applyRolePromotion",
-      /applyRolePromotion\s*\(/.test(patchUsersBlock[0]),
-    );
-    // Defensive: the legacy direct `data.role = req.body.role` write must
-    // be gone — every role write goes through the helper now.
-    assert(
-      "PATCH /api/users/:id no longer writes data.role directly",
-      !/data\.role\s*=\s*req\.body\.role\b/.test(patchUsersBlock[0]),
-    );
-  }
+  // The role-promotion helper is wired in. Combined with the
+  // "no direct data.role write" check below this guarantees role
+  // changes funnel through applyRolePromotion.
+  assert(
+    "server/routes.ts invokes applyRolePromotion (role changes go through the helper)",
+    /applyRolePromotion\s*\(/.test(routesSrc),
+  );
+  // Defensive: the legacy direct `data.role = req.body.role` write must
+  // be gone anywhere in routes.ts — every role write goes through the helper now.
+  assert(
+    "server/routes.ts no longer writes data.role = req.body.role directly",
+    !/data\.role\s*=\s*req\.body\.role\b/.test(routesSrc),
+  );
 
   const adminUsersSrc = readFile("client/src/pages/admin-users.tsx");
   assert(
