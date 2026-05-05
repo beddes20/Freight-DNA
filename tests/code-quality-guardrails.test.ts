@@ -3685,6 +3685,138 @@ console.log("\n── Section 34: Phase 1 Response-Time Visibility (read-only) �
 }
 
 
+// ── Section 35: Task #1030 (LWQ E) — admin/engine surfaces off LWQ ──────────
+//
+// The Lane Work Queue rep page must not host the engine-control,
+// freshness, leak-console, sourcing-performance, edit/delete-lane, or
+// admin-debug surfaces. Those live on /admin/lane-engine. The rep page
+// keeps only a small `status-engine-health` dot that links to the admin
+// route. Any regression that re-introduces these surfaces on LWQ should
+// fail this section.
+console.log("\n── Section 35: Task #1030 LWQ E — engine surfaces relocated to /admin/lane-engine ──\n");
+
+{
+  const lwqSrc = readFile("client/src/pages/lane-work-queue.tsx");
+  const adminSrc = readFile("client/src/pages/admin-lane-engine.tsx");
+  const appSrc = readFile("client/src/App.tsx");
+
+  // (1) Status dot present in LWQ header
+  assert(
+    /data-testid="status-engine-health"/.test(lwqSrc),
+    "Task #1030: LWQ must render status-engine-health dot in the header",
+  );
+  assert(
+    /href="\/admin\/lane-engine"/.test(lwqSrc),
+    "Task #1030: status-engine-health dot must link to /admin/lane-engine",
+  );
+
+  // (2) Forbidden surfaces on LWQ
+  const forbidden: Array<[RegExp, string]> = [
+    [/data-testid="btn-run-engine"/, "btn-run-engine"],
+    [/data-testid="btn-run-engine-empty"/, "btn-run-engine-empty"],
+    [/data-testid="btn-leak-console"/, "btn-leak-console"],
+    [/data-testid="banner-cache-warming"/, "banner-cache-warming"],
+    [/data-testid="engine-debug-panel"/, "engine-debug-panel"],
+    [/data-testid="sourcing-performance-panel"/, "sourcing-performance-panel"],
+    [/data-testid="admin-debug-panel"/, "admin-debug-panel"],
+    [/data-testid="pill-lwq-freshness"/, "pill-lwq-freshness"],
+    [/data-testid=\{`btn-edit-lane-/, "btn-edit-lane-{id}"],
+    [/data-testid=\{`btn-delete-lane-/, "btn-delete-lane-{id}"],
+    [/from "@\/components\/freight\/freshness-pill"/, "freshness-pill import"],
+    [/<FreshnessPill/, "<FreshnessPill> render"],
+    [/\/api\/recurring-lanes\/run-engine/, "/api/recurring-lanes/run-engine call"],
+    [/\/api\/recurring-lanes\/engine-status/, "/api/recurring-lanes/engine-status call"],
+    [/\/api\/carriers\/sourcing-performance/, "/api/carriers/sourcing-performance call"],
+    [/\/api\/freight-freshness/, "/api/freight-freshness call"],
+  ];
+  for (const [re, label] of forbidden) {
+    assert(
+      !re.test(lwqSrc),
+      `Task #1030: LWQ rep page must NOT contain ${label} (moved to /admin/lane-engine)`,
+    );
+  }
+
+  // (3) Admin Lane Engine page exists and hosts the moved surfaces.
+  assert(/data-testid="page-admin-lane-engine"/.test(adminSrc),
+    "Task #1030: admin-lane-engine.tsx must render the page-admin-lane-engine container");
+  for (const id of [
+    "btn-run-engine",
+    "engine-debug-panel",
+    "sourcing-performance-panel",
+    "pill-lwq-freshness",
+    "card-recurring-lane-upload",
+    "input-lane-upload-file",
+    "link-leak-console",
+    "card-lane-management",
+    "card-engine-kpis",
+    "kpi-detected-this-week",
+    "kpi-retracted-this-week",
+    "kpi-eligibility-distribution",
+    "btn-recompute-cache",
+  ]) {
+    assert(
+      new RegExp(`data-testid="${id}"`).test(adminSrc),
+      `Task #1030: admin-lane-engine.tsx must host ${id}`,
+    );
+  }
+  assert(
+    /btn-edit-lane-\$\{l\.laneId\}/.test(adminSrc) || /btn-edit-lane-\$/.test(adminSrc),
+    "Task #1030: admin-lane-engine.tsx must host per-row btn-edit-lane-{id}",
+  );
+  assert(
+    /btn-delete-lane-\$\{l\.laneId\}/.test(adminSrc) || /btn-delete-lane-\$/.test(adminSrc),
+    "Task #1030: admin-lane-engine.tsx must host per-row btn-delete-lane-{id}",
+  );
+
+  // (4) RBAC gate on the admin page — sales must be 403'd.
+  assert(
+    /ALLOWED_ROLES\s*=\s*\[\s*"admin",\s*"director",\s*"national_account_manager",\s*"sales_director"\s*\]/.test(adminSrc),
+    "Task #1030: admin-lane-engine.tsx must gate to admin/director/national_account_manager/sales_director",
+  );
+  assert(
+    /admin-lane-engine-forbidden/.test(adminSrc),
+    "Task #1030: admin-lane-engine.tsx must render a 403 placeholder for disallowed roles",
+  );
+
+  // (5) Route registered.
+  assert(
+    /<Route\s+path="\/admin\/lane-engine"\s+component=\{AdminLaneEnginePage\}\s*\/>/.test(appSrc),
+    "Task #1030: App.tsx must register <Route path=\"/admin/lane-engine\" />",
+  );
+
+  // (6) Server health/KPIs/recompute endpoints exist; run-engine stamps ranAt.
+  const serverSrc = readFile("server/routes/laneCarrierOutreach.ts");
+  assert(
+    /app\.get\("\/api\/lane-engine\/health"/.test(serverSrc),
+    "Task #1030: GET /api/lane-engine/health must exist in laneCarrierOutreach.ts",
+  );
+  assert(
+    /app\.get\("\/api\/lane-engine\/kpis"/.test(serverSrc),
+    "Task #1030: GET /api/lane-engine/kpis must exist (detected/retracted/eligibility)",
+  );
+  assert(
+    /app\.post\("\/api\/lane-engine\/recompute-cache"/.test(serverSrc),
+    "Task #1030: POST /api/lane-engine/recompute-cache must exist (manual cache trigger)",
+  );
+  assert(
+    /lane_engine_last_run:\$\{user\.organizationId\}.*ranAt:\s*new Date\(\)\.toISOString\(\)/s.test(serverSrc),
+    "Task #1030: run-engine handler must persist `ranAt` so the health endpoint can age-check the last run",
+  );
+  // (7) RBAC widening — the three engine endpoints must allow NAM +
+  // sales_director so the page roles match the API roles.
+  for (const route of [
+    /app\.get\("\/api\/recurring-lanes\/engine-status"[\s\S]*?national_account_manager[\s\S]*?sales_director/,
+    /app\.post\("\/api\/recurring-lanes\/run-engine"[\s\S]*?national_account_manager[\s\S]*?sales_director/,
+    /app\.post\("\/api\/admin\/carriers\/seed-from-excel"[\s\S]*?national_account_manager[\s\S]*?sales_director/,
+  ]) {
+    assert(
+      route.test(serverSrc),
+      `Task #1030: backend RBAC for ${route.source.slice(0, 60)}… must include national_account_manager + sales_director to match /admin/lane-engine page roles`,
+    );
+  }
+}
+
+
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {
   console.error("Failures:");

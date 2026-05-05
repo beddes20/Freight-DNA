@@ -53,6 +53,7 @@ import AdminQuotePipelineHealthPage from "@/pages/admin-quote-pipeline-health";
 import AdminCarriers from "@/pages/admin-carriers";
 import AdminWebexHealth from "@/pages/admin-webex-health";
 import AdminIntegrationsHealthPage from "@/pages/admin-integrations-health";
+import AdminLaneEnginePage from "@/pages/admin-lane-engine";
 import AdminEndpointPerfPage from "@/pages/admin-endpoint-perf";
 import RepCustomers from "@/pages/rep-customers";
 import Financials from "@/pages/financials";
@@ -226,6 +227,7 @@ function Router() {
       <Route path="/admin/webex-health" component={AdminWebexHealth} />
       <Route path="/admin/ai-engagement" component={AiHubPage} />
       <Route path="/admin/integrations-health" component={AdminIntegrationsHealthPage} />
+      <Route path="/admin/lane-engine" component={AdminLaneEnginePage} />
       <Route path="/admin/endpoint-perf" component={AdminEndpointPerfPage} />
       <Route path="/admin/monitored-mailboxes" component={AdminMonitoredMailboxesPage} />
       <Route path="/admin/pod-intake" component={AdminPodIntakePage} />

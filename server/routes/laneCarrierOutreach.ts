@@ -44,7 +44,7 @@ import { applyMessageToThread } from "../services/conversationWaitingStateServic
 import { formatLaneDisplay, formatWeeklyLoadRange, normalizeEquipmentType, buildFallbackEmail as buildFallbackEmailHelper } from "../laneOutreachEmailBuilder";
 import { formatCustomerName } from "@shared/laneFormatters";
 import { z } from "zod";
-import { inArray, eq, and, gte, lte, desc, isNull, or } from "drizzle-orm";
+import { inArray, eq, and, gte, lte, desc, isNull, or, sql } from "drizzle-orm";
 import { sendEmail } from "../emailService";
 import { setEmailLiveMode, EMAIL_LIVE_MODE_FLAG } from "../emailGate";
 import { buildOpenOppContextByLaneSig, laneSig, type OpenOppLaneContext } from "../laneCrossLinkService";
@@ -327,7 +327,11 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
   app.post("/api/admin/carriers/seed-from-excel", upload.single("file"), async (req, res, next) => {
     try {
     const user = req.user!;
-    if (!ADMIN_ROLES.includes(user.role)) return res.status(403).json({ error: "Admin/Director only" });
+    // Task #1030 — also accept national_account_manager + sales_director
+    // so the /admin/lane-engine upload card works for every allowed role.
+    if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role)) {
+      return res.status(403).json({ error: "Admin/Director/NAM/Sales Director only" });
+    }
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
     const wb = XLSX.read(req.file.buffer, { type: "buffer" });
@@ -1072,11 +1076,187 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
   app.get("/api/recurring-lanes/engine-status", requireUser, async (req, res) => {
     const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Admin/Director only" });
+    // Task #1030 — widened from admin/director to also include
+    // national_account_manager + sales_director so the new
+    // /admin/lane-engine console (which the LWQ status dot links to)
+    // can render last-run meta for every allowed role without 403'ing.
+    if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role)) {
+      return res.status(403).json({ error: "Admin/Director/NAM/Sales Director only" });
+    }
     try {
       const raw = await storage.getSetting(`lane_engine_last_run:${user.organizationId}`);
       const meta = raw ? JSON.parse(raw) : null;
       res.json({ meta });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  /**
+   * Task #1030 (LWQ E) — Cheap aggregate health endpoint for the LWQ
+   * status dot. Combines the freight-freshness signal with the recency
+   * of the last engine run into a single 3-state verdict so the rep
+   * page never has to assemble it from multiple admin-only sources.
+   *
+   *   healthy  — freshness=green AND engine ran within 25h
+   *   degraded — freshness=yellow OR engine ran 25-72h ago OR engine
+   *              never ran (cold tenant)
+   *   down     — freshness=red OR engine ran >72h ago
+   *
+   * Visible to all authenticated users so the rep-side LWQ header can
+   * render the dot without an extra RBAC dance. The detail payload
+   * (lastRunAt, ageHours, freshnessState) is non-sensitive.
+   */
+  app.get("/api/lane-engine/health", requireUser, async (req, res) => {
+    const user = req.user!;
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    try {
+      const { computeFreightFreshnessSignal } = await import("../services/freightFreshness");
+      const [raw, freshness] = await Promise.all([
+        storage.getSetting(`lane_engine_last_run:${user.organizationId}`),
+        computeFreightFreshnessSignal(user.organizationId).catch(() => null),
+      ]);
+      const meta = raw ? JSON.parse(raw) as { ranAt?: string; latestUploadDate?: string } : null;
+      const lastRunAt = meta?.ranAt ?? meta?.latestUploadDate ?? null;
+      const ageHours = lastRunAt
+        ? Math.max(0, (Date.now() - new Date(lastRunAt).getTime()) / 36e5)
+        : null;
+      const freshnessState = freshness?.overall.healthState ?? "yellow";
+
+      let state: "healthy" | "degraded" | "down" = "healthy";
+      const reasons: string[] = [];
+      if (freshnessState === "red") {
+        state = "down";
+        reasons.push("Source freshness is stale");
+      } else if (freshnessState === "yellow") {
+        state = "degraded";
+        reasons.push("Source freshness is slowing");
+      }
+      if (ageHours == null) {
+        if (state === "healthy") state = "degraded";
+        reasons.push("Lane engine has never been run for this org");
+      } else if (ageHours > 72) {
+        state = "down";
+        reasons.push(`Lane engine last ran ${Math.round(ageHours)}h ago`);
+      } else if (ageHours > 25 && state !== "down") {
+        state = state === "healthy" ? "degraded" : state;
+        reasons.push(`Lane engine last ran ${Math.round(ageHours)}h ago`);
+      }
+
+      res.json({
+        state,
+        lastRunAt,
+        ageHours,
+        freshnessState,
+        message: reasons[0] ?? "Lane engine and source freshness are healthy",
+        reasons,
+      });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  /**
+   * Task #1030 — Engine KPIs panel for /admin/lane-engine.
+   *
+   *   detectedThisWeek    — recurring lanes the engine first persisted in
+   *                         the last 7 days (created_at >= now-7d).
+   *   retractedThisWeek   — lanes the engine flipped to is_eligible=false
+   *                         in the last 7 days (last_scored_at >= now-7d
+   *                         AND is_eligible=false). This is the closest
+   *                         we can get to "retracted" without a separate
+   *                         audit table; the engine sets is_eligible=false
+   *                         on lanes that fall out of the eligibility
+   *                         set on its next pass.
+   *   eligibilityDistribution — count by eligibility_confidence bucket
+   *                             across currently-eligible lanes.
+   */
+  app.get("/api/lane-engine/kpis", requireUser, async (req, res) => {
+    const user = req.user!;
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role)) {
+      return res.status(403).json({ error: "Admin/Director/NAM/Sales Director only" });
+    }
+    try {
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const sevenDaysAgoIso = sevenDaysAgo.toISOString();
+
+      const [detectedRes, retractedRes, distRes, totalEligibleRes] = await Promise.all([
+        db.execute(sql`
+          SELECT count(*)::int AS n
+          FROM recurring_lanes
+          WHERE org_id = ${user.organizationId}
+            AND created_at >= ${sevenDaysAgo}
+        `),
+        db.execute(sql`
+          SELECT count(*)::int AS n
+          FROM recurring_lanes
+          WHERE org_id = ${user.organizationId}
+            AND is_eligible = false
+            AND last_scored_at IS NOT NULL
+            AND last_scored_at >= ${sevenDaysAgoIso}
+        `),
+        db.execute(sql`
+          SELECT eligibility_confidence AS bucket, count(*)::int AS n
+          FROM recurring_lanes
+          WHERE org_id = ${user.organizationId}
+            AND is_eligible = true
+          GROUP BY eligibility_confidence
+        `),
+        db.execute(sql`
+          SELECT count(*)::int AS n
+          FROM recurring_lanes
+          WHERE org_id = ${user.organizationId}
+            AND is_eligible = true
+        `),
+      ]);
+
+      // db.execute returns Record<string, unknown> rows since the SQL is
+      // raw — we coerce per-field with Number()/String() so a malformed
+      // driver shape can never throw here.
+      const firstN = (res: { rows: ReadonlyArray<Record<string, unknown>> }): number =>
+        Number(res.rows[0]?.n ?? 0);
+
+      const distribution: Record<string, number> = { high: 0, medium: 0, borderline: 0 };
+      for (const row of (distRes.rows ?? []) as ReadonlyArray<Record<string, unknown>>) {
+        const bucket = row.bucket;
+        if (typeof bucket !== "string" || bucket.length === 0) continue;
+        distribution[bucket] = Number(row.n ?? 0);
+      }
+
+      res.json({
+        detectedThisWeek: firstN(detectedRes),
+        retractedThisWeek: firstN(retractedRes),
+        totalEligible: firstN(totalEligibleRes),
+        eligibilityDistribution: distribution,
+        windowDays: 7,
+      });
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  /**
+   * Task #1030 — Manual cache recompute trigger. Re-runs scoring (which
+   * rebuilds lane_summary_cache) without re-running the heavier
+   * detection engine. Use this when the cache went cold after a restart
+   * or after a manual edit/delete of lanes that didn't roll into the
+   * cache via incremental writes.
+   */
+  app.post("/api/lane-engine/recompute-cache", requireUser, async (req, res) => {
+    const user = req.user!;
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role)) {
+      return res.status(403).json({ error: "Admin/Director/NAM/Sales Director only" });
+    }
+    try {
+      const startedAt = Date.now();
+      await scoreAllEligibleLanes(user.organizationId, storage);
+      res.json({
+        ok: true,
+        durationMs: Date.now() - startedAt,
+        message: "lane_summary_cache rebuilt",
+      });
     } catch (err) {
       res.status(500).json({ error: getErrorMessage(err) });
     }
@@ -1617,18 +1797,27 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     }
   });
 
-  // Run the recurring lane engine + scoring on demand (admin/director)
+  // Run the recurring lane engine + scoring on demand. Task #1030 widened
+  // to admin/director/NAM/sales_director — the /admin/lane-engine console
+  // gates this button on the page side too.
   app.post("/api/recurring-lanes/run-engine", requireUser, async (req, res) => {
     const user = req.user!;
     if (!await assertFlagEnabled(user.organizationId, res)) return;
-    if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Admin/Director only" });
+    if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role)) {
+      return res.status(403).json({ error: "Admin/Director/NAM/Sales Director only" });
+    }
 
     try {
       const result = await runRecurringLaneEngineForOrg(user.organizationId, storage);
       await scoreAllEligibleLanes(user.organizationId, storage);
       res.json({ ...result, message: "Engine + scoring complete" });
-      // Persist last-run meta so the work queue debug panel can show it without re-running
-      await storage.setSetting(`lane_engine_last_run:${user.organizationId}`, JSON.stringify(result.meta));
+      // Persist last-run meta so the work queue debug panel can show it without re-running.
+      // Task #1030 — also stamp `ranAt` so /api/lane-engine/health can age-check the
+      // last run independent of the underlying upload date.
+      await storage.setSetting(
+        `lane_engine_last_run:${user.organizationId}`,
+        JSON.stringify({ ...result.meta, ranAt: new Date().toISOString() }),
+      );
     } catch (err) {
       res.status(500).json({ error: getErrorMessage(err) });
     }

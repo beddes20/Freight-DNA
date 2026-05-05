@@ -61,16 +61,12 @@ import {
   Zap,
   Eye,
   ChevronDown,
-  Play,
   Building2,
   Filter,
   Database,
   PlusCircle,
   Shield,
-  ShieldAlert,
   TrendingUp,
-  Trash2,
-  Pencil,
   MessageCircle,
   X,
   MoreHorizontal,
@@ -94,7 +90,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { CarrierOutreachPanel } from "@/components/CarrierOutreachPanel";
 import { LiveOppsChip } from "@/components/freight/lane-cross-link-chip";
-import { FreshnessPill, type FreshnessSignal } from "@/components/freight/freshness-pill";
+// Task #1030 — FreshnessPill moved off LWQ to /admin/lane-engine. The
+// LWQ header now renders a small `status-engine-health` dot instead.
 import { HiddenCountsDisclosure, type HiddenCountsSummary } from "@/components/freight/hidden-counts";
 // Task #967 — shared live-sync health pill.
 import { LiveSyncPill } from "@/components/live-sync/LiveSyncPill";
@@ -269,12 +266,12 @@ interface WorkQueue {
   };
 }
 
-interface EngineRunMeta {
-  source: "financial_uploads";
-  uploadIds: string[];
-  latestUploadDate: string;
-  rowsScanned: number;
-  lanesGenerated: number;
+// Task #1030 — EngineRunMeta interface relocated to admin-lane-engine.tsx
+// alongside the Run Engine + engine-debug-panel UI it powers.
+
+interface EngineHealth {
+  state: "healthy" | "degraded" | "down";
+  message: string;
 }
 
 interface TeamMember {
@@ -793,21 +790,10 @@ function LaneRow({
   }
   const { user: currentUser } = useAuth();
   const isManager = MANAGER_ROLES.includes(currentUser?.role ?? "");
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [editForm, setEditForm] = useState({
-    origin: item.origin ?? "",
-    originState: item.originState ?? "",
-    destination: item.destination ?? "",
-    destinationState: item.destinationState ?? "",
-    equipmentType: item.equipmentType ?? "",
-    avgLoadsPerWeek: item.avgLoadsPerWeek ?? "",
-    // Seed with the cleaned customer label so the Edit Lane dialog shows the
-    // user-facing name (e.g. "Bloom Energy") instead of a raw TMS-prefixed
-    // value (e.g. "BLOOSACA - Bloom Energy"). The PATCH endpoint re-runs
-    // formatCustomerName on save, so this is also safe round-trip.
-    companyName: formatCustomerName(item.companyName ?? ""),
-  });
+  // Task #1030 — Edit/Delete row actions (with dialogs, edit-form
+  // local state, and the deleteMutation/editMutation hooks they
+  // powered) were relocated to /admin/lane-engine so reps can't
+  // fat-finger structural lane changes mid-outreach.
 
   const selfAssignMutation = useMutation({
     mutationFn: (ownerUserId: string | null) =>
@@ -845,37 +831,6 @@ function LaneRow({
 
   const canUnassign = item.ownerUserId &&
     (isManager || item.ownerUserId === currentUser?.id);
-
-  const canDelete = isManager || item.ownerUserId === currentUser?.id;
-
-  const deleteMutation = useMutation({
-    mutationFn: () => apiRequest("DELETE", `/api/recurring-lanes/${item.laneId}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
-      toast({ title: "Lane deleted" });
-      setDeleteDialogOpen(false);
-    },
-    onError: () => toast({ title: "Failed to delete lane", variant: "destructive" }),
-  });
-
-  const editMutation = useMutation({
-    mutationFn: (data: typeof editForm) =>
-      apiRequest("PATCH", `/api/recurring-lanes/${item.laneId}`, {
-        origin: data.origin.trim() || undefined,
-        originState: data.originState.trim() || null,
-        destination: data.destination.trim() || undefined,
-        destinationState: data.destinationState.trim() || null,
-        equipmentType: data.equipmentType.trim() || null,
-        avgLoadsPerWeek: data.avgLoadsPerWeek !== "" ? data.avgLoadsPerWeek : null,
-        companyName: data.companyName.trim() || null,
-      }).then(r => r.json()),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
-      toast({ title: "Lane updated" });
-      setEditDialogOpen(false);
-    },
-    onError: () => toast({ title: "Failed to update lane", variant: "destructive" }),
-  });
 
   const { data: coverageData } = useQuery<{ profile: CoverageProfile; carriers: CoverageProfileCarrier[] }>({
     queryKey: ["/api/lanes", item.laneId, "coverage-profile"],
@@ -1184,26 +1139,7 @@ function LaneRow({
         {/* Right side actions */}
         <div className="flex flex-col items-center gap-2 shrink-0">
           <div className="flex items-center gap-1">
-            {canDelete && (
-              <button
-                className="p-1 rounded hover:bg-amber-500/10 text-muted-foreground hover:text-amber-400"
-                onClick={e => { e.stopPropagation(); setEditForm({ origin: item.origin ?? "", originState: item.originState ?? "", destination: item.destination ?? "", destinationState: item.destinationState ?? "", equipmentType: item.equipmentType ?? "", avgLoadsPerWeek: item.avgLoadsPerWeek ?? "", companyName: formatCustomerName(item.companyName ?? "") }); setEditDialogOpen(true); }}
-                data-testid={`btn-edit-lane-${item.laneId}`}
-                title="Edit lane"
-              >
-                <Pencil className="w-3.5 h-3.5" />
-              </button>
-            )}
-            {canDelete && (
-              <button
-                className="p-1 rounded hover:bg-red-500/10 text-muted-foreground hover:text-red-400"
-                onClick={e => { e.stopPropagation(); setDeleteDialogOpen(true); }}
-                data-testid={`btn-delete-lane-${item.laneId}`}
-                title="Delete lane"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            )}
+            {/* Task #1030 — Edit/Delete buttons relocated to /admin/lane-engine. */}
             {/* Task #888 — row overflow menu. Currently hosts the
                 trackpad-friendly mirror of the `L` keyboard shortcut so
                 users who don't reach for the keyboard can still open the
@@ -1235,144 +1171,8 @@ function LaneRow({
         </div>
       </div>
 
-      {/* Delete confirmation dialog */}
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <AlertDialogContent onClick={e => e.stopPropagation()}>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete lane?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently remove <strong>{laneLabel(item)}</strong> from the work queue along with all carrier interest records. This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel data-testid={`btn-delete-lane-cancel-${item.laneId}`}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-red-600 hover:bg-red-700 text-white"
-              onClick={() => deleteMutation.mutate()}
-              disabled={deleteMutation.isPending}
-              data-testid={`btn-delete-lane-confirm-${item.laneId}`}
-            >
-              {deleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : "Delete lane"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Edit lane dialog */}
-      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent className="max-w-lg" onClick={e => e.stopPropagation()}>
-          <DialogHeader>
-            <DialogTitle>Edit lane</DialogTitle>
-            <DialogDescription>Update the details for this lane.</DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-4 py-2">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor={`edit-origin-${item.laneId}`}>Origin city</Label>
-                <Input
-                  id={`edit-origin-${item.laneId}`}
-                  value={editForm.origin}
-                  onChange={e => setEditForm(f => ({ ...f, origin: e.target.value }))}
-                  placeholder="e.g. Chicago"
-                  data-testid={`input-edit-origin-${item.laneId}`}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor={`edit-origin-state-${item.laneId}`}>Origin state</Label>
-                <Input
-                  id={`edit-origin-state-${item.laneId}`}
-                  value={editForm.originState}
-                  onChange={e => setEditForm(f => ({ ...f, originState: e.target.value }))}
-                  placeholder="e.g. IL"
-                  maxLength={2}
-                  data-testid={`input-edit-origin-state-${item.laneId}`}
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor={`edit-destination-${item.laneId}`}>Destination city</Label>
-                <Input
-                  id={`edit-destination-${item.laneId}`}
-                  value={editForm.destination}
-                  onChange={e => setEditForm(f => ({ ...f, destination: e.target.value }))}
-                  placeholder="e.g. Dallas"
-                  data-testid={`input-edit-destination-${item.laneId}`}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor={`edit-destination-state-${item.laneId}`}>Destination state</Label>
-                <Input
-                  id={`edit-destination-state-${item.laneId}`}
-                  value={editForm.destinationState}
-                  onChange={e => setEditForm(f => ({ ...f, destinationState: e.target.value }))}
-                  placeholder="e.g. TX"
-                  maxLength={2}
-                  data-testid={`input-edit-destination-state-${item.laneId}`}
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor={`edit-equipment-${item.laneId}`}>Equipment type</Label>
-                <Select
-                  value={editForm.equipmentType === "" ? "__none__" : editForm.equipmentType}
-                  onValueChange={v => setEditForm(f => ({ ...f, equipmentType: v === "__none__" ? "" : v }))}
-                >
-                  <SelectTrigger
-                    id={`edit-equipment-${item.laneId}`}
-                    data-testid={`select-edit-equipment-${item.laneId}`}
-                  >
-                    <SelectValue placeholder="Any" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">Any</SelectItem>
-                    {EQUIPMENT_TYPES.map(t => (
-                      <SelectItem key={t} value={t}>{t}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor={`edit-loads-${item.laneId}`}>Avg loads/week</Label>
-                <Input
-                  id={`edit-loads-${item.laneId}`}
-                  type="number"
-                  min="0"
-                  step="0.1"
-                  value={editForm.avgLoadsPerWeek}
-                  onChange={e => setEditForm(f => ({ ...f, avgLoadsPerWeek: e.target.value }))}
-                  placeholder="e.g. 3.5"
-                  data-testid={`input-edit-loads-${item.laneId}`}
-                />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor={`edit-company-${item.laneId}`}>Customer name</Label>
-              <Input
-                id={`edit-company-${item.laneId}`}
-                value={editForm.companyName}
-                onChange={e => setEditForm(f => ({ ...f, companyName: e.target.value }))}
-                placeholder="e.g. Acme Corp"
-                data-testid={`input-edit-company-${item.laneId}`}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditDialogOpen(false)} data-testid={`btn-edit-cancel-${item.laneId}`}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => editMutation.mutate(editForm)}
-              disabled={editMutation.isPending || !editForm.origin.trim() || !editForm.destination.trim()}
-              data-testid={`btn-edit-save-${item.laneId}`}
-            >
-              {editMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
-              Save changes
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Task #1030 — Delete confirmation + Edit lane dialogs were
+          relocated to /admin/lane-engine. */}
     </div>
   );
 }
@@ -2568,18 +2368,8 @@ export default function LaneWorkQueuePage() {
     return () => clearTimeout(timer);
   }, []);
 
-  const runEngineMutation = useMutation({
-    mutationFn: () =>
-      apiRequest("POST", "/api/recurring-lanes/run-engine", {}).then(r => r.json()),
-    onSuccess: (data: { upserted?: number; total?: number; message?: string }) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/recurring-lanes/work-queue"] });
-      toast({
-        title: `Engine complete — ${data.upserted ?? data.total ?? 0} lane${(data.upserted ?? data.total ?? 0) !== 1 ? "s" : ""} scored`,
-        description: data.message ?? "Work queue refreshed.",
-      });
-    },
-    onError: () => toast({ title: "Engine run failed", variant: "destructive" }),
-  });
+  // Task #1030 — runEngineMutation moved to /admin/lane-engine. Reps see
+  // the consolidated `status-engine-health` dot in the header instead.
 
   // Workflow OS — Task #917. Thread owner + pickupScope into the queryKey
   // so the cache splits per-filter, and append them as querystring params
@@ -2629,25 +2419,14 @@ export default function LaneWorkQueuePage() {
   const isAdminOrDirector = ["admin", "director"].includes(user?.role ?? "");
   const isManagerScope = MANAGER_ROLES.includes(user?.role ?? "");
 
-  const { data: engineStatus } = useQuery<{ meta: EngineRunMeta | null }>({
-    queryKey: ["/api/recurring-lanes/engine-status"],
-    queryFn: () => fetch("/api/recurring-lanes/engine-status").then(r => r.json()),
-    enabled: isAdminOrDirector,
-    staleTime: 60_000,
-  });
-
-  const { data: sourcingPerf = [] } = useQuery<Array<{
-    sourceChannel: string;
-    label: string;
-    carriersImported: number;
-    outreached: number;
-    responded: number;
-    responseRate: number;
-  }>>({
-    queryKey: ["/api/carriers/sourcing-performance"],
-    queryFn: () => fetch("/api/carriers/sourcing-performance").then(r => r.json()),
-    enabled: isAdminOrDirector,
-    staleTime: 60_000,
+  // Task #1030 — Single cheap aggregate signal that powers the header
+  // status dot. The richer engineStatus + sourcingPerf queries (and the
+  // freshness signal popover) all moved to /admin/lane-engine.
+  const { data: engineHealth } = useQuery<EngineHealth>({
+    queryKey: ["/api/lane-engine/health"],
+    queryFn: () => fetch("/api/lane-engine/health").then(r => r.json()),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
   });
 
   // Task #651 — lane signals are now fetched lazily by each `LazyLaneRow`
@@ -2734,16 +2513,8 @@ export default function LaneWorkQueuePage() {
     });
   }, [filteredQueue?.unassigned, votriByLane]);
 
-  // Task #871 — AF-style freshness pill in the LWQ header. Shares the
-  // single org-scoped aggregate endpoint with the AF cockpit + Lane
-  // Cockpit overlay so all three surfaces show the same Fresh/Slowing/
-  // Stale story without disagreement.
-  const { data: freshnessSignal } = useQuery<FreshnessSignal>({
-    queryKey: ["/api/freight-freshness"],
-    queryFn: () => fetch("/api/freight-freshness").then(r => r.json()),
-    refetchInterval: 60_000,
-    staleTime: 30_000,
-  });
+  // Task #1030 — freshnessSignal query moved to /admin/lane-engine. The
+  // LWQ header dot rolls freshness into the engine-health verdict.
 
   // Task #871 — flat ordering of every lane currently visible across the
   // four buckets. j/k navigates this list and Enter / L acts on the
@@ -2940,32 +2711,47 @@ export default function LaneWorkQueuePage() {
                 Showing: {queue.scopeLabel}
               </span>
             )}
-            {/* Cold-start banner — lane_summary_cache hasn't warmed yet,
-                so this request fell back to the slower live aggregation path.
-                The cache fills automatically ~20s after server boot. */}
-            {queue?.meta?.source === "full" && (
-              <span
-                className="inline-flex items-center gap-1.5 mt-1 ml-2 text-[11px] text-amber-400 border border-amber-500/40 rounded-full px-2 py-0.5 bg-amber-500/10"
-                data-testid="banner-cache-warming"
-                title="Lane cache is still warming after restart. The next refresh will be much faster."
-              >
-                <Loader2 className="w-3 h-3 animate-spin" />
-                Warming up — next load will be faster
-              </span>
-            )}
+            {/* Task #1030 — cache "warming up" banner moved to
+                /admin/lane-engine; reps just see the engine-health dot. */}
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Task #871 — AF-style freshness pill + hidden-counts disclosure
-              so the LWQ header tells the rep the same "is the import
-              healthy / what's hidden" story AF already does. */}
-          {freshnessSignal && (
-            <FreshnessPill
-              signal={freshnessSignal}
-              testId="pill-lwq-freshness"
-              popoverTestId="popover-lwq-freshness"
-            />
-          )}
+          {/* Task #1030 — small status dot replaces the FreshnessPill +
+              cache banner + run-engine surfaces on the rep page. Clicking
+              the dot deep-links into /admin/lane-engine where the full
+              operational console lives. Visible to every rep so they know
+              when source feeds or the engine are degraded. */}
+          {(() => {
+            // Use a neutral "unknown" state until /api/lane-engine/health
+            // responds so the dot never optimistically claims healthy
+            // when the backend is unreachable or still loading.
+            const state: "healthy" | "degraded" | "down" | "unknown" =
+              engineHealth?.state ?? "unknown";
+            const tone =
+              state === "healthy" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+              : state === "degraded" ? "border-amber-500/40 bg-amber-500/10 text-amber-400"
+              : state === "down" ? "border-red-500/40 bg-red-500/10 text-red-400"
+              : "border-border bg-muted/30 text-muted-foreground";
+            const dotTone =
+              state === "healthy" ? "bg-emerald-500 animate-pulse"
+              : state === "degraded" ? "bg-amber-500"
+              : state === "down" ? "bg-red-500"
+              : "bg-muted-foreground/50 animate-pulse";
+            const label = state === "unknown" ? "Engine: checking…" : `Engine: ${state}`;
+            return (
+              <Link href="/admin/lane-engine">
+                <a
+                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border text-[11px] font-medium hover:opacity-90 ${tone}`}
+                  data-testid="status-engine-health"
+                  data-engine-state={state}
+                  title={engineHealth?.message ?? "Lane engine status (loading)"}
+                >
+                  <span className={`inline-block h-2 w-2 rounded-full ${dotTone}`} />
+                  {label}
+                </a>
+              </Link>
+            );
+          })()}
           {/* Task #967 — shared live-sync health pill. */}
           <LiveSyncPill testId="pill-live-sync-lwq" />
           <HiddenCountsDisclosure
@@ -2993,20 +2779,7 @@ export default function LaneWorkQueuePage() {
             <PlusCircle className="w-3.5 h-3.5" />
             Build Lane
           </Button>
-          {isManagerScope && (
-            <Link href="/leak-console">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 text-xs gap-1.5"
-                data-testid="btn-leak-console"
-                title="Manager-only console of coverage leaks"
-              >
-                <ShieldAlert className="w-3.5 h-3.5" />
-                Leak Console
-              </Button>
-            </Link>
-          )}
+          {/* Task #1030 — Leak Console link moved to /admin/lane-engine. */}
           <Button
             variant="outline"
             size="sm"
@@ -3103,22 +2876,7 @@ export default function LaneWorkQueuePage() {
             <PlusCircle className="w-3.5 h-3.5" />
             Manual{manualLaneCount > 0 && ` (${manualLaneCount})`}
           </Button>
-          {/* Admin-only: manually trigger the lane capacity engine */}
-          {user?.role === "admin" && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs gap-1.5 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
-              onClick={() => runEngineMutation.mutate()}
-              disabled={runEngineMutation.isPending}
-              data-testid="btn-run-engine"
-            >
-              {runEngineMutation.isPending
-                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                : <Play className="w-3.5 h-3.5" />}
-              Run Engine
-            </Button>
-          )}
+          {/* Task #1030 — Run Engine button moved to /admin/lane-engine. */}
           <Button
             variant="outline"
             size="sm"
@@ -3281,79 +3039,8 @@ export default function LaneWorkQueuePage() {
               />
             )}
 
-            {/* Admin engine metadata debug panel */}
-            {isAdminOrDirector && engineStatus?.meta && (
-              <div className="mb-5 rounded-lg border border-border bg-muted/30 px-4 py-3 flex flex-wrap gap-4 items-center" data-testid="engine-debug-panel">
-                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                  <Database className="w-3.5 h-3.5 text-muted-foreground" />
-                  <span className="font-medium text-foreground">Last Engine Run</span>
-                </div>
-                <span className="text-[11px] text-muted-foreground">
-                  Source: <span className="text-foreground">{engineStatus.meta.source}</span>
-                </span>
-                <span className="text-[11px] text-muted-foreground">
-                  Uploads used: <span className="text-foreground">{engineStatus.meta.uploadIds.length}</span>
-                </span>
-                <span className="text-[11px] text-muted-foreground">
-                  Rows scanned: <span className="text-foreground">{engineStatus.meta.rowsScanned.toLocaleString()}</span>
-                </span>
-                <span className="text-[11px] text-muted-foreground">
-                  Lanes generated: <span className="text-foreground">{engineStatus.meta.lanesGenerated}</span>
-                </span>
-                {engineStatus.meta.latestUploadDate && (
-                  <span className="text-[11px] text-muted-foreground">
-                    Upload date: <span className="text-foreground">
-                      {new Date(engineStatus.meta.latestUploadDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                    </span>
-                  </span>
-                )}
-              </div>
-            )}
-
-            {/* Sourcing Performance Panel — admin/director only */}
-            {isAdminOrDirector && sourcingPerf.length > 0 && (
-              <div className="mb-5 rounded-lg border border-border bg-card" data-testid="sourcing-performance-panel">
-                <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
-                  <div className="w-6 h-6 rounded bg-teal-500/15 flex items-center justify-center">
-                    <svg className="w-3.5 h-3.5 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                    </svg>
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold text-foreground">Carrier Sourcing Performance</p>
-                    <p className="text-[10px] text-muted-foreground">Response rates by channel</p>
-                  </div>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-border">
-                        <th className="text-left px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Source</th>
-                        <th className="text-right px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Imported</th>
-                        <th className="text-right px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Outreached</th>
-                        <th className="text-right px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Responded</th>
-                        <th className="text-right px-4 py-2 text-[10px] font-medium text-muted-foreground uppercase tracking-wide">Response %</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sourcingPerf.map(ch => (
-                        <tr key={ch.sourceChannel} className="border-b border-border/50 last:border-0 hover:bg-muted/20">
-                          <td className="px-4 py-2 font-medium text-foreground">{ch.label}</td>
-                          <td className="px-4 py-2 text-right text-muted-foreground">{ch.carriersImported}</td>
-                          <td className="px-4 py-2 text-right text-muted-foreground">{ch.outreached}</td>
-                          <td className="px-4 py-2 text-right text-emerald-500">{ch.responded}</td>
-                          <td className="px-4 py-2 text-right">
-                            <span className={`font-semibold ${ch.responseRate >= 40 ? "text-emerald-400" : ch.responseRate >= 20 ? "text-amber-400" : "text-muted-foreground"}`}>
-                              {ch.responseRate}%
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
+            {/* Task #1030 — engine-debug-panel and sourcing-performance-panel
+                relocated to /admin/lane-engine. */}
 
             {/* Buckets — use filteredQueue */}
             {filteredQueue && (
@@ -3431,26 +3118,24 @@ export default function LaneWorkQueuePage() {
 
             {!isLoading && totalLanes === 0 && (
               <div className="flex flex-col items-center justify-center py-16 text-center">
-                {user?.role === "admin" ? (
+                {isAdminOrDirector ? (
                   <>
-                    <Play className="w-10 h-10 text-emerald-400 mb-3" />
+                    <Database className="w-10 h-10 text-emerald-400 mb-3" />
                     <p className="text-sm font-semibold text-foreground">No lanes scored yet</p>
                     <p className="text-xs text-muted-foreground mt-1 max-w-xs">
-                      The lane capacity engine hasn't run against your TMS upload data in this environment.
-                      Click <strong>Run Engine</strong> in the header to score lanes from your financial uploads.
+                      The lane capacity engine hasn't run against your TMS upload data yet.
+                      Open the Lane Engine console to trigger a run.
                     </p>
-                    <Button
-                      size="sm"
-                      className="mt-4 gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
-                      onClick={() => runEngineMutation.mutate()}
-                      disabled={runEngineMutation.isPending}
-                      data-testid="btn-run-engine-empty"
-                    >
-                      {runEngineMutation.isPending
-                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        : <Play className="w-3.5 h-3.5" />}
-                      {runEngineMutation.isPending ? "Running…" : "Run Engine Now"}
-                    </Button>
+                    <Link href="/admin/lane-engine">
+                      <Button
+                        size="sm"
+                        className="mt-4 gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
+                        data-testid="btn-open-lane-engine-empty"
+                      >
+                        <Database className="w-3.5 h-3.5" />
+                        Open Lane Engine
+                      </Button>
+                    </Link>
                   </>
                 ) : (
                   <>
@@ -3462,36 +3147,7 @@ export default function LaneWorkQueuePage() {
               </div>
             )}
 
-            {/* Admin debug panel — queue correctness at a glance */}
-            {user?.role === "admin" && queue && !isLoading && (
-              <details className="mt-8 border border-border rounded-lg overflow-hidden" data-testid="admin-debug-panel">
-                <summary className="px-4 py-2 text-[11px] text-muted-foreground cursor-pointer select-none hover:bg-muted/40 transition-colors">
-                  Admin: Queue Debug ({totalLanes} lanes across {Object.values(queue).filter(Array.isArray).filter(a => a.length > 0).length} buckets)
-                </summary>
-                <div className="px-4 py-3 bg-muted/20 font-mono text-[10px] leading-relaxed space-y-2">
-                  {(["unassigned", "noContactable", "assignedUntouched", "inProgress"] as const).map(bucket => (
-                    <div key={bucket}>
-                      <span className="text-foreground font-semibold">{bucket}</span>
-                      <span className="text-muted-foreground"> ({queue[bucket].length})</span>
-                      {queue[bucket].length > 0 && (
-                        <ul className="pl-3 mt-0.5 space-y-0.5">
-                          {queue[bucket].map(item => (
-                            <li key={item.laneId} className="text-muted-foreground">
-                              {item.laneId.slice(0, 8)}… {item.origin}→{item.destination}
-                              {" | "}{item.avgLoadsPerWeek ?? "—"}/wk
-                              {" | "}owner={item.ownerName ?? "none"}
-                              {" | "}contacted={item.carriersContactedCount ?? 0}
-                              {" | "}bench={item.totalBenchCount}
-                              {" | "}contactable={item.contactableCount}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </details>
-            )}
+            {/* Task #1030 — admin-debug-panel relocated to /admin/lane-engine. */}
           </>
         )}
       </div>
