@@ -754,6 +754,49 @@ async function processUserMailboxEmail(params: {
 
   log(`[user-mailbox] ${direction} email recorded: from=${fromEmail} to=${toEmail} account=${accountMatch?.companyId ?? "(none)"} msgId=${providerMessageId}`);
 
+  // Task #1055 (Email→Exec 4) — Signature-derived contact + rep link sweep.
+  // Run after the inbound row is persisted whenever we have a known
+  // company, REGARDLESS of whether the sender already matches a CRM
+  // contact. The sweep itself decides what to do:
+  //   - sender unknown            → create or suggest
+  //   - existing contact is thin  → enrich null fields only (never
+  //                                 overwrite filled fields, so a
+  //                                 "complete" contact short-circuits to
+  //                                 noop_existing_complete inside the
+  //                                 sweep)
+  //   - existing contact complete → noop_existing_complete (cheap
+  //                                 lookup, no writes)
+  // Gating only on `!accountMatch.contactId` here would have skipped the
+  // "sender mapped to placeholder contact (just an email + null title)"
+  // case, which is one of the most common shapes the parser is meant
+  // to fix. The sweep is org-scoped by construction (`companyId` is the
+  // org-resolved match above) and best-effort: failures NEVER break
+  // ingestion.
+  if (
+    direction === "inbound" &&
+    accountMatch?.companyId
+  ) {
+    try {
+      const { sweepSignatureContactForInbound } = await import(
+        "../services/signatureContactSweep"
+      );
+      const sweepResult = await sweepSignatureContactForInbound(message, storage, {
+        companyId: accountMatch.companyId,
+      });
+      if (sweepResult.action !== "skipped_no_signal" && sweepResult.action !== "noop_existing_complete") {
+        log(
+          `[user-mailbox] signature-sweep action=${sweepResult.action}` +
+            (sweepResult.contactId ? ` contact=${sweepResult.contactId}` : "") +
+            ` company=${accountMatch.companyId}`,
+        );
+      }
+    } catch (sweepErr) {
+      log(
+        `[user-mailbox] signature-sweep error: ${sweepErr instanceof Error ? sweepErr.message : String(sweepErr)}`,
+      );
+    }
+  }
+
   // Task #867 / #874 — live-sync hint is now emitted by each caller (webhook,
   // delta-sync poll, reply-capture self-heal) using the `created` signal in
   // the returned result. Centralising it here would have made the polling-

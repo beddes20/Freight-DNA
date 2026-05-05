@@ -1,11 +1,19 @@
 /**
- * Conversation Ownership Service (Task #202)
+ * Conversation Ownership Service (Task #202; rep-link strengthening Task #1055)
  *
  * Implements v1 ownership priority order:
- *   (a) account owner if thread is linked to an account (companies.assignedTo)
+ *   (a) account owner if thread is linked to an account
+ *         1. companies.ownerRepId  ← canonical owner (Task #1055 / CQ contract)
+ *         2. companies.assignedTo  ← legacy fallback for orgs that haven't
+ *            backfilled ownerRepId yet
  *   (b) carrier owner if linked to a carrier (no direct ownerUserId on carriers — fall through)
  *   (c) internal user who sent the first outbound email in the thread
  *   (d) null
+ *
+ * Read-only by design: this helper NEVER writes back to companies.ownerRepId
+ * or companies.assignedTo (CQ-3 — Customer Quotes stability contract). It
+ * only resolves the rep id used for the email_conversation_threads.ownerUserId
+ * column on thread creation.
  *
  * Exposes assignOwner() for manual changes.
  */
@@ -30,12 +38,17 @@ export async function determineInitialOwner(
   orgId: string,
   storageInstance: ConversationOwnershipStorage,
 ): Promise<string | null> {
-  // (a) Account owner — companies.assignedTo is the rep user ID
+  // (a) Account owner — prefer canonical ownerRepId, then legacy assignedTo.
   if (message.linkedAccountId) {
     const company = await storageInstance.getCompany(message.linkedAccountId);
-    if (company?.assignedTo) {
-      // Verify user exists and belongs to the org
-      const user = await storageInstance.getUser(company.assignedTo);
+    const candidates: string[] = [];
+    if (company?.ownerRepId) candidates.push(company.ownerRepId);
+    if (company?.assignedTo && company.assignedTo !== company.ownerRepId) {
+      candidates.push(company.assignedTo);
+    }
+    for (const candidate of candidates) {
+      // Cross-tenant guard: verify the candidate user belongs to the same org.
+      const user = await storageInstance.getUser(candidate);
       if (user && user.organizationId === orgId) {
         return user.id;
       }
