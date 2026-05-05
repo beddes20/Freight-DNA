@@ -39,6 +39,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { getCityCoords, haversineDistanceMiles } from "../cityCoordinates";
 import { cityToKma } from "../kmaMapping";
+import { resolveHeroSliceAutoAssign } from "./heroSliceAutoAssign";
 import {
   getLaneMarket, getLaneTraffic, getLaneCarriers, getCorridorPattern,
   type LaneMarket, type LaneTraffic, type CarrierOutreachItem, type CorridorPattern,
@@ -3252,6 +3253,18 @@ export async function createFreightOpportunityFromWonQuote(
         return { id: existing.id, created: false };
       }
 
+      // Task #1069 — Hero Slice auto-assign. For the narrow customer/lane
+      // combination(s) configured under `hero_slice_auto_assign:<orgId>`,
+      // skip the NAM/AM popup and promote the brand-new freight row to
+      // `ready_to_send` already delegated to the configured LM. Outside
+      // the slice every won quote still lands as `pending_approval`.
+      const heroAssign = await resolveHeroSliceAutoAssign(orgId, {
+        customerName,
+        originState: opp.originState,
+        destinationState: opp.destState,
+        equipmentType: equipment,
+      });
+      const now = new Date();
       const insert: InsertFreightOpportunity = {
         orgId,
         companyId,
@@ -3269,19 +3282,29 @@ export async function createFreightOpportunityFromWonQuote(
         quotedRate: quotedRateStr,
         targetBuyRate: targetBuyRateStr,
         urgencyScore: 70,
-        // Task #803 — Won Load Autopilot: every won quote starts in
-        // pending_approval and waits for the NAM/AM popup to assign an LM.
-        status: "pending_approval",
-        awaitingApprovalSince: new Date(),
+        // Task #803 — default: every won quote starts in pending_approval
+        // and waits for the NAM/AM popup to assign an LM. Hero-slice rows
+        // (Task #1069) skip that gate.
+        status: heroAssign ? "ready_to_send" : "pending_approval",
+        awaitingApprovalSince: heroAssign ? null : now,
+        approvedAt: heroAssign ? now : null,
+        approvedById: heroAssign ? (actorUserId ?? heroAssign.lmUserId) : null,
+        delegatedToUserId: heroAssign ? heroAssign.lmUserId : null,
         createdById: actorUserId,
         ownerUserId,
         notes: opp.notes,
       };
       const [createdRow] = await tx.insert(freightOpportunities).values(insert)
         .returning({ id: freightOpportunities.id });
-      console.log(`[customer-quotes] AF handoff created opp=${createdRow?.id} quote=${opp.id} pickup=${pickupDay} status=pending_approval`);
+      if (heroAssign) {
+        console.log(
+          `[customer-quotes] AF handoff created opp=${createdRow?.id} quote=${opp.id} pickup=${pickupDay} status=ready_to_send hero_slice=${heroAssign.slice.id} delegated_to=${heroAssign.lmUserId}`,
+        );
+      } else {
+        console.log(`[customer-quotes] AF handoff created opp=${createdRow?.id} quote=${opp.id} pickup=${pickupDay} status=pending_approval`);
+      }
       if (createdRow) {
-        return { id: createdRow.id, created: true };
+        return { id: createdRow.id, created: true, heroAssigned: !!heroAssign };
       }
       return null;
     }).then(async (result) => {
@@ -3300,7 +3323,37 @@ export async function createFreightOpportunityFromWonQuote(
       // Task #803 — fire the autopilot notification AFTER commit so the popup
       // never beats the row into the DB. Best-effort: a notification failure
       // must not retract the freight row.
-      if (result?.created && ownerUserId) {
+      if (result?.created && result.heroAssigned) {
+        // Task #1069 — hero-slice rows are already delegated + approved
+        // inside the converter txn, so the legacy "Won load needs an LM"
+        // popup would be a lie (and would re-introduce the NAM/AM step
+        // the hero loop is explicitly designed to skip). Instead notify
+        // the configured LM directly that a ready_to_send row landed in
+        // their Available Freight queue. Best-effort — failure must not
+        // retract the freight row.
+        try {
+          const heroLmUserId = await (async () => {
+            const [row] = await db
+              .select({ uid: freightOpportunities.delegatedToUserId })
+              .from(freightOpportunities)
+              .where(eq(freightOpportunities.id, result.id))
+              .limit(1);
+            return row?.uid ?? null;
+          })();
+          if (heroLmUserId) {
+            await storage.createNotification({
+              userId: heroLmUserId,
+              type: "won_load_ready_to_send",
+              title: "New ready-to-send load (hero slice)",
+              body: `${opp.originCity} → ${opp.destCity} (${equipment ?? "load"}) auto-assigned to you. Open Available Freight to start carrier outreach.`,
+              link: `/available-freight?freightOppId=${result.id}`,
+              relatedId: result.id,
+            });
+          }
+        } catch (err) {
+          console.error(`[customer-quotes] hero-slice ready-to-send notification failed opp=${result.id}:`, err);
+        }
+      } else if (result?.created && ownerUserId) {
         try {
           await storage.createNotification({
             userId: ownerUserId,

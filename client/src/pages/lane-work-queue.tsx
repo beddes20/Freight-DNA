@@ -220,6 +220,8 @@ interface LaneItem {
     combinedRevenue: number;
     nextPickupAt: string | null;
     sampleOppId: string | null;
+    /** Task #1069 — subset of `count` from won customer quotes. */
+    wonQuoteCount: number;
   } | null;
   // Workflow OS — server-stamped Task #917. The lane itself has no pickup
   // column; freshness is derived from `liveOpps.nextPickupAt` on the server
@@ -1086,6 +1088,20 @@ function LaneRow({
                 data={item.liveOpps}
                 testId={`chip-live-opps-${item.laneId}`}
               />
+            )}
+            {/* Task #1069 — Hero loop "Active won load(s)" chip. Surfaces
+                the subset of live AF opps that originated from a won
+                customer quote so the LM can see inbound-email-driven
+                loads on the same row as the lane they belong to. */}
+            {item.liveOpps && item.liveOpps.wonQuoteCount > 0 && (
+              <Badge
+                variant="outline"
+                className="text-[10px] py-0 px-1.5 border-emerald-500/50 text-emerald-400 bg-emerald-500/10 gap-0.5 font-semibold"
+                data-testid={`chip-active-won-${item.laneId}`}
+                title={`${item.liveOpps.wonQuoteCount} active won load${item.liveOpps.wonQuoteCount > 1 ? "s" : ""} sourced from a customer-quote win — open in Available Freight`}
+              >
+                {item.liveOpps.wonQuoteCount} active won
+              </Badge>
             )}
             {/* Frequency badge — prominent, always first */}
             <FrequencyBadge val={item.avgLoadsPerWeek} />

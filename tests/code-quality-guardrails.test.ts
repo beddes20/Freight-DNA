@@ -1396,8 +1396,12 @@ console.log("\n── 19. Available Freight — canonical status name (Phase A1)
   const customerQuotesSrc = readFile("server/services/customerQuotes.ts");
   assert(
     "server/services/customerQuotes.ts — Won Load Autopilot writes status: \"pending_approval\"",
-    /status:\s*"pending_approval"/.test(customerQuotesSrc),
-    "createFreightOpportunityFromWonQuote must continue to seed status=\"pending_approval\" so the approval SLA clock starts.",
+    // Task #1069: the hero-slice auto-assign branch may write
+    // "ready_to_send" instead, but the default (no slice) branch MUST
+    // still seed pending_approval. Regex tolerates the inline ternary
+    // form `status: heroAssign ? "ready_to_send" : "pending_approval"`.
+    /status:\s*("pending_approval"|heroAssign\s*\?\s*"ready_to_send"\s*:\s*"pending_approval")/.test(customerQuotesSrc),
+    "createFreightOpportunityFromWonQuote must continue to seed status=\"pending_approval\" (or its hero-slice ternary) so the approval SLA clock starts.",
   );
 
   // Consumer-side positive assertion: the Available Freight default
@@ -4857,6 +4861,137 @@ console.log("\n── Section 1051: Unified ReplitDailyUpload contract ──\n"
   assert(
     "[1052] FromEmailBadge is rendered next to WonQuoteBadge in the cockpit row",
     /<FromEmailBadge\s+sourceRef=\{opp\.sourceRef\}\s+oppId=\{opp\.id\}\s*\/>/.test(afSrc),
+  );
+}
+
+// ── Section 1052: Hero Loop — Email→Quote→Won→Load Ready (Task #1069) ─────
+//
+// Pins the contract for the hero-slice auto-assign that lets a single
+// inbound customer email walk Conversations → Customer Quotes (Won) →
+// freight_opportunities (status=ready_to_send, delegated to LM) →
+// Available Freight → Lane Work Queue without the NAM/AM popup. The
+// guardrails below lock both the slice config module and every
+// downstream consumer the doc claims is wired.
+//
+{
+  console.log("\n── Section 1052: Hero Loop email→load-ready ──────────────────────────\n");
+
+  const docPath = "docs/hero-loop-email-to-load.md";
+  assert(
+    "[1069] hero-loop proof doc exists",
+    fs.existsSync(docPath),
+  );
+
+  const slicePath = "server/services/heroSliceAutoAssign.ts";
+  assert(
+    "[1069] heroSliceAutoAssign module exists",
+    fs.existsSync(slicePath),
+  );
+  const sliceSrc = fs.existsSync(slicePath) ? fs.readFileSync(slicePath, "utf8") : "";
+  assert(
+    "[1069] heroSliceAutoAssign exports matchHeroSlice (pure matcher)",
+    /export\s+function\s+matchHeroSlice\s*\(/.test(sliceSrc),
+  );
+  assert(
+    "[1069] heroSliceAutoAssign exports resolveHeroSliceAutoAssign (storage-backed)",
+    /export\s+async\s+function\s+resolveHeroSliceAutoAssign\s*\(/.test(sliceSrc),
+  );
+  assert(
+    "[1069] heroSliceAutoAssign reads the hero_slice_auto_assign:<orgId> setting key",
+    /hero_slice_auto_assign:\$\{orgId\}/.test(sliceSrc) &&
+      /storage\.getSetting\(heroSliceSettingKey/.test(sliceSrc),
+  );
+
+  // Converter integration — the hero slice MUST be evaluated inside
+  // createFreightOpportunityFromWonQuote and gate the four assignment
+  // fields on the slice result. The default branch (no slice) MUST
+  // still produce status=pending_approval + awaitingApprovalSince=now
+  // so the global NAM/AM popup contract is unchanged for every other
+  // customer.
+  const cqSvc = readFile("server/services/customerQuotes.ts");
+  assert(
+    "[1069] customerQuotes imports resolveHeroSliceAutoAssign",
+    /import\s*\{\s*resolveHeroSliceAutoAssign\s*\}\s*from\s*["']\.\/heroSliceAutoAssign["']/.test(cqSvc),
+  );
+  assert(
+    "[1069] createFreightOpportunityFromWonQuote calls resolveHeroSliceAutoAssign",
+    /resolveHeroSliceAutoAssign\(orgId,\s*\{[\s\S]{0,200}customerName/.test(cqSvc),
+  );
+  assert(
+    "[1069] insert payload gates status on the heroAssign result",
+    /status:\s*heroAssign\s*\?\s*["']ready_to_send["']\s*:\s*["']pending_approval["']/.test(cqSvc),
+  );
+  assert(
+    "[1069] insert payload gates delegatedToUserId on the heroAssign result",
+    /delegatedToUserId:\s*heroAssign\s*\?\s*heroAssign\.lmUserId\s*:\s*null/.test(cqSvc),
+  );
+  assert(
+    "[1069] insert payload clears awaitingApprovalSince on the heroAssign branch",
+    /awaitingApprovalSince:\s*heroAssign\s*\?\s*null\s*:\s*now/.test(cqSvc),
+  );
+  assert(
+    "[1069] insert payload stamps approvedAt on the heroAssign branch",
+    /approvedAt:\s*heroAssign\s*\?\s*now\s*:\s*null/.test(cqSvc),
+  );
+  // Distinct log line is what ops greps for during the proof walk.
+  assert(
+    "[1069] auto-assign emits a hero_slice= log line",
+    /status=ready_to_send hero_slice=\$\{heroAssign\.slice\.id\} delegated_to=\$\{heroAssign\.lmUserId\}/.test(cqSvc),
+  );
+
+  // OPEN_OPP_STATUSES must still include ready_to_send so the
+  // auto-assigned row counts in the LWQ live-opps chip + the AF default
+  // status set.
+  const xlinkSrc = readFile("server/laneCrossLinkService.ts");
+  assert(
+    "[1069] laneCrossLinkService.OPEN_OPP_STATUSES includes ready_to_send",
+    /OPEN_OPP_STATUSES\s*=\s*\[[\s\S]{0,200}["']ready_to_send["']/.test(xlinkSrc),
+  );
+  // The per-lane aggregator must split won-quote opps so the LWQ chip
+  // can render. The split is done in-process from sourceRef->>'type'.
+  assert(
+    "[1069] OpenOppLaneContext exposes wonQuoteCount",
+    /wonQuoteCount:\s*number/.test(xlinkSrc),
+  );
+  assert(
+    "[1069] buildOpenOppContextByLaneSig increments wonQuoteCount on sourceType==='won_quote'",
+    /sourceType\s*===\s*["']won_quote["'][\s\S]{0,80}wonQuoteCount\s*\+=\s*1/.test(xlinkSrc),
+  );
+
+  // LWQ row UI surfaces the active-won chip keyed off liveOpps.wonQuoteCount.
+  const lwqSrc = readFile("client/src/pages/lane-work-queue.tsx");
+  assert(
+    "[1069] LWQ row renders the chip-active-won-${laneId} chip",
+    /chip-active-won-\$\{item\.laneId\}/.test(lwqSrc),
+  );
+  assert(
+    "[1069] LWQ active-won chip is gated on liveOpps.wonQuoteCount > 0",
+    /item\.liveOpps\.wonQuoteCount\s*>\s*0/.test(lwqSrc),
+  );
+
+  // Anti-regression: hero-loop conversion (and the entire customerQuotes
+  // service) MUST NOT write to freight_daily_upload_fact. That table is
+  // the single source of truth for "moved loads" feeding the LWQ ≥6/30d
+  // eligibility rule (Task #1051). Quote events (won, hero-assigned, or
+  // otherwise) must leave it untouched so a refactor can't accidentally
+  // double-count wins as moves.
+  assert(
+    "[1069] customerQuotes.ts never writes to freight_daily_upload_fact (no synthetic moves)",
+    !/freight_daily_upload_fact/i.test(cqSvc) &&
+      !/freightDailyUploadFact/.test(cqSvc),
+  );
+
+  // Notification correctness: hero-assigned rows are already delegated +
+  // approved, so they must NOT fire the legacy "Won load needs an LM"
+  // popup (which would re-introduce the NAM/AM step the hero loop is
+  // designed to skip). Default-branch rows still fire it.
+  assert(
+    "[1069] post-commit notification skips won_load_pending_approval for hero-assigned rows",
+    /result\?\.created\s*&&\s*result\.heroAssigned[\s\S]{0,2000}else if\s*\(\s*result\?\.created\s*&&\s*ownerUserId\s*\)[\s\S]{0,400}won_load_pending_approval/.test(cqSvc),
+  );
+  assert(
+    "[1069] hero-assigned rows fire a distinct won_load_ready_to_send notification instead",
+    /type:\s*"won_load_ready_to_send"/.test(cqSvc),
   );
 }
 

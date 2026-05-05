@@ -114,6 +114,13 @@ export interface OpenOppLaneContext {
   combinedRevenue: number;
   nextPickupAt: string | null;
   sampleOppId: string | null;
+  /**
+   * Task #1069 — subset of `count` whose source is a won customer quote
+   * (`sourceRef.type = 'won_quote'`). Powers the "Active won load" chip
+   * on the LWQ row so the LM sees inbound-email-driven won loads next
+   * to their lane.
+   */
+  wonQuoteCount: number;
 }
 
 type DrizzleLikeDb = {
@@ -283,6 +290,9 @@ export async function buildOpenOppContextByLaneSig(
       // Surface the source TMS order id so we can join to load_fact for the
       // customer-side revenue without making per-row queries.
       sourceOrderId: sql<string | null>`${freightOpportunities.sourceRef}->>'orderId'`.as("source_order_id"),
+      // Task #1069 — surface the source discriminator so the per-lane
+      // aggregator can split won-quote rows out of the open-opp count.
+      sourceType: sql<string | null>`${freightOpportunities.sourceRef}->>'type'`.as("source_type"),
     })
     .from(freightOpportunities)
     .where(and(
@@ -303,6 +313,7 @@ export async function buildOpenOppContextByLaneSig(
       generatedAt: Date | string | null;
       status: string;
       sourceOrderId: string | null;
+      sourceType: string | null;
     }>;
 
   // Fetch realized/available revenue for the matching source orders in a
@@ -346,9 +357,11 @@ export async function buildOpenOppContextByLaneSig(
       combinedRevenue: 0,
       nextPickupAt: null,
       sampleOppId: null,
+      wonQuoteCount: 0,
     };
     acc.count += 1;
     acc.totalLoads += r.loadCount ?? 1;
+    if (r.sourceType === "won_quote") acc.wonQuoteCount += 1;
     if (r.sourceOrderId) {
       acc.combinedRevenue += revenueByOrderId.get(r.sourceOrderId) ?? 0;
     }
