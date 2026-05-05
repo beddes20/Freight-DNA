@@ -6025,6 +6025,37 @@ export async function runMigrations() {
     console.error("[migrations] Task #911 copilot extraction tables error:", err);
   }
 
+  // Task #1011 — Customer ownership model: companies.owner_rep_id +
+  // customer_email_identities table. Production schema-drift guard
+  // refuses to boot without these. Idempotent — safe to re-run.
+  try {
+    const c1011 = await pool.connect();
+    try {
+      await c1011.query(`ALTER TABLE companies ADD COLUMN IF NOT EXISTS owner_rep_id varchar`);
+      await c1011.query(`
+        CREATE TABLE IF NOT EXISTS customer_email_identities (
+          id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+          organization_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+          company_id varchar NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+          kind text NOT NULL,
+          value text NOT NULL,
+          label text,
+          contact_id varchar REFERENCES contacts(id) ON DELETE SET NULL,
+          active boolean NOT NULL DEFAULT true,
+          created_at timestamp NOT NULL DEFAULT now()
+        )
+      `);
+      await c1011.query(`CREATE UNIQUE INDEX IF NOT EXISTS customer_email_identities_uq ON customer_email_identities (organization_id, kind, value)`);
+      await c1011.query(`CREATE INDEX IF NOT EXISTS customer_email_identities_org_idx ON customer_email_identities (organization_id)`);
+      await c1011.query(`CREATE INDEX IF NOT EXISTS customer_email_identities_company_idx ON customer_email_identities (company_id)`);
+      console.log("[migrations] Task #1011 companies.owner_rep_id + customer_email_identities ensured");
+    } finally {
+      c1011.release();
+    }
+  } catch (err) {
+    console.error("[migrations] Task #1011 customer ownership migration error:", err);
+  }
+
   // Task #943 — Email Intelligence Layer v1.5 fact crystallization tables.
   await runEmailIntelV1_5Migrations();
 }
