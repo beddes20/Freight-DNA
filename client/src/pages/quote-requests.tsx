@@ -610,15 +610,30 @@ function QuoteRequestsInner(): JSX.Element {
     refetchInterval: 30_000,
   });
 
+  // Task #1016 — when a non-elevated rep's recipient scope hides every
+  // unrouted row but the org has some, the panel exposes a "Show all
+  // reps" control that flips this flag and re-fetches both the SLO
+  // badge count and the list under `includeAll=1`. Elevated roles
+  // ignore the flag (server already returns org-wide for them).
+  const [needsRoutingIncludeAll, setNeedsRoutingIncludeAll] = useState(false);
+
   // Task #1003 — capture-first SLO + needs-routing badge count.
   // Polls every 30s; failure is non-fatal (chip just shows no count).
+  // Task #1016 — pass the same `includeAll` the list query uses so the
+  // tab badge count and the table contents agree on scope.
   const sloQuery = useQuery<{
     p50Sec: number | null; p95Sec: number | null; p99Sec: number | null;
-    sampleSize: number; unprocessedBacklog: number; needsRoutingCount: number;
+    sampleSize: number; unprocessedBacklog: number;
+    needsRoutingCount: number;
+    needsRoutingOrgTotal?: number;
+    scopeNarrowed?: boolean;
+    isElevated?: boolean;
+    includeAll?: boolean;
   }>({
-    queryKey: ["/api/customer-quotes/routing-slo"],
+    queryKey: ["/api/customer-quotes/routing-slo", needsRoutingIncludeAll],
     queryFn: async () => {
-      const res = await fetch("/api/customer-quotes/routing-slo", { credentials: "include" });
+      const qs = needsRoutingIncludeAll ? "?includeAll=1" : "";
+      const res = await fetch(`/api/customer-quotes/routing-slo${qs}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load routing SLO");
       return res.json();
     },
@@ -627,10 +642,14 @@ function QuoteRequestsInner(): JSX.Element {
   });
   const needsRoutingCount = sloQuery.data?.needsRoutingCount ?? 0;
 
-  const needsRoutingQuery = useQuery<{ rows: any[]; total: number; isElevated: boolean; includeAll: boolean }>({
-    queryKey: ["/api/customer-quotes/needs-routing"],
+  const needsRoutingQuery = useQuery<{
+    rows: any[]; total: number; orgTotal?: number;
+    scopeNarrowed?: boolean; isElevated: boolean; includeAll: boolean;
+  }>({
+    queryKey: ["/api/customer-quotes/needs-routing", needsRoutingIncludeAll],
     queryFn: async () => {
-      const res = await fetch("/api/customer-quotes/needs-routing?limit=100", { credentials: "include" });
+      const qs = needsRoutingIncludeAll ? "&includeAll=1" : "";
+      const res = await fetch(`/api/customer-quotes/needs-routing?limit=100${qs}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to load needs-routing queue");
       return res.json();
     },
@@ -1153,7 +1172,15 @@ function QuoteRequestsInner(): JSX.Element {
               <NeedsRoutingPanel
                 rows={needsRoutingQuery.data?.rows ?? []}
                 total={needsRoutingQuery.data?.total ?? 0}
+                orgTotal={needsRoutingQuery.data?.orgTotal ?? needsRoutingQuery.data?.total ?? 0}
+                scopeNarrowed={!!needsRoutingQuery.data?.scopeNarrowed}
+                isElevated={!!needsRoutingQuery.data?.isElevated || isElevated}
+                includeAll={needsRoutingIncludeAll}
                 isLoading={needsRoutingQuery.isLoading}
+                isError={needsRoutingQuery.isError}
+                error={needsRoutingQuery.error as Error | null}
+                onShowAllReps={() => setNeedsRoutingIncludeAll(true)}
+                onScopeToMine={() => setNeedsRoutingIncludeAll(false)}
                 onRoute={(id, decision, remember) =>
                   routeMutation.mutate({ id, decision, remember })
                 }
@@ -1428,11 +1455,22 @@ function ChipGroup<T extends string>({
 // this queue.
 
 function NeedsRoutingPanel({
-  rows, total, isLoading, onRoute, isRouting,
+  rows, total, orgTotal, scopeNarrowed, isElevated, includeAll,
+  isLoading, isError, error,
+  onShowAllReps, onScopeToMine,
+  onRoute, isRouting,
 }: {
   rows: any[];
   total: number;
+  orgTotal: number;
+  scopeNarrowed: boolean;
+  isElevated: boolean;
+  includeAll: boolean;
   isLoading: boolean;
+  isError: boolean;
+  error: Error | null;
+  onShowAllReps: () => void;
+  onScopeToMine: () => void;
   onRoute: (id: string, decision: "customer" | "carrier" | "dismiss", remember: "none" | "email" | "domain") => void;
   isRouting: boolean;
 }) {
@@ -1444,7 +1482,42 @@ function NeedsRoutingPanel({
       </div>
     );
   }
+  // Task #1016 — list-query errors must show an explicit error state for
+  // the table. Never silently fall through to the "Capture-first contract
+  // is healthy" copy when we don't actually know whether the queue is empty.
+  if (isError) {
+    return (
+      <div className="p-6" data-testid="needs-routing-error">
+        <ErrorBanner message={error?.message ?? "Couldn't load the routing queue."} />
+      </div>
+    );
+  }
   if (!rows.length) {
+    // Task #1016 — when the rep's recipient scope hides everything but
+    // the org has unrouted rows, never claim the queue is healthy.
+    // Surface the org-wide number and a one-click "Show all reps"
+    // control so the user understands what they're looking at.
+    if (scopeNarrowed && !isElevated && !includeAll && orgTotal > 0) {
+      return (
+        <div className="p-10 text-center space-y-3" data-testid="needs-routing-scope-narrowed">
+          <p className="text-sm">
+            Showing items where you're on To/CC. Org-wide there {orgTotal === 1 ? "is" : "are"}{" "}
+            <span className="font-semibold" data-testid="text-needs-routing-org-total">
+              {orgTotal}
+            </span>{" "}
+            email{orgTotal === 1 ? "" : "s"} that still need a routing decision.
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onShowAllReps}
+            data-testid="button-needs-routing-show-all-reps"
+          >
+            Show all reps
+          </Button>
+        </div>
+      );
+    }
     return (
       <div className="p-10 text-center" data-testid="needs-routing-empty">
         <p className="text-sm text-muted-foreground">
@@ -1455,8 +1528,41 @@ function NeedsRoutingPanel({
   }
   return (
     <div className="p-4 space-y-3 overflow-auto h-full" data-testid="needs-routing-list">
-      <div className="text-xs text-muted-foreground" data-testid="text-needs-routing-count">
-        {total} email{total === 1 ? "" : "s"} need a routing decision.
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-xs text-muted-foreground" data-testid="text-needs-routing-count">
+          {total} email{total === 1 ? "" : "s"} need a routing decision.
+          {scopeNarrowed && !isElevated && !includeAll && orgTotal > total ? (
+            <>
+              {" "}
+              <span data-testid="text-needs-routing-org-more">
+                {orgTotal - total} more org-wide.
+              </span>
+            </>
+          ) : null}
+        </div>
+        {!isElevated && (scopeNarrowed || includeAll) ? (
+          includeAll ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs"
+              onClick={onScopeToMine}
+              data-testid="button-needs-routing-scope-mine"
+            >
+              Show only mine
+            </Button>
+          ) : orgTotal > total ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={onShowAllReps}
+              data-testid="button-needs-routing-show-all-reps"
+            >
+              Show all reps
+            </Button>
+          ) : null
+        ) : null}
       </div>
       {rows.map((r) => {
         const fromEmail: string = r.fromEmail ?? "";

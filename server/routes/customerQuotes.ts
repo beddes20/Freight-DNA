@@ -2505,6 +2505,11 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       // Recipient scoping: by default a non-elevated rep only sees rows where
       // they are the sender of one of the to/cc addresses on the source
       // email. `includeAll=1` (manager toggle) lifts the scope.
+      const scopeNarrowed = !isElevated && !includeAll && !!recipientMatch;
+      const scopeFilter = scopeNarrowed
+        ? sqlExpr`AND (em.to_email ILIKE ${'%' + recipientMatch + '%'}
+                    OR em.cc_email ILIKE ${'%' + recipientMatch + '%'})`
+        : sqlExpr``;
       const rows = await db.execute<any>(sqlExpr`
         SELECT q.id, q.organization_id AS "organizationId", q.customer_id AS "customerId",
                q.rep_id AS "repId", q.lane_group_id AS "laneGroupId",
@@ -2523,22 +2528,38 @@ export function registerCustomerQuoteRoutes(app: Express): void {
           LEFT JOIN email_messages em ON em.id = q.source_reference
          WHERE q.organization_id = ${user.organizationId}
            AND q.routing_status = 'needs_routing'
-           ${(!isElevated && !includeAll && recipientMatch)
-              ? sqlExpr`AND (em.to_email ILIKE ${'%' + recipientMatch + '%'}
-                          OR em.cc_email ILIKE ${'%' + recipientMatch + '%'})`
-              : sqlExpr``}
+           ${scopeFilter}
          ORDER BY q.request_date DESC
          LIMIT ${limit}
       `);
-      const totalRow = await db.execute<{ c: number }>(sqlExpr`
+      // Task #1016 — `total` now reflects the SAME scope as `rows` so the
+      // tab badge, the count line, and the table never disagree. The
+      // org-wide number is exposed separately as `orgTotal` so the UI
+      // can surface "X more org-wide — switch to All reps" when the
+      // rep's recipient scope hides everything.
+      const scopedTotalRow = await db.execute<{ c: number }>(sqlExpr`
         SELECT COUNT(*)::int AS c
-          FROM quote_opportunities
-         WHERE organization_id = ${user.organizationId}
-           AND routing_status = 'needs_routing'
+          FROM quote_opportunities q
+          LEFT JOIN email_messages em ON em.id = q.source_reference
+         WHERE q.organization_id = ${user.organizationId}
+           AND q.routing_status = 'needs_routing'
+           ${scopeFilter}
       `);
+      const orgTotalRow = scopeNarrowed
+        ? await db.execute<{ c: number }>(sqlExpr`
+            SELECT COUNT(*)::int AS c
+              FROM quote_opportunities
+             WHERE organization_id = ${user.organizationId}
+               AND routing_status = 'needs_routing'
+          `)
+        : null;
+      const scopedTotal = scopedTotalRow.rows?.[0]?.c ?? 0;
+      const orgTotal = orgTotalRow ? (orgTotalRow.rows?.[0]?.c ?? 0) : scopedTotal;
       res.json({
         rows: rows.rows ?? [],
-        total: totalRow.rows?.[0]?.c ?? 0,
+        total: scopedTotal,
+        orgTotal,
+        scopeNarrowed,
         isElevated,
         includeAll: !!includeAll,
       });
@@ -2624,6 +2645,20 @@ export function registerCustomerQuoteRoutes(app: Express): void {
   app.get("/api/customer-quotes/routing-slo", requireUser, async (req, res) => {
     try {
       const user = req.user!;
+      // Task #1016 — accept the same `includeAll` toggle the list endpoint
+      // uses, so the tab badge count reflects what the user will actually
+      // see in the table. Org-wide total is still surfaced separately.
+      const includeAll = qBool(req.query.includeAll, false);
+      const elevatedRoles = new Set([
+        "admin", "director", "sales_director", "national_account_manager", "sales",
+      ]);
+      const isElevated = elevatedRoles.has(user.role);
+      const recipientMatch = (user.username ?? "").trim();
+      const scopeNarrowed = !isElevated && !includeAll && !!recipientMatch;
+      const scopeFilter = scopeNarrowed
+        ? sqlExpr`AND (em.to_email ILIKE ${'%' + recipientMatch + '%'}
+                    OR em.cc_email ILIKE ${'%' + recipientMatch + '%'})`
+        : sqlExpr``;
       const sloRow = await db.execute<{ p50: number | null; p95: number | null; p99: number | null; sample: number }>(sqlExpr`
         SELECT
           PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (q.created_at - em.created_at))) AS p50,
@@ -2646,19 +2681,40 @@ export function registerCustomerQuoteRoutes(app: Express): void {
            AND processed_for_signals_at IS NULL
            AND created_at >= NOW() - INTERVAL '24 hours'
       `);
-      const needsRoutingRow = await db.execute<{ c: number }>(sqlExpr`
+      // Task #1016 — scoped count first (matches what the rep would see in
+      // the Needs Routing table). The org-wide total is returned alongside
+      // so the UI can render "X more org-wide" without re-fetching.
+      const needsRoutingScopedRow = await db.execute<{ c: number }>(sqlExpr`
         SELECT COUNT(*)::int AS c
-          FROM quote_opportunities
-         WHERE organization_id = ${user.organizationId}
-           AND routing_status = 'needs_routing'
+          FROM quote_opportunities q
+          LEFT JOIN email_messages em ON em.id = q.source_reference
+         WHERE q.organization_id = ${user.organizationId}
+           AND q.routing_status = 'needs_routing'
+           ${scopeFilter}
       `);
+      const needsRoutingOrgRow = scopeNarrowed
+        ? await db.execute<{ c: number }>(sqlExpr`
+            SELECT COUNT(*)::int AS c
+              FROM quote_opportunities
+             WHERE organization_id = ${user.organizationId}
+               AND routing_status = 'needs_routing'
+          `)
+        : null;
+      const needsRoutingCount = needsRoutingScopedRow.rows?.[0]?.c ?? 0;
+      const needsRoutingOrgTotal = needsRoutingOrgRow
+        ? (needsRoutingOrgRow.rows?.[0]?.c ?? 0)
+        : needsRoutingCount;
       res.json({
         p50Sec: sloRow.rows?.[0]?.p50 ?? null,
         p95Sec: sloRow.rows?.[0]?.p95 ?? null,
         p99Sec: sloRow.rows?.[0]?.p99 ?? null,
         sampleSize: sloRow.rows?.[0]?.sample ?? 0,
         unprocessedBacklog: backlogRow.rows?.[0]?.c ?? 0,
-        needsRoutingCount: needsRoutingRow.rows?.[0]?.c ?? 0,
+        needsRoutingCount,
+        needsRoutingOrgTotal,
+        scopeNarrowed,
+        isElevated,
+        includeAll: !!includeAll,
       });
     } catch (err) {
       console.error("[customer-quotes] routing-slo error:", err);

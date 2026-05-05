@@ -3116,6 +3116,28 @@ console.log("\n── Section 33: Capture-first contract (Task #1003) ───�
     "quote-requests.tsx — renders NeedsRoutingPanel when status is 'needs_routing'",
     /NeedsRoutingPanel/.test(pageSrc),
   );
+  // Task #1016 — Needs Routing count/list/snapshot consistency contract.
+  // The list endpoint must return both `total` (scoped to match `rows`)
+  // and `orgTotal` (org-wide) so the UI can never show a non-zero badge
+  // alongside an empty table without explanation.
+  assert(
+    "routes/customerQuotes.ts — needs-routing returns scoped total + orgTotal",
+    /scopeNarrowed/.test(routesSrc) && /orgTotal/.test(routesSrc),
+  );
+  assert(
+    "routes/customerQuotes.ts — routing-slo accepts includeAll and returns needsRoutingOrgTotal",
+    /routing-slo[\s\S]{0,2000}includeAll/.test(routesSrc) &&
+      /needsRoutingOrgTotal/.test(routesSrc),
+  );
+  assert(
+    "quote-requests.tsx — NeedsRoutingPanel handles list-error state (not 'healthy' fall-through)",
+    /needs-routing-error/.test(pageSrc),
+  );
+  assert(
+    "quote-requests.tsx — NeedsRoutingPanel surfaces scope-narrowed explainer with Show all reps",
+    /needs-routing-scope-narrowed/.test(pageSrc) &&
+      /button-needs-routing-show-all-reps/.test(pageSrc),
+  );
 })();
 
 // ── Section 32: Carrier Ranking Lane-First Rebalance (May 2026) ────────────
