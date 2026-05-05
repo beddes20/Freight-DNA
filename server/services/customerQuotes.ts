@@ -20,7 +20,7 @@ import { UNKNOWN_CUSTOMER_NAME, classifyPartyType, sanitizeCustomerName, isFreeM
 import { isObviousFakeCustomerName } from "@shared/fakeCustomerName";
 import { organizations } from "@shared/schema";
 import { loadNonCustomerCustomerIds } from "./customerOnlyChokepoint";
-import { isFunnelEligibleRep, QUOTE_REP_UNIVERSE_ROLES, QUOTE_OWNER_DISPLAY_ROLES } from "@shared/quoteOpportunitiesRoles";
+import { isFunnelEligibleRep, isCustomerFacingQuoteRep, QUOTE_REP_UNIVERSE_ROLES, QUOTE_OWNER_DISPLAY_ROLES } from "@shared/quoteOpportunitiesRoles";
 import { users } from "@shared/schema";
 import { learnFromReassign } from "./quoteSenderMappings";
 import type { QuotePartyType } from "@shared/schema";
@@ -598,6 +598,16 @@ export function applyFilters(
   // generic-sales rep). Rows with `repId === null` are NOT dropped here —
   // the existing customer chokepoint and Account-Owner fallback still
   // govern their visibility, preserving Task #1012 behavior.
+  //
+  // Task #1048 — this set MUST be the *visibility* superset
+  // (`ctx.visibleRepIds`), NOT the strict funnel-eligibility set
+  // (`ctx.customerFacingRepIds`). The strict set excludes reps with
+  // `users.user_id IS NULL` (legacy / email-signature-derived reps that
+  // have never been linked to a `users` row). In production those
+  // unlinked reps own ~70% of fresh `auto_customer` quote rows because
+  // ingestion creates a `quote_reps` row from the email signature long
+  // before the rep is provisioned in `users`. Passing the strict set
+  // here was hiding nearly every fresh customer quote from the rep view.
   customerFacingRepIds?: Set<string>,
 ): QuoteOpportunity[] {
   return rows.filter((r) => {
@@ -1236,6 +1246,23 @@ async function loadContext(orgId: string) {
     .filter(r => isFunnelEligibleRep({ linkedUserRole: r.linkedUserRole, suppressed: r.suppressed }))
     .map(({ linkedUserRole: _r, linkedUserName: _n, ...rest }) => rest);
   const customerFacingRepIds = new Set<string>(customerFacingReps.map(r => r.id));
+  // Task #1048 — visibility superset for the read-layer rep gate in
+  // `applyFilters`. Includes (a) AM/NAM-linked reps that pass
+  // `isFunnelEligibleRep` and (b) reps with `user_id IS NULL` (legacy /
+  // email-signature-derived reps not yet provisioned in `users`).
+  // Mirrors `isCustomerFacingQuoteRep` (which also accepts unlinked reps)
+  // so the visibility gate matches the ingestion-side rep-create gate.
+  // Strict-funnel rep ranking still uses `customerFacingRepIds` —
+  // unlinked reps are intentionally excluded from rankings because
+  // there is no canonical user identity to attribute to.
+  const visibleRepIds = new Set<string>(
+    repsJoined
+      .filter(r =>
+        !r.suppressed &&
+        isCustomerFacingQuoteRep(r.linkedUserRole),
+      )
+      .map(r => r.id),
+  );
   // Task #837 — preferred display name per rep (linked-user-name wins
   // over the legacy `quote_reps.name`). Empty string entries are
   // dropped so `repDisplayNames.get()` returning undefined naturally
@@ -1283,6 +1310,7 @@ async function loadContext(orgId: string) {
     // attributed to a non-customer-facing rep from the best/worst rep
     // ranking. The underlying quote rows are unaffected.
     customerFacingRepIds,
+    visibleRepIds,
     canonicalCustomerNames,
     ownerRepNameByCustomerId,
   };
@@ -1309,7 +1337,7 @@ export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: 
   for (const r of all) {
     if (!ctx.customerMap.has(r.customerId)) exclusionIds.add(r.customerId);
   }
-  const filtered = applyFilters(all, filters, exclusionIds, ctx.customerFacingRepIds);
+  const filtered = applyFilters(all, filters, exclusionIds, ctx.visibleRepIds);
   // Customer Quotes portlet bug-fix — Tier-1 rep resolution from
   // `email_messages.to_email`. Built per-request because it depends on the
   // page's specific opportunities, not the org-level context.
@@ -1807,7 +1835,7 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
     .orderBy(desc(quoteOpportunities.requestDate));
 
   const nonCustomerIds = await loadNonCustomerCustomerIds(orgId, ctx.customerMap);
-  const filtered = applyFilters(allOpps, filters, nonCustomerIds, ctx.customerFacingRepIds);
+  const filtered = applyFilters(allOpps, filters, nonCustomerIds, ctx.visibleRepIds);
   const won = filtered.filter(r => isWon(r.outcomeStatus));
   const lost = filtered.filter(r => isLost(r.outcomeStatus));
   const pending = filtered.filter(r => r.outcomeStatus === "pending");
@@ -3795,7 +3823,7 @@ export async function exportCsv(orgId: string, filters: QuoteFilters): Promise<s
   const ctx = await loadContext(orgId);
   const all = await db.select().from(quoteOpportunities).where(eq(quoteOpportunities.organizationId, orgId));
   const nonCustomerIds = await loadNonCustomerCustomerIds(orgId, ctx.customerMap);
-  const filtered = applyFilters(all, filters, nonCustomerIds, ctx.customerFacingRepIds);
+  const filtered = applyFilters(all, filters, nonCustomerIds, ctx.visibleRepIds);
   // Customer Quotes portlet bug-fix — same Tier-1 rep + canonical-name
   // wiring as listQuotes so the CSV export matches what users see in the
   // table. Skipping this would let the export silently regress to
@@ -4962,7 +4990,7 @@ export async function getFunnel(
   const effectiveFilters: QuoteFilters = scopedRepId
     ? { ...filters, repId: scopedRepId }
     : filters;
-  const filtered = applyFilters(allOpps, effectiveFilters, nonCustomerIds, ctx.customerFacingRepIds);
+  const filtered = applyFilters(allOpps, effectiveFilters, nonCustomerIds, ctx.visibleRepIds);
 
   if (filtered.length === 0) {
     return emptyFunnelResult(scopedRepId ?? null);
