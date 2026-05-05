@@ -86,6 +86,13 @@ import { LiveSyncPill } from "@/components/live-sync/LiveSyncPill";
 import { AfImportHealthPill } from "@/components/freight/af-import-health-pill";
 import { HiddenCountsDisclosure, type HiddenCountsSummary } from "@/components/freight/hidden-counts";
 import { computeCockpitUrgency } from "@shared/cockpitUrgency";
+import {
+  resolveNextBestAction,
+  resolveBlocking,
+  pickWhyBucket,
+  bucketToneClass,
+  type RowActionInput,
+} from "@shared/cockpitRowActions";
 import { LaneStabilityBadge } from "@/components/freight/lane-stability-badge";
 import { LaneCockpitSheet } from "@/components/lane-cockpit/lane-cockpit-sheet";
 import { useSharedLaneKeyboard, useLaneCheatSheetRows } from "@/hooks/useSharedLaneKeyboard";
@@ -368,6 +375,46 @@ function fmtPickup(s: string | null | undefined) {
   return Number.isFinite(d.getTime())
     ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
     : "—";
+}
+
+/**
+ * Task #1022 — Verbose pickup label for the self-explanatory row.
+ * Returns an absolute calendar phrase ("Today", "Tomorrow", "Mon Apr 27") with
+ * a 24h time, and a relative phrase ("in 14h", "3h ago"). Both pieces are
+ * separated so the row can render them with distinct emphasis.
+ */
+function fmtPickupVerbose(
+  s: string | null | undefined,
+  now: Date = new Date(),
+): { absolute: string; relative: string | null } {
+  if (!s) return { absolute: "No pickup set", relative: null };
+  const d = new Date(s);
+  if (!Number.isFinite(d.getTime())) return { absolute: "No pickup set", relative: null };
+  const startOfDay = (x: Date) => {
+    const c = new Date(x);
+    c.setHours(0, 0, 0, 0);
+    return c;
+  };
+  const dayDelta = Math.round(
+    (startOfDay(d).getTime() - startOfDay(now).getTime()) / 86_400_000,
+  );
+  const dayLabel = dayDelta === 0
+    ? "Today"
+    : dayDelta === 1
+      ? "Tomorrow"
+      : dayDelta === -1
+        ? "Yesterday"
+        : d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  const timeLabel = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+  const absolute = `${dayLabel} ${timeLabel}`;
+  const diffMin = Math.round((d.getTime() - now.getTime()) / 60_000);
+  const abs = Math.abs(diffMin);
+  let relPhrase: string;
+  if (abs < 60) relPhrase = `${abs}m`;
+  else if (abs < 48 * 60) relPhrase = `${Math.round(abs / 60)}h`;
+  else relPhrase = `${Math.round(abs / (60 * 24))}d`;
+  const relative = diffMin >= 0 ? `in ${relPhrase}` : `${relPhrase} ago`;
+  return { absolute, relative };
 }
 function fmtAge(min: number | null | undefined) {
   if (min === null || min === undefined) return "—";
@@ -2132,8 +2179,52 @@ export default function AvailableFreightPage() {
       e.preventDefault();
       setFocusIndex(i => Math.max(0, i - 1));
     } else if (e.key === "Enter") {
+      // Task #1022 — Enter fires the focused row's primary "next best
+      // action" instead of always navigating to detail, so the keyboard
+      // path matches the visible primary button. Shift+Enter falls back
+      // to the original "open detail" behavior for reps who want it.
       const it = filtered[focusIndex];
-      if (it) navigate(`/available-freight/${it.opportunity.id}`);
+      if (!it) return;
+      e.preventDefault();
+      if (e.shiftKey) {
+        navigate(`/available-freight/${it.opportunity.id}`);
+        return;
+      }
+      const input: RowActionInput = {
+        opportunity: {
+          status: it.opportunity.status ?? null,
+          pickupWindowStart: it.opportunity.pickupWindowStart ?? null,
+          coveredAt: (it.opportunity as { coveredAt?: string | null }).coveredAt ?? null,
+          generatedAt: it.opportunity.generatedAt ?? null,
+        },
+        coverage: it.coverage,
+        freshnessMinutes: it.freshnessMinutes,
+        rankedCarrierCount: it.chips.length,
+        ownership: it.ownership ?? null,
+        owner: it.owner ?? null,
+        pickupFreshness: it.pickupFreshness ?? null,
+        pickupDaysAgo: it.pickupDaysAgo ?? null,
+      };
+      const action = resolveNextBestAction(input);
+      if (action.disabled) return;
+      switch (action.id) {
+        case "approve":
+          bulkMutate.mutate({ action: "approve", opportunityIds: [it.opportunity.id] });
+          return;
+        case "send_top":
+        case "escalate":
+          bulkMutate.mutate({ action: "send_top", opportunityIds: [it.opportunity.id], ...(action.payload ?? {}) });
+          return;
+        case "mark_covered":
+          markCoveredSingle(it);
+          return;
+        case "pick_carriers":
+        case "open_detail":
+        case "confirm_covered":
+        default:
+          navigate(`/available-freight/${it.opportunity.id}`);
+          return;
+      }
     } else if (e.key === "x" || e.key === " ") {
       const it = filtered[focusIndex];
       if (it) {
@@ -2196,6 +2287,21 @@ export default function AvailableFreightPage() {
     if (!it) return;
     openCockpitForItem(it);
   }, [filtered, focusIndex, openCockpitForItem]);
+
+  // Task #1022 — Single-row "mark covered" entry point. Seeds the bulk
+  // cover dialog's selection with just this row so the existing dialog
+  // (with its top-carrier prefill, bench-promotion + rate-band toggles)
+  // can be reused without forking a per-row form. The dialog's prefill
+  // useEffect keys off `bulkCoverOpen`, so opening here picks up the
+  // single-row top carrier automatically.
+  const markCoveredSingle = useCallback((it: CockpitItem) => {
+    setSelected(new Set([it.opportunity.id]));
+    setBulkCoverCarrier("");
+    setBulkCoverPaidRate("");
+    setBulkCoverCustomerRate("");
+    setBulkCoverNotes("");
+    setBulkCoverOpen(true);
+  }, []);
 
   useSharedLaneKeyboard({
     enabled: !showShortcutsHelp && !cockpitOpen,
@@ -2302,7 +2408,7 @@ export default function AvailableFreightPage() {
                 stops competing with the page title. */}
           </div>
           <p className="text-sm text-muted-foreground">
-            Triage open freight in priority order. Shortcuts: j/k move • x select • Enter open • A approve • S send top 3 • R reassign • Esc clear.
+            Triage open freight in priority order. Shortcuts: j/k move • x select • Enter run primary action • Shift+Enter open detail • A approve • S send top 3 • R reassign • Esc clear.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -3329,6 +3435,9 @@ export default function AvailableFreightPage() {
                                 onLogOutcome={() => setOutcomeTargetId(it.opportunity.id)}
                                 onToggleAutoPilot={() => toggleAutoPilot(it)}
                                 onOpenCockpit={() => openCockpitForItem(it)}
+                                onMarkCovered={() => markCoveredSingle(it)}
+                                onOpenDetail={() => navigate(`/available-freight/${it.opportunity.id}`)}
+                                evalCtx={bucketEvalCtx}
                                 urgencyOverride={urgencyOverrides.get(it.opportunity.id) ?? null}
                                 onRetryConversion={(failureId) => conversionRetryMutation.mutate({ opportunityId: it.opportunity.id, failureId })}
                                 retryingConversion={conversionRetryMutation.isPending && conversionRetryMutation.variables?.opportunityId === it.opportunity.id}
@@ -3372,6 +3481,9 @@ export default function AvailableFreightPage() {
                               onLogOutcome={() => setOutcomeTargetId(it.opportunity.id)}
                               onToggleAutoPilot={() => toggleAutoPilot(it)}
                               onOpenCockpit={() => openCockpitForItem(it)}
+                              onMarkCovered={() => markCoveredSingle(it)}
+                              onOpenDetail={() => navigate(`/available-freight/${it.opportunity.id}`)}
+                              evalCtx={bucketEvalCtx}
                               urgencyOverride={urgencyOverrides.get(it.opportunity.id) ?? null}
                               onRetryConversion={(failureId) => conversionRetryMutation.mutate({ opportunityId: it.opportunity.id, failureId })}
                               retryingConversion={conversionRetryMutation.isPending && conversionRetryMutation.variables?.opportunityId === it.opportunity.id}
@@ -3423,6 +3535,9 @@ export default function AvailableFreightPage() {
                             onLogOutcome={() => setOutcomeTargetId(it.opportunity.id)}
                             onToggleAutoPilot={() => toggleAutoPilot(it)}
                             onOpenCockpit={() => openCockpitForItem(it)}
+                            onMarkCovered={() => markCoveredSingle(it)}
+                            onOpenDetail={() => navigate(`/available-freight/${it.opportunity.id}`)}
+                            evalCtx={bucketEvalCtx}
                             urgencyOverride={urgencyOverrides.get(it.opportunity.id) ?? null}
                             onRetryConversion={(failureId) => conversionRetryMutation.mutate({ opportunityId: it.opportunity.id, failureId })}
                             retryingConversion={conversionRetryMutation.isPending && conversionRetryMutation.variables?.opportunityId === it.opportunity.id}
@@ -4011,6 +4126,8 @@ export default function AvailableFreightPage() {
                 Available Freight only
               </div>
               <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">Enter</kbd><span>Run focused row's primary action</span>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">Shift+Enter</kbd><span>Open focused row's detail page</span>
                 <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">x</kbd><span>Toggle selection on focused row</span>
                 <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">A</kbd><span>Approve selected</span>
                 <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs">S</kbd><span>Send top 3 carriers for selected</span>
@@ -4191,6 +4308,18 @@ function CockpitRowView(props: {
   // signature. Mirrors the `L` keyboard shortcut so trackpad users have
   // the same affordance from the row's overflow menu.
   onOpenCockpit?: () => void;
+  /** Task #1022 — opens the cover dialog seeded with this single row.
+   *  Used by the "Mark covered" / "Pick carriers" primary actions so the
+   *  rep stays on the queue. */
+  onMarkCovered?: () => void;
+  /** Task #1022 — opens the row's detail page (used by the
+   *  pick_carriers action since the carrier shortlist editor lives
+   *  there). */
+  onOpenDetail?: () => void;
+  /** Task #1022 — bucket evaluation context (todayIso + team set).
+   *  Used to pick the row's "why surfaced" badge from the same predicate
+   *  the chip strip uses, so row + chip cannot disagree. */
+  evalCtx?: import("@shared/cockpitBuckets").BucketEvalContext;
   /** Task #971 — recomputed urgency override from the parent's 60s
    *  drift recompute. When present, the badge prefers this over the
    *  server-stamped value so a row whose pickup window crossed a
@@ -4206,7 +4335,7 @@ function CockpitRowView(props: {
   lastSeenAt: string | null;
   compact?: boolean;
 }) {
-  const { item, isSelected, isFocused, onToggleSelected, onFocus, onAction, onReassign, onOpenDraft, onLogOutcome, onToggleAutoPilot, onOpenCockpit, lastSeenAt, urgencyOverride, onRetryConversion, retryingConversion } = props;
+  const { item, isSelected, isFocused, onToggleSelected, onFocus, onAction, onReassign, onOpenDraft, onLogOutcome, onToggleAutoPilot, onOpenCockpit, onMarkCovered, onOpenDetail, evalCtx, lastSeenAt, urgencyOverride, onRetryConversion, retryingConversion } = props;
   // Task #653 — local navigate so the "Make this recurring" item can deep-link
   // into LWQ. Defined here (rather than passed as a prop) to keep the row's
   // public surface unchanged.
@@ -4220,6 +4349,126 @@ function CockpitRowView(props: {
   const isNewSinceLastView = !!lastSeenAt && opp.generatedAt
     ? new Date(opp.generatedAt).getTime() > new Date(lastSeenAt).getTime()
     : false;
+
+  // Task #1022 — Self-explanatory row metadata. The action resolver, the
+  // "why surfaced" badge, and the blocking-state caption all derive from
+  // the same RowActionInput so the row never disagrees with itself (e.g.
+  // a "Send to top 3" button while the caption says "Awaiting reply").
+  const actionInput: RowActionInput = {
+    opportunity: {
+      status: opp.status ?? null,
+      pickupWindowStart: opp.pickupWindowStart ?? null,
+      coveredAt: (opp as { coveredAt?: string | null }).coveredAt ?? null,
+      generatedAt: opp.generatedAt ?? null,
+    },
+    coverage: item.coverage,
+    freshnessMinutes: item.freshnessMinutes,
+    rankedCarrierCount: item.chips.length,
+    ownership: item.ownership ?? null,
+    owner: item.owner ?? null,
+    pickupFreshness: item.pickupFreshness ?? null,
+    pickupDaysAgo: item.pickupDaysAgo ?? null,
+  };
+  const blocking = resolveBlocking(actionInput);
+  const nextAction = resolveNextBestAction(actionInput);
+  // Task #1022 — `pickWhyBucket` always returns a BucketDefinition (falls
+  // back to `BUCKETS.all` when no priority bucket matches) so the badge
+  // is guaranteed to render. Only suppressed when no evalCtx was wired
+  // through (defensive — all real callsites pass it).
+  const whyBucket = evalCtx ? pickWhyBucket(actionInput, evalCtx) : null;
+  const pickup = fmtPickupVerbose(opp.pickupWindowStart);
+
+  // Task #1022 — Carrier chips capped to 3 with "+N more" popover so the
+  // primary line stays scannable. The popover renders the full ordered list
+  // with the same CarrierReasonsPopover semantics so reps don't lose access
+  // to the ranker's reasoning when they expand the overflow.
+  const MAX_VISIBLE_CHIPS = 3;
+  const visibleChips = item.chips.slice(0, MAX_VISIBLE_CHIPS);
+  const overflowChips = item.chips.slice(MAX_VISIBLE_CHIPS);
+
+  const firePrimaryAction = () => {
+    if (nextAction.disabled) return;
+    switch (nextAction.id) {
+      case "approve":
+        onAction("approve");
+        return;
+      case "send_top":
+      case "escalate":
+        onAction("send_top", nextAction.payload);
+        return;
+      case "mark_covered":
+        if (onMarkCovered) onMarkCovered();
+        else onAction("mark_covered");
+        return;
+      case "pick_carriers":
+        if (onOpenDetail) onOpenDetail();
+        else rowNavigate(`/available-freight/${opp.id}`);
+        return;
+      case "open_detail":
+      case "confirm_covered":
+      default:
+        if (onOpenDetail) onOpenDetail();
+        else rowNavigate(`/available-freight/${opp.id}`);
+        return;
+    }
+  };
+
+  // Task #1022 — Render helper for a single carrier chip (used both in the
+  // visible cluster and the overflow popover so behavior stays identical).
+  const renderCarrierChip = (chip: CockpitChip) => {
+    const tip = [
+      `${chip.bucket.replace(/_/g, " ")} • fit ${Math.round(chip.fitScore)}`,
+      chip.explanation,
+      chip.respondedAt
+        ? "responded"
+        : chip.sentAt
+          ? "sent, awaiting reply"
+          : "queued",
+    ].filter(Boolean).join(" · ");
+    const benchWins = chip.benchWins ?? 0;
+    const showBench = !!chip.bench && benchWins > 0;
+    return (
+      <span key={chip.opportunityCarrierId} className="inline-flex items-center gap-1">
+        <CarrierReasonsPopover
+          carrierName={chip.carrierName}
+          reasons={chip.reasons ?? []}
+          suppressionReasons={chip.suppressionReasons ?? []}
+          testId={`trigger-reasons-${opp.id}-${chip.carrierId}`}
+        >
+          <Badge
+            variant="outline"
+            className={`${bucketTone(chip.bucket)} cursor-help`}
+            data-testid={`chip-carrier-${opp.id}-${chip.carrierId}`}
+            title={tip}
+          >
+            #{chip.rank} {chip.carrierName}
+            {chip.respondedAt && <CheckCircle2 className="h-3 w-3 ml-1" />}
+            {!chip.respondedAt && chip.sentAt && <Send className="h-3 w-3 ml-1" />}
+          </Badge>
+        </CarrierReasonsPopover>
+        {showBench && (
+          <Badge
+            variant="outline"
+            className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/40 text-[10px] py-0 px-1.5"
+            data-testid={`chip-bench-${opp.id}-${chip.carrierId}`}
+            title={`replied yes ${benchWins}x in last 90d`}
+          >
+            Bench ({benchWins} wins)
+          </Badge>
+        )}
+        {chip.claimed && (
+          <Badge
+            variant="outline"
+            className="bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/40 text-[10px] py-0 px-1.5"
+            data-testid={`chip-claimed-${opp.id}-${chip.carrierId}`}
+            title="Carrier claimed this lane in Carrier Hub"
+          >
+            Claimed
+          </Badge>
+        )}
+      </span>
+    );
+  };
 
   return (
     <div
@@ -4265,6 +4514,20 @@ function CockpitRowView(props: {
             </Badge>
           );
         })()}
+        {/* Task #1022 — "Why surfaced" badge. Same tone palette as the
+            cockpit bucket chip strip so the row reads consistently with
+            the chip the rep clicked to land here. */}
+        {whyBucket && (
+          <Badge
+            variant="outline"
+            className={bucketToneClass(whyBucket.tone)}
+            title={whyBucket.description}
+            data-testid={`badge-why-${opp.id}`}
+            data-why-bucket={whyBucket.key}
+          >
+            {whyBucket.label}
+          </Badge>
+        )}
         {/* Task #971 — Conversion-failure chip. Click opens an in-cockpit
             detail panel (reason, full detail, last-attempted, retry
             count) with the Retry action inside the panel. The chip
@@ -4383,12 +4646,6 @@ function CockpitRowView(props: {
           stability={item.lwqContext?.stability ?? null}
           testId={`badge-stability-${opp.id}`}
         />
-        {item.lwqContext && (
-          <LwqContextChip
-            data={item.lwqContext}
-            testId={`chip-lwq-context-${opp.id}`}
-          />
-        )}
         {item.customer && (
           <span className="flex items-center gap-1 text-xs">
             <span className="text-muted-foreground" data-testid={`text-customer-${opp.id}`}>{item.customer.name}</span>
@@ -4409,8 +4666,15 @@ function CockpitRowView(props: {
             the pricing priors that came in on the source quote so the rep
             can see them at a glance without opening the detail page. */}
         <WonQuoteBadge sourceRef={opp.sourceRef} oppId={opp.id} />
-        <span className="text-xs text-muted-foreground flex items-center gap-1">
-          <Clock className="h-3 w-3" /> pickup {fmtPickup(opp.pickupWindowStart)}
+        <span
+          className="text-xs flex items-center gap-1"
+          data-testid={`text-pickup-${opp.id}`}
+        >
+          <Clock className="h-3 w-3 text-muted-foreground" />
+          <span className="font-medium">{pickup.absolute}</span>
+          {pickup.relative && (
+            <span className="text-muted-foreground">· {pickup.relative}</span>
+          )}
         </span>
         {/* Phase B1 — pickup freshness label. Surfaces when a row is past
             its pickup date but still visible because its status is open;
@@ -4456,6 +4720,23 @@ function CockpitRowView(props: {
             {item.owner ? ownerInitials(item.owner.name) : "—"}
           </span>
           <span className="text-xs text-muted-foreground" data-testid={`text-freshness-${opp.id}`}>{fmtAge(item.freshnessMinutes)} ago</span>
+          {/* Task #1022 — Single primary "next best action" button. The
+              action id, label, and disabled state are derived from the
+              same RowActionInput as the blocking caption so they cannot
+              disagree. Enter on the focused row fires this same handler
+              (see onKey in the page-level keyboard router). */}
+          <Button
+            type="button"
+            size="sm"
+            variant={nextAction.disabled || nextAction.emphasis === "secondary" ? "outline" : "default"}
+            disabled={nextAction.disabled}
+            onClick={(e) => { e.stopPropagation(); firePrimaryAction(); }}
+            title={nextAction.label}
+            data-testid={`button-row-primary-${opp.id}`}
+            data-row-action={nextAction.id}
+          >
+            {nextAction.label}
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => e.stopPropagation()} data-testid={`button-row-menu-${opp.id}`}>
@@ -4526,74 +4807,57 @@ function CockpitRowView(props: {
       </div>
 
       <div className="flex flex-wrap items-center gap-2 pl-7">
+        {/* Task #1022 — Blocking caption: terse, neutral phrasing of why
+            the primary action is what it is (e.g. "Awaiting reply",
+            "No carriers picked yet"). Drives the rep to the right next
+            move without forcing them to scan chips first. */}
+        <span
+          className="text-xs text-muted-foreground"
+          data-testid={`text-blocking-${opp.id}`}
+          data-blocking-state={blocking.state}
+        >
+          {blocking.label}
+        </span>
         {item.chips.length === 0 ? (
           <span className="text-xs text-muted-foreground italic">No carriers shortlisted yet</span>
         ) : (
-          item.chips.map(chip => {
-            // Server-side fit-score reason for tooltip.
-            const tip = [
-              `${chip.bucket.replace(/_/g, " ")} • fit ${Math.round(chip.fitScore)}`,
-              chip.explanation,
-              chip.respondedAt
-                ? "responded"
-                : chip.sentAt
-                  ? "sent, awaiting reply"
-                  : "queued",
-            ].filter(Boolean).join(" · ");
-            const benchWins = chip.benchWins ?? 0;
-            const showBench = !!chip.bench && benchWins > 0;
-            return (
-              <span key={chip.opportunityCarrierId} className="inline-flex items-center gap-1">
-                {/*
-                  Task #633 — wrap the carrier badge in CarrierReasonsPopover so
-                  reps can see the ranker's "why this carrier" reasons on hover
-                  (desktop) or tap (mobile). The native title= tooltip is kept
-                  as a fallback for screen readers / older browsers.
-                */}
-                <CarrierReasonsPopover
-                  carrierName={chip.carrierName}
-                  reasons={chip.reasons ?? []}
-                  suppressionReasons={chip.suppressionReasons ?? []}
-                  testId={`trigger-reasons-${opp.id}-${chip.carrierId}`}
+          <>
+            {visibleChips.map(renderCarrierChip)}
+            {overflowChips.length > 0 && (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={(e) => e.stopPropagation()}
+                    className="inline-flex items-center rounded-md border border-border bg-muted/40 px-2 py-0.5 text-[11px] font-medium text-muted-foreground hover:bg-muted"
+                    data-testid={`button-chips-overflow-${opp.id}`}
+                  >
+                    +{overflowChips.length} more
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent
+                  className="w-[28rem] p-3"
+                  onClick={(e) => e.stopPropagation()}
+                  data-testid={`panel-chips-overflow-${opp.id}`}
                 >
-                  <Badge
-                    variant="outline"
-                    className={`${bucketTone(chip.bucket)} cursor-help`}
-                    data-testid={`chip-carrier-${opp.id}-${chip.carrierId}`}
-                    title={tip}
-                  >
-                    #{chip.rank} {chip.carrierName}
-                    {chip.respondedAt && <CheckCircle2 className="h-3 w-3 ml-1" />}
-                    {!chip.respondedAt && chip.sentAt && <Send className="h-3 w-3 ml-1" />}
-                  </Badge>
-                </CarrierReasonsPopover>
-                {showBench && (
-                  <Badge
-                    variant="outline"
-                    className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/40 text-[10px] py-0 px-1.5"
-                    data-testid={`chip-bench-${opp.id}-${chip.carrierId}`}
-                    title={`replied yes ${benchWins}x in last 90d`}
-                  >
-                    Bench ({benchWins} wins)
-                  </Badge>
-                )}
-                {/* Cross-tab UX (option C) — surface carrier-asserted lane
-                    preference so reps can immediately tell the carrier WANTS
-                    this freight (vs. just being a regional fit). Stamped by
-                    the ranker on the chip's `responsivenessSnapshot`. */}
-                {chip.claimed && (
-                  <Badge
-                    variant="outline"
-                    className="bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/40 text-[10px] py-0 px-1.5"
-                    data-testid={`chip-claimed-${opp.id}-${chip.carrierId}`}
-                    title="Carrier claimed this lane in Carrier Hub"
-                  >
-                    Claimed
-                  </Badge>
-                )}
-              </span>
-            );
-          })
+                  <div className="mb-2 text-xs font-semibold text-muted-foreground">
+                    All {item.chips.length} carriers
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {item.chips.map(renderCarrierChip)}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            )}
+          </>
+        )}
+        {/* Task #1022 — LWQ shortcut moved out of the primary line so it
+            stays subordinate to the lane title and primary action. */}
+        {item.lwqContext && (
+          <LwqContextChip
+            data={item.lwqContext}
+            testId={`chip-lwq-context-${opp.id}`}
+          />
         )}
         <div className="flex items-center gap-2 text-xs text-muted-foreground ml-auto">
           {item.suggestedBuy?.rate !== null && item.suggestedBuy?.rate !== undefined && (
