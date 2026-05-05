@@ -271,20 +271,64 @@ function parseFilters(req: Request): QuoteFilters {
   return f;
 }
 
-// Task #850 — resolve `mineOnly=true` to the requesting user's
-// quote_reps.id. If the user has no rep mapping we inject a sentinel
-// that matches no row, so toggling "Mine only" never accidentally
-// widens scope (e.g. an admin viewing org-wide rows).
-const NO_REP_SENTINEL = "__no_rep__";
-async function applyMineOnly(req: Request, f: QuoteFilters): Promise<QuoteFilters> {
+// Task #1007 — Quote Requests trust contract.
+// `mineOnly=true` resolves to the requesting user's quote_reps.id when
+// such a mapping exists. When it does NOT exist we deliberately do
+// **not** scope the request (the legacy `__no_rep__` sentinel silently
+// turned the list into a fake zero, which was the trust bug we were
+// fixing). Instead we return the filters un-narrowed and surface a
+// structured warning the UI uses to render an honest "Mine only is on
+// but you're not mapped to a rep" banner with a one-click escape hatch.
+//
+// Contract:
+//   { requested: true,  applied: true,  myRepId: <id>, warningCode: null }
+//     → mineOnly was honored, repId scoped down to user's rep.
+//   { requested: true,  applied: false, myRepId: null,
+//     warningCode: "NO_QUOTE_REP_MAPPING" }
+//     → user asked for mineOnly but has no quote_reps row. Filters returned
+//       *un-scoped* so org-wide rows still show; UI renders the warning.
+//   { requested: false, applied: false, myRepId: <id|null>, warningCode: null }
+//     → user did not request mineOnly. No-op.
+export type MineOnlyMeta = {
+  requested: boolean;
+  applied: boolean;
+  myRepId: string | null;
+  warningCode: "NO_QUOTE_REP_MAPPING" | null;
+};
+
+async function applyMineOnly(
+  req: Request,
+  f: QuoteFilters,
+): Promise<{ filters: QuoteFilters; meta: MineOnlyMeta }> {
   const parsed = queryFiltersSchema.safeParse(req.query);
-  if (!parsed.success || !parsed.data.mineOnly) return f;
+  const requested = parsed.success && !!parsed.data.mineOnly;
   const user = req.user;
-  if (!user) return { ...f, repId: NO_REP_SENTINEL };
+  if (!user) {
+    return {
+      filters: f,
+      meta: { requested, applied: false, myRepId: null, warningCode: requested ? "NO_QUOTE_REP_MAPPING" : null },
+    };
+  }
   const [rep] = await db.select({ id: quoteReps.id }).from(quoteReps)
     .where(andSql(eqSql(quoteReps.organizationId, user.organizationId), eqSql(quoteReps.userId, user.id)))
     .limit(1);
-  return { ...f, repId: rep?.id ?? NO_REP_SENTINEL };
+  const myRepId = rep?.id ?? null;
+  if (!requested) {
+    return { filters: f, meta: { requested: false, applied: false, myRepId, warningCode: null } };
+  }
+  if (!myRepId) {
+    // Honest fallback: do NOT silently scope to nothing. Return un-narrowed
+    // filters so the rep sees real org-wide work, and let the UI explain
+    // why their personal queue can't be honored.
+    return {
+      filters: f,
+      meta: { requested: true, applied: false, myRepId: null, warningCode: "NO_QUOTE_REP_MAPPING" },
+    };
+  }
+  return {
+    filters: { ...f, repId: myRepId },
+    meta: { requested: true, applied: true, myRepId, warningCode: null },
+  };
 }
 
 // ─── Attribution response builder ──────────────────────────────────────
@@ -516,16 +560,12 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       // rows can never re-seed an org via the dashboard. Demo seeding is
       // now strictly opt-in via the dev-only seed script.
       void ensureEmailBackfill(user.organizationId);
-      const filters = await applyMineOnly(req, parseFilters(req));
+      const { filters, meta: mineOnlyMeta } = await applyMineOnly(req, parseFilters(req));
       const snap = await getSnapshot(user.organizationId, filters);
-      // Task #850 — surface the requesting user's quote_reps.id so the UI
-      // can drive ownership checks (isMine / isOwnerOrManager) against
-      // rep identity instead of user identity. Lookup is cheap and is
-      // already cached client-side via React Query.
-      const [meRep] = await db.select({ id: quoteReps.id }).from(quoteReps)
-        .where(andSql(eqSql(quoteReps.organizationId, user.organizationId), eqSql(quoteReps.userId, user.id)))
-        .limit(1);
-      res.json({ ...snap, myRepId: meRep?.id ?? null });
+      // Task #850 + #1007 — surface the requesting user's quote_reps.id
+      // (mineOnlyMeta.myRepId is the same value, but we keep `myRepId`
+      // at the top level for backwards-compat with existing UI checks).
+      res.json({ ...snap, myRepId: mineOnlyMeta.myRepId, mineOnlyMeta });
     } catch (err) {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] snapshot error:", err);
@@ -579,9 +619,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
         ? requestedSort
         : "requestDate") as ListSortKey;
       const sortDir = d.sortDir ?? "desc";
-      const scopedFilters = await applyMineOnly(req, filters);
+      const { filters: scopedFilters, meta: mineOnlyMeta } = await applyMineOnly(req, filters);
       const result = await listQuotes(user.organizationId, scopedFilters, sortKey, sortDir, d.offset, d.limit);
-      res.json(result);
+      res.json({ ...result, mineOnlyMeta });
     } catch (err) {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] list error:", err);

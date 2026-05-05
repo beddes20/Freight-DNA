@@ -158,8 +158,20 @@ type Customer = {
 type Rep = { id: string; organizationId: string; name: string; email: string | null };
 type Reason = { id: string; organizationId: string; code: string; label: string; category: string };
 
+// Task #1007 — Quote Requests trust contract. Backend surfaces this on
+// every snapshot/list response so the UI can render an honest banner
+// when "Mine only" is on but the user has no quote_reps mapping
+// (instead of silently returning a fake-zero list).
+type MineOnlyMeta = {
+  requested: boolean;
+  applied: boolean;
+  myRepId: string | null;
+  warningCode: "NO_QUOTE_REP_MAPPING" | null;
+};
+
 type Snapshot = {
   total: number;
+  mineOnlyMeta?: MineOnlyMeta;
   kpis: {
     total: number;
     won: number;
@@ -1053,6 +1065,32 @@ function QuoteRequestsInner(): JSX.Element {
             setNewQuoteOpen(true);
           }}
         />
+
+        {/* Task #1007 — Mine-only honesty banner. Renders when the user
+            asked for "Mine only" but has no quote_reps mapping. The
+            backend deliberately returns un-scoped (org-wide) rows in
+            that case instead of a fake-zero list, and surfaces this via
+            snapshot.mineOnlyMeta so we can name the failure and give a
+            one-click escape hatch. */}
+        {snapshotQuery.data?.mineOnlyMeta?.warningCode === "NO_QUOTE_REP_MAPPING" && (
+          <div
+            className="mx-6 mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300 flex items-center justify-between gap-3"
+            data-testid="banner-mine-only-no-rep"
+          >
+            <div className="flex-1">
+              <span className="font-semibold">Mine only is on, but you're not mapped to a quote rep.</span>{" "}
+              Showing all org rows instead. Ask an admin to link your user to a <code>quote_reps</code> row to enable your personal queue.
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setMineOnly(false)}
+              data-testid="button-mine-only-show-all"
+            >
+              Turn off Mine only
+            </Button>
+          </div>
+        )}
 
         {/* Body: table + drawer */}
         <div className="flex flex-1 overflow-hidden relative">

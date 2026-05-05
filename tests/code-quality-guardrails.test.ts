@@ -3364,6 +3364,82 @@ console.log("\n── 30. graphWebhook never silently drops unknown-sender inbou
   );
 }
 
+// ── Section 32: Quote Requests "Mine only" trust contract ───────────────────
+//
+// Background — the legacy `applyMineOnly` injected a `__no_rep__` sentinel
+// repId when the requesting user had no `quote_reps` row, which silently
+// turned the list endpoint into a fake-zero result while the snapshot
+// still returned org-wide KPIs. Result: rep saw "No matches for the
+// current filters" + a "99+" sidebar badge + 1700+ pending opps in
+// production. Trust bug.
+//
+// Replacement contract (Task #1007):
+//   1. The legacy `__no_rep__` sentinel must not exist anywhere in
+//      `server/routes/customerQuotes.ts`.
+//   2. `applyMineOnly` must return `{ filters, meta }` — not a bare
+//      filters object — so `mineOnlyMeta` can be propagated to the UI.
+//   3. Both `/api/customer-quotes/list` and `/api/customer-quotes/snapshot`
+//      must include `mineOnlyMeta` in their JSON responses.
+//   4. The frontend must render the `banner-mine-only-no-rep` element when
+//      `warningCode === "NO_QUOTE_REP_MAPPING"` and offer a one-click
+//      "Turn off Mine only" escape hatch.
+console.log("\n── Section 32: Quote Requests Mine-only trust contract ──────────────\n");
+{
+  const routesPath = path.join(ROOT, "server/routes/customerQuotes.ts");
+  const pagePath = path.join(ROOT, "client/src/pages/quote-requests.tsx");
+  const routesSrc = fs.readFileSync(routesPath, "utf-8");
+  const pageSrc = fs.readFileSync(pagePath, "utf-8");
+
+  // Strip line comments so the historical-context comment that names the
+  // legacy sentinel doesn't trigger a false positive — what we forbid is
+  // an executable reference, not a commemorative note.
+  const routesCode = routesSrc.split("\n").map(l => l.replace(/\/\/.*$/, "")).join("\n");
+  assert(
+    "customerQuotes.ts — legacy __no_rep__ sentinel removed (no silent fake-zero list)",
+    !/["'`]__no_rep__["'`]|NO_REP_SENTINEL\s*=/.test(routesCode),
+    "__no_rep__ / NO_REP_SENTINEL still defined in code — silent zero-row mineOnly bug may have been re-introduced",
+  );
+
+  assert(
+    "customerQuotes.ts — applyMineOnly returns { filters, meta } shape",
+    /async\s+function\s+applyMineOnly[\s\S]{0,400}Promise<\{\s*filters:\s*QuoteFilters;\s*meta:\s*MineOnlyMeta/.test(routesSrc),
+    "applyMineOnly signature does not return the structured { filters, meta } contract",
+  );
+
+  assert(
+    "customerQuotes.ts — NO_QUOTE_REP_MAPPING warning code emitted by applyMineOnly",
+    /warningCode:\s*["']NO_QUOTE_REP_MAPPING["']/.test(routesSrc),
+    "applyMineOnly does not emit the NO_QUOTE_REP_MAPPING warning code — UI cannot render an honest banner",
+  );
+
+  assert(
+    "customerQuotes.ts — /list endpoint propagates mineOnlyMeta in response",
+    /res\.json\(\{\s*\.\.\.result,\s*mineOnlyMeta\s*\}\)/.test(routesSrc),
+    "/api/customer-quotes/list response does not include mineOnlyMeta — UI cannot detect no-rep state",
+  );
+
+  assert(
+    "customerQuotes.ts — /snapshot endpoint propagates mineOnlyMeta in response",
+    /res\.json\(\{\s*\.\.\.snap,\s*myRepId:[^,]+,\s*mineOnlyMeta\s*\}\)/.test(routesSrc),
+    "/api/customer-quotes/snapshot response does not include mineOnlyMeta — UI cannot render warning banner",
+  );
+
+  assert(
+    "quote-requests.tsx — banner renders on NO_QUOTE_REP_MAPPING with Show-all CTA",
+    /data-testid="banner-mine-only-no-rep"/.test(pageSrc)
+      && /data-testid="button-mine-only-show-all"/.test(pageSrc)
+      && /warningCode\s*===\s*["']NO_QUOTE_REP_MAPPING["']/.test(pageSrc),
+    "Mine-only honesty banner missing in quote-requests.tsx — generic empty state will be shown for unmapped users again",
+  );
+
+  assert(
+    "quote-requests.tsx — Show-all button clears mineOnly via setMineOnly(false)",
+    /setMineOnly\(false\)[\s\S]{0,300}button-mine-only-show-all/.test(pageSrc)
+      || /button-mine-only-show-all[\s\S]{0,300}setMineOnly\(false\)/.test(pageSrc),
+    "Show-all button does not call setMineOnly(false) — user has no escape hatch from mine-only-on state",
+  );
+}
+
 // ── Summary ───────────────────────────────────────────────────────────────────
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {
