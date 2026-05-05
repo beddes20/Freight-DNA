@@ -1,0 +1,228 @@
+I want to step back and treat Available Freight as a product strategy + execution redesign, not just a one-off bug fix.
+
+Product intent
+
+Available Freight should become:
+
+“The execution cockpit for loads that need carrier coverage now — prioritized by urgency, filtered truthfully, and optimized for the next best action.”
+
+I want you to use that as the design and product north star.
+
+What’s wrong today
+
+The current tab feels like it is trying to be too many things at once:
+
+triage queue
+
+coverage dashboard
+
+filter lab
+
+system health console
+
+auto-pilot control surface
+
+That creates too much cognitive load and too many ways for the UI to feel untrustworthy.
+
+A concrete example from today:
+
+I selected Pickup tomorrow
+
+but visible rows still said pickup May 5, which is today
+
+and the page warns that the filter is “layering over current selection,” which is honest but signals the interaction model is too fragile
+
+I do not want a cosmetic redesign first. I want a strategy-led revamp broken into clear tasks.
+
+Your assignment
+
+I want you to:
+
+1. Produce a concise product strategy brief for Available Freight
+
+Define:
+
+the primary purpose of the tab
+
+primary user types
+
+top 3–5 workflows it should support
+
+what belongs on this page
+
+what does not belong on this page
+
+the correct relationship between:
+
+Customer Quotes
+
+Available Freight
+
+Lane Work Queue
+
+I want you to explicitly separate:
+
+inbound demand intake
+
+outbound carrier coverage execution
+
+strategic lane management
+
+2. Break the revamp into implementation tasks
+
+Split the work into separate tasks/phases with clear scope boundaries.
+
+I want at minimum these task buckets:
+
+Task A — Truth & semantics
+
+Fix filter/date/scope truth:
+
+“Pickup tomorrow” must actually mean tomorrow in rows, counts, KPIs, and chips
+
+no contradictory filter states
+
+no hidden layered scope that makes results misleading
+
+clear scope label for what the page is currently showing
+
+Task B — Information hierarchy
+
+Redesign the top of the page so it is easier to scan and operate:
+
+simplify primary controls
+
+reduce KPI/filter/control competition
+
+clarify what is a primary mode vs an advanced filter
+
+reduce operator confusion
+
+Task C — Row model / actionability
+
+Redesign row/card presentation so each load clearly communicates:
+
+what it is
+
+when it picks up
+
+why it is surfaced
+
+what is blocking coverage
+
+what the next best action is
+
+Task D — Mode separation
+
+Define and implement the separation between:
+
+action mode
+
+coverage mode
+
+health/ops mode
+
+If they remain on one page, explain the structure.
+If some controls/insights should move to admin/ops surfaces, say so.
+
+Task E — System health / automation surfaces
+
+Re-evaluate where things like:
+
+import degraded
+
+leak console
+
+hidden loads
+
+auto-pilot preview
+
+should live, and reduce their interference with the primary freight execution workflow.
+
+3. Recommend the build sequence
+
+Tell me:
+
+what order to implement the tasks in
+
+which tasks are highest leverage
+
+which tasks are safest to do first
+
+which tasks depend on others
+
+My assumption is:
+
+Truth & semantics
+
+Information hierarchy
+
+Row model
+
+Mode separation
+
+System health / automation surface refinement
+
+but I want your recommendation after reviewing the actual code and current page structure.
+
+4. Ground it in the current codebase
+
+Before proposing the tasks, inspect the real Available Freight implementation and explain:
+
+main page/component(s)
+
+current filter state model
+
+where date filtering is applied
+
+where KPI counts are computed
+
+where row rendering is defined
+
+where health/ops controls are defined
+
+I do not want abstract product thinking disconnected from the code we actually have.
+
+5. Keep it practical
+
+For each proposed task, include:
+
+problem statement
+
+user impact
+
+exact files/modules likely involved
+
+backend/API/query changes if any
+
+frontend/UI state changes if any
+
+acceptance criteria
+
+regression risks
+
+Constraints
+
+Do not start coding the full redesign yet
+
+Start with strategy + task decomposition
+
+However, if you find an obvious trust bug (like the Pickup tomorrow semantics issue), call it out explicitly as a candidate for immediate repair
+
+Keep this focused on Available Freight, not email plumbing or Customer Quotes work
+
+Deliverables back
+
+I want:
+
+a short product strategy brief,
+
+a proposed task breakdown (A, B, C, D, E or better),
+
+recommended implementation sequence,
+
+notes on what in the current codebase is helping vs hurting,
+
+and a recommendation on whether the date/filter truth issue should be fixed immediately before the broader revamp.
+
+The outcome I want is a plan to give Available Freight a powerful, efficient makeover that makes it feel like a real execution cockpit instead of a crowded mixed-purpose screen.
