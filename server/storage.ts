@@ -7805,6 +7805,54 @@ export class DatabaseStorage implements IStorage {
       )
       .limit(1);
 
+    // Task #1002 — self-heal junk rows from the May-2026 inbound-persistence
+    // incident. The previous webhook handler wrote rows with empty
+    // from/to/subject/body whenever Graph delivered a UUID-resource
+    // notification whose message body it couldn't fetch (the empty fields
+    // collapsed the direction comparison to `"" === ""` and mis-classified
+    // the row as outbound). Those junk rows then permanently consumed the
+    // unique (org_id, provider_message_id) slot, so the legitimate
+    // re-delivery (or backfill replay) with real data was silently
+    // skipped as a duplicate — starving the customer-quote pipeline.
+    //
+    // Heal in place when the existing row has an empty from_email and the
+    // incoming payload carries real data. We overwrite the data fields
+    // (direction, from/to/subject/body, links, ingestedVia) and reset
+    // processedForSignalsAt to null so downstream pipelines re-process
+    // the now-correct row. Treat the result as `created: true` so callers
+    // emit live-sync hints and dispatch the inline classifier — the row
+    // is functionally a brand-new message from every consumer's
+    // perspective. Self-heal is gated on `data.fromEmail` being non-empty
+    // so the first guards in the webhook + delta path can't trigger this
+    // (we don't overwrite junk with more junk).
+    if (existing && !existing.fromEmail && data.fromEmail) {
+      const [healed] = await db
+        .update(emailMessages)
+        .set({
+          direction: data.direction,
+          fromEmail: data.fromEmail,
+          toEmail: data.toEmail ?? "",
+          subject: data.subject ?? "",
+          body: data.body ?? "",
+          threadId: data.threadId ?? null,
+          linkedAccountId: data.linkedAccountId ?? null,
+          linkedCarrierId: data.linkedCarrierId ?? null,
+          linkedLaneId: data.linkedLaneId ?? null,
+          linkedLoadId: data.linkedLoadId ?? null,
+          linkedTaskId: data.linkedTaskId ?? null,
+          linkedNbaId: data.linkedNbaId ?? null,
+          linkedOutreachLogId: data.linkedOutreachLogId ?? null,
+          processedForSignalsAt: null,
+          providerSentAt: data.providerSentAt ?? existing.providerSentAt,
+          ingestedVia: data.ingestedVia ?? existing.ingestedVia,
+        })
+        .where(eq(emailMessages.id, existing.id))
+        .returning();
+      if (healed) {
+        return { message: healed, created: true };
+      }
+    }
+
     return { message: existing, created: false };
   }
 

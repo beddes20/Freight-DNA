@@ -3006,6 +3006,36 @@ console.log("\n── Section 31: ingestion-silent-drop & empty-content watchdog
     /_emptyContentTickCount[\s\S]{0,2500}resolveMailboxHealthAlert\([^)]*ALERT_KEY_EMPTY_CONTENT_SPIKE/.test(watchdogSrc),
     "Without the auto-resolve call, a recovered alert will sit red in the admin console forever",
   );
+
+  // Task #1002 — inbound/outbound asymmetry guard. The closest detector to
+  // the May-2026 incident's signature (outbound healthy while inbound is
+  // starved). The other two checks above can be defeated by partial
+  // regressions; this one cannot.
+  assert(
+    "mailboxWatchdogService — ALERT_KEY_INBOUND_OUTBOUND_ASYMMETRY defined",
+    /ALERT_KEY_INBOUND_OUTBOUND_ASYMMETRY\s*=\s*"ingestion_inbound_outbound_asymmetry"/.test(watchdogSrc),
+    "Alert key constant missing — admins won't be able to dedupe or auto-resolve asymmetry alerts",
+  );
+  assert(
+    "mailboxWatchdogService — runInboundOutboundAsymmetryCheck export exists",
+    /export\s+async\s+function\s+runInboundOutboundAsymmetryCheck\s*\(/.test(watchdogSrc),
+    "The watchdog cycle imports this name; renaming it without updating the cycle will silently disable the check",
+  );
+  assert(
+    "mailboxWatchdogService — runWatchdogCycle invokes runInboundOutboundAsymmetryCheck",
+    /runWatchdogCycle[\s\S]{0,5000}runInboundOutboundAsymmetryCheck\s*\(/.test(watchdogSrc),
+    "Wire-up missing — the asymmetry check exists but never runs",
+  );
+  assert(
+    "mailboxWatchdogService — asymmetry honors QUOTE_PIPELINE_CONSECUTIVE_TICKS",
+    /_asymmetryTickCount[\s\S]{0,2000}QUOTE_PIPELINE_CONSECUTIVE_TICKS/.test(watchdogSrc),
+    "Without consecutive-tick gating, a single transient minute will wake on-call",
+  );
+  assert(
+    "mailboxWatchdogService — asymmetry calls resolveMailboxHealthAlert on recovery",
+    /_asymmetryTickCount[\s\S]{0,2500}resolveMailboxHealthAlert\([^)]*ALERT_KEY_INBOUND_OUTBOUND_ASYMMETRY/.test(watchdogSrc),
+    "Without the auto-resolve call, a recovered alert will sit red in the admin console forever",
+  );
 })();
 
 // ── Section 33: Capture-first contract (Task #1003) ──────────────────

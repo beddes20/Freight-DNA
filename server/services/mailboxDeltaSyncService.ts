@@ -206,27 +206,26 @@ async function ingestMessage(
 ): Promise<void> {
   const { processUserMailboxEmailForDelta } = await import("../routes/graphWebhook");
 
-  // TEMP-PROBE (remove after the inbound-email persistence incident is
-  // resolved): distinguish "Graph payload missing required fields" from
-  // "our extraction/comparison wrong". Logs only booleans + the Graph
-  // messageId; never the body, subject, or sender (those are PII and
-  // this log surface is not a sanctioned PII destination).
-  {
-    const hasFrom = !!msg.from?.emailAddress?.address;
-    const hasSubj = !!msg.subject;
-    const hasBody = !!msg.body?.content;
-    const mailboxOk = !!mailbox.email;
-    if (!hasFrom || !hasSubj || !hasBody || !mailboxOk) {
-      log(
-        `EMPTY-FIELD payload mailbox=${mailbox.email || "(empty!)"} folder=${folder} ` +
-        `msgId=${msg.id} hasFrom=${hasFrom} hasSubj=${hasSubj} hasBody=${hasBody} ` +
-        `mailboxOk=${mailboxOk}`,
-      );
-    }
-  }
-
   const fromEmail = msg.from?.emailAddress?.address ?? "";
   const fromName = msg.from?.emailAddress?.name ?? "";
+
+  // Task #1002 — refuse to ingest a Graph delta entry that has no sender.
+  // Empty-from rows are either (a) a transient Graph response missing
+  // required fields, or (b) a placeholder for a deleted message. Either
+  // way, persisting them creates a junk row keyed on providerMessageId
+  // that blocks the legitimate re-delivery (with real data) from
+  // upserting. Skip and let the next delta cycle replay carry the real
+  // message. mailbox.email is non-empty by construction (we resolve the
+  // monitored mailbox before calling here), so the only failure mode is
+  // an empty payload from Graph.
+  if (!fromEmail) {
+    log(
+      `[delta-sync] Skipping empty-from message mailbox=${mailbox.email} ` +
+      `folder=${folder} msgId=${msg.id}`,
+    );
+    return;
+  }
+
   const allToRecipients = (msg.toRecipients ?? [])
     .map(r => r.emailAddress?.address)
     .filter((a): a is string => !!a);

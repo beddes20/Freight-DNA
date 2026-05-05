@@ -1353,6 +1353,13 @@ export const _QUOTE_PIPELINE_THRESHOLDS_FOR_TESTS = {
 
 const ALERT_KEY_INGESTION_SILENT_DROP = "ingestion_silent_drop";
 const ALERT_KEY_EMPTY_CONTENT_SPIKE = "email_empty_content_spike";
+// Task #1002 — asymmetry guard. The May-2026 incident had Graph
+// notifications firing AND outbound rows landing (as junk) — so a check
+// keyed only on "Graph notifications + 0 inbound" can be defeated by a
+// regression that mis-classifies inbound as outbound. The asymmetry
+// check is the cleanest detector: outbound continues healthy WHILE
+// inbound is severely depressed.
+const ALERT_KEY_INBOUND_OUTBOUND_ASYMMETRY = "ingestion_inbound_outbound_asymmetry";
 
 // Window over which we compare Graph activity to inbound row landings. 30
 // minutes is wide enough to absorb a slow delta cycle but tight enough to
@@ -1371,6 +1378,20 @@ const EMPTY_CONTENT_WINDOW_MIN = 60;
 const EMPTY_CONTENT_MIN_VOLUME = 50;
 const EMPTY_CONTENT_RATIO_THRESHOLD = 0.20;
 const _emptyContentTickCount = new Map<string, number>();
+
+// Task #1002 — inbound/outbound asymmetry thresholds. Healthy historical
+// inbound:outbound ratio per the prod audit ranges 4-540% across orgs.
+// We trip when:
+//   - outbound rows in the window cross a "the org is active" floor
+//     (so quiet evenings can't trip the alert), AND
+//   - inbound/outbound ratio falls below a conservative floor that's
+//     well under the lowest historical baseline.
+// 60-min window matches the empty-content-spike check so the two signals
+// cover the same observation surface.
+const ASYMMETRY_WINDOW_MIN = 60;
+const ASYMMETRY_MIN_OUTBOUND = 100;
+const ASYMMETRY_MIN_INBOUND_RATIO = 0.02; // <2% inbound vs. outbound = regression
+const _asymmetryTickCount = new Map<string, number>();
 
 export async function runIngestionSilentDropCheck(
   mailboxes: MonitoredMailbox[],
@@ -1538,11 +1559,105 @@ export async function runEmptyContentSpikeCheck(
   return { orgsChecked: byOrg.size, orgsTripped, alertsFired, alertsResolved };
 }
 
+// Task #1002 — inbound/outbound asymmetry check. The closest signal to the
+// May-2026 incident: outbound continues healthy while inbound is severely
+// depressed. Catches both the original failure mode (mis-classified inbound
+// → outbound, leaving 0 inbound) and partial regressions where some inbound
+// still lands but at a tiny fraction of outbound. Reuses the same per-org
+// streak gating + auto-resolve primitives as the other ingestion checks.
+export async function runInboundOutboundAsymmetryCheck(
+  mailboxes: MonitoredMailbox[],
+  now: Date,
+): Promise<{ orgsChecked: number; orgsTripped: number; alertsFired: number; alertsResolved: number }> {
+  const byOrg = new Map<string, MonitoredMailbox[]>();
+  for (const mb of mailboxes) {
+    if (!mb.enabled) continue;
+    const arr = byOrg.get(mb.orgId) ?? [];
+    arr.push(mb);
+    byOrg.set(mb.orgId, arr);
+  }
+
+  let orgsTripped = 0;
+  let alertsFired = 0;
+  let alertsResolved = 0;
+  const windowStart = new Date(now.getTime() - ASYMMETRY_WINDOW_MIN * 60_000);
+
+  for (const [orgId, orgMailboxes] of byOrg.entries()) {
+    const anchor = orgMailboxes[0];
+    let inboundN = 0;
+    let outboundN = 0;
+    try {
+      const result = await db.execute(sql`
+        SELECT
+          COUNT(*) FILTER (WHERE direction = 'inbound')::int  AS inbound_n,
+          COUNT(*) FILTER (WHERE direction = 'outbound')::int AS outbound_n
+        FROM email_messages
+        WHERE org_id = ${orgId}
+          AND created_at >= ${windowStart}
+      `);
+      const row = (result.rows?.[0] ?? {}) as { inbound_n?: number; outbound_n?: number };
+      inboundN = Number(row.inbound_n ?? 0);
+      outboundN = Number(row.outbound_n ?? 0);
+    } catch (err) {
+      log(`asymmetry query failed org=${orgId}: ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+
+    // Tripped iff the org is *active* (outbound floor met) and inbound has
+    // collapsed below the conservative ratio. Quiet hours don't trigger
+    // because outbound also drops; partial regressions trigger because
+    // inbound falls disproportionately.
+    const ratio = outboundN > 0 ? inboundN / outboundN : 0;
+    const tripped =
+      outboundN >= ASYMMETRY_MIN_OUTBOUND && ratio < ASYMMETRY_MIN_INBOUND_RATIO;
+
+    if (tripped) {
+      orgsTripped++;
+      const next = (_asymmetryTickCount.get(orgId) ?? 0) + 1;
+      _asymmetryTickCount.set(orgId, next);
+      if (next >= QUOTE_PIPELINE_CONSECUTIVE_TICKS) {
+        const pct = (ratio * 100).toFixed(1);
+        const reason =
+          `Inbound/outbound asymmetry: ${inboundN} inbound vs ${outboundN} outbound rows ` +
+          `in last ${ASYMMETRY_WINDOW_MIN} min (${pct}% — floor ${ASYMMETRY_MIN_INBOUND_RATIO * 100}%). ` +
+          `Outbound is healthy so the org is active; inbound starvation indicates a persistence or ` +
+          `direction-classification regression — check graphWebhook + mailboxDeltaSyncService.`;
+        const result = await storage
+          .fireMailboxHealthAlert({
+            orgId,
+            mailboxId: anchor.id,
+            alertKey: ALERT_KEY_INBOUND_OUTBOUND_ASYMMETRY,
+            severity: "critical",
+            reason,
+          })
+          .catch(() => null);
+        if (result?.isNew) {
+          alertsFired++;
+          await fanOutAdminNotifications(
+            anchor,
+            "Email ingestion: inbound/outbound asymmetry",
+            reason,
+          ).catch(() => {});
+        }
+      }
+    } else {
+      _asymmetryTickCount.delete(orgId);
+      const resolved = await storage
+        .resolveMailboxHealthAlert(anchor.id, ALERT_KEY_INBOUND_OUTBOUND_ASYMMETRY)
+        .catch(() => null);
+      if (resolved) alertsResolved++;
+    }
+  }
+
+  return { orgsChecked: byOrg.size, orgsTripped, alertsFired, alertsResolved };
+}
+
 // Test-only: reset per-org streak trackers so unit tests can assert
 // streak-gating behavior deterministically.
 export function _resetIngestionWatchdogTrackersForTests(): void {
   _ingestSilentDropTickCount.clear();
   _emptyContentTickCount.clear();
+  _asymmetryTickCount.clear();
 }
 
 export const _INGESTION_WATCHDOG_THRESHOLDS_FOR_TESTS = {
@@ -1551,9 +1666,13 @@ export const _INGESTION_WATCHDOG_THRESHOLDS_FOR_TESTS = {
   emptyContentWindowMin: EMPTY_CONTENT_WINDOW_MIN,
   emptyContentMinVolume: EMPTY_CONTENT_MIN_VOLUME,
   emptyContentRatioThreshold: EMPTY_CONTENT_RATIO_THRESHOLD,
+  asymmetryWindowMin: ASYMMETRY_WINDOW_MIN,
+  asymmetryMinOutbound: ASYMMETRY_MIN_OUTBOUND,
+  asymmetryMinInboundRatio: ASYMMETRY_MIN_INBOUND_RATIO,
   consecutiveTicks: QUOTE_PIPELINE_CONSECUTIVE_TICKS,
   alertKeyIngestionSilentDrop: ALERT_KEY_INGESTION_SILENT_DROP,
   alertKeyEmptyContentSpike: ALERT_KEY_EMPTY_CONTENT_SPIKE,
+  alertKeyInboundOutboundAsymmetry: ALERT_KEY_INBOUND_OUTBOUND_ASYMMETRY,
 };
 
 // ── Cron scheduler ──────────────────────────────────────────────────────────
@@ -1633,6 +1752,16 @@ async function runWatchdogCycle(trigger: "boot" | "cron"): Promise<void> {
       log(`empty-content-spike check failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
+    // Task #1002 — inbound/outbound asymmetry guard. Fires when outbound
+    // continues healthy while inbound is severely depressed (the exact
+    // signature of the May-2026 incident).
+    let asymmetrySummary: Awaited<ReturnType<typeof runInboundOutboundAsymmetryCheck>> | null = null;
+    try {
+      asymmetrySummary = await runInboundOutboundAsymmetryCheck(mailboxes, now);
+    } catch (err) {
+      log(`inbound/outbound asymmetry check failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     if (trigger === "cron") {
       const lagSuffix = lagSummary
         ? `, lag: ${lagSummary.orgsLagging}/${lagSummary.orgsChecked} org(s) lagging, ${lagSummary.alertsFired} alert(s) fired, ${lagSummary.alertsResolved} resolved`
@@ -1653,7 +1782,10 @@ async function runWatchdogCycle(trigger: "boot" | "cron"): Promise<void> {
       const emptySuffix = emptyContentSummary
         ? `, empty-content: ${emptyContentSummary.orgsTripped}/${emptyContentSummary.orgsChecked} tripped, ${emptyContentSummary.alertsFired} alert(s) fired, ${emptyContentSummary.alertsResolved} resolved`
         : "";
-      log(`Cycle done: ${mailboxes.length} mailbox(es), ${unhealthy} unhealthy, ${degraded} degraded, ${healed} self-healed${lagSuffix}${lsSuffix}${qpSuffix}${ingestSuffix}${emptySuffix}`);
+      const asymSuffix = asymmetrySummary
+        ? `, asymmetry: ${asymmetrySummary.orgsTripped}/${asymmetrySummary.orgsChecked} tripped, ${asymmetrySummary.alertsFired} alert(s) fired, ${asymmetrySummary.alertsResolved} resolved`
+        : "";
+      log(`Cycle done: ${mailboxes.length} mailbox(es), ${unhealthy} unhealthy, ${degraded} degraded, ${healed} self-healed${lagSuffix}${lsSuffix}${qpSuffix}${ingestSuffix}${emptySuffix}${asymSuffix}`);
     }
   } finally {
     _tickInFlight = false;

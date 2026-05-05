@@ -209,10 +209,10 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
   const resourceMailbox = resource.match(/users\/([^/]+)\//i);
   const rawMailboxSegment = resourceMailbox ? decodeURIComponent(resourceMailbox[1]) : "";
   const isUuidSegment = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawMailboxSegment);
-  const mailboxEmail = !isUuidSegment ? rawMailboxSegment.toLowerCase() : "";
+  const mailboxEmailFromResource = !isUuidSegment ? rawMailboxSegment.toLowerCase() : "";
 
-  let monitoredMailbox = mailboxEmail
-    ? await storage.getMonitoredMailboxByEmail(orgId, mailboxEmail).catch(() => null)
+  let monitoredMailbox = mailboxEmailFromResource
+    ? await storage.getMonitoredMailboxByEmail(orgId, mailboxEmailFromResource).catch(() => null)
     : null;
 
   // Subscription-id resolution path (already used by the outer caller) — when
@@ -222,6 +222,37 @@ async function processNotification(notification: GraphNotificationValue, orgId: 
     monitoredMailbox = await storage
       .getMonitoredMailboxByAnySubscriptionId(notification.subscriptionId)
       .catch(() => null) ?? null;
+  }
+
+  // Task #1002 — when the resource path is a UUID segment, mailboxEmail
+  // from the URL is empty. Fall back to the resolved monitored mailbox's
+  // email so the downstream `fromEmail === mailboxEmail` direction
+  // comparison can correctly distinguish outbound (rep-sent) from
+  // inbound (customer reply). Without this fallback the comparison
+  // collapses to `"" === ""` whenever fetchGraphMessage also returns no
+  // sender, which silently mis-classifies every UUID-path notification
+  // as outbound and pollutes email_messages with empty rows that then
+  // block the legitimate inbound re-delivery via the unique
+  // (org_id, provider_message_id) constraint.
+  const mailboxEmail = mailboxEmailFromResource || monitoredMailbox?.email?.toLowerCase() || "";
+
+  // Task #1002 — refuse to persist a row when Graph gave us a notification
+  // whose message body we couldn't fetch (deletion race, transient 404, or
+  // the not-yet-replicated-to-this-replica window). The previous code
+  // would write an outbound row with empty from/to/subject/body, which
+  // (a) corrupts outbound counts, (b) consumes the unique providerMessageId
+  // slot so the re-delivered notification with real data is silently
+  // skipped as a duplicate, and (c) starves the customer-quote pipeline.
+  // Returning early lets Microsoft Graph re-deliver the notification once
+  // the message is fetchable; the resilient-fetch retries already handle
+  // transient 5xx so a real "message vanished" returns null exactly once.
+  if (!messageDetails || !fromEmail) {
+    log(
+      `Skipping notification with no fetchable message body: msgId=${providerMessageId} ` +
+      `fromEmpty=${!fromEmail} detailsNull=${!messageDetails} ` +
+      `resource="${resource.slice(0, 80)}"`,
+    );
+    return;
   }
 
   if (monitoredMailbox) {
@@ -525,16 +556,36 @@ async function processUserMailboxEmail(params: {
   const isFromMailboxOwner = fromEmail.toLowerCase() === mailboxEmail.toLowerCase();
   const direction = isFromMailboxOwner ? "outbound" : "inbound";
 
-  // TEMP-PROBE (remove after the inbound-email persistence incident is
-  // resolved): catch the case where mailboxEmail is empty/normalized-empty,
-  // which collapses the from-comparison to "" === "" and mis-classifies
-  // every row as outbound. Booleans only — no PII.
-  if (!fromEmail || !mailboxEmail) {
+  // Task #1002 — unified TOMBSTONE-DROP. A Graph delivery is "tombstoned" if
+  // it's unfetchable in either of the two ways the May-2026 incident surfaced:
+  //
+  //   (a) Empty payload: !fromEmail && !subject && !bodyFull. Graph @removed
+  //       placeholders look like this — persisting creates skinny rows that
+  //       pollute the inbox without giving operators anything to act on.
+  //
+  //   (b) Empty from + empty mailbox owner: !fromEmail && !mailboxEmail. This
+  //       is the exact `"" === ""` mis-classification that fabricated junk
+  //       outbound rows during the incident. processNotification + delta-sync
+  //       now block this upstream, but other callers (backfill, self-heal)
+  //       still reuse this helper, so the defensive layer stays.
+  //
+  // Hoisted above the unknown-first-touch / accountMatch logic so it applies
+  // to known AND unknown senders — an empty Graph notification is useless
+  // regardless of who the supposed sender is. This is the only allowed
+  // `created: false` early-return alongside the duplicate-skip below; the
+  // Section-30 guardrail in tests/code-quality-guardrails.test.ts pins that
+  // contract.
+  const isEmptyPayload = !fromEmail && !subject && !bodyFull;
+  const isMailboxEmpty = !fromEmail && !mailboxEmail;
+  if (isEmptyPayload || isMailboxEmpty) {
+    const reason = isMailboxEmpty
+      ? "empty from + empty mailbox owner — would fabricate outbound from \"\" === \"\""
+      : "no from / no subject / no body — Graph @removed placeholder";
     log(
-      `[user-mailbox] MAILBOX-EMPTY-PROBE direction=${direction} ` +
-      `fromEmpty=${!fromEmail} mailboxEmpty=${!mailboxEmail} ` +
-      `msgId=${providerMessageId} ingestedVia=${ingestedVia}`,
+      `[user-mailbox] TOMBSTONE-DROP direction=inbound msgId=${providerMessageId} ` +
+        `ingestedVia=${ingestedVia} (${reason})`,
     );
+    return { created: false, direction };
   }
 
   const counterpartyEmails = isFromMailboxOwner
@@ -637,6 +688,12 @@ async function processUserMailboxEmail(params: {
   //   - LOG: emit a distinct `PERSIST-UNKNOWN` line so ops can count first-
   //     touch traffic and so this branch is grep-attributable.
   //
+  // EXCEPTION (Task #302, retained): outbound rep emails must always reach
+  // the play-run stamping block below so we can attribute the send to a
+  // play run via tier-3 (unbound recent run) matching, even when the
+  // recipient doesn't match a CRM contact and no thread exists yet. The
+  // `direction !== "outbound"` predicate below preserves that bypass.
+  //
   // The single guard we keep is for true Outlook tombstones — a Graph
   // delivery with no from / no subject / no body is a `@removed` placeholder
   // (or an empty-payload race), not a real email. Persisting those would
@@ -647,13 +704,9 @@ async function processUserMailboxEmail(params: {
   const isUnknownFirstTouch =
     !accountMatch && !effectiveCarrierId && !existingThreadExists && direction !== "outbound";
   if (isUnknownFirstTouch) {
-    if (!fromEmail && !subject && !bodyFull) {
-      log(
-        `[user-mailbox] TOMBSTONE-DROP direction=inbound msgId=${providerMessageId} ` +
-          `(no from / no subject / no body — Graph @removed placeholder)`,
-      );
-      return { created: false, direction };
-    }
+    // Empty-payload tombstones are already filtered by the unified
+    // TOMBSTONE-DROP check above, so by the time we reach here the row is
+    // worth preserving even though no contact / carrier / thread matched.
     log(
       `[user-mailbox] PERSIST-UNKNOWN direction=inbound from=${fromEmail || "(empty)"} ` +
         `subjEmpty=${!subject} bodyEmpty=${!bodyFull} msgId=${providerMessageId} — ` +
