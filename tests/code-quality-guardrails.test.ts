@@ -4437,7 +4437,169 @@ console.log("\n── Section 1029: LWQ D — Row redesign (reason chip + lifecy
   );
 }
 
+// ── Section 1100: Customer Quotes & Account Ownership stability contract ──
+//
+// Consolidated regression protection for the contracts documented in
+// `docs/customer-quotes-stability-contract.md` (CQ-1 .. CQ-6). Each assert
+// names the contract ID so a failure points the next reader straight at
+// the doc. Do NOT relax any of these assertions without updating the
+// matching contract section in the doc in the same commit.
+//
+{
+  console.log("\n── Section 1100: Customer Quotes stability contract (CQ-1..CQ-6) ──\n");
+
+  const docPath = "docs/customer-quotes-stability-contract.md";
+  assert(
+    "[CQ-doc] customer-quotes stability contract doc exists",
+    fs.existsSync(docPath),
+  );
+  const docSrc = fs.existsSync(docPath) ? fs.readFileSync(docPath, "utf8") : "";
+  for (const id of ["CQ-1", "CQ-2", "CQ-3", "CQ-4", "CQ-5", "CQ-6"]) {
+    assert(
+      `[CQ-doc] contract ${id} is documented`,
+      new RegExp(`##\\s+${id}\\b`).test(docSrc),
+    );
+  }
+
+  const cqSvc = readFile("server/services/customerQuotes.ts");
+
+  // ── CQ-1 — "Mine Only" honest empty state ──────────────────────────────
+  // The __none__ sentinel is the contract value the resolver returns when
+  // a customer-facing user has no QuoteRep mapping. It MUST be checked at
+  // the three rep-scoped readers so they short-circuit to an empty shell
+  // instead of leaking org-wide rows.
+  assert(
+    "[CQ-1] resolver returns the __none__ sentinel for unmapped reps",
+    /return\s+rep\?\.id\s*\?\?\s*"__none__"/.test(cqSvc),
+  );
+  const noneShortCircuits = (cqSvc.match(/scopedRepId\s*===\s*"__none__"/g) ?? []).length;
+  assert(
+    `[CQ-1] __none__ short-circuits at >=3 callers (got ${noneShortCircuits})`,
+    noneShortCircuits >= 3,
+  );
+
+  // ── CQ-2 — Customer-only main queue (single chokepoint) ────────────────
+  // The routing-status drop is unconditional inside applyFilters: no flag,
+  // no caller opt-out, both literals present.
+  const applyFiltersMatch = cqSvc.match(/export function applyFilters\([\s\S]*?\n\}\n/);
+  assert("[CQ-2] applyFilters helper is present", !!applyFiltersMatch);
+  if (applyFiltersMatch) {
+    const body = applyFiltersMatch[0];
+    assert(
+      "[CQ-2] applyFilters drops routingStatus === 'auto_carrier' and 'needs_routing' on the same line",
+      /routingStatus\s*===\s*"auto_carrier"\s*\|\|\s*r\.routingStatus\s*===\s*"needs_routing"/.test(body),
+    );
+    // ── CQ-5 — null-passthrough is load-bearing ──────────────────────────
+    // The `r.repId &&` guard MUST stay so null-rep rows fall through to
+    // the Account Owner fallback in CQ-3.
+    assert(
+      "[CQ-5] applyFilters keeps the `r.repId &&` null-passthrough guard on the customer-facing rep gate",
+      /customerFacingRepIds\s*&&\s*r\.repId\s*&&\s*!customerFacingRepIds\.has\(r\.repId\)/.test(body),
+    );
+  }
+  // The Needs Routing surface must use a distinct path (direct
+  // routing_status filter) and not be unified into applyFilters.
+  assert(
+    "[CQ-2] a Needs-Routing reader queries routing_status='needs_routing' directly (separate path from applyFilters)",
+    /routing_status\s*=\s*['"]needs_routing['"]|routingStatus,\s*['"]needs_routing['"]|eq\(\s*[^,]+\.routingStatus,\s*['"]needs_routing['"]\s*\)/.test(cqSvc + readFile("server/routes/customerQuotes.ts")),
+  );
+
+  // ── CQ-3 — Account Owner is canonical (companies.ownerRepId) ──────────
+  // The owner-name map MUST be built from the companies table, not from
+  // quote_customers.owner_rep_id.
+  assert(
+    "[CQ-3] loadContext selects companies.ownerRepId for the canonical owner-name map",
+    /from\(companies\)[\s\S]{0,200}ownerRepId:\s*companies\.ownerRepId|ownerRepId:\s*companies\.ownerRepId[\s\S]{0,200}from\(companies\)/.test(cqSvc),
+  );
+  assert(
+    "[CQ-3] loadContext exposes ownerRepNameByCustomerId in the returned ctx",
+    /ownerRepNameByCustomerId,/.test(cqSvc),
+  );
+  // enrich() MUST read the canonical map and MUST NOT read the deprecated
+  // copy field (`customer.ownerRepId`) for the display fallback.
+  const enrichMatch = cqSvc.match(/return rows\.map\(r => \{[\s\S]*?\n  \}\);\n\}/);
+  assert("[CQ-3] enrich() row mapper is present", !!enrichMatch);
+  if (enrichMatch) {
+    const body = enrichMatch[0];
+    assert(
+      "[CQ-3] enrich() reads opts.ownerRepNameByCustomerId for the Account Owner fallback",
+      /opts\.ownerRepNameByCustomerId\?\.get\(r\.customerId\)/.test(body),
+    );
+    assert(
+      "[CQ-3] enrich() does NOT read the deprecated customer.ownerRepId copy field",
+      !/customer\.ownerRepId|customerMap\.get\([^)]+\)\?\.ownerRepId/.test(body),
+    );
+  }
+
+  // ── CQ-4 — Response-time visibility is read-only derived ──────────────
+  // attachResponseTimes body must contain ZERO write verbs and must not
+  // call ingestion / classifier helpers. Tighter than the existing Phase 1
+  // guard (which already checks db.insert/update/delete) — also forbids
+  // upsert / onConflictDoUpdate / onConflictDoNothing so a "cache" can't
+  // sneak in via a different write API.
+  const attachMatch = cqSvc.match(/async function attachResponseTimes[\s\S]*?\n\}\n/);
+  assert("[CQ-4] attachResponseTimes helper is present", !!attachMatch);
+  if (attachMatch) {
+    const body = attachMatch[0];
+    assert(
+      "[CQ-4] attachResponseTimes contains no db.insert/update/delete/upsert (read-only)",
+      !/db\.(insert|update|delete|upsert)\(/.test(body),
+    );
+    assert(
+      "[CQ-4] attachResponseTimes does not chain onConflictDo* (no hidden upsert)",
+      !/\.onConflictDo(Update|Nothing)\(/.test(body),
+    );
+    assert(
+      "[CQ-4] attachResponseTimes does not call ingestion/classifier helpers",
+      !/processUserMailboxEmail|ingestQuoteFromEmail|classifyEmail/.test(body),
+    );
+  }
+
+  // ── CQ-6 — Funnel diagnostics intentionally omits the rep gate ────────
+  // The Leakage / audit screen needs to see rows the main queue hides;
+  // the diagnostics path MUST call applyFilters with at most three
+  // positional args (no customerFacingRepIds).
+  const diagMatch = cqSvc.match(/getFunnelDiagnostics[\s\S]{0,4000}?applyFilters\([^)]*\)/);
+  assert(
+    "[CQ-6] getFunnelDiagnostics callsite for applyFilters is locatable",
+    !!diagMatch,
+  );
+  if (diagMatch) {
+    // Strip trailing `)` and count comma-separated args at the top level.
+    const callMatch = diagMatch[0].match(/applyFilters\(([^)]*)\)$/);
+    if (callMatch) {
+      const args = callMatch[1].split(",").map(s => s.trim()).filter(Boolean);
+      assert(
+        `[CQ-6] getFunnelDiagnostics calls applyFilters with <=3 args (no customerFacingRepIds) — got ${args.length}: ${args.join(" | ")}`,
+        args.length <= 3,
+      );
+      assert(
+        "[CQ-6] getFunnelDiagnostics does NOT pass ctx.customerFacingRepIds to applyFilters",
+        !/customerFacingRepIds/.test(callMatch[1]),
+      );
+    }
+  }
+
+  // ── Cross-contract — generic PATCH /api/companies/:id strips ownerRepId ─
+  // (Prevents a writer to companies.ownerRepId from sneaking in via the
+  // generic update — the dedicated /owner endpoint is the only allowed
+  // write path. See CQ-3 "Must NOT".)
+  const companiesRoutes = readFile("server/routes/companies.ts");
+  const patchCompaniesMatch = companiesRoutes.match(
+    /app\.patch\("\/api\/companies\/:id",[\s\S]{0,3000}?delete\s*\(data as Record<string,\s*unknown>\)\.ownerRepId/,
+  );
+  assert(
+    "[CQ-3] PATCH /api/companies/:id strips ownerRepId (only /owner endpoint may write it)",
+    !!patchCompaniesMatch,
+  );
+  assert(
+    "[CQ-3] dedicated PATCH /api/companies/:id/owner endpoint exists (single write path)",
+    /app\.patch\("\/api\/companies\/:id\/owner"/.test(companiesRoutes),
+  );
+}
+
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
+
 if (failures.length > 0) {
   console.error("Failures:");
   for (const f of failures) console.error(`  - ${f}`);

@@ -1,0 +1,73 @@
+After the latest republish, no new Quote Requests have appeared for ~1 hour, even though the header says:
+
+“Last capture run: 2:45 PM – just now – 5323 emails still being processed.”
+
+the newest visible rows in Customer Quotes are 1–2 hours old.
+image.jpg
+
+I need to know whether:
+
+the pipeline actually stopped creating quote_opportunities, or
+
+the new read-layer filters (customer-only, routing_status-based, etc.) are now hiding fresh rows.
+
+Your job
+
+Pick one real inbound quote-shaped email from the last 15 minutes in production.
+
+Trace it end-to-end:
+
+Does it exist in email_messages?
+
+Does it have a quote_opportunities row?
+
+What is its routing_status and any other relevant flags?
+
+Why is it (or is it not) returned by /api/customer-quotes/list for “All / Today / 24h” with default filters?
+
+Confirm whether the read-layer tightening we just did (customer-only, routing_status filters, role-based ownership) is:
+
+correctly excluding only carrier/internal items, or
+
+accidentally excluding fresh, valid customer quotes.
+
+If quote_opportunities are still being created correctly, but the list endpoint is not returning them, fix the list/filter logic only:
+
+Do not touch ingestion, classifier, routing_status generation, or backfill.
+
+Adjust only the filters in listQuotes and sibling read paths so new valid customer quotes are visible again.
+
+If quote_opportunities are not being created:
+
+Identify the first break between email_messages and quote_opportunities introduced by the last deploy.
+
+Fix that break as minimally as possible.
+
+Prove with the same specimen email that it now flows through.
+
+Constraints
+
+Prefer fixing at the read/filter layer if at all possible.
+
+Do not redesign the customer-only contracts we just added unless they are clearly the cause.
+
+Do not revert to showing carrier/internal rows just to get volume back.
+
+Deliverables back
+
+The root cause in plain English (read-layer vs write-layer).
+
+Exact files/functions changed.
+
+Before/after evidence for one specimen email:
+
+seen in Outlook,
+
+present in email_messages,
+
+present in quote_opportunities,
+
+and visible again in Customer Quotes with default filters after the fix.
+
+The question I’m trying to answer is simple:
+Did the republish break quote creation, or did the new filters hide new quotes?
