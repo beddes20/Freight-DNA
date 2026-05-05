@@ -6068,6 +6068,80 @@ export async function runMigrations() {
 
   // Task #943 — Email Intelligence Layer v1.5 fact crystallization tables.
   await runEmailIntelV1_5Migrations();
+
+  // Task #1051 — Unified ReplitDailyUpload (Financials / Available Freight / LWQ).
+  await runTask1051UnifiedDailyUploadMigrations();
+}
+
+/**
+ * Task #1051 — Unified ReplitDailyUpload canonical fact table + LWQ
+ * enrichment columns. Production deploys run this manual runner (not
+ * `db:push`) so the dev-side `npm run db:push` is NOT enough on its own —
+ * Schema-Drift Guard halted prod boot until this block existed.
+ *
+ * - CREATE TABLE freight_daily_upload_fact (canonical row-per-load fact;
+ *   schema mirror of `shared/schema.ts:7986`).
+ * - ALTER TABLE recurring_lanes ADD COLUMN ... ×6 for the engine's
+ *   ≥6/30d rule + 7-day grace anchor (mirror of `shared/schema.ts:1490-1498`).
+ *
+ * All statements are `IF NOT EXISTS`-guarded and the FK targets
+ * (`organizations`, `financial_uploads`) are created earlier in this file,
+ * so this block is safe to re-run on every boot.
+ */
+export async function runTask1051UnifiedDailyUploadMigrations() {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS freight_daily_upload_fact (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        upload_id varchar NOT NULL REFERENCES financial_uploads(id) ON DELETE CASCADE,
+        load_key text NOT NULL,
+        customer text,
+        origin_city text,
+        origin_state text,
+        dest_city text,
+        dest_state text,
+        equipment text,
+        carrier_name text,
+        carrier_payee_code text,
+        ship_date text,
+        delivery_date text,
+        brokerage_status text,
+        order_type text,
+        moved boolean NOT NULL DEFAULT false,
+        total_revenue numeric(14,2),
+        carrier_total numeric(14,2),
+        margin_pct numeric(6,2),
+        loaded_miles integer,
+        ingested_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS freight_daily_upload_fact_org_upload_idx
+        ON freight_daily_upload_fact (org_id, upload_id);
+      CREATE INDEX IF NOT EXISTS freight_daily_upload_fact_org_moved_ship_idx
+        ON freight_daily_upload_fact (org_id, moved, ship_date);
+      CREATE INDEX IF NOT EXISTS freight_daily_upload_fact_org_lane_idx
+        ON freight_daily_upload_fact (org_id, origin_city, dest_city, equipment);
+      CREATE UNIQUE INDEX IF NOT EXISTS freight_daily_upload_fact_load_key_uq
+        ON freight_daily_upload_fact (org_id, upload_id, load_key);
+    `);
+    console.log("[migrations] Task #1051 freight_daily_upload_fact table + indexes ensured");
+
+    await client.query(`
+      ALTER TABLE recurring_lanes ADD COLUMN IF NOT EXISTS moves_last_30_days integer;
+      ALTER TABLE recurring_lanes ADD COLUMN IF NOT EXISTS last_moved_at text;
+      ALTER TABLE recurring_lanes ADD COLUMN IF NOT EXISTS qualification_reason text;
+      ALTER TABLE recurring_lanes ADD COLUMN IF NOT EXISTS supporting_customers jsonb;
+      ALTER TABLE recurring_lanes ADD COLUMN IF NOT EXISTS recent_carriers jsonb;
+      ALTER TABLE recurring_lanes ADD COLUMN IF NOT EXISTS last_eligible_at text;
+    `);
+    console.log("[migrations] Task #1051 recurring_lanes LWQ enrichment columns ensured");
+  } catch (err) {
+    console.error("[migrations] Task #1051 unified daily upload migration error:", err);
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /**
