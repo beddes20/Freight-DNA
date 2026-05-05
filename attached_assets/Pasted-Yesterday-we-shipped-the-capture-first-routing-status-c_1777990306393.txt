@@ -1,0 +1,66 @@
+Yesterday we shipped the capture‑first + routing_status contract, the Needs Routing tab, and the 5‑day backfill. You showed real examples landing in Needs Routing and Customer Quotes.
+
+This morning, the UI is back to lying to me:
+
+Quote Requests (Customer Quotes) with filters All / Today / 24h is effectively empty, showing “No matches for the current filters” even though:
+
+Conversations has active inbound email threads right now,
+
+the sidebar badge on Customer Quotes still shows “99+” overall.
+image-2.jpg
++1
+
+The Webhook unhealthy pill in Conversations is noisy again, but I can see mail flowing.
+image-2.jpg
+
+I need you to stop zooming out and answer one concrete question:
+
+For today’s date only, is the Quote Requests tab lying to me again, or are there truly 0 quote opportunities in scope for “All / Today / 24h”?
+
+Your job
+
+Pick 3 real inbound emails from this morning that clearly look like quotes (customer asking for a lane/price). Use my mailbox and one or two others if needed.
+
+For each of those 3 emails, prove in production:
+
+It exists in email_messages with a body and correct direction.
+
+It has a quote_opportunities row (or not), and what its routing_status is.
+
+Whether it appears in:
+
+Customer Quotes “All / Today / 24h”,
+
+Needs Routing,
+
+or is only visible via admin/drops.
+
+If any of those 3 emails do not appear anywhere a rep can see under normal filters, stop and explain exactly why:
+
+bad filters or date scoping on the Quote Requests query,
+
+wrong routing_status mapping to tabs,
+
+or a regression in the capture‑first / classifier / backfill path for today’s mail.
+
+Fix only the first real break you find between:
+
+email_messages → quote_opportunities → Quote Requests UI.
+
+Deliver back:
+
+Screenshot(s) of the Quote Requests tab showing those 3 emails under normal filters.
+
+The exact API/SQL used for the “All / Today / 24h” view and how it maps routing_status to tabs.
+
+A brief explanation of what was wrong (if anything) and the minimal code change made.
+
+Hard constraints
+
+Do not redesign the page or add more analytics here. I only care whether the “All / Today / 24h” view is truthful for quote opportunities after yesterday’s fix.
+
+Do not touch the capture‑first contract or backfill logic unless you prove it’s misbehaving today.
+
+If the answer is genuinely “we have no quote opportunities in the last 24h,” show me the production counts from quote_opportunities for that window so I can believe the 0 in the UI.
+
+This is a binary trust check on the Quote Requests tab for today, not another architecture exercise.
