@@ -4298,6 +4298,145 @@ console.log("\n── Section 1028: LWQ C — Mode split (Strategic/Outreach/Tri
   );
 }
 
+// ── Section 1029: LWQ D — Row redesign (reason chip + lifecycle + relationship) ──
+//
+// Task #1029 redesigns each Lane Work Queue row to lead with the
+// strategic story (Task B's `priorityExplanation.topReason`), surface
+// the lifecycle stage (Task A's `recurring_lanes.lifecycle_stage`) as a
+// first-class badge, and promote the owner relationship pair (avatar
+// + last-touchpoint age) to the top tier so reps see "why now / who
+// owns / how stale" before any tactical metric. Edit/Delete are
+// demoted into the row overflow menu and gated to admin/director/NAM/
+// sales_director (the structural editor lives at /admin/lane-engine
+// per Task #1030).
+//
+// The contract guardrails below pin:
+//   (a) the new row test ids exist (chip-reason, badge-lifecycle,
+//       pill-touchpoint-age) so E2E + audit tools can target them,
+//   (b) the reason chip reads from `priorityExplanation.topReason`
+//       verbatim and is rendered conditionally — the UI MUST NOT
+//       recompute the top reason or hardcode a fallback string,
+//   (c) the lifecycle badge reads `lifecycleStage` straight off the
+//       row and never re-derives it from raw signals,
+//   (d) the touchpoint pill reads the server-stamped
+//       `daysSinceLastTouchpoint` field (no client recomputation),
+//   (e) Edit/Delete are NOT rendered as standalone inline action
+//       buttons — they only appear inside the role-gated overflow menu,
+//   (f) the LeanItem type carries the three new optional fields, and
+//   (g) the server attach() block writes daysSinceLastTouchpoint
+//       alongside priorityExplanation so the field travels with the
+//       same enrichment pass.
+console.log("\n── Section 1029: LWQ D — Row redesign (reason chip + lifecycle + relationship) ──\n");
+{
+  const lwqSrc = readFile("client/src/pages/lane-work-queue.tsx");
+  const serverSrc = readFile("server/routes/laneCarrierOutreach.ts");
+
+  // (a) New test ids — required by the spec for E2E targeting.
+  assert(
+    "LWQ row exposes data-testid `chip-reason-${laneId}`",
+    /data-testid=\{`chip-reason-\$\{[^}]+\}`\}/.test(lwqSrc),
+  );
+  assert(
+    "LWQ row exposes data-testid `badge-lifecycle-${laneId}`",
+    /data-testid=\{`badge-lifecycle-\$\{[^}]+\}`\}/.test(lwqSrc),
+  );
+  assert(
+    "LWQ row exposes data-testid `pill-touchpoint-age-${laneId}`",
+    /data-testid=\{`pill-touchpoint-age-\$\{[^}]+\}`\}/.test(lwqSrc),
+  );
+
+  // (b) Reason chip is conditionally rendered from
+  //     priorityExplanation.topReason — no recomputation, no hardcoded
+  //     fallback string. The render guard MUST short-circuit when the
+  //     server omits the explanation so the chip degrades gracefully.
+  assert(
+    "LWQ row guards ReasonChip behind item.priorityExplanation?.topReason",
+    /item\.priorityExplanation\?\.topReason\s*&&\s*\(\s*<ReasonChip/.test(lwqSrc),
+  );
+  assert(
+    "LWQ ReasonChip renders the topReason prop verbatim (no recomputation)",
+    /function ReasonChip[\s\S]{0,400}\{topReason\}/.test(lwqSrc),
+  );
+  // The forbidden patterns: a literal "topReason =" assignment or any
+  // attempt to derive the reason from the components array on the
+  // client side. Both would short-circuit the server's strategic
+  // ranking story and break the audit trail.
+  assert(
+    "LWQ does NOT recompute topReason on the client",
+    !/topReason\s*=\s*(?!.*priorityExplanation\.topReason)/.test(lwqSrc) &&
+      !/priorityExplanation\.components[\s\S]{0,80}\.label/.test(lwqSrc),
+  );
+
+  // (c) Lifecycle badge reads `lifecycleStage` straight off the row.
+  assert(
+    "LWQ row guards LifecycleBadge behind item.lifecycleStage",
+    /item\.lifecycleStage\s*&&\s*\(\s*<LifecycleBadge/.test(lwqSrc),
+  );
+  assert(
+    "LWQ LifecycleBadge maps stage → label via LIFECYCLE_LABELS (no signal-based derivation)",
+    /LIFECYCLE_LABELS\s*:\s*Record<string, string>/.test(lwqSrc) &&
+      /function LifecycleBadge[\s\S]{0,400}LIFECYCLE_LABELS\[stage\]/.test(lwqSrc),
+  );
+
+  // (d) Touchpoint pill reads the server-stamped field.
+  assert(
+    "LWQ row renders TouchpointAgePill from item.daysSinceLastTouchpoint",
+    /typeof item\.daysSinceLastTouchpoint === "number"\s*&&\s*\(\s*<TouchpointAgePill\s+days=\{item\.daysSinceLastTouchpoint\}/.test(lwqSrc),
+  );
+
+  // (e) Edit/Delete only appear inside the role-gated overflow menu.
+  //     There must be NO inline `btn-edit-lane-` or `btn-delete-lane-`
+  //     button in the row anymore (those were the pre-Task-1030 inline
+  //     buttons). The overflow menu items themselves are role-gated.
+  assert(
+    "LWQ row contains no inline btn-edit-lane-/btn-delete-lane- testid (demoted to overflow menu)",
+    !/data-testid=\{`btn-(?:edit|delete)-lane-/.test(lwqSrc),
+  );
+  assert(
+    "LWQ overflow menu Edit/Delete items are role-gated to ROW_ADMIN_ROLES",
+    /ROW_ADMIN_ROLES\.includes\(currentUser\?\.role\s*\?\?\s*""\)[\s\S]{0,400}menu-edit-lane-[\s\S]{0,400}menu-delete-lane-/.test(lwqSrc),
+  );
+  assert(
+    "ROW_ADMIN_ROLES is admin/director/national_account_manager/sales_director",
+    /ROW_ADMIN_ROLES\s*=\s*\[\s*"admin"\s*,\s*"director"\s*,\s*"national_account_manager"\s*,\s*"sales_director"\s*\]/.test(lwqSrc),
+  );
+
+  // (f) LaneItem (client) carries the three new fields the row reads.
+  assert(
+    "LaneItem declares priorityExplanation with topReason",
+    /priorityExplanation\?\:\s*\{[\s\S]{0,400}topReason:\s*string/.test(lwqSrc),
+  );
+  assert(
+    "LaneItem declares lifecycleStage and daysSinceLastTouchpoint optional fields",
+    /lifecycleStage\?\:\s*string\s*\|\s*null/.test(lwqSrc) &&
+      /daysSinceLastTouchpoint\?\:\s*number\s*\|\s*null/.test(lwqSrc),
+  );
+
+  // (g) Server attach() writes daysSinceLastTouchpoint alongside
+  //     priorityExplanation so the freshness pill travels with the
+  //     same enrichment pass that produces the reason chip.
+  assert(
+    "server LeanItem declares daysSinceLastTouchpoint optional field",
+    /daysSinceLastTouchpoint\?\:\s*number\s*\|\s*null/.test(serverSrc),
+  );
+  assert(
+    "server attach() writes daysSinceLastTouchpoint = daysSinceOwnerTouchpoint alongside priorityExplanation",
+    /r\.priorityExplanation\s*=\s*result;[\s\S]{0,400}r\.daysSinceLastTouchpoint\s*=\s*daysSinceOwnerTouchpoint/.test(serverSrc),
+  );
+  // Outreach mode also gets the strategic enrichment so the row's
+  // reason chip + touchpoint pill render there too. The bucket
+  // re-sort, however, stays gated on the explicit strategic flag so
+  // Outreach's reply-urgency ordering is not silently overridden.
+  assert(
+    "server enriches strategic data when sortMode strategic OR mode outreach",
+    /enrichStrategic\s*=\s*sortMode\s*===\s*"strategic"\s*\|\|\s*mode\s*===\s*"outreach"/.test(serverSrc),
+  );
+  assert(
+    "server bucket re-sort by strategicPriority stays gated on sortMode === strategic",
+    /if \(sortMode === "strategic"\) \{\s*const byPriority/.test(serverSrc),
+  );
+}
+
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {
   console.error("Failures:");

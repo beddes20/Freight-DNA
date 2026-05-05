@@ -230,6 +230,23 @@ interface LaneItem {
   // Task #1028 (LWQ C) — Outreach mode reply-urgency. Server attaches when
   // `?mode=outreach`; absent in other modes so the field stays opt-in.
   hotReplyCount?: number;
+  // Task #1027 (LWQ B) — strategic priority composite. Server attaches when
+  // `?sort=strategic` is set OR when `?mode=outreach` (Task #1029) so the
+  // row's strategic-tier reason chip can render across both surfaces.
+  strategicPriority?: number;
+  priorityExplanation?: {
+    score: number;
+    components: Array<{ label: string; score: number; contribution: number }>;
+    /** Label of the highest-contributing component — drives the row reason chip. */
+    topReason: string;
+  };
+  // Task #1026 (LWQ A) — server-stamped lifecycle stage from
+  // `recurring_lanes.lifecycle_stage`. UI MUST NOT recompute it.
+  lifecycleStage?: string | null;
+  // Task #1029 (LWQ D) — owner relationship freshness in days. Server
+  // attaches alongside the strategic enrichment so the row's "12d" pill
+  // surfaces without recomputation.
+  daysSinceLastTouchpoint?: number | null;
 }
 
 interface WorkQueue {
@@ -752,6 +769,105 @@ function AssignToDropdown({
 
 const MANAGER_ROLES = ["admin", "director", "national_account_manager", "logistics_manager"];
 
+// Task #1029 (LWQ D) — Roles allowed to deep-link from a row's overflow
+// menu into /admin/lane-engine for structural Edit/Delete. Mirrors the
+// admin-mode gate at the bottom of this file (`LWQ_ADMIN_ROLES`); kept
+// duplicated here so LaneRow stays a self-contained presentational
+// component without coupling to the page-level mode logic.
+const ROW_ADMIN_ROLES = ["admin", "director", "national_account_manager", "sales_director"];
+
+// Task #1029 (LWQ D) — Display labels for `recurring_lanes.lifecycle_stage`
+// (Task #1026/A). Stage strings come straight off the row from the server;
+// the UI MUST NOT recompute them from raw signals (guardrail enforced).
+const LIFECYCLE_LABELS: Record<string, string> = {
+  detected: "Detected",
+  qualified: "Qualified",
+  assigned: "Assigned",
+  contactable: "Contactable",
+  contacted: "Contacted",
+  engaged: "Engaged",
+  operationalized: "Operationalized",
+};
+
+// Owner-initials avatar — falls back to "?" so unassigned rows still
+// render a consistent slot. Kept as a tiny inline component (no shadcn
+// Avatar) to avoid the extra DOM weight inside a virtualized list.
+function OwnerInitialsAvatar({ name, laneId }: { name?: string | null; laneId: string }) {
+  const initials = (name ?? "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(p => p[0]!.toUpperCase())
+    .join("") || "?";
+  return (
+    <span
+      className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[9px] font-semibold border shrink-0 ${
+        name ? "bg-blue-500/15 border-blue-500/40 text-blue-300" : "bg-muted/50 border-border text-muted-foreground"
+      }`}
+      title={name ?? "Unassigned"}
+      data-testid={`avatar-owner-${laneId}`}
+    >
+      {initials}
+    </span>
+  );
+}
+
+// Reason chip — renders Task B's `priorityExplanation.topReason` verbatim.
+// Hidden gracefully when the server omits the explanation (e.g. legacy
+// callers without strategic enrichment). UI MUST NOT recompute the
+// reason — guardrail enforces this in `tests/code-quality-guardrails.test.ts`.
+function ReasonChip({ topReason, laneId }: { topReason: string; laneId: string }) {
+  return (
+    <Badge
+      variant="outline"
+      className="text-[10px] py-0 px-1.5 border-amber-500/40 text-amber-300 bg-amber-500/10 font-medium gap-0.5"
+      title={`Top strategic reason: ${topReason}`}
+      data-testid={`chip-reason-${laneId}`}
+    >
+      {topReason}
+    </Badge>
+  );
+}
+
+// Lifecycle badge — reads `recurring_lanes.lifecycle_stage` straight off
+// the row (Task #1026/A). Pure mapping from stage → display label; no
+// derivation from raw signals.
+function LifecycleBadge({ stage, laneId }: { stage: string; laneId: string }) {
+  const label = LIFECYCLE_LABELS[stage] ?? stage;
+  return (
+    <Badge
+      variant="outline"
+      className="text-[9px] py-0 px-1 border-slate-500/40 text-slate-300 bg-slate-500/10"
+      title={`Lifecycle stage: ${label}`}
+      data-testid={`badge-lifecycle-${laneId}`}
+    >
+      {label}
+    </Badge>
+  );
+}
+
+// Touchpoint-age pill — promotes the `daysSinceLastTouchpoint` field the
+// server now stamps on every strategic-enriched row (Task #1029). Color
+// scales with staleness so reps spot dormant relationships at a glance:
+//   ≤ 7d  → green   (fresh)
+//   ≤ 21d → amber   (warming up)
+//   > 21d → red     (stale)
+function TouchpointAgePill({ days, laneId }: { days: number; laneId: string }) {
+  const tone =
+    days <= 7 ? "border-emerald-500/40 text-emerald-300 bg-emerald-500/10"
+    : days <= 21 ? "border-amber-500/40 text-amber-300 bg-amber-500/10"
+    : "border-red-500/40 text-red-300 bg-red-500/10";
+  return (
+    <span
+      className={`inline-flex items-center text-[10px] font-medium px-1.5 py-0 rounded-full border ${tone}`}
+      title={`Last owner touchpoint with this customer: ${days} day${days === 1 ? "" : "s"} ago`}
+      data-testid={`pill-touchpoint-age-${laneId}`}
+    >
+      {days}d
+    </span>
+  );
+}
+
 // Backward-compatible alias — see Task #651. Lane signals are now sourced
 // from the shared `useLaneSignals` hook, whose richer `LaneSignalResult`
 // shape is structurally a superset of the fields LaneRow needs.
@@ -905,17 +1021,41 @@ function LaneRow({
           </div>
         )}
         <div className="flex-1 min-w-0">
-          {/* Customer name — always shown first, prominent */}
-          {item.companyName && (
-            <div className="flex items-center gap-1.5 mb-1.5">
-              <Building2 className="w-3 h-3 text-blue-400 shrink-0" />
-              <span className="text-xs font-semibold text-blue-500 dark:text-blue-400">{formatCustomerName(item.companyName)}</span>
-              {/* CRM match indicator: show 'CRM' badge if companyId resolved, otherwise 'customer name' fallback */}
-              {item.companyId ? (
-                <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400 bg-blue-500/10">CRM</Badge>
-              ) : (
-                <Badge variant="outline" className="text-[9px] py-0 px-1 border-slate-500/30 text-muted-foreground" title="Customer name from TMS — not yet matched to a CRM account">TMS name</Badge>
+          {/* Task #1029 (LWQ D) — Strategic tier. Leads with the customer
+              name + Task B's reason chip + Task A's lifecycle stage badge,
+              and promotes the relationship signals (owner avatar +
+              last-touchpoint age) to first-class metadata so reps see
+              "why now / who owns / how stale" at a glance, without
+              hunting through the row body. Each strategic field renders
+              only when the server supplies it (graceful degradation). */}
+          {(item.companyName || item.priorityExplanation?.topReason || item.lifecycleStage || item.ownerName || typeof item.daysSinceLastTouchpoint === "number") && (
+            <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
+              {item.companyName && (
+                <>
+                  <Building2 className="w-3 h-3 text-blue-400 shrink-0" />
+                  <span className="text-xs font-semibold text-blue-500 dark:text-blue-400">{formatCustomerName(item.companyName)}</span>
+                  {item.companyId ? (
+                    <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400 bg-blue-500/10">CRM</Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[9px] py-0 px-1 border-slate-500/30 text-muted-foreground" title="Customer name from TMS — not yet matched to a CRM account">TMS name</Badge>
+                  )}
+                </>
               )}
+              {item.priorityExplanation?.topReason && (
+                <ReasonChip topReason={item.priorityExplanation.topReason} laneId={item.laneId} />
+              )}
+              {item.lifecycleStage && (
+                <LifecycleBadge stage={item.lifecycleStage} laneId={item.laneId} />
+              )}
+              {/* Owner avatar + touchpoint freshness — pushed to the right
+                  edge of the strategic tier so the eye lands on the
+                  relationship pair after reading the reason. */}
+              <span className="ml-auto inline-flex items-center gap-1.5">
+                <OwnerInitialsAvatar name={item.ownerName} laneId={item.laneId} />
+                {typeof item.daysSinceLastTouchpoint === "number" && (
+                  <TouchpointAgePill days={item.daysSinceLastTouchpoint} laneId={item.laneId} />
+                )}
+              </span>
             </div>
           )}
           {/* Lane label + badges */}
@@ -1166,6 +1306,21 @@ function LaneRow({
                   >
                     Open in Cockpit
                   </DropdownMenuItem>
+                  {/* Task #1029 (LWQ D) — Edit/Delete demoted to a
+                      role-gated overflow item. The structural editor
+                      lives at /admin/lane-engine (Task #1030); this
+                      menu just deep-links there for admins so reps
+                      can't fat-finger lane geometry mid-outreach. */}
+                  {ROW_ADMIN_ROLES.includes(currentUser?.role ?? "") && (
+                    <>
+                      <DropdownMenuItem asChild data-testid={`menu-edit-lane-${item.laneId}`}>
+                        <Link href={`/admin/lane-engine?laneId=${item.laneId}`}>Edit lane (admin)</Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild data-testid={`menu-delete-lane-${item.laneId}`}>
+                        <Link href={`/admin/lane-engine?laneId=${item.laneId}&action=delete`}>Delete lane (admin)</Link>
+                      </DropdownMenuItem>
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}

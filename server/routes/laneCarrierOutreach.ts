@@ -838,6 +838,13 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         strategicPriority?: number;
         priorityExplanation?: LaneStrategicResult;
         lifecycleStage?: string | null;
+        // Task #1029 (LWQ D) — last-touchpoint age in days. Promoted to a
+        // first-class field so the row's strategic tier can render the
+        // owner relationship-staleness pill ("12d") without recomputing.
+        // Sourced from the same per-company touchpoint roll-up the
+        // strategic enrichment uses (owner-specific with any-rep
+        // fallback).
+        daysSinceLastTouchpoint?: number | null;
         // Task #1028 (LWQ C) — reply-urgency metadata for Outreach mode.
         // Attached when `?mode=outreach` so each row carries the same Hot
         // signal the cockpit chip uses; the client sorts each bucket by
@@ -1012,7 +1019,13 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
       // signals that feed the pure `computeLaneStrategicPriority` composite,
       // attach `strategicPriority` + `priorityExplanation` to every visible
       // row, and re-sort within each bucket by composite desc.
-      if (sortMode === "strategic") {
+      // Task #1029 (LWQ D) — Outreach mode also gets the enrichment so the
+      // row's strategic-tier reason chip + touchpoint-age pill render
+      // there too. The bucket re-sort below stays gated on the explicit
+      // `sort=strategic` flag so Outreach's reply-urgency ordering is
+      // not silently overridden by the composite.
+      const enrichStrategic = sortMode === "strategic" || mode === "outreach";
+      if (enrichStrategic) {
         const allScoped = [
           ...scopedBuckets.unassigned,
           ...scopedBuckets.noContactable,
@@ -1229,6 +1242,10 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
             );
             r.strategicPriority = result.score;
             r.priorityExplanation = result;
+            // Task #1029 (LWQ D) — promote the per-company touchpoint
+            // freshness onto the row so the strategic-tier "Xd" pill can
+            // render without recomputing on the client.
+            r.daysSinceLastTouchpoint = daysSinceOwnerTouchpoint;
           }
         };
         attach(scopedBuckets.unassigned);
@@ -1236,13 +1253,18 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         attach(scopedBuckets.assignedUntouched);
         attach(scopedBuckets.inProgress);
 
-        const byPriority = (a: LeanItem, b: LeanItem) =>
-          (b.strategicPriority ?? 0) - (a.strategicPriority ?? 0)
-          || a.laneId.localeCompare(b.laneId);
-        scopedBuckets.unassigned.sort(byPriority);
-        scopedBuckets.noContactable.sort(byPriority);
-        scopedBuckets.assignedUntouched.sort(byPriority);
-        scopedBuckets.inProgress.sort(byPriority);
+        // Bucket re-sort stays gated on the explicit strategic sort flag
+        // so Outreach mode (which only uses the enrichment for the row
+        // chip + touchpoint pill) keeps its own reply-urgency ordering.
+        if (sortMode === "strategic") {
+          const byPriority = (a: LeanItem, b: LeanItem) =>
+            (b.strategicPriority ?? 0) - (a.strategicPriority ?? 0)
+            || a.laneId.localeCompare(b.laneId);
+          scopedBuckets.unassigned.sort(byPriority);
+          scopedBuckets.noContactable.sort(byPriority);
+          scopedBuckets.assignedUntouched.sort(byPriority);
+          scopedBuckets.inProgress.sort(byPriority);
+        }
       }
 
       // ── Task #1028 (LWQ C) — Outreach mode reply-urgency enrichment ──────
