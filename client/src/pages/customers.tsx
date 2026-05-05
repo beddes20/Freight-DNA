@@ -307,6 +307,10 @@ export default function Customers() {
     queryKey: ["/api/users/sales"],
   });
   const salesPersonMap = new Map(salesUsers.map(u => [u.id, u.name]));
+  const accountOwnerMap = useMemo(
+    () => new Map(teamMembers.map(u => [u.id, u.name])),
+    [teamMembers],
+  );
 
   type MsSummaryRow = { companyId: string; currentPct: number | null };
   const { data: msSummary = [] } = useQuery<MsSummaryRow[]>({
@@ -692,6 +696,17 @@ export default function Customers() {
                               <p className="text-xs text-blue-600 dark:text-blue-400 flex items-center gap-1 mt-0.5" data-testid={`text-salesperson-${company.id}`}>
                                 <UserCheck className="h-3 w-3" />
                                 {spName}
+                              </p>
+                            );
+                          })()}
+                          {(() => {
+                            const ownerId = company.ownerRepId;
+                            const ownerName = ownerId ? accountOwnerMap.get(ownerId) : null;
+                            const display = ownerName || "Unassigned";
+                            return (
+                              <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5" data-testid={`text-account-owner-${company.id}`}>
+                                <UserCheck className="h-3 w-3" />
+                                {display}
                               </p>
                             );
                           })()}
