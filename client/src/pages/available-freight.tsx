@@ -58,6 +58,7 @@ import { todayIsoInOrgTz, ORG_LOCAL_TIMEZONE } from "@shared/orgLocalDate";
 import {
   BUCKETS,
   BUCKET_ORDER,
+  bucketOrderForMode,
   countBuckets,
   kpisFromFiltered,
   type BucketKey,
@@ -85,6 +86,14 @@ import {
 import { LiveSyncPill } from "@/components/live-sync/LiveSyncPill";
 import { AfImportHealthPill } from "@/components/freight/af-import-health-pill";
 import { HiddenCountsDisclosure, type HiddenCountsSummary } from "@/components/freight/hidden-counts";
+import {
+  AVAILABLE_FREIGHT_MODE_META,
+  AVAILABLE_FREIGHT_MODES,
+  AF_MODE_STORAGE_KEY,
+  applyModeToUrl,
+  resolveInitialMode,
+  type AvailableFreightMode,
+} from "@/lib/availableFreightMode";
 import { computeCockpitUrgency } from "@shared/cockpitUrgency";
 import {
   resolveNextBestAction,
@@ -724,19 +733,35 @@ function BucketChipStrip({
   selected,
   counts,
   onSelect,
+  mode,
 }: {
   selected: BucketKey;
   counts: Record<BucketKey, number>;
   onSelect: (bucket: BucketKey) => void;
+  // Task #1023 — bucket strip is mode-aware. The full registry is
+  // unchanged; per-mode order narrows the strip to the chips most
+  // relevant to that workflow (Action triage / Coverage funnel / Ops
+  // health). Counts are computed from the same filtered collection so
+  // a chip's number means the same rows in every mode.
+  mode: AvailableFreightMode;
 }) {
+  // If `selected` is a bucket that isn't in the active mode's strip
+  // (e.g. user deep-linked `bucket=stale&mode=action`), fall back to
+  // appending it so the chip is always visible while selected — the
+  // rep's selection wins over the visual default.
+  const orderForMode = bucketOrderForMode(mode);
+  const order = orderForMode.includes(selected)
+    ? orderForMode
+    : [...orderForMode, selected];
   return (
     <div
       className="flex flex-wrap items-center gap-1.5"
       role="tablist"
       aria-label="Queue buckets"
       data-testid="strip-bucket-chips"
+      data-mode={mode}
     >
-      {BUCKET_ORDER.map((key) => {
+      {order.map((key) => {
         const def = BUCKETS[key];
         const count = counts[key] ?? 0;
         const isActive = selected === key;
@@ -935,6 +960,58 @@ export default function AvailableFreightPage() {
   // sees a single primary action surface on first paint.
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [autoPilotDrawerOpen, setAutoPilotDrawerOpen] = useState(false);
+  // Task #1023 — Available Freight modes (action / coverage / ops). The
+  // mode is shared across the page header but each mode renders its own
+  // content subtree so the primary execution surface (Action) stays
+  // uncluttered. Scope (owner / pickup / saved view / bucket) is shared
+  // across modes and never silently mutated by a mode switch — see
+  // setMode below.
+  const [mode, setModeState] = useState<AvailableFreightMode>(() => {
+    if (typeof window === "undefined") return "action";
+    const url = new URLSearchParams(window.location.search).get("mode");
+    let storage: string | null = null;
+    try { storage = localStorage.getItem(AF_MODE_STORAGE_KEY); } catch { /* SSR / privacy mode */ }
+    return resolveInitialMode({ url, storage });
+  });
+  const setMode = useCallback((next: AvailableFreightMode) => {
+    setModeState(next);
+    try { localStorage.setItem(AF_MODE_STORAGE_KEY, next); } catch { /* ignore */ }
+    if (typeof window === "undefined") return;
+    const nextHref = applyModeToUrl(window.location.href, next);
+    if (nextHref !== window.location.href) {
+      window.history.replaceState({}, "", nextHref);
+    }
+  }, []);
+  // Re-sync mode whenever the user navigates back/forward through a
+  // deep-link that flipped `?mode=`. Mirrors the existing lane/owner
+  // popstate sync so the URL bar and the segmented switcher never
+  // disagree.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sync = () => {
+      const url = new URLSearchParams(window.location.search).get("mode");
+      let storage: string | null = null;
+      try { storage = localStorage.getItem(AF_MODE_STORAGE_KEY); } catch { /* ignore */ }
+      setModeState(resolveInitialMode({ url, storage }));
+    };
+    window.addEventListener("popstate", sync);
+    return () => window.removeEventListener("popstate", sync);
+  }, []);
+  // Task #1023 — Canonicalize URL + storage whenever the resolved mode
+  // changes (initial mount, popstate, programmatic switch). This
+  // guarantees the strict "persisted AND reflected in URL" contract:
+  //   - storage-seeded → URL gets `?mode=` written so the link is
+  //     deep-linkable for sharing
+  //   - URL-seeded → storage gets updated so the next visit keeps it
+  //   - default mode → `?mode=` is dropped from the URL for clean links
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { localStorage.setItem(AF_MODE_STORAGE_KEY, mode); } catch { /* ignore */ }
+    const nextHref = applyModeToUrl(window.location.href, mode);
+    if (nextHref !== window.location.href) {
+      window.history.replaceState({}, "", nextHref);
+    }
+  }, [mode]);
   const [newViewName, setNewViewName] = useState("");
   const [newViewShared, setNewViewShared] = useState(false);
   const [confirmBulk, setConfirmBulk] = useState<
@@ -2425,13 +2502,11 @@ export default function AvailableFreightPage() {
             <RefreshCw className={`h-4 w-4 mr-2 ${isFetching ? "animate-spin" : ""}`} />
             Refresh
           </Button>
-          <Button
-            variant="outline" size="sm"
-            onClick={() => setAutoPilotDrawerOpen(true)}
-            data-testid="button-auto-pilot-preview"
-          >
-            <Truck className="h-4 w-4 mr-2" /> Auto-pilot preview
-          </Button>
+          {/* Task #1023 — Auto-pilot preview was a header button competing
+              with primary triage actions. It now lives inside Ops mode
+              alongside the import-health surfaces. Action mode shows a
+              small status pill (below the mode switcher) that links to
+              Ops mode so reps can still reach it in one click. */}
           {isManagerScope && (
             <Link href="/leak-console">
               <Button
@@ -2450,6 +2525,69 @@ export default function AvailableFreightPage() {
         open={autoPilotDrawerOpen}
         onOpenChange={setAutoPilotDrawerOpen}
       />
+
+      {/* Task #1023 — Segmented mode switcher. Three named modes:
+          Action (default triage cockpit), Coverage (in-flight outreach
+          funnel), Ops & health (import health / auto-pilot / hidden
+          loads). Mode is persisted per-user (localStorage) and
+          reflected in the URL (`?mode=`) so a rep can deep-link to a
+          specific mode. Switching modes never changes the underlying
+          scope — the Scope Summary below remains the source of truth. */}
+      <div
+        className="flex flex-wrap items-center gap-2"
+        data-testid="bar-af-modes"
+        role="tablist"
+        aria-label="Available Freight mode"
+      >
+        <div
+          className="inline-flex items-center gap-0.5 rounded-md border bg-background p-0.5"
+          data-testid="segmented-af-mode"
+        >
+          {AVAILABLE_FREIGHT_MODES.map((m) => {
+            const meta = AVAILABLE_FREIGHT_MODE_META[m];
+            const active = mode === m;
+            return (
+              <Button
+                key={m}
+                size="sm"
+                variant={active ? "default" : "ghost"}
+                className="h-7 px-3 text-xs"
+                onClick={() => setMode(m)}
+                role="tab"
+                aria-selected={active}
+                data-testid={meta.testId}
+                data-mode={m}
+                data-mode-active={active}
+                title={meta.description}
+              >
+                {meta.label}
+              </Button>
+            );
+          })}
+        </div>
+        <span
+          className="text-xs text-muted-foreground"
+          data-testid="text-af-mode-description"
+        >
+          {AVAILABLE_FREIGHT_MODE_META[mode].description}
+        </span>
+        {mode !== "ops" && (
+          // Small status pill that links to Ops mode so the auto-pilot
+          // and import-health surfaces are still one click away from
+          // Action / Coverage modes.
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 text-[11px] ml-auto"
+            onClick={() => setMode("ops")}
+            data-testid="link-to-ops-mode"
+            title="Switch to Ops & health for import status, hidden loads, and the auto-pilot preview."
+          >
+            <ShieldAlert className="h-3 w-3 mr-1" />
+            Ops & health
+          </Button>
+        )}
+      </div>
 
       {/* Cross-tab UX (option B) — banner shown when arriving from Carrier Hub
           via `?carrierId=<id>`. Explains the filter and offers a one-click
@@ -2493,21 +2631,61 @@ export default function AvailableFreightPage() {
           The demoted tiles (Generated today, Sent / awaiting carrier,
           Stale) live behind the "Advanced" disclosure below so the page
           opens with one obvious set of numbers to act on. */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2" data-testid="strip-kpi-primary">
-        <KpiTile label="Ready to send" value={kpis?.readyToSend ?? 0} tone="ready" testId="kpi-ready" />
-        <KpiTile label="At-risk pickup ≤24h" value={kpis?.atRiskPickup24h ?? 0} tone="critical" testId="kpi-at-risk-24h" />
-        <KpiTile label="Covered today" value={kpis?.coveredToday ?? 0} tone="ok" testId="kpi-covered-today" />
-        <KpiTile
-          label="Total visible"
-          value={kpis?.total ?? 0}
-          testId="kpi-total"
-          subtitle={
-            typeof serverKpis?.total === "number" && serverKpis.total !== (kpis?.total ?? 0)
-              ? `Queue total: ${serverKpis.total}`
-              : undefined
-          }
-        />
-      </div>
+      {/* Task #1023 — KPI strip adapts to the active mode. Action keeps
+          the triage tiles (Ready / At-risk / Covered today / Total);
+          Coverage emphasizes the response funnel (Sent / awaiting,
+          Responded, Covered today, Total); Ops emphasizes import
+          freshness (Last import age, Generated today, Stale hidden,
+          Total in scope). The same `kpis`/`feed` objects feed every
+          mode so switching never silently changes the numbers. */}
+      {mode === "action" && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2" data-testid="strip-kpi-primary" data-mode="action">
+          <KpiTile label="Ready to send" value={kpis?.readyToSend ?? 0} tone="ready" testId="kpi-ready" />
+          <KpiTile label="At-risk pickup ≤24h" value={kpis?.atRiskPickup24h ?? 0} tone="critical" testId="kpi-at-risk-24h" />
+          <KpiTile label="Covered today" value={kpis?.coveredToday ?? 0} tone="ok" testId="kpi-covered-today" />
+          <KpiTile
+            label="Total visible"
+            value={kpis?.total ?? 0}
+            testId="kpi-total"
+            subtitle={
+              typeof serverKpis?.total === "number" && serverKpis.total !== (kpis?.total ?? 0)
+                ? `Queue total: ${serverKpis.total}`
+                : undefined
+            }
+          />
+        </div>
+      )}
+      {mode === "coverage" && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2" data-testid="strip-kpi-coverage" data-mode="coverage">
+          <KpiTile label="Sent / awaiting carrier" value={kpis?.sentAwaitingCarrier ?? 0} tone="info" testId="kpi-coverage-sent-awaiting" />
+          <KpiTile label="With at least one reply" value={roi.replyRows} tone="info" testId="kpi-coverage-replied" />
+          <KpiTile label="Covered today" value={kpis?.coveredToday ?? 0} tone="ok" testId="kpi-coverage-covered-today" />
+          <KpiTile
+            label="Total visible"
+            value={kpis?.total ?? 0}
+            testId="kpi-coverage-total"
+            subtitle={`${roi.coverageRate}% covered · ${roi.replyRate}% reply rate`}
+          />
+        </div>
+      )}
+      {mode === "ops" && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2" data-testid="strip-kpi-ops" data-mode="ops">
+          <KpiTile
+            label="Last import"
+            value={feed?.lastImport ? fmtAge(feed.lastImport.ageMinutes) : "—"}
+            testId="kpi-ops-last-import"
+            subtitle={feed?.nextImport ? `next in ${fmtAge(feed.nextImport.inMinutes)}` : undefined}
+          />
+          <KpiTile label="Generated today" value={kpis?.generatedToday ?? 0} testId="kpi-ops-generated-today" />
+          <KpiTile
+            label="Stale (hidden)"
+            value={kpis?.hiddenStale ?? 0}
+            tone={(kpis?.hiddenStale ?? 0) > 0 ? "critical" : undefined}
+            testId="kpi-ops-stale"
+          />
+          <KpiTile label="Total in scope" value={feed?.hiddenCounts?.totalInScope ?? items.length} testId="kpi-ops-total-in-scope" />
+        </div>
+      )}
 
       {/* Task #1021 — Advanced disclosure + tertiary right-aligned health
           cluster. Hides the demoted KPI tiles (Generated today, Sent /
@@ -2583,12 +2761,18 @@ export default function AvailableFreightPage() {
             </div>
           </CollapsibleContent>
         </Collapsible>
-        <div
-          className="flex items-center gap-2 ml-auto"
-          data-testid="cluster-tertiary-health"
-        >
-          <AfImportHealthPill testId="pill-af-import-health" />
-        </div>
+        {/* Task #1023 — In Action / Coverage modes the import-health
+            pill is replaced by the small "Ops & health" link in the
+            mode bar above. The full pill, hidden-loads detail, dedupe
+            audit, and auto-pilot preview live inside Ops mode below. */}
+        {mode === "ops" && (
+          <div
+            className="flex items-center gap-2 ml-auto"
+            data-testid="cluster-tertiary-health"
+          >
+            <AfImportHealthPill testId="pill-af-import-health" />
+          </div>
+        )}
       </div>
 
       {/* Saved-view tab strip + freshness pulse */}
@@ -2905,6 +3089,7 @@ export default function AvailableFreightPage() {
         selected={bucket}
         counts={bucketCounts}
         onSelect={setBucket}
+        mode={mode}
       />
 
       {/* Task #1020 — Scope Summary. The single visible source of truth
@@ -3114,6 +3299,13 @@ export default function AvailableFreightPage() {
         </div>
       )}
 
+      {/* Task #1023 — Main grid (row list + ROI side-rail) is the
+          shared body for Action and Coverage modes. Ops mode renders
+          its own surface below in place of the grid; the bucket strip,
+          scope summary, and bulk-action bar above remain shared so
+          switching modes never silently changes the underlying scope. */}
+      {mode !== "ops" && (
+      <>
       {/* Main grid: rows + ROI side-rail */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
         <Card>
@@ -3640,6 +3832,82 @@ export default function AvailableFreightPage() {
           </CardContent>
         </Card>
       </div>
+      </>
+      )}
+
+      {/* Task #1023 — Ops & health surface. Rendered in place of the
+          row list when the rep is in Ops mode. Bundles the demoted
+          import-health pill, the auto-pilot preview trigger, the full
+          hidden-loads disclosure, and links to admin import tooling.
+          Task E will move these surfaces wholesale to a dedicated
+          admin route; until then a tab keeps everything one click
+          away. */}
+      {mode === "ops" && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4" data-testid="panel-mode-ops">
+          <Card>
+            <CardContent className="p-4 space-y-3">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <ShieldAlert className="h-4 w-4" /> Import &amp; auto-pilot
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Confirm the latest Excel import landed cleanly and preview
+                the next outreach batch before reps see it in Action mode.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <AfImportHealthPill testId="pill-af-import-health-ops" />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAutoPilotDrawerOpen(true)}
+                  data-testid="button-auto-pilot-preview-ops"
+                >
+                  <Truck className="h-4 w-4 mr-2" /> Auto-pilot preview
+                </Button>
+                <Link href="/admin/available-freight/imports">
+                  <Button variant="ghost" size="sm" data-testid="link-admin-imports">
+                    Excel import history →
+                  </Button>
+                </Link>
+                {isManagerScope && (
+                  <Link href="/leak-console">
+                    <Button variant="ghost" size="sm" data-testid="link-leak-console-ops">
+                      Leak console →
+                    </Button>
+                  </Link>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="p-4 space-y-3">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                Hidden loads &amp; dedupe
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Rows the current scope is hiding (status, snooze, past
+                pickup, lane / carrier deep-link, owner). Use this view
+                to debug "where did my freight go?" before changing scope.
+              </p>
+              {(() => {
+                const h = feed?.hiddenCounts;
+                if (!h) return <div className="text-xs text-muted-foreground" data-testid="text-ops-hidden-empty">No hidden-load telemetry available yet.</div>;
+                const totalInScope = h.totalInScope ?? items.length;
+                const visible = items.length;
+                const buckets = [
+                  { id: "status", label: "By status", count: h.byStatus ?? 0 },
+                  { id: "snooze", label: "Snoozed", count: h.bySnooze ?? 0 },
+                  { id: "past-pickup", label: "Past pickup", count: h.byPastPickup ?? 0 },
+                  { id: "lane", label: "By lane filter", count: h.byLane ?? 0 },
+                  { id: "carrier", label: "By carrier filter", count: h.byCarrier ?? 0 },
+                  { id: "owner", label: "By owner filter", count: h.byOwner ?? 0 },
+                ];
+                const summary: HiddenCountsSummary = { totalInScope, visible, buckets };
+                return <HiddenCountsDisclosure summary={summary} surface="af" />;
+              })()}
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* Snooze dialog */}
       <Dialog open={snoozeOpen} onOpenChange={setSnoozeOpen}>
@@ -4190,7 +4458,7 @@ export default function AvailableFreightPage() {
 }
 
 
-function KpiTile({ label, value, tone, testId, subtitle }: { label: string; value: number; tone?: "critical" | "warn" | "ready" | "info" | "ok"; testId: string; subtitle?: string }) {
+function KpiTile({ label, value, tone, testId, subtitle }: { label: string; value: number | string; tone?: "critical" | "warn" | "ready" | "info" | "ok"; testId: string; subtitle?: string }) {
   const toneCls = tone === "critical"
     ? "text-red-700 dark:text-red-300"
     : tone === "warn"

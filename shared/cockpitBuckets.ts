@@ -118,6 +118,53 @@ export const BUCKET_ORDER: BucketKey[] = [
   "stale",
 ];
 
+// Task #1023 — Per-mode bucket ordering.
+//
+// All three Available Freight modes operate on the SAME underlying
+// row collection (so a count of N on a chip means the same N rows in
+// every mode). What differs is which buckets are surfaced first and
+// which become noise. Action leads with triage chips ("Ready to send",
+// "At risk <24h"); Coverage leads with the outreach funnel ("No
+// response 4h", "Covered today"); Ops leads with the health-and-leak
+// chips ("Stale", "Unassigned"). The "All" chip always anchors the
+// strip so the rep can clear the bucket filter without thinking.
+//
+// The set of bucket keys is intentionally a SUBSET / re-ordering of
+// `BUCKET_ORDER` — never a new bucket — so the existing scope rules
+// and counts apply unchanged across modes.
+export type AvailableFreightModeId = "action" | "coverage" | "ops";
+
+export const BUCKET_ORDER_BY_MODE: Record<AvailableFreightModeId, BucketKey[]> = {
+  action: [
+    "all",
+    "ready_to_send",
+    "at_risk_24h",
+    "pickup_today",
+    "pickup_tomorrow",
+    "team_needs_approval",
+    "covered_today",
+  ],
+  coverage: [
+    "all",
+    "no_response_4h",
+    "at_risk_24h",
+    "pickup_today",
+    "pickup_tomorrow",
+    "covered_today",
+  ],
+  ops: [
+    "all",
+    "stale",
+    "unassigned",
+    "team_needs_approval",
+    "covered_today",
+  ],
+};
+
+export function bucketOrderForMode(mode: AvailableFreightModeId): BucketKey[] {
+  return BUCKET_ORDER_BY_MODE[mode] ?? BUCKET_ORDER;
+}
+
 // Minimum row shape the bucket predicate needs. Keep this loose so the
 // server's pre-`buildCockpitRow` shape and the client's enriched
 // `CockpitItem` both satisfy it.
