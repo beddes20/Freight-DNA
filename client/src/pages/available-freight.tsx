@@ -42,8 +42,13 @@ import {
   Truck, AlertCircle, RefreshCw, Search, Inbox, Upload,
   CheckCircle2, Clock, Bookmark, MoreHorizontal, ChevronDown,
   Send, AlarmClock, X, UserCheck, ClipboardCheck, Star,
-  ChevronsUpDown, Check, ShieldAlert,
+  ChevronsUpDown, Check, ShieldAlert, SlidersHorizontal,
 } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { useAuth } from "@/hooks/use-auth";
 import type { FreightOpportunity } from "@shared/schema";
 import { applyCockpitFilters, type CockpitFilterDiagnostics } from "@/lib/cockpitFilters";
@@ -877,6 +882,11 @@ export default function AvailableFreightPage() {
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [snoozeHours, setSnoozeHours] = useState<string>("4");
   const [saveViewOpen, setSaveViewOpen] = useState(false);
+  // Task #1021 — local-only "Advanced" disclosure state for the demoted
+  // KPI tiles (Generated today / Sent / Stale) and the power-user filter
+  // selects (Sort / Grouping / Layout). Closed by default so a new rep
+  // sees a single primary action surface on first paint.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [autoPilotDrawerOpen, setAutoPilotDrawerOpen] = useState(false);
   const [newViewName, setNewViewName] = useState("");
   const [newViewShared, setNewViewShared] = useState(false);
@@ -2287,10 +2297,9 @@ export default function AvailableFreightPage() {
             <FreshnessPill signal={feed?.freshness} />
             {/* Task #967 — shared live-sync health pill. */}
             <LiveSyncPill testId="pill-live-sync-af" />
-            {/* Task #971 — AF-specific Excel-importer health. Polls every
-                60s independently of the cockpit feed so a stalled importer
-                stays visible even when the rep isn't refreshing. */}
-            <AfImportHealthPill testId="pill-af-import-health" />
+            {/* Task #1021 — AF import health pill demoted to the tertiary
+                right-aligned cluster on the freshness row below so it
+                stops competing with the page title. */}
           </div>
           <p className="text-sm text-muted-foreground">
             Triage open freight in priority order. Shortcuts: j/k move • x select • Enter open • A approve • S send top 3 • R reassign • Esc clear.
@@ -2372,17 +2381,16 @@ export default function AvailableFreightPage() {
           active clause is rendered as a removable chip in the ScopeSummary
           above the row list, so silent layering is impossible. */}
 
-      {/* KPI strip — Task #601 contract semantics + Task #900 stale chip */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2">
-        <KpiTile label="Generated today" value={kpis?.generatedToday ?? 0} testId="kpi-generated-today" />
+      {/* Task #1021 — Compact KPI strip. Trimmed from 7 tiles + stale
+          chip to the 4 action-oriented metrics reps actually triage from
+          (Ready to send, At-risk ≤24h, Covered today, Total visible).
+          The demoted tiles (Generated today, Sent / awaiting carrier,
+          Stale) live behind the "Advanced" disclosure below so the page
+          opens with one obvious set of numbers to act on. */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2" data-testid="strip-kpi-primary">
         <KpiTile label="Ready to send" value={kpis?.readyToSend ?? 0} tone="ready" testId="kpi-ready" />
-        <KpiTile label="Sent / awaiting carrier" value={kpis?.sentAwaitingCarrier ?? 0} tone="info" testId="kpi-sent-awaiting" />
         <KpiTile label="At-risk pickup ≤24h" value={kpis?.atRiskPickup24h ?? 0} tone="critical" testId="kpi-at-risk-24h" />
         <KpiTile label="Covered today" value={kpis?.coveredToday ?? 0} tone="ok" testId="kpi-covered-today" />
-        {/* Task #957 follow-up — `Total visible` reflects the post-filter
-            collection so it lines up with the visible row count and the
-            "All" bucket chip. The small subtitle preserves the queue-wide
-            total reps used to read off the old "Total in queue" tile. */}
         <KpiTile
           label="Total visible"
           value={kpis?.total ?? 0}
@@ -2393,40 +2401,88 @@ export default function AvailableFreightPage() {
               : undefined
           }
         />
-        {/* Task #900 — Stale chip + reveal-stale recovery affordance.
-            Click → switches scope to 'all' so the rep can immediately see
-            the past-pickup rows the actionable rule had hidden. We render
-            the tile even when the count is zero (greyed out) so the chip's
-            position never shifts and screen readers always have the same
-            structure. */}
-        <button
-          type="button"
-          onClick={() => {
-            if ((kpis?.hiddenStale ?? 0) > 0) setPickupScope("all");
-          }}
-          className={`text-left rounded-md border px-3 py-2 transition-colors ${
-            (kpis?.hiddenStale ?? 0) > 0
-              ? "border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/15 cursor-pointer"
-              : "border-border bg-background opacity-60 cursor-default"
-          }`}
-          data-testid="button-reveal-stale"
-          aria-label={
-            (kpis?.hiddenStale ?? 0) > 0
-              ? `Reveal ${kpis?.hiddenStale} stale past-pickup rows`
-              : "No stale past-pickup rows"
-          }
-          title={
-            (kpis?.hiddenStale ?? 0) > 0
-              ? "Past-pickup rows the 'actionable' rule has hidden. Click to switch scope to 'All' and review them."
-              : "No past-pickup rows are currently hidden by the actionable rule."
-          }
-          disabled={(kpis?.hiddenStale ?? 0) === 0}
+      </div>
+
+      {/* Task #1021 — Advanced disclosure + tertiary right-aligned health
+          cluster. Hides the demoted KPI tiles (Generated today, Sent /
+          awaiting, Stale) so a new rep isn't confronted with 8 numbers
+          on first paint. The right-side cluster demotes the AF import
+          health pill out of the page title. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Collapsible
+          open={advancedOpen}
+          onOpenChange={setAdvancedOpen}
+          className="flex-1 min-w-0"
         >
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Stale</div>
-          <div className="text-lg font-semibold" data-testid="chip-stale-count">
-            {kpis?.hiddenStale ?? 0}
-          </div>
-        </button>
+          <CollapsibleTrigger asChild>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-[11px] text-muted-foreground"
+              data-testid="button-toggle-advanced"
+              aria-expanded={advancedOpen}
+            >
+              <SlidersHorizontal className="h-3 w-3 mr-1" />
+              Advanced
+              <ChevronDown
+                className={`h-3 w-3 ml-1 transition-transform ${advancedOpen ? "rotate-180" : ""}`}
+              />
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="pt-2" data-testid="panel-advanced-kpis">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2" data-testid="strip-kpi-advanced">
+              <KpiTile
+                label="Generated today"
+                value={kpis?.generatedToday ?? 0}
+                testId="kpi-generated-today"
+              />
+              <KpiTile
+                label="Sent / awaiting carrier"
+                value={kpis?.sentAwaitingCarrier ?? 0}
+                tone="info"
+                testId="kpi-sent-awaiting"
+              />
+              {/* Task #900 — Stale tile + reveal-stale recovery affordance.
+                  Click → switches scope to 'all'. Always rendered (greyed
+                  when zero) so position is stable for screen readers. */}
+              <button
+                type="button"
+                onClick={() => {
+                  if ((kpis?.hiddenStale ?? 0) > 0) setPickupScope("all");
+                }}
+                className={`text-left rounded-md border px-3 py-2 transition-colors ${
+                  (kpis?.hiddenStale ?? 0) > 0
+                    ? "border-amber-500/50 bg-amber-500/10 hover:bg-amber-500/15 cursor-pointer"
+                    : "border-border bg-background opacity-60 cursor-default"
+                }`}
+                data-testid="button-reveal-stale"
+                aria-label={
+                  (kpis?.hiddenStale ?? 0) > 0
+                    ? `Reveal ${kpis?.hiddenStale} stale past-pickup rows`
+                    : "No stale past-pickup rows"
+                }
+                title={
+                  (kpis?.hiddenStale ?? 0) > 0
+                    ? "Past-pickup rows the 'actionable' rule has hidden. Click to switch scope to 'All' and review them."
+                    : "No past-pickup rows are currently hidden by the actionable rule."
+                }
+                disabled={(kpis?.hiddenStale ?? 0) === 0}
+              >
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Stale</div>
+                <div className="text-lg font-semibold" data-testid="chip-stale-count">
+                  {kpis?.hiddenStale ?? 0}
+                </div>
+              </button>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+        <div
+          className="flex items-center gap-2 ml-auto"
+          data-testid="cluster-tertiary-health"
+        >
+          <AfImportHealthPill testId="pill-af-import-health" />
+        </div>
       </div>
 
       {/* Saved-view tab strip + freshness pulse */}
@@ -2603,7 +2659,7 @@ export default function AvailableFreightPage() {
           visible while the rep scrolls a long queue. */}
       <Card className="sticky top-0 z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80" data-testid="card-filter-bar-sticky">
         <CardContent className="p-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
             <div className="lg:col-span-2 relative">
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
@@ -2645,35 +2701,11 @@ export default function AvailableFreightPage() {
                 <SelectItem value="all">All</SelectItem>
               </SelectContent>
             </Select>
-            <Select value={sort} onValueChange={(v) => setSort(v as CockpitPrefs["sort"])}>
-              <SelectTrigger data-testid="select-sort"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="urgency">Sort: urgency</SelectItem>
-                <SelectItem value="pickup_soonest">Sort: pickup soonest</SelectItem>
-                <SelectItem value="freshness">Sort: freshest</SelectItem>
-                <SelectItem value="suggested_buy">Sort: suggested buy</SelectItem>
-                <SelectItem value="coverage_pct">Sort: coverage %</SelectItem>
-                <SelectItem value="confidence">Sort: confidence</SelectItem>
-                <SelectItem value="customer">Sort: customer</SelectItem>
-                <SelectItem value="lane">Sort: lane</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={grouping} onValueChange={(v) => setGrouping(v as CockpitPrefs["grouping"])}>
-              <SelectTrigger data-testid="select-grouping"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">Group: none</SelectItem>
-                <SelectItem value="customer">Group: customer</SelectItem>
-                <SelectItem value="pickup_day">Group: pickup day</SelectItem>
-                <SelectItem value="lane">Group: lane</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={layout} onValueChange={(v) => setLayout(v as CockpitPrefs["layout"])}>
-              <SelectTrigger data-testid="select-layout"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="table">Layout: table</SelectItem>
-                <SelectItem value="calendar">Layout: pickup-day swimlane</SelectItem>
-              </SelectContent>
-            </Select>
+            {/* Task #1021 — Sort / Grouping / Layout selects moved into
+                the Advanced disclosure below so the primary filter row
+                only shows the controls reps tune day-to-day (search,
+                customer, owner, status, pickup scope). The selects keep
+                their original test-ids and behavior. */}
             {/* Phase B1 / Task #900 — pickup scope. 'actionable' (default)
                 shows upcoming + today + past-pickup ≤24h-overdue still-open
                 rows. 'recent' restores the legacy 14-day grace view;
@@ -2715,6 +2747,49 @@ export default function AvailableFreightPage() {
                     : "All pickup dates"}
             </Badge>
           </div>
+          {/* Task #1021 — Advanced selects. Sort / Grouping / Layout
+              live behind the same `advancedOpen` toggle as the demoted
+              KPI tiles up top so opening either reveals every power-user
+              control at once. Closed by default so the sticky filter
+              bar stays compact for a new rep. */}
+          <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+            <CollapsibleContent
+              className="pt-2"
+              data-testid="panel-advanced-filters"
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <Select value={sort} onValueChange={(v) => setSort(v as CockpitPrefs["sort"])}>
+                  <SelectTrigger data-testid="select-sort"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="urgency">Sort: urgency</SelectItem>
+                    <SelectItem value="pickup_soonest">Sort: pickup soonest</SelectItem>
+                    <SelectItem value="freshness">Sort: freshest</SelectItem>
+                    <SelectItem value="suggested_buy">Sort: suggested buy</SelectItem>
+                    <SelectItem value="coverage_pct">Sort: coverage %</SelectItem>
+                    <SelectItem value="confidence">Sort: confidence</SelectItem>
+                    <SelectItem value="customer">Sort: customer</SelectItem>
+                    <SelectItem value="lane">Sort: lane</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select value={grouping} onValueChange={(v) => setGrouping(v as CockpitPrefs["grouping"])}>
+                  <SelectTrigger data-testid="select-grouping"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Group: none</SelectItem>
+                    <SelectItem value="customer">Group: customer</SelectItem>
+                    <SelectItem value="pickup_day">Group: pickup day</SelectItem>
+                    <SelectItem value="lane">Group: lane</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select value={layout} onValueChange={(v) => setLayout(v as CockpitPrefs["layout"])}>
+                  <SelectTrigger data-testid="select-layout"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="table">Layout: table</SelectItem>
+                    <SelectItem value="calendar">Layout: pickup-day swimlane</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
         </CardContent>
       </Card>
 
