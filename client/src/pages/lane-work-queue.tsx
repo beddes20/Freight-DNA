@@ -2375,6 +2375,26 @@ export default function LaneWorkQueuePage() {
   // so the cache splits per-filter, and append them as querystring params
   // so the server-side `applyOwnerFilter` + `applyPickupScope` see the same
   // values the URL serializer round-trips.
+  // Task #1027 (LWQ B) — opt-in Strategic sort. The URL is the source of
+  // truth so a deep-link / saved view round-trips. Default ("default")
+  // preserves the legacy signal-tiered order; "strategic" asks the server
+  // to attach the composite + sort by it. The sort key is threaded into
+  // the queryKey so each mode keeps its own cache entry.
+  type LwqSortMode = "default" | "strategic";
+  const initialSortMode: LwqSortMode = (() => {
+    if (typeof window === "undefined") return "default";
+    const v = new URLSearchParams(window.location.search).get("sort");
+    return v === "strategic" ? "strategic" : "default";
+  })();
+  const [sortMode, setSortMode] = useState<LwqSortMode>(initialSortMode);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (sortMode === "strategic") url.searchParams.set("sort", "strategic");
+    else url.searchParams.delete("sort");
+    window.history.replaceState({}, "", url.toString());
+  }, [sortMode]);
+
   const workQueueQueryParams = useMemo(() => {
     const sp = new URLSearchParams();
     if (ownerFilter && ownerFilter !== "all") {
@@ -2386,10 +2406,11 @@ export default function LaneWorkQueuePage() {
     if (pickupScope && pickupScope !== DEFAULT_PICKUP_SCOPE) {
       sp.set("pickupScope", pickupScope);
     }
+    if (sortMode === "strategic") sp.set("sort", "strategic");
     return sp.toString();
-  }, [ownerFilter, pickupScope]);
+  }, [ownerFilter, pickupScope, sortMode]);
   const { data: queue, isLoading, isError, refetch } = useQuery<WorkQueue>({
-    queryKey: ["/api/recurring-lanes/work-queue", { owner: ownerFilter, pickupScope }],
+    queryKey: ["/api/recurring-lanes/work-queue", { owner: ownerFilter, pickupScope, sort: sortMode }],
     // SSE-mid-fetch race guard; append ?debug=lwq to log dropped fetches.
     queryFn: () =>
       fetchWithFreshnessGuard<WorkQueue>({
@@ -2492,7 +2513,13 @@ export default function LaneWorkQueuePage() {
 
   // Sort unassigned: hot-market lanes (VOTRI signal = "hot") are elevated to the top,
   // then warm, then cool, then stale/unknown — within each signal tier, sort by avgLoadsPerWeek desc.
+  // Task #1027 (LWQ B) — when Strategic mode is active the server has
+  // already ordered each bucket by the composite `strategicPriority`. We
+  // MUST NOT re-sort here or the client would silently override the
+  // server's strategic ranking. Pass the bucket through unchanged in
+  // that mode; otherwise apply the legacy signal-tiered fallback.
   const sortedUnassigned = useMemo(() => {
+    if (sortMode === "strategic") return filteredQueue?.unassigned ?? [];
     const SIGNAL_PRIORITY: Record<string, number> = {
       hot: 3, warm: 2, stable: 1, cool: 1, stale: 0,
     };
@@ -2511,7 +2538,7 @@ export default function LaneWorkQueuePage() {
       const bVal = parseLoadsPerWeek(b.avgLoadsPerWeek) ?? 0;
       return bVal - aVal;
     });
-  }, [filteredQueue?.unassigned, votriByLane]);
+  }, [filteredQueue?.unassigned, votriByLane, sortMode]);
 
   // Task #1030 — freshnessSignal query moved to /admin/lane-engine. The
   // LWQ header dot rolls freshness into the engine-health verdict.
@@ -2833,6 +2860,23 @@ export default function LaneWorkQueuePage() {
             onChange={setPickupScope}
             className="h-8 text-xs w-44 gap-1"
           />
+          {/*
+            Task #1027 (LWQ B) — opt-in Strategic sort. Default mode keeps
+            the legacy signal-tiered ordering so reps see no surprise. When
+            toggled, the page passes ?sort=strategic and the server attaches
+            the composite + sorts each bucket by it; the client stops
+            re-sorting unassigned. Weights are admin-tunable on
+            /admin/carrier-intelligence-scoring.
+          */}
+          <Select value={sortMode} onValueChange={(v) => setSortMode(v as LwqSortMode)}>
+            <SelectTrigger className="h-8 text-xs w-40 gap-1" data-testid="select-lwq-sort-mode">
+              <SelectValue placeholder="Sort: Default" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="default" data-testid="option-sort-default">Sort: Default</SelectItem>
+              <SelectItem value="strategic" data-testid="option-sort-strategic">Sort: Strategic</SelectItem>
+            </SelectContent>
+          </Select>
           <StaleCountChip
             hiddenStale={queue?.hiddenStale ?? 0}
             currentScope={pickupScope}

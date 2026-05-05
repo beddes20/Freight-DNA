@@ -54,6 +54,14 @@ import { getGraphAccessToken } from "../graphService";
 import { getReplyTrackingStatus, replyTrackingEnabled } from "../graphSubscriptionService";
 import { logOutboundCarrierEmail, logInboundCarrierEmail } from "../emailIntelligenceService";
 import { findCarrierContactLocks, formatLockReason } from "../carrierContactLocks";
+// Task #1027 (LWQ B) — strategic priority composite for the LWQ.
+import {
+  computeLaneStrategicPriority,
+  type LaneStrategicResult,
+} from "../services/laneStrategicPriority";
+import { getLaneStrategicWeights } from "../laneStrategicWeights";
+import { isLaneLifecycleStage } from "@shared/laneLifecycle";
+import { financialUploads, touchpoints, loadFact, companies as companiesTbl, laneCarrierInterest } from "@shared/schema";
 // Task #917 — Workflow OS adoption (LWQ). Same shared primitives AF uses
 // so the Owner-filter + pickup-scope semantics cannot drift across surfaces.
 import {
@@ -756,6 +764,12 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         ? pickupScopeRaw
         : DEFAULT_PICKUP_SCOPE;
 
+      // Task #1027 (LWQ B) — opt-in strategic ranking. Default sort is
+      // unchanged (laneScore desc) so this rolls out behind a URL param;
+      // Task C will flip the default for Strategic mode.
+      const sortMode: "default" | "strategic" =
+        qOptStr(req.query.sort) === "strategic" ? "strategic" : "default";
+
       const { visibleUserIds, canSeeUnassigned, scopeLabel } = await storage.resolveVisibleUserIds(
         user.id, user.organizationId, user.role
       );
@@ -806,6 +820,13 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         pickupWindowStart: string | null;
         pickupFreshness: PickupFreshness;
         pickupDaysAgo: number | null;
+        // Task #1027 (LWQ B) — strategic priority composite. Attached only
+        // when `?sort=strategic` is set; both fields appear together (the
+        // guardrail asserts `priorityExplanation` is present whenever
+        // `strategicPriority` is).
+        strategicPriority?: number;
+        priorityExplanation?: LaneStrategicResult;
+        lifecycleStage?: string | null;
       };
 
       type LeanBuckets = {
@@ -970,14 +991,259 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         inProgress: applyPickupScope(ownedBuckets.inProgress, pickupScope, actionabilityCtx),
       };
 
-      // Keyset pagination within each bucket (already sorted laneScore DESC, laneId by DB)
+      // ── Task #1027 (LWQ B) — Strategic ranking enrichment (opt-in) ───────
+      // When `?sort=strategic` is set, batch-load the per-customer + per-lane
+      // signals that feed the pure `computeLaneStrategicPriority` composite,
+      // attach `strategicPriority` + `priorityExplanation` to every visible
+      // row, and re-sort within each bucket by composite desc.
+      if (sortMode === "strategic") {
+        const allScoped = [
+          ...scopedBuckets.unassigned,
+          ...scopedBuckets.noContactable,
+          ...scopedBuckets.assignedUntouched,
+          ...scopedBuckets.inProgress,
+        ];
+        const laneIds = allScoped.map(r => r.laneId);
+        const companyIds = [...new Set(allScoped.map(r => r.companyId).filter((id): id is string => !!id))];
+
+        // 1) Per-org tunable weights.
+        const weights = await getLaneStrategicWeights(user.organizationId);
+
+        // 2) Per-company customer-value inputs (estimatedFreightSpend) +
+        //    per-company days-since-last-touchpoint + per-company current-year
+        //    realized revenue (proxy for YTD revenue), all batched.
+        // Per-company aggregate: revenue/spend, account-owner-specific
+        // touchpoint freshness, fallback any-rep freshness, and a 0–1
+        // strategicTierBoost derived from `companies.onboardingMilestones`
+        // + `sharedReps` (the existing on-company "this is a strategic
+        // account" signals — no new column required).
+        type CustAggregate = {
+          estimatedFreightSpend: number | null;
+          ytdRevenue: number | null;
+          ownerRepId: string | null;
+          daysSinceOwnerTouchpoint: number | null;
+          daysSinceAnyTouchpoint: number | null;
+          strategicTierBoost: number;
+        };
+        const companiesMap = new Map<string, CustAggregate>();
+        if (companyIds.length > 0) {
+          const [companyRows, touchAnyRows, ytdRows] = await Promise.all([
+            db.select({
+              id: companiesTbl.id,
+              estimatedFreightSpend: companiesTbl.estimatedFreightSpend,
+              ownerRepId: companiesTbl.ownerRepId,
+              onboardingMilestones: companiesTbl.onboardingMilestones,
+              sharedReps: companiesTbl.sharedReps,
+            }).from(companiesTbl).where(and(eq(companiesTbl.organizationId, user.organizationId), inArray(companiesTbl.id, companyIds))),
+            db.select({
+              companyId: touchpoints.companyId,
+              maxDate: sql<string | null>`MAX(${touchpoints.date})`,
+            }).from(touchpoints).where(inArray(touchpoints.companyId, companyIds)).groupBy(touchpoints.companyId),
+            db.select({
+              companyId: loadFact.companyId,
+              revenue: sql<string | null>`COALESCE(SUM(${loadFact.revenue}), 0)`,
+            }).from(loadFact).where(and(
+              eq(loadFact.orgId, user.organizationId),
+              inArray(loadFact.companyId, companyIds),
+              eq(loadFact.bucket, "realized"),
+              sql`${loadFact.month} >= ${`${new Date().getUTCFullYear()}-01`}`,
+            )).groupBy(loadFact.companyId),
+          ]);
+
+          // Seed per-company aggregate from companies row, deriving the
+          // strategic-tier boost from existing on-company signals.
+          for (const c of companyRows) {
+            const milestones = (c.onboardingMilestones ?? null) as Record<string, boolean> | null;
+            const milestoneFraction = milestones
+              ? Math.min(1, Object.values(milestones).filter(Boolean).length / 7) // 7 = ONBOARDING_MILESTONE_IDS.length
+              : 0;
+            const sharedReps = Array.isArray(c.sharedReps) ? c.sharedReps : [];
+            const sharedBoost = sharedReps.length > 0 ? 0.25 : 0;
+            companiesMap.set(c.id, {
+              estimatedFreightSpend: c.estimatedFreightSpend ? Number(c.estimatedFreightSpend) : null,
+              ytdRevenue: null,
+              ownerRepId: c.ownerRepId ?? null,
+              daysSinceOwnerTouchpoint: null,
+              daysSinceAnyTouchpoint: null,
+              strategicTierBoost: Math.min(1, milestoneFraction + sharedBoost),
+            });
+          }
+
+          // Owner-specific freshness: only count touchpoints logged BY the
+          // current account owner (`logged_by_id = ownerRepId`). Falls back
+          // to any-rep touchpoint when no owner is set OR the owner has
+          // never touched the account.
+          const todayMs = Date.now();
+          const ownerToCompanies = new Map<string, string[]>();
+          for (const [cid, agg] of companiesMap) {
+            if (!agg.ownerRepId) continue;
+            const list = ownerToCompanies.get(agg.ownerRepId) ?? [];
+            list.push(cid);
+            ownerToCompanies.set(agg.ownerRepId, list);
+          }
+          if (ownerToCompanies.size > 0) {
+            const ownerIds = [...ownerToCompanies.keys()];
+            const ownerCompanyIds = [...new Set([...ownerToCompanies.values()].flat())];
+            const ownerTouchRows = await db.select({
+              companyId: touchpoints.companyId,
+              loggedById: touchpoints.loggedById,
+              maxDate: sql<string | null>`MAX(${touchpoints.date})`,
+            }).from(touchpoints).where(and(
+              inArray(touchpoints.companyId, ownerCompanyIds),
+              inArray(touchpoints.loggedById, ownerIds),
+            )).groupBy(touchpoints.companyId, touchpoints.loggedById);
+            for (const t of ownerTouchRows) {
+              if (!t.companyId || !t.maxDate) continue;
+              const cur = companiesMap.get(t.companyId);
+              if (!cur || cur.ownerRepId !== t.loggedById) continue;
+              const ts = Date.parse(t.maxDate);
+              if (Number.isFinite(ts)) {
+                cur.daysSinceOwnerTouchpoint = Math.max(0, Math.floor((todayMs - ts) / 86_400_000));
+              }
+            }
+          }
+          for (const t of touchAnyRows) {
+            if (!t.companyId || !t.maxDate) continue;
+            const cur = companiesMap.get(t.companyId);
+            if (!cur) continue;
+            const ts = Date.parse(t.maxDate);
+            cur.daysSinceAnyTouchpoint = Number.isFinite(ts)
+              ? Math.max(0, Math.floor((todayMs - ts) / 86_400_000))
+              : null;
+          }
+          for (const r of ytdRows) {
+            if (!r.companyId) continue;
+            const cur = companiesMap.get(r.companyId);
+            if (!cur) continue;
+            cur.ytdRevenue = r.revenue ? Number(r.revenue) : null;
+          }
+        }
+
+        // 2b) Per-lane hot reply count — sourced directly from
+        //     `lane_carrier_interest` (interestStatus IN
+        //     'available_now' | 'available_next_week'), NOT proxied
+        //     through lifecycle stage. This is the same Hot signal the
+        //     LWQ row chip displays.
+        const hotByLaneId = new Map<string, number>();
+        if (laneIds.length > 0) {
+          const hotRows = await db.select({
+            laneId: laneCarrierInterest.laneId,
+            n: sql<string>`COUNT(*)`,
+          }).from(laneCarrierInterest).where(and(
+            inArray(laneCarrierInterest.laneId, laneIds),
+            inArray(laneCarrierInterest.interestStatus, ["available_now", "available_next_week"]),
+          )).groupBy(laneCarrierInterest.laneId);
+          for (const h of hotRows) hotByLaneId.set(h.laneId, Number(h.n) || 0);
+        }
+
+        // 3) Prior covered loads on each lane signature (companyId × lane).
+        const priorByLaneId = new Map<string, number>();
+        if (laneIds.length > 0 && companyIds.length > 0) {
+          // Build quick lookup: signature → laneId, so a single batched
+          // load_fact aggregate can be projected back onto each row.
+          const sigToLaneIds = new Map<string, string[]>();
+          for (const r of allScoped) {
+            if (!r.companyId) continue;
+            const key = `${r.companyId}|${(r.origin || "").toLowerCase()}|${(r.originState || "").toLowerCase()}|${(r.destination || "").toLowerCase()}|${(r.destinationState || "").toLowerCase()}|${(r.equipmentType || "").toLowerCase()}`;
+            const list = sigToLaneIds.get(key) ?? [];
+            list.push(r.laneId);
+            sigToLaneIds.set(key, list);
+          }
+          const realized = await db.select({
+            companyId: loadFact.companyId,
+            originCity: loadFact.originCity,
+            originState: loadFact.originState,
+            destinationCity: loadFact.destinationCity,
+            destinationState: loadFact.destinationState,
+            equipmentType: loadFact.equipmentType,
+            n: sql<string>`COUNT(*)`,
+          }).from(loadFact).where(and(
+            eq(loadFact.orgId, user.organizationId),
+            inArray(loadFact.companyId, companyIds),
+            eq(loadFact.bucket, "realized"),
+          )).groupBy(loadFact.companyId, loadFact.originCity, loadFact.originState, loadFact.destinationCity, loadFact.destinationState, loadFact.equipmentType);
+          for (const row of realized) {
+            if (!row.companyId) continue;
+            const key = `${row.companyId}|${(row.originCity || "").toLowerCase()}|${(row.originState || "").toLowerCase()}|${(row.destinationCity || "").toLowerCase()}|${(row.destinationState || "").toLowerCase()}|${(row.equipmentType || "").toLowerCase()}`;
+            const matches = sigToLaneIds.get(key);
+            if (!matches) continue;
+            const n = Number(row.n) || 0;
+            for (const laneId of matches) {
+              priorByLaneId.set(laneId, (priorByLaneId.get(laneId) ?? 0) + n);
+            }
+          }
+        }
+
+        // 4) Per-lane lifecycleStage. Cache items don't carry it; pull in
+        //    bulk so the composite can apply its lifecycle floor.
+        const lifecycleByLaneId = new Map<string, string | null>();
+        if (laneIds.length > 0) {
+          const stageRows = await db.select({
+            id: recurringLanes.id,
+            lifecycleStage: recurringLanes.lifecycleStage,
+          }).from(recurringLanes).where(inArray(recurringLanes.id, laneIds));
+          for (const s of stageRows) lifecycleByLaneId.set(s.id, s.lifecycleStage ?? null);
+        }
+
+        const attach = (rows: LeanItem[]): void => {
+          for (const r of rows) {
+            const cust = (r.companyId && companiesMap.get(r.companyId)) || null;
+            const stageRaw = lifecycleByLaneId.get(r.laneId) ?? null;
+            const stage = isLaneLifecycleStage(stageRaw) ? stageRaw : null;
+            r.lifecycleStage = stageRaw;
+            // Owner-specific touchpoint freshness with any-rep fallback so
+            // unowned accounts still contribute a freshness signal.
+            const ownerDays = cust?.daysSinceOwnerTouchpoint ?? null;
+            const anyDays = cust?.daysSinceAnyTouchpoint ?? null;
+            const daysSinceOwnerTouchpoint = ownerDays !== null ? ownerDays : anyDays;
+            const result = computeLaneStrategicPriority(
+              { laneScore: r.laneScore, avgLoadsPerWeek: r.avgLoadsPerWeek, isHighFrequency: r.isHighFrequency },
+              {
+                ytdRevenue: cust?.ytdRevenue ?? null,
+                estimatedFreightSpend: cust?.estimatedFreightSpend ?? null,
+                strategicTierBoost: cust?.strategicTierBoost ?? 0,
+              },
+              {
+                hotReplyCount: hotByLaneId.get(r.laneId) ?? 0,
+                daysSinceOwnerTouchpoint,
+                priorCoveredLoads: priorByLaneId.get(r.laneId) ?? 0,
+              },
+              stage,
+              weights,
+            );
+            r.strategicPriority = result.score;
+            r.priorityExplanation = result;
+          }
+        };
+        attach(scopedBuckets.unassigned);
+        attach(scopedBuckets.noContactable);
+        attach(scopedBuckets.assignedUntouched);
+        attach(scopedBuckets.inProgress);
+
+        const byPriority = (a: LeanItem, b: LeanItem) =>
+          (b.strategicPriority ?? 0) - (a.strategicPriority ?? 0)
+          || a.laneId.localeCompare(b.laneId);
+        scopedBuckets.unassigned.sort(byPriority);
+        scopedBuckets.noContactable.sort(byPriority);
+        scopedBuckets.assignedUntouched.sort(byPriority);
+        scopedBuckets.inProgress.sort(byPriority);
+      }
+
+      // Keyset pagination within each bucket. The cursor's leading number is
+      // `laneScore` for the default sort and the rounded `strategicPriority`
+      // (×100) when `?sort=strategic` is active.
+      const cursorKey = (item: LeanItem): number =>
+        sortMode === "strategic"
+          ? Math.round(((item.strategicPriority ?? 0) as number) * 100)
+          : (item.laneScore ?? 0);
+
       function applyPagination(items: LeanItem[]): { items: LeanItem[]; nextCursor: string | null } {
         let startIdx = 0;
         if (cursor) {
           const [cursorScoreStr, cursorId] = cursor.split(":");
           const cursorScore = parseInt(cursorScoreStr, 10);
           startIdx = items.findIndex(item => {
-            const score = item.laneScore ?? 0;
+            const score = cursorKey(item);
             if (score !== cursorScore) return score < cursorScore;
             return item.laneId > cursorId;
           });
@@ -986,7 +1252,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         const page = items.slice(startIdx, startIdx + limit);
         const last = page[page.length - 1];
         const nextCursor = page.length === limit && last
-          ? `${last.laneScore ?? 0}:${last.laneId}`
+          ? `${cursorKey(last)}:${last.laneId}`
           : null;
         return { items: page, nextCursor };
       }
@@ -1019,7 +1285,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         });
 
       const source = leanQueue ? "cache" : "full";
-      console.log(`[work-queue] org=${user.organizationId} source=${source} scope=${scopeLabel} buckets=${JSON.stringify(totals)} hiddenStale=${hiddenStale} owner=${typeof ownerFilterValue === "string" ? ownerFilterValue : `specific:${ownerFilterValue.specificUserId}`} pickupScope=${pickupScope} limit=${limit} cursor=${cursor ?? "none"} requestedBy=${user.id}(${user.role})`);
+      console.log(`[work-queue] org=${user.organizationId} source=${source} scope=${scopeLabel} sort=${sortMode} buckets=${JSON.stringify(totals)} hiddenStale=${hiddenStale} owner=${typeof ownerFilterValue === "string" ? ownerFilterValue : `specific:${ownerFilterValue.specificUserId}`} pickupScope=${pickupScope} limit=${limit} cursor=${cursor ?? "none"} requestedBy=${user.id}(${user.role})`);
       res.json({
         unassigned: stampLiveOpps(uPaged.items),
         noContactable: stampLiveOpps(ncPaged.items),
@@ -1037,6 +1303,11 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           //           show a "warming up" banner so reps know the next load
           //           will be faster.
           source,
+          // Task #1027 (LWQ B) — echo back the active sort so the client
+          // can render the Strategic-mode chip and downstream surfaces
+          // (Task D row reason chip) know whether `priorityExplanation`
+          // is populated on every row.
+          sort: sortMode,
         },
         pagination: {
           limit,

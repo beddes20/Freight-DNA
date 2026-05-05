@@ -4017,6 +4017,148 @@ console.log("── Section 1026: LWQ A — Lifecycle as first-class state ─�
   );
 }
 
+// ── Section 1027: LWQ B — Strategic priority composite ──────────────────
+// `computeLaneStrategicPriority` is the single source of truth for the LWQ
+// strategic ranking. It MUST stay pure (no DB / storage imports), the
+// defaults MUST live as a documented exported constant, and the work-queue
+// response MUST carry `priorityExplanation` whenever `strategicPriority` is
+// attached to a row (so Task D's reason chip never has to re-derive).
+console.log("\n── Section 1027: LWQ B — Strategic priority composite ──────────────");
+{
+  const pureSrc = readFile("server/services/laneStrategicPriority.ts");
+  // (a) Pure function: no DB / storage imports.
+  assert(
+    "computeLaneStrategicPriority module has no DB or storage imports (pure)",
+    !/from\s+["']\.\.\/storage["']/.test(pureSrc)
+      && !/from\s+["']drizzle-orm["']/.test(pureSrc)
+      && !/\bawait\s+storage\./.test(pureSrc)
+      && !/\bawait\s+db\./.test(pureSrc),
+  );
+  assert(
+    "computeLaneStrategicPriority is exported",
+    /export function computeLaneStrategicPriority\b/.test(pureSrc),
+  );
+  // (b) Defaults are a documented exported constant.
+  assert(
+    "DEFAULT_LANE_STRATEGIC_WEIGHTS exported as documented constant",
+    /export const DEFAULT_LANE_STRATEGIC_WEIGHTS\s*:\s*LaneStrategicWeights\s*=/.test(pureSrc),
+  );
+
+  // (c) Work-queue endpoint wires the composite + opt-in sort param, and
+  //     pairs `strategicPriority` with `priorityExplanation`.
+  const wqSrc = readFile("server/routes/laneCarrierOutreach.ts");
+  assert(
+    "work-queue handler reads ?sort=strategic opt-in",
+    /sortMode[\s\S]{0,200}sort.*===\s*["']strategic["']/.test(wqSrc),
+  );
+  assert(
+    "work-queue handler imports computeLaneStrategicPriority",
+    /from\s+["']\.\.\/services\/laneStrategicPriority["']/.test(wqSrc)
+      && /computeLaneStrategicPriority/.test(wqSrc),
+  );
+  assert(
+    "work-queue rows pair strategicPriority with priorityExplanation",
+    /r\.strategicPriority\s*=[\s\S]{0,200}r\.priorityExplanation\s*=/.test(wqSrc),
+  );
+  assert(
+    "LeanItem type declares both strategicPriority and priorityExplanation",
+    /strategicPriority\?:\s*number;[\s\S]{0,200}priorityExplanation\?:/.test(wqSrc),
+  );
+
+  // (d) Per-org weights live in their own settings module + admin route.
+  const settingsSrc = readFile("server/laneStrategicWeights.ts");
+  assert(
+    "laneStrategicWeights exports get/set helpers",
+    /export async function getLaneStrategicWeights\b/.test(settingsSrc)
+      && /export async function setLaneStrategicWeights\b/.test(settingsSrc),
+  );
+  const adminSrc = readFile("server/routes/carrierIntelligenceScoring.ts");
+  assert(
+    "admin route exposes GET + PUT /api/admin/lane-strategic-weights",
+    /app\.get\("\/api\/admin\/lane-strategic-weights"/.test(adminSrc)
+      && /app\.put\("\/api\/admin\/lane-strategic-weights"/.test(adminSrc),
+  );
+
+  // (e) Admin UI surfaces the new card so admins can tune without a deploy.
+  const adminPageSrc = readFile("client/src/pages/admin-carrier-intelligence-scoring.tsx");
+  assert(
+    "admin scoring page renders the lane-strategic-weights card",
+    /data-testid="card-lane-strategic-weights"/.test(adminPageSrc)
+      && /data-testid="button-save-lane-strategic-weights"/.test(adminPageSrc),
+  );
+
+  // (f) Scorer signature uses real signals — NOT lifecycle-proxied "hot"
+  //     and NOT generic "any-rep" freshness. Code review specifically
+  //     rejected the proxies; this guardrail prevents regression.
+  assert(
+    "scorer accepts hotReplyCount (real lane_carrier_interest signal)",
+    /hotReplyCount\s*:\s*number/.test(pureSrc),
+  );
+  assert(
+    "scorer accepts daysSinceOwnerTouchpoint (owner-specific freshness)",
+    /daysSinceOwnerTouchpoint\s*:\s*number/.test(pureSrc),
+  );
+  assert(
+    "scorer accepts strategicTierBoost (on-company strategic signal)",
+    /strategicTierBoost\?:\s*number/.test(pureSrc),
+  );
+  assert(
+    "scorer no longer carries the lifecycle-proxied isHot field",
+    !/\bisHot\b/.test(pureSrc),
+  );
+
+  // (g) Route batch-loads the real Hot signal from lane_carrier_interest
+  //     and filters touchpoints by ownerRepId.
+  assert(
+    "work-queue batch-loads Hot replies from lane_carrier_interest",
+    /laneCarrierInterest[\s\S]{0,400}available_now[\s\S]{0,80}available_next_week/.test(wqSrc),
+  );
+  assert(
+    "work-queue filters touchpoints by company ownerRepId for freshness",
+    /touchpoints\.loggedById/.test(wqSrc) && /ownerRepId/.test(wqSrc),
+  );
+  assert(
+    "work-queue passes hotReplyCount + daysSinceOwnerTouchpoint to scorer",
+    /hotReplyCount:\s*hotByLaneId/.test(wqSrc)
+      && /daysSinceOwnerTouchpoint/.test(wqSrc),
+  );
+
+  // (h) LWQ page exposes the opt-in Strategic toggle AND skips the
+  //     client-side resort when strategic mode is active (otherwise the
+  //     server's strategic ordering would be silently overridden).
+  const lwqSrc = readFile("client/src/pages/lane-work-queue.tsx");
+  assert(
+    "LWQ page renders the Strategic sort toggle",
+    /data-testid="select-lwq-sort-mode"/.test(lwqSrc)
+      && /data-testid="option-sort-strategic"/.test(lwqSrc),
+  );
+  assert(
+    "LWQ page threads sort=strategic into the work-queue request",
+    /sortMode\s*===\s*["']strategic["'][\s\S]{0,200}sp\.set\(\s*["']sort["']\s*,\s*["']strategic["']\s*\)/.test(lwqSrc),
+  );
+  assert(
+    "LWQ page skips client-side resort when strategic mode is active",
+    /if\s*\(\s*sortMode\s*===\s*["']strategic["']\s*\)\s*return\s+filteredQueue\?\.unassigned/.test(lwqSrc),
+  );
+
+  // (i) Unit tests for the pure scorer exist (code review required them).
+  const unitSrc = readFile("tests/lane-strategic-priority.test.ts");
+  assert(
+    "unit tests file imports computeLaneStrategicPriority",
+    /computeLaneStrategicPriority/.test(unitSrc)
+      && /from\s+["']\.\.\/server\/services\/laneStrategicPriority["']/.test(unitSrc),
+  );
+  assert(
+    "unit tests cover the contract edge cases",
+    /missing customer value/i.test(unitSrc)
+      && /never[- ]touched|null daysSinceOwnerTouchpoint/i.test(unitSrc)
+      && /priorCoveredLoads=0/i.test(unitSrc)
+      && /null lifecycle/i.test(unitSrc)
+      && /strategicTierBoost/i.test(unitSrc)
+      && /hotReplyCount/i.test(unitSrc),
+  );
+}
+
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {
   console.error("Failures:");

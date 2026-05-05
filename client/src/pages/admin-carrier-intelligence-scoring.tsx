@@ -73,14 +73,45 @@ const DEFAULT_THRESHOLDS: ThresholdsCfg = {
   confidenceChips: { greenMinLoads: 5, greenMaxSpreadPct: 8, yellowMinLoads: 2 },
 };
 
+// Task #1027 (LWQ B) — strategic priority weights for the Lane Work Queue.
+interface LaneStrategicWeightsCfg {
+  customerValue: number;
+  freshness: number;
+  outcomeHistory: number;
+  tactical: number;
+  lifecycle: number;
+  customerValueCap: number;
+  freshnessStaleDays: number;
+  avgLoadsCap: number;
+  outcomeBoostPerLoad: number;
+}
+const DEFAULT_LANE_STRATEGIC_WEIGHTS: LaneStrategicWeightsCfg = {
+  customerValue: 0.30, freshness: 0.15, outcomeHistory: 0.10, tactical: 0.30, lifecycle: 0.15,
+  customerValueCap: 1_000_000, freshnessStaleDays: 30, avgLoadsCap: 5, outcomeBoostPerLoad: 20,
+};
+
 export default function AdminCarrierIntelligenceScoringPage() {
   const { toast } = useToast();
   const { data, isLoading } = useQuery<ScoringResp>({ queryKey: ["/api/admin/carrier-intelligence/scoring"] });
+  const { data: laneWeightsResp } = useQuery<{ weights: LaneStrategicWeightsCfg; defaults: LaneStrategicWeightsCfg }>({
+    queryKey: ["/api/admin/lane-strategic-weights"],
+  });
   const [blend, setBlend] = useState<BlendCfg | null>(null);
   const [thresholds, setThresholds] = useState<ThresholdsCfg | null>(null);
   const [skipRecs, setSkipRecs] = useState(false);
   const [overridesText, setOverridesText] = useState<string | null>(null);
   const [overridesError, setOverridesError] = useState<string | null>(null);
+  const [laneWeights, setLaneWeights] = useState<LaneStrategicWeightsCfg | null>(null);
+  const effLW: LaneStrategicWeightsCfg = laneWeights ?? laneWeightsResp?.weights ?? DEFAULT_LANE_STRATEGIC_WEIGHTS;
+  const saveLaneWeights = useMutation({
+    mutationFn: async () => apiRequest("PUT", "/api/admin/lane-strategic-weights", effLW),
+    onSuccess: () => {
+      toast({ title: "Lane priority weights saved" });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/lane-strategic-weights"] });
+      setLaneWeights(null);
+    },
+    onError: (e: Error) => toast({ title: "Save failed", description: e?.message ?? "", variant: "destructive" }),
+  });
 
   const eff: BlendCfg = blend ?? data?.blend ?? DEFAULT_BLEND;
   const effT: ThresholdsCfg = thresholds ?? data?.thresholds ?? DEFAULT_THRESHOLDS;
@@ -248,6 +279,39 @@ export default function AdminCarrierIntelligenceScoringPage() {
             value={effT.confidenceChips.yellowMinLoads}
             onChange={v => setThresholds({ ...effT, confidenceChips: { ...effT.confidenceChips, yellowMinLoads: v } })}
             testId="input-chip-yellow-loads" />
+        </CardContent>
+      </Card>
+
+      <Card data-testid="card-lane-strategic-weights">
+        <CardHeader>
+          <CardTitle>Lane Work Queue — Strategic Priority Weights</CardTitle>
+          <CardDescription>
+            Tunes the composite that ranks lanes inside each LWQ bucket when reps choose Strategic mode (opt-in via <code>?sort=strategic</code>; default sort unchanged for now). Each component sub-score is normalized 0–100 and weighted by these values.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <NumberField label="Customer value weight (0–1)" step={0.05} min={0} max={1}
+            value={effLW.customerValue} onChange={v => setLaneWeights({ ...effLW, customerValue: v })} testId="input-lsw-customer-value" />
+          <NumberField label="Relationship freshness weight (0–1)" step={0.05} min={0} max={1}
+            value={effLW.freshness} onChange={v => setLaneWeights({ ...effLW, freshness: v })} testId="input-lsw-freshness" />
+          <NumberField label="Lane outcome history weight (0–1)" step={0.05} min={0} max={1}
+            value={effLW.outcomeHistory} onChange={v => setLaneWeights({ ...effLW, outcomeHistory: v })} testId="input-lsw-outcome-history" />
+          <NumberField label="Tactical signal weight (0–1)" step={0.05} min={0} max={1}
+            value={effLW.tactical} onChange={v => setLaneWeights({ ...effLW, tactical: v })} testId="input-lsw-tactical" />
+          <NumberField label="Lifecycle stage weight (0–1)" step={0.05} min={0} max={1}
+            value={effLW.lifecycle} onChange={v => setLaneWeights({ ...effLW, lifecycle: v })} testId="input-lsw-lifecycle" />
+          <Separator />
+          <NumberField label="Customer-value cap ($) — revenue/spend at or above this scores 100" step={10000} min={1000} max={1_000_000_000}
+            value={effLW.customerValueCap} onChange={v => setLaneWeights({ ...effLW, customerValueCap: v })} testId="input-lsw-customer-value-cap" />
+          <NumberField label="Freshness stale-at days — days since touch where freshness sub-score = 100" step={1} min={1} max={365}
+            value={effLW.freshnessStaleDays} onChange={v => setLaneWeights({ ...effLW, freshnessStaleDays: v })} testId="input-lsw-freshness-stale-days" />
+          <NumberField label="Avg loads/week cap — tactical loads sub-axis maxes at this rate" step={0.5} min={1} max={100}
+            value={effLW.avgLoadsCap} onChange={v => setLaneWeights({ ...effLW, avgLoadsCap: v })} testId="input-lsw-avg-loads-cap" />
+          <NumberField label="Outcome boost per prior covered load (0–100)" step={1} min={0} max={100}
+            value={effLW.outcomeBoostPerLoad} onChange={v => setLaneWeights({ ...effLW, outcomeBoostPerLoad: v })} testId="input-lsw-outcome-boost" />
+          <Button onClick={() => saveLaneWeights.mutate()} disabled={!laneWeights || saveLaneWeights.isPending} data-testid="button-save-lane-strategic-weights">
+            {saveLaneWeights.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />} Save lane priority weights
+          </Button>
         </CardContent>
       </Card>
 

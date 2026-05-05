@@ -30,6 +30,10 @@ import {
   getThresholds, setThresholds,
   type ScoringThresholds,
 } from "../carrierIntelligenceSettings";
+import {
+  getLaneStrategicWeights, setLaneStrategicWeights,
+  DEFAULT_LANE_STRATEGIC_WEIGHTS,
+} from "../laneStrategicWeights";
 import { listScorecards, getScorecardForCarrier } from "../carrierScorecardService";
 import { getBlendedRate } from "../pricingBlendService";
 import { recommendCarriersForLoad } from "../carrierRecommendationEngine";
@@ -596,6 +600,43 @@ export function registerCarrierIntelligenceScoringRoutes(app: Express): void {
     } catch (err) {
       console.error("[admin/carrier-intel/scoring PUT]", err);
       return res.status(500).json({ error: "Failed to update scoring settings" });
+    }
+  });
+
+  // ── Task #1027 (LWQ B) — Lane Work Queue strategic-priority weights ──
+  // Mirrors the carrier-intel scoring admin contract: GET returns the
+  // current weights + documented defaults, PUT validates + persists.
+  app.get("/api/admin/lane-strategic-weights", requireUser, async (req, res) => {
+    const ctx = await requireAdmin(req, res); if (!ctx) return;
+    try {
+      const weights = await getLaneStrategicWeights(ctx.orgId);
+      return res.json({ weights, defaults: DEFAULT_LANE_STRATEGIC_WEIGHTS });
+    } catch (err) {
+      console.error("[admin/lane-strategic-weights GET]", err);
+      return res.status(500).json({ error: "Failed to read lane strategic weights" });
+    }
+  });
+  const laneStrategicWeightsSchema = z.object({
+    customerValue: z.number().min(0).max(1).optional(),
+    freshness: z.number().min(0).max(1).optional(),
+    outcomeHistory: z.number().min(0).max(1).optional(),
+    tactical: z.number().min(0).max(1).optional(),
+    lifecycle: z.number().min(0).max(1).optional(),
+    customerValueCap: z.number().min(1_000).max(1_000_000_000).optional(),
+    freshnessStaleDays: z.number().min(1).max(365).optional(),
+    avgLoadsCap: z.number().min(1).max(100).optional(),
+    outcomeBoostPerLoad: z.number().min(0).max(100).optional(),
+  });
+  app.put("/api/admin/lane-strategic-weights", requireUser, async (req, res) => {
+    const ctx = await requireAdmin(req, res); if (!ctx) return;
+    try {
+      const parsed = laneStrategicWeightsSchema.safeParse(req.body ?? {});
+      if (!parsed.success) return res.status(400).json({ error: "Invalid payload", details: parsed.error.flatten() });
+      const weights = await setLaneStrategicWeights(ctx.orgId, parsed.data);
+      return res.json({ ok: true, weights });
+    } catch (err) {
+      console.error("[admin/lane-strategic-weights PUT]", err);
+      return res.status(500).json({ error: "Failed to update lane strategic weights" });
     }
   });
 
