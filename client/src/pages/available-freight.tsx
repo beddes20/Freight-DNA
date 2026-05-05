@@ -47,6 +47,7 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 import type { FreightOpportunity } from "@shared/schema";
 import { applyCockpitFilters, type CockpitFilterDiagnostics } from "@/lib/cockpitFilters";
+import { resolveScope, summarizeScope, type ScopeInput, type ViewMergeMode } from "@/lib/cockpitScope";
 import { resolveUserIdentity, isRowOwnedByUser } from "@shared/cockpitOwnership";
 import { todayIsoInOrgTz, ORG_LOCAL_TIMEZONE } from "@shared/orgLocalDate";
 import {
@@ -765,16 +766,9 @@ export default function AvailableFreightPage() {
   // Task #957 — queue bucket chip selection (drives row + KPI + ROI from
   // the same filtered collection). "all" means no bucket narrowing.
   const [bucket, setBucket] = useState<BucketKey>("all");
-  // Task #957 — per-saved-view safety-banner dismiss flag (localStorage).
-  const [dismissedViewWarn, setDismissedViewWarn] = useState<Record<string, boolean>>(() => {
-    if (typeof window === "undefined") return {};
-    try {
-      const raw = localStorage.getItem("cockpit:viewWarn:dismissed");
-      return raw ? JSON.parse(raw) : {};
-    } catch {
-      return {};
-    }
-  });
+  // Task #1020 — the per-view dismissed-banner localStorage flag is gone
+  // along with the amber "view is layering" banner. Replace/merge is now
+  // explicit (see `viewMergeMode` below) and surfaced in the ScopeSummary.
   // Task #635 — `?lane=<sig>` deep-link from LWQ filters the cockpit to a
   // single lane signature so the rep lands directly on those opportunities.
   const [laneFilter, setLaneFilter] = useState<string | null>(() => {
@@ -854,6 +848,14 @@ export default function AvailableFreightPage() {
   }, [ownerFilter]);
   const [statusFilter, setStatusFilter] = useState<string>("active");
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
+  // Task #1020 — explicit replace-vs-merge for saved views. Default
+  // "replace" (the historical activation effect mirrors a view's scalar
+  // fields — search/customer/status/owner/pickupScope — into local state
+  // and drops its filter extras). Switching to "merge" layers the view's
+  // extras (pickupWithinHours, pickupAfterHours, confidenceFlag,
+  // sentNoReplyMinAgeMin, statuses) on top of the page state and surfaces
+  // them as visible clauses in the scope summary.
+  const [viewMergeMode, setViewMergeMode] = useState<ViewMergeMode>("replace");
   const [grouping, setGrouping] = useState<CockpitPrefs["grouping"]>("none");
   const [sort, setSort] = useState<CockpitPrefs["sort"]>("pickup_soonest");
   // Phase B1 — pickupScope answers the operator question "is this lane
@@ -997,6 +999,11 @@ export default function AvailableFreightPage() {
     if (!activeViewId) return;
     const v = savedViews.find(v => v.id === activeViewId);
     if (!v) return;
+    // Task #1020 — only the "replace" mode mirrors a saved view's scalar
+    // fields into page-local state. In "merge" mode the page state is left
+    // alone and the view's extras layer on top via mergedViewFilters; the
+    // ScopeSummary surfaces every clause + provenance.
+    if (viewMergeMode !== "replace") return;
     // Task #900 — saved views (including the built-in "My freight today"
     // and "Team needs approval") may carry ownerFilter / pickupScope; load
     // both alongside the legacy fields. Unknown values are ignored so a
@@ -1025,7 +1032,8 @@ export default function AvailableFreightPage() {
     ) {
       setPickupScope(f.pickupScope);
     }
-  }, [activeViewId, savedViews]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeViewId, savedViews, viewMergeMode]);
 
   // Task #875 — also pull `username` (which is the user's email in this
   // app — see server/auth.ts where Clerk emails are written to
@@ -1545,6 +1553,17 @@ export default function AvailableFreightPage() {
     }
   }, [isImpersonating]);
 
+  // Task #1020 — per-clause view removal. Clearing the saved-view clause
+  // from the Scope Summary (or the conflict "Drop view" action) must
+  // ONLY deactivate the view; unrelated page filters such as `search`,
+  // `companyFilter`, `statusFilter`, and `pickupScope` must be preserved.
+  // Full reset semantics live exclusively on the
+  // `button-reset-operational-default` actions.
+  const deactivateViewOnly = useCallback(() => {
+    setActiveViewId(null);
+    setViewMergeMode("replace");
+  }, []);
+
   // Task #875 — `?debug=cockpit` opens a non-production diagnostic pane
   // that prints the per-stage drop counts, the resolved current-user
   // identity, the org-local "today" anchor, and (further below) the side-
@@ -1566,6 +1585,42 @@ export default function AvailableFreightPage() {
     return users.map((u) => ({ id: u.id, managerId: (u as any).managerId ?? null }));
   }, [users]);
 
+  // Task #1020 — single ResolvedScope object that drives BOTH the row
+  // pipeline (`filtered`) AND the bucket-count pipeline (`bucketCounts`).
+  // We pass empty display labels here because this version is consumed
+  // only for its `effectiveExtras` + `conflicts` (filter-pipeline data).
+  // The render-time call further down recomputes with full labels for
+  // the visible Scope Summary chips.
+  const resolvedPipelineScope = useMemo(() => resolveScope({
+    search: debouncedSearch,
+    companyId: companyFilter,
+    ownerTokens: ownerScopeTokens,
+    ownerLabels: {},
+    statusFilter,
+    bucket,
+    pickupScope,
+    laneFilter,
+    carrierIdFilter,
+    view: activeView ? {
+      id: activeView.id,
+      name: activeView.name,
+      mergeMode: viewMergeMode,
+      extras: viewFilters,
+    } : null,
+  }), [
+    debouncedSearch,
+    companyFilter,
+    ownerScopeTokens,
+    statusFilter,
+    bucket,
+    pickupScope,
+    laneFilter,
+    carrierIdFilter,
+    activeView,
+    viewMergeMode,
+    viewFilters,
+  ]);
+
   const filtered = useMemo(() => {
     const diagnostics: CockpitFilterDiagnostics | undefined = cockpitDebugEnabled
       ? { enabled: true, stages: [] }
@@ -1575,14 +1630,18 @@ export default function AvailableFreightPage() {
     const perfStart = cockpitDebugEnabled && typeof performance !== "undefined"
       ? performance.now()
       : 0;
-    // Task #957 — merge the active saved-view filters with the page-local
-    // owner combobox + bucket chip selection. The combobox always wins over
-    // the saved view's `ownerScope` when the user picks tokens explicitly.
+    // Task #1020 — single source of truth: resolveScope produces the
+    // *effective* saved-view extras (after conflict resolution) that
+    // both this row pipeline AND the bucketCounts pipeline below
+    // consume. The page state, the visible Scope Summary, the row
+    // count, the KPI tiles, the bucket chip counts, and the ROI
+    // snapshot therefore all derive from the same merged extras and
+    // can never disagree about which view rules are actually in force.
     const mergedViewFilters = {
-      ...viewFilters,
+      ...resolvedPipelineScope.effectiveExtras,
       ownerScope: ownerScopeTokens.length > 0
         ? ownerScopeTokens
-        : viewFilters.ownerScope,
+        : (activeViewId && viewMergeMode === "merge" ? viewFilters.ownerScope : undefined),
       bucket: bucket === "all" ? undefined : bucket,
       orgChart: orgChartForBuckets,
     };
@@ -1648,7 +1707,7 @@ export default function AvailableFreightPage() {
       console.groupEnd();
     }
     return result;
-  }, [items, debouncedSearch, viewFilters, currentIdentity, cockpitDebugEnabled, activeViewId, serverKpis, ownerScopeTokens, bucket, orgChartForBuckets]);
+  }, [items, debouncedSearch, viewFilters, currentIdentity, cockpitDebugEnabled, activeViewId, serverKpis, ownerScopeTokens, bucket, orgChartForBuckets, resolvedPipelineScope, viewMergeMode]);
 
   /** Task #971 — when the 60s drift recompute escalates a row's urgency
    *  client-side (e.g. pickup window crossed the ≤12h threshold while
@@ -1704,17 +1763,19 @@ export default function AvailableFreightPage() {
   }, [currentIdentity, orgChartForBuckets]);
 
   const bucketCounts = useMemo(() => {
-    // Pre-bucket pipeline: same merged view filters but without the
-    // bucket clause so each chip count reflects "what would survive if I
-    // clicked you".
+    // Task #1020 — pre-bucket pipeline reads the SAME effectiveExtras
+    // produced by resolveScope above. This means a view extra that the
+    // conflict resolver dropped for the row pipeline is *also* dropped
+    // here, so the bucket chip counts can never disagree with the
+    // row count or the KPI tiles about which view rules are in force.
     const preBucket = applyCockpitFilters(
       items,
       debouncedSearch,
       {
-        ...viewFilters,
+        ...resolvedPipelineScope.effectiveExtras,
         ownerScope: ownerScopeTokens.length > 0
           ? ownerScopeTokens
-          : viewFilters.ownerScope,
+          : (activeViewId && viewMergeMode === "merge" ? viewFilters.ownerScope : undefined),
         bucket: undefined,
         orgChart: orgChartForBuckets,
       },
@@ -1722,7 +1783,7 @@ export default function AvailableFreightPage() {
       Date.now(),
     );
     return countBuckets(preBucket, bucketEvalCtx);
-  }, [items, debouncedSearch, viewFilters, currentIdentity, ownerScopeTokens, orgChartForBuckets, bucketEvalCtx]);
+  }, [items, debouncedSearch, viewFilters, currentIdentity, ownerScopeTokens, orgChartForBuckets, bucketEvalCtx, activeViewId, viewMergeMode, resolvedPipelineScope]);
 
   // Task #957 follow-up — KPI tiles derive from the SAME `filtered`
   // collection that drives visible rows. `hiddenStale` is a server-only
@@ -2305,61 +2366,11 @@ export default function AvailableFreightPage() {
         </div>
       )}
 
-      {/* Task #957 — saved-view safety banner. Shows once per view (per-
-          user dismiss persisted in localStorage) so the rep is reminded
-          that the saved view's filters are layered on top of their own
-          owner / bucket selection. */}
-      {activeView && !dismissedViewWarn[activeView.id] && (
-        <div
-          className="flex items-center justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm"
-          data-testid={`banner-view-warn-${activeView.id}`}
-        >
-          <div className="flex items-center gap-2 min-w-0">
-            <ShieldAlert className="h-4 w-4 shrink-0 text-amber-500" />
-            <span className="truncate">
-              <span className="font-semibold" data-testid="text-view-warn-name">
-                {activeView.name}
-              </span>{" "}
-              is layering its filters over your current selection. Counts on
-              KPIs / buckets / ROI all reflect this combined scope.
-            </span>
-          </div>
-          <div className="flex items-center gap-1">
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7"
-              onClick={clearActiveView}
-              data-testid={`button-view-warn-reset-${activeView.id}`}
-            >
-              Reset to operational default
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7"
-              onClick={() => {
-                const id = activeView.id;
-                setDismissedViewWarn((prev) => {
-                  const next = { ...prev, [id]: true };
-                  try {
-                    localStorage.setItem(
-                      "cockpit:viewWarn:dismissed",
-                      JSON.stringify(next),
-                    );
-                  } catch {
-                    /* localStorage may be disabled — banner just re-shows next session */
-                  }
-                  return next;
-                });
-              }}
-              data-testid={`button-view-warn-dismiss-${activeView.id}`}
-            >
-              <X className="h-3.5 w-3.5 mr-1" /> Dismiss
-            </Button>
-          </div>
-        </div>
-      )}
+      {/* Task #1020 — the amber "saved view is layering over your current
+          selection" banner is gone. Saved views are now explicit replace-
+          vs-merge (see toggle next to the saved-view tab strip) and every
+          active clause is rendered as a removable chip in the ScopeSummary
+          above the row list, so silent layering is impossible. */}
 
       {/* KPI strip — Task #601 contract semantics + Task #900 stale chip */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2">
@@ -2455,6 +2466,39 @@ export default function AvailableFreightPage() {
             <Button size="sm" variant="ghost" onClick={() => setSaveViewOpen(true)} data-testid="button-save-view">
               <Bookmark className="h-3 w-3 mr-1" /> Save current
             </Button>
+            {/* Task #1020 — explicit replace-vs-merge toggle for the
+                active saved view. "Replace" (default) mirrors the view's
+                scalar fields into page state and drops its extras;
+                "Merge" layers the view's extras on top of page state and
+                surfaces them as visible clauses in the ScopeSummary. */}
+            {activeView && (
+              <div
+                className="ml-2 inline-flex items-center gap-0.5 rounded-md border bg-background p-0.5"
+                data-testid="toggle-view-mode"
+                aria-label="Saved view mode"
+              >
+                <Button
+                  size="sm"
+                  variant={viewMergeMode === "replace" ? "default" : "ghost"}
+                  className="h-6 px-2 text-[11px]"
+                  onClick={() => setViewMergeMode("replace")}
+                  data-testid="button-view-mode-replace"
+                  aria-pressed={viewMergeMode === "replace"}
+                >
+                  Replace
+                </Button>
+                <Button
+                  size="sm"
+                  variant={viewMergeMode === "merge" ? "default" : "ghost"}
+                  className="h-6 px-2 text-[11px]"
+                  onClick={() => setViewMergeMode("merge")}
+                  data-testid="button-view-mode-merge"
+                  aria-pressed={viewMergeMode === "merge"}
+                >
+                  Merge
+                </Button>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             {/* Phase A4 — anchor the dot to the multi-producer overall signal so
@@ -2682,118 +2726,170 @@ export default function AvailableFreightPage() {
         onSelect={setBucket}
       />
 
-      {/* Task #957 — Active filter chip strip. Renders a removable chip for
-          every constraint currently narrowing the queue so the rep can see
-          why they're not seeing rows and clear constraints individually. */}
+      {/* Task #1020 — Scope Summary. The single visible source of truth
+          for what the queue is filtered to. Every clause is removable;
+          saved-view extras render with provenance; conflicts render an
+          inline resolver. KPIs / bucket counts / ROI / visible rows all
+          derive from the same post-filter collection (see `filtered`),
+          so this summary is always faithful to what the rep sees. */}
       {(() => {
-        const chips: Array<{ key: string; label: string; onClear: () => void; testId: string }> = [];
-        if (debouncedSearch.trim().length > 0) {
-          chips.push({
-            key: "search",
-            label: `Search: "${debouncedSearch.trim().slice(0, 24)}"`,
-            onClear: () => setSearch(""),
-            testId: "active-chip-search",
-          });
-        }
-        if (companyFilter !== "all") {
-          const c = customersForFilter.find((x) => x.id === companyFilter);
-          chips.push({
-            key: "customer",
-            label: `Customer: ${c?.name ?? companyFilter}`,
-            onClear: () => setCompanyFilter("all"),
-            testId: "active-chip-customer",
-          });
-        }
+        const customer = companyFilter !== "all"
+          ? customersForFilter.find((x) => x.id === companyFilter)
+          : null;
+        const ownerLabels: Record<string, string> = {};
         for (const tok of ownerScopeTokens) {
           const lower = tok.toLowerCase();
-          let label = `Owner: ${tok}`;
-          if (lower === "me") label = "Owner: me";
-          else if (lower === "my-team" || lower === "myteam") label = "Owner: my team";
-          else if (lower === "unassigned") label = "Owner: unassigned";
+          if (lower === "me") ownerLabels[tok] = "me";
+          else if (lower === "my-team" || lower === "myteam") ownerLabels[tok] = "my team";
+          else if (lower === "unassigned") ownerLabels[tok] = "unassigned";
+          else if (lower === "am_book") ownerLabels[tok] = "my AM book";
           else if (lower.startsWith("team:")) {
             const team = listCockpitTeams().find((t) => t.id === tok.slice("team:".length));
-            label = team ? `Team: ${team.name}` : `Team: ${tok.slice("team:".length)}`;
+            ownerLabels[tok] = team ? team.name : tok.slice("team:".length);
           } else {
             const u = users.find((x) => x.id === tok);
-            if (u) label = `Owner: ${ownerLabel(u)}`;
+            if (u) ownerLabels[tok] = ownerLabel(u);
           }
-          chips.push({
-            key: `owner:${tok}`,
-            label,
-            onClear: () => setOwnerFilter(ownerScopeTokens.filter((x) => x !== tok)),
-            testId: `active-chip-owner-${tok.replace(/[^a-z0-9]/gi, "_")}`,
-          });
         }
-        if (statusFilter !== "active") {
-          chips.push({
-            key: "status",
-            label: `Status: ${statusFilter}`,
-            onClear: () => setStatusFilter("active"),
-            testId: "active-chip-status",
-          });
-        }
-        if (bucket !== "all") {
-          chips.push({
-            key: "bucket",
-            label: `Queue: ${BUCKETS[bucket].label}`,
-            onClear: () => setBucket("all"),
-            testId: "active-chip-bucket",
-          });
-        }
-        if (laneFilter) {
-          chips.push({ key: "lane", label: "Lane (deep-link)", onClear: clearLaneFilter, testId: "active-chip-lane" });
-        }
-        if (carrierIdFilter) {
-          chips.push({ key: "carrier", label: "Carrier (deep-link)", onClear: clearCarrierFilter, testId: "active-chip-carrier" });
-        }
-        if (chips.length === 0) return null;
+        const carrierName = carrierIdFilter ? (carrierFilterMeta?.carrier?.name ?? null) : null;
+        const scopeInput: ScopeInput = {
+          search: debouncedSearch,
+          companyId: companyFilter,
+          ownerTokens: ownerScopeTokens,
+          ownerLabels,
+          statusFilter,
+          bucket,
+          pickupScope,
+          laneFilter,
+          carrierIdFilter,
+          carrierName,
+          customerName: customer?.name ?? null,
+          view: activeView ? {
+            id: activeView.id,
+            name: activeView.name,
+            mergeMode: viewMergeMode,
+            extras: viewFilters,
+          } : null,
+        };
+        const resolved = resolveScope(scopeInput);
+        const sentence = summarizeScope(resolved);
+        const onClearClause = (key: string) => {
+          if (key === "search") setSearch("");
+          else if (key === "customer") setCompanyFilter("all");
+          else if (key.startsWith("owner:")) {
+            const tok = key.slice("owner:".length);
+            setOwnerFilter(ownerScopeTokens.filter((x) => x !== tok));
+          } else if (key === "status") setStatusFilter("active");
+          else if (key === "bucket") setBucket("all");
+          else if (key === "lane") clearLaneFilter();
+          else if (key === "carrier") clearCarrierFilter();
+          else if (key === "pickupScope") setPickupScope("actionable");
+          else if (key.startsWith("view:")) {
+            deactivateViewOnly();
+          }
+        };
         return (
-          <div className="flex flex-wrap items-center gap-1.5" data-testid="strip-active-filters">
-            <span className="text-[11px] uppercase tracking-wide text-muted-foreground mr-1">
-              Active filters:
-            </span>
-            {chips.map((c) => (
-              <Badge
-                key={c.key}
-                variant="secondary"
-                className="gap-1 pr-1"
-                data-testid={c.testId}
-              >
-                <span className="text-xs">{c.label}</span>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  className="h-4 w-4 p-0 hover:bg-transparent"
-                  onClick={c.onClear}
-                  data-testid={`${c.testId}-clear`}
-                  aria-label={`Clear ${c.label}`}
-                >
-                  <X className="h-3 w-3" />
-                </Button>
-              </Badge>
-            ))}
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-6 px-2 text-[11px]"
-              onClick={() => {
-                setSearch("");
-                setCompanyFilter("all");
-                setOwnerFilter("all");
-                setStatusFilter("active");
-                setBucket("all");
-                // Task #957 follow-up — explicit strict default so this
-                // chip-strip Reset matches the empty-state Reset.
-                setPickupScope("actionable");
-                if (laneFilter) clearLaneFilter();
-                if (carrierIdFilter) clearCarrierFilter();
-                clearActiveView();
-              }}
-              data-testid="button-reset-operational-default"
+          <div
+            className="rounded-md border bg-muted/20 px-3 py-2 space-y-2"
+            data-testid="card-scope-summary"
+          >
+            <div
+              className="text-xs text-foreground"
+              data-testid="text-scope-summary"
             >
-              Reset to operational default
-            </Button>
+              {sentence}
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {resolved.clauses.map((c) => (
+                <Badge
+                  key={c.key}
+                  variant={c.source === "view" ? "outline" : "secondary"}
+                  className="gap-1 pr-1"
+                  data-testid={`scope-clause-${c.key.replace(/[^a-z0-9]/gi, "_")}`}
+                  data-clause-source={c.source}
+                  data-clause-dimension={c.dimension}
+                  title={c.source === "view" && c.viewName ? `From saved view: ${c.viewName}` : undefined}
+                >
+                  <span className="text-xs">{c.label}</span>
+                  {c.clearable && (
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      className="h-4 w-4 p-0 hover:bg-transparent"
+                      onClick={() => onClearClause(c.key)}
+                      data-testid={`scope-clause-${c.key.replace(/[^a-z0-9]/gi, "_")}-clear`}
+                      aria-label={`Clear ${c.label}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  )}
+                </Badge>
+              ))}
+              {!resolved.isDefault && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-[11px]"
+                  onClick={() => {
+                    setSearch("");
+                    setCompanyFilter("all");
+                    setOwnerFilter("all");
+                    setStatusFilter("active");
+                    setBucket("all");
+                    setPickupScope("actionable");
+                    if (laneFilter) clearLaneFilter();
+                    if (carrierIdFilter) clearCarrierFilter();
+                    clearActiveView();
+                    setViewMergeMode("replace");
+                  }}
+                  data-testid="button-reset-operational-default"
+                >
+                  Reset to operational default
+                </Button>
+              )}
+            </div>
+            {resolved.conflicts.length > 0 && (
+              <div
+                className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-xs"
+                data-testid="scope-conflicts"
+              >
+                {resolved.conflicts.map((conflict) => (
+                  <div
+                    key={conflict.key}
+                    className="flex flex-wrap items-center gap-2"
+                    data-testid={`scope-conflict-${conflict.key}`}
+                  >
+                    <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                    <span className="flex-1 min-w-0">{conflict.message}</span>
+                    <span
+                      className="text-[10px] uppercase tracking-wide text-muted-foreground"
+                      data-testid={`scope-conflict-${conflict.key}-resolution`}
+                    >
+                      Resolved: {conflict.resolution === "page-wins" ? "view rule dropped" : "page filter dropped"}
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 px-2 text-[11px]"
+                      onClick={() => setBucket("all")}
+                      data-testid={`scope-conflict-${conflict.key}-clear-bucket`}
+                    >
+                      Clear bucket
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 px-2 text-[11px]"
+                      onClick={deactivateViewOnly}
+                      data-testid={`scope-conflict-${conflict.key}-clear-view`}
+                    >
+                      Drop view
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })()}
