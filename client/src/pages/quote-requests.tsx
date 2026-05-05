@@ -393,6 +393,107 @@ function emailDomain(addr: string | null | undefined): string | null {
   return addr.slice(at + 1).toLowerCase();
 }
 
+// ─── KPI drilldown contract (Task #1066) ──────────────────────────────────
+//
+// Each KPI tile in the strip can become a deep-linkable doorway into the
+// exact records it counts. Descriptors live in `KPI_DRILLDOWNS`; each names
+// the filter overrides the page must adopt and where its count comes from
+// (server snapshot vs client list). Wiring a tile is two steps:
+//   1. Set the tile's `onClick` to `applyDrilldown("<id>")`.
+//   2. Confirm the tile's count source matches `KPI_DRILLDOWNS[id].countSource`.
+// The active chip + Clear control render automatically; URL serialization
+// (`?drilldown=<id>`) and cold-load rehydration are automatic too.
+//
+// Wired today: wonToday. The other four are stub descriptors so the shape
+// is proven against all five tiles even though only Won Today is on:
+//   - openRequests / awaitingReply: server snapshot counts already exist;
+//     just add `onClick={() => applyDrilldown(id)}`. (Awaiting Your Reply
+//     stays list-derived until a first-class server count lands.)
+//   - pastSla: client-only post-filter (`pastSlaOnly`). No server support
+//     needed; descriptor below already toggles the right knob.
+//   - autoCapturedToday: server count exists; the click handler should be
+//     extended with a source=email scope once that filter lands server-side.
+type KpiDrilldownId =
+  | "wonToday"
+  | "openRequests"
+  | "awaitingReply"
+  | "pastSla"
+  | "autoCapturedToday";
+
+type DrilldownFilterOverride = {
+  status?: StatusFilter;
+  age?: AgeFilter;
+  mineOnly?: boolean;
+  pastSlaOnly?: boolean;
+  includeSnoozed?: boolean;
+  // Client-only narrowing knobs that, if left enabled, would shrink the
+  // visible set below the KPI count and break record-set parity. Captured
+  // here so applyDrilldown / clearDrilldown can snapshot + restore them.
+  search?: string;
+  domainFilter?: string | null;
+  freeEmailOnly?: boolean;
+};
+
+type KpiDrilldown = {
+  id: KpiDrilldownId;
+  label: string;
+  apply: DrilldownFilterOverride;
+  countSource: "snapshot" | "list";
+  notes: string;
+};
+
+const KPI_DRILLDOWNS: Record<KpiDrilldownId, KpiDrilldown> = {
+  wonToday: {
+    id: "wonToday",
+    label: "Won today",
+    // includeSnoozed:false is explicit so applyDrilldown forces the list
+    // to the same scope the snapshot KPI counts. Snapshot's filterParams
+    // never carries includeSnoozed (snapshot ignores snoozed rows), so
+    // leaving the page-level toggle on after the click would let snoozed
+    // won rows leak into the list and break record-set parity.
+    apply: { status: "won", age: "today", includeSnoozed: false },
+    countSource: "snapshot",
+    notes: "Server snapshot kpis.won; list narrows via wonOnly + includeSnoozed=false so totals match.",
+  },
+  openRequests: {
+    id: "openRequests",
+    label: "Open requests",
+    apply: { status: "new", age: "7d" },
+    countSource: "snapshot",
+    notes: "Server snapshot kpis.pending. Wire onClick on the tile to enable.",
+  },
+  awaitingReply: {
+    id: "awaitingReply",
+    label: "Awaiting your reply",
+    apply: { status: "new", mineOnly: true },
+    countSource: "list",
+    notes: "List-derived (rep scope is server-resolved). Wire onClick to enable.",
+  },
+  pastSla: {
+    id: "pastSla",
+    label: "Past SLA",
+    apply: { pastSlaOnly: true },
+    countSource: "list",
+    notes: "Client-only post-filter (slaState === 'breached').",
+  },
+  autoCapturedToday: {
+    id: "autoCapturedToday",
+    label: "Auto-captured today",
+    apply: { age: "today" },
+    countSource: "snapshot",
+    notes: "Server snapshot kpis.autoCapturedToday. Add a source=email scope when available.",
+  },
+};
+
+function readInitialDrilldownFromUrl(): KpiDrilldownId | null {
+  if (typeof window === "undefined") return null;
+  const sp = new URLSearchParams(window.location.search);
+  const v = sp.get("drilldown");
+  return v && Object.prototype.hasOwnProperty.call(KPI_DRILLDOWNS, v)
+    ? (v as KpiDrilldownId)
+    : null;
+}
+
 // ─── Page-level container ─────────────────────────────────────────────────
 
 export default function QuoteRequestsPage(): JSX.Element {
@@ -427,14 +528,21 @@ function QuoteRequestsInner(): JSX.Element {
   useLiveSync(["customer_quote", "email_thread"]);
 
   // ─── Filter / view state ─────────────────────────────────────────────
-  const [status, setStatus] = useState<StatusFilter>("all");
-  const [age, setAge] = useState<AgeFilter>("today");
-  const [mineOnly, setMineOnly] = useState(false);
+  // Task #1066 — if a `?drilldown=<id>` param is present at cold load,
+  // pre-apply that descriptor's filter overrides into the initial state
+  // so the deep-link is honoured on the very first render (no flicker).
+  const initialDrilldownId = useMemo(() => readInitialDrilldownFromUrl(), []);
+  const initialOverride: DrilldownFilterOverride = initialDrilldownId
+    ? KPI_DRILLDOWNS[initialDrilldownId].apply
+    : {};
+  const [status, setStatus] = useState<StatusFilter>(initialOverride.status ?? "all");
+  const [age, setAge] = useState<AgeFilter>(initialOverride.age ?? "today");
+  const [mineOnly, setMineOnly] = useState(!!initialOverride.mineOnly);
   const [freeEmailOnly, setFreeEmailOnly] = useState(false);
   const [domainFilter, setDomainFilter] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
-  const [includeSnoozed, setIncludeSnoozed] = useState(false);
+  const [includeSnoozed, setIncludeSnoozed] = useState(!!initialOverride.includeSnoozed);
   const [sortKey, setSortKey] = useState<SortKey>("requestDate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [offset, setOffset] = useState(0);
@@ -459,6 +567,124 @@ function QuoteRequestsInner(): JSX.Element {
   // Tracks which Saved View (built-in key or saved id) is currently
   // applied. Cleared whenever the user changes any underlying filter.
   const [activeViewKey, setActiveViewKey] = useState<string | null>(null);
+
+  // Task #1066 — active KPI drilldown id (or null). When non-null the
+  // active-drilldown chip renders above the table and the URL carries
+  // `?drilldown=<id>` so the filtered view is refreshable / shareable.
+  const [drilldown, setDrilldown] = useState<KpiDrilldownId | null>(initialDrilldownId);
+  // Snapshot of the filter state at the moment the drilldown was applied,
+  // so Clear can restore the prior queue. Null when the drilldown was
+  // hydrated from the URL on a hard refresh — Clear in that case just
+  // strips the override knobs (see clearDrilldown).
+  const priorFiltersRef = useRef<DrilldownFilterOverride | null>(null);
+
+  const applyDrilldown = useCallback((id: KpiDrilldownId) => {
+    const d = KPI_DRILLDOWNS[id];
+    // Snapshot every page-level filter knob so Clear can restore the prior
+    // queue exactly. Includes client-only narrowing knobs (search,
+    // domainFilter, freeEmailOnly, pastSlaOnly) that we forcibly reset
+    // below to guarantee the rendered list equals the KPI's record set.
+    priorFiltersRef.current = {
+      status, age, mineOnly, pastSlaOnly, includeSnoozed,
+      search, domainFilter, freeEmailOnly,
+    };
+    // Apply the descriptor's overrides.
+    if (d.apply.status !== undefined) setStatus(d.apply.status);
+    if (d.apply.age !== undefined) setAge(d.apply.age);
+    if (d.apply.mineOnly !== undefined) setMineOnly(d.apply.mineOnly);
+    if (d.apply.pastSlaOnly !== undefined) setPastSlaOnly(d.apply.pastSlaOnly);
+    if (d.apply.includeSnoozed !== undefined) setIncludeSnoozed(d.apply.includeSnoozed);
+    // Record-set parity (review #1): reset only the *client-only* narrowing
+    // knobs that would shrink the rendered list below the KPI count
+    // (search, domainFilter, freeEmailOnly, and pastSlaOnly when not part
+    // of the descriptor). Server-scope knobs the snapshot itself respects
+    // — mineOnly and includeSnoozed — are deliberately preserved so the
+    // drilldown reflects the same scope the tile counted (e.g. "Mine
+    // only + Won today" stays mine-scoped after the click).
+    if (d.apply.search === undefined) { setSearch(""); setSearchInput(""); }
+    else { setSearch(d.apply.search); setSearchInput(d.apply.search); }
+    if (d.apply.domainFilter === undefined) setDomainFilter(null);
+    else setDomainFilter(d.apply.domainFilter);
+    if (d.apply.freeEmailOnly === undefined) setFreeEmailOnly(false);
+    else setFreeEmailOnly(d.apply.freeEmailOnly);
+    if (d.apply.pastSlaOnly === undefined) setPastSlaOnly(false);
+    setDrilldown(id);
+    setActiveViewKey(null);
+    appliedSignatureRef.current = null;
+    setOffset(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, age, mineOnly, pastSlaOnly, includeSnoozed, search, domainFilter, freeEmailOnly]);
+
+  const clearDrilldown = useCallback(() => {
+    const prior = priorFiltersRef.current;
+    if (prior) {
+      // Restore the snapshotted prior queue (every captured knob).
+      setStatus(prior.status ?? "all");
+      setAge(prior.age ?? "today");
+      setMineOnly(!!prior.mineOnly);
+      setPastSlaOnly(!!prior.pastSlaOnly);
+      setIncludeSnoozed(!!prior.includeSnoozed);
+      const s = prior.search ?? "";
+      setSearch(s);
+      setSearchInput(s);
+      setDomainFilter(prior.domainFilter ?? null);
+      setFreeEmailOnly(!!prior.freeEmailOnly);
+    } else {
+      // Cold-load case (?drilldown=<id> on a hard refresh): no prior to
+      // restore. Reverse the FULL descriptor so Clear honestly returns the
+      // user to the page's default queue, plus reset the client-only
+      // narrowing knobs the descriptor implicitly cleared on apply.
+      setStatus("all");
+      setAge("today");
+      setMineOnly(false);
+      setPastSlaOnly(false);
+      setIncludeSnoozed(false);
+      setSearch("");
+      setSearchInput("");
+      setDomainFilter(null);
+      setFreeEmailOnly(false);
+    }
+    priorFiltersRef.current = null;
+    setDrilldown(null);
+    setOffset(0);
+  }, []);
+
+  // Mirror the active drilldown into ?drilldown=<id>. Uses replaceState so
+  // wouter's route doesn't churn and the existing ?quote=<id> drawer link
+  // is preserved.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sp = new URLSearchParams(window.location.search);
+    if (drilldown) sp.set("drilldown", drilldown);
+    else sp.delete("drilldown");
+    const next = sp.toString();
+    const url = window.location.pathname + (next ? "?" + next : "") + window.location.hash;
+    window.history.replaceState(null, "", url);
+  }, [drilldown]);
+
+  // If the user manually changes a filter the drilldown represents (or
+  // re-introduces a client-only narrowing knob the drilldown forced off),
+  // auto-clear the chip rather than letting the count silently diverge.
+  // mineOnly / includeSnoozed are intentionally preserved by applyDrilldown
+  // (server-scope knobs the snapshot KPI already respects), so the drift
+  // check tolerates any value for them when the descriptor didn't set one.
+  useEffect(() => {
+    if (!drilldown) return;
+    const a = KPI_DRILLDOWNS[drilldown].apply;
+    const matches =
+      (a.status === undefined || a.status === status) &&
+      (a.age === undefined || a.age === age) &&
+      (a.mineOnly === undefined || a.mineOnly === mineOnly) &&
+      (a.includeSnoozed === undefined || a.includeSnoozed === includeSnoozed) &&
+      (a.pastSlaOnly === undefined ? pastSlaOnly === false : a.pastSlaOnly === pastSlaOnly) &&
+      (a.search === undefined ? search === "" : a.search === search) &&
+      (a.domainFilter === undefined ? domainFilter === null : a.domainFilter === domainFilter) &&
+      (a.freeEmailOnly === undefined ? freeEmailOnly === false : a.freeEmailOnly === freeEmailOnly);
+    if (!matches) {
+      priorFiltersRef.current = null;
+      setDrilldown(null);
+    }
+  }, [drilldown, status, age, mineOnly, pastSlaOnly, includeSnoozed, search, domainFilter, freeEmailOnly]);
 
   // Task #969 — "Why this rep?" attribution drawer state. Opened by a
   // window CustomEvent dispatched from the rep-cell `why?` link in
@@ -571,15 +797,30 @@ function QuoteRequestsInner(): JSX.Element {
     return p;
   }, [ageDates, status, mineOnly, myUserId, search]);
 
-  const listParams = useMemo(() => {
+  // Task #1066 — list-only narrowing for status groups whose codes can't
+  // be expressed by the single-value `outcomeStatus` query arg. Without
+  // this, the snapshot KPI ("Won today = 14") and the list table (50
+  // rows) would diverge whenever the user picks "Won" or "Lost", because
+  // filterParams skips outcomeStatus when STATUS_GROUPS[status].length > 1.
+  // Snapshot deliberately keeps the broader scope here so the rest of the
+  // KPI strip (pending, past-SLA, etc.) doesn't all collapse to a single
+  // status when the list is narrowed.
+  const listFilterParams = useMemo(() => {
     const p = new URLSearchParams(filterParams);
+    if (status === "won") p.set("wonOnly", "true");
+    if (status === "lost") p.set("lostOnly", "true");
+    return p;
+  }, [filterParams, status]);
+
+  const listParams = useMemo(() => {
+    const p = new URLSearchParams(listFilterParams);
     p.set("sortKey", sortKey);
     p.set("sortDir", sortDir);
     p.set("limit", String(PAGE_SIZE));
     p.set("offset", String(offset));
     if (includeSnoozed) p.set("includeSnoozed", "1");
     return p.toString();
-  }, [filterParams, sortKey, sortDir, offset, includeSnoozed]);
+  }, [listFilterParams, sortKey, sortDir, offset, includeSnoozed]);
 
   // ─── Queries ─────────────────────────────────────────────────────────
   const snapshotQuery = useQuery<Snapshot & { myRepId: string | null }>({
@@ -956,7 +1197,7 @@ function QuoteRequestsInner(): JSX.Element {
             tone="success"
             isLoading={snapshotQuery.isLoading}
             testId="kpi-won-today"
-            onClick={() => { setStatus("won"); setAge("today"); }}
+            onClick={() => applyDrilldown("wonToday")}
           />
           {/* Phase 1 — Response Time Visibility KPIs (read-only,
               derived from existing responseTimeHours). Rendered next
@@ -1164,6 +1405,75 @@ function QuoteRequestsInner(): JSX.Element {
             </Button>
           </div>
         )}
+
+        {/* Task #1066 — Active KPI drilldown chip. Renders when the rep
+            entered the queue via a clickable KPI tile so the filter
+            origin stays visible and there's a one-click escape back to
+            the prior queue. The chip shows the server list total AND the
+            KPI count side-by-side; a mismatch indicator surfaces when
+            they diverge so reps don't silently see a different number
+            than the tile they clicked. */}
+        {drilldown && (() => {
+          const d = KPI_DRILLDOWNS[drilldown];
+          const rawListTotal: number | null | undefined = listQuery.data?.total;
+          const listTotal: number | undefined = rawListTotal == null ? undefined : rawListTotal;
+          // Resolve the canonical KPI count behind this descriptor so we
+          // can compare it against what the list actually returned.
+          const kpiCount: number | undefined =
+            d.id === "wonToday" ? wonTodayCount
+            : d.id === "openRequests" ? openCount
+            : d.id === "autoCapturedToday" ? (snapshotQuery.data?.kpis?.autoCapturedToday ?? 0)
+            : d.id === "pastSla" ? pastSlaCount
+            : d.id === "awaitingReply" ? (myAwaitingCount ?? undefined)
+            : undefined;
+          // The chip's primary number is what the rep can actually see in
+          // the table right now (rendered rows). When the server total
+          // exceeds the rendered count (pagination), surface "N rendered
+          // (of M)" so the chip stays honest about what's on screen.
+          const renderedCount = visibleRows.length;
+          const showCount = listQuery.isLoading
+            ? "…"
+            : (listTotal !== undefined && listTotal !== renderedCount)
+              ? `${renderedCount} rendered (of ${listTotal})`
+              : `${renderedCount} result${renderedCount === 1 ? "" : "s"}`;
+          // Mismatch: the canonical KPI count for this descriptor disagrees
+          // with what the server returned for the list. Should be impossible
+          // for wonToday now that listFilterParams adds wonOnly, but we
+          // render an explicit warning so any future regression surfaces
+          // instead of silently mis-counting.
+          const mismatch = !listQuery.isLoading
+            && kpiCount !== undefined
+            && listTotal !== undefined
+            && kpiCount !== listTotal;
+          return (
+            <div className="px-6 pt-3" data-testid="chip-drilldown-active">
+              <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                <span data-testid="chip-drilldown-label">{d.label}</span>
+                <span className="text-emerald-600/70" aria-hidden>·</span>
+                <span data-testid="chip-drilldown-count">{showCount}</span>
+                {mismatch && (
+                  <span
+                    className="ml-1 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-300"
+                    data-testid="chip-drilldown-mismatch"
+                    title={`KPI tile shows ${kpiCount} but list returned ${listTotal}. Reload, or report this to ops.`}
+                  >
+                    <AlertTriangle className="h-3 w-3" aria-hidden />
+                    KPI says {kpiCount}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={clearDrilldown}
+                  className="ml-1 rounded-full p-0.5 hover:bg-emerald-500/20 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                  data-testid="button-drilldown-clear"
+                  aria-label={`Clear ${d.label} drill-down`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Body: table + drawer */}
         <div className="flex flex-1 overflow-hidden relative">
