@@ -174,6 +174,11 @@ type Snapshot = {
     expiringSoon: number;
     // Server-side count of today's email-sourced opps. Optional during rollout.
     autoCapturedToday?: number;
+    // Task #1003 — org-wide pending count over the last 7 days,
+    // ignoring the active startDate/endDate filter. Drives the honest
+    // empty-state subtitle when today happens to be quiet but the
+    // pipeline isn't actually empty.
+    pendingLast7d?: number;
     trend: { winRate: number; total: number; avgMargin: number; avgResponse: number };
   };
   customers: Customer[];
@@ -1115,6 +1120,22 @@ function QuoteRequestsInner(): JSX.Element {
                 setSearch("");
                 setSearchInput("");
               }}
+              // Task #1003 — honest zero-state on the Customer Quotes
+              // page. When today is empty (snapshot pending=0 AND
+              // autoCapturedToday=0) but the org has pending opps in
+              // the last 7 days, surface a one-line subtitle on the
+              // empty state so a quiet morning never reads as a dead
+              // pipeline. The button flips the page filter to `7d` via
+              // the existing setters (no new route, no new query).
+              age={age}
+              openCount={openCount}
+              autoCapturedToday={
+                snapshotQuery.data?.kpis?.autoCapturedToday
+                ?? automationQuery.data?.counters?.created
+                ?? 0
+              }
+              pendingLast7d={snapshotQuery.data?.kpis?.pendingLast7d ?? 0}
+              onShowLast7Days={() => { setAge("7d"); setOffset(0); }}
             />
             )}
           </div>
@@ -1355,6 +1376,7 @@ function ListTable({
   selectedId, focusedId, onSelect, onOpen, sortKey, sortDir, onSort, isElevated, myRepId,
   onRefresh,
   emptyStateFilters, onResetFilters,
+  age, openCount, autoCapturedToday, pendingLast7d, onShowLast7Days,
 }: {
   rows: Quote[];
   isLoading: boolean;
@@ -1377,6 +1399,15 @@ function ListTable({
   // shared EmptyStateRecovery (filtered-empty pane) when appropriate.
   emptyStateFilters?: ReadonlyArray<string>;
   onResetFilters?: () => void;
+  // Task #1003 — honest zero-state inputs. When all three of (age =
+  // "today", openCount = 0, autoCapturedToday = 0) are true and
+  // pendingLast7d > 0, ZeroState renders a one-line subtitle plus a
+  // "Show last 7 days" button (which calls onShowLast7Days).
+  age?: AgeFilter;
+  openCount?: number;
+  autoCapturedToday?: number;
+  pendingLast7d?: number;
+  onShowLast7Days?: () => void;
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -1414,6 +1445,11 @@ function ListTable({
         onRefresh={onRefresh}
         activeFilterLabels={emptyStateFilters}
         onResetFilters={onResetFilters}
+        age={age}
+        openCount={openCount}
+        autoCapturedToday={autoCapturedToday}
+        pendingLast7d={pendingLast7d}
+        onShowLast7Days={onShowLast7Days}
       />
     );
   }
@@ -1685,11 +1721,26 @@ function ZeroState({
   onRefresh,
   activeFilterLabels,
   onResetFilters,
+  age,
+  openCount,
+  autoCapturedToday,
+  pendingLast7d,
+  onShowLast7Days,
 }: {
   isElevated: boolean;
   onRefresh: () => void;
   activeFilterLabels?: ReadonlyArray<string>;
   onResetFilters?: () => void;
+  // Task #1003 — honest zero-state subtitle inputs. The subtitle only
+  // renders when age is the default ("today"), the snapshot reports
+  // zero open + zero auto-captured today, and the org has pending
+  // pipeline in the last 7 days — so a quiet today never reads as a
+  // dead pipeline. Otherwise the empty state is unchanged.
+  age?: AgeFilter;
+  openCount?: number;
+  autoCapturedToday?: number;
+  pendingLast7d?: number;
+  onShowLast7Days?: () => void;
 }): JSX.Element {
   const { toast } = useToast();
   const [, navigate] = useLocation();
@@ -1730,6 +1781,20 @@ function ZeroState({
       </div>
     );
   }
+  // Task #1003 — honest zero-state subtitle. When the active age slice
+  // is the default ("today") AND the snapshot reports zero open + zero
+  // auto-captured today AND the org has pending opps in the last 7
+  // days, render a one-line subtitle plus a "Show last 7 days" button
+  // that flips the page filter via the existing setters. This stops
+  // a transient ingestion stall from being read as total platform
+  // breakage.
+  const showHonestSubtitle =
+    age === "today"
+    && (openCount ?? 0) === 0
+    && (autoCapturedToday ?? 0) === 0
+    && (pendingLast7d ?? 0) > 0
+    && !!onShowLast7Days;
+
   return (
     <div className="h-full flex items-center justify-center p-8" data-testid="empty-quote-rows">
       <div className="flex flex-col items-center gap-4">
@@ -1744,6 +1809,31 @@ function ZeroState({
           }}
           testId="zero-state-empty"
         />
+        {showHonestSubtitle && (
+          <div
+            className="-mt-2 flex flex-col items-center gap-2"
+            data-testid="zero-state-honest-subtitle"
+          >
+            <p className="text-xs text-muted-foreground">
+              No requests received today ·{" "}
+              <span
+                className="text-foreground font-medium"
+                data-testid="zero-state-pending-7d-count"
+              >
+                {pendingLast7d}
+              </span>{" "}
+              pending in the last 7 days
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onShowLast7Days}
+              data-testid="button-show-last-7-days"
+            >
+              Show last 7 days
+            </Button>
+          </div>
+        )}
         {isElevated && (
           <div className="flex flex-wrap items-center justify-center gap-2 -mt-2">
             <Button

@@ -149,6 +149,12 @@ export type Snapshot = {
     // Today's email-sourced opps (post customer-only chokepoint). See
     // `automation-counters` for the leakage-path counter.
     autoCapturedToday: number;
+    // Task #1003 — count of pending (and not-currently-snoozed) opps in
+    // the last 7 days, computed org-wide post the customer-only
+    // chokepoint, *ignoring* the request's startDate/endDate. Used by
+    // the empty-state subtitle on `/quote-requests` so a quiet today
+    // never reads as a dead pipeline when 7-day pending volume exists.
+    pendingLast7d: number;
     trend: { winRate: number; total: number; avgMargin: number; avgResponse: number };
   };
   customers: QuoteCustomer[];
@@ -1895,12 +1901,27 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
     && o.requestDate.getTime() >= dayStart.getTime(),
   ).length;
 
+  // Task #1003 — Org-wide pending count over the last 7 rolling days,
+  // computed off `allOpps` so it never depends on the request's
+  // startDate/endDate filter. Mirrors the customer-only chokepoint and
+  // hides currently-snoozed rows so the "honest zero-state" subtitle on
+  // the Customer Quotes page reflects work the rep can actually act on.
+  const sevenDaysAgo = now.getTime() - 7 * dayMs;
+  const nowMs = now.getTime();
+  const pendingLast7d = allOpps.filter((o) =>
+    !nonCustomerIds.has(o.customerId)
+    && o.outcomeStatus === "pending"
+    && o.requestDate.getTime() >= sevenDaysAgo
+    && !(o.snoozedUntil && o.snoozedUntil.getTime() > nowMs),
+  ).length;
+
   return {
     total,
     kpis: {
       total, won: won.length, lost: lost.length, winRate, avgQuoted, avgCarrierCost,
       avgMarginDollar, avgMarginPct, avgResponseTime, pending: pending.length, expiringSoon,
       autoCapturedToday,
+      pendingLast7d,
       trend,
     },
     customers: ctx.customers, reps: ctx.reps, reasons: ctx.reasons, laneGroups: ctx.laneGroups, carriers: ctx.carriers,
