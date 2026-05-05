@@ -42,7 +42,7 @@ import {
   Truck, AlertCircle, RefreshCw, Search, Inbox, Upload,
   CheckCircle2, Clock, Bookmark, MoreHorizontal, ChevronDown,
   Send, AlarmClock, X, UserCheck, ClipboardCheck, Star,
-  ChevronsUpDown, Check, ShieldAlert, SlidersHorizontal,
+  ChevronsUpDown, Check, ShieldAlert, SlidersHorizontal, Mail,
 } from "lucide-react";
 import {
   Collapsible,
@@ -4559,6 +4559,66 @@ function WonQuoteBadge({ sourceRef, oppId }: { sourceRef: unknown; oppId: string
   );
 }
 
+/**
+ * Email→Exec 1 (Task #1052) — "From email" badge for AF cockpit rows that
+ * were auto-created from a customer tender email by
+ * `server/services/tenderEmailIngestion.ts`. Renders only when
+ * `sourceRef.type === "email_tender"` (or, defensively, when
+ * `sourceRef.source === "email"` which is the literal contract value the
+ * task spec writes alongside `providerMessageId`). Tooltip shows the
+ * original subject and sender; clicking deep-links to the source
+ * conversation thread so the rep can see the full message in one click.
+ */
+function FromEmailBadge({ sourceRef, oppId }: { sourceRef: unknown; oppId: string }) {
+  if (!sourceRef || typeof sourceRef !== "object") return null;
+  const ref = sourceRef as {
+    type?: string;
+    source?: string;
+    subject?: string | null;
+    fromEmail?: string | null;
+    threadId?: string | null;
+    providerMessageId?: string | null;
+  };
+  const isEmail = ref.type === "email_tender" || ref.source === "email";
+  if (!isEmail) return null;
+  const subject = (ref.subject ?? "").trim() || "(no subject)";
+  const fromEmail = (ref.fromEmail ?? "").trim() || "(unknown sender)";
+  const deepLink = ref.threadId ? `/conversations/${encodeURIComponent(ref.threadId)}` : null;
+  const badge = (
+    <Badge
+      variant="outline"
+      className="text-[10px] bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/30 inline-flex items-center gap-1"
+      data-testid={`badge-from-email-${oppId}`}
+    >
+      <Mail className="h-3 w-3" />
+      From email
+    </Badge>
+  );
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {deepLink ? (
+            <Link href={deepLink} data-testid={`link-from-email-${oppId}`}>
+              {badge}
+            </Link>
+          ) : (
+            badge
+          )}
+        </TooltipTrigger>
+        <TooltipContent side="top" data-testid={`tooltip-from-email-${oppId}`}>
+          <div className="text-xs space-y-0.5 max-w-[320px]">
+            <div className="font-medium">From customer email</div>
+            <div className="text-muted-foreground">From: {fromEmail}</div>
+            <div className="text-muted-foreground truncate">Subject: {subject}</div>
+            {deepLink && <div className="text-muted-foreground">Click to open thread</div>}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 function slaDotColor(level: "green" | "yellow" | "red" | null): string {
   if (level === "red") return "bg-red-500";
   if (level === "yellow") return "bg-amber-500";
@@ -4939,6 +4999,9 @@ function CockpitRowView(props: {
             the pricing priors that came in on the source quote so the rep
             can see them at a glance without opening the detail page. */}
         <WonQuoteBadge sourceRef={opp.sourceRef} oppId={opp.id} />
+        {/* Task #1052 — Email→Exec 1: "From email" badge for rows auto-created
+            from a customer tender email by tenderEmailIngestion.ts. */}
+        <FromEmailBadge sourceRef={opp.sourceRef} oppId={opp.id} />
         <span
           className="text-xs flex items-center gap-1"
           data-testid={`text-pickup-${opp.id}`}

@@ -4754,6 +4754,112 @@ console.log("\n── Section 1051: Unified ReplitDailyUpload contract ──\n"
   );
 }
 
+// ── Section 1101: Email→Exec 1 (Task #1052) tender → freight_opportunity ──
+//
+// Pins the contract for the first-touch tender → freight_opportunities
+// auto-create branch:
+//   - dedicated module exports `looksLikeTenderEmail` + `ingestTenderFromEmail`
+//   - inline classifier dispatches the tender branch BEFORE the quote pipeline
+//   - sourceRef literal stamps source='email' + providerMessageId for the
+//     idempotency lookup the badge UI keys off
+//   - cockpit UI ships the "From email" badge keyed to that sourceRef
+//   - carrier emails + outbound mail are excluded inside the helper
+//
+{
+  console.log("\n── Section 1101: Email→Exec 1 tender→freight_opportunity ──\n");
+
+  const tenderPath = "server/services/tenderEmailIngestion.ts";
+  assert(
+    "[1052] tenderEmailIngestion module exists",
+    fs.existsSync(tenderPath),
+  );
+  const tenderSrc = fs.existsSync(tenderPath) ? fs.readFileSync(tenderPath, "utf8") : "";
+  assert(
+    "[1052] tenderEmailIngestion exports looksLikeTenderEmail",
+    /export\s+function\s+looksLikeTenderEmail\s*\(/.test(tenderSrc),
+  );
+  assert(
+    "[1052] tenderEmailIngestion exports ingestTenderFromEmail",
+    /export\s+async\s+function\s+ingestTenderFromEmail\s*\(/.test(tenderSrc),
+  );
+  // sourceRef must stamp BOTH the literal `source: "email"` (the contract
+  // value the task spec writes alongside providerMessageId) AND a routable
+  // `type: "email_tender"` discriminator the UI badge keys off.
+  assert(
+    "[1052] ingestTenderFromEmail writes sourceRef.source = 'email'",
+    /source:\s*["']email["']/.test(tenderSrc),
+  );
+  assert(
+    "[1052] ingestTenderFromEmail writes sourceRef.type = 'email_tender'",
+    /type:\s*["']email_tender["']/.test(tenderSrc),
+  );
+  assert(
+    "[1052] ingestTenderFromEmail writes sourceRef.providerMessageId",
+    /providerMessageId:\s*message\.providerMessageId/.test(tenderSrc),
+  );
+  // Idempotency: the helper MUST do a pre-insert lookup keyed on
+  // (orgId, sourceRef.source='email', sourceRef.providerMessageId=ref)
+  // so re-processing the same email never duplicates.
+  assert(
+    "[1052] ingestTenderFromEmail pre-insert lookup keyed on sourceRef.source='email'",
+    /sourceRef[\s\S]{0,80}->>'source'\s*=\s*'email'/.test(tenderSrc),
+  );
+  assert(
+    "[1052] ingestTenderFromEmail pre-insert lookup keyed on sourceRef.providerMessageId",
+    /sourceRef[\s\S]{0,80}->>'providerMessageId'/.test(tenderSrc),
+  );
+  // Status MUST be the safe pending_approval value — never auto-book/dispatch.
+  assert(
+    "[1052] ingestTenderFromEmail inserts status='pending_approval'",
+    /status:\s*["']pending_approval["']/.test(tenderSrc),
+  );
+  // Carrier exclusion + outbound exclusion + no-company skip are the
+  // explicit safety gates the task spec calls out.
+  assert(
+    "[1052] ingestTenderFromEmail excludes carrier-linked messages",
+    /linkedCarrierId/.test(tenderSrc) && /skipped_carrier/.test(tenderSrc),
+  );
+  assert(
+    "[1052] ingestTenderFromEmail excludes outbound messages",
+    /direction\s*===\s*["']outbound["']/.test(tenderSrc) && /skipped_outbound/.test(tenderSrc),
+  );
+  assert(
+    "[1052] ingestTenderFromEmail skips when no companyId resolved (no faked accounts)",
+    /skipped_no_company/.test(tenderSrc) && /linkedAccountId/.test(tenderSrc),
+  );
+
+  // Inline classifier dispatch.
+  const classifierSrc = readFile("server/services/inlineEmailClassifier.ts");
+  assert(
+    "[1052] inlineEmailClassifier dispatches ingestTenderFromEmail",
+    /ingestTenderFromEmail\b/.test(classifierSrc) &&
+      /["']\.\/tenderEmailIngestion["']/.test(classifierSrc),
+  );
+  // Tender dispatch MUST sit inside an inbound + non-carrier guard so a
+  // careless edit can't start handing carrier replies to the tender path.
+  assert(
+    "[1052] inlineEmailClassifier guards tender dispatch on inbound + non-carrier actor",
+    /direction\s*===\s*["']inbound["'][\s\S]{0,200}!message\.linkedCarrierId[\s\S]{0,200}actorType\s*!==\s*["']carrier["'][\s\S]{0,400}ingestTenderFromEmail/.test(
+      classifierSrc,
+    ),
+  );
+
+  // Cockpit UI — "From email" badge keyed off the sourceRef written above.
+  const afSrc = readFile("client/src/pages/available-freight.tsx");
+  assert(
+    "[1052] available-freight UI defines FromEmailBadge component",
+    /function\s+FromEmailBadge\s*\(/.test(afSrc),
+  );
+  assert(
+    "[1052] FromEmailBadge keys off sourceRef.type='email_tender' (or .source='email')",
+    /["']email_tender["']/.test(afSrc) && /["']email["']/.test(afSrc),
+  );
+  assert(
+    "[1052] FromEmailBadge is rendered next to WonQuoteBadge in the cockpit row",
+    /<FromEmailBadge\s+sourceRef=\{opp\.sourceRef\}\s+oppId=\{opp\.id\}\s*\/>/.test(afSrc),
+  );
+}
+
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 
 if (failures.length > 0) {

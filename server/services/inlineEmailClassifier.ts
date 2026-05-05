@@ -279,6 +279,43 @@ async function classifyOne(message: EmailMessage, signal: AbortSignal): Promise<
       message.body ?? "",
     );
     const isCandidate = candidateBySignal || candidateByShape;
+
+    // Email→Exec 1 (Task #1052) — first-touch tender branch. Runs BEFORE the
+    // quote pipeline so a clear customer load tender ("please cover ATL→DAL,
+    // PO #...") creates a `freight_opportunities` row in `pending_approval`
+    // instead of being mis-routed into Customer Quotes. Carrier emails and
+    // outbound mail are excluded inside the helper. Honors the inbound email
+    // preservation contract: this branch is additive (it inserts a new
+    // freight_opportunities row) — it never mutates or drops the underlying
+    // email_messages row, so the existing quote pipeline still gets a chance
+    // to create a quote_opportunity if the email is mixed-intent.
+    if (
+      message.direction === "inbound" &&
+      !message.linkedCarrierId &&
+      extraction.actorType !== "carrier"
+    ) {
+      try {
+        const { ingestTenderFromEmail } = await import("./tenderEmailIngestion");
+        const tenderResult = await ingestTenderFromEmail(message);
+        if (tenderResult.status === "ingested") {
+          // Successful tender ingest. We deliberately fall through to the
+          // quote-pipeline block below — a single email CAN legitimately be
+          // both a tender AND a price ask, and the existing pipeline is the
+          // single source of truth for quote_opportunities. The freight_opps
+          // pre-insert lookup makes a re-run of the same email a no-op.
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        recordIntegrationEvent({
+          source: "graph",
+          outcome: "error",
+          errorMessage: `inline_tender_ingest:${message.id}: ${errMsg.slice(0, 200)}`,
+        });
+        // Tender ingest failure must NEVER gate the quote pipeline — fall
+        // through so the message still gets its quote_opportunity chance.
+      }
+    }
+
     if (isCandidate) {
       const senderRule = await lookupSenderRoutingDecision(
         message.orgId,
